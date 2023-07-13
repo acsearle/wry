@@ -35,7 +35,10 @@
     
     AVAudioEngine* _audio_engine;
     AVAudioPCMBuffer* _audio_buffer;
+    AVAudioPCMBuffer* _audio_buffer2;
     NSMutableArray<AVAudioPlayerNode*>* _audio_players;
+    
+    AVAudioEnvironmentNode* _audio_environment;
     
 }
 
@@ -50,7 +53,7 @@
         _model = model_;
         self.wantsLayer = YES;
         self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
-        self.layer.delegate = self;
+        // self.layer.delegate = self;
         
         {
             NSURL* url = [[NSBundle mainBundle]
@@ -71,6 +74,18 @@
             
             [file readIntoBuffer:_audio_buffer error:&err];
             
+            url = [[NSBundle mainBundle]
+                   URLForResource:@"mixkit-typewriter-classic-return-1381"
+                   withExtension:@"wav"];
+            file = [[AVAudioFile alloc]
+                    initForReading:url error:&err];
+            if (err)
+                NSLog(@"%@", [err localizedDescription]);
+            _audio_buffer2 = [[AVAudioPCMBuffer alloc]
+                              initWithPCMFormat:file.processingFormat
+                              frameCapacity:(int) file.length];
+            [file readIntoBuffer:_audio_buffer2 error:&err];
+
             /*
             {
                 auto* p = _audio_buffer.floatChannelData[0];
@@ -93,6 +108,11 @@
                         
             if (err)
                 NSLog(@"%@", [err localizedDescription]);
+            
+            _audio_environment = [[AVAudioEnvironmentNode alloc] init];
+            [_audio_engine attachNode:_audio_environment];
+            [_audio_engine connect:_audio_environment
+                                to:_audio_engine.mainMixerNode format:nil];
             
             _audio_players = [[NSMutableArray<AVAudioPlayerNode*> alloc] init];
             
@@ -268,13 +288,13 @@ static CVReturn DispatchRenderLoop(CVDisplayLinkRef displayLink,
                                    CVOptionFlags* flagsOut,
                                    void* displayLinkContext)
 {
-    printf("DispatchRenderLoop\n");
+    //printf("DispatchRenderLoop\n");
     @autoreleasepool
     {
         ClientView *clientView = (__bridge ClientView*)displayLinkContext;
         [clientView render];
     }
-    printf("~DispatchRenderLoop\n");
+    // printf("~DispatchRenderLoop\n");
     return kCVReturnSuccess;
 }
 
@@ -333,7 +353,7 @@ static CVReturn DispatchRenderLoop(CVDisplayLinkRef displayLink,
         
     }
     
-    {
+    if (event.characters.length) {
         // play keydown sound
         
         AVAudioPlayerNode* player = nil;
@@ -351,18 +371,30 @@ static CVReturn DispatchRenderLoop(CVDisplayLinkRef displayLink,
             player = [[AVAudioPlayerNode alloc] init];
             [_audio_engine attachNode:player];
             [_audio_engine connect:player
-                                to:_audio_engine.mainMixerNode
+                                // to:_audio_engine.mainMixerNode
+                                to:_audio_environment
                             format:_audio_buffer.format];
             NSError* err = nil;
             [_audio_engine startAndReturnError:&err];
-            [player play];
             if (err)
                 NSLog(@"%@", [err localizedDescription]);
-            player.position = AVAudioMake3DPoint(1, 2, 3);
+            
+            //player.renderingAlgorithm = AVAudio3DMixingRenderingAlgorithmAuto;
+            player.sourceMode = AVAudio3DMixingSourceModePointSource;
+            
+            [player play];
+            
         }
-        
+
+        // put the player in space somewhere
+        player.position = AVAudioMake3DPoint(rand() & 1 ? -1.0 : +1.0,
+                                             rand() & 1 ? -1.0 : +1.0,
+                                             rand() & 1 ? -1.0 : +1.0);
+
         // schedule the waveform on the player
-        [player scheduleBuffer:_audio_buffer
+        [player scheduleBuffer:
+         (([event.characters characterAtIndex:0] == NSCarriageReturnCharacter)
+          ? _audio_buffer2 : _audio_buffer)
              completionHandler:^{
             // "don't stop the player in the handler, it may deadlock"
             // when playback completes, put the player back in the stack

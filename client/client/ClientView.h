@@ -21,7 +21,7 @@
 
 @end
 
-@interface ClientView : NSView <CALayerDelegate>
+@interface ClientView : NSView
 
 @property (nonatomic, nonnull, readonly) CAMetalLayer *metalLayer;
 @property (nonatomic, nullable) id<ClientViewDelegate> delegate;

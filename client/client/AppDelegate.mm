@@ -35,22 +35,22 @@
 - (void)applicationWillFinishLaunching:(NSNotification *)aNotification {
 
     // Insert code here to initialize your application
-    
     _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0.0, 0.0, 1440.0, 900.0)
                                           styleMask:(NSWindowStyleMaskMiniaturizable
                                                      | NSWindowStyleMaskClosable
                                                      | NSWindowStyleMaskResizable
                                                      | NSWindowStyleMaskTitled)
                                             backing:NSBackingStoreBuffered
-                                              defer:NO];
-    [_window center];
+                                              defer:YES];
+    //[_window center];
     [_window setTitle:@"Client"];
     [_window setContentViewController:[[ViewController alloc] initWithModel:_model]];
-    [_window makeKeyAndOrderFront:nil];
+    // don't display the window until the app becomes active
+    
 }
 
-- (void)applicationWillBecomeActive:(NSNotification *)aNotification {
-    printf("will become active\n");
+- (void)applicationDidBecomeActive:(NSNotification *)notification {
+    [_window makeKeyAndOrderFront:nil];
 }
 
 - (void)applicationWillResignActive:(NSNotification *)aNotification {

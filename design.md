@@ -162,3 +162,35 @@ We get the critical display link on another thread.  Currently we lock out the
 other thread when resizing and rendering, which is not great; we should just
 atomically update the size, and resize the drawable as we need it. 
 
+
+
+
+AppKit
+------
+
+Do we need a ViewController?  it seems mostly to be for loading-from-file views
+
+Notifications we need go to:
+
+NSApplicationDelegate
+X CALayerDelegate -- only needed for event-based drawing
+NSView has no delegate, instead we subclass it
+NSView subscribes to windowWillClose which is available to NSWindowDelegate
+
+Should we just make 
+`WryDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WryViewDelegate>`
+as the clearing-house for all `dispatch_queue_main` stuff?
+
+And then, `WryRenderer` becomes the class associated with all stuff that occurs
+on the CVDisplayLink thread
+
+`WryModel` lives on a third thread/queue, receives notifications from main queue
+and sends minimal data to render; advances game state
+
+`WryNetwork` lives on a fourth thread for multiplayer
+
+ 
+
+
+NSView
+CALayerDelegate

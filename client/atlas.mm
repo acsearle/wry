@@ -21,6 +21,12 @@ namespace wry {
         descriptor.pixelFormat = MTLPixelFormatRGBA8Unorm_sRGB;
         descriptor.width = n;
         descriptor.height = n;
+        
+        // MTL asks for this but it may be an Apple Silicon thing?
+         // Non-shared memory GPU: Managed ?
+        // Shared memory GP: Shared ?
+        descriptor.storageMode = MTLStorageModeShared;
+        
         _texture = [device newTextureWithDescriptor:descriptor];
         _vertices.reserve(65536);
         _buffer = [device newBufferWithLength:sizeof(gl::vertex) * _vertices.capacity()
