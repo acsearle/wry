@@ -8,8 +8,6 @@
 #include <iostream>
 #include <thread>
 
-#import <AVFoundation/AVFoundation.h>
-
 #include "ClientView.h"
 
 // Metal view, like MTKView and CustomView[2], specialized to our use case of
@@ -27,125 +25,35 @@
 // [2] https://developer.apple.com/documentation/metal/onscreen_presentation/creating_a_custom_metal_view?language=objc
 // [3] https://developer.apple.com/documentation/metal/resource_synchronization/synchronizing_cpu_and_gpu_work?language=objc
 
-@implementation ClientView
+@implementation WryMetalView
 {
     CVDisplayLinkRef _displayLink;
     std::shared_ptr<wry::model> _model;
     // AVAudioPlayer* _audio_player;
-    
-    AVAudioEngine* _audio_engine;
-    AVAudioPCMBuffer* _audio_buffer;
-    AVAudioPCMBuffer* _audio_buffer2;
-    NSMutableArray<AVAudioPlayerNode*>* _audio_players;
-    
-    AVAudioEnvironmentNode* _audio_environment;
-    
 }
 
 - (CALayer *)makeBackingLayer
 {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+
     return _metalLayer = [CAMetalLayer layer];
 }
 
 - (nonnull instancetype) initWithFrame:(CGRect)frame model:(std::shared_ptr<wry::model>)model_
 {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+
     if ((self = [super initWithFrame:frame])) {
         _model = model_;
         self.wantsLayer = YES;
         self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
-        // self.layer.delegate = self;
-        
-        {
-            NSURL* url = [[NSBundle mainBundle]
-                          URLForResource:@"Keyboard-Button-Click-07-c-FesliyanStudios.com2"
-                          withExtension:@"mp3"];
-            
-            NSError* err = nil;
-            
-            AVAudioFile* file = [[AVAudioFile alloc]
-                                 initForReading:url error:&err];
-            
-            if (err)
-                NSLog(@"%@", [err localizedDescription]);
-            
-            _audio_buffer = [[AVAudioPCMBuffer alloc]
-                             initWithPCMFormat:file.processingFormat
-                             frameCapacity:(int) file.length];
-            
-            [file readIntoBuffer:_audio_buffer error:&err];
-            
-            url = [[NSBundle mainBundle]
-                   URLForResource:@"mixkit-typewriter-classic-return-1381"
-                   withExtension:@"wav"];
-            file = [[AVAudioFile alloc]
-                    initForReading:url error:&err];
-            if (err)
-                NSLog(@"%@", [err localizedDescription]);
-            _audio_buffer2 = [[AVAudioPCMBuffer alloc]
-                              initWithPCMFormat:file.processingFormat
-                              frameCapacity:(int) file.length];
-            [file readIntoBuffer:_audio_buffer2 error:&err];
-
-            /*
-            {
-                auto* p = _audio_buffer.floatChannelData[0];
-                auto n = _audio_buffer.frameLength;
-                for (int i = 0; i != n; ++i) {
-                    if (p[i]) {
-                        printf("%d\n", i);
-                        break;
-                    }
-                }
-            }
-             */
-
-            if (err)
-                NSLog(@"%@", [err localizedDescription]);
-            
-
-            
-            _audio_engine = [[AVAudioEngine alloc] init];
-                        
-            if (err)
-                NSLog(@"%@", [err localizedDescription]);
-            
-            _audio_environment = [[AVAudioEnvironmentNode alloc] init];
-            [_audio_engine attachNode:_audio_environment];
-            [_audio_engine connect:_audio_environment
-                                to:_audio_engine.mainMixerNode format:nil];
-            
-            _audio_players = [[NSMutableArray<AVAudioPlayerNode*> alloc] init];
-            
-        }
-        
-        
-        
-        /*
-        NSError* e = nil;
-        _audio_player = [[AVAudioPlayer alloc]
-                         initWithContentsOfURL:u
-                         error:&e];
-        if (e) {
-            NSLog(@"%@", [e localizedDescription]);
-        }
-        //[_audio_player play];
-        [_audio_player prepareToPlay];
-         */
-        
-
-
-
-
-
-        //AVAudioPlayerNode* player = [[AVAudioPlayerNode alloc] init];
-        
     }
     return self;
 }
 
 - (void)dealloc
 {
-    printf("~ClientView\n");
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
     [self stopRenderLoop];
     // ARC calls [super dealloc];
 }
@@ -153,6 +61,8 @@
 
 - (void)resizeDrawable:(CGFloat)scaleFactor
 {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+
     CGSize newSize = self.bounds.size;
     newSize.width *= scaleFactor;
     newSize.height *= scaleFactor;
@@ -186,6 +96,7 @@
 
 - (void)render
 {
+
     // Must synchronize if rendering on background thread to ensure resize operations from the
     // main thread are complete before rendering which depends on the size occurs.
     
@@ -204,7 +115,7 @@
 
 - (void)viewDidMoveToWindow
 {
-    printf("viewDidMoveToWindow\n");
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
     if (self.window) {
         [super viewDidMoveToWindow];
         [self setupCVDisplayLinkForScreen:self.window.screen];
@@ -214,7 +125,8 @@
 
 - (BOOL)setupCVDisplayLinkForScreen:(NSScreen*)screen
 {
-    
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+
     CVReturn cvReturn;
     
     // Create a display link capable of being used with all active displays
@@ -268,14 +180,13 @@
 
 - (void)windowWillClose:(NSNotification*)notification
 {
-    printf("windowWillClose\n");
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
     // Stop the display link when the window is closing since there
     // is no point in drawing something that can't be seen
     if (notification.object == self.window)
     {
         CVReturn result = CVDisplayLinkStop(_displayLink);
         assert(result == kCVReturnSuccess);
-        printf("CVDisplayLinkStop\n");
     }
 }
 
@@ -288,18 +199,17 @@ static CVReturn DispatchRenderLoop(CVDisplayLinkRef displayLink,
                                    CVOptionFlags* flagsOut,
                                    void* displayLinkContext)
 {
-    //printf("DispatchRenderLoop\n");
     @autoreleasepool
     {
-        ClientView *clientView = (__bridge ClientView*)displayLinkContext;
-        [clientView render];
+        WryMetalView* view = (__bridge WryMetalView*)displayLinkContext;
+        [view render];
     }
-    // printf("~DispatchRenderLoop\n");
     return kCVReturnSuccess;
 }
 
 - (void)stopRenderLoop
 {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
     if (_displayLink)
     {
         // Stop the display link BEFORE releasing anything in the view otherwise the display link
@@ -314,18 +224,21 @@ static CVReturn DispatchRenderLoop(CVDisplayLinkRef displayLink,
 
 - (void)viewDidChangeBackingProperties
 {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
     [super viewDidChangeBackingProperties];
     [self resizeDrawable:self.window.screen.backingScaleFactor];
 }
 
 - (void)setFrameSize:(NSSize)size
 {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
     [super setFrameSize:size];
     [self resizeDrawable:self.window.screen.backingScaleFactor];
 }
 
 - (void)setBoundsSize:(NSSize)size
 {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
     [super setBoundsSize:size];
     [self resizeDrawable:self.window.screen.backingScaleFactor];
 }
@@ -333,134 +246,13 @@ static CVReturn DispatchRenderLoop(CVDisplayLinkRef displayLink,
 
 - (void)viewWillMoveToWindow:(NSWindow *)newWindow
 {
-    printf("viewWillMoveToWindow\n");
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
     [super viewWillMoveToWindow:newWindow];
 }
 
-
-
-
-// User interaction
-
-- (BOOL)acceptsFirstResponder
-{
+- (BOOL)acceptsFirstResponder {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
     return YES;
 }
-
-- (void)keyDown:(NSEvent *)event {
-    
-    if (!event.ARepeat) {
-        
-    }
-    
-    if (event.characters.length) {
-        // play keydown sound
-        
-        AVAudioPlayerNode* player = nil;
-        
-        // try_pop an existing unused player
-        @synchronized (_audio_players) {
-            if (_audio_players.count) {
-                player = _audio_players.lastObject;
-                [_audio_players removeLastObject];
-            }
-        }
-
-        if (!player) {
-            // set up a new player
-            player = [[AVAudioPlayerNode alloc] init];
-            [_audio_engine attachNode:player];
-            [_audio_engine connect:player
-                                // to:_audio_engine.mainMixerNode
-                                to:_audio_environment
-                            format:_audio_buffer.format];
-            NSError* err = nil;
-            [_audio_engine startAndReturnError:&err];
-            if (err)
-                NSLog(@"%@", [err localizedDescription]);
-            
-            //player.renderingAlgorithm = AVAudio3DMixingRenderingAlgorithmAuto;
-            player.sourceMode = AVAudio3DMixingSourceModePointSource;
-            
-            [player play];
-            
-        }
-
-        // put the player in space somewhere
-        player.position = AVAudioMake3DPoint(rand() & 1 ? -1.0 : +1.0,
-                                             rand() & 1 ? -1.0 : +1.0,
-                                             rand() & 1 ? -1.0 : +1.0);
-
-        // schedule the waveform on the player
-        [player scheduleBuffer:
-         (([event.characters characterAtIndex:0] == NSCarriageReturnCharacter)
-          ? _audio_buffer2 : _audio_buffer)
-             completionHandler:^{
-            // "don't stop the player in the handler, it may deadlock"
-            // when playback completes, put the player back in the stack
-            @synchronized (self->_audio_players) {
-                [self->_audio_players addObject:player];
-            }            
-        }];
-    }
-    
-    // UTF-16 code for key, such as private use 0xf700 = NSUpArrowFunctionKey
-    // printf("%x\n", [event.characters characterAtIndex:0]);
-    
-    // _model->_console.back().append(event.characters.UTF8String);
-    NSLog(@"keyDown: \"%@\"\n", event.characters);
-    if (event.characters.length) {
-        NSLog(@"keyDown: (%x)\n", [event.characters characterAtIndex:0]);
-        auto guard = std::unique_lock{_model->_mutex};
-        switch ([event.characters characterAtIndex:0]) {
-            case NSCarriageReturnCharacter:
-                _model->_console.emplace_back();
-                break;
-            case NSDeleteCharacter:
-                if (!_model->_console.back().empty())
-                    _model->_console.back().pop_back();
-                break;
-            case NSUpArrowFunctionKey:
-                std::rotate(_model->_console.begin(), _model->_console.end() - 1, _model->_console.end());
-                break;
-            case NSDownArrowFunctionKey:
-                std::rotate(_model->_console.begin(), _model->_console.begin() + 1, _model->_console.end());
-                break;
-            case NSLeftArrowFunctionKey:
-                if (!_model->_console.back().empty()) {
-                    auto ch = _model->_console.back().pop_back();
-                    _model->_console.back().push_front(ch);
-                }
-                break;
-            case NSRightArrowFunctionKey:
-                if (!_model->_console.back().empty()) {
-                    auto ch = _model->_console.back().pop_front();
-                    _model->_console.back().push_back(ch);
-                }
-                break;
-            default:
-                _model->_console.back().append(event.characters.UTF8String);
-                break;
-        }
-    }
-}
-    
-
-- (void)keyUp:(NSEvent *)event {
-    // NSLog(@"keyUp: \"%@\"\n", event.characters);
-}
-
-- (void) mouseMoved:(NSEvent *)event {}
-- (void) mouseEntered:(NSEvent *)event {}
-- (void) mouseExited:(NSEvent *)event {}
-- (void) mouseDown:(NSEvent *)event {}
-- (void) mouseDragged:(NSEvent *)event {}
-- (void) mouseUp:(NSEvent *)event {}
-- (void) rightMouseDown:(NSEvent *)event {}
-- (void) rightMouseDragged:(NSEvent *)event {}
-- (void) rightMouseUp:(NSEvent *)event {}
-- (void) otherMouseDown:(NSEvent *)event {}
-- (void) otherMouseDragged:(NSEvent *)event {}
-- (void) otherMouseUp:(NSEvent *)event {}
 
 @end

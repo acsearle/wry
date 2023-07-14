@@ -6,7 +6,7 @@
 //
 
 #import <AppKit/AppKit.h>
-#import "AppDelegate.h"
+#import "WryDelegate.h"
 
 #include "model.hpp"
 
@@ -19,7 +19,7 @@ int main(int argc, const char** argv) {
     auto mdl = std::make_shared<wry::model>();
     @autoreleasepool {
         NSApplication* application = [NSApplication sharedApplication];
-        AppDelegate* delegate = [[AppDelegate alloc] initWithModel:mdl];
+        WryDelegate* delegate = [[WryDelegate alloc] initWithModel:mdl];
         [application setDelegate:delegate];
         return NSApplicationMain(argc, argv); // [[noreturn]]
     }
