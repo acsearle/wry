@@ -5,18 +5,18 @@
 //  Created by Antony Searle on 1/7/2023.
 //
 
-#ifndef ClientRenderer_h
-#define ClientRenderer_h
+#ifndef WryRenderer_h
+#define WryRenderer_h
 
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 #include "model.hpp"
 
-@interface ClientRenderer : NSObject
+@interface WryRenderer : NSObject
 
 - (nonnull instancetype)initWithMetalDevice:(nonnull id<MTLDevice>)device
-                        drawablePixelFormat:(MTLPixelFormat)drawabklePixelFormat
+                        drawablePixelFormat:(MTLPixelFormat)drawablePixelFormat
                                       model:(std::shared_ptr<wry::model>)model_;
 
 - (void)renderToMetalLayer:(nonnull CAMetalLayer*)metalLayer;
@@ -25,4 +25,4 @@
 
 @end
 
-#endif /* ClientRenderer_h */
+#endif /* WryRenderer_h */

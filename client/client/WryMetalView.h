@@ -5,8 +5,8 @@
 //  Created by Antony Searle on 21/6/2023.
 //
 
-#ifndef ClientView_h
-#define ClientView_h
+#ifndef WryMetalView_h
+#define WryMetalView_h
 
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
@@ -33,4 +33,4 @@
 
 @end
 
-#endif /* ClientView_h */
+#endif /* WryMetalView_h */

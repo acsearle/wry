@@ -11,7 +11,7 @@
 #import <AppKit/AppKit.h>
 
 #include "model.hpp"
-#include "ClientView.h"
+#include "WryMetalView.h"
 
 @interface WryDelegate : NSResponder <NSApplicationDelegate, NSWindowDelegate,
     WryMetalViewDelegate>

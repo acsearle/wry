@@ -1,18 +1,18 @@
 //
-//  ClientRenderer.mm
+//  WryRenderer.mm
 //  client
 //
 //  Created by Antony Searle on 1/7/2023.
 //
 
-#include "ClientRenderer.h"
+#include "WryRenderer.h"
 #include "ShaderTypes.h"
 
 #include "atlas.hpp"
 #include "font.hpp"
 #include "platform.hpp"
 
-@implementation ClientRenderer
+@implementation WryRenderer
 {
     // renderer global ivars
     id <MTLDevice>              _device;
@@ -30,12 +30,13 @@
     
     wry::atlas* _atlas;
     wry::font* _font;
-    
+    std::vector<wry::sprite> _sprites;
+
     std::shared_ptr<wry::model> _model;
 }
 
 -(void) dealloc {
-    printf("~ClientRenderer\n");
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
 - (nonnull instancetype)initWithMetalDevice:(nonnull id<MTLDevice>)device
@@ -113,8 +114,12 @@
             
             auto img = wry::from_png_and_multiply_alpha(wry::path_for_resource("assets", "png"));
             wry::draw_bounding_box(img);
-            for (int x = 0; x != 2048; x += 64)
-                _atlas->place(img.sub(0, x, 64, 64), gl::vec2{32, 32});
+            for (int y = 0; y != 256; y += 64) {
+                for (int x = 0; x != 2048; x += 64) {
+                    wry::sprite s = _atlas->place(img.sub(y, x, 64, 64), gl::vec2{32, 32});
+                    _sprites.push_back(s);
+                }
+            }
             
             
             
@@ -169,7 +174,53 @@
     
     // _atlas->push_sprite(_font->charmap['a'].sprite_ + gl::vec2{100,100});
     
-    // _atlas->push_sprite(gl::sprite{{{0,0},{0,0}},{{20480,20480},{1,1}}}+gl::vec2{256,256});
+    // _atlas->push_sprite(gl::sprite{{{0,0},{0,0}},{{2048,2048},{1,1}}}+gl::vec2{256,256});
+    {
+        simd_int2 origin;
+        {
+            auto guard = std::unique_lock{_model->_mutex};
+            origin = simd_make_int2(_model->_yx.x, _model->_yx.y);
+        }
+        
+        simd_int2 c;
+        c.x = (origin.x) >> 6;
+        c.y = (origin.y) >> 6;
+        NSLog(@"%d %d\n", c.x, c.y);
+        
+        origin.x &= 0x0000003F;
+        origin.y &= 0x0000003F;
+        origin.x -= 32;
+        origin.y -= 32;
+
+        simd_int2 b;
+        b.x = 32 + (int) _viewportSize.x;
+        b.y = 32 + (int) _viewportSize.y;
+
+
+        for (int y = origin.y, i = -c.y; y < b.y; y += 64, ++i) {
+            for (int x = origin.x, j = -c.x; x < b.x; x += 64, ++j) {
+                _atlas->push_sprite(_sprites[_model->_world(simd_make_int2(i, j)).x] + gl::vec2(x, y));
+            }
+        }
+
+        
+        
+        
+        /*
+        simd_int2 a = {-32, -32}, b;
+        a.x += (int)yx.x;
+        a.y += (int)yx.y;
+        b.x = a.x + (int)_viewportSize.x;
+        b.y = a.y + (int)_viewportSize.y;
+
+        int kk = 0;
+        for (int y = a.y; y < b.y; y += 64) {
+            for (int x = a.x; x < b.x; x += 64) {
+                _atlas->push_sprite(_sprites[4] + gl::vec2{x, y} + yx);
+            }
+        }
+         */
+    }
     
     auto draw_text = [=](gl::rect<float> x, wry::string_view v) {
 

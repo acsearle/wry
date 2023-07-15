@@ -7,9 +7,10 @@
 
 #import <AVFoundation/AVFoundation.h>
 
-#include "ClientRenderer.h"
-#include "ClientView.h"
+#include "WryRenderer.h"
+#include "WryMetalView.h"
 #include "WryDelegate.h"
+#include "WryAudio.h"
 
 
 // [1] https://sarunw.com/posts/how-to-create-macos-app-without-storyboard/
@@ -26,14 +27,8 @@
 {
     std::shared_ptr<wry::model> _model;
     NSWindow* _window;
-    ClientRenderer *_renderer;
-    
-    AVAudioEngine* _audio_engine;
-    AVAudioPCMBuffer* _audio_buffer;
-    AVAudioPCMBuffer* _audio_buffer2;
-    NSMutableArray<AVAudioPlayerNode*>* _audio_players;
-    AVAudioEnvironmentNode* _audio_environment;
-    
+    WryRenderer *_renderer;
+    WryAudio *_audio;
 }
 
 -(nonnull instancetype) initWithModel:(std::shared_ptr<wry::model>)mdl
@@ -64,6 +59,7 @@
                                               defer:YES];
     _window.delegate = self;
     _window.title = @"WryApplication";
+    _window.acceptsMouseMovedEvents = YES;
     [_window center];
     //[_window setContentViewController:[[ViewController alloc] initWithModel:_model]];
     // [_window setContentView:[
@@ -75,97 +71,13 @@
     view.metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
     view.delegate = self;
     
-    _renderer = [[ClientRenderer alloc] initWithMetalDevice:view.metalLayer.device
+    _renderer = [[WryRenderer alloc] initWithMetalDevice:view.metalLayer.device
                                         drawablePixelFormat:view.metalLayer.pixelFormat
                                                       model:_model];
     
+    _audio = [[WryAudio alloc] init];
+    
     _window.contentView = view;
-    
-    
-    {
-        NSURL* url = [[NSBundle mainBundle]
-                      URLForResource:@"Keyboard-Button-Click-07-c-FesliyanStudios.com2"
-                      withExtension:@"mp3"];
-        
-        NSError* err = nil;
-        
-        AVAudioFile* file = [[AVAudioFile alloc]
-                             initForReading:url error:&err];
-        
-        if (err)
-            NSLog(@"%@", [err localizedDescription]);
-        
-        _audio_buffer = [[AVAudioPCMBuffer alloc]
-                         initWithPCMFormat:file.processingFormat
-                         frameCapacity:(int) file.length];
-        
-        [file readIntoBuffer:_audio_buffer error:&err];
-        
-        url = [[NSBundle mainBundle]
-               URLForResource:@"mixkit-typewriter-classic-return-1381"
-               withExtension:@"wav"];
-        file = [[AVAudioFile alloc]
-                initForReading:url error:&err];
-        if (err)
-            NSLog(@"%@", [err localizedDescription]);
-        _audio_buffer2 = [[AVAudioPCMBuffer alloc]
-                          initWithPCMFormat:file.processingFormat
-                          frameCapacity:(int) file.length];
-        [file readIntoBuffer:_audio_buffer2 error:&err];
-        
-        /*
-         {
-         auto* p = _audio_buffer.floatChannelData[0];
-         auto n = _audio_buffer.frameLength;
-         for (int i = 0; i != n; ++i) {
-         if (p[i]) {
-         printf("%d\n", i);
-         break;
-         }
-         }
-         }
-         */
-        
-        if (err)
-            NSLog(@"%@", [err localizedDescription]);
-        
-        
-        
-        _audio_engine = [[AVAudioEngine alloc] init];
-        
-        if (err)
-            NSLog(@"%@", [err localizedDescription]);
-        
-        _audio_environment = [[AVAudioEnvironmentNode alloc] init];
-        [_audio_engine attachNode:_audio_environment];
-        [_audio_engine connect:_audio_environment
-                            to:_audio_engine.mainMixerNode format:nil];
-        
-        _audio_players = [[NSMutableArray<AVAudioPlayerNode*> alloc] init];
-        
-    }
-    
-    
-    
-    /*
-     NSError* e = nil;
-     _audio_player = [[AVAudioPlayer alloc]
-     initWithContentsOfURL:u
-     error:&e];
-     if (e) {
-     NSLog(@"%@", [e localizedDescription]);
-     }
-     //[_audio_player play];
-     [_audio_player prepareToPlay];
-     */
-    
-    
-    
-    
-    
-    
-    //AVAudioPlayerNode* player = [[AVAudioPlayerNode alloc] init];
-    
     view.nextResponder = self;
 
     
@@ -262,57 +174,25 @@
     if (!event.ARepeat) {
         
     }
-    
-    if (event.characters.length) {
-        // play keydown sound
+
+    {
+        // random location on a line in front of the listener
+        AVAudio3DPoint location = AVAudioMake3DPoint(// rand() & 1 ? -1.0 : +1.0,
+                                                     rand() * 2.0 / RAND_MAX - 1.0,
+                                                     0.0, //rand() & 1 ? -1.0 : +1.0,
+                                                     1.0 // rand() & 1 ? -1.0 : +1.0
+                                                     );
         
-        AVAudioPlayerNode* player = nil;
         
-        // try_pop an existing unused player
-        @synchronized (_audio_players) {
-            if (_audio_players.count) {
-                player = _audio_players.lastObject;
-                [_audio_players removeLastObject];
-            }
-        }
+        NSString* name = ((event.characters.length
+                           && ([event.characters characterAtIndex:0]
+                               == NSCarriageReturnCharacter))
+                          ? @"mixkit-typewriter-classic-return-1381"
+                          : @"Keyboard-Button-Click-07-c-FesliyanStudios.com2");
         
-        if (!player) {
-            // set up a new player
-            player = [[AVAudioPlayerNode alloc] init];
-            [_audio_engine attachNode:player];
-            [_audio_engine connect:player
-             // to:_audio_engine.mainMixerNode
-                                to:_audio_environment
-                            format:_audio_buffer.format];
-            NSError* err = nil;
-            [_audio_engine startAndReturnError:&err];
-            if (err)
-                NSLog(@"%@", [err localizedDescription]);
-            
-            //player.renderingAlgorithm = AVAudio3DMixingRenderingAlgorithmAuto;
-            player.sourceMode = AVAudio3DMixingSourceModePointSource;
-            
-            [player play];
-            
-        }
-        
-        // put the player in space somewhere
-        player.position = AVAudioMake3DPoint(rand() & 1 ? -1.0 : +1.0,
-                                             rand() & 1 ? -1.0 : +1.0,
-                                             rand() & 1 ? -1.0 : +1.0);
-        
-        // schedule the waveform on the player
-        [player scheduleBuffer:
-         (([event.characters characterAtIndex:0] == NSCarriageReturnCharacter)
-          ? _audio_buffer2 : _audio_buffer)
-             completionHandler:^{
-            // "don't stop the player in the handler, it may deadlock"
-            // when playback completes, put the player back in the stack
-            @synchronized (self->_audio_players) {
-                [self->_audio_players addObject:player];
-            }
-        }];
+        [_audio play:name at:location];
     }
+        
     
     // UTF-16 code for key, such as private use 0xf700 = NSUpArrowFunctionKey
     // printf("%x\n", [event.characters characterAtIndex:0]);
@@ -357,14 +237,36 @@
 
 
 - (void)keyUp:(NSEvent *)event {
-    // NSLog(@"keyUp: \"%@\"\n", event.characters);
+    NSLog(@"keyUp: \"%@\"\n", event.characters);
 }
 
-- (void) mouseMoved:(NSEvent *)event {}
+- (void)flagsChanged:(NSEvent *)event {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    /*
+    NSEventModifierFlagCommand;
+    NSEventModifierFlagOption;
+    NSEventModifierFlagHelp;
+    NSEventModifierFlagControl;
+    NSEventModifierFlagCapsLock;
+    NSEventModifierFlagFunction;
+    NSEventModifierFlagNumericPad;
+     */
+}
+
+- (void) mouseMoved:(NSEvent *)event {
+}
+
 - (void) mouseEntered:(NSEvent *)event {}
 - (void) mouseExited:(NSEvent *)event {}
 - (void) mouseDown:(NSEvent *)event {}
-- (void) mouseDragged:(NSEvent *)event {}
+- (void) mouseDragged:(NSEvent *)event {
+    auto lock = std::unique_lock{_model->_mutex};
+    _model->_yx.x += event.deltaX * _window.screen.backingScaleFactor;
+    _model->_yx.y += event.deltaY * _window.screen.backingScaleFactor;
+    NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
+    
+     
+}
 - (void) mouseUp:(NSEvent *)event {}
 - (void) rightMouseDown:(NSEvent *)event {}
 - (void) rightMouseDragged:(NSEvent *)event {}
@@ -373,5 +275,12 @@
 - (void) otherMouseDragged:(NSEvent *)event {}
 - (void) otherMouseUp:(NSEvent *)event {}
 
+-(void) scrollWheel:(NSEvent *)event {
+    auto lock = std::unique_lock{_model->_mutex};
+    _model->_yx.x += event.scrollingDeltaX * _window.screen.backingScaleFactor;
+    _model->_yx.y += event.scrollingDeltaY * _window.screen.backingScaleFactor;
+    NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
+
+}
 
 @end

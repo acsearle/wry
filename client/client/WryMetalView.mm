@@ -1,5 +1,5 @@
 //
-//  ClientView.mm
+//  WryMetalView.mm
 //  client
 //
 //  Created by Antony Searle on 21/6/2023.
@@ -8,7 +8,7 @@
 #include <iostream>
 #include <thread>
 
-#include "ClientView.h"
+#include "WryMetalView.h"
 
 // Metal view, like MTKView and CustomView[2], specialized to our use case of
 // - render on a non-main thread
@@ -252,6 +252,7 @@ static CVReturn DispatchRenderLoop(CVDisplayLinkRef displayLink,
 
 - (BOOL)acceptsFirstResponder {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    // we accept first responder and chain to nextResponder, the big delegate
     return YES;
 }
 
