@@ -105,10 +105,10 @@ namespace wry {
     }
     
     // tight-bound
-    gl::ivec2 prune(image& x, auto predicate = [](pixel v) {
+    simd_int2 prune(image& x, auto predicate = [](pixel v) {
         return v == pixel{0,0,0,0}; } )
     {
-        gl::ivec2 offset = {};
+        simd_int2 offset = {};
         
         auto f = [&](auto v) {
             return std::all_of(std::begin(v), std::end(v), predicate);
@@ -187,8 +187,9 @@ namespace wry {
             draw_bounding_box(u);
             
             sprite s = atl.place(u,
-                                 vec2(-face->glyph->bitmap_left + 2,
-                                      +face->glyph->bitmap_top + 1));
+                                 simd_make_float2(-face->glyph->bitmap_left + 2,
+                                                  +face->glyph->bitmap_top + 1
+                                                  ));
             
             float advance = face->glyph->advance.x * k;
             result.charmap.insert(std::make_pair((u32) charcode, font::glyph{s, advance}));

@@ -29,9 +29,9 @@ namespace wry {
         
         _texture = [device newTextureWithDescriptor:descriptor];
         _vertices.reserve(65536);
-        _buffer = [device newBufferWithLength:sizeof(gl::vertex) * _vertices.capacity()
+        _buffer = [device newBufferWithLength:sizeof(vertex) * _vertices.capacity()
                                       options:MTLResourceStorageModeShared];
-        _buffer2 = [device newBufferWithLength:sizeof(gl::vertex) * _vertices.capacity()
+        _buffer2 = [device newBufferWithLength:sizeof(vertex) * _vertices.capacity()
                                        options:MTLResourceStorageModeShared];
         _semaphore = dispatch_semaphore_create(2);
     }
@@ -40,10 +40,10 @@ namespace wry {
         
         dispatch_semaphore_wait(_semaphore, DISPATCH_TIME_FOREVER);
         
-        assert(_buffer.length >= _vertices.size() * sizeof(gl::vertex));
+        assert(_buffer.length >= _vertices.size() * sizeof(vertex));
         std::memcpy(_buffer.contents,
                     _vertices.data(),
-                    _vertices.size() * sizeof(gl::vertex));
+                    _vertices.size() * sizeof(vertex));
         [renderEncoder setVertexBuffer:_buffer
                                 offset:0
                                atIndex:MyVertexInputIndexVertices];
@@ -63,8 +63,8 @@ namespace wry {
     
     // Place a sprite within the free space of the atlas
     
-    sprite atlas::place(const_matrix_view<pixel> v, vec2 origin) {
-        auto tl = _packer.place({v.columns(), v.rows()});
+    sprite atlas::place(const_matrix_view<pixel> v, simd_float2 origin) {
+        auto tl = _packer.place(simd_make_ulong2(v.columns(), v.rows()));
         [_texture replaceRegion:MTLRegionMake2D(tl.x, tl.y,
                                                 v.columns(), v.rows())
                     mipmapLevel:0
@@ -72,9 +72,9 @@ namespace wry {
                     bytesPerRow:v.stride() * sizeof(pixel)];
         sprite s;
         s.a.position = - origin;
-        s.a.texCoord = tl / (float) _size;
+        s.a.texCoord = simd_float(tl) / (float) _size;
         s.b.position = { v.columns() - origin.x, v.rows() - origin.y };
-        s.b.texCoord = vec2{ tl.x + v.columns(), tl.y + v.rows() } / _size;
+        s.b.texCoord = simd_make_float2(tl.x + v.columns(), tl.y + v.rows()) / _size;
         
         // for debug, also shade the split regions
         
@@ -120,8 +120,8 @@ namespace wry {
     
     
     void atlas::release(sprite s) {
-        vec<int, 2> a = s.a.texCoord * _size;
-        vec<int, 2> b = s.b.texCoord * _size;
+        auto a = simd_ulong(s.a.texCoord * _size);
+        auto b = simd_ulong(s.b.texCoord * _size);
         _packer.release(a, b);
     }
     

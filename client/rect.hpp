@@ -8,7 +8,8 @@
 #ifndef rect_hpp
 #define rect_hpp
 
-#include "vec.hpp"
+#include <simd/simd.h>
+#include "utility.hpp"
 
 namespace wry {
     
@@ -17,12 +18,30 @@ namespace wry {
     // top-left and bottom-right vertices means that two vertices are copies, and
     // the other two corners are component-wise copies.
     
+    template<typename T, int N>
+    struct simd_TN;
+    
+    template<typename T, int N>
+    using simd_TN_t = typename simd_TN<T, N>::type;
+    
+    template<>
+    struct simd_TN<float, 2> {
+        using type = simd_float2;
+    };
+
+    template<>
+    struct simd_TN<unsigned long, 2> {
+        using type = simd_ulong2;
+    };
+
     template<typename T>
     class rect {
         
     public:
         
-        vec<T, 2> a, b;
+        using T2 = typename simd_TN<T, 2>::type;
+        
+        T2 a, b;
         
         bool invariant() const {
             return (a.x <= b.x) && (a.y <= b.y);
@@ -32,15 +51,15 @@ namespace wry {
         
         rect(const rect&) = default;
         
-        rect(const vec<T, 2>& x,
-             const vec<T, 2>& y)
+        rect(const T2& x,
+             const T2& y)
         : a(x)
         , b(y) {
         }
         
         rect(T ax, T ay, T bx, T by)
-        : a(ax, ay)
-        , b(bx, by) {
+        : a{ax, ay}
+        , b{bx, by} {
         }
         
         void canonicalize() {
@@ -51,22 +70,26 @@ namespace wry {
                 swap(a.y, b.y);
         }
         
-        vec<T, 2> size() const { return b - a; }
+        T2 size() const { return b - a; }
         
         T width() const { return b.x - a.x; }
         T height() const { return b.y - a.y; }
         
-        friend T area(const rect<T>& x) { return product(x.b - x.a); }
-        
-        T area() const {
-            return product(b - a);
+        friend T area(const rect<T>& x) {
+            auto y = x.b - x.a;
+            return y.x * y.y;
         }
         
-        bool contains(vec<T, 2> x) const {
+        T area() const {
+            auto y = b - a;
+            return y.x * y.y;
+        }
+        
+        bool contains(T2 x) const {
             return (a.x <= x.x) && (a.y <= x.y) && (x.x < b.x) && (x.y < b.y);
         }
         
-        vec2 mid() {
+        T2 mid() {
             return (a + b) / 2.0f;
         }
         
@@ -111,24 +134,24 @@ namespace wry {
     
     // shift
     template<typename T>
-    rect<T> operator+(const rect<T>& a, const vec<T, 2>& b) {
+    rect<T> operator+(const rect<T>& a, const simd_TN_t<T, 2>& b) {
         return rect{a.a + b, a.b + b};
     }
     
     template<typename T>
-    rect<T>& operator+=(rect<T>& a, const vec<T, 2>& b) {
+    rect<T>& operator+=(rect<T>& a, const simd_TN_t<T, 2>& b) {
         a.a += b;
         a.b += b;
         return a;
     }
     
     template<typename T>
-    rect<T> operator-(const rect<T>& a, const vec<T, 2>& b) {
+    rect<T> operator-(const rect<T>& a, const simd_TN_t<T, 2>& b) {
         return rect{a.a - b, a.b - b};
     }
     
     template<typename T>
-    rect<T>& operator-=(rect<T>& a, const vec<T, 2>& b) {
+    rect<T>& operator-=(rect<T>& a, const simd_TN_t<T, 2>& b) {
         a.a -= b;
         a.b -= b;
         return a;
@@ -156,18 +179,18 @@ namespace wry {
     
     template<typename T>
     rect<T> hull(const rect<T>& a, const rect<T>& b) {
-        return rect<T>(std::min(a.a.x, b.a.x),
-                       std::min(a.a.y, b.a.y),
-                       std::max(a.b.x, b.b.x),
-                       std::max(a.b.y, b.b.y));
+        return rect<T>(min(a.a.x, b.a.x),
+                       min(a.a.y, b.a.y),
+                       max(a.b.x, b.b.x),
+                       max(a.b.y, b.b.y));
     }
     
     template<typename T>
-    rect<T> hull(const rect<T>& a, const vec<T, 2>& b) {
-        return rect<T>(std::min(a.a.x, b.x),
-                       std::min(a.a.y, b.y),
-                       std::max(a.b.x, b.x),
-                       std::max(a.b.y, b.y));
+    rect<T> hull(const rect<T>& a, const simd_TN_t<T, 2>& b) {
+        return rect<T>(min(a.a.x, b.x),
+                       min(a.a.y, b.y),
+                       max(a.b.x, b.x),
+                       max(a.b.y, b.y));
     }
     
     template<typename T>
@@ -178,10 +201,10 @@ namespace wry {
     
     template<typename T>
     rect<T> intersection(const rect<T>& a, const rect<T>& b) {
-        return rect<T>(std::max(a.a.x, b.a.x),
-                       std::max(a.a.y, b.a.y),
-                       std::min(a.b.x, b.b.x),
-                       std::min(a.b.y, b.b.y));
+        return rect<T>(max(a.a.x, b.a.x),
+                       max(a.a.y, b.a.y),
+                       min(a.b.x, b.b.x),
+                       min(a.b.y, b.b.y));
     }
     
 } // namespace wry

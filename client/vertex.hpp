@@ -8,44 +8,25 @@
 #ifndef vertex_hpp
 #define vertex_hpp
 
-#include "vec.hpp"
+#include <simd/simd.h>
 
-namespace gl {
-    
-    using namespace wry;
-    
-    struct alignas(8) subvert {
-        vec2 position;
-        vec2 texCoord;
+namespace wry {
+        
+    struct subvertex {
+        simd_float2 position; // 8
+        simd_float2 texCoord; // 8
     };
     
-    struct alignas(8) vertex {
-        subvert v;
-        vec<std::uint8_t, 4> color;
+    struct vertex {
+        subvertex v; // 16
+        simd_uchar4 color; // 4
         static void bind();
     };
     
     static_assert(sizeof(vertex) == 24);
-    /*
-     inline vertex operator+(const vertex& a, const vertex& b) {
-     return vertex{
-     a.v.position + b.v.position,
-     a.v.texCoord + b.v.texCoord,
-     a.color
-     };
-     }
-     
-     inline vertex operator/(const vertex& a, float b) {
-     return vertex{
-     a.v.position / b,
-     a.v.texCoord / b,
-     a.color
-     };
-     }
-     */
+    static_assert(alignof(vertex) == 8);
     
-    
-} // namespace gl
+} // namespace wry
 
 #endif /* vertex_hpp */
 

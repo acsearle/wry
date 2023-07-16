@@ -223,10 +223,10 @@ namespace wry {
         double e = std::accumulate(c.begin(), c.end(), 0.0);
         for (ptrdiff_t i = 0; i != b.rows(); ++i)
             for (ptrdiff_t j = 0; j != b.columns(); ++j) {
-                vec<double, 4> f = 0.0;
+                simd_double4 f = {};
                 for (ptrdiff_t k = 0; k != 5; ++k)
-                    f += b(i, j + k) * d[k];
-                a(i, j) = f / e;
+                    f += simd_double(b(i, j + k)) * d[k];
+                a(i, j) = simd_uchar_sat(f / e);
             }
     }
     
@@ -240,8 +240,8 @@ namespace wry {
         return true;
     }
     
-    vec<i64, 2> prune(matrix_view<pixel>& v) {
-        vec<i64, 2> o(0, 0);
+    simd_long2 prune(matrix_view<pixel>& v) {
+        simd_long2 o = {};
         while (v.rows() && is_blank(v.sub(0, 0, 1, v.columns()))) {
             ++o.y;
             v = v.sub(1, 0, v.rows() - 1, v.columns());

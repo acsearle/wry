@@ -10,10 +10,10 @@
 
 #include <cmath>
 
+#include <simd/simd.h>
+
 #include "const_matrix_iterator.hpp"
 #include "const_column_vector_view.hpp"
-
-#include "vec.hpp"
 
 namespace wry {
     
@@ -69,10 +69,9 @@ namespace wry {
             return const_vector_view<T>(_begin + i * _stride, _columns);
         }
         
-        const T& operator()(isize i, isize j) const;
+        const T& operator()(isize i, isize j) const;        
         
-        
-        T& operator()(vec<isize, 2> ij) {
+        T& operator()(simd_long2 ij) {
             return operator()(ij.x, ij.y);
         }
         

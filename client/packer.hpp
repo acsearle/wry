@@ -46,7 +46,7 @@ namespace wry {
             _free.emplace(a, b, c, d);
         }
         
-        vec<T, 2> place(vec<T, 2> wh) {
+        simd_TN_t<T, 2> place(simd_TN_t<T, 2> wh) {
             
             // Start with the smallest free rectangle with enough area
             auto i = _free.lower_bound(rect<T>(0, 0, wh.x, wh.y));
@@ -62,7 +62,7 @@ namespace wry {
             _free.erase(i);
             
             // Compute the new corner
-            vec c(old.a + wh);
+            simd_TN_t<T, 2> c(old.a + wh);
             
             _last_split.clear();
             
@@ -84,7 +84,7 @@ namespace wry {
             
         }
         
-        void release(vec<T, 2> a, vec<T, 2> b) {
+        void release(simd_TN_t<T, 2> a, simd_TN_t<T, 2> b) {
             _free.emplace(a, b);
         }
         

@@ -24,11 +24,11 @@ namespace wry {
     // to the vertices that will be emitted - just add the offset and construct
     // the opposite corners.
     struct sprite {
-        gl::subvert a;
-        gl::subvert b;
+        subvertex a;
+        subvertex b;
     };
     
-    inline sprite operator+(sprite s, vec2 x) {
+    inline sprite operator+(sprite s, simd_float2 x) {
         s.a.position += x;
         s.b.position += x;
         return s;
@@ -58,7 +58,7 @@ namespace wry {
         std::size_t _size;
         packer<std::size_t> _packer;
         
-        array<gl::vertex> _vertices;
+        array<vertex> _vertices;
         
         id<MTLTexture> _texture;
         id<MTLBuffer> _buffer;
@@ -74,7 +74,7 @@ namespace wry {
             };
         }
         
-        void push_sprite(sprite s, vec<std::uint8_t, 4> c = { 255, 255, 255, 255 }) {
+        void push_sprite(sprite s, pixel c = { 255, 255, 255, 255 }) {
             // a - x
             // | \ | => abx ayb
             // y - b
@@ -86,7 +86,7 @@ namespace wry {
             _vertices.push_back({s.b, c});
         }
         
-        void push_quad(gl::vertex v[]) {
+        void push_quad(vertex v[]) {
             // Draw an arbitrary quad, such as one resulting from a rotation
             _vertices.push_back(v[0]);
             _vertices.push_back(v[1]);
@@ -100,7 +100,7 @@ namespace wry {
         
         void discard();
         
-        sprite place(const_matrix_view<pixel>, vec2 origin = { 0, 0 });
+        sprite place(const_matrix_view<pixel>, simd_float2 origin = { 0, 0 });
         
         void release(sprite);
         

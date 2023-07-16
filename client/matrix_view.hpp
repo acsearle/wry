@@ -100,7 +100,7 @@ namespace wry {
             return *(this->_begin + i * this->_stride + j);
         }
         
-        T& operator()(vec<ptrdiff_t, 2> ij) {
+        T& operator()(simd_long2 ij) {
             return operator()(ij.x, ij.y);
         }
         

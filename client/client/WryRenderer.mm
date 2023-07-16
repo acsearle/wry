@@ -116,7 +116,7 @@
             wry::draw_bounding_box(img);
             for (int y = 0; y != 256; y += 64) {
                 for (int x = 0; x != 2048; x += 64) {
-                    wry::sprite s = _atlas->place(img.sub(y, x, 64, 64), gl::vec2{32, 32});
+                    wry::sprite s = _atlas->place(img.sub(y, x, 64, 64), simd_float2{32, 32});
                     _sprites.push_back(s);
                 }
             }
@@ -199,7 +199,7 @@
 
         for (int y = origin.y, i = -c.y; y < b.y; y += 64, ++i) {
             for (int x = origin.x, j = -c.x; x < b.x; x += 64, ++j) {
-                _atlas->push_sprite(_sprites[_model->_world(simd_make_int2(i, j)).x] + gl::vec2(x, y));
+                _atlas->push_sprite(_sprites[_model->_world(simd_make_int2(i, j)).x] + simd_make_float2(x, y));
             }
         }
 
@@ -222,7 +222,7 @@
          */
     }
     
-    auto draw_text = [=](gl::rect<float> x, wry::string_view v) {
+    auto draw_text = [=](wry::rect<float> x, wry::string_view v) {
 
         auto valign = (_font->height + _font->ascender + _font->descender) / 2; // note descender is negative
 
@@ -241,7 +241,7 @@
                     return xy;
                 }
                     
-                gl::sprite s = q->second.sprite_;
+                wry::sprite s = q->second.sprite_;
                 _atlas->push_sprite(s + xy);
                 xy.x += q->second.advance;
                 
@@ -271,14 +271,14 @@
     {
         auto guard = std::unique_lock{_model->_mutex};
         float y = 1080;
-        gl::vec2 z;
+        simd_float2 z;
         bool first = true;
         for (auto p = _model->_console.end(); (y >= 0) && (p != _model->_console.begin());) {
             --p;
             y -= _font->height;
             z = draw_text({0, y, 1920, 1080}, *p);
             if (first) {
-                draw_text(gl::rect<float>{z.x, z.y, 1920, 1080 }, (_frameNum & 0x40) ? "_" : " ");
+                draw_text(wry::rect<float>{z.x, z.y, 1920, 1080 }, (_frameNum & 0x40) ? "_" : " ");
                 first = false;
             }
         }

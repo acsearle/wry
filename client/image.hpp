@@ -11,7 +11,6 @@
 #include <cstdlib>
 #include <utility>
 
-#include "vec.hpp"
 #include "matrix.hpp"
 #include "string.hpp"
 
@@ -29,10 +28,10 @@ namespace wry {
     // Emmissives are their own texture layer so the fact they can't be represented
     // in non-premultiplied-alpha pngs is irrelevant.
     
-    using pixel = vec<u8, 4>;
+    using pixel = simd_uchar4;
     using image = matrix<pixel>;
     
-    using imagef = matrix<vec4>;
+    using imagef = matrix<simd_float4>;
     
     image from_png_and_multiply_alpha(string_view);
     void to_png(image const&, char const*);
@@ -51,11 +50,11 @@ namespace wry {
         return _from_sRGB_table[u];
     }
     
-    inline vec4 from_sRGB_(pixel p) {
-        return vec4(_from_sRGB_table[p.r],
-                    _from_sRGB_table[p.g],
-                    _from_sRGB_table[p.b],
-                    p.a / 255.0f);
+    inline simd_float4 from_sRGB_(pixel p) {
+        return simd_make_float4(_from_sRGB_table[p.r],
+                                _from_sRGB_table[p.g],
+                                _from_sRGB_table[p.b],
+                                p.a / 255.0f);
     }
     
     inline f32 to_sRGB(f32 u) {
@@ -64,11 +63,13 @@ namespace wry {
                 : (1.055f * powf(u, 1.0f / 2.4f) - 0.055f));
     }
     
-    inline vec4 to_sRGB(vec4 v) {
-        return vec4(to_sRGB(v.r),
-                    to_sRGB(v.g),
-                    to_sRGB(v.b),
-                    v.a * 255.0f);
+    inline simd_float4 to_sRGB(simd_float4 v) {
+        return simd_float4{
+            to_sRGB(v.r),
+            to_sRGB(v.g),
+            to_sRGB(v.b),
+            v.a * 255.0f,
+        };
     }
     
     extern u8 (*_multiply_alpha_table)[256];
@@ -95,8 +96,9 @@ namespace wry {
     
     inline void draw_bounding_box(image& x) {
         auto foo = [&](auto i, auto j) {
-            auto& b = x(i, j).a;
+            auto b = x(i, j).a;
             b = b * 3 / 4 + 64;
+            x(i, j).a = b;
         };
         for (i64 j = 0; j != x.columns(); ++j) {
             foo(0, j);
