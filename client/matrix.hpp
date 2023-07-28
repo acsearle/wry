@@ -13,7 +13,7 @@
 #include <iostream>
 
 #include "matrix_view.hpp"
-#include "raw_vector.hpp"
+#include "utility.hpp"
 
 namespace wry {
     
@@ -35,7 +35,10 @@ namespace wry {
     
     
     template<typename T>
-    struct matrix : matrix_view<T>, raw_vector<T> {
+    struct matrix : matrix_view<T> {
+        
+        T* _allocation;
+        isize _capacity;
         
         bool _invariant() {
             assert(this->_columns >= 0);
@@ -48,7 +51,11 @@ namespace wry {
             return true;
         }
         
-        matrix() : matrix_view<T>(nullptr, 0, 0, 0), raw_vector<T>() {}
+        matrix()
+        : matrix_view<T>(nullptr, 0, 0, 0)
+        , _allocation(nullptr)
+        , _capacity(0) {
+        }
         
         matrix(const matrix& r) : matrix() {
             *this = r;
@@ -65,15 +72,15 @@ namespace wry {
         
         matrix(isize rows, isize columns)
         : matrix_view<T>(nullptr, columns, columns, rows)
-        , raw_vector<T>(rows * columns) {
+        , _allocation((T*) std::calloc(rows * columns, sizeof(T)))
+        , _capacity(rows * columns) {
             this->_begin = this->_allocation;
             std::uninitialized_default_construct_n(this->_begin, rows * columns);
             assert(_invariant());
         }
         
         matrix(isize rows, isize columns, const T& x)
-        : matrix_view<T>(nullptr, columns, columns, rows)
-        , raw_vector<T>(rows * columns) {
+        : matrix(rows, columns) {            
             this->_begin = this->_allocation;
             std::uninitialized_fill_n(this->_begin, rows * columns, x);
             assert(_invariant());
@@ -87,7 +94,7 @@ namespace wry {
         }
         
         ~matrix() {
-            _destroy_all();
+            free(_allocation);
         }
         
         matrix& operator=(const matrix& r) {
@@ -99,19 +106,24 @@ namespace wry {
             return *this;
         }
         
-        matrix& operator=(const_matrix_view<T> r) {
+        matrix& operator=(const_matrix_view<T> other) {
             assert(_invariant());
             _destroy_all();
-            if (this->_capacity < r.rows() * r.columns()) {
-                raw_vector<T> v(std::max(r.rows() * r.columns(), this->_capacity * 2));
-                v.swap(*this);
+            if (this->_capacity < other.rows() * other.columns()) {
+                std::size_t n = std::max(other.rows() * other.columns(),
+                                         this->_capacity << 1);
+                T* p = (T*) std::calloc(n, sizeof(T));
+                free(exchange(this->_allocation, p, nullptr));
+                this->_capacity = n;
             }
             this->_begin = this->_allocation;
-            this->_columns = r._columns;
-            this->_stride = r._columns;
-            this->_rows = r._rows;
+            this->_columns = other._columns;
+            this->_stride = other._columns;
+            this->_rows = other._rows;
             for (isize i = 0; i != this->_rows; ++i)
-                std::uninitialized_copy_n(r._begin + i * r._stride, r._columns, this->_begin + i * this->_stride);
+                std::uninitialized_copy_n(other._begin + i * other._stride,
+                                          other._columns,
+                                          this->_begin + i * this->_stride);
             assert(_invariant());
             return *this;
         }
@@ -183,8 +195,11 @@ namespace wry {
         void discard_and_resize(isize rows, isize columns) {
             _destroy_all();
             if (this->_capacity < rows * columns) {
-                raw_vector<T> v(std::max(rows * columns, 2 * this->_capacity));
-                v.swap(*this);
+                std::size_t n = std::max(rows * columns,
+                                         this->_capacity << 1);
+                T* p = (T*) std::calloc(n, sizeof(T));
+                free(exchange(this->_allocation, p, nullptr));
+                this->_capacity = n;
             }
             this->_begin = this->_allocation;
             this->_columns = columns;

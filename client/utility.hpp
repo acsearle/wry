@@ -29,6 +29,32 @@ namespace wry {
         return static_cast<U5>(value);
     }
     
+    template<class I1, class I2, class Cmp>
+    constexpr auto lexicographical_compare_three_way(I1 f1, I1 l1, I2 f2, I2 l2, Cmp comp) -> decltype(comp(*f1, *f2)) {
+        using ret_t = decltype(comp(*f1, *f2));
+        static_assert(std::disjunction_v<
+                      std::is_same<ret_t, std::strong_ordering>,
+                      std::is_same<ret_t, std::weak_ordering>,
+                      std::is_same<ret_t, std::partial_ordering>>,
+                      "The return type must be a comparison category type.");
+        for (;;) {
+            bool exhaust1 = (f1 == l1);
+            bool exhaust2 = (f2 == l2);
+            if (exhaust1 || exhaust2) {
+                return (!exhaust1
+                        ? std::strong_ordering::greater
+                        : (!exhaust2
+                           ? std::strong_ordering::less:
+                           std::strong_ordering::equal));
+            }
+            if (auto c = comp(*f1, *f2); c != 0)
+                return c;
+            ++f1;
+            ++f2;
+        }
+        
+    }
+    
     // from Rust
     
     using u8 = std::uint8_t;
@@ -159,14 +185,72 @@ namespace wry {
     
     
     
-    
-   
+    // # memswap
+    //
+    // Always enticing but rarely the best way of doing things, swaps the bytes
+    // of two disjoint regions
+    inline void memswap(void* __restrict__ lhs, void* __restrict__ rhs, std::size_t count) {
+        unsigned char* first1 = static_cast<unsigned char*>(lhs);
+        unsigned char* first2 = static_cast<unsigned char*>(rhs);
+        unsigned char* last1 = first1 + count;
+        while (first1 != last1) {
+            unsigned char temporary = *first1;
+            *first1 = *first2;
+            *first2 = temporary;
+            ++first1;
+            ++first2;
+        }
+    }
+
+    // # relocate
+    //
+    // A type `T` is _Relocatable_ if, for `T* dest, T *src`
+    // ```
+    //     std::construct_at(dest, std::move(*src));
+    //     std::destroy_at(src);
+    // ```
+    // is equivalent to
+    // ```
+    //     std::memcpy(dest, src, sizeof(T));
+    // ```
+    // _Movable_ types are typically _Relocatable_.  A type must introspect and
+    // store or publish its own address to become unrelocatable; mutexes are one
+    // example of this behavior.  STL containers and even smart pointers are
+    // movable.  Rust types are relocatable by default (see `Pin`).
+    // Is there a non-contrived example of a type that is _Movable_ but not
+    // _Relocatable_?
+    //
+    // In particular, we can perform bulk array relocates where
+    // ```
+    //     std::uninitialized_move(first, last, d_first);
+    //     std::destroy(first, last)
+    // ```
+    // becomes
+    // ```
+    //     std::memmove(d_first, first, first - last);
+    // ```
+    // which avoids writing move-from states back to the source range just to
+    // communicate to their destructors that no actions are needed.
+        
+    // `std::memmove` will do the right thing without having to worry about
+    // forward or backward copying in the sense of `std::copy_backward`, but
+    // we provide backward relocate operations for when it is more convenient
+    // to specify `d_last`.
+    //
+    // An optional argument signals if the ranges are known to be disjoint so
+    // we can use `std::memcpy` rather than `std::memmove`.  Since
+    // `std::memmove` (probably) performs this check internally and falls back
+    // to `std::memcpy` when possible, this argument should be set only when we
+    // know at compile time that the ranges are disjoint.
+    //
+    // Note that AddressSanitizer can detect overlapping misuses of
+    // `std::memcpy`.
     
     template<typename T>
-    void relocate(const T* src, T* dst) {
-        std::memcpy(dst, src, sizeof(T));
+    void relocate/*_one*/(const T* source, T* destination) {
+        std::memcpy(destination, source, sizeof(T));
     }
-    
+        
     template<typename T, typename N>
     T* relocate_n(const T* first, N count, T* d_first, bool disjoint = false) {
         if (disjoint)
@@ -180,15 +264,15 @@ namespace wry {
     T* relocate(const T* first, const T* last, T* d_first, bool disjoint = false) {
         return relocate_n(first, last - first, d_first, disjoint);
     }
-    
+        
     template<typename T>
     T* relocate_backward(const T* first, const T* last, T* d_last, bool disjoint = false) {
-        ptrdiff_t count = last - first;
+        auto count = last - first;
         T* d_first = d_last - count;
         relocate_n(first, count, d_first, disjoint);
         return d_first;
     }
-    
+        
     template<typename T, typename N>
     T* relocate_backward_n(N count, const T* last, T* d_last, bool disjoint = false) {
         const T* first = last - count;
@@ -196,6 +280,7 @@ namespace wry {
         relocate_n(first, count, d_first, disjoint);
         return d_first;
     }
+    
     
     
     template<typename T, typename U>
@@ -211,8 +296,6 @@ namespace wry {
     inline void deallocate(void* ptr) noexcept {
         operator delete(ptr);
     }
-    
-    
     
 } // namespace wry
 

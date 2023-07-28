@@ -16,8 +16,14 @@
 // [1] https://sarunw.com/posts/how-to-create-macos-app-without-storyboard/
 
 // Our simple application with a single window and view uses a single class as
-// application delegate, window delegate and first responder to respond to all
-// user interface events
+// application delegate, window delegate and first responder to handle all
+// external events on the main thread.  Typically these are minimally processed
+// and handed over to the renderer and simulation threads; we want to avoid
+// doing any blocking work on the main thread.
+//
+// Outstanding questions:
+// - does this include network events?
+// - does CoreAudio do any work on the calling thread (such as buffer prep)
 
 @interface WryDelegate ()
 
@@ -263,8 +269,7 @@
     auto lock = std::unique_lock{_model->_mutex};
     _model->_yx.x += event.deltaX * _window.screen.backingScaleFactor;
     _model->_yx.y += event.deltaY * _window.screen.backingScaleFactor;
-    NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
-    
+    // NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
      
 }
 - (void) mouseUp:(NSEvent *)event {}
@@ -279,8 +284,7 @@
     auto lock = std::unique_lock{_model->_mutex};
     _model->_yx.x += event.scrollingDeltaX * _window.screen.backingScaleFactor;
     _model->_yx.y += event.scrollingDeltaY * _window.screen.backingScaleFactor;
-    NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
-
+    // NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
 }
 
 @end

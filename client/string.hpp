@@ -143,9 +143,9 @@ namespace wry {
             // this is a good argument for const_vector_view having _end rather than
             // _size
             // _bytes._size = (e._ptr - _bytes._begin);
-            _bytes._c = const_cast<u8*>(e._ptr); // <-- fixme
+            _bytes._end = const_cast<u8*>(e._ptr); // <-- fixme
             // _bytes._begin[_bytes._size] = 0;
-            *(_bytes._c) = 0;
+            *(_bytes._end) = 0;
             return c;
         }
         
@@ -156,7 +156,7 @@ namespace wry {
             ++b;
             //_bytes._size -= (b._ptr - _bytes._begin);
             //_bytes._begin += (b._ptr - _bytes._begin);
-            _bytes._b = const_cast<u8*>(b._ptr);
+            _bytes._begin = const_cast<u8*>(b._ptr);
             return c;
         }
         

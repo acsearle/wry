@@ -185,7 +185,7 @@
         simd_int2 c;
         c.x = (origin.x) >> 6;
         c.y = (origin.y) >> 6;
-        NSLog(@"%d %d\n", c.x, c.y);
+        // NSLog(@"%d %d\n", c.x, c.y);
         
         origin.x &= 0x0000003F;
         origin.y &= 0x0000003F;

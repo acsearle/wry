@@ -114,6 +114,10 @@ namespace wry {
         return x;
     }
     
+    inline constexpr u64 bitselect(u64 a, u64 b, u64 c) {
+        return (a & ~c) | (b & c);
+    }
+    
     // Interleave bits to achieve a 1D indexing of 2D space with decent
     // locality properties.  Good for spatial hashing
     //
