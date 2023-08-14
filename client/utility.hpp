@@ -72,7 +72,13 @@ namespace wry {
     
     using iaddr = std::intptr_t;
     using uaddr = std::uintptr_t;
+
+    // simd-like functions
     
+    inline constexpr u64 bitselect(u64 a, u64 b, u64 c) {
+        return (a & ~c) | (b & c);
+    }
+
     namespace detail {
         
         template<typename F, typename X>

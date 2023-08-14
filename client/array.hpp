@@ -151,8 +151,10 @@ namespace wry {
         }
         
         array(const array& other) noexcept
-        : array(with_capacity, other.size()) {
-            _end = std::uninitialized_copy(_begin, other.begin(), other.end());
+        : array(with_capacity_t{}, other.size()) {
+            _end = std::uninitialized_copy(other.begin(),
+                                           other.end(),
+                                           _begin);
         }
         
         array(array&& other)
@@ -168,7 +170,7 @@ namespace wry {
                 std::destroy(end2, end());
                 _end = end2;
             } else if (other.size() <= capacity()) {
-                iterator mid = other.begin() + size();
+                const_iterator mid = other.begin() + size();
                 std::copy(other.begin(), mid, begin());
                 _end = std::uninitialized_copy(mid, other.end(), end());
             } else {

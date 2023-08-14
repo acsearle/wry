@@ -37,7 +37,7 @@ vertexShader(uint vertexID [[ vertex_id ]],
     RasterizerData out;
     
     out.clipSpacePosition = float4(uniforms.position_transform
-                                   * float3(vertexArray[vertexID].position, 1), 1);
+                                   * float4(vertexArray[vertexID].position, 0, 1));
     out.texCoord = vertexArray[vertexID].texCoord;
     
     // out.color = float4(vertexArray[vertexID].color) / 255;
@@ -45,6 +45,25 @@ vertexShader(uint vertexID [[ vertex_id ]],
     
     return out;
 }
+
+vertex RasterizerData
+vertexShader4(uint vertexID [[ vertex_id ]],
+             const device MyVertex4 *vertexArray [[ buffer(MyVertexInputIndexVertices) ]],
+             constant MyUniforms &uniforms  [[ buffer(MyVertexInputIndexUniforms) ]])
+
+{
+    RasterizerData out;
+    
+    out.clipSpacePosition = float4(uniforms.position_transform
+                                   * float4(vertexArray[vertexID].position));
+    out.texCoord = vertexArray[vertexID].texCoord;
+    
+    // out.color = float4(vertexArray[vertexID].color) / 255;
+    out.color = unpack_unorm4x8_srgb_to_float(vertexArray[vertexID].color);
+    
+    return out;
+}
+
 
 /*
  fragment float4
@@ -59,8 +78,8 @@ fragment float4
 fragmentShader(RasterizerData in [[stage_in]],
                texture2d<half> colorTexture [[ texture(AAPLTextureIndexBaseColor) ]])
 {
-    constexpr sampler textureSampler (mag_filter::nearest,
-                                      min_filter::nearest);
+    constexpr sampler textureSampler (mag_filter::linear,
+                                      min_filter::linear);
     
     // Sample the texture to obtain a color
     const half4 colorSample = colorTexture.sample(textureSampler, in.texCoord);

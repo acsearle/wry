@@ -14,6 +14,7 @@
 #include <map>
 
 #include "with_capacity.hpp"
+#include "hash.hpp"
 
 namespace wry {
     
@@ -528,14 +529,14 @@ namespace wry {
             , _context(c) {
             }
             
-            iterator& operator++() {
+            const_iterator& operator++() {
                 assert(_pointer != _end());
                 ++_pointer;
                 _advance();
                 return *this;
             }
             
-            iterator& operator--() {
+            const_iterator& operator--() {
                 _retreat();
             }
             
@@ -544,7 +545,7 @@ namespace wry {
             }
             
             const_pointer operator->() const {
-                return &(_pointer->_kv);
+                return &reinterpret_cast<const_reference>(_pointer->_kv);
             }
             
             bool operator==(const const_iterator& other) const {
@@ -611,6 +612,32 @@ namespace wry {
             _inner.clear();
         }
         
+        const_iterator find(const auto& keylike) const {
+            Entry* p = _inner.find(_inner._hasher.get_hash(keylike),
+                                   [&](const Entry& e) {
+                return e._kv.first == keylike;
+            });
+            return const_iterator((p ? p : _inner.end()), &_inner);
+        }
+        
+        std::pair<iterator, bool> emplace(auto&& key, auto&& value) {
+            std::uint64_t h = _inner._hasher.get_hash(key);
+            std::uint64_t i = _inner._insert_uninitialized(h, [&key](Entry& e) {
+                return e._kv.first == key;
+            });
+            Entry* p = _inner._begin + i;
+            if (p->_hash) {
+                return {iterator{p, &_inner}, false};
+            } else {
+                p->_hash = h;
+                std::construct_at(&(p->_kv),
+                                  std::forward<decltype(key)>(key),
+                                  std::forward<decltype(value)>(value));
+                return {iterator{p, &_inner}, true};
+            }
+        }
+
+        
         std::pair<iterator, bool> insert(auto&& value) {
             std::uint64_t h = _inner._hasher.get_hash(value);
             std::uint64_t i = _inner._insert_uninitialized(h,
@@ -655,13 +682,6 @@ namespace wry {
         
         
         
-        const_iterator find(const auto& keylike) const {
-            Entry* p = _inner.find(_inner._hasher.get_hash(keylike),
-                                   [&](const Entry& e) {
-                return e._kv.first == keylike;
-            });
-            return const_iterator((p ? p : _inner.end()), &_inner);
-        }
         
         std::size_t erase(iterator pos) {
             _inner._relocate_backward_from(pos._pointer - _inner._begin);
@@ -675,12 +695,11 @@ namespace wry {
                 return e._kv.first == keylike;
             });
         }
-        
-        reference find_or_value_construct(auto&& k) {
-            std::uint64_t h = _inner._hasher.get_hash(k);
-            std::uint64_t i = _inner._insert_uninitialized(_inner._hasher.get_hash(k),
-                                                           [&](const Entry& e) {
-                return e._kv.first == k;
+        /*
+        reference find_or_value_construct(auto&& key) {
+            std::uint64_t h = _inner._hasher.get_hash(key);
+            std::uint64_t i = _inner._insert_uninitialized(h, [&key](const Entry& e) {
+                return e._kv.first == key;
             });
             Entry* p = _inner._begin + i;
             if (p->_hash) {
@@ -694,20 +713,52 @@ namespace wry {
                 return {iterator{p, &_inner}, true};
             }
         }
+         */
         
-        reference operator[](auto&& k) {
-            return find_or_value_construct(std::forward<decltype(k)>(k));
+        T& operator[](auto&& key) {
+            std::uint64_t h = _inner._hasher.get_hash(key);
+            std::uint64_t i = _inner._insert_uninitialized(h, [&key](const Entry& e) {
+                return e._kv.first == key;
+            });
+            Entry* p = _inner._begin + i;
+            if (!(p->_hash)) {
+                p->_hash = h;
+                std::construct_at(&(p->_kv),
+                                  std::piecewise_construct,
+                                  std::forward_as_tuple(std::forward<decltype(key)>(key)),
+                                  std::tuple<>());
+            }
+            return p->_kv.second;
         }
         
+        const T& at(auto&& key) const {
+            Entry* p = _inner.find(_inner._hasher.get_hash(key),
+                                   [&key](const Entry& e) {
+                return e._kv.first == key;
+            });
+            assert(p);
+            return p->_kv.second;
+        }
+
+        T& at(auto&& key) {
+            Entry* p = _inner.find(_inner._hasher.get_hash(key),
+                                   [&key](const Entry& e) {
+                return e._kv.first == key;
+            });
+            assert(p);
+            return p->_kv.second;
+        }
+
         std::size_t count(auto&& k) {
             return _inner.find(k) ? 1 : 0;
         }
         
-        bool contains(auto&& k) {
-            return _inner.find(k);
+        bool contains(auto&& key) {
+            return _inner.find(_inner._hasher.get_hash(key),
+                               [&key](const Entry& e) {
+                return e._kv.first == key;
+            });
         }
-
-                
     };
     
 } // namespace wry

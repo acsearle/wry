@@ -10,4 +10,12 @@
 
 #include <stdio.h>
 
+namespace wry {
+    
+    // we have a dynamic_array already
+    //
+    // tempting to make vector be dynamic_array plus arithmetic operators
+    
+} // namespace wry
+
 #endif /* vector_hpp */

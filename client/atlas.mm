@@ -71,9 +71,12 @@ namespace wry {
                       withBytes:v.data()
                     bytesPerRow:v.stride() * sizeof(pixel)];
         sprite s;
-        s.a.position = - origin;
+        s.a.position = simd_make_float4(-origin, 0, 1);
         s.a.texCoord = simd_float(tl) / (float) _size;
-        s.b.position = { v.columns() - origin.x, v.rows() - origin.y };
+        s.b.position = simd_make_float4(v.columns() - origin.x,
+                                        v.rows() - origin.y,
+                                        0,
+                                        1);
         s.b.texCoord = simd_make_float2(tl.x + v.columns(), tl.y + v.rows()) / _size;
         
         // for debug, also shade the split regions

@@ -32,8 +32,10 @@ namespace wry {
     using image = matrix<pixel>;
     
     using imagef = matrix<simd_float4>;
-    
+
+    image from_png(string_view);
     image from_png_and_multiply_alpha(string_view);
+    imagef from_png_and_multiply_alpha_f(string_view);
     void to_png(image const&, char const*);
     
     void multiply_alpha(image& a);
@@ -94,7 +96,8 @@ namespace wry {
         };
     }
     
-    inline void draw_bounding_box(image& x) {
+    inline void draw_bounding_box(matrix_view<pixel>& x) {
+        // draw a dark box outline _under_ the premultiplied alpha image
         auto foo = [&](auto i, auto j) {
             auto b = x(i, j).a;
             b = b * 3 / 4 + 64;
@@ -110,7 +113,9 @@ namespace wry {
         }
     }
 
+    void halve(imagef&);
     
+    image to_RGB8Unorm_sRGB(const imagef&);
     
     
 } // namespace manic

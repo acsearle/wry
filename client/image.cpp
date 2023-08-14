@@ -49,6 +49,24 @@ namespace wry {
         return c;
     }
     
+    imagef from_png_and_multiply_alpha_f(string_view v) {
+        image c = from_png(v);
+        imagef d(c.height(), c.width());
+        for (std::size_t i = 0; i != c.height(); ++i) {
+            for (std::size_t j = 0; j != c.width(); ++j) {
+                simd_uchar4 a = c(i, j);
+                float alpha = a.a / 255.0f;
+                d(i, j) = simd_float4{
+                    from_sRGB(a.r) * alpha,
+                    from_sRGB(a.g) * alpha,
+                    from_sRGB(a.b) * alpha,
+                    alpha
+                };
+            }
+        }
+        return d;
+    }
+    
     image from_png_and_multiply_alpha(string_view v) {
         // timer _((const char*) v.a._ptr);
         image c = from_png(v);
@@ -297,5 +315,27 @@ namespace wry {
                 background(i, j) = compose(background(i, j), foreground(i, j));
     }
     
+    void halve(imagef& a) {
+        imagef b(a.height() >> 1, a.width() >> 1);
+        for (std::size_t i = 0; i != a.height(); ++i) {
+            for (std::size_t j = 0; j != a.width(); ++j) {
+                b(i >> 1, j >> 1) += a(i, j) * 0.25f;
+            }
+        }
+        using std::swap;
+        swap(a, b);
+    }
+    
+    image to_RGB8Unorm_sRGB(const imagef& a) {
+        image b(a.height(), a.width());
+        for (std::size_t i = 0; i != a.height(); ++i) {
+            for (std::size_t j = 0; j != a.width(); ++j) {
+                b(i, j) = simd_uchar(simd::round(to_sRGB(a(i, j))));
+            }
+        }
+        return b;
+    }
+
+        
 }
 

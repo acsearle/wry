@@ -8,10 +8,9 @@
 #ifndef font_hpp
 #define font_hpp
 
-#include <map> // fixme
-
 #include "atlas.hpp"
 #include "string.hpp"
+#include "table.hpp"
 
 namespace wry {
     
@@ -22,7 +21,8 @@ namespace wry {
             float advance;
         };
         
-        std::map<u32, glyph> charmap;
+        // std::map<u32, glyph> charmap;
+        table<u32, glyph> charmap;
         
         float ascender;
         float descender;

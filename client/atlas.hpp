@@ -29,16 +29,18 @@ namespace wry {
     };
     
     inline sprite operator+(sprite s, simd_float2 x) {
-        s.a.position += x;
-        s.b.position += x;
+        s.a.position += simd_make_float4(x, 0, 0);
+        s.b.position += simd_make_float4(x, 0, 0);
         return s;
     }
     
+    /*
     inline sprite operator*(sprite s, float k) {
         s.a.position *= k;
         s.b.position *= k;
         return s;
     }
+     */
     
     
     // atlas bundles together some functionality, some of which should move elsewhere
@@ -67,12 +69,14 @@ namespace wry {
         
         atlas(std::size_t n, id<MTLDevice> device);
         
+        /*
         sprite as_sprite() const {
             return sprite{
                 {{0.0f, 0.0f}, {0.0f, 0.0f}},
                 {{(float) _size, (float)_size}, {1.0f, 1.0f}},
             };
         }
+         */
         
         void push_sprite(sprite s, pixel c = { 255, 255, 255, 255 }) {
             // a - x
@@ -80,9 +84,13 @@ namespace wry {
             // y - b
             _vertices.push_back({s.a, c});
             _vertices.push_back({s.b, c});
-            _vertices.push_back({{{s.b.position.x, s.a.position.y}, {s.b.texCoord.x, s.a.texCoord.y}}, c});
+            _vertices.push_back({{
+                { s.b.position.x, s.a.position.y, 0.0f, 1.0f},
+                { s.b.texCoord.x, s.a.texCoord.y}}, c });
             _vertices.push_back({s.a, c});
-            _vertices.push_back({{{s.a.position.x, s.b.position.y}, {s.a.texCoord.x, s.b.texCoord.y}}, c});
+            _vertices.push_back({{
+                {s.a.position.x, s.b.position.y, 0.0f, 1.0f},
+                {s.a.texCoord.x, s.b.texCoord.y}}, c});
             _vertices.push_back({s.b, c});
         }
         
@@ -91,9 +99,15 @@ namespace wry {
             _vertices.push_back(v[0]);
             _vertices.push_back(v[1]);
             _vertices.push_back(v[2]);
-            _vertices.push_back(v[0]);
             _vertices.push_back(v[2]);
+            _vertices.push_back(v[1]);
             _vertices.push_back(v[3]);
+        }
+        
+        void push_triangle(vertex v[]) {
+            _vertices.push_back(v[0]);
+            _vertices.push_back(v[1]);
+            _vertices.push_back(v[2]);
         }
         
         void commit(id<MTLRenderCommandEncoder> renderEncoder);

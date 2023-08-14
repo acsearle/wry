@@ -194,3 +194,102 @@ and sends minimal data to render; advances game state
 
 NSView
 CALayerDelegate
+
+
+# ZZZ
+
+Rotating a vector 
+
+(a, b)
+
+by 60 degrees is
+
+( c, -s)
+( s,  c)
+
+(ca - sb)
+(sa + cb)
+
+(a - b sqrt(3)) / 2
+(sqrt(3) a + b) / 2
+
+sqrt(3) = 1.73    1.75 = 7/4
+
+( 1/2   -7/8)
+( 7/8   +1/2)
+
+(4 a - 7 b) / 8
+(7 a + 4 b) / 8
+
+
+(1, 1) -> (- 3, 13) / 8
+
+(1, 2) -> (-10, 18) / 8
+(1, 3) -> (-17, 19) / 8
+(2, 3) -> (-13, 26) / 8 = (
+(1, 4) -> (-24, 23) / 8 = (-3, 2.875)
+(3, 4) -> (-16, 37) / 8 = (-2, 4.625)
+
+ASPMT
+
+
+
+// projection
+// isometric looks nice but square is better for drafting
+
+// isometric angle is (1,1,1)
+// right triangle is 1, sqrt(2), sqrt(3)
+// so we are talking about 1/sqrt(3) as the v:h pitch
+// 0.577 = 37/64
+
+
+
+
+// Illumination
+
+What shape is the shadow of a rectangle:
+
+Consider the shadow of a quadrant illuminated by a uniform hemisphere sky
+
+Shadow cast on a surface by blocker on plane 1 unit up
+
+In the coordinates of the plane, an unobstructed region dxdy contributes in
+proportion to the solid angle it subtends
+
+area:
+
+dx dy
+
+distance:
+
+1 / (x^2 + y^2 + 1)
+
+angle:
+
+cos theta = 1 / sqrt(x^2 + y^2 + 1)
+
+dx dy / (x^2 + y^2 + 1)^1.5
+
+and another factor of cos theta for the glancing incidence
+
+dx dy / (x^2 + y^2 + 1)^2
+
+This is the radiosity _view factor_, cos theta1 const theta2 / (pi s^2)
+
+Compute the shadow of a corner, which is 1/(x^2 + y^2 + 1) convolved
+This is now a cumulative shadow/illumination map
+We can make any rectangular shadow by corners:
+```
+ + -
+ - + 
+```
+And scaling the shadow map by distance
+And using the texture map edge clamped mode to extend beyond the map
+Shadow is now four lookups in the same texture
+
+
+
+
+ 
+
+
