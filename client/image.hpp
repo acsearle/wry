@@ -28,6 +28,49 @@ namespace wry {
     // Emmissives are their own texture layer so the fact they can't be represented
     // in non-premultiplied-alpha pngs is irrelevant.
     
+    
+    /* Metal Spec 3.1 conversions
+     
+     sRGB conversions:
+     
+     if (c <= 0.04045)
+     result = c / 12.92;
+     else
+     result = powr((c + 0.055) / 1.055, 2.4);
+     
+     if (isnan(c))
+        c = 0.0;
+     if (c > 1.0)
+        c = 1.0;
+     else if (c < 0.0)
+        c = 0.0;
+     else if (c < 0.0031308)
+        c = 12.92 * c;
+     else
+        c = 1.055 * powr(c, 1.0/2.4) - 0.055;
+     // Convert to integer scale: c = c * 255.0
+     // Convert to integer: c = c + 0.5
+     // Drop the decimal fraction. The remaining floating-point(integral) value
+     // is converted directly to an integer.
+     
+     
+     U/Snorm conversions:
+     
+     float(c) / 255.0
+     
+     max(-1.0,
+     float(c)/127.0)
+     
+     x = min(max(f * 255.0, 0.0), 255.0)
+     i7:0 = intRTNE(x)
+     
+     result = min(max(f * 127.0, -127.0), 127.0)
+     i7:0 = intRTNE(x)
+     
+     
+     
+     */
+    
     using pixel = simd_uchar4;
     using image = matrix<pixel>;
     
@@ -67,9 +110,9 @@ namespace wry {
     
     inline simd_float4 to_sRGB(simd_float4 v) {
         return simd_float4{
-            to_sRGB(v.r),
-            to_sRGB(v.g),
-            to_sRGB(v.b),
+            to_sRGB(v.r)  * 255.0f,
+            to_sRGB(v.g)  * 255.0f,
+            to_sRGB(v.b)  * 255.0f,
             v.a * 255.0f,
         };
     }
@@ -114,6 +157,7 @@ namespace wry {
     }
 
     void halve(imagef&);
+    void inflate(image&);
     
     image to_RGB8Unorm_sRGB(const imagef&);
     

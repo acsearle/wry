@@ -34,7 +34,7 @@ namespace wry {
         }
         
         ~model() {
-            printf("~model\n");
+            fprintf(stderr, "%s\n", __PRETTY_FUNCTION__);
         }
         
     };

@@ -163,7 +163,7 @@ namespace wry {
         , _allocation_begin(std::exchange(other._allocation_begin, nullptr))
         , _allocation_end(std::exchange(other._allocation_end, nullptr)) {
         }
-        
+                
         array& operator=(const array& other) {
             if (other.size() <= size()) {
                 iterator end2 = std::copy(other.begin(), other.end(), begin());
@@ -242,6 +242,10 @@ namespace wry {
         template<typename InputIt>
         array(InputIt first, InputIt last)
         : array(first, last, typename std::iterator_traits<InputIt>::iterator_category{}) {
+        }
+        
+        array(std::initializer_list<T> x)
+        : array(x.begin(), x.end()) {
         }
         
         template<typename... Args>
@@ -564,7 +568,7 @@ namespace wry {
 
         template<typename InputIt>
         array(InputIt first, InputIt last, std::random_access_iterator_tag)
-        : array(with_capacity, std::distance(first, last)) {
+        : array(with_capacity_t(), std::distance(first, last)) {
             for (; first != last; ++first)
                 push_back(*first);
         }

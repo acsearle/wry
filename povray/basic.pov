@@ -27,9 +27,13 @@ camera {
     up <0, 1, 0>
     location < 0, 0, 1 >
     scale 8
+    // rotate <-90, 0, 0>
+    
+    rotate <-35.264, 0, 0>
+    rotate <0, 45, 0>
+    
     // location <0, 1/2, -sqrt(3/4)>
-    //look_at <0, 0.0, 0>
-    //rotate <-90, 0, 0>
+    // look_at <0, 0.0, 0>
 }
 
 background { color rgbt <0,0,0,1> }
@@ -42,18 +46,32 @@ sphere {
             [ 0 color <0, 0, 0> ]
             [ 1 color <1, 1, 1> * 2 ]
         }
-        // color rgb <1,1,1>*2
     }
     finish {
         diffuse 0
         emission 1
     }
     no_image
+    // rotate <90, 0, 0>
 }
+
+/*
+light_source {
+    <0,0,1>*8, <1,1,1>
+    parallel
+    point_at <0,0,0>
+    rotate <-35.264, 0, 0>
+    rotate <0, 135, 0>
+
+}
+*/
 
 union {
     plane { <0, 1, 0>, -1 }
-    box { <-1, -1, -1>, <1,1,1> }
+    // box { <-1, -1, -1>, <1,1,1> }
+    // cylinder { <-1, 0, 0>, <1,0,0>, 1 }
+    // box { <-1, 0, -1>, <1, 1, 1> }
+    sphere { 0, 1 }
     pigment { color rgb <1,1,1>/2 }
     finish { diffuse 1 emission 0 }
 }

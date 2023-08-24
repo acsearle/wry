@@ -57,11 +57,12 @@ namespace wry {
                 simd_uchar4 a = c(i, j);
                 float alpha = a.a / 255.0f;
                 d(i, j) = simd_float4{
-                    from_sRGB(a.r) * alpha,
-                    from_sRGB(a.g) * alpha,
-                    from_sRGB(a.b) * alpha,
+                    from_sRGB(a.r / 255.0f) * alpha,
+                    from_sRGB(a.g / 255.0f) * alpha,
+                    from_sRGB(a.b / 255.0f) * alpha,
                     alpha
                 };
+                //printf("%g\n", d(i, j).r);
             }
         }
         return d;
@@ -324,6 +325,15 @@ namespace wry {
         }
         using std::swap;
         swap(a, b);
+    }
+    
+    void inflate(image& a) {
+        image b(a.height() << 1, a.width() << 1);
+        for (std::size_t i = 0; i != b.width(); ++i)
+            for (std::size_t j = 0; j != b.width(); ++j)
+                b(i, j) = a(i >> 1, j >> 1);
+        swap(a, b);
+
     }
     
     image to_RGB8Unorm_sRGB(const imagef& a) {

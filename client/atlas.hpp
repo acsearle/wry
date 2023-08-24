@@ -63,35 +63,32 @@ namespace wry {
         array<vertex> _vertices;
         
         id<MTLTexture> _texture;
-        id<MTLBuffer> _buffer;
-        id<MTLBuffer> _buffer2;
+        id<MTLBuffer> _buffers[4];
         dispatch_semaphore_t _semaphore;
         
         atlas(std::size_t n, id<MTLDevice> device);
         
-        /*
         sprite as_sprite() const {
             return sprite{
-                {{0.0f, 0.0f}, {0.0f, 0.0f}},
-                {{(float) _size, (float)_size}, {1.0f, 1.0f}},
+                {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
+                {{(float) _size, (float)_size, 0.0f, 1.0f}, {1.0f, 1.0f}},
             };
         }
-         */
         
         void push_sprite(sprite s, pixel c = { 255, 255, 255, 255 }) {
             // a - x
             // | \ | => abx ayb
             // y - b
             _vertices.push_back({s.a, c});
-            _vertices.push_back({s.b, c});
             _vertices.push_back({{
                 { s.b.position.x, s.a.position.y, 0.0f, 1.0f},
                 { s.b.texCoord.x, s.a.texCoord.y}}, c });
+            _vertices.push_back({s.b, c});
             _vertices.push_back({s.a, c});
+            _vertices.push_back({s.b, c});
             _vertices.push_back({{
                 {s.a.position.x, s.b.position.y, 0.0f, 1.0f},
                 {s.a.texCoord.x, s.b.texCoord.y}}, c});
-            _vertices.push_back({s.b, c});
         }
         
         void push_quad(vertex v[]) {

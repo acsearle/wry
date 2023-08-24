@@ -21,6 +21,7 @@ namespace wry {
         descriptor.pixelFormat = MTLPixelFormatRGBA8Unorm_sRGB;
         descriptor.width = n;
         descriptor.height = n;
+        descriptor.usage = MTLTextureUsageShaderRead;
         
         // MTL asks for this but it may be an Apple Silicon thing?
          // Non-shared memory GPU: Managed ?
@@ -29,31 +30,31 @@ namespace wry {
         
         _texture = [device newTextureWithDescriptor:descriptor];
         _vertices.reserve(65536);
-        _buffer = [device newBufferWithLength:sizeof(vertex) * _vertices.capacity()
-                                      options:MTLResourceStorageModeShared];
-        _buffer2 = [device newBufferWithLength:sizeof(vertex) * _vertices.capacity()
-                                       options:MTLResourceStorageModeShared];
-        _semaphore = dispatch_semaphore_create(2);
+        for (auto& x : _buffers) {
+            x = [device newBufferWithLength:sizeof(vertex) * _vertices.capacity()
+                                    options:MTLResourceStorageModeShared];
+        }
+        _semaphore = dispatch_semaphore_create(4);
     }
     
     void atlas::commit(id<MTLRenderCommandEncoder> renderEncoder) {
         
         dispatch_semaphore_wait(_semaphore, DISPATCH_TIME_FOREVER);
         
-        assert(_buffer.length >= _vertices.size() * sizeof(vertex));
-        std::memcpy(_buffer.contents,
+        assert(_buffers[0].length >= _vertices.size() * sizeof(vertex));
+        std::memcpy(_buffers[0].contents,
                     _vertices.data(),
                     _vertices.size() * sizeof(vertex));
-        [renderEncoder setVertexBuffer:_buffer
+        [renderEncoder setVertexBuffer:_buffers[0]
                                 offset:0
-                               atIndex:MyVertexInputIndexVertices];
+                               atIndex:AAPLBufferIndexVertices];
         [renderEncoder setFragmentTexture:_texture
-                                  atIndex:AAPLTextureIndexBaseColor];
+                                  atIndex:AAPLTextureIndexColor];
         [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle
                           vertexStart:0
                           vertexCount:_vertices.size()];
         _vertices.clear();
-        std::swap(_buffer, _buffer2);
+        std::rotate(_buffers, _buffers + 1, _buffers + 4);
         
     }
     

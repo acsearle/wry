@@ -10,16 +10,30 @@
 
 #include <simd/simd.h>
 
-typedef enum MyVertexInputIndex
-{
-    MyVertexInputIndexVertices = 0,
-    MyVertexInputIndexUniforms = 1,
-} MyVertexInputIndex;
+// location attributes
 
-typedef enum AAPLTextureIndex
+typedef enum
 {
-    AAPLTextureIndexBaseColor = 0,
+    AAPLBufferIndexUniforms = 0,
+    AAPLBufferIndexVertices = 1,
+    AAPLBufferIndexIndices = 2,
+} AAPLBufferIndex;
+
+
+typedef enum
+{
+    AAPLTextureIndexColor = 0,
+    AAPLTextureIndexNormal = 1,
+    AAPLTextureIndexShadow = 2,
+    AAPLTextureIndexRoughness = 4,
+    AAPLTextureIndexMetallic = 5,
 } AAPLTextureIndex;
+
+typedef enum {
+    AAPLColorIndexColor = 0,
+    AAPLColorIndexNormal = 1,
+} AAPLColorIndex;
+
 
 typedef struct
 {
@@ -57,6 +71,27 @@ typedef struct
     // vector_uint2 viewportSize;
     matrix_float4x4 position_transform;
 } MyUniforms;
+
+
+typedef struct {
+    vector_float4 position;
+    vector_float2 texCoord;
+    vector_float4 normal;
+    vector_float4 tangent;
+} MeshVertex;
+
+typedef struct
+{
+    matrix_float4x4 model_transform; // make 3x4
+    matrix_float4x4 viewprojection_transform;
+    matrix_float4x4 light_viewprojection_transform;
+    
+    matrix_float4x4 inverse_model_transform; // make 3x3
+    vector_float3 light_direction;
+    
+    vector_float4 camera_world_position;
+    
+} MeshUniforms;
 
 
 #endif /* ShaderTypes_h */

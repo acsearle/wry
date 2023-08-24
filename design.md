@@ -288,6 +288,14 @@ And using the texture map edge clamped mode to extend beyond the map
 Shadow is now four lookups in the same texture
 
 
+### Notes on deferred physically-based rendering
+
+- On Apple silicon the gbuffer can be entirely memoryless if we do everything 
+in the screen pass
+
+- No readback from the current depth texture, but can we bind it as an
+attachment?
+
 
 
  
