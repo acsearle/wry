@@ -14,24 +14,25 @@
 
 typedef enum
 {
-    AAPLBufferIndexUniforms = 0,
-    AAPLBufferIndexVertices = 1,
-    AAPLBufferIndexIndices = 2,
+    AAPLBufferIndexUniforms,
+    AAPLBufferIndexVertices,
+    AAPLBufferIndexIndices,
 } AAPLBufferIndex;
 
 
 typedef enum
 {
-    AAPLTextureIndexColor = 0,
-    AAPLTextureIndexNormal = 1,
-    AAPLTextureIndexShadow = 2,
-    AAPLTextureIndexRoughness = 4,
-    AAPLTextureIndexMetallic = 5,
+    AAPLTextureIndexColor,
+    AAPLTextureIndexNormal,
+    AAPLTextureIndexShadow,
+    AAPLTextureIndexRoughness,
+    AAPLTextureIndexMetallic,
+    AAPLTextureIndexEnvironment,
 } AAPLTextureIndex;
 
 typedef enum {
-    AAPLColorIndexColor = 0,
-    AAPLColorIndexNormal = 1,
+    AAPLColorIndexColor,
+    AAPLColorIndexNormal,
 } AAPLColorIndex;
 
 
@@ -92,6 +93,12 @@ typedef struct
     vector_float4 camera_world_position;
     
 } MeshUniforms;
+
+typedef struct {
+    float alpha;
+    matrix_float4x4 transforms[6];
+    
+} cubeFilterUniforms;
 
 
 #endif /* ShaderTypes_h */

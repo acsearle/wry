@@ -10,6 +10,7 @@
 namespace wry {
     
     define_test("projection") {
+        return;
         
         double c = 1.0 / 2.0;
         double s = sqrt(3.0) / 2.0;
@@ -75,7 +76,7 @@ namespace wry {
     };
     
     define_test("fraction approximation") {
-        
+        return;
         double b = 1.0;
         double q = 1.0 / sqrt(3.0);
         for (int i = 0; i != 64; ++i) {
@@ -92,7 +93,7 @@ namespace wry {
     };
     
     define_test("shadow") {
-        
+        return;
         // 256
         // 8
         

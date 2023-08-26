@@ -230,12 +230,12 @@ namespace wry {
         // [[C++ named requirement]] SequenceContainer (core)
         
         explicit array(size_type count) noexcept
-        : array(with_capacity, count) {
+        : array(with_capacity_t(), count) {
             _end = std::uninitialized_value_construct_n(_begin, count);
         }
 
         array(size_type count, const value_type& value) noexcept
-        : array(with_capacity, count) {
+        : array(with_capacity_t(), count) {
             _end = std::uninitialized_fill_n(_begin, count, value);
         }
 

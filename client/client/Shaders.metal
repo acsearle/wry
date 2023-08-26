@@ -177,7 +177,7 @@ struct MeshFragmentOutput {
 float DistributionGGX(float3 normal, float3 halfway, float roughness) {
     float alpha = roughness * roughness;
     float a2 = alpha * alpha;
-    float nh = max(dot(normal, halfway), 0.0f);
+    float nh = saturate(dot(normal, halfway));
     float nh2 = nh * nh;
     float d = (nh2 * (a2 - 1.0f) + 1.0f);
     float d2 = d * d;
@@ -194,8 +194,8 @@ float GeometrySchlickGGXPoint(float NdotV, float roughness) {
 
 float GeometrySmithPoint(float3 N, float3 V, float3 L, float roughness)
 {
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = saturate(dot(N, V));
+    float NdotL = saturate(dot(N, L));
     float ggx1 = GeometrySchlickGGXPoint(NdotV, roughness);
     float ggx2 = GeometrySchlickGGXPoint(NdotL, roughness);
     
@@ -204,24 +204,12 @@ float GeometrySmithPoint(float3 N, float3 V, float3 L, float roughness)
 
 float3 fresnelSchlick(float cosTheta, float3 F0)
 {
-    return F0 + (1.0f - F0) * pow(clamp(1.0f - cosTheta, 0.0f, 1.0f), 5.0f);
+    return F0 + (1.0f - F0) * pow(saturate(1.0f - cosTheta), 5.0f);
 }
 
 float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
 {
-    return F0 + (max(float3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
-
-
-// very crude environment map
-float3 environmentLookup(float3 w, float alpha) {
-    float k = smoothstep(-alpha*alpha, +alpha*alpha, w.y);
-    float j = smoothstep(-1, 0, w.y);
-    // return float3(1.0f - blue, 0.5f, blue)*0.3f;
-    //float red = (1.0f - blue) * 0.25f;
-    //return float3(red, red * 0.25 + blue * 0.5f, blue);
-    //return mix(float3(0.5f, 0.25f, 0.0f)*0.0f, float3(0.25f, 0.5f, 1.0f), k) * 1.0f;
-    return mix(float3(0.5f, 0.25f, 0.125f)*j, float3(0.25f, 0.5f, 1.0f), k);
+    return F0 + (max(float3(1.0 - roughness), F0) - F0) * pow(saturate(1.0f - cosTheta), 5.0);
 }
 
 [[fragment]] MeshFragmentOutput
@@ -231,9 +219,11 @@ meshFragmentShader(MeshRasterizerData in [[stage_in]],
                    texture2d<float> normalTexture [[texture(AAPLTextureIndexNormal)]],
                    texture2d<float> roughnessTexture [[texture(AAPLTextureIndexRoughness)]],
                    texture2d<float> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
-                   texture2d<float> shadowTexture [[texture(AAPLTextureIndexShadow)]])
+                   texture2d<float> shadowTexture [[texture(AAPLTextureIndexShadow)]],
+                   texturecube<float> environmentTexture [[texture(AAPLTextureIndexEnvironment)]])
+
 {
-    constexpr sampler linearSampler(mag_filter::linear,
+    constexpr sampler bilinearSampler(mag_filter::linear,
                                     min_filter::linear,
                                     s_address::repeat,
                                     t_address::repeat);
@@ -243,36 +233,39 @@ meshFragmentShader(MeshRasterizerData in [[stage_in]],
                                      s_address::clamp_to_edge,
                                      t_address::clamp_to_edge);
 
+    constexpr sampler trilinearSampler(mag_filter::linear,
+                                       min_filter::linear,
+                                       mip_filter::linear,
+                                       s_address::repeat,
+                                       t_address::repeat);
+
 
     MeshFragmentOutput out;
     
     // Sample the texture to obtain a color
-    float4 colorSample = colorTexture.sample(linearSampler, in.texCoord);
+    float4 colorSample = colorTexture.sample(bilinearSampler, in.texCoord);
     // Sample the texture to obtain a normal
-    float4 normalSample = normalTexture.sample(linearSampler, in.texCoord);
+    float4 normalSample = normalTexture.sample(bilinearSampler, in.texCoord);
     // Sample the rougness texture
-    float4 roughnessSample = roughnessTexture.sample(linearSampler, in.texCoord);
+    float4 roughnessSample = roughnessTexture.sample(bilinearSampler, in.texCoord);
     // Sample the metallic texture
-    float4 metallicSample = metallicTexture.sample(linearSampler, in.texCoord);
+    float4 metallicSample = metallicTexture.sample(bilinearSampler, in.texCoord);
 
-    in.lightSpacePosition.x = +in.lightSpacePosition.x;
-    in.lightSpacePosition.y = -in.lightSpacePosition.y;
-    float shadowSample = shadowTexture.sample(nearestSampler, in.lightSpacePosition.xy * 0.5f + 0.5f).r;
+    float shadowSample = shadowTexture.sample(nearestSampler, in.lightSpacePosition.xy).r;
 
     // hack in white
-    // colorSample = 0.5f;
+    //colorSample = float4(1.0f, 1.0f, 0.0f, 1.0f) * 0.3;
     // hack in flat
     //normalSample = mix(normalSample, float4(0.5, 0.5, 1.0, 0.0), 0.0f);
-    
-    // float roughness = 0.1f;
-    float roughness = roughnessSample.r;
-    // float metalness = 1.0f;
-    float metalness = metallicSample.r;
+    // hack in rough
+    //roughnessSample.r = 0.03;
+    // hack in plastic
+    //metallicSample.r = 1;
     float ao = 1.0; // ambient occlusion
     
     // Fresnel perpendicular reflectance
     float3 F0 = 0.04f;
-    F0 = mix(F0, colorSample.rgb, metalness);
+    F0 = mix(F0, colorSample.rgb, metallicSample.r);
     
         
     
@@ -292,8 +285,11 @@ meshFragmentShader(MeshRasterizerData in [[stage_in]],
     float3 reflected = reflect(-view, normal);
     
 
-    float3 ambientSample = environmentLookup(normal, 1.0);
-    float3 reflectedSample = environmentLookup(reflected, roughness);
+    // float3 ambientSample = environmentLookup(normal, 1.0);
+    
+    float lod = log2(roughnessSample.r) + 4;
+    float4 ambientSample = environmentTexture.sample(trilinearSampler, normal, level(5));
+    float4 reflectedSample = environmentTexture.sample(trilinearSampler, reflected, level(lod));
 
     
     // simple lighting:
@@ -310,14 +306,14 @@ meshFragmentShader(MeshRasterizerData in [[stage_in]],
     
     // for the sun light
     {
-        float cosTheta = max(dot(normal, halfway), 0.0);
-        float NdotL = max(dot(normal, -uniforms.light_direction), 0.0);
+        float cosTheta = saturate(dot(normal, halfway));
+        float NdotL = saturate(dot(normal, -uniforms.light_direction));
 
         // microfacet distribution factor
-        float NDF = DistributionGGX(normal, halfway, roughness);
+        float NDF = DistributionGGX(normal, halfway, roughnessSample.r);
         
         // geometry factor
-        float G = GeometrySmithPoint(normal, view, -uniforms.light_direction, roughness);
+        float G = GeometrySmithPoint(normal, view, -uniforms.light_direction, roughnessSample.r);
 
         float3 F = fresnelSchlick(cosTheta, F0);
         
@@ -326,7 +322,7 @@ meshFragmentShader(MeshRasterizerData in [[stage_in]],
         float3 specular = numerator / denominator;
 
         float3 kS = F;
-        float3 kD = (1.0f - kS) * (1.0 - metalness);
+        float3 kD = (1.0f - kS) * (1.0 - metallicSample.r);
 
         // float radiance = 3.0f; // of light source
         float3 radiance = float3(4, 3, 2);
@@ -337,26 +333,27 @@ meshFragmentShader(MeshRasterizerData in [[stage_in]],
     // for environmental illumination
     {
         // how reflective are we
-        float3 F = fresnelSchlickRoughness(max(dot(normal, view), 0.0), F0, roughness);
+        float3 F = fresnelSchlickRoughness(saturate(dot(normal, view)), F0, roughnessSample.r);
         float3 kS = F;
         float3 kD = 1.0 - kS;
-        float3 irradiance = ambientSample;
+        float3 irradiance = ambientSample.rgb;
         float3 diffuse    = irradiance * colorSample.rgb;
 
-        float3 specular = 1.0f * reflectedSample * F;
-        
+        float3 specular = 1.0f * reflectedSample.rgb * F;
         
         float3 ambient = (kD * diffuse + specular) * ao;
         Lo += ambient;
-        
+                
     }
     
     
     
     
     float3 color = Lo;
-    //color = color / (color + 1.0f);
-    //color = pow(color, 1.0f / 2.2f);
+    // hdr
+    // color = color / (color + 1.0f);
+    // gamma
+    // color = pow(color, 1.0f / 2.2f);
     
     
     // out.color = half4(shadowFactor, shadowFactor, shadowFactor, 1.0f);
@@ -401,3 +398,109 @@ meshFragmentShader(MeshRasterizerData in [[stage_in]],
 }
 
 
+
+
+
+/*
+ [[kernel]] void environmentMapPreFilterKernel(texturecube<half, access::read_write> inout,
+ ushort3 gid [[thread_position_in_grid]]
+ ) {
+ constexpr sampler linearSampler(mag_filter::linear,
+ min_filter::linear);
+ 
+ ushort2 coord = gid.xy;
+ ushort2 face = gid.z;
+ 
+ 
+ 
+ 
+ }
+ */
+
+
+
+
+
+// filter a cube map with a scaled probe
+
+
+struct cubeFilterVertexOut {
+    float4 position [[position]];
+    float4 normal;
+    ushort face [[render_target_array_index]];
+    ushort row;
+};
+
+
+[[vertex]] cubeFilterVertexOut
+cubeFilterVertex(ushort i [[vertex_id]],
+                 ushort j [[instance_id]],
+                 const device float4 *v [[buffer(AAPLBufferIndexVertices)]],
+                 constant cubeFilterUniforms &u [[buffer(AAPLBufferIndexUniforms)]])
+{
+    cubeFilterVertexOut out;
+    out.position = v[i];
+    out.face = j % 6;
+    out.row = j / 6;
+    out.normal = u.transforms[out.face] * out.position;
+    return out;
+}
+
+[[fragment]] float4
+cubeFilterAccumulate(cubeFilterVertexOut in [[stage_in]],
+                    constant cubeFilterUniforms& uniforms [[ buffer(AAPLBufferIndexUniforms)]],
+                    texturecube<float> environmentMap [[ texture(AAPLTextureIndexColor) ]])
+{
+    
+    float3 n = normalize(in.normal.xyz);
+    float4 w = float4(0,0,0,1);
+    float3 sum = 0;
+    float weight = 0;
+    ushort2 coord;
+    ushort face;
+    ushort q = environmentMap.get_width();
+    
+    // cube filter by explicit summation over environment pixels
+    
+    for (face = 0; face != 6; ++face) {
+        coord.y = in.row;
+        // for (coord.y = 0; coord.y != q; ++coord.y) {
+            for (coord.x = 0; coord.x != q; ++coord.x) {
+                float4 environmentSample = environmentMap.read(coord.xy, face, 0);
+                w.xy = (float2(coord.xy) + 0.5f) * 2 / q - 1.0f;
+                w.y = -w.y;
+                float3 v = normalize((uniforms.transforms[face] * w).xyz);
+                
+                float k = dot(v, n);
+                v = (v - k * n) / (uniforms.alpha * uniforms.alpha) + k * n;
+                v = normalize(v);
+                
+                // weight by (original) angle of emission
+                float u = w.w / length(w);
+                
+                // weight by (adjusted) angle of incidence
+                float t = saturate(dot(v, n));
+                
+                float s = u * t;
+                
+                weight += s;
+                sum += environmentSample.rgb * s;
+                
+            }
+        // }
+    }
+    
+    return float4(sum, weight);
+}
+
+
+
+[[fragment]] float4
+cubeFilterNormalize(cubeFilterVertexOut in [[stage_in]],
+                    constant cubeFilterUniforms& uniforms [[ buffer(AAPLBufferIndexUniforms)]],
+                    texturecube<float> environmentMap [[ texture(AAPLTextureIndexColor) ]])
+{
+    constexpr sampler nearestSampler(mag_filter::nearest, min_filter::nearest);
+    float4 environmentSample = environmentMap.sample(nearestSampler, in.normal.xyz);
+    return float4(environmentSample.rgb / environmentSample.a, 1);
+}

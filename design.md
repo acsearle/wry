@@ -296,8 +296,128 @@ in the screen pass
 - No readback from the current depth texture, but can we bind it as an
 attachment?
 
+Importance sampling:
 
+To integrate f cos\theta over a hemisphere, we can importance sample from an
+offset sphere:
+```
+(x, y) = (cos theta, sin theta) * cos theta
+(r, theta) = (cos theta, theta)
+```
+describes a circle of radius 0.5 centered at (0.5, 0.0).
+
+As a probility distribution of theta, this sphere is
+```
+P(r, theta, phi) = r^2 sin(theta)
+P(theta, phi) = 1/3 cos(theta)^3 * sin(theta)
+```
+And the indefinite integral wrt theta is
+```
+CDF(theta) * PDF(phi) = cos(theta)^4
+```
+
+so we can importance sample directions with `x, y in [0, 1]` mapped to
+```
+theta = acos(pow(x, 0.25))
+phi = 2 * pi * y
+```
+and thus
+``` 
+u = r sin(theta) * cos(phi) 
+v = r sin(theta) * sin(phi)
+w = r cos(theta)
+
+w = pow(x, 0.25)
+v = sqrt(1.0 - sqrt(x)) * cos(phi))
+u = sqrt(1.0 - sqrt(x)) * sin(phi))
+```
+
+Step two:
+
+Now sample from a sphere scaled by a,
+```
+(s, z) = (a sin psi, cos psi) * cos psi
+```
+We again have the spherical polar weights
+```
+P(r, theta, phi) = r^2 sin(theta)
+```
+We need to relate psi and theta
+```
+```
+
+But now theta and psi are different, we need to integrate out to
+`r_max` such that 
+
+```
+r sin theta = a sin psi cos psi = a sin 2 psi
+r = a sin 2 psi / sin theta
+``` 
+
+```
+P(theta, phi) = 1/3 r^3 sin(theta)
+    = (a sin 2 psi)^3 / (3 sin(theta)^2)
+```
+
+
+
+
+Volume of our sphere is 4/3 pi r^3 vs cube = 1 so sphere occupies
+4/3 pi / 8 = pi / 6 of bounds
+so rejection sampling will waste half the samples
+
+to sample from a sphere:
+
+x^2 + y^2 + z^2 = 1
+
+x^2 + y^2 = 1 - z^2
+
+area of slice at z is pi(1 - z^2)
+
+cumulative area is pi(z - 1/3 z^3)
+
+solve    y = z - 1/3 z^3
+
+y = z (1 - 1 / 3 z^2) ugh
+
+aha:
+
+Malley's method:
+
+given samples on a unit disk
+`x, y`
+or
+`r, phi`
+project to hemisphere
+`z = sqrt(1 - r^2)`
+this is now a cos theta weighted importance sampling of a hemisphere
 
  
+
+now rescale horizontal plane 
+```
+u, v = x * a, y * a
+s = r * a, phi
+```
+
+no longer normalized, but it doesn't need to be for cube sampling 
+
+now compute a second normalization (if needed) 
+```
+= sqrt(s^2 + z^2)
+= sqrt(a^2 r^2 + 1 - r^2)
+= sqrt((a^2 - 1)r^2 + 1)
+```
+finally,
+```
+t = r*a / sqrt((a^2-1) r^2 + 1)
+zz = sqrt((1 - r^2)/((a^2-1)r^2+1))
+
+```
+
+
+
+
+
 
 

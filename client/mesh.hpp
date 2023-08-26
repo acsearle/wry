@@ -15,6 +15,7 @@
 #include "array.hpp"
 #include "image.hpp"
 
+
 inline simd_float4x4 simd_matrix4x4(simd_float3x3 a) {
     return simd_matrix(simd_make_float4(a.columns[0], 0.0f),
                        simd_make_float4(a.columns[1], 0.0f),
@@ -27,6 +28,20 @@ inline simd_float3x3 simd_matrix3x3(simd_float4x4 a) {
                        a.columns[1].xyz,
                        a.columns[2].xyz);
 }
+
+inline constexpr simd_float4x4 simd_matrix_ndc_to_tc = {{
+    {  0.5f,  0.0f,  0.0f,  0.0f },
+    {  0.0f, -0.5f,  0.0f,  0.0f },
+    {  0.0f,  0.0f,  1.0f,  0.0f },
+    {  0.5f,  0.5f,  0.0f,  1.0f },
+}};
+
+inline constexpr simd_float4x4 simd_matrix_tc_to_ndc = {{
+    {  2.0f,  0.0f,  0.0f,  0.0f },
+    {  0.0f, -2.0f,  0.0f,  0.0f },
+    {  0.0f,  0.0f,  1.0f,  0.0f },
+    { -1.0f,  1.0f,  0.0f,  1.0f },
+}};
 
 inline simd_float4x4 simd_matrix_rotation(float theta, simd_float3 u) {
     return simd_matrix4x4(simd_quaternion(theta, u));
@@ -51,15 +66,16 @@ namespace wry {
     
     struct mesh {
         
-        static array<simd_float3> clip_space_quad() {
-            return {
-                simd_make_float3(-1.0f, -1.0f, 0.0f),
-                simd_make_float3(-1.0f, +1.0f, 0.0f),
-                simd_make_float3(+1.0f, +1.0f, 0.0f),
-                simd_make_float3(-1.0f, -1.0f, 0.0f),
-                simd_make_float3(+1.0f, +1.0f, 0.0f),
-                simd_make_float3(+1.0f, -1.0f, 0.0f),
+        static array<simd_float4> clip_space_quad() {
+            array<simd_float4> v = {
+                simd_make_float4(-1.0f, -1.0f, 0.0f, 1.0f),
+                simd_make_float4(-1.0f, +1.0f, 0.0f, 1.0f),
+                simd_make_float4(+1.0f, +1.0f, 0.0f, 1.0f),
+                simd_make_float4(-1.0f, -1.0f, 0.0f, 1.0f),
+                simd_make_float4(+1.0f, +1.0f, 0.0f, 1.0f),
+                simd_make_float4(+1.0f, -1.0f, 0.0f, 1.0f),
             };
+            return v;
         }
         
         static array<MeshVertex> add_normals(simd_float3x3* first, simd_float3x3* last) {
@@ -81,9 +97,9 @@ namespace wry {
                     float phi = atan2(position.y, position.x);
                     float theta = atan2(r, position.z);
                     float theta2 = theta;
-                    if (theta > M_PI / 2)
-                        theta2 = M_PI - theta;
-                    simd_float2 texCoord = (theta2 / M_PI * 2) * simd_make_float2(cos(phi), -sin(phi)) + 0.5f;
+                    //if (theta > M_PI / 2)
+                    //    theta2 = M_PI - theta;
+                    simd_float2 texCoord = (theta2 / M_PI) * simd_make_float2(cos(phi), -sin(phi)) + 0.5f;
                     
                     // interestingly, the quaternion's 4 floats is enough to
                     // encode the whole tangent-bitangent-normal coordinate

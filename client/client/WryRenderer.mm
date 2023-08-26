@@ -5,6 +5,8 @@
 //  Created by Antony Searle on 1/7/2023.
 //
 
+#include <random>
+
 #include "WryRenderer.h"
 #include "ShaderTypes.h"
 
@@ -68,6 +70,12 @@
     id <MTLTexture> _cube_metallic;
     
     int _mesh_count;
+    
+    id<MTLTexture> _environmentMap;
+    id<MTLTexture> _environmentMapRenderTarget;
+    id<MTLTexture> _environmentMapFiltered;
+
+
 
 }
 
@@ -90,6 +98,242 @@
         id<MTLLibrary> shaderLib = [_device newDefaultLibrary];
 
         _commandQueue = [_device newCommandQueue];
+        
+        
+        {
+            // preparatory rendering
+            
+            // create a high dynamic range environment map
+            
+            // filter the environment map for various roughnesses
+            
+            // we do this by explicit weighted summation over the input map
+            // for each pixel of the output map (aka, an n^4 operation)
+            
+            // this produces excellent quality but the fragment shader times
+            // out for sizes > 128
+            
+            // we slice up the calculation by image rows and use
+            // instances with id = face + y * 6
+            
+            
+            {
+                std::size_t n = 256;
+                MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+                descriptor.textureType = MTLTextureTypeCube;
+                descriptor.pixelFormat = MTLPixelFormatRGBA32Float;
+                descriptor.width = n;
+                descriptor.height = n;
+                descriptor.usage = MTLTextureUsageShaderRead;
+                descriptor.resourceOptions = MTLResourceStorageModeShared;
+                _environmentMap = [_device newTextureWithDescriptor:descriptor];
+                _environmentMap.label = @"Environment map";
+
+                // simple env texture
+                wry::matrix<simd_float4> a(n, n);
+                a = simd_make_float4(0, 0, 0, 0);
+                a.sub(0, 0, n/2, n) = simd_make_float4(0.25, 0.5, 1, 0);
+                a.sub(n/2, 0, n/2, n) = simd_make_float4(0.5, 0.25, 0.125, 0);
+                a.sub(n/8, n/8, n/2, n/16) = simd_make_float4(4, 3, 2, 0) * 4;
+                for (int i = 0; i != 6; ++i) {
+                    [_environmentMap replaceRegion:MTLRegionMake2D(0, 0, n, n)
+                                       mipmapLevel:0
+                                             slice:i
+                                         withBytes:a.data()
+                                       bytesPerRow:a.stride() * sizeof(simd_float4)
+                                     bytesPerImage:0];
+                }
+            }
+            
+            {
+                MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+                descriptor.textureType = MTLTextureTypeCube;
+                descriptor.width = _environmentMap.width;
+                descriptor.height = _environmentMap.height;
+                descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+                descriptor.mipmapLevelCount = 5; // 0.0625, 0.125, 0.25, 0.5, 1
+                descriptor.usage = MTLTextureUsageShaderRead;
+                descriptor.resourceOptions = MTLResourceStorageModePrivate;
+                _environmentMapFiltered = [_device newTextureWithDescriptor:descriptor];
+                _environmentMapFiltered.label = @"Environment map filtered";
+            }
+            
+            MTLRenderPassDescriptor* renderPassAccumulate = [MTLRenderPassDescriptor new];
+            renderPassAccumulate.colorAttachments[0].loadAction = MTLLoadActionClear;
+            renderPassAccumulate.colorAttachments[0].storeAction = MTLStoreActionStore;
+            renderPassAccumulate.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+            renderPassAccumulate.renderTargetArrayLength = 6;
+
+            MTLRenderPassDescriptor* renderPassNormalize = [MTLRenderPassDescriptor new];
+            renderPassNormalize.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+            renderPassNormalize.colorAttachments[0].storeAction = MTLStoreActionStore;
+            renderPassNormalize.renderTargetArrayLength = 6;
+
+            id<MTLRenderPipelineState> pipelineStateAccumulate;
+            {
+                MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
+                descriptor.label = @"Cube filter accumulate";
+                descriptor.vertexFunction = [shaderLib newFunctionWithName:@"cubeFilterVertex"];
+                descriptor.fragmentFunction = [shaderLib newFunctionWithName:@"cubeFilterAccumulate"];
+                descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA32Float;
+                descriptor.colorAttachments[0].blendingEnabled = YES;
+                descriptor.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+                descriptor.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+                descriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+                descriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+                descriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
+                descriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
+                descriptor.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
+                NSError* error = nil;
+                pipelineStateAccumulate = [_device newRenderPipelineStateWithDescriptor:descriptor
+                                                                        error:&error];
+                if(!pipelineStateAccumulate) {
+                    NSLog(@"ERROR: Failed aquiring pipeline state: %@", error);
+                    exit(EXIT_FAILURE);
+                }
+                
+            }
+            
+            id<MTLRenderPipelineState> pipelineStateNormalize;
+            {
+                MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
+                descriptor.label = @"Cube filter normalize";
+                descriptor.vertexFunction = [shaderLib newFunctionWithName:@"cubeFilterVertex"];
+                descriptor.fragmentFunction = [shaderLib newFunctionWithName:@"cubeFilterNormalize"];
+                descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+                descriptor.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
+                NSError* error = nil;
+                pipelineStateNormalize = [_device newRenderPipelineStateWithDescriptor:descriptor
+                                                           error:&error];
+                if(!pipelineStateNormalize) {
+                    NSLog(@"ERROR: Failed aquiring pipeline state: %@", error);
+                    exit(EXIT_FAILURE);
+                }
+                
+            }
+            
+            NSUInteger nvertices;
+            id<MTLBuffer> vertexBuffer;
+            {
+                wry::array<simd_float4> a = wry::mesh::clip_space_quad();
+                nvertices = a.size();
+                vertexBuffer = [_device newBufferWithBytes:a.data()
+                                                    length:a.size()*sizeof(simd_float4) options:MTLResourceStorageModeShared];
+            }
+            
+            cubeFilterUniforms uniforms;
+            {
+                // we have position in NDCs with XY01
+                //
+                
+                // translate z=0 near clip plane cordinates to z=1
+                simd_float4x4 Z
+                = simd_matrix(simd_make_float4(1.0f, 0.0f, 0.0f, 0.0f),
+                              simd_make_float4(0.0f, 1.0f, 0.0f, 0.0f),
+                              simd_make_float4(0.0f, 0.0f, 1.0f, 0.0f),
+                              simd_make_float4(0.0f, 0.0f, 1.0f, 1.0f));
+                uniforms.transforms[0]
+                = simd_mul(simd_matrix_rotation(M_PI_2, simd_make_float3(0.0f, 1.0f, 0.0f)), Z);
+                uniforms.transforms[1]
+                = simd_mul(simd_matrix_rotation(-M_PI_2, simd_make_float3(0.0f, 1.0f, 0.0f)), Z);
+                uniforms.transforms[2]
+                = simd_mul(simd_matrix_rotation(M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f)), Z);
+                uniforms.transforms[3]
+                = simd_mul(simd_matrix_rotation(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f)), Z);
+                uniforms.transforms[4] = Z;
+                uniforms.transforms[5]
+                = simd_mul(simd_matrix_rotation(M_PI, simd_make_float3(0.0f, 1.0f, 0.0f)), Z);
+            }
+            
+            id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+            
+            for (NSUInteger level = 0; level != _environmentMapFiltered.mipmapLevelCount; ++level) {
+
+                id<MTLTexture> renderTargetAccumulate;
+                {
+                    MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+                    descriptor.textureType = MTLTextureTypeCube;
+                    descriptor.pixelFormat = MTLPixelFormatRGBA32Float;
+                    descriptor.width = _environmentMapFiltered.width >> level;
+                    descriptor.height = _environmentMapFiltered.height >> level;
+                    descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+                    descriptor.resourceOptions = MTLResourceStorageModePrivate;
+                    renderTargetAccumulate = [_device newTextureWithDescriptor:descriptor];
+                    renderTargetAccumulate.label = @"Cube filter accumulate";
+                }
+                
+                renderPassAccumulate.colorAttachments[0].texture = renderTargetAccumulate;
+                
+                id<MTLRenderCommandEncoder> accumulateEncoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPassAccumulate];
+                uniforms.alpha = pow(2.0,
+                                     1.0 + level - _environmentMapFiltered.mipmapLevelCount);
+                // 1.0, 0.5, 0.25, 0.125, 0.0625
+                [accumulateEncoder setRenderPipelineState:pipelineStateAccumulate];
+                [accumulateEncoder setVertexBuffer:vertexBuffer
+                                               offset:0
+                                              atIndex:AAPLBufferIndexVertices];
+                [accumulateEncoder setVertexBytes:&uniforms
+                                              length:sizeof(cubeFilterUniforms)
+                                             atIndex:AAPLBufferIndexUniforms];
+                [accumulateEncoder setFragmentBytes:&uniforms
+                                                length:sizeof(cubeFilterUniforms)
+                                               atIndex:AAPLBufferIndexUniforms];
+                [accumulateEncoder setFragmentTexture:_environmentMap
+                                                 atIndex:AAPLTextureIndexColor];
+                [accumulateEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                         vertexStart:0
+                                         vertexCount:nvertices
+                                       instanceCount:6*_environmentMap.height];
+                [accumulateEncoder endEncoding];
+                
+                id<MTLTexture> renderTargetNormalize;
+                {
+                    MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+                    descriptor.textureType = MTLTextureTypeCube;
+                    descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+                    descriptor.width = renderTargetAccumulate.width;
+                    descriptor.height = renderTargetAccumulate.width;
+                    descriptor.usage = MTLTextureUsageRenderTarget;
+                    descriptor.resourceOptions = MTLResourceStorageModePrivate;
+                    renderTargetNormalize = [_device newTextureWithDescriptor:descriptor];
+                    renderTargetNormalize.label = @"Cube filter normalize";
+                }
+                
+                renderPassNormalize.colorAttachments[0].texture = renderTargetNormalize;
+                id<MTLRenderCommandEncoder> normalizeEncoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPassNormalize];
+                [normalizeEncoder setRenderPipelineState:pipelineStateNormalize];
+                [normalizeEncoder setVertexBuffer:vertexBuffer
+                                            offset:0
+                                           atIndex:AAPLBufferIndexVertices];
+                [normalizeEncoder setVertexBytes:&uniforms
+                                           length:sizeof(cubeFilterUniforms)
+                                          atIndex:AAPLBufferIndexUniforms];
+                [normalizeEncoder setFragmentBytes:&uniforms
+                                             length:sizeof(cubeFilterUniforms)
+                                            atIndex:AAPLBufferIndexUniforms];
+                [normalizeEncoder setFragmentTexture:renderTargetAccumulate
+                                              atIndex:AAPLTextureIndexColor];
+                [normalizeEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                      vertexStart:0
+                                      vertexCount:nvertices
+                                    instanceCount:6];
+                [normalizeEncoder endEncoding];
+                
+                
+                id<MTLBlitCommandEncoder> blitCommandEncoder = [commandBuffer blitCommandEncoder];
+                [blitCommandEncoder copyFromTexture:renderTargetNormalize
+                                        sourceSlice:0
+                                        sourceLevel:0
+                                          toTexture:_environmentMapFiltered
+                                   destinationSlice:0
+                                   destinationLevel:level
+                                         sliceCount:6
+                                         levelCount:1 ];
+                [blitCommandEncoder endEncoding];
+            }
+
+            [commandBuffer commit];
+        }
 
         // render sun shadow map to texture
         _shadowRenderPassDescriptor = [MTLRenderPassDescriptor new];
@@ -173,6 +417,7 @@
                 // wry::image a(4,4);
                 wry::image a;
                 a = wry::from_png(wry::path_for_resource("rustediron2_basecolor", "png"));
+                //a = wry::from_png(wry::path_for_resource("steelplate1_albedo", "png"));
                 
                 {
                     MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
@@ -191,6 +436,8 @@
                 }
                 
                 a = wry::from_png(wry::path_for_resource("rustediron2_normal", "png"));
+                //a = wry::from_png(wry::path_for_resource("steelplate1_normal-ogl", "png"));
+                
 
                 {
                     MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
@@ -208,6 +455,7 @@
                 }
                
                 a = wry::from_png(wry::path_for_resource("rustediron2_roughness", "png"));
+                //a = wry::from_png(wry::path_for_resource("steelplate1_roughness", "png"));
                 
                 {
                     MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
@@ -225,6 +473,7 @@
                 }
                 
                 a = wry::from_png(wry::path_for_resource("rustediron2_metallic", "png"));
+                //a = wry::from_png(wry::path_for_resource("steelplate1_metallic", "png"));
                 
                 {
                     MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
@@ -394,81 +643,6 @@
                 _checkerboard_sprite = _atlas->place(v, simd_make_float2(1.0f, 1.0f));
                 
             }
-                        
-            /*
-            {
-                // triangles
-                auto v = img.sub(256-32, 64-32, 64+64, 160+64);
-                // wry::draw_bounding_box(v);
-                wry::sprite s = _atlas->place(v, simd_float2{0, 0});
-                s.a.texCoord += simd_float2{32, 32} / _atlas->_size;
-                _terrain_triangles[0] = s.a;
-                _terrain_triangles[1] = wry::subvertex{
-                    s.a.position + simd_make_float4(32, 64, 0, 0),
-                    s.a.texCoord + simd_float2{32, 64} / _atlas->_size
-                };
-                _terrain_triangles[2] = wry::subvertex{
-                    s.a.position + simd_make_float4(64, 0, 0, 0),
-                    s.a.texCoord + simd_float2{64, 0} / _atlas->_size
-                };
-                _terrain_triangles[3] = wry::subvertex{
-                    s.a.position + simd_make_float4(96, 64, 0, 0),
-                    s.a.texCoord + simd_float2{96, 64} / _atlas->_size
-                };
-                _terrain_triangles[4] = wry::subvertex{
-                    s.a.position + simd_make_float4(128, 0, 0, 0),
-                    s.a.texCoord + simd_float2{128, 0} / _atlas->_size
-                };
-                _terrain_triangles[5] = wry::subvertex{
-                    s.a.position + simd_make_float4(160, 64, 0, 0),
-                    s.a.texCoord + simd_float2{160, 64} / _atlas->_size
-                };
-
-            }
-            
-            {
-                auto jmg = wry::from_png_and_multiply_alpha_f(wry::path_for_resource("cube-top", "png"));
-                while (jmg.height() > 256) {
-                    halve(jmg);
-                }
-
-                for (int i = 0; i != 96; ++i) {
-                    for (int j = 0; j != 256; ++j) {
-                        auto& r = jmg(i, j); r.a = 255.0f - r.r; r.rgb = 0.0f;
-                    }
-                }
-                for (int i = 96; i != 160; ++i) {
-                    for (int j = 0; j != 96; ++j) {
-                        auto& r = jmg(i, j); r.a = 255.0f - r.r; r.rgb = 0.0f;
-                    }
-                    for (int j = 160; j != 256; ++j) {
-                        auto& r = jmg(i, j); r.a = 255.0f - r.r; r.rgb = 0.0f;
-                    }
-                }
-                for (int i = 160; i != 256; ++i) {
-                    for (int j = 0; j != 256; ++j) {
-                        auto& r = jmg(i, j); r.a = 255.0f - r.r; r.rgb = 0.0f;
-                    }
-                }
-
-                img = wry::to_RGB8Unorm_sRGB(jmg);
-                wry::sprite s = _atlas->place(img, simd_float2{128, 128});
-                _cube_sprites[0] = s;
-            }
-
-            {
-                auto jmg = wry::from_png_and_multiply_alpha_f(wry::path_for_resource("cube-side", "png"));
-                while (jmg.height() > 256) {
-                    halve(jmg);
-                }
-                img = wry::to_RGB8Unorm_sRGB(jmg);
-                wry::sprite s = _atlas->place(img, simd_float2{128, 128});
-                _cube_sprites[1] = s;
-            }
-
-            
-            */
-            
         }
     }
     
@@ -612,7 +786,10 @@
             // camera world location is...
             
             {
-                mesh_uniforms.light_viewprojection_transform = mesh_uniforms.viewprojection_transform;
+                // map from clip coordinates to texture coordinates
+                mesh_uniforms.light_viewprojection_transform
+                    = simd_mul(simd_matrix_ndc_to_tc,
+                               mesh_uniforms.viewprojection_transform);
                 mesh_uniforms.viewprojection_transform = A;
                 [renderCommandEncoder setVertexBuffer:_cube_buffer
                                                offset:0
@@ -624,6 +801,7 @@
                 [renderCommandEncoder setFragmentTexture:_cube_roughness atIndex:AAPLTextureIndexRoughness];
                 [renderCommandEncoder setFragmentTexture:_cube_metallic atIndex:AAPLTextureIndexMetallic];
                 [renderCommandEncoder setFragmentTexture:_shadowRenderTargetTexture atIndex:AAPLTextureIndexShadow];
+                [renderCommandEncoder setFragmentTexture:_environmentMapFiltered atIndex:AAPLTextureIndexEnvironment];
                 [renderCommandEncoder setDepthStencilState:_shadowDepthStencilState];
 
                 mesh_uniforms.model_transform = MeshA;
