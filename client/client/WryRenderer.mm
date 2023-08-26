@@ -29,6 +29,7 @@
     
     id <MTLRenderPipelineState> _shadowRenderPipelineState;
     id <MTLDepthStencilState> _shadowDepthStencilState;
+    id <MTLDepthStencilState> _ignoreDepthStencilState;
 
     
     // screen pass
@@ -37,11 +38,13 @@
     
     // gbuffers (memoryless?)
     
-    id<MTLTexture> _colorRenderTargetTexture;
-    id<MTLTexture> _normalRenderTargetTexture;
     id<MTLTexture> _depthRenderTargetTexture;
-    id<MTLTexture> _brdfLUTtexture;
 
+    id<MTLTexture> _colorRenderTargetTexture; // basic, used for accumulating emissives
+    id<MTLTexture> _albedoMetallicRenderTargetTexture;
+    id<MTLTexture> _normalRoughnessRenderTargetTexture;
+    id<MTLTexture> _depthAsColorRenderTargetTexture;
+    
     id <MTLRenderPipelineState> _colorRenderPipelineState;
 
     // conventional compositing for hud
@@ -75,6 +78,13 @@
     id<MTLTexture> _environmentMapRenderTarget;
     id<MTLTexture> _environmentMapFiltered;
 
+    id<MTLTexture> _brdfLUTtexture;
+
+    id <MTLRenderPipelineState> _lightingPipelineState;
+    id <MTLRenderPipelineState> _pointLightPipelineState;
+
+    
+    id<MTLBuffer> _screenQuadVertexBuffer;
 
 
 }
@@ -213,11 +223,10 @@
             }
             
             NSUInteger nvertices;
-            id<MTLBuffer> vertexBuffer;
             {
                 wry::array<simd_float4> a = wry::mesh::clip_space_quad();
                 nvertices = a.size();
-                vertexBuffer = [_device newBufferWithBytes:a.data()
+                _screenQuadVertexBuffer = [_device newBufferWithBytes:a.data()
                                                     length:a.size()*sizeof(simd_float4) options:MTLResourceStorageModeShared];
             }
             
@@ -269,7 +278,7 @@
                                      1.0 + level - _environmentMapFiltered.mipmapLevelCount);
                 // 1.0, 0.5, 0.25, 0.125, 0.0625
                 [accumulateEncoder setRenderPipelineState:pipelineStateAccumulate];
-                [accumulateEncoder setVertexBuffer:vertexBuffer
+                [accumulateEncoder setVertexBuffer:_screenQuadVertexBuffer
                                                offset:0
                                               atIndex:AAPLBufferIndexVertices];
                 [accumulateEncoder setVertexBytes:&uniforms
@@ -302,7 +311,7 @@
                 renderPassNormalize.colorAttachments[0].texture = renderTargetNormalize;
                 id<MTLRenderCommandEncoder> normalizeEncoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPassNormalize];
                 [normalizeEncoder setRenderPipelineState:pipelineStateNormalize];
-                [normalizeEncoder setVertexBuffer:vertexBuffer
+                [normalizeEncoder setVertexBuffer:_screenQuadVertexBuffer
                                             offset:0
                                            atIndex:AAPLBufferIndexVertices];
                 [normalizeEncoder setVertexBytes:&uniforms
@@ -360,6 +369,12 @@
             descriptor.depthWriteEnabled = YES;
             descriptor.label = @"Shadow map depth/stencil state";
             _shadowDepthStencilState = [_device newDepthStencilStateWithDescriptor:descriptor];
+            
+            descriptor.depthCompareFunction = MTLCompareFunctionAlways;
+            descriptor.depthWriteEnabled = NO;
+            _ignoreDepthStencilState = [_device newDepthStencilStateWithDescriptor:descriptor];
+            
+            
         }
         
         {
@@ -382,13 +397,25 @@
         
         // render to screen and associated buffers
         _screenRenderPassDescriptor = [MTLRenderPassDescriptor new];
-        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexColor].loadAction = MTLLoadActionClear;
+        
+        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexColor].loadAction = MTLLoadActionDontCare;
         _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexColor].storeAction = MTLStoreActionStore;
         _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexColor].clearColor
-        = MTLClearColorMake(0.5, 0.25, 0.125, 1);
-        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexNormal].loadAction = MTLLoadActionClear;
-        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexNormal].storeAction = MTLStoreActionDontCare;
-        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexNormal].clearColor = MTLClearColorMake(0, 0, 0, 0);
+        // = MTLClearColorMake(0.5, 0.25, 0.125, 1);
+        = MTLClearColorMake(0, 0, 0, 0);
+        
+        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].loadAction = MTLLoadActionDontCare;
+        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].storeAction = MTLStoreActionDontCare;
+        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].clearColor = MTLClearColorMake(0, 0, 0, 0);
+
+        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexNormalRoughness].loadAction = MTLLoadActionDontCare;
+        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexNormalRoughness].storeAction = MTLStoreActionDontCare;
+        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexNormalRoughness].clearColor = MTLClearColorMake(0, 0, 0, 0);
+
+        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexDepthAsColor].loadAction = MTLLoadActionDontCare;
+        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexDepthAsColor].storeAction = MTLStoreActionDontCare;
+        _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexDepthAsColor].clearColor = MTLClearColorMake(1, 1, 1, 1);
+
         _screenRenderPassDescriptor.depthAttachment.loadAction = MTLLoadActionClear;
         _screenRenderPassDescriptor.depthAttachment.storeAction = MTLStoreActionDontCare;
         _screenRenderPassDescriptor.depthAttachment.clearDepth = 1.0;
@@ -531,11 +558,26 @@
             descriptor.usage = MTLTextureUsageRenderTarget;
             descriptor.resourceOptions = MTLResourceStorageModeMemoryless;
             _depthRenderTargetTexture = [_device newTextureWithDescriptor:descriptor];
+            _depthRenderTargetTexture.label = @"Depth";
             
             descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
-            descriptor.usage = MTLTextureUsageRenderTarget;
+            descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
             descriptor.resourceOptions = MTLResourceStorageModeMemoryless;
-            _normalRenderTargetTexture = [_device newTextureWithDescriptor:descriptor];
+            _albedoMetallicRenderTargetTexture = [_device newTextureWithDescriptor:descriptor];
+            _albedoMetallicRenderTargetTexture.label = @"AlbedoMetallic";
+            
+
+            descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+            descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+            descriptor.resourceOptions = MTLResourceStorageModeMemoryless;
+            _normalRoughnessRenderTargetTexture = [_device newTextureWithDescriptor:descriptor];
+            _normalRoughnessRenderTargetTexture.label = @"NormalRoughness";
+
+            descriptor.pixelFormat = MTLPixelFormatR32Float;
+            descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+            descriptor.resourceOptions = MTLResourceStorageModeMemoryless;
+            _depthAsColorRenderTargetTexture = [_device newTextureWithDescriptor:descriptor];
+            _depthAsColorRenderTargetTexture.label = @"DepthAsColor";
 
         }
         
@@ -543,22 +585,61 @@
         {
             MTLRenderPipelineDescriptor *descriptor = [[MTLRenderPipelineDescriptor alloc] init];
             
-            descriptor.label                           = @"Color";
+            descriptor.label                           = @"Mesh to gbuffer";
             
             descriptor.vertexFunction                  = [shaderLib newFunctionWithName:@"meshVertexShader"];
             descriptor.vertexBuffers[AAPLBufferIndexUniforms].mutability = MTLMutabilityImmutable;
             descriptor.vertexBuffers[AAPLBufferIndexVertices].mutability = MTLMutabilityImmutable;
 
-            descriptor.fragmentFunction                = [shaderLib newFunctionWithName:@"meshFragmentShader"];
+            descriptor.fragmentFunction                = [shaderLib newFunctionWithName:@"meshGbufferFragment"];
             descriptor.fragmentBuffers[AAPLBufferIndexUniforms].mutability = MTLMutabilityImmutable;
-            
+            descriptor.fragmentBuffers[AAPLBufferIndexVertices].mutability = MTLMutabilityImmutable;
+
             descriptor.colorAttachments[AAPLColorIndexColor].pixelFormat = drawablePixelFormat;
-            descriptor.colorAttachments[AAPLColorIndexNormal].pixelFormat = MTLPixelFormatRGBA16Float;
+            descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].pixelFormat = MTLPixelFormatRGBA16Float;
+            descriptor.colorAttachments[AAPLColorIndexNormalRoughness].pixelFormat = MTLPixelFormatRGBA16Float;
+            descriptor.colorAttachments[AAPLColorIndexDepthAsColor].pixelFormat = MTLPixelFormatR32Float;
             descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
             NSError *error;
             _colorRenderPipelineState = [_device newRenderPipelineStateWithDescriptor:descriptor
-                                                                           error:&error];
+                                                                                error:&error];
+            if(!_colorRenderPipelineState) {
+                NSLog(@"ERROR: Failed aquiring pipeline state: %@", error);
+                exit(EXIT_FAILURE);
+            }
+
+            
+            descriptor.colorAttachments[AAPLColorIndexColor].blendingEnabled = YES;
+            descriptor.colorAttachments[AAPLColorIndexColor].rgbBlendOperation = MTLBlendOperationAdd;
+            descriptor.colorAttachments[AAPLColorIndexColor].alphaBlendOperation = MTLBlendOperationAdd;
+            descriptor.colorAttachments[AAPLColorIndexColor].sourceRGBBlendFactor = MTLBlendFactorOne;
+            descriptor.colorAttachments[AAPLColorIndexColor].sourceAlphaBlendFactor = MTLBlendFactorOne;
+            descriptor.colorAttachments[AAPLColorIndexColor].destinationRGBBlendFactor = MTLBlendFactorOne;
+            descriptor.colorAttachments[AAPLColorIndexColor].destinationAlphaBlendFactor = MTLBlendFactorOne;
+
+            
+            descriptor.label = @"Deferred image-based lighting";
+            descriptor.vertexFunction = [shaderLib newFunctionWithName:@"meshLightingVertex"];
+            descriptor.fragmentFunction = [shaderLib newFunctionWithName:@"meshLightingFragment"];
+
+            _lightingPipelineState = [_device newRenderPipelineStateWithDescriptor:descriptor
+                                                                                error:&error];
+            if(!_lightingPipelineState) {
+                NSLog(@"ERROR: Failed aquiring pipeline state: %@", error);
+                exit(EXIT_FAILURE);
+            }
+
+            descriptor.label = @"Deferred point lighting";
+            descriptor.fragmentFunction = [shaderLib newFunctionWithName:@"meshPointLightFragment"];
+            
+            _pointLightPipelineState = [_device newRenderPipelineStateWithDescriptor:descriptor
+                                                                               error:&error];
+            if(!_pointLightPipelineState) {
+                NSLog(@"ERROR: Failed aquiring pipeline state: %@", error);
+                exit(EXIT_FAILURE);
+            }
+
         }
                 
         {
@@ -604,7 +685,9 @@
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].sourceAlphaBlendFactor = MTLBlendFactorOne;
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexNormal].pixelFormat = MTLPixelFormatRGBA16Float;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].pixelFormat = MTLPixelFormatRGBA16Float;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexNormalRoughness].pixelFormat = MTLPixelFormatRGBA16Float;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexDepthAsColor].pixelFormat = MTLPixelFormatR32Float;
             renderPipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
                                     
             NSError *error;
@@ -734,7 +817,9 @@
 
     id<CAMetalDrawable> currentDrawable = [metalLayer nextDrawable];
     _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexColor].texture = currentDrawable.texture;
-    _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexNormal].texture = _normalRenderTargetTexture;
+    _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].texture = _albedoMetallicRenderTargetTexture;
+    _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexNormalRoughness].texture = _normalRoughnessRenderTargetTexture;
+    _screenRenderPassDescriptor.colorAttachments[AAPLColorIndexDepthAsColor].texture = _depthAsColorRenderTargetTexture;
     _screenRenderPassDescriptor.depthAttachment.texture = _depthRenderTargetTexture;
     id <MTLRenderCommandEncoder> renderCommandEncoder
     = [commandBuffer renderCommandEncoderWithDescriptor:_screenRenderPassDescriptor];
@@ -778,10 +863,12 @@
                 { 0.0f, 0.0f, 0.0f, 1.0f },
             }};
 
-            A = simd_mul(B, A);
-            mesh_uniforms.camera_world_position = simd_mul(simd_inverse(A), simd_make_float4(0,0,0,1));
-            A = simd_mul(C, A);
-            A = simd_mul(D, A);
+            B = simd_mul(B, A);
+            mesh_uniforms.camera_world_position = simd_mul(simd_inverse(B), simd_make_float4(0,0,0,1));
+            D = simd_mul(D, B);
+            mesh_uniforms.view_transform = D;
+            mesh_uniforms.inverse_view_transform = simd_inverse(D);
+            C = simd_mul(C, D);
             
             // camera world location is...
             
@@ -790,7 +877,7 @@
                 mesh_uniforms.light_viewprojection_transform
                     = simd_mul(simd_matrix_ndc_to_tc,
                                mesh_uniforms.viewprojection_transform);
-                mesh_uniforms.viewprojection_transform = A;
+                mesh_uniforms.viewprojection_transform = C;
                 [renderCommandEncoder setVertexBuffer:_cube_buffer
                                                offset:0
                                               atIndex:AAPLBufferIndexVertices];
@@ -830,35 +917,31 @@
                                          vertexStart:0
                                          vertexCount:_mesh_count];
 
+                // g-buffer is now filled
+                                
+                [renderCommandEncoder setVertexBuffer:_screenQuadVertexBuffer
+                                               offset:0
+                                              atIndex:AAPLBufferIndexVertices];
+                [renderCommandEncoder setDepthStencilState:_ignoreDepthStencilState];
 
+                // image-based lighting pass:
+                
+                [renderCommandEncoder setRenderPipelineState:_lightingPipelineState];
+                [renderCommandEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                         vertexStart:0
+                                         vertexCount:6];
+                
+                // shadow-casting point-light pass:
+
+                [renderCommandEncoder setRenderPipelineState:_pointLightPipelineState];
+                [renderCommandEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                         vertexStart:0
+                                         vertexCount:6];
 
             }
             
             
-            
-            [renderCommandEncoder setRenderPipelineState:_renderPipelineState];
-
-            MyUniforms uniforms;
-            uniforms.position_transform = A;
-            //uniforms.position_transform = matrix_float4x4{{
-            //    {200.0f / _viewportSize.x, 0.0f, 0.0f},
-            //    {0.0f, -200.0f / _viewportSize.y, 0.0f, 0.0f},
-            //    { 0.0f, 0.0f, 1.0f, 0.0f },
-            //    {-1.0f, +1.0f, 0.0f, 1.0f},
-            //}};
-            [renderCommandEncoder setVertexBytes:&uniforms
-                                          length:sizeof(uniforms)
-                                         atIndex:AAPLBufferIndexUniforms ];
-
-            _atlas->push_sprite(_checkerboard_sprite + simd_make_float2(1.0f, 1.0f));
-            //_atlas->push_sprite(_atlas->as_sprite());
-            /*
-            _atlas->commit(renderCommandEncoder);
-            [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
-                dispatch_semaphore_signal(self->_atlas->_semaphore);
-            }];
-             */
-
+           
 
         }
 
@@ -1088,6 +1171,7 @@
     //}
     
     {
+        [renderCommandEncoder setRenderPipelineState:_renderPipelineState];
         MyUniforms uniforms;
         uniforms.position_transform = matrix_float4x4{{
             {2.0f / _viewportSize.x, 0.0f, 0.0f},

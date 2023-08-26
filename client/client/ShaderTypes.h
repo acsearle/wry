@@ -32,7 +32,9 @@ typedef enum
 
 typedef enum {
     AAPLColorIndexColor,
-    AAPLColorIndexNormal,
+    AAPLColorIndexAlbedoMetallic,
+    AAPLColorIndexNormalRoughness,
+    AAPLColorIndexDepthAsColor,
 } AAPLColorIndex;
 
 
@@ -83,14 +85,40 @@ typedef struct {
 
 typedef struct
 {
-    matrix_float4x4 model_transform; // make 3x4
-    matrix_float4x4 viewprojection_transform;
-    matrix_float4x4 light_viewprojection_transform;
     
-    matrix_float4x4 inverse_model_transform; // make 3x3
-    vector_float3 light_direction;
+    // coordinate systems:
+    //
+    // tangent space
+    //                  normal transform
+    // model space
+    //                  model transform
+    // world space
+    //                  view transform
+    // eye space
+    //                  projection transform
+    // clip space
+    //
+    // light space (eye)
     
+    
+    // tangent space -> model space -> world space -> eye space -> clip space
+    //           normal           model            view        projection
+    
+    
+    matrix_float4x4 model_transform;
+    matrix_float4x4 inverse_model_transform;
+
+    matrix_float4x4 view_transform;
+    matrix_float4x4 inverse_view_transform;
     vector_float4 camera_world_position;
+    
+    matrix_float4x4 projection_transform;
+
+    matrix_float4x4 viewprojection_transform;
+    
+    
+    vector_float3 light_direction;
+    matrix_float4x4 light_viewprojection_transform;
     
 } MeshUniforms;
 

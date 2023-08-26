@@ -140,6 +140,7 @@ struct MeshRasterizerData
 {
     float4 clipSpacePosition [[position]];
     float4 worldSpacePosition;
+    float4 eyeSpacePosition;
     float4 lightSpacePosition;
     float2 texCoord;
     float3 normal;
@@ -156,6 +157,7 @@ meshVertexShader(uint vertexID [[ vertex_id ]],
     MeshRasterizerData out;
     
     out.worldSpacePosition = uniforms.model_transform * vertexArray[vertexID].position;
+    out.eyeSpacePosition = uniforms.view_transform * out.worldSpacePosition;
     out.clipSpacePosition = uniforms.viewprojection_transform * out.worldSpacePosition;
     out.lightSpacePosition = uniforms.light_viewprojection_transform * out.worldSpacePosition;
     out.texCoord = vertexArray[vertexID].texCoord;
@@ -167,7 +169,9 @@ meshVertexShader(uint vertexID [[ vertex_id ]],
 
 struct MeshFragmentOutput {
     half4 color [[color(AAPLColorIndexColor)]];
-    half4 normal [[color(AAPLColorIndexNormal)]];
+    half4 albedoMetallic [[color(AAPLColorIndexAlbedoMetallic)]];
+    half4 normalRoughness [[color(AAPLColorIndexNormalRoughness)]];
+    float depth [[color(AAPLColorIndexDepthAsColor)]];
 };
 
 // BRDF components
@@ -214,7 +218,7 @@ float3 fresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
 
 [[fragment]] MeshFragmentOutput
 meshFragmentShader(MeshRasterizerData in [[stage_in]],
-                   constant MeshUniforms &uniforms  [[ buffer(0) ]],
+                   constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
                    texture2d<float> colorTexture [[texture(AAPLTextureIndexColor) ]],
                    texture2d<float> normalTexture [[texture(AAPLTextureIndexNormal)]],
                    texture2d<float> roughnessTexture [[texture(AAPLTextureIndexRoughness)]],
@@ -359,7 +363,8 @@ meshFragmentShader(MeshRasterizerData in [[stage_in]],
     // out.color = half4(shadowFactor, shadowFactor, shadowFactor, 1.0f);
     out.color = half4(half3(color), 1.0f);
     // out.color += half4(half3(environmentLookup(reflected, 0.001f)), 1.0f) * 0.5;
-    out.normal = half4(half3(normal), 1.0f);
+    out.albedoMetallic = half4(half3(colorSample.rgb), metallicSample.r);
+    out.normalRoughness = half4(half3(normal), roughnessSample.r);
     
 
     // shadowed
@@ -396,6 +401,234 @@ meshFragmentShader(MeshRasterizerData in [[stage_in]],
     //return float4(colorSample) * in.color;
     // return float4(0.5, 0.5, 0.5, 0.5);
 }
+
+
+
+
+
+[[fragment]] MeshFragmentOutput
+meshGbufferFragment(MeshRasterizerData in [[stage_in]],
+                    constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                   texture2d<half> colorTexture [[texture(AAPLTextureIndexColor) ]],
+                   texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
+                   texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]],
+                   texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]])
+
+{
+    constexpr sampler bilinearSampler(mag_filter::linear,
+                                      min_filter::linear,
+                                      s_address::repeat,
+                                      t_address::repeat);
+    
+
+    MeshFragmentOutput out;
+    
+    // todo: pack, compress these textures
+    
+    // Sample the texture to obtain a color
+    half4 colorSample = colorTexture.sample(bilinearSampler, in.texCoord);
+    // Sample the texture to obtain a normal
+    half4 normalSample = normalTexture.sample(bilinearSampler, in.texCoord);
+    // Sample the rougness texture
+    half4 roughnessSample = roughnessTexture.sample(bilinearSampler, in.texCoord);
+    // Sample the metallic texture
+    half4 metallicSample = metallicTexture.sample(bilinearSampler, in.texCoord);
+    // Sample the emssive
+    half4 emissiveSample = 0;
+    half4 occlusionSample = 0;
+    
+    // transform from tangent space to world space
+    
+    // orthogonalize
+    half3 bitangent = normalize(half3(cross(in.tangent, in.normal)));
+    half3 tangent = cross(half3(in.normal), bitangent);
+    half3 normal = normalSample.xyz * 2.0h - 1.0h;
+
+    // renormalize
+    in.normal = normalize(in.normal);
+    tangent = normalize(tangent);
+    bitangent = normalize(bitangent);
+
+    normal = half3x3(tangent, bitangent, half3(in.normal)) * half3(normal);
+    normal = normalize(half3((uniforms.inverse_model_transform * float4(float3(normal), 1.0f)).xyz));
+    
+    out.color = emissiveSample;
+    out.albedoMetallic.rgb = colorSample.rgb;
+    out.albedoMetallic.a = metallicSample.r;
+    out.normalRoughness.xyz = normal.xyz;
+    out.normalRoughness.w = roughnessSample.r;
+    out.depth = in.eyeSpacePosition.z;
+    
+    return out;
+   
+}
+
+
+
+
+
+struct LightingVertexInput {
+    float4 position;
+};
+
+struct LightingVertexOutput {
+    float4 position [[position]];
+    float3 direction;
+};
+
+
+
+[[vertex]] LightingVertexOutput
+meshLightingVertex(uint vertexID [[ vertex_id ]],
+                   const device float4 *vertexArray [[ buffer(AAPLBufferIndexVertices) ]],
+                   constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]])
+
+{
+    LightingVertexOutput out;
+    out.position = vertexArray[vertexID];
+    float4 direction = float4(out.position.x, out.position.y, 1.0, 0.0);
+    out.direction = (uniforms.inverse_view_transform * direction).xyz;
+    return out;
+}
+
+
+struct LightingFragmentOutput {
+    half4 color [[color(AAPLColorIndexColor)]];
+};
+
+[[fragment]] LightingFragmentOutput
+meshLightingFragment(LightingVertexOutput in [[stage_in]],
+                     float4 albedoMetallic [[color(AAPLColorIndexAlbedoMetallic)]],
+                     float4 normalRoughness [[color(AAPLColorIndexNormalRoughness)]],
+                     float depthAsColor [[color(AAPLColorIndexDepthAsColor)]],
+                     constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                     texturecube<float> environmentTexture [[texture(AAPLTextureIndexEnvironment)]])
+{
+
+    constexpr sampler trilinearSampler(mag_filter::linear,
+                                       min_filter::linear,
+                                       mip_filter::linear,
+                                       s_address::repeat,
+                                       t_address::repeat);
+
+
+    
+    float3 albedo = albedoMetallic.rgb;
+    float3 metallic = albedoMetallic.a;
+    float3 normal = normalRoughness.xyz;
+    float roughness = normalRoughness.w;
+    float occlusion = 1.0;
+    
+    float3 view = -normalize(in.direction.xyz);
+    float3 reflected = reflect(-view, normal);
+
+    float lod = log2(roughness) + 4;
+    float3 diffuseSample = environmentTexture.sample(trilinearSampler,
+                                                     normalRoughness.xyz,
+                                                     level(5)).rgb;
+    float3 reflectedSample = environmentTexture.sample(trilinearSampler,
+                                                       reflected,
+                                                       level(lod)).rgb;
+    
+    float3 F0 = 0.04f;
+    F0 = mix(F0, albedo, metallic);
+    
+    float3 Lo = 0;
+
+    {
+        // how reflective are we
+        float3 F = fresnelSchlickRoughness(saturate(dot(normal, view)),
+                                           F0,
+                                           roughness);
+        float3 kS = F;
+        float3 kD = 1.0 - kS;
+        float3 irradiance = diffuseSample.rgb;
+        float3 diffuse    = irradiance * albedo;
+        
+        float3 specular = 1.0f * reflectedSample.rgb * F;
+        
+        float3 ambient = (kD * diffuse + specular) * occlusion;
+        Lo += ambient;
+        
+    }
+    
+    
+    LightingFragmentOutput out;
+    out.color.rgb = half3(Lo);
+    return out;
+        
+}
+
+
+[[fragment]] LightingFragmentOutput
+meshPointLightFragment(LightingVertexOutput in [[stage_in]],
+                      float4 albedoMetallic [[color(AAPLColorIndexAlbedoMetallic)]],
+                      float4 normalRoughness [[color(AAPLColorIndexNormalRoughness)]],
+                      float depthAsColor [[color(AAPLColorIndexDepthAsColor)]],
+                      constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                      texture2d<float> shadowTexture [[texture(AAPLTextureIndexShadow)]])
+{
+    
+    constexpr sampler nearestSampler(mag_filter::nearest,
+                                     min_filter::nearest,
+                                     s_address::clamp_to_edge,
+                                     t_address::clamp_to_edge);
+    
+    float3 albedo = albedoMetallic.rgb;
+    float3 metallic = albedoMetallic.a;
+    float3 normal = normalRoughness.xyz;
+    float roughness = normalRoughness.w;
+    float occlusion = 1.0;
+    
+    float3 view = -normalize(in.direction.xyz);
+    float3 halfway = normalize(view - uniforms.light_direction);
+    float4 position = float4(in.direction * depthAsColor, 0) + uniforms.camera_world_position;
+    float4 lightSpacePosition = uniforms.light_viewprojection_transform * position;
+        
+    // we only need to know distance for shadowing? (and fog i guess)
+    float shadowSample = shadowTexture.sample(nearestSampler, lightSpacePosition.xy).r;
+    float shadowFactor = step(lightSpacePosition.z, shadowSample);
+    
+    float3 F0 = 0.04f;
+    F0 = mix(F0, albedo, metallic);
+    
+    float3 Lo = 0;
+    
+    // for the sun light
+    {
+        float cosTheta = saturate(dot(normal, halfway));
+        float NdotL = saturate(dot(normal, -uniforms.light_direction));
+        
+        // microfacet distribution factor
+        float NDF = DistributionGGX(normal, halfway, roughness);
+        
+        // geometry factor
+        float G = GeometrySmithPoint(normal, view, -uniforms.light_direction, roughness);
+        
+        float3 F = fresnelSchlick(cosTheta, F0);
+        
+        float3 numerator = NDF * G * F;
+        float denominator = 4.0f * dot(normal, view) * NdotL + 0.0001f;
+        float3 specular = numerator / denominator;
+        
+        float3 kS = F;
+        float3 kD = (1.0f - kS) * (1.0 - metallic);
+        
+        // float radiance = 3.0f; // of light source
+        float3 radiance = float3(4, 3, 2);
+        Lo += (kD * albedo * M_1_PI_F + specular) * NdotL * radiance * shadowFactor;
+        
+    }
+    
+    LightingFragmentOutput out;
+    out.color.rgb = half3(Lo);
+    out.color.a = 1;
+    return out;
+    
+}
+
+
+
 
 
 
