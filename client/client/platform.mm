@@ -14,8 +14,11 @@
 namespace wry {
     
     string path_for_resource(string_view name, string_view ext) {
-        return [[[NSBundle mainBundle] pathForResource:[NSString stringWithUTF8String:string(name).c_str()]
-                                                ofType:[NSString stringWithUTF8String:string(ext).c_str()]] UTF8String];
+        string s("/Users/antony/Desktop/assets/");
+        s.append(name);
+        s.append(".");
+        s.append(ext);
+        return s;
     }
 
 }

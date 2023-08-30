@@ -10,8 +10,7 @@
 
 #include <cmath>
 
-#include <simd/simd.h>
-
+#include "simd.hpp"
 #include "const_matrix_iterator.hpp"
 #include "const_column_vector_view.hpp"
 

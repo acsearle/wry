@@ -18,11 +18,10 @@
 
 - (void)loadResource:(NSString*)name withExtension:(NSString*)ext {
     NSError* err = nil;
-    NSURL* url = [[NSBundle mainBundle]
-                  URLForResource:name
-                  withExtension:ext];
+    NSString* path = [NSString stringWithFormat:@"/Users/antony/Desktop/assets/%@.%@", name, ext];
+    NSURL* fileUrl = [NSURL fileURLWithPath:path];
     AVAudioFile* file = [[AVAudioFile alloc]
-                         initForReading:url
+                         initForReading:fileUrl
                          error:&err];
     if (err) {
         NSLog(@"%@", [err localizedDescription]);

@@ -421,3 +421,84 @@ zz = sqrt((1 - r^2)/((a^2-1)r^2+1))
 
 
 
+  // derivation:
+    //
+    // recall that to integrate over angle
+    // ```
+    //     \int f dw
+    // ```
+    // in polar coordinates
+    // ```
+    //     \int\int f sin(\theta) d\theta d\phi
+    // ```
+    // is equivalent to
+    // ```
+    //     \int\int f d\cos(\theta) d\phi
+    // ```
+    //
+    // For the Trowbridge-Reitz distribution, we have
+    //
+    // p(\theta) = \alpha^2 / [ \pi ( cos^2(\theta)^2 (\alpha^2 - 1) + 1)^2 ]
+    //
+    // which is a rather nasty integral, but fortunately we always want to
+    // integrate it as multiplied by
+    // ```
+    //     cos(\theta)    \theta < M_PI
+    //     0              otherwise
+    // ```
+    // and the combined function,
+    // ```
+    //    g = \alpha^2 cos(\theta) / [ \pi ( cos^2(\theta) (\alpha^2 - 1) + 1)^2 ]
+    // ```
+    // has a much simpler integral
+    // ```
+    //     \int \alpha^2 cos(\theta) / [ \pi ( cos^2(\theta) (\alpha^2 - 1) + 1)^2 ] d cos(\theta)
+    //
+    //        = \alpha^2 / [ 2\pi (1-\alpha^2) ((\alpha^2 - 1) * cos^2(\theta) + 1)
+    // ```
+    // When \theta = 0, cos\theta = 1,
+    // ```
+    //        = \alpha^2 / [2\pi (1-\alpha^2) ((\alpha^2 - 1) + 1)
+    //        = 1 / [2\pi (1 - \alpha^2)]
+    // ```
+    // And when \theta = \pi/2, cos\theta = 0
+    // ```
+    //        = \alpha^2 / [2\pi (1 - \alpha^2)]
+    // ```
+    // thus the total integral is
+    // ```
+    //        = (1 - \alpha^2) / (2\pi (1 - \alpha^2))
+    //        = 1 / 2\pi
+    // ```
+    // Note that this indicates that the T-R form used is actually normalized
+    // over the cos\theta weighted hemisphere, not the sphere.  Is that OK?
+    //
+    // Pulling out the 2\pi term that normalizes the integral over \phi, we
+    // have obtained the cumulative density function
+    //
+    // and the CDF is
+    // ```
+    //     \Chi = \alpha^2 / [(1-\alpha^2)((\alpha^2-1)*cos^2(\theta)+1) - \alpha^2/(1-\alpha^2)
+    // ```
+    // Solving for cos\theta,
+    // ```
+    //     X*(1-a^2) = a^2/[(a^2-1)c^2+1] - a^2
+    //     X*(1-a^2)+a^2 = a^2/[(a^2-1)c^2+1]
+    //     (a^2-1)c^2+1 = a^2/[X*(1-a^2)+a^2]
+    //     (a^2-1)c^2 = [a^2-X*(1-a^2)-a^2]/[X*(1-a^2)+a^2]
+    //     (a^2-1)c^2 = [-X*(1-a^2)/[X*(1-a^2)+a^2]
+    //     c^2 = X/[X*(1-a^2)+a^2]
+    //     c^2 = 1 / [(1-a^2) + a^2 / X ]
+    // ```
+    // The final form's only dependence on X is in the a^2 / X term showing how
+    // the scale factor if the problem changes with alpha (?)
+    //
+    // If we change variables X = 1-Y
+    // ```
+    //     c^2 = (1-Y)/[(1-Y)(1-a^2)+a^2]
+    //         = (1-Y)/[Y(a^2-1) + 1]
+    // ```
+    // we recover the UE4 expression, indicating they chose the other direction
+    // of CDF convention
+
+

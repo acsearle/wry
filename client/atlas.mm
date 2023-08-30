@@ -5,12 +5,13 @@
 //  Created by Antony Searle on 26/6/2023.
 //
 
+#include "ShaderTypes.h"
+
 #include <chrono>
 #include <thread>
 
 #include "atlas.hpp"
 #include "debug.hpp"
-#include "ShaderTypes.h"
 
 namespace wry {
     

@@ -8,8 +8,9 @@
 #ifndef vertex_hpp
 #define vertex_hpp
 
-#include <simd/simd.h>
 #include "ShaderTypes.h"
+
+#include "simd.hpp"
 
 namespace wry {
         

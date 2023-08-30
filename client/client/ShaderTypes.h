@@ -10,33 +10,117 @@
 
 #include <simd/simd.h>
 
-// location attributes
+// vertex argument [[attribute(i)]]
 
-typedef enum
-{
+enum AAPLAttributeIndex {
+    AAPLAttributeIndexPosition,
+    AAPLAttributeIndexColor,
+    AAPLAttributeIndexTexCoord,
+    AAPLAttributeIndexNormal,
+    AAPLAttributeIndexTangent,
+    AAPLAttributeIndexBinormal,
+};
+
+// buffer [[buffer(i)]]
+
+enum AAPLBufferIndex {
     AAPLBufferIndexUniforms,
     AAPLBufferIndexVertices,
     AAPLBufferIndexIndices,
-} AAPLBufferIndex;
+    AAPLBufferIndexInstanced,
+};
 
+// texture [[texture(i)]]
 
-typedef enum
-{
+enum AAPLTextureIndex {
+    AAPLTextureIndexAlbedo,
+    AAPLTextureIndexAlbedoMetallic,
+    AAPLTextureIndexClearcoat,
     AAPLTextureIndexColor,
-    AAPLTextureIndexNormal,
-    AAPLTextureIndexShadow,
-    AAPLTextureIndexRoughness,
-    AAPLTextureIndexMetallic,
+    AAPLTextureIndexDepth,
+    AAPLTextureIndexEmissive,
     AAPLTextureIndexEnvironment,
-} AAPLTextureIndex;
+    AAPLTextureIndexFresnel,
+    AAPLTextureIndexMetallic,
+    AAPLTextureIndexNormal,
+    AAPLTextureIndexNormalRoughness,
+    AAPLTextureIndexOcclusion,
+    AAPLTextureIndexRoughness,
+    AAPLTextureIndexShadow,
+};
 
-typedef enum {
+// color attachment [[color(i)]]
+
+enum AAPLColorIndex {
     AAPLColorIndexColor,
     AAPLColorIndexAlbedoMetallic,
     AAPLColorIndexNormalRoughness,
-    AAPLColorIndexDepthAsColor,
-} AAPLColorIndex;
+    AAPLColorIndexDepth,
+};
 
+
+#pragma mark - Deferred rendering
+
+struct MeshVertex{
+    vector_float4 position;
+    vector_float2 texCoord;
+    vector_float4 normal;
+    vector_float4 tangent;
+};
+
+struct MeshUniforms {
+    
+    // coordinate systems:
+    //
+    // tangent space
+    //                  normal transform
+    // model space
+    //                  model transform
+    // world space
+    //                  view transform
+    // eye[light] space
+    //                  projection transform
+    // clip space
+    
+    
+    // tangent space -> model space -> world space -> eye space -> clip space
+    //           normal           model            view        projection
+    
+    vector_float4 origin;
+    
+    matrix_float4x4 model_transform;
+    matrix_float4x4 inverse_model_transform;
+
+    matrix_float4x4 view_transform;
+    matrix_float4x4 inverse_view_transform;
+    
+    matrix_float4x4 projection_transform;
+    matrix_float4x4 inverse_projection_transform;
+
+    matrix_float4x4 viewprojection_transform;
+
+    // light-specifc
+    
+    vector_float3 light_direction;
+    matrix_float4x4 light_viewprojection_transform;
+    vector_float3 radiance;
+    
+    // IBL multiplier
+    vector_float4 ibl_scale;
+    matrix_float3x3 ibl_transform;
+    
+};
+
+
+
+#pragma mark - Cube filtering
+
+struct CubeFilterUniforms {
+    float alpha2;
+    matrix_float4x4 transforms[6]; // per face projections
+};
+
+#pragma mark - Legacy
 
 typedef struct
 {
@@ -61,7 +145,7 @@ typedef struct
         
         // 8 bytes wasted, fixme
     };
-
+    
     // vector_uchar4 color;
     // srgba8unorm
     unsigned int color; // 4
@@ -74,59 +158,6 @@ typedef struct
     // vector_uint2 viewportSize;
     matrix_float4x4 position_transform;
 } MyUniforms;
-
-
-typedef struct {
-    vector_float4 position;
-    vector_float2 texCoord;
-    vector_float4 normal;
-    vector_float4 tangent;
-} MeshVertex;
-
-typedef struct
-{
-    
-    // coordinate systems:
-    //
-    // tangent space
-    //                  normal transform
-    // model space
-    //                  model transform
-    // world space
-    //                  view transform
-    // eye space
-    //                  projection transform
-    // clip space
-    //
-    // light space (eye)
-    
-    
-    // tangent space -> model space -> world space -> eye space -> clip space
-    //           normal           model            view        projection
-    
-    
-    matrix_float4x4 model_transform;
-    matrix_float4x4 inverse_model_transform;
-
-    matrix_float4x4 view_transform;
-    matrix_float4x4 inverse_view_transform;
-    vector_float4 camera_world_position;
-    
-    matrix_float4x4 projection_transform;
-
-    matrix_float4x4 viewprojection_transform;
-    
-    
-    vector_float3 light_direction;
-    matrix_float4x4 light_viewprojection_transform;
-    
-} MeshUniforms;
-
-typedef struct {
-    float alpha;
-    matrix_float4x4 transforms[6];
-    
-} cubeFilterUniforms;
 
 
 #endif /* ShaderTypes_h */

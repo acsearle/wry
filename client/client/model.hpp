@@ -8,12 +8,12 @@
 #ifndef model_hpp
 #define model_hpp
 
-#include <simd/simd.h>
-
 #include <unordered_map>
 #include <memory>
 #include <mutex>
 
+
+#include "simd.hpp"
 #include "array.hpp"
 #include "hash.hpp"
 #include "string.hpp"

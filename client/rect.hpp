@@ -8,7 +8,7 @@
 #ifndef rect_hpp
 #define rect_hpp
 
-#include <simd/simd.h>
+#include "simd.hpp"
 #include "utility.hpp"
 
 namespace wry {

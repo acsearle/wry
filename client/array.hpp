@@ -443,7 +443,7 @@ namespace wry {
                         
         void resize(size_t count) {
             iterator pos = _resize(count);
-            std::uninitialized_value_construct_n(pos, _end);
+            std::uninitialized_value_construct(pos, _end);
         }
         
         void resize(size_t count, T value) {
@@ -660,10 +660,10 @@ namespace wry {
             size_type i = pos - _begin;
             size_type j = _end - (pos + count);
             if (i <= j) {
-                relocate_n(_begin, i, _begin + count);
+                relocate_backward(_begin, _begin + i, _begin + i + count);
                 _begin += count;
             } else {
-                relocate_backward_n(j, _end, _end - count);
+                relocate(_begin + i + count, _end, _begin + i);
                 _end -= count;
             }
             return _begin + i;

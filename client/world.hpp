@@ -8,7 +8,7 @@
 #ifndef world_hpp
 #define world_hpp
 
-#include <simd/simd.h>
+#include "simd.hpp"
 
 #include "common.hpp"
 #include "utility.hpp"
