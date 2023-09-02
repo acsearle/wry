@@ -135,48 +135,6 @@ fragmentShader_sdf(RasterizerData in [[stage_in]],
 
 # pragma mark - Deferred physically-based rendering
 
-// Mostly from
-//
-// learnopengl.com/PBR
-//
-
-struct MeshRasterizerData
-{
-    float4 clipSpacePosition [[position]];
-    float4 worldSpacePosition;
-    float4 eyeSpacePosition;
-    float4 lightSpacePosition;
-    float2 texCoord;
-    float3 normal;
-    float3 tangent;
-};
-
-[[vertex]] MeshRasterizerData
-meshVertexShader(uint vertexID [[ vertex_id ]],
-                 uint instanceID [[ instance_id ]],
-                 const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
-                 constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]])
-{
-    MeshRasterizerData out;
-    
-    out.worldSpacePosition = uniforms.model_transform * vertexArray[vertexID].position;
-    out.eyeSpacePosition = uniforms.view_transform * out.worldSpacePosition;
-    out.clipSpacePosition = uniforms.viewprojection_transform * out.worldSpacePosition;
-    out.lightSpacePosition = uniforms.light_viewprojection_transform * out.worldSpacePosition;
-    out.texCoord = vertexArray[vertexID].texCoord;
-    out.normal = vertexArray[vertexID].normal.xyz;
-    out.tangent = vertexArray[vertexID].tangent.xyz;
-
-    return out;
-}
-
-struct MeshFragmentOutput {
-    half4 color [[color(AAPLColorIndexColor)]];
-    half4 albedoMetallic [[color(AAPLColorIndexAlbedoMetallic)]];
-    half4 normalRoughness [[color(AAPLColorIndexNormalRoughness)]];
-    float depth [[color(AAPLColorIndexDepth)]];
-};
-
 // Physically-Based Rendering functions
 //
 // Mostly based on
@@ -192,6 +150,121 @@ struct MeshFragmentOutput {
 //     [3] https://blog.selfshadow.com/publications/s2012-shading-course/burley/s2012_pbs_disney_brdf_notes_v3.pdf
 //
 // which describes the lighting model used in Wreck-It Ralph by Disney
+
+
+struct MeshToGBufferVertexOutput
+{
+    float4 clipSpacePosition [[position]];
+    float4 worldSpacePosition;
+    float4 eyeSpacePosition;
+    float4 lightSpacePosition;
+    float4 coordinate;
+    float4 worldNormal;
+    float4 worldTangent;
+    float4 worldBitangent;
+};
+
+
+struct MeshToGBufferFragmentOutput {
+    half4 emissive [[color(AAPLColorIndexColor)]];
+    half4 albedoMetallic [[color(AAPLColorIndexAlbedoMetallic)]];
+    half4 normalRoughness [[color(AAPLColorIndexNormalRoughness)]];
+    float depth [[color(AAPLColorIndexDepth)]];
+};
+
+
+[[vertex]] MeshToGBufferVertexOutput
+MeshToGBufferVertexShader(uint vertexID [[ vertex_id ]],
+                          uint instanceID [[ instance_id ]],
+                          constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
+                          const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
+                          const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
+{
+    
+    MeshToGBufferVertexOutput out;
+
+    out.coordinate = vertexArray[vertexID].coordinate;
+
+    out.worldSpacePosition = instancedArray[instanceID].model_transform * vertexArray[vertexID].position;
+    out.eyeSpacePosition = uniforms.view_transform * out.worldSpacePosition;
+    out.clipSpacePosition = uniforms.viewprojection_transform * out.worldSpacePosition;
+    out.lightSpacePosition = uniforms.light_viewprojection_transform * out.worldSpacePosition;
+    out.worldTangent = vertexArray[vertexID].tangent * instancedArray[instanceID].inverse_model_transform;
+    out.worldBitangent = vertexArray[vertexID].bitangent * instancedArray[instanceID].inverse_model_transform;
+    out.worldNormal = vertexArray[vertexID].normal * instancedArray[instanceID].inverse_model_transform;
+
+    return out;
+}
+
+[[fragment]] MeshToGBufferFragmentOutput
+MeshToGBufferFragmentShader(MeshToGBufferVertexOutput in [[stage_in]],
+                            bool front_facing [[front_facing]],
+                            constant MeshUniforms& uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                            texture2d<half> emissiveTexture [[texture(AAPLTextureIndexEmissive) ]],
+                            texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]],
+                            texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
+                            texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
+                            texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]])
+
+{
+    constexpr sampler trilinearSampler(mag_filter::linear,
+                                      min_filter::linear,
+                                      mip_filter::linear,
+                                      s_address::repeat,
+                                      t_address::repeat);
+        
+    half4 albedoSample = albedoTexture.sample(trilinearSampler, in.coordinate.xy);
+    half4 normalSample = normalTexture.sample(trilinearSampler, in.coordinate.xy);
+    half4 roughnessSample = roughnessTexture.sample(trilinearSampler, in.coordinate.xy);
+    half4 metallicSample = metallicTexture.sample(trilinearSampler, in.coordinate.xy);
+    half4 emissiveSample = emissiveTexture.sample(trilinearSampler, in.coordinate.xy);
+    
+    normalSample = normalSample * 2.0h - 1.0h;
+    
+    // material hacks:
+    albedoSample = half4(1,1,1,1)/8; // dark
+    metallicSample = 0.0f; // dielectric
+    normalSample = half4(0.0h, 0.0h, 1.0h, 0.0h); // smooth (macro)
+    roughnessSample = exp2(0.0); // rough (micro)
+    emissiveSample = 0.0; // ordinary
+    
+    // transform from tangent space to world space
+    
+    // we have a (potentially skewed) Jacobian that we can use directly for
+    // displacement mapping, but not for normal mapping.
+    
+    // orthogonalize
+    //half3 bitangent = normalize(half3(cross(in.worldTangent.xyz, in.worldNormal.xyz)));
+    //half3 tangent = normalize(cross(half3(in.worldNormal.xyz), bitangent.xyz));
+    //half3 normal = normalSample.xyz * 2.0h - 1.0h;
+
+    // renormalize
+    //in.worldNormal = normalize(in.worldNormal);
+
+    //normal = half3x3(tangent, bitangent, half3(in.worldNormal.xyz)) * normal;
+    //normal = normalize(half3((uniforms.inverse_model_transform * float4(float3(normal), 1.0f)).xyz));
+    
+    half3 normal = normalize(half3x3(half3(in.worldTangent.xyz),
+                                     half3(in.worldBitangent.xyz),
+                                     half3(in.worldNormal.xyz)) * normalSample.xyz);
+
+    MeshToGBufferFragmentOutput out;
+    
+    out.emissive = front_facing ? emissiveSample : half4(1.0h, 0.0h, 1.0h, 0.0h);
+    out.albedoMetallic.rgb = front_facing ? albedoSample.rgb : 0.0h;
+    out.albedoMetallic.a = front_facing ? metallicSample.r : 0.0h;
+    out.normalRoughness.xyz = front_facing ? normal : 0.0h;
+    out.normalRoughness.w = front_facing ? roughnessSample.r : 1.0h;
+    out.depth = in.eyeSpacePosition.z;
+    
+    return out;
+   
+}
+
+
+
+
+
 
 
 // Hammersley low-discrepency sequence for quasi-Monte-Carlo integration
@@ -268,75 +341,6 @@ float3 FresnelSchlick(float cosTheta, float3 F0) {
 float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
     return F0 + (max(float3(1.0 - roughness), F0) - F0) * pow(saturate(1.0f - cosTheta), 5.0);
 }
-
-[[fragment]] MeshFragmentOutput
-meshGbufferFragment(MeshRasterizerData in [[stage_in]],
-                    constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
-                    texture2d<half> emissiveTexture [[texture(AAPLTextureIndexEmissive) ]],
-                    texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]],
-                    texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
-                    texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
-                    texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]])
-
-{
-    constexpr sampler trilinearSampler(mag_filter::linear,
-                                      min_filter::linear,
-                                      mip_filter::linear,
-                                      s_address::repeat,
-                                      t_address::repeat);
-    
-    MeshFragmentOutput out;
-    
-    // todo: pack, compress these textures
-    
-    // Sample the texture to obtain a color
-    half4 albedoSample = albedoTexture.sample(trilinearSampler, in.texCoord);
-    // Sample the texture to obtain a normal
-    half4 normalSample = normalTexture.sample(trilinearSampler, in.texCoord);
-    // Sample the rougness texture
-    half4 roughnessSample = roughnessTexture.sample(trilinearSampler, in.texCoord);
-    // Sample the metallic texture
-    half4 metallicSample = metallicTexture.sample(trilinearSampler, in.texCoord);
-    // Sample the emssive
-    half4 emissiveSample = emissiveTexture.sample(trilinearSampler, in.texCoord);
-    half4 occlusionSample = 0;
-    
-    // hacks:    
-    // normalSample = half4(0.5h, 0.5h, 1.0h, 0.0h);
-    //albedoSample = half4(0.125h, 1.0h, 0.25h, 0.0h);
-    albedoSample = half4(1.0h, 0.5h, 0.25h, 0.0h);
-    roughnessSample = exp2(-2.0);
-    metallicSample = 1.0f;
-    emissiveSample = 0.0;
-    
-    // transform from tangent space to world space
-    
-    // orthogonalize
-    half3 bitangent = normalize(half3(cross(in.tangent, in.normal)));
-    half3 tangent = cross(half3(in.normal), bitangent);
-    half3 normal = normalSample.xyz * 2.0h - 1.0h;
-
-    // renormalize
-    in.normal = normalize(in.normal);
-    tangent = normalize(tangent);
-    bitangent = normalize(bitangent);
-
-    normal = half3x3(tangent, bitangent, half3(in.normal)) * half3(normal);
-    normal = normalize(half3((uniforms.inverse_model_transform * float4(float3(normal), 1.0f)).xyz));
-    
-    out.color = emissiveSample;
-    out.albedoMetallic.rgb = albedoSample.rgb;
-    out.albedoMetallic.a = metallicSample.r;
-    out.normalRoughness.xyz = normal.xyz;
-    out.normalRoughness.w = roughnessSample.r;
-    out.depth = in.eyeSpacePosition.z;
-    
-    return out;
-   
-}
-
-
-
 
 
 struct LightingVertexInput {
@@ -745,3 +749,85 @@ SplitSumFragment(float4 position [[position]]) {
     return float4(scale / M, offset / M, 0.0f, 0.0f);
     
 }
+
+
+
+
+
+struct whiskerVertexOut {
+    float4 clipSpacePosition [[position]];
+    float4 color;
+};
+
+[[vertex]] whiskerVertexOut
+whiskerVertexShader(uint vertexID [[ vertex_id ]],
+                    uint instanceID [[ instance_id ]],
+                    const device float4 *vertexArray [[buffer(AAPLBufferIndexVertices)]],
+                    constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
+                    const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
+{
+    whiskerVertexOut out;
+    
+    float4 worldSpacePosition = instancedArray[instanceID].model_transform * vertexArray[vertexID];
+    out.clipSpacePosition = uniforms.viewprojection_transform * worldSpacePosition;
+    
+    out.color = 0.0f;
+    out.color[(vertexID >> 1) % 3] = 1.0f;
+    
+    return out;
+}
+
+struct whiskerFragmentOut {
+    half4 color [[color(AAPLColorIndexColor)]];
+};
+
+[[fragment]] whiskerFragmentOut
+whiskerFragmentShader(whiskerVertexOut in [[stage_in]],
+                      constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]])
+{
+    whiskerFragmentOut out;
+    out.color = half4(in.color);
+    return out;
+}
+
+
+
+
+
+struct pointsVertexOut {
+    float4 clipSpacePosition [[position]];
+    float4 color;
+    float point_size [[point_size]];
+};
+
+[[vertex]] pointsVertexOut
+pointsVertexShader(uint vertexID [[ vertex_id ]],
+                    uint instanceID [[ instance_id ]],
+                    const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
+                    constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
+                   const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
+{
+    pointsVertexOut out;
+    
+    float4 worldSpacePosition = instancedArray[instanceID].model_transform * vertexArray[vertexID].position;
+    out.clipSpacePosition = uniforms.viewprojection_transform * worldSpacePosition;
+
+    out.color = 1.0f;
+    out.point_size = 8.0f;
+    
+    return out;
+}
+
+struct pointsFragmentOut {
+    half4 color [[color(AAPLColorIndexColor)]];
+};
+
+[[fragment]] pointsFragmentOut
+pointsFragmentShader(pointsVertexOut in [[stage_in]],
+                      constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]])
+{
+    pointsFragmentOut out;
+    out.color = half4(in.color);
+    return out;
+}
+

@@ -181,6 +181,7 @@
         
     }
 
+    /*
     {
         // random location on a line in front of the listener
         AVAudio3DPoint location = AVAudioMake3DPoint(// rand() & 1 ? -1.0 : +1.0,
@@ -198,45 +199,84 @@
         
         [_audio play:name at:location];
     }
+     */
         
     
     // UTF-16 code for key, such as private use 0xf700 = NSUpArrowFunctionKey
     // printf("%x\n", [event.characters characterAtIndex:0]);
     
     // _model->_console.back().append(event.characters.UTF8String);
-    NSLog(@"keyDown: \"%@\"\n", event.characters);
+    NSLog(@"keyDown: \"%@\" (\"%@\")\n",
+          event.characters,
+          [event charactersByApplyingModifiers:0]);
     if (event.characters.length) {
-        NSLog(@"keyDown: (%x)\n", [event.characters characterAtIndex:0]);
+        // NSLog(@"keyDown: (%x)\n", [event.characters characterAtIndex:0]);
         auto guard = std::unique_lock{_model->_mutex};
-        switch ([event.characters characterAtIndex:0]) {
-            case NSCarriageReturnCharacter:
-                _model->_console.emplace_back();
-                break;
-            case NSDeleteCharacter:
-                if (!_model->_console.back().empty())
-                    _model->_console.back().pop_back();
-                break;
-            case NSUpArrowFunctionKey:
-                std::rotate(_model->_console.begin(), _model->_console.end() - 1, _model->_console.end());
-                break;
-            case NSDownArrowFunctionKey:
-                std::rotate(_model->_console.begin(), _model->_console.begin() + 1, _model->_console.end());
-                break;
-            case NSLeftArrowFunctionKey:
-                if (!_model->_console.back().empty()) {
-                    auto ch = _model->_console.back().pop_back();
-                    _model->_console.back().push_front(ch);
-                }
-                break;
-            case NSRightArrowFunctionKey:
-                if (!_model->_console.back().empty()) {
-                    auto ch = _model->_console.back().pop_front();
-                    _model->_console.back().push_back(ch);
-                }
-                break;
-            default:
-                _model->_console.back().append(event.characters.UTF8String);
-                break;
+        
+        if (_model->_console_active) {
+            switch ([event.characters characterAtIndex:0]) {
+                case NSCarriageReturnCharacter:
+                    _model->_console.emplace_back();
+                    break;
+                case 0x001b: // ESC
+                    _model->_console_active = false;
+                    _model->append_log("[ESC] Hide console");
+                    break;
+                case NSDeleteCharacter:
+                    if (!_model->_console.back().empty())
+                        _model->_console.back().pop_back();
+                    break;
+                case NSUpArrowFunctionKey:
+                    std::rotate(_model->_console.begin(), _model->_console.end() - 1, _model->_console.end());
+                    break;
+                case NSDownArrowFunctionKey:
+                    std::rotate(_model->_console.begin(), _model->_console.begin() + 1, _model->_console.end());
+                    break;
+                case NSLeftArrowFunctionKey:
+                    if (!_model->_console.back().empty()) {
+                        auto ch = _model->_console.back().pop_back();
+                        _model->_console.back().push_front(ch);
+                    }
+                    break;
+                case NSRightArrowFunctionKey:
+                    if (!_model->_console.back().empty()) {
+                        auto ch = _model->_console.back().pop_front();
+                        _model->_console.back().push_back(ch);
+                    }
+                    break;
+                default:
+                    _model->_console.back().append(event.characters.UTF8String);
+                    break;
+            }
+        } else {
+            auto toggle = [](auto& x) {
+                x = !x;
+            };
+            unichar ch = [[event charactersByApplyingModifiers:0] characterAtIndex:0];
+            char buffer[100];
+            switch (ch) {
+                case '`':
+                    _model->_console_active = true;
+                    _model->append_log("[~] Show console");
+                    break;
+                case 'j':
+                    toggle(_model->_show_jacobian);
+                    snprintf(buffer, 100, "%s [J]acobians", _model->_show_jacobian ? "Show" : "Hide");
+                    _model->append_log(buffer);
+                    break;
+                case 'p':
+                    toggle(_model->_show_points);
+                    snprintf(buffer, 100, "%s [P]oints", _model->_show_points ? "Show" : "Hide");
+                    _model->append_log(buffer);
+                    break;
+                case 'w':
+                    toggle(_model->_show_wireframe);
+                    snprintf(buffer, 100, "%s [W]ireframe", _model->_show_wireframe ? "Show" : "Hide");
+                    _model->append_log(buffer);
+                    break;
+                default:
+                    break;
+            }
         }
     }
 }

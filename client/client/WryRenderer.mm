@@ -20,7 +20,7 @@
 
 @implementation WryRenderer
 {
-    
+        
     simd_uint2 _viewportSize;
     
     id<MTLDevice> _device;
@@ -42,6 +42,8 @@
     // deferred render pass
     
     id <MTLRenderPipelineState> _colorRenderPipelineState;
+    id <MTLRenderPipelineState> _whiskerPipelineState;
+    id <MTLRenderPipelineState> _pointsPipelineState;
     id <MTLRenderPipelineState> _lightingPipelineState;
     id <MTLRenderPipelineState> _pointLightPipelineState;
     
@@ -74,6 +76,10 @@
     wry::sprite _checkerboard_sprite;
     
     id <MTLBuffer> _cube_buffer;
+    id <MTLBuffer> _cube_indices;
+    id <MTLBuffer> _cube_instances;
+    id <MTLBuffer> _whisker_buffer;
+    
     id <MTLTexture> _cube_normals;
     id <MTLTexture> _cube_colors;
     id <MTLTexture> _cube_roughness;
@@ -83,6 +89,7 @@
     id <MTLTexture> _environments[3];
     
     int _mesh_count;
+    int _whisker_count;
     
 }
 
@@ -235,9 +242,9 @@
                               atIndex:AAPLBufferIndexUniforms];
             [encoder setFragmentTexture:input
                                 atIndex:AAPLTextureIndexColor];
-            [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+            [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                         vertexStart:0
-                        vertexCount:6
+                        vertexCount:4
                       instanceCount:6];
             
             [encoder endEncoding];
@@ -296,7 +303,18 @@
                         drawablePixelFormat:(MTLPixelFormat)drawablePixelFormat
                                       model:(std::shared_ptr<wry::model>)model_
 {
+
+    using namespace ::wry;
+    using namespace ::simd;
     
+    auto newBufferWithArray = [&](auto& a) {
+        void* bytes = a.data();
+        usize length = a.size() * sizeof(typename std::decay_t<decltype(a)>::value_type);
+        id<MTLBuffer> buffer = [_device newBufferWithBytes:bytes length:length options:MTLStorageModeShared];
+        assert(buffer);
+        return buffer;
+    };
+        
     if ((self = [super init])) {
         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
@@ -311,9 +329,16 @@
         _commandQueue = [_device newCommandQueue];
         
         {
-            wry::array<simd_float4> a = wry::mesh::clip_space_quad();
-            _screenQuadVertexBuffer = [_device newBufferWithBytes:a.data()
-                                                           length:a.size()*sizeof(simd_float4) options:MTLResourceStorageModeShared];
+            // wry::array<float4> a = wry::mesh::clip_space_quad();
+            float4 buffer[4] = {
+                { -1.0f, -1.0f, 0.0f, 1.0f, },
+                { -1.0f, +1.0f, 0.0f, 1.0f, },
+                { +1.0f, -1.0f, 0.0f, 1.0f, },
+                { +1.0f, +1.0f, 0.0f, 1.0f, },
+            };
+            _screenQuadVertexBuffer = [_device newBufferWithBytes:buffer
+                                                           length:sizeof(buffer)
+                                                          options:MTLResourceStorageModeShared];
         }
         
         {
@@ -378,9 +403,9 @@
             [commandEncoder setVertexBuffer:_screenQuadVertexBuffer
                                      offset:0
                                     atIndex:AAPLBufferIndexVertices];
-            [commandEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+            [commandEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                                vertexStart:0
-                               vertexCount:6];
+                               vertexCount:4];
             [commandEncoder endEncoding];
             [commandBuffer commit];
             
@@ -405,7 +430,7 @@
         {
             MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
             descriptor.label = @"Shadow map pipeline";
-            descriptor.vertexFunction = [self newFunctionWithName:@"meshVertexShader"];
+            descriptor.vertexFunction = [self newFunctionWithName:@"MeshToGBufferVertexShader"];
             descriptor.vertexBuffers[AAPLBufferIndexVertices].mutability = MTLMutabilityImmutable;
             descriptor.vertexBuffers[AAPLBufferIndexUniforms].mutability = MTLMutabilityImmutable;
             descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
@@ -418,10 +443,12 @@
             {
                 
                 // auto v = wry::mesh::prism(16);
+                
                 /*
                 auto p = wry::mesh2::polyhedron::icosahedron();
                 wry::mesh2::triangulation q;
                 p.triangulate(q);
+                q.tesselate();
                 q.tesselate();
                 q.tesselate();
                 q.tesselate();
@@ -430,12 +457,13 @@
                 }
                 wry::mesh2::mesh m;
                 m.position_from(q);
-                m.normal_from_triangle();
-                m.texcoord_from_position();
+                m.normals_from_average(0.000001, 0.9);
+                m.texcoord_from_normal();
                 m.tangent_from_texcoord();
-                 */
+                */
 
-                wry::mesh2::mesh m; // cogwheel
+                /*
+                wry::mesh2::mesh m; // "cogwheel horn"
                 {
                     auto C = simd_matrix_rotate(-0.25,
                                                 simd_normalize(simd_make_float3(1.0, 1.0f, 1.0f)));
@@ -446,6 +474,7 @@
                     auto base = wry::mesh2::polygon::regular(12);
                     base.stellate(+1);
                     base.truncate(0.4f);
+                    //base.truncate(0.03f);
                     //base.triangulate(q);
                     //auto p = wry::mesh2::polyhedron::frustum(base, 0.75f);
                     auto p = wry::mesh2::polyhedron::extrusion(base, 50, D);
@@ -453,12 +482,14 @@
                     p.triangulate(q);
                     m.position_from(q);
                     m.normal_from_triangle();
+                    m.normals_from_average(0.000001, 0.9);
                     // m.texcoord_from_position(simd_matrix_scale(0.25f));
                     m.texcoord_from_normal();
                     m.tangent_from_texcoord();
                 }
+                 */
                  
-                /*
+                 /*
                 wry::mesh2::mesh m;
                 {
                     wry::mesh2::triangulation q;
@@ -471,18 +502,43 @@
                     // m.texcoord_from_position(simd_matrix_scale(0.25f));
                     m.texcoord_from_normal();
                     m.tangent_from_texcoord();
-                }
-                 */
+                }*/
                 
-                    
+                using namespace simd;
                 
-                _mesh_count = (int) m.vertices.size();
+                // low-poly tire with superquadric cross-section
                 
+                wry::mesh::mesh m;
+                // m.add_face_disk(8);
+                // m.add_edges_polygon(4);
+                m.add_edges_superquadric(8);
+                m.extrude(12, vector4(0.0f, M_PI_F / 6, 0.0f, 0.0f));
+                m.edges.clear();
+                m.transform_with_function([](float4 position, float4 coordinate) {
+                    float4x4 A = simd_matrix_translate(vector3(-2.0f, 0.0f, +coordinate.y));
+                    float4x4 B = simd_matrix_rotate(-coordinate.y, vector3(0.0f, 1.0f, 0.0f));
+                    //float4x4 C = simd_matrix_translate(vector3(0.0f, -10.0f, 0.0f));
+                    float4x4 D = simd_matrix_scale(0.5f);
+                    //position = D * (C * (B * (A * position)));
+                    // position = D * B * A * position;
+                    position = D * B * A * position;
+                    return position;
+                });
+                m.reparameterize_with_matrix(simd_matrix_scale(vector3(2.0f, 8.0f, 1.0f)));
+                m.colocate_similar_vertices();
+                m.combine_duplicate_vertices();
+                m.triangulate();
+                m.strip();
+                m.reindex_for_strip();
+                m.MeshVertexify();
+                
+                _mesh_count = (int) m.hack_triangle_strip.size();
+                _whisker_count = (int) m.hack_lines.size();
                 {
                     
-                    size_t length = sizeof(MeshVertex) * _mesh_count;
-                    _cube_buffer = [_device newBufferWithLength:length options:MTLResourceStorageModeShared];
-                    std::memcpy(_cube_buffer.contents, m.vertices.data(), length);
+                    _cube_buffer = newBufferWithArray(m.hack_MeshVertex);
+                    _cube_indices = newBufferWithArray(m.hack_triangle_strip);
+                    _whisker_buffer = newBufferWithArray(m.hack_lines);
                     
                 }
                 
@@ -493,10 +549,9 @@
             {
                 _cube_emissive = [self newTextureFromResource:@"emissive"
                                                        ofType:@"png"];
-                //_cube_colors = [self newTextureFromResource:@"rustediron2_basecolor"
-                //                                     ofType:@"png"];
-                _cube_colors = [self newTextureFromResource:@"albedo"
-                                                     ofType:@"png"];
+                //_cube_colors = [self newTextureFromResource:@"rustediron2_basecolor" ofType:@"png"];
+                //_cube_colors = [self newTextureFromResource:@"albedo" ofType:@"png"];
+                _cube_colors = [self newTextureFromResource:@"albedo2" ofType:@"png"];
                 _cube_metallic = [self newTextureFromResource:@"rustediron2_metallic"
                                                        ofType:@"png"];
                 _cube_normals = [self newTextureFromResource:@"rustediron2_normal"
@@ -549,8 +604,8 @@
             
             descriptor.label                           = @"Mesh to gbuffer";
             
-            descriptor.vertexFunction = [self newFunctionWithName:@"meshVertexShader"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"meshGbufferFragment"];
+            descriptor.vertexFunction = [self newFunctionWithName:@"MeshToGBufferVertexShader"];
+            descriptor.fragmentFunction = [self newFunctionWithName:@"MeshToGBufferFragmentShader"];
             descriptor.colorAttachments[AAPLColorIndexColor].pixelFormat = drawablePixelFormat;
             descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].pixelFormat = MTLPixelFormatRGBA16Float;
             descriptor.colorAttachments[AAPLColorIndexNormalRoughness].pixelFormat = MTLPixelFormatRGBA16Float;
@@ -559,6 +614,16 @@
 
             _colorRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
             
+            descriptor.label = @"Whiskers";
+            descriptor.vertexFunction = [self newFunctionWithName:@"whiskerVertexShader"];
+            descriptor.fragmentFunction = [self newFunctionWithName:@"whiskerFragmentShader"];
+            _whiskerPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
+
+            descriptor.label = @"Points";
+            descriptor.vertexFunction = [self newFunctionWithName:@"pointsVertexShader"];
+            descriptor.fragmentFunction = [self newFunctionWithName:@"pointsFragmentShader"];
+            _pointsPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
+
             // full-screen post-processing passes
             descriptor.vertexFunction = [self newFunctionWithName:@"meshLightingVertex"];
             descriptor.colorAttachments[AAPLColorIndexColor].blendingEnabled = YES;
@@ -648,21 +713,42 @@
 
 - (void)renderToMetalLayer:(nonnull CAMetalLayer*)metalLayer
 {
+    
+    using namespace ::simd;
+    using namespace ::wry;
+    
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
 
     MeshUniforms mesh_uniforms;
 
-    simd_float4x4 MeshA;
     {
-        simd_float4x4 A = simd_matrix_scale(0.5f);
-        simd_float4x4 B = simd_matrix_rotate(_frameNum * 0.0007*3, simd_make_float3(1.0f, 0.0f, 0.0f));
-        simd_float4x4 C = simd_matrix_rotate(_frameNum * 0.0011*3, simd_make_float3(0.0f, 0.0f, 1.0f));
-        MeshA = simd_mul(C, simd_mul(B, A));
+        // make single-use buffer for instance transforms
+        // this should be round-robin reuse?
+        // or even generate on GPU if possible
+        
+        NSUInteger length = sizeof(MeshInstanced) * 100;
+        _cube_instances = [_device newBufferWithLength:length
+                                               options:MTLStorageModeShared];
+        MeshInstanced* p = (MeshInstanced*) _cube_instances.contents;
+        
+        for (usize i = 0; i != 100; ++i) {
+            usize j = i / 10;
+            usize k = i % 10;
+            simd_float4x4 MeshA;
+            {
+                simd_float4x4 A = simd_matrix_scale(0.5f);
+                simd_float4x4 B = simd_matrix_rotate(_frameNum * 0.0007*3 + i, simd_make_float3(1.0f, 0.0f, 0.0f));
+                simd_float4x4 C = simd_matrix_rotate(_frameNum * 0.0011*3 + i, simd_make_float3(0.0f, 0.0f, 1.0f));
+                simd_float4x4 D = simd_matrix_translate(simd_make_float3(j, 0, k));
+                MeshA = D * C * B * A;
+            }
+            p[i].model_transform = MeshA;
+            p[i].inverse_model_transform = simd_inverse(MeshA);
 
+        }
+        
+        
     }
-    
-    simd_float4x4 MeshB = simd_mul(simd_matrix_translate(simd_make_float3(0.0f, -20.5f, 0.0f)),
-                                   simd_matrix_scale(simd_make_float3(2.0, 2.0, 2.0)));
     
 
    
@@ -685,10 +771,10 @@
         simd_float4x4 A = simd_matrix_rotate(-M_PI/2, simd_make_float3(1,0,0));
         simd_float4x4 B = simd_matrix_rotate(phaseOfDay, simd_make_float3(0, 1, 0));
         simd_float4x4 C = {{
-            { 0.5f, 0.0f, 0.0f, 0.0f },
-            { 0.0f, 0.5f, 0.0f, 0.0f },
-            { 0.0f, 0.0f, 0.1f, 0.0f },
-            { 0.0f, 0.0f, 0.5f, 1.0f },
+            { 0.05f, 0.0f, 0.0f, 0.0f },
+            { 0.0f, 0.05f, 0.0f, 0.0f },
+            { 0.0f, 0.0f, 0.01f, 0.0f },
+            { 0.0f, 0.0f, 0.05f, 1.0f },
         }};
         
         mesh_uniforms.viewprojection_transform = simd_mul(C, simd_mul(B, A));
@@ -701,25 +787,19 @@
         [encoder setVertexBuffer:_cube_buffer
                           offset:0
                          atIndex:AAPLBufferIndexVertices];
-        
-        mesh_uniforms.model_transform = MeshA;
+        [encoder setVertexBuffer:_cube_instances
+                          offset:0
+                         atIndex:AAPLBufferIndexInstanced];
         [encoder setVertexBytes:&mesh_uniforms
                          length:sizeof(MeshUniforms)
                         atIndex:AAPLBufferIndexUniforms];
-        
-        [encoder drawPrimitives:MTLPrimitiveTypeTriangle
-                    vertexStart:0
-                    vertexCount:_mesh_count];
-        
-        mesh_uniforms.model_transform = MeshB;
-        [encoder setVertexBytes:&mesh_uniforms
-                         length:sizeof(MeshUniforms)
-                        atIndex:AAPLBufferIndexUniforms];
-        
-        [encoder drawPrimitives:MTLPrimitiveTypeTriangle
-                    vertexStart:0
-                    vertexCount:_mesh_count];
-        
+        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
+                            indexCount:_mesh_count
+                             indexType:MTLIndexTypeUInt16
+                           indexBuffer:_cube_indices
+                     indexBufferOffset:0
+                         instanceCount:100];
+
         [encoder endEncoding];
         
     }
@@ -766,9 +846,9 @@
         
         {
             // view: rotate to isometric view angle
-            simd_float4x4 A = simd_matrix_rotate(atan2(1, sqrt(2)), simd_make_float3(-1, 0, 0));
+            simd_float4x4 A = simd_matrix_rotate(atan2(1, sqrt(2.0f)), simd_make_float3(-1, 0, 0));
 
-            float z = 4.0f;
+            float z = 20.0f;
             // view: translate camera back
             simd_float4x4 B = simd_matrix_translate(simd_make_float3(0, 0, z));
             
@@ -782,7 +862,7 @@
             
             // view: zoom
             simd_float4x4 D
-            = simd_matrix_scale(simd_make_float3(z * _viewportSize.y / _viewportSize.x, z, 1));
+            = simd_matrix_scale(simd_make_float3(4 * _viewportSize.y / _viewportSize.x, 4, 1));
 
             B = simd_mul(B, A);
             mesh_uniforms.origin = simd_mul(simd_inverse(B), simd_make_float4(0,0,0,1));
@@ -814,31 +894,62 @@
                 [encoder setDepthStencilState:_enabledDepthStencilState];
                 [encoder setCullMode:MTLCullModeBack];
 
-                mesh_uniforms.model_transform = MeshA;
-                mesh_uniforms.inverse_model_transform = simd_transpose(simd_inverse(mesh_uniforms.model_transform));
                 [encoder setVertexBytes:&mesh_uniforms
                                               length:sizeof(MeshUniforms)
                                              atIndex:AAPLBufferIndexUniforms];
                 [encoder setFragmentBytes:&mesh_uniforms
                                                 length:sizeof(MeshUniforms)
                                                atIndex:AAPLBufferIndexUniforms];
+                [encoder setVertexBuffer:_cube_instances
+                                  offset:0
+                                 atIndex:AAPLBufferIndexInstanced];
+
+                bool show_jacobian, show_points, show_wireframe;
+                {
+                    auto guard = std::unique_lock(_model->_mutex);
+                    show_jacobian = _model->_show_jacobian;
+                    show_points = _model->_show_points;
+                    show_wireframe = _model->_show_wireframe;
+
+                }
                 
-                [encoder drawPrimitives:MTLPrimitiveTypeTriangle
-                                         vertexStart:0
-                                         vertexCount:_mesh_count];
+                if (show_wireframe) {
+                    [encoder setTriangleFillMode:MTLTriangleFillModeLines];
+                }
                 
-                mesh_uniforms.model_transform = MeshB;
-                mesh_uniforms.inverse_model_transform = simd_transpose(simd_inverse(mesh_uniforms.model_transform));
-                [encoder setVertexBytes:&mesh_uniforms
-                                              length:sizeof(MeshUniforms)
-                                             atIndex:AAPLBufferIndexUniforms];
-                [encoder setFragmentBytes:&mesh_uniforms
-                                                length:sizeof(MeshUniforms)
-                                               atIndex:AAPLBufferIndexUniforms];
+                /*
+                [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                            vertexStart:0
+                            vertexCount:_mesh_count];
+                 */
+                [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
+                                    indexCount:_mesh_count
+                                     indexType:MTLIndexTypeUInt16
+                                   indexBuffer:_cube_indices
+                             indexBufferOffset:0
+                                 instanceCount:100];
                 
-                [encoder drawPrimitives:MTLPrimitiveTypeTriangle
-                                         vertexStart:0
-                                         vertexCount:_mesh_count];
+                if (show_wireframe) {
+                    [encoder setTriangleFillMode:MTLTriangleFillModeFill];
+                }
+                
+                if (show_points) {
+                    [encoder setRenderPipelineState:_pointsPipelineState];
+                    [encoder drawPrimitives:MTLPrimitiveTypePoint
+                                vertexStart:0
+                                vertexCount:_mesh_count];
+                    [encoder setRenderPipelineState:_colorRenderPipelineState];
+                }
+                
+                if (show_jacobian) {
+                    [encoder setRenderPipelineState:_whiskerPipelineState];
+                    [encoder setVertexBuffer:_whisker_buffer offset:0 atIndex:AAPLBufferIndexVertices];
+                    [encoder drawPrimitives:MTLPrimitiveTypeLine
+                                vertexStart:0
+                                vertexCount:_whisker_count];
+                    [encoder setRenderPipelineState:_colorRenderPipelineState];
+                    [encoder setVertexBuffer:_cube_buffer offset:0 atIndex:AAPLBufferIndexVertices];
+                }
 
                 // G-buffers are now initialized
                                 
@@ -870,91 +981,30 @@
                                        length:sizeof(MeshUniforms)
                                       atIndex:AAPLBufferIndexUniforms];
                     [encoder setFragmentTexture:_environments[i] atIndex:AAPLTextureIndexEnvironment];
-                    [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                    [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                                 vertexStart:0
-                                vertexCount:6];
+                                vertexCount:4];
                 }
                 
                 // shadow-casting point-light pass:
                 [encoder setRenderPipelineState:_pointLightPipelineState];
-                [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                                          vertexStart:0
-                                         vertexCount:6];
+                                         vertexCount:4];
             }
         }
-    
         
-        [encoder setRenderPipelineState:_renderPipelineState];
-        MyUniforms uniforms;
-        uniforms.position_transform = matrix_float4x4{{
-            {2.0f / _viewportSize.x, 0.0f, 0.0f},
-            {0.0f, -2.0f / _viewportSize.y, 0.0f, 0.0f},
-            { 0.0f, 0.0f, 1.0f, 0.0f },
-            {-1.0f, +1.0f, 0.0f, 1.0f},
-        }};
-        [encoder setVertexBytes:&uniforms
-                                      length:sizeof(uniforms)
-                                     atIndex:AAPLBufferIndexUniforms ];
         
-        auto draw_text = [=](wry::rect<float> x, wry::string_view v) {
-            
-            auto valign = (_font->height + _font->ascender + _font->descender) / 2; // note descender is negative
-            
-            auto xy = x.a;
-            xy.y += valign;
-            while (v) {
-                auto c = *v; ++v;
-                auto q = _font->charmap.find(c);
-                if (q != _font->charmap.end()) {
-                    
-                    if (xy.x + q->second.advance > x.b.x) {
-                        xy.x = x.a.x;
-                        xy.y += _font->height;
-                    }
-                    if (xy.y - _font->descender > x.b.y) {
-                        return xy;
-                    }
-                    
-                    wry::sprite s = q->second.sprite_;
-                    _atlas->push_sprite(s + xy);
-                    xy.x += q->second.advance;
-                    
-                } else if (c == '\n') {
-                    xy.x = x.a.x;
-                    xy.y += _font->height;
-                }
-            }
-            xy.y -= valign;
-            return xy;
-        };
-        
-      
         {
-            auto guard = std::unique_lock{_model->_mutex};
-            float y = 1080;
-            simd_float2 z;
-            bool first = true;
-            for (auto p = _model->_console.end(); (y >= 0) && (p != _model->_console.begin());) {
-                --p;
-                y -= _font->height;
-                z = draw_text({0, y, 1920, 1080}, *p);
-                if (first) {
-                    draw_text(wry::rect<float>{z.x, z.y, 1920, 1080 }, (_frameNum & 0x40) ? "_" : " ");
-                    first = false;
-                }
-            }
-            
+            auto guard = std::unique_lock(_model->_mutex);
+            [self drawTextLayer:encoder];
+            [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+                dispatch_semaphore_signal(self->_atlas->_semaphore);
+            }];
         }
-        
-     
-        
-        _atlas->commit(encoder);
-        [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
-            dispatch_semaphore_signal(self->_atlas->_semaphore);
-        }];
 
         [encoder endEncoding];
-        
+
     }
             
     [commandBuffer presentDrawable:currentDrawable];
@@ -965,7 +1015,95 @@
     
 }
 
-- (void)drawableResize:(CGSize)drawableSize
+- (void) drawTextLayer:(id<MTLRenderCommandEncoder>)encoder {
+    
+    [encoder setRenderPipelineState:_renderPipelineState];
+    MyUniforms uniforms;
+    uniforms.position_transform = matrix_float4x4{{
+        {2.0f / _viewportSize.x, 0.0f, 0.0f},
+        {0.0f, -2.0f / _viewportSize.y, 0.0f, 0.0f},
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        {-1.0f, +1.0f, 0.0f, 1.0f},
+    }};
+    [encoder setVertexBytes:&uniforms
+                     length:sizeof(uniforms)
+                    atIndex:AAPLBufferIndexUniforms ];
+    
+    auto draw_text = [=](wry::rect<float> x, wry::string_view v, wry::pixel color) {
+        
+        auto valign = (_font->height + _font->ascender + _font->descender) / 2; // note descender is negative
+        
+        auto xy = x.a;
+        xy.y += valign;
+        while (v) {
+            auto c = *v; ++v;
+            auto q = _font->charmap.find(c);
+            if (q != _font->charmap.end()) {
+                
+                if (xy.x + q->second.advance > x.b.x) {
+                    xy.x = x.a.x;
+                    xy.y += _font->height;
+                }
+                if (xy.y - _font->descender > x.b.y) {
+                    return xy;
+                }
+                
+                wry::sprite s = q->second.sprite_;
+                _atlas->push_sprite(s + xy, color);
+                xy.x += q->second.advance;
+                
+            } else if (c == '\n') {
+                xy.x = x.a.x;
+                xy.y += _font->height;
+            }
+        }
+        xy.y -= valign;
+        return xy;
+    };
+    
+    {
+        wry::pixel color = {200, 200, 200, 255};
+        // draw logs
+        float y = _font->height / 2;
+        simd_float2 z;
+        auto t = std::chrono::steady_clock::now();
+        for (auto p = _model->_logs.begin(); p != _model->_logs.end();) {
+            if (p->first < t) {
+                p = _model->_logs.erase(p);
+            } else {
+                z = draw_text({_font->height / 2, y, 1920, 1080}, p->second, color);
+                y += _font->height;
+                ++p;
+            }
+        }
+    }
+
+
+    if (_model->_console_active) {
+        // draw console
+        wry::pixel color = {255, 255, 255, 255};
+        float y = 1080 - _font->height / 2;
+        simd_float2 z;
+        bool first = true;
+        for (auto p = _model->_console.end(); (y >= 0) && (p != _model->_console.begin());) {
+            --p;
+            y -= _font->height;
+            z = draw_text({_font->height / 2, y, 1920, 1080}, *p, color);
+            if (first) {
+                draw_text(wry::rect<float>{z.x, z.y, 1920, 1080 }, (_frameNum & 0x40) ? "_" : " ", color);
+                first = false;
+            }
+        }
+    }
+        
+    
+    
+    
+    _atlas->commit(encoder);
+    
+}
+
+- (void) drawableResize:(CGSize)drawableSize
 {
     _viewportSize.x = drawableSize.width;
     _viewportSize.y = drawableSize.height;

@@ -62,10 +62,16 @@ enum AAPLColorIndex {
 #pragma mark - Deferred rendering
 
 struct MeshVertex{
-    vector_float4 position;
-    vector_float2 texCoord;
-    vector_float4 normal;
-    vector_float4 tangent;
+    simd_float4 coordinate;
+    union {
+        struct {
+            simd_float4 tangent;
+            simd_float4 bitangent;
+            simd_float4 normal;
+            simd_float4 position;
+        };
+        simd_float4x4 jacobian;
+    };
 };
 
 struct MeshUniforms {
@@ -88,9 +94,6 @@ struct MeshUniforms {
     
     vector_float4 origin;
     
-    matrix_float4x4 model_transform;
-    matrix_float4x4 inverse_model_transform;
-
     matrix_float4x4 view_transform;
     matrix_float4x4 inverse_view_transform;
     
@@ -109,6 +112,11 @@ struct MeshUniforms {
     vector_float4 ibl_scale;
     matrix_float3x3 ibl_transform;
     
+};
+
+struct MeshInstanced {
+    matrix_float4x4 model_transform;
+    matrix_float4x4 inverse_model_transform;
 };
 
 
