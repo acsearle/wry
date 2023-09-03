@@ -446,7 +446,6 @@
                 _groundMesh = [[WryMesh alloc] initWithDevice:_device];
                 _groundMesh.vertexBuffer = newBufferWithArray(m.vertices);
                 _groundMesh.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
-                _groundMesh.jacobianBuffer = newBufferWithArray(m.hack_lines);
              
                 _groundMesh.emissiveTexture = [self newTextureFromResource:@"black"
                                                                 ofType:@"png"];
@@ -496,7 +495,6 @@
                 _tireMesh = [[WryMesh alloc] initWithDevice:_device];
                 _tireMesh.vertexBuffer = newBufferWithArray(m.vertices);
                 _tireMesh.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
-                _tireMesh.jacobianBuffer = newBufferWithArray(m.hack_lines);
                 
                 _tireMesh.emissiveTexture = [self newTextureFromResource:@"black"
                                                               ofType:@"png"];
@@ -527,7 +525,6 @@
                 _chassisMesh = [[WryMesh alloc] initWithDevice:_device];
                 _chassisMesh.vertexBuffer = newBufferWithArray(m.vertices);
                 _chassisMesh.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
-                _chassisMesh.jacobianBuffer = newBufferWithArray(m.hack_lines);
                 
                 _chassisMesh.emissiveTexture = [self newTextureFromResource:@"black"
                                                               ofType:@"png"];
@@ -730,7 +727,7 @@
     
     id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
 
-    // MeshUniforms mesh_uniforms;
+    MeshUniforms uniforms = {};
 
     {
         _tireMesh.instances[ 0].model_transform = simd_matrix_translate(simd_make_float3( -1.0f,  0.0f, -0.5f));
@@ -776,16 +773,22 @@
         float4x4 B = simd_matrix_scale(simd_make_float3(1.0f, 1.0f, 0.5f) / light_radius);
         float4x4 C = simd_matrix_translate(simd_make_float3(0.0f, 0.0f, +0.5f));
         
-        _groundMesh.uniforms->viewprojection_transform = C * B * A;
-        _groundMesh.uniforms->light_direction = -light_direction;
-        _groundMesh.uniforms->radiance = 10.0f; //sqrt(simd_saturate(cos(phaseOfDay)));
+        uniforms.viewprojection_transform = C * B * A;
+        uniforms.light_direction = -light_direction;
+        uniforms.radiance = 10.0f; //sqrt(simd_saturate(cos(phaseOfDay)));
         
         [render_command_encoder setRenderPipelineState:_shadowMapRenderPipelineState];
         [render_command_encoder setCullMode:MTLCullModeFront];
         [render_command_encoder setDepthStencilState:_enabledDepthStencilState];
         
-        *_tireMesh.uniforms = *_groundMesh.uniforms;
-        *_chassisMesh.uniforms = *_groundMesh.uniforms;
+
+        [render_command_encoder setVertexBytes:&uniforms
+                                        length:sizeof(MeshUniforms)
+                                       atIndex:AAPLBufferIndexUniforms];
+        
+        [render_command_encoder setFragmentBytes:&uniforms
+                                          length:sizeof(MeshUniforms)
+                                         atIndex:AAPLBufferIndexUniforms];
 
         [_chassisMesh drawWithRenderCommandEncoder:render_command_encoder];
         [_tireMesh drawWithRenderCommandEncoder:render_command_encoder];
@@ -838,8 +841,8 @@
 
             {
                 // save shadow map transform
-                float4x4 A = matrix_ndc_to_tc_float4x4 * _groundMesh.uniforms->viewprojection_transform;
-                _groundMesh.uniforms->light_viewprojection_transform = A;
+                float4x4 A = matrix_ndc_to_tc_float4x4 * uniforms.viewprojection_transform;
+                uniforms.light_viewprojection_transform = A;
             }
 
             
@@ -857,14 +860,22 @@
                 float4x4 P = matrix_perspective_float4x4;
                 float4x4 VP = P * V;
                 float4x4 iVP = inverse(VP);
-                
-                _groundMesh.uniforms->origin = origin;
-                _groundMesh.uniforms->view_transform = V;
-                _groundMesh.uniforms->inverse_view_transform = iV;
-                _groundMesh.uniforms->viewprojection_transform = VP;
-                _groundMesh.uniforms->inverse_viewprojection_transform = iVP;
+                                                
+                uniforms.origin = origin;
+                uniforms.view_transform = V;
+                uniforms.inverse_view_transform = iV;
+                uniforms.viewprojection_transform = VP;
+                uniforms.inverse_viewprojection_transform = iVP;
 
             }
+            
+            {
+                uniforms.ibl_scale = 1.0f;
+                uniforms.ibl_transform = matrix_identity_float3x3;
+
+            }
+            
+            
             
             
             // camera world location is...
@@ -900,9 +911,15 @@
                                    indexBuffer:_cube_indices
                              indexBufferOffset:0
                                  instanceCount:100];*/
-                                
-                *_tireMesh.uniforms = *_groundMesh.uniforms;
-                *_chassisMesh.uniforms = *_groundMesh.uniforms;
+                
+                [encoder setVertexBytes:&uniforms
+                                 length:sizeof(MeshUniforms)
+                                atIndex:AAPLBufferIndexUniforms];
+                
+                [encoder setFragmentBytes:&uniforms
+                                   length:sizeof(MeshUniforms)
+                                  atIndex:AAPLBufferIndexUniforms];
+                
                 [_chassisMesh drawWithRenderCommandEncoder:encoder];
                 [_tireMesh drawWithRenderCommandEncoder:encoder];
                 [_groundMesh drawWithRenderCommandEncoder:encoder];
@@ -937,17 +954,10 @@
                                  atIndex:AAPLBufferIndexVertices];
                 [encoder setDepthStencilState:_disabledDepthStencilState];
 
-                MeshUniforms light_uniforms;
-                light_uniforms = *_groundMesh.uniforms;
                 
                 // Image-based lights:
 
-                light_uniforms.ibl_scale = 1.0f;
-                light_uniforms.ibl_transform = matrix_identity_float3x3;
                 [encoder setRenderPipelineState:_deferredLightImageBasedRenderPipelineState];
-                [encoder setFragmentBytes:&light_uniforms
-                                   length:sizeof(MeshUniforms)
-                                  atIndex:AAPLBufferIndexUniforms];
                 [encoder setFragmentTexture:_deferredLightImageBasedTexture atIndex:AAPLTextureIndexEnvironment];
                 [encoder setFragmentTexture:_deferredLightImageBasedFresnelTexture atIndex:AAPLTextureIndexFresnel];
                 [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip

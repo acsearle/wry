@@ -10,7 +10,6 @@
 @implementation WryMesh
 {
     id<MTLDevice> _device;
-    MeshUniforms _uniforms;
     MeshInstanced* _instances;
 }
 
@@ -21,10 +20,6 @@
         _instances = (MeshInstanced*) malloc(sizeof(MeshInstanced) * 100);
     }
     return self;
-}
-
--(MeshUniforms* _Nonnull) uniforms {
-    return &_uniforms;
 }
 
 -(MeshInstanced* _Nonnull) instances {
@@ -45,13 +40,6 @@
     [encoder setVertexBuffer:instanceBuffer
                       offset:0
                      atIndex:AAPLBufferIndexInstanced];
-    [encoder setVertexBytes:&_uniforms
-                     length:sizeof(MeshUniforms)
-                    atIndex:AAPLBufferIndexUniforms];
-
-    [encoder setFragmentBytes:&_uniforms
-                       length:sizeof(MeshUniforms)
-                      atIndex:AAPLBufferIndexUniforms];
     [encoder setFragmentTexture:_emissiveTexture atIndex:AAPLTextureIndexEmissive];
     [encoder setFragmentTexture:_albedoTexture atIndex:AAPLTextureIndexAlbedo];
     [encoder setFragmentTexture:_metallicTexture atIndex:AAPLTextureIndexMetallic];
@@ -59,7 +47,7 @@
     [encoder setFragmentTexture:_roughnessTexture atIndex:AAPLTextureIndexRoughness];
     
     [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
-                        indexCount:_indexBuffer.length/sizeof(unsigned int)
+                        indexCount:_indexBuffer.length / sizeof(uint)
                          indexType:MTLIndexTypeUInt32
                        indexBuffer:_indexBuffer
                  indexBufferOffset:0

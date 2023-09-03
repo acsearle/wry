@@ -640,7 +640,7 @@ whiskerVertexShader(uint vertexID [[ vertex_id ]],
 }
 
 struct whiskerFragmentOut {
-    half4 color [[color(AAPLColorIndexColor)]];
+    half4 color [[color(AAPLColorIndexColor), raster_order_group(AAPLRasterOrderGroupLighting) ]];
 };
 
 [[fragment]] whiskerFragmentOut
@@ -681,7 +681,7 @@ pointsVertexShader(uint vertexID [[ vertex_id ]],
 }
 
 struct pointsFragmentOut {
-    half4 color [[color(AAPLColorIndexColor)]];
+    half4 color [[color(AAPLColorIndexColor), raster_order_group(AAPLRasterOrderGroupLighting) ]];
 };
 
 [[fragment]] pointsFragmentOut
@@ -753,8 +753,12 @@ vertexShader4(uint vertexID [[ vertex_id ]],
  }
  */
 
+struct basicFragmentShaderOut {
+    half4 color [[color(AAPLColorIndexColor), raster_order_group(AAPLRasterOrderGroupLighting) ]];
+};
+
 // Fragment function
-[[fragment]] float4
+[[fragment]] basicFragmentShaderOut
 fragmentShader(RasterizerData in [[stage_in]],
                texture2d<half> colorTexture [[ texture(AAPLTextureIndexColor) ]])
 {
@@ -765,7 +769,7 @@ fragmentShader(RasterizerData in [[stage_in]],
     const half4 colorSample = colorTexture.sample(textureSampler, in.texCoord);
     
     // return the color of the texture
-    return float4(colorSample) * in.color;
+    return { colorSample * half4(in.color) };
     // return float4(0.5, 0.5, 0.5, 0.5);
 }
 

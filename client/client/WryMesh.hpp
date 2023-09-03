@@ -22,11 +22,9 @@
 
 @property (nonatomic, nullable) id<MTLBuffer> vertexBuffer;
 @property (nonatomic, nullable) id<MTLBuffer> indexBuffer;
-@property (nonatomic, nullable) id<MTLBuffer> jacobianBuffer;
 
 @property (nonatomic) unsigned int instanceCount;
 
--(MeshUniforms* _Nonnull) uniforms;
 -(MeshInstanced* _Nonnull) instances;
 
 -(instancetype _Nonnull)initWithDevice:(id<MTLDevice> _Nonnull)device;

@@ -15,7 +15,6 @@
 namespace wry {
     
     define_test("btree") {
-        return;
 
         int N = 1000;
 
@@ -33,10 +32,8 @@ namespace wry {
             int j = uid(rne);
             int k = uid(rne);
             v.emplace_back(j, k);
-            // printf("insert {%d, %d}\n", j, k);
             b.insert_or_assign({j, k});
         }
-        // printf("height %d\n", b._inner._height);
         
         b._inner._assert_invariant();
         
@@ -75,10 +72,8 @@ namespace wry {
         
         // pointer find absent
         for (auto j : u) {
-            // printf("exclude [%d]\n", j.first);
             auto p = b._inner.pfind(j.first);
             assert(!p);
-            // printf("    [%d] not present\n", j.first);
         }
 
         // find

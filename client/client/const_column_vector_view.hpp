@@ -10,6 +10,7 @@
 
 #include <iostream>
 
+#include "common.hpp"
 #include "stride_ptr.hpp"
 
 namespace wry {

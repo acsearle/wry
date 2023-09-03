@@ -14,79 +14,7 @@
 #include "utility.hpp"
 #include "with_capacity.hpp"
 
-// #include "utility.hpp"
-
 namespace wry {
-    
-    // ContiguousView can be const/mutable in two orthogonal senses: can we
-    // mutate the viewed elements, and can we mutate the view itself as in
-    // pop_front()
-    
-    template<typename PointerType>
-    struct contiguous_view {
-        
-        PointerType _begin;
-        PointerType _end;
-        
-        constexpr auto size() const {
-            return _end - _begin;
-        }
-        
-        constexpr auto empty() const {
-            return _begin != _end;
-        }
-                
-        decltype(auto) operator[](std::ptrdiff_t i) {
-            assert((0 <= i) && (i < size()));
-            return _begin[i];
-        }
-        
-        decltype(auto) operator[](std::ptrdiff_t i) const {
-            assert((0 <= i) && (i < size()));
-            return std::as_const(_begin[i]);
-        }
-        
-        decltype(auto) front() {
-            assert(!empty());
-            return *_begin;
-        }
-
-        decltype(auto) front() const {
-            assert(!empty());
-            return std::as_const(*_begin);
-        }
-
-        decltype(auto) back() {
-            assert(!empty());
-            auto e = _end;
-            return *--e;
-        }
-        
-        decltype(auto) back() const {
-            assert(!empty());
-            auto e = _end;
-            return std::as_const(*--e);
-        }
-        
-
-        decltype(auto) pop_front() {
-            assert(!empty());
-            return *_begin++;
-        }
-
-        decltype(auto) pop_back() {
-            assert(!empty());
-            return *--_end;
-        }
-        
-    };
-    
-    template<typename T>
-    struct slice {
-        T* _begin;
-        T* _end;
-    };
-    
     
     // # Array
     //
@@ -230,12 +158,12 @@ namespace wry {
         // [[C++ named requirement]] SequenceContainer (core)
         
         explicit array(size_type count) noexcept
-        : array(with_capacity_t(), count) {
+        : array(wry::with_capacity_t{}, count) {
             _end = std::uninitialized_value_construct_n(_begin, count);
         }
 
         array(size_type count, const value_type& value) noexcept
-        : array(with_capacity_t(), count) {
+        : array(wry::with_capacity_t{}, count) {
             _end = std::uninitialized_fill_n(_begin, count, value);
         }
 
@@ -519,22 +447,11 @@ namespace wry {
             for (; pos != end(); ++pos)
                 new ((void*) pos) T(f());
         }
-        
-        slice<T> leak() && {
-            _allocation_begin = nullptr;
-            _allocation_end = nullptr;
-            return {
-                std::exchange(_begin, nullptr),
-                std::exchange(_end, nullptr),
-            };
-        }
-        
-        slice<const std::byte> as_bytes() const;
-        slice<std::byte> as_bytes();
+
         
         // Extensions
         
-        array(with_capacity_t, size_type count)
+        array(wry::with_capacity_t, size_type count)
         : _begin(static_cast<T*>(::operator new(count * sizeof(T))))
         , _end(_begin)
         , _allocation_begin(_begin)
@@ -568,7 +485,7 @@ namespace wry {
 
         template<typename InputIt>
         array(InputIt first, InputIt last, std::random_access_iterator_tag)
-        : array(with_capacity_t(), std::distance(first, last)) {
+        : array(wry::with_capacity_t{}, std::distance(first, last)) {
             for (; first != last; ++first)
                 push_back(*first);
         }
