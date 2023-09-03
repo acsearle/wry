@@ -5,133 +5,17 @@
 //  Created by Antony Searle on 21/6/2023.
 //
 
-/*
- See LICENSE folder for this sample’s licensing information.
- 
- Abstract:
- Metal shaders used for this sample
- */
-
 #include <metal_stdlib>
 #include <simd/simd.h>
 
 using namespace metal;
 
-// Include header shared between this Metal shader code and C code executing Metal API commands
 #include "ShaderTypes.h"
 
-// Vertex shader outputs and per-fragment inputs
-struct RasterizerData
-{
-    float4 clipSpacePosition [[position]];
-    float2 texCoord;
-    float4 color;
-    float3 light_direction;
+enum AAPLRasterOrderGroup {
+    AAPLRasterOrderGroupGBuffer,
+    AAPLRasterOrderGroupLighting,
 };
-
-[[vertex]] RasterizerData
-vertexShader(uint vertexID [[ vertex_id ]],
-             const device MyVertex *vertexArray [[ buffer(AAPLBufferIndexVertices) ]],
-             constant MyUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]])
-
-{
-    RasterizerData out;
-    
-    out.clipSpacePosition = float4(uniforms.position_transform
-                                   * float4(vertexArray[vertexID].position, 0, 1));
-    out.texCoord = vertexArray[vertexID].texCoord;
-    
-    // out.color = float4(vertexArray[vertexID].color) / 255;
-    out.color = unpack_unorm4x8_srgb_to_float(vertexArray[vertexID].color);
-        
-    return out;
-}
-
-[[vertex]] RasterizerData
-vertexShader4(uint vertexID [[ vertex_id ]],
-             const device MyVertex4 *vertexArray [[ buffer(AAPLBufferIndexVertices) ]],
-             constant MyUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]])
-
-{
-    RasterizerData out;
-    
-    out.clipSpacePosition = float4(uniforms.position_transform
-                                   * float4(vertexArray[vertexID].position));
-    out.texCoord = vertexArray[vertexID].texCoord;
-    
-    // out.color = float4(vertexArray[vertexID].color) / 255;
-    out.color = unpack_unorm4x8_srgb_to_float(vertexArray[vertexID].color);
-    
-    return out;
-}
-
-
-/*
- fragment float4
- fragmentShader(RasterizerData in [[stage_in]])
- {
- return in.color;
- }
- */
-
-// Fragment function
-[[fragment]] float4
-fragmentShader(RasterizerData in [[stage_in]],
-               texture2d<half> colorTexture [[ texture(AAPLTextureIndexColor) ]])
-{
-    constexpr sampler textureSampler (mag_filter::nearest,
-                                      min_filter::nearest);
-    
-    // Sample the texture to obtain a color
-    const half4 colorSample = colorTexture.sample(textureSampler, in.texCoord);
-    
-    // return the color of the texture
-    return float4(colorSample) * in.color;
-    // return float4(0.5, 0.5, 0.5, 0.5);
-}
-
-// Fragment function
-[[fragment]] float4
-fragmentShader_sdf(RasterizerData in [[stage_in]],
-               texture2d<half> colorTexture [[ texture(AAPLTextureIndexColor) ]])
-{
-    constexpr sampler textureSampler (mag_filter::linear,
-                                      min_filter::linear);
-    
-    // signed distance fields are 128 at edge
-    // +/- 16 per pixel
-    // aka, the slope is 16/255
-    
-    // aka, the distance is in texels+8, in 4.4 fixed point
-    //
-    // so, * 255.0 takes us back to original u8 value (linear interpolated)
-    // - 128.0 to put the zero where it should be
-    // / 16.0 to give signed distance in texels
-    
-    // one we have signed distance in texels,
-    // * $magnification_factor to convert to signed distance in screen pixels
-    // this is * 10 in current hardcoded demo
-    // how to do in general?  when anisotropic?  when perspective?
-    // map [-0.5, +0.5] to [0, 1]
-    
-    
-    // Sample the texture to obtain a color
-    const half4 colorSample = colorTexture.sample(textureSampler, in.texCoord);
-
-    const half4 colorSample2 = colorTexture.sample(textureSampler, in.texCoord + float2(0,-0.001));
-
-    // return the color of the texture
-    // return float4(colorSample) * in.color;
-    // return float4(0.5, 0.5, 0.5, 0.5);
-    
-    float a = saturate((colorSample.a * 255.0 - 128.0) / 16.0 * 10.0 + 0.5);
-    float b = saturate((colorSample.a * 255.0 - 128.0 + 16.0 * 16.0 / 10.0)  / 16.0 * 10.0 + 0.5);
-    float c = saturate((colorSample2.a * 255.0 - 64.0)  / 64.0);
-    // return in.color * saturate((colorSample.a * 255.0 - 128.0) / 16.0 * 10.0 + 0.5);
-    return in.color * float4(a, a, a, c * (1 - b) + b);
-}
-
-
 
 # pragma mark - Deferred physically-based rendering
 
@@ -151,8 +35,7 @@ fragmentShader_sdf(RasterizerData in [[stage_in]],
 //
 // which describes the lighting model used in Wreck-It Ralph by Disney
 
-
-struct MeshToGBufferVertexOutput
+struct DeferredGBufferVertexShaderOutput
 {
     float4 clipSpacePosition [[position]];
     float4 worldSpacePosition;
@@ -164,55 +47,57 @@ struct MeshToGBufferVertexOutput
     float4 worldBitangent;
 };
 
-
-struct MeshToGBufferFragmentOutput {
-    half4 emissive [[color(AAPLColorIndexColor)]];
-    half4 albedoMetallic [[color(AAPLColorIndexAlbedoMetallic)]];
-    half4 normalRoughness [[color(AAPLColorIndexNormalRoughness)]];
-    float depth [[color(AAPLColorIndexDepth)]];
+struct DeferredGBufferFragmentShaderOutput {
+    half4 light [[color(AAPLColorIndexColor), raster_order_group(AAPLRasterOrderGroupLighting)]];
+    half4 albedoMetallic [[color(AAPLColorIndexAlbedoMetallic), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+    half4 normalRoughness [[color(AAPLColorIndexNormalRoughness), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+    float depth [[color(AAPLColorIndexDepth), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
 };
 
 
-[[vertex]] MeshToGBufferVertexOutput
-MeshToGBufferVertexShader(uint vertexID [[ vertex_id ]],
-                          uint instanceID [[ instance_id ]],
-                          constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
-                          const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
-                          const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
+[[vertex]] DeferredGBufferVertexShaderOutput
+DeferredGBufferVertexShader(uint vertex_id [[ vertex_id ]],
+                            uint instance_id [[ instance_id ]],
+                            constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
+                            const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
+                            const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
 {
     
-    MeshToGBufferVertexOutput out;
+    DeferredGBufferVertexShaderOutput out;
+    
+    MeshVertex in = vertexArray[vertex_id];
+    MeshInstanced instance = instancedArray[instance_id];
 
-    out.coordinate = vertexArray[vertexID].coordinate;
+    out.coordinate = in.coordinate;
 
-    out.worldSpacePosition = instancedArray[instanceID].model_transform * vertexArray[vertexID].position;
-    out.eyeSpacePosition = uniforms.view_transform * out.worldSpacePosition;
-    out.clipSpacePosition = uniforms.viewprojection_transform * out.worldSpacePosition;
+    out.worldSpacePosition = instance.model_transform * in.position;
+    out.eyeSpacePosition   = uniforms.view_transform * out.worldSpacePosition;
+    out.clipSpacePosition  = uniforms.viewprojection_transform * out.worldSpacePosition;
     out.lightSpacePosition = uniforms.light_viewprojection_transform * out.worldSpacePosition;
-    out.worldTangent = vertexArray[vertexID].tangent * instancedArray[instanceID].inverse_model_transform;
-    out.worldBitangent = vertexArray[vertexID].bitangent * instancedArray[instanceID].inverse_model_transform;
-    out.worldNormal = vertexArray[vertexID].normal * instancedArray[instanceID].inverse_model_transform;
+    out.worldTangent       = instance.inverse_transpose_model_transform * in.tangent;
+    out.worldBitangent     = instance.inverse_transpose_model_transform * -in.bitangent;
+    out.worldNormal        = instance.inverse_transpose_model_transform * in.normal;
 
     return out;
 }
 
-[[fragment]] MeshToGBufferFragmentOutput
-MeshToGBufferFragmentShader(MeshToGBufferVertexOutput in [[stage_in]],
-                            bool front_facing [[front_facing]],
-                            constant MeshUniforms& uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
-                            texture2d<half> emissiveTexture [[texture(AAPLTextureIndexEmissive) ]],
-                            texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]],
-                            texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
-                            texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
-                            texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]])
+[[fragment]] DeferredGBufferFragmentShaderOutput
+DeferredGBufferFragmentShader(DeferredGBufferVertexShaderOutput in [[stage_in]],
+                              bool front_facing [[front_facing]],
+                              constant MeshUniforms& uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                              texture2d<half> emissiveTexture [[texture(AAPLTextureIndexEmissive) ]],
+                              texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]],
+                              texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
+                              texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
+                              texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]])
 
 {
     constexpr sampler trilinearSampler(mag_filter::linear,
-                                      min_filter::linear,
-                                      mip_filter::linear,
-                                      s_address::repeat,
-                                      t_address::repeat);
-        
+                                       min_filter::linear,
+                                       mip_filter::linear,
+                                       s_address::repeat,
+                                       t_address::repeat);
+    
     half4 albedoSample = albedoTexture.sample(trilinearSampler, in.coordinate.xy);
     half4 normalSample = normalTexture.sample(trilinearSampler, in.coordinate.xy);
     half4 roughnessSample = roughnessTexture.sample(trilinearSampler, in.coordinate.xy);
@@ -220,37 +105,14 @@ MeshToGBufferFragmentShader(MeshToGBufferVertexOutput in [[stage_in]],
     half4 emissiveSample = emissiveTexture.sample(trilinearSampler, in.coordinate.xy);
     
     normalSample = normalSample * 2.0h - 1.0h;
-    
-    // material hacks:
-    albedoSample = half4(1,1,1,1)/8; // dark
-    metallicSample = 0.0f; // dielectric
-    normalSample = half4(0.0h, 0.0h, 1.0h, 0.0h); // smooth (macro)
-    roughnessSample = exp2(0.0); // rough (micro)
-    emissiveSample = 0.0; // ordinary
-    
-    // transform from tangent space to world space
-    
-    // we have a (potentially skewed) Jacobian that we can use directly for
-    // displacement mapping, but not for normal mapping.
-    
-    // orthogonalize
-    //half3 bitangent = normalize(half3(cross(in.worldTangent.xyz, in.worldNormal.xyz)));
-    //half3 tangent = normalize(cross(half3(in.worldNormal.xyz), bitangent.xyz));
-    //half3 normal = normalSample.xyz * 2.0h - 1.0h;
 
-    // renormalize
-    //in.worldNormal = normalize(in.worldNormal);
-
-    //normal = half3x3(tangent, bitangent, half3(in.worldNormal.xyz)) * normal;
-    //normal = normalize(half3((uniforms.inverse_model_transform * float4(float3(normal), 1.0f)).xyz));
-    
     half3 normal = normalize(half3x3(half3(in.worldTangent.xyz),
                                      half3(in.worldBitangent.xyz),
                                      half3(in.worldNormal.xyz)) * normalSample.xyz);
 
-    MeshToGBufferFragmentOutput out;
+    DeferredGBufferFragmentShaderOutput out;
     
-    out.emissive = front_facing ? emissiveSample : half4(1.0h, 0.0h, 1.0h, 0.0h);
+    out.light = front_facing ? emissiveSample : half4(1.0h, 0.0h, 1.0h, 0.0h);
     out.albedoMetallic.rgb = front_facing ? albedoSample.rgb : 0.0h;
     out.albedoMetallic.a = front_facing ? metallicSample.r : 0.0h;
     out.normalRoughness.xyz = front_facing ? normal : 0.0h;
@@ -369,13 +231,12 @@ meshLightingVertex(uint vertexID [[ vertex_id ]],
 
 
 struct LightingFragmentOutput {
-    half4 color [[color(AAPLColorIndexColor)]];
+    half4 color [[color(AAPLColorIndexColor), raster_order_group(AAPLRasterOrderGroupLighting)]];
 };
 
 [[fragment]] LightingFragmentOutput
 meshLightingFragment(LightingVertexOutput in [[stage_in]],
-                     float4 albedoMetallic [[color(AAPLColorIndexAlbedoMetallic)]],
-                     float4 normalRoughness [[color(AAPLColorIndexNormalRoughness)]],
+                     DeferredGBufferFragmentShaderOutput gbuffer,
                      constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
                      texturecube<float> environmentTexture [[texture(AAPLTextureIndexEnvironment)]],
                      texture2d<float> fresnelTexture [[texture(AAPLTextureIndexFresnel)]])
@@ -394,13 +255,14 @@ meshLightingFragment(LightingVertexOutput in [[stage_in]],
 
     LightingFragmentOutput out;
     
-    float3 albedo = albedoMetallic.rgb;
-    float3 metallic = albedoMetallic.a;
-    float roughness = normalRoughness.w;
+    float3 albedo = float3(gbuffer.albedoMetallic.rgb);
+    float metallic = float(gbuffer.albedoMetallic.a);
+    float3 normal = float3(gbuffer.normalRoughness.xyz);
+    float roughness = float(gbuffer.normalRoughness.w);
     float occlusion = 1.0f;
 
     float3 V = -normalize(in.direction.xyz);
-    float3 N = normalRoughness.xyz;
+    float3 N = normal;
     float3 R = reflect(-V, N);
     
     float NdotV = saturate(dot(N, V));
@@ -442,9 +304,7 @@ meshLightingFragment(LightingVertexOutput in [[stage_in]],
 
 [[fragment]] LightingFragmentOutput
 meshPointLightFragment(LightingVertexOutput in [[stage_in]],
-                       float4 albedoMetallic [[color(AAPLColorIndexAlbedoMetallic)]],
-                       float4 normalRoughness [[color(AAPLColorIndexNormalRoughness)]],
-                       float depth [[color(AAPLColorIndexDepth)]],
+                       DeferredGBufferFragmentShaderOutput gbuffer,
                        constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
                        texture2d<float> shadowTexture [[texture(AAPLTextureIndexShadow)]])
 {
@@ -456,11 +316,12 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     
     LightingFragmentOutput out;
     
-    float3 albedo = albedoMetallic.rgb;
-    float3 metallic = albedoMetallic.a;
-    float3 N = normalRoughness.xyz;
-    float roughness = normalRoughness.w;
-    float occlusion = 1.0;
+    float3 albedo = float3(gbuffer.albedoMetallic.rgb);
+    float metallic = float(gbuffer.albedoMetallic.a);
+    float3 N = float3(gbuffer.normalRoughness.xyz);
+    float roughness = float(gbuffer.normalRoughness.w);
+    float occlusion = 1.0f;
+    float depth = gbuffer.depth;
 
     float3 V = -normalize(in.direction.xyz);
     float3 L = -uniforms.light_direction;
@@ -475,10 +336,11 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     float3 F0 = 0.04f;
     F0 = mix(F0, albedo, metallic);
         
+    float HdotV = saturate(dot(H, V));
     float NdotL = saturate(dot(N, L));
     float NdotV = saturate(dot(N, V));
     float NdotH = saturate(dot(N, H));
-    
+
     // distribution factor
     float alpha = roughness * roughness;
     float alpha2 = alpha * alpha;
@@ -488,7 +350,7 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     float G = GeometrySmithPoint(NdotV, NdotL, roughness);
     
     // fresnel factor
-    float3 F = FresnelSchlick(NdotH, F0);
+    float3 F = FresnelSchlick(HdotV, F0);
     
     float3 numerator = D * G * F;
     float denominator = 4.0f * NdotV * NdotL + 0.0001f;
@@ -829,5 +691,122 @@ pointsFragmentShader(pointsVertexOut in [[stage_in]],
     pointsFragmentOut out;
     out.color = half4(in.color);
     return out;
+}
+
+
+
+
+
+
+
+// Vertex shader outputs and per-fragment inputs
+struct RasterizerData
+{
+    float4 clipSpacePosition [[position]];
+    float2 texCoord;
+    float4 color;
+    float3 light_direction;
+};
+
+[[vertex]] RasterizerData
+vertexShader(uint vertexID [[ vertex_id ]],
+             const device MyVertex *vertexArray [[ buffer(AAPLBufferIndexVertices) ]],
+             constant MyUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]])
+
+{
+    RasterizerData out;
+    
+    out.clipSpacePosition = float4(uniforms.position_transform
+                                   * float4(vertexArray[vertexID].position, 0, 1));
+    out.texCoord = vertexArray[vertexID].texCoord;
+    
+    // out.color = float4(vertexArray[vertexID].color) / 255;
+    out.color = unpack_unorm4x8_srgb_to_float(vertexArray[vertexID].color);
+    
+    return out;
+}
+
+[[vertex]] RasterizerData
+vertexShader4(uint vertexID [[ vertex_id ]],
+              const device MyVertex4 *vertexArray [[ buffer(AAPLBufferIndexVertices) ]],
+              constant MyUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]])
+
+{
+    RasterizerData out;
+    
+    out.clipSpacePosition = float4(uniforms.position_transform
+                                   * float4(vertexArray[vertexID].position));
+    out.texCoord = vertexArray[vertexID].texCoord;
+    
+    // out.color = float4(vertexArray[vertexID].color) / 255;
+    out.color = unpack_unorm4x8_srgb_to_float(vertexArray[vertexID].color);
+    
+    return out;
+}
+
+
+/*
+ fragment float4
+ fragmentShader(RasterizerData in [[stage_in]])
+ {
+ return in.color;
+ }
+ */
+
+// Fragment function
+[[fragment]] float4
+fragmentShader(RasterizerData in [[stage_in]],
+               texture2d<half> colorTexture [[ texture(AAPLTextureIndexColor) ]])
+{
+    constexpr sampler textureSampler (mag_filter::nearest,
+                                      min_filter::nearest);
+    
+    // Sample the texture to obtain a color
+    const half4 colorSample = colorTexture.sample(textureSampler, in.texCoord);
+    
+    // return the color of the texture
+    return float4(colorSample) * in.color;
+    // return float4(0.5, 0.5, 0.5, 0.5);
+}
+
+// Fragment function
+[[fragment]] float4
+fragmentShader_sdf(RasterizerData in [[stage_in]],
+                   texture2d<half> colorTexture [[ texture(AAPLTextureIndexColor) ]])
+{
+    constexpr sampler textureSampler (mag_filter::linear,
+                                      min_filter::linear);
+    
+    // signed distance fields are 128 at edge
+    // +/- 16 per pixel
+    // aka, the slope is 16/255
+    
+    // aka, the distance is in texels+8, in 4.4 fixed point
+    //
+    // so, * 255.0 takes us back to original u8 value (linear interpolated)
+    // - 128.0 to put the zero where it should be
+    // / 16.0 to give signed distance in texels
+    
+    // one we have signed distance in texels,
+    // * $magnification_factor to convert to signed distance in screen pixels
+    // this is * 10 in current hardcoded demo
+    // how to do in general?  when anisotropic?  when perspective?
+    // map [-0.5, +0.5] to [0, 1]
+    
+    
+    // Sample the texture to obtain a color
+    const half4 colorSample = colorTexture.sample(textureSampler, in.texCoord);
+    
+    const half4 colorSample2 = colorTexture.sample(textureSampler, in.texCoord + float2(0,-0.001));
+    
+    // return the color of the texture
+    // return float4(colorSample) * in.color;
+    // return float4(0.5, 0.5, 0.5, 0.5);
+    
+    float a = saturate((colorSample.a * 255.0 - 128.0) / 16.0 * 10.0 + 0.5);
+    float b = saturate((colorSample.a * 255.0 - 128.0 + 16.0 * 16.0 / 10.0)  / 16.0 * 10.0 + 0.5);
+    float c = saturate((colorSample2.a * 255.0 - 64.0)  / 64.0);
+    // return in.color * saturate((colorSample.a * 255.0 - 128.0) / 16.0 * 10.0 + 0.5);
+    return in.color * float4(a, a, a, c * (1 - b) + b);
 }
 

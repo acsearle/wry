@@ -101,6 +101,7 @@ struct MeshUniforms {
     matrix_float4x4 inverse_projection_transform;
 
     matrix_float4x4 viewprojection_transform;
+    matrix_float4x4 inverse_viewprojection_transform;
 
     // light-specifc
     
@@ -116,7 +117,8 @@ struct MeshUniforms {
 
 struct MeshInstanced {
     matrix_float4x4 model_transform;
-    matrix_float4x4 inverse_model_transform;
+    matrix_float4x4 inverse_transpose_model_transform;
+    simd_float4 albedo;
 };
 
 

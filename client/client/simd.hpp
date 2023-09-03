@@ -31,18 +31,25 @@ inline simd_float3x3 simd_matrix3x3(simd_float4x4 a) {
                        a.columns[2].xyz);
 }
 
-inline constexpr simd_float4x4 simd_matrix_ndc_to_tc = {{
+inline constexpr simd_float4x4 matrix_ndc_to_tc_float4x4 = {{
     {  0.5f,  0.0f,  0.0f,  0.0f },
     {  0.0f, -0.5f,  0.0f,  0.0f },
     {  0.0f,  0.0f,  1.0f,  0.0f },
     {  0.5f,  0.5f,  0.0f,  1.0f },
 }};
 
-inline constexpr simd_float4x4 simd_matrix_tc_to_ndc = {{
+inline constexpr simd_float4x4 matrix_tc_to_ndc_float4x4 = {{
     {  2.0f,  0.0f,  0.0f,  0.0f },
     {  0.0f, -2.0f,  0.0f,  0.0f },
     {  0.0f,  0.0f,  1.0f,  0.0f },
     { -1.0f,  1.0f,  0.0f,  1.0f },
+}};
+
+inline constexpr simd_float4x4 matrix_perspective_float4x4 = {{
+    {  1.0f,  0.0f,  0.0f,  0.0f,  },
+    {  0.0f,  1.0f,  0.0f,  0.0f,  },
+    {  0.0f,  0.0f,  1.0f,  1.0f,  },
+    {  0.0f,  0.0f, -1.0f,  0.0f,  },
 }};
 
 
@@ -84,8 +91,8 @@ inline simd_float4x4 simd_matrix_scale(simd_float4 u) {
                        simd_make_float4(0.0f, u.y, 0.0f, 0.0f),
                        simd_make_float4(0.0f, 0.0f, u.z, 0.0f),
                        simd_make_float4(0.0f, 0.0f, 0.0f, u.w));
-}
-
+}           
+                 
 union r8Unorm_sRGB {
     unsigned char r;
     unsigned char x;
