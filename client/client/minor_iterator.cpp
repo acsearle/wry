@@ -1,8 +1,8 @@
 //
-//  stride_ptr.cpp
+//  minor_iterator.cpp
 //  client
 //
 //  Created by Antony Searle on 26/6/2023.
 //
 
-#include "stride_ptr.hpp"
+#include "minor_iterator.hpp"

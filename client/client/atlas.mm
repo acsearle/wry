@@ -65,29 +65,30 @@ namespace wry {
     
     // Place a sprite within the free space of the atlas
     
-    sprite atlas::place(const_matrix_view<pixel> v, simd_float2 origin) {
-        auto tl = _packer.place(simd_make_ulong2(v.columns(), v.rows()));
+    sprite atlas::place(matrix_view<const RGBA8Unorm_sRGB> v, simd_float2 origin) {
+        auto tl = _packer.place(simd_make_ulong2(v.get_major(),
+                                                 v.get_minor()));
         [_texture replaceRegion:MTLRegionMake2D(tl.x, tl.y,
-                                                v.columns(), v.rows())
+                                                v.get_major(), v.get_minor())
                     mipmapLevel:0
                       withBytes:v.data()
-                    bytesPerRow:v.stride() * sizeof(pixel)];
+                    bytesPerRow:v.bytes_per_row()];
         sprite s;
         s.a.position = simd_make_float4(-origin, 0, 1);
         s.a.texCoord = simd_float(tl) / (float) _size;
-        s.b.position = simd_make_float4(v.columns() - origin.x,
-                                        v.rows() - origin.y,
+        s.b.position = simd_make_float4(v.get_major() - origin.x,
+                                        v.get_minor() - origin.y,
                                         0,
                                         1);
-        s.b.texCoord = simd_make_float2(tl.x + v.columns(), tl.y + v.rows()) / _size;
+        s.b.texCoord = simd_make_float2(tl.x + v.get_major(), tl.y + v.get_minor()) / _size;
         
         // for debug, also shade the split regions
         
         {
             for (auto&& a : _packer._last_split) {
                 auto n = max(a.width(), a.height());
-                pixel p{0,0,0,64};
-                array<pixel> b;
+                RGBA8Unorm_sRGB p(0.0f,0.0f,0.0f,0.25f);
+                array<RGBA8Unorm_sRGB> b;
                 b.resize(n, p);
                 //DUMP(a.a.x);
                 //DUMP(a.a.y);
@@ -97,19 +98,19 @@ namespace wry {
                 [_texture replaceRegion:MTLRegionMake2D(a.a.x, a.a.y, a.width(), 1)
                             mipmapLevel:0
                               withBytes:b.data()
-                            bytesPerRow:b.size() * sizeof(pixel)];
+                            bytesPerRow:b.size() * sizeof(RGBA8Unorm_sRGB)];
                 [_texture replaceRegion:MTLRegionMake2D(a.a.x, a.a.y, 1, a.height())
                             mipmapLevel:0
                               withBytes:b.data()
-                            bytesPerRow:sizeof(pixel)];
+                            bytesPerRow:sizeof(RGBA8Unorm_sRGB)];
                 [_texture replaceRegion:MTLRegionMake2D(a.a.x, a.a.y + a.height() - 1, a.width(), 1)
                             mipmapLevel:0
                               withBytes:b.data()
-                            bytesPerRow:b.size() * sizeof(pixel)];
+                            bytesPerRow:b.size() * sizeof(RGBA8Unorm_sRGB)];
                 [_texture replaceRegion:MTLRegionMake2D(a.a.x + a.width() - 1, a.a.y, 1, a.height())
                             mipmapLevel:0
                               withBytes:b.data()
-                            bytesPerRow:sizeof(pixel)];
+                            bytesPerRow:sizeof(RGBA8Unorm_sRGB)];
             }
         }
         

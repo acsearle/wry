@@ -58,6 +58,8 @@ namespace wry {
         
     using byte = std::byte;
     
+    using uchar = unsigned char;
+    
 } // namespace wry
 
 #endif /* common_h */

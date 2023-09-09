@@ -11,7 +11,6 @@
 #import <Metal/Metal.h>
 
 #include "array.hpp"
-#include "const_matrix_view.hpp"
 #include "image.hpp"
 #include "packer.hpp"
 #include "vertex.hpp"
@@ -75,11 +74,11 @@ namespace wry {
             };
         }
         
-        void push_sprite(sprite s, pixel c = { 255, 255, 255, 255 }) {
+        void push_sprite(sprite s, RGBA8Unorm_sRGB c = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f)) {
             // a - x
             // | \ | => abx ayb
             // y - b
-            _vertices.push_back({s.a, c});
+            _vertices.emplace_back(s.a, c);
             _vertices.push_back({{
                 { s.b.position.x, s.a.position.y, 0.0f, 1.0f},
                 { s.b.texCoord.x, s.a.texCoord.y}}, c });
@@ -111,7 +110,7 @@ namespace wry {
         
         void discard();
         
-        sprite place(const_matrix_view<pixel>, simd_float2 origin = { 0, 0 });
+        sprite place(matrix_view<const RGBA8Unorm_sRGB>, simd_float2 origin = { 0, 0 });
         
         void release(sprite);
         

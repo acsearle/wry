@@ -127,7 +127,7 @@ namespace wry {
     // argument list is returned.
     
     template<typename... Args>
-    decltype(auto) min(Args&&... args) {
+    constexpr decltype(auto) min(Args&&... args) {
         return fold_left([](auto&& a, auto&& b) -> decltype(auto) {
             return (b < a) ? std::forward<decltype(b)>(b) : std::forward<decltype(a)>(a);
         }, std::forward<Args>(args)...);
@@ -302,6 +302,33 @@ namespace wry {
     inline void deallocate(void* ptr) noexcept {
         operator delete(ptr);
     }
+    
+
+    // std::copy, but checks destination ending
+    
+    template<typename InputIterator, typename InputSentinel, typename OutputIterator, typename OutputSentinel>
+    OutputIterator copy(InputIterator first, InputSentinel last, OutputIterator d_first, OutputSentinel d_last) {
+        for (; first != last; ++first, ++d_first) {
+            assert(d_first != d_last);
+            *d_first = *first;
+        }
+        assert(d_first == d_last);
+        return d_first;
+    }
+    
+    // std::swap_ranges, but checks 2nd range ending
+    template<typename ForwardIt1, typename Sentinel1, typename ForwardIt2, typename Sentinel2>
+    ForwardIt2 swap_ranges(ForwardIt1 first1, Sentinel1 last1, ForwardIt2 first2, Sentinel2 last2) {
+        for (; first1 != last1; ++first1, ++first2) {
+            assert(first2 != last2);
+            using std::iter_swap;
+            iter_swap(first1, first2);
+        }
+        assert(first2 == last2);
+        return first2;
+    }
+
+    
     
 } // namespace wry
 

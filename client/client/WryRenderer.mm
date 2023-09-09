@@ -27,13 +27,14 @@
     // link to rest of program
     
     std::shared_ptr<wry::model> _model;
+    
+    MTLPixelFormat _drawablePixelFormat;
 
     // view-only state
         
     wry::usize _frame_count;
     simd::float2 _viewport_size;
-    
-        
+            
     id<MTLBuffer> _screenTriangleStripVertexBuffer;
     id<MTLCommandQueue> _commandQueue;
     id<MTLDepthStencilState> _enabledDepthStencilState;
@@ -74,8 +75,216 @@
         
     wry::atlas* _atlas;
     wry::font* _font;
-                
+                    
+    // photometry
+    
+    // receive incoming buffers
+    dispatch_queue_t _capture_video_queue;
+    dispatch_queue_t _process_video_queue;
+
+    AVCaptureSession* _captureSession;
+    AVCaptureVideoDataOutput* _captureVideoDataOutput;
+    AVCaptureDevice* _captureDevice;
+    AVCaptureDeviceInput* _captureDeviceInput;
+    
+    NSMutableArray<id<MTLTexture>>* _capture_results;
+    
+    id<MTLRenderPipelineState> _trivialRenderPipelineState;
+    id<MTLTexture> _trivialTexture;
+    id<MTLTexture> _radienceTexture;
+    wry::matrix<wry::RGBA8Unorm_sRGB> _observationSlice;
+
+    int _head;
+    int _tail;
+
 }
+
+- (void)captureInit {
+
+    {
+        dispatch_queue_t interactive =  dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0);
+        _capture_video_queue = dispatch_queue_create_with_target("wry.capture_video",
+                                                                 DISPATCH_QUEUE_SERIAL,
+                                                                 interactive);
+        
+        dispatch_queue_t background =  dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0);
+        _process_video_queue = dispatch_queue_create_with_target("wry.process_video",
+                                                                 DISPATCH_QUEUE_SERIAL,
+                                                                 background);
+    }
+        
+    _captureSession = [AVCaptureSession new];
+    _captureSession.sessionPreset = AVCaptureSessionPreset1920x1080;
+    
+    _captureDevice = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+    {
+        NSError* error = nil;
+        _captureDeviceInput = [[AVCaptureDeviceInput alloc] initWithDevice:_captureDevice error:&error];
+        if (error) {
+            NSLog(@"%@", [error localizedDescription]);
+            abort();
+        }
+    }
+    [_captureSession addInput:_captureDeviceInput];
+        
+    _captureVideoDataOutput = [AVCaptureVideoDataOutput new];
+    _captureVideoDataOutput.videoSettings = @{
+        (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey : @((int) kCVPixelFormatType_32BGRA)
+    };
+    [_captureVideoDataOutput setSampleBufferDelegate:self queue:_capture_video_queue];
+    [_captureSession addOutput:_captureVideoDataOutput];
+        
+    
+    _capture_results = [NSMutableArray new];
+    
+    {
+        MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
+        descriptor.vertexFunction = [self newFunctionWithName:@"TrivialVertexFunction"];
+        descriptor.fragmentFunction = [self newFunctionWithName:@"TrivialFragmentFunction"];
+        descriptor.colorAttachments[0].pixelFormat = _drawablePixelFormat;
+        _trivialRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
+    }
+    
+    {
+        MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+        descriptor.textureType = MTLTextureType2D;
+        descriptor.pixelFormat = MTLPixelFormatRGBA8Unorm;
+        descriptor.height = 1080;
+        descriptor.width = 1;
+        descriptor.storageMode = MTLStorageModeShared;
+        descriptor.usage = MTLTextureUsageShaderRead;
+        _radienceTexture = [_device newTextureWithDescriptor:descriptor];
+        _radienceTexture.label = @"Source radience";
+        _trivialTexture = _radienceTexture;
+              
+    }
+    
+    {
+        _observationSlice = wry::matrix<wry::RGBA8Unorm_sRGB>(1080, 1080);
+    }
+        
+}
+
+-(void) captureVideoStart {
+    [_captureSession startRunning];
+}
+
+-(void) captureVideoStop {
+    [_captureSession stopRunning];
+    
+}
+
+-(void) captureOutput:(AVCaptureOutput *)output
+  didDropSampleBuffer:(CMSampleBufferRef)sampleBuffer
+       fromConnection:(AVCaptureConnection *)connection {
+    NSLog(@"Dropped a video capture sample");
+}
+
+-(void) captureOutput:(AVCaptureOutput *)output
+didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+       fromConnection:(AVCaptureConnection *)connection {
+    
+    NSLog(@"%s", __PRETTY_FUNCTION__);
+    
+    int head;
+    @synchronized (self) {
+        if (_head >= 1080) {
+            return;
+        } else {
+            head = _head++;
+        }
+    }
+        
+    // we are on a high-priority queue and must do minimal work
+    // we can't retain the sample buffer permanently so we need to make a copy
+    // we can't deep copy any of these objects, we have to extract the
+    // image data
+        
+    CMTime presentationTimeStamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    assert(imageBuffer);
+    CVPixelBufferRef pixelBuffer = (CVPixelBufferRef) imageBuffer;
+    CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    void* baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer);
+    size_t height = CVPixelBufferGetHeight(pixelBuffer);
+    size_t width = CVPixelBufferGetWidth(pixelBuffer);
+    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer);
+    size_t dataSize = CVPixelBufferGetDataSize(pixelBuffer);
+    
+    void* dataCopy = malloc(dataSize);
+    memcpy(dataCopy, baseAddress, dataSize);
+    CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    
+    {
+        simd_uchar4 white;
+        white = 255;
+        simd_uchar4 black;
+        black = 0;
+                
+        [_trivialTexture replaceRegion:MTLRegionMake2D(0, head, 1, 1)
+                           mipmapLevel:0
+                             withBytes:&white
+                           bytesPerRow:4];
+        int thick = 16;
+        if (head >= thick) {
+            [_trivialTexture replaceRegion:MTLRegionMake2D(0, head-thick, 1, 1)
+                               mipmapLevel:0
+                                 withBytes:&black
+                               bytesPerRow:4];
+        }
+    }
+    
+    dispatch_async(_process_video_queue, ^{
+        
+        CMTimeShow(presentationTimeStamp);
+        
+        int tail;
+        @synchronized (self) {
+            tail = self->_tail;
+            if (self->_tail < 1080)
+                ++self->_tail;
+        }
+        
+        for (size_t j = 0; j != 1080; ++j) {
+            self->_observationSlice(j, tail) = *((wry::RGBA8Unorm_sRGB*)(((wry::u8*) dataCopy) + 960 * 4 + bytesPerRow * j));
+        }
+        
+        if (tail == 1079) {
+            wry::to_png(self->_observationSlice, "/Users/antony/Desktop/captures/slice.png");
+            std::terminate();
+        }
+        
+        free(dataCopy);
+        
+    });
+        
+}
+
+-(void) captureLogic {
+    
+    static int state = 0;
+    static NSUInteger trigger = 0;
+    
+    if (_frame_count < trigger)
+        return;
+
+    switch (state) {
+        case 0:
+            [self captureVideoStart];
+            state = 10;
+            break;
+        case 10:
+            break;
+        default:
+            abort();
+    }
+    
+    
+    
+    
+}
+
 
 -(void) dealloc {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
@@ -116,22 +325,23 @@
                                  ofType:(NSString*)ext
                         withPixelFormat:(MTLPixelFormat)pixelFormat
 {
-    wry::image image = wry::from_png(wry::path_for_resource([name UTF8String], [ext UTF8String]));
+    wry::matrix<wry::RGBA8Unorm_sRGB> image = wry::from_png(wry::path_for_resource([name UTF8String], [ext UTF8String]));
+    wry::multiply_alpha_inplace(image);
     
     MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
     descriptor.textureType = MTLTextureType2D;
     descriptor.pixelFormat = pixelFormat;
-    descriptor.width = image.width();
-    descriptor.height = image.height();
+    descriptor.width = image.get_major();
+    descriptor.height = image.get_minor();
     descriptor.mipmapLevelCount = std::countr_zero(descriptor.width | descriptor.height);
     descriptor.storageMode = MTLStorageModeShared;
     descriptor.usage = MTLTextureUsageShaderRead;
     
     id<MTLTexture> texture = [_device newTextureWithDescriptor:descriptor];
-    [texture replaceRegion:MTLRegionMake2D(0, 0, image.width(), image.height())
+    [texture replaceRegion:MTLRegionMake2D(0, 0, image.get_major(), image.get_minor())
                     mipmapLevel:0
                       withBytes:image.data()
-                    bytesPerRow:image.stride() * 4];
+                    bytesPerRow:image.bytes_per_row()];
     texture.label = name;
     
     id<MTLCommandBuffer> buffer = [_commandQueue commandBuffer];
@@ -339,6 +549,7 @@
         };
         
         _model = model_;
+        _drawablePixelFormat = drawablePixelFormat;
                 
         _device = device;
         _library = [_device newDefaultLibrary];
@@ -629,10 +840,96 @@
             _atlas = new wry::atlas(2048, device);
             _font = new wry::font(build_font(*_atlas));
         }
+                
+        // [self captureInit];
+        
+        if (false) {
+            // load input data
+            id<MTLTexture> lightTexture = [self newTextureFromResource:@"../captures/slice"
+                                                               ofType:@"png"];
+
+            // make mask data
+            id<MTLTexture> maskTexture = nil;
+            {
+                MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+                descriptor.textureType = MTLTextureType2D;
+                descriptor.pixelFormat = MTLPixelFormatRGBA32Float;
+                descriptor.width = 1;
+                descriptor.height = 240;
+                descriptor.usage = MTLTextureUsageShaderRead;
+                descriptor.storageMode = MTLStorageModeShared;
+                maskTexture = [_device newTextureWithDescriptor:descriptor];
+                wry::array<simd_float4> mask(240, simd_make_float4(0.0f, 0.0f, 0.0f, 0.0f));
+                for (int i = 0; i != 8; ++i) {
+                    for (int j = 0; j != 8; ++j) {
+                        mask[i * 16 + (240 - 166) + j] = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+                    }
+                }
+                [maskTexture replaceRegion:MTLRegionMake2D(0,0,1,240)
+                               mipmapLevel:0
+                                 withBytes:mask.data()
+                               bytesPerRow:16];
+                assert(maskTexture);
+
+            }
+            
+            // make result texture
+            {
+                MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+                descriptor.textureType = MTLTextureType2D;
+                descriptor.pixelFormat = MTLPixelFormatRGBA32Float;
+                descriptor.width = 1080;
+                descriptor.height = 1080;
+                descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+                descriptor.storageMode = MTLStorageModeShared;
+                _trivialTexture = [_device newTextureWithDescriptor:descriptor];
+                assert(_trivialTexture);
+                _trivialTexture.label = @"trivial Texture";
+            }
+            
+            // make pipeline
+            id<MTLComputePipelineState> pipelineState = nil;
+            {
+                //MTLComputePipelineDescriptor* descriptor = [MTLComputePipelineDescriptor new];
+                //descriptor.computeFunction = [self newFunctionWithName:@"DepthProcessing"];
+                //descriptor.label = @"DepthProcessing";
+                NSError* error = nil;
+                pipelineState = [_device newComputePipelineStateWithFunction:[self newFunctionWithName:@"DepthProcessing"]
+                                                       error:&error];
+                assert(!error);
+                assert(pipelineState);
+            }
+            
+            id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+            id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+            [encoder setComputePipelineState:pipelineState];
+            [encoder setTexture:_trivialTexture atIndex:0];
+            [encoder setTexture:lightTexture atIndex:1];
+            [encoder setTexture:maskTexture atIndex:2];
+
+            NSUInteger w = pipelineState.threadExecutionWidth;
+            NSUInteger h = pipelineState.maxTotalThreadsPerThreadgroup / w;
+            MTLSize threadsPerThreadgroup = MTLSizeMake(w, h, 1);
+
+            MTLSize threadsPerGrid = MTLSizeMake(_trivialTexture.width, _trivialTexture.height, 1);
+
+            [encoder dispatchThreadgroups:threadsPerGrid threadsPerThreadgroup:threadsPerThreadgroup];
+            [encoder endEncoding];
+            [commandBuffer commit];
+            
+            
+        }
+        
+        
+        
     }
 
     NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
     
+
+    
+    NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
+
     return self;
 }
 
@@ -651,7 +948,7 @@
                      length:sizeof(uniforms)
                     atIndex:AAPLBufferIndexUniforms ];
     
-    auto draw_text = [=](wry::rect<float> x, wry::string_view v, wry::pixel color) {
+    auto draw_text = [=](wry::rect<float> x, wry::string_view v, wry::RGBA8Unorm_sRGB color) {
         
         auto valign = (_font->height + _font->ascender + _font->descender) / 2; // note descender is negative
         
@@ -684,7 +981,7 @@
     };
     
     {
-        wry::pixel color = {200, 200, 200, 255};
+        wry::RGBA8Unorm_sRGB color(0.5f, 0.5f, 0.5f, 1.0f);
         // draw logs
         float y = _font->height / 2;
         simd_float2 z;
@@ -703,7 +1000,7 @@
     
     if (_model->_console_active) {
         // draw console
-        wry::pixel color = {255, 255, 255, 255};
+        wry::RGBA8Unorm_sRGB color(1.0f, 1.0f, 1.0f, 1.0f);
         float y = 1080 - _font->height / 2;
         simd_float2 z;
         bool first = true;
@@ -719,6 +1016,41 @@
     }
     _atlas->commit(encoder);
 }
+
+
+- (void)renderToMetalLayer2:(nonnull CAMetalLayer*)metalLayer
+{
+    //[self captureLogic];
+    
+    id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
+    id<CAMetalDrawable> currentDrawable = [metalLayer nextDrawable];
+    id <MTLRenderCommandEncoder> encoder = nil;
+    {
+        MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor new];
+        descriptor.colorAttachments[AAPLColorIndexColor].clearColor = MTLClearColorMake(1, 0, 1, 0);
+        descriptor.colorAttachments[AAPLColorIndexColor].loadAction = MTLLoadActionClear;
+        descriptor.colorAttachments[AAPLColorIndexColor].storeAction = MTLStoreActionStore;
+        descriptor.colorAttachments[AAPLColorIndexColor].texture = currentDrawable.texture;
+        encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
+    }
+    
+
+    [encoder setRenderPipelineState:_trivialRenderPipelineState];
+    [encoder setVertexBuffer:_screenTriangleStripVertexBuffer offset:0 atIndex:AAPLBufferIndexVertices];
+    if (_trivialTexture) {
+        [encoder setFragmentTexture:_trivialTexture atIndex:AAPLTextureIndexColor];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+    }
+   
+    [encoder endEncoding];
+    
+    [command_buffer presentDrawable:currentDrawable];
+    [command_buffer commit];
+    
+    ++_frame_count;
+    
+}
+
 
 - (void)renderToMetalLayer:(nonnull CAMetalLayer*)metalLayer
 {
@@ -1539,5 +1871,118 @@ for (int y = 0; y != 256; y += 64) {
  m.texcoord_from_normal();
  m.tangent_from_texcoord();
  }*/
+
+
+
+-(void) capturePhoto
+{
+    if (![_captureSession isRunning]) {
+        [_captureSession startRunning];
+    }
+    [_capturePhotoOutput capturePhotoWithSettings:[AVCapturePhotoSettings photoSettingsWithFormat:@{
+        (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey : @((int) 'BGRA')
+    }] delegate:self];
+}
+
+- (void)captureOutput:(AVCapturePhotoOutput *)output
+didFinishProcessingPhoto:(AVCapturePhoto *)photo
+error:(NSError *)error {
+    NSLog(@"%s", __PRETTY_FUNCTION__);
+    if (error) {
+        NSLog(@"%@", error.localizedDescription);
+    }
+    
+    CGImageRef image = [photo CGImageRepresentation];
+    assert(image);
+    
+    size_t width = CGImageGetWidth(image);
+    size_t height = CGImageGetHeight(image);
+    size_t bytesPerRow = CGImageGetBytesPerRow(image);
+    CGDataProviderRef dataProvider = CGImageGetDataProvider(image);
+    assert(dataProvider);
+    CFDataRef data = CGDataProviderCopyData(dataProvider);
+    assert(data);
+    const UInt8* bytePtr = CFDataGetBytePtr(data);
+    
+    /*
+     wry::image z(height, width);
+     for (size_t i = 0; i != z.rows(); ++i) {
+     for (size_t j = 0; j != z.columns(); ++j) {
+     z(i, j).bgra = ((wry::pixel*)(bytePtr + i * bytesPerRow))[j];
+     }
+     }
+     char c[256];
+     snprintf(c, 256, "/Users/antony/Desktop/captures/capture%03d.png", _photoCount);
+     wry::to_png(z, c);
+     */
+    
+    MTLTextureDescriptor* textureDescriptor = [MTLTextureDescriptor new];
+    textureDescriptor.textureType = MTLTextureType2D;
+    textureDescriptor.pixelFormat = MTLPixelFormatRGBA8Unorm_sRGB;
+    textureDescriptor.width = width;
+    textureDescriptor.height = height;
+    textureDescriptor.storageMode = MTLStorageModeShared;
+    textureDescriptor.usage = MTLTextureUsageShaderRead;
+    textureDescriptor.swizzle = MTLTextureSwizzleChannelsMake(MTLTextureSwizzleBlue,
+                                                              MTLTextureSwizzleGreen,
+                                                              MTLTextureSwizzleRed,
+                                                              MTLTextureSwizzleAlpha);
+    id<MTLTexture> texture = [_device newTextureWithDescriptor:textureDescriptor];
+    [texture replaceRegion:MTLRegionMake2D(0, 0, width, height)
+               mipmapLevel:0
+                 withBytes:bytePtr
+               bytesPerRow:bytesPerRow];
+    texture.label = @"Still";
+    
+    CFRelease(data);
+    
+    _photoTexture = texture; // <-- why isn't this write a race condition?
+    
+}
+
+
+// still camera
+//_capturePhotoOutput = [AVCapturePhotoOutput new];
+//_capturePhotoOutput.maxPhotoQualityPrioritization = AVCapturePhotoQualityPrioritizationQuality;
+//[_captureSession addOutput:_capturePhotoOutput];
+
+
+@synchronized (self->_capture_results) {
+    
+    id<MTLTexture> texture = nil;
+    if (![self->_capture_results count]) {
+        
+        MTLTextureDescriptor* textureDescriptor = [MTLTextureDescriptor new];
+        
+        textureDescriptor.textureType = MTLTextureType2D;
+        textureDescriptor.pixelFormat = MTLPixelFormatRGBA8Unorm_sRGB;
+        textureDescriptor.width = width;
+        textureDescriptor.height = height;
+        textureDescriptor.storageMode = MTLStorageModeShared;
+        textureDescriptor.usage = MTLTextureUsageShaderRead;
+        textureDescriptor.swizzle = MTLTextureSwizzleChannelsMake(MTLTextureSwizzleBlue,
+                                                                  MTLTextureSwizzleGreen,
+                                                                  MTLTextureSwizzleRed,
+                                                                  MTLTextureSwizzleAlpha);
+        
+        id<MTLTexture> texture = [self->_device newTextureWithDescriptor:textureDescriptor];
+        assert(texture);
+        texture.label = @"Still";
+        
+        [self->_capture_results addObject:texture];
+        
+    } else {
+        texture = [self->_capture_results objectAtIndex:0];
+    }
+    
+    [texture replaceRegion:MTLRegionMake2D(self->_sliceCount, 0, 1, height)
+               mipmapLevel:0
+                 withBytes:((wry::u8*) dataCopy) + (2 * 1920)
+               bytesPerRow:bytesPerRow];
+    ++self->_sliceCount;
+    free(dataCopy);
+    //self->_last_capture = dataCopy;
+    
+    NSLog(@"Processed %ld", [self->_capture_results count]);
 
 #endif

@@ -20,9 +20,16 @@ namespace wry {
     };
     
     struct vertex {
+        
         subvertex v; // 24
-        simd_uchar4 color; // 4
+        RGBA8Unorm_sRGB color; // 4
         static void bind();
+        
+        vertex(subvertex s, RGBA8Unorm_sRGB c)
+        : v(s)
+        , color(c) {
+        }
+        
     };
     
     static_assert(sizeof(vertex) == 48);

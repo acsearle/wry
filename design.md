@@ -502,3 +502,71 @@ zz = sqrt((1 - r^2)/((a^2-1)r^2+1))
     // of CDF convention
 
 
+
+
+For normal recovery from image:
+
+For a given camera pixel, we know V, the camera direction.
+
+For a given screen pixel, L is a function of the surface distance d along the
+camera ray
+
+For a circle of screen pixels centered on the camera, VdotL is constant
+
+The BRDF model we use:
+
+```
+k / (k - k * NdotH^2)
+*
+NdotV / (k * NdotV + k)
+*
+NdotL / (k * NdotL + k)
+*
+k + k (1 - HdotV)^5
+*
+1 / NdotV  xxxx
+*
+1 / NdotL  xxxx
+* 
+NdotL 
+```
+
+We can actually look at the logarithm and linearize lots of these specular 
+terms:
+```
+-log((k - k * NdotH^2)
+-log(k * NdotV)
++NdotL
+-log(k * NdotL + k)
++
+...
+```
+
+The fresnel term requires (1 - HdotV) approxeq 1 to be significant, which requires 
+H to be nearly perpendicular to V and thus L to be nearly opposite to V.
+
+The camera and screen geometry constrain L and V to be quite similar, within 30
+degrees, and H is between them.
+
+When the light source is close to the camera, L, V and H are the same.  We
+could look to a different parameterization,
+```
+V = (0, 0, 1)
+H = (x, 0, 1 - x^2)
+L = (2x, 0, 1 - 4x^2)
+
+NdotV = Nz
+NdotH = Nx*x + Nz*(1-x^2)
+NodtL = Nx*2*x + Nz*(1-4x^2)
+```
+Where the scale of x is determined by the distance d
+
+If the camera pixel is dominated by specular lighting, we can directly
+find N = H = V + L as the peak.
+
+If the camera pixel is dominated by diffuse lighting, we can directly find
+N = L as the peak.
+
+Whatever the situation, we will be brightest when N lies in the LV plane,
+letting us constrain one of the degrees of freedom of N immediately.
+

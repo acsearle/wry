@@ -11,6 +11,7 @@
 #define string_hpp
 
 #include "array.hpp"
+#include "common.hpp"
 #include "string_view.hpp"
 
 namespace wry {
@@ -61,7 +62,8 @@ namespace wry {
             _bytes.reserve(v.as_bytes().size() + 1);
             // _bytes = v.as_bytes();
             auto u = v.as_bytes();
-            _bytes.assign(u.begin(), u.end());
+            _bytes.assign(reinterpret_cast<const uchar*>(u.begin()),
+                          reinterpret_cast<const uchar*>(u.end()));
             _bytes.push_back(0);
             _bytes.pop_back();
         }
@@ -78,8 +80,8 @@ namespace wry {
             _bytes.pop_back();
         }
         
-        operator const_vector_view<u8>() const {
-            return const_vector_view<u8>(_bytes.begin(), _bytes.end());
+        operator array_view<const u8>() const {
+            return array_view<const u8>(_bytes.begin(), _bytes.end());
         }
         operator string_view() const { return string_view(begin(), end()); }
         
@@ -88,8 +90,8 @@ namespace wry {
         
         u8 const* data() const { return _bytes.begin(); }
         
-        const_vector_view<u8> as_bytes() const {
-            return const_vector_view<u8>(_bytes.begin(), _bytes.end());
+        array_view<const u8> as_bytes() const {
+            return array_view<const u8>(_bytes.begin(), _bytes.end());
         }
         
         char const* c_str() const { return (char const*) _bytes.begin(); }
@@ -223,15 +225,12 @@ namespace wry {
         // requires pointer chasing, making use cases where we access the metadata
         // but not the data slower.
         
+        // We don't store the hash since the hash table will usually do this
+        
         struct implementation {
+            
             u8* _end;
             u8 _begin[];
-            
-            // or,
-            // u8* _begin
-            // u8* _end
-            // u8* _capacity
-            // u8 _data[]
             
             static implementation* make(string_view v) {
                 auto n = v.as_bytes().size();
@@ -301,9 +300,9 @@ namespace wry {
             return _body ? (u8 const*) _body->_begin : nullptr;
         }
         
-        const_vector_view<u8> as_bytes() const {
-            return const_vector_view<u8>(_body ? _body->_begin : nullptr,
-                                         _body ? _body->_end : nullptr);
+        array_view<const byte> as_bytes() const {
+            return array_view<const byte>(_body ? reinterpret_cast<const byte*>(_body->_begin) : nullptr,
+                                          _body ? reinterpret_cast<const byte*>(_body->_end + 1) : nullptr);
         }
         
         operator string_view() const {

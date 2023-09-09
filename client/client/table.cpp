@@ -17,7 +17,7 @@ namespace wry {
     
     define_test("table")
     {
-        return;
+
         {
             table<int, int> t;
             assert(t.empty());
@@ -42,7 +42,7 @@ namespace wry {
 
             t._inner._invariant();
             
-            auto x = t._inner.total_displacement();
+            [[maybe_unused]] auto x = t._inner.total_displacement();
             //printf("avg disp %g\n", x / (double) t.size());
 
             assert(t.size() == N);

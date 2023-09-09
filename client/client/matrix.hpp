@@ -12,9 +12,190 @@
 #include <vector>
 #include <iostream>
 
+#include "matrix_transpose_view.hpp"
 #include "matrix_view.hpp"
-#include "utility.hpp"
 
+namespace wry {
+    
+    // matrix is indexed (i, j) = (row, column)
+    // matrix is stored column major
+    //
+    // image is indexed (x, y) = (column, row)
+    // image is stored row major
+    //
+    // these objects differ only in our interpretation of the major and minor
+    // indices
+
+    
+    template<typename T>
+    struct matrix;
+    
+    template<typename T>
+    struct matrix<const T>; // undefined
+
+    template<typename T>
+    struct matrix {
+        
+        using size_type = std::size_t;
+        using difference_type = std::ptrdiff_t;
+        using value_type = vector_view<T>;
+        using iterator = minor_iterator<T>;
+        using const_iterator = minor_iterator<const T>;
+        using reference = vector_view<T>;
+        using const_reference = vector_view<const T>;
+        
+        stride_iterator<T> base;
+        size_t _minor;
+        size_t _major;
+        void* _allocation;
+        size_t _capacity;
+                
+        size_t bytes_per_row() const {
+            return base._stride;
+        }
+        
+        matrix()
+        : base(nullptr)
+        , _minor(0)
+        , _major(0)
+        , _allocation(nullptr)
+        , _capacity(0) {
+        }
+        
+        matrix(size_t minor, size_t major) {
+            _minor = minor;
+            _major = major;
+            base._stride = _major * sizeof(T);
+            _capacity = base._stride * _minor;
+            _allocation = operator new(_capacity);
+            assert(_allocation);
+            base.base = static_cast<T*>(_allocation);
+        }
+        
+        matrix(const matrix& other)
+        : matrix(other._minor, other._major) {
+            std::copy(other.begin(), other.end(), begin());
+        }
+        
+        matrix(matrix&& other)
+        : base(exchange(other.base, nullptr))
+        , _minor(exchange(other._minor, 0))
+        , _major(exchange(other._major, 0))
+        , _allocation(exchange(other._allocation, nullptr))
+        , _capacity(exchange(other._capacity, 0)) {
+        }
+        
+        ~matrix() {
+            operator delete(_allocation);
+        }
+        
+        void swap(matrix& other) {
+            using std::swap;
+            swap(base, other.base);
+            swap(_minor, other._minor);
+            swap(_major, other._major);
+            swap(_allocation, other._allocation);
+            swap(_capacity, other._capacity);
+        }
+        
+        matrix& operator=(matrix&& other) {
+            matrix(std::move(other)).swap(*this);
+            return *this;
+        }
+        
+        matrix& operator=(auto&& other) {
+            wry::copy(std::begin(other), std::end(other), begin(), end());
+            return *this;
+        }
+        
+        size_type get_major() const { return _major; }
+        size_type get_minor() const { return _minor; }
+        difference_type get_stride() const { return base._stride; }
+        
+        size_type size() const { return _minor; }
+        
+        iterator begin() const {
+            return iterator(base, _major);
+        }
+        
+        iterator end() const {
+            return iterator(base + _minor, _major);
+        }
+        
+        const_iterator cbegin() const {
+            return const_iterator(base, _major);
+        }
+        
+        const_iterator cend() const {
+            return const_iterator(base + _minor, _major);
+        }
+        
+        reference operator[](difference_type i) {
+            return reference((base + i).base, _major);
+        }
+
+        const_reference operator[](difference_type i) const {
+            return reference((base + i).base, _major);
+        }
+
+        T& operator()(difference_type i, difference_type j) {
+            return (base + i).base[j];
+        }
+
+        const T& operator()(difference_type i, difference_type j) const {
+            return (base + i).base[j];
+        }
+        
+        reference front() const { return reference(base._pointer, _major); }
+        reference back() const { return reference((base + _minor - 1)._pointer, _major); }
+        
+        matrix_view<T> sub(ptrdiff_t i,
+                           ptrdiff_t j,
+                           ptrdiff_t minor,
+                           ptrdiff_t major) const {
+            assert(0 <= i);
+            assert(0 <= j);
+            assert(0 <= minor);
+            assert(i + minor <= _minor);
+            assert(0 <= major);
+            assert(j + major <= _major);
+            return matrix_view(stride_iterator<T>(base.base + j,
+                                                  base._stride) + i,
+                               minor,
+                               major);
+        }
+        
+        operator matrix_view<T>() {
+            return matrix_view<T>(base, _minor, major);
+        }
+        
+        operator matrix_view<const T>() const {
+            return matrix_view<const T>(base, _minor, _major);
+        }
+        
+        matrix_transpose_view<T> transpose() {
+            return matrix_transpose_view<T>(base, _minor, _major);
+        }
+        
+        T* data() {
+            return base.base;
+        }
+
+        const T* data() const {
+            return base.base;
+        }
+
+    };
+
+    template<typename T>
+    matrix_view(stride_iterator<T>, std::size_t, std::size_t) -> matrix_view<T>;
+    
+    
+} // namespace wry
+
+
+
+/*
 namespace wry {
     
     
@@ -316,5 +497,6 @@ namespace wry {
     
     
 }
+ */
 
 #endif /* matrix_hpp */

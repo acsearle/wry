@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <iterator>
 
+#include "array_view.hpp"
 #include "utility.hpp"
 #include "with_capacity.hpp"
 
@@ -33,6 +34,10 @@ namespace wry {
     // - Less iterator stability
     //
     // Array assumes that the stored type is Relocatable
+    
+    template<typename> struct array;
+    
+    template<typename T> struct array<const T>; // undefined
     
     template<typename T>
     struct array {
@@ -323,13 +328,13 @@ namespace wry {
 
         reference at(size_type pos) {
             if (!(pos < size()))
-                throw std::out_of_range("array::at");
+                throw std::out_of_range(__PRETTY_FUNCTION__);
             return _begin[pos];
         }
         
         const_reference at(size_type pos) const {
             if (!(pos < size()))
-                throw std::out_of_range("array::at");
+                throw std::out_of_range(__PRETTY_FUNCTION__);
             return _begin[pos];
         }
         
@@ -718,7 +723,25 @@ namespace wry {
                 push_back(*first);
             }
         }
-        
+                
+        array_view<T> sub(std::ptrdiff_t i, std::size_t n) {
+            assert(0 <= i);
+            assert(i + n <= size());
+            return array_view(_begin + i, n);
+        }
+
+        array_view<const T> sub(std::ptrdiff_t i, std::size_t n) const {
+            assert(0 <= i);
+            assert(i + n <= size());
+            return array_view(_begin + i, n);
+        }
+
+        array_view<const T> csub(std::ptrdiff_t i, std::size_t n) const {
+            assert(0 <= i);
+            assert(i + n <= size());
+            return array_view(_begin + i, n);
+        }
+
     }; // struct array<T>
     
     template<typename T>

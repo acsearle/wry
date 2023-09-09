@@ -91,6 +91,8 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+   
+    // [_window toggleFullScreen:nil]; // < --------------------------------
 }
 
 - (void)applicationWillBecomeActive:(NSNotification *)notification {

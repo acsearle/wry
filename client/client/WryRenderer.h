@@ -8,12 +8,13 @@
 #ifndef WryRenderer_h
 #define WryRenderer_h
 
+#import <AVFoundation/AVFoundation.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 #include "model.hpp"
 
-@interface WryRenderer : NSObject
+@interface WryRenderer : NSObject <AVCapturePhotoCaptureDelegate, AVCaptureVideoDataOutputSampleBufferDelegate>
 
 - (nonnull instancetype)initWithMetalDevice:(nonnull id<MTLDevice>)device
                         drawablePixelFormat:(MTLPixelFormat)drawablePixelFormat

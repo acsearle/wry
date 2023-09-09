@@ -10,18 +10,18 @@
 
 #include <simd/simd.h>
 
-// vertex argument [[attribute(i)]]
+// [[attribute(index)]] for vertex shader structured input
 
 enum AAPLAttributeIndex {
     AAPLAttributeIndexPosition,
-    AAPLAttributeIndexColor,
-    AAPLAttributeIndexTexCoord,
+    AAPLAttributeIndexCoordinate,
     AAPLAttributeIndexNormal,
     AAPLAttributeIndexTangent,
     AAPLAttributeIndexBinormal,
+    AAPLAttributeIndexColor,
 };
 
-// buffer [[buffer(i)]]
+// [[buffer(index)]]
 
 enum AAPLBufferIndex {
     AAPLBufferIndexUniforms,
@@ -30,7 +30,35 @@ enum AAPLBufferIndex {
     AAPLBufferIndexInstanced,
 };
 
-// texture [[texture(i)]]
+// [[color(index)]] attachment
+
+enum AAPLColorIndex {
+    AAPLColorIndexColor,
+    AAPLColorIndexAlbedoMetallic,
+    AAPLColorIndexNormalRoughness,
+    AAPLColorIndexDepth,
+};
+
+// [[function_constant(index)
+
+enum AAPLFunctionConstantIndex {
+    AAPLFunctionConstantIndexHasPerDrawPositionTransform,
+    AAPLFunctionConstantIndexHasPerInstancePositionTransform,
+    AAPLFunctionConstantIndexHasPerDrawCoordinateTransform,
+    AAPLFunctionConstantIndexHasPerInstanceCoordinateTransform,
+    AAPLFunctionConstantIndexHasPerDrawColorTransform,
+    AAPLFunctionConstantIndexHasPerInstanceColorTransform,
+};
+
+// [[raster_order_group(index)]]
+
+enum AAPLRasterOrderGroup {
+    AAPLRasterOrderGroupGBuffer,
+    AAPLRasterOrderGroupLighting,
+};
+
+
+// [[texture(index)]]
 
 enum AAPLTextureIndex {
     AAPLTextureIndexAlbedo,
@@ -47,15 +75,6 @@ enum AAPLTextureIndex {
     AAPLTextureIndexOcclusion,
     AAPLTextureIndexRoughness,
     AAPLTextureIndexShadow,
-};
-
-// color attachment [[color(i)]]
-
-enum AAPLColorIndex {
-    AAPLColorIndexColor,
-    AAPLColorIndexAlbedoMetallic,
-    AAPLColorIndexNormalRoughness,
-    AAPLColorIndexDepth,
 };
 
 

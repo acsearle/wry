@@ -5,153 +5,131 @@
 //  Created by Antony Searle on 26/6/2023.
 //
 
-#ifndef matrix_view_h
-#define matrix_view_h
+#ifndef matrix_view_hpp
+#define matrix_view_hpp
 
-#include "const_matrix_view.hpp"
-#include "matrix_iterator.hpp"
+#include <iostream>
+
+#include "minor_iterator.hpp"
+#include "major_iterator.hpp"
 
 namespace wry {
     
     template<typename T>
-    struct matrix_view
-    : const_matrix_view<T> {
+    struct matrix_view {
         
-        using value_type = const_vector_view<T>;
-        using reference = value_type;
-        using iterator = matrix_iterator<T>;
+        // by default we iterate across the minor axis and yield a contiguous
+        // view of the major axis
+        
+        using value_type = vector_view<T>;
+        using size_type = std::size_t;
+        using difference_type = std::ptrdiff_t;
+        using reference = vector_view<T>;
+        using const_reference = vector_view<std::add_const_t<T>>;
+        using iterator = minor_iterator<T>;
+        using const_iterator = minor_iterator<std::add_const_t<T>>;
+
+        stride_iterator<T> base;
+        std::size_t _minor;
+        std::size_t _major;
         
         matrix_view() = delete;
         
-        matrix_view(matrix_view&) = default;
-        matrix_view(matrix_view&&) = default;
-        matrix_view(const matrix_view&) = delete;
-        matrix_view(const matrix_view&&) = delete;
+        template<typename U>
+        matrix_view(const matrix_view<U>& other)
+        : base(other.base)
+        , _minor(other._minor)
+        , _major(other._major) {
+        }
         
-        matrix_view(T* ptr, ptrdiff_t columns, ptrdiff_t stride, ptrdiff_t rows)
-        : const_matrix_view<T>(ptr, columns, stride, rows) {
+        template<typename U>
+        matrix_view(stride_iterator<U> p,
+                    std::size_t minor,
+                    std::size_t major)
+        : base(p)
+        , _minor(minor)
+        , _major(major) {
         }
         
         ~matrix_view() = default;
         
-        matrix_view& operator=(const matrix_view& v) {
-            return *this = static_cast<const_matrix_view<T>>(v);
-        }
-        
-        template<typename U>
-        matrix_view& operator=(const_matrix_view<U> v) {
-            assert(this->_rows == v._rows);
-            std::copy(v.begin(), v.end(), begin());
+        matrix_view& operator=(auto&& x) {
+            wry::copy(std::begin(x), std::end(x), begin(), end());
             return *this;
         }
         
-        matrix_view& operator=(const T& x) {
-            std::fill(begin(), end(), x);
-            return *this;
+        size_type get_major() const { return _major; }
+        size_type get_minor() const { return _minor; }
+        difference_type get_stride() const { return base._stride; }
+        
+        size_type size() const { return _minor; }
+        
+        iterator begin() const {
+            return iterator(base, _major);
         }
         
-        using const_matrix_view<T>::data;
-        using const_matrix_view<T>::begin;
-        using const_matrix_view<T>::end;
-        using const_matrix_view<T>::operator[];
-        using const_matrix_view<T>::operator();
-        using const_matrix_view<T>::front;
-        using const_matrix_view<T>::back;
-        using const_matrix_view<T>::sub;
-        
-        T* data() { return this->_begin; }
-        
-        iterator begin() {
-            return iterator(this->_begin,
-                            this->_columns,
-                            this->_stride);
+        iterator end() const {
+            return iterator(base + _minor, _major);
         }
         
-        iterator end() { return begin() + this->_rows; }
-        
-        vector_view<T> operator[](ptrdiff_t i) {
-            assert(0 <= i);
-            assert(i < this->_rows);
-            return vector_view<T>(this->_begin + i * this->_stride, this->_columns);
+        const_iterator cbegin() const {
+            return const_iterator(base, _major);
         }
         
+        const_iterator cend() const {
+            return const_iterator(base + _minor, _major);
+        }
         
-        vector_view<T> front() { return *begin(); }
-        vector_view<T> back() { return begin()[this->_rows - 1]; }
+        reference operator[](difference_type i) const {
+            return reference((base + i).base, _major);
+        }
+        
+        const T& operator()(difference_type i, difference_type j) const {
+            return (base + i).base[j];
+        }
+                
+        reference front() const { return reference(base.base, _major); }
+        reference back() const { return reference((base + _minor - 1).base, _major); }
         
         matrix_view<T> sub(ptrdiff_t i,
                            ptrdiff_t j,
-                           ptrdiff_t r,
-                           ptrdiff_t c) {
+                           ptrdiff_t minor,
+                           ptrdiff_t major) const {
             assert(0 <= i);
             assert(0 <= j);
-            assert(0 <= r);
-            assert(i + r <= this->_rows);
-            assert(0 <= c);
-            assert(j + c <= this->_columns);
-            return matrix_view<T>(this->_begin + i * this->_stride + j, c, this->_stride, r);
+            assert(0 <= minor);
+            assert(i + minor <= _minor);
+            assert(0 < major);
+            assert(j + major <= _major);
+            return matrix_view(stride_iterator<T>(base.base + j,
+                                                  base._stride) + i,
+                               minor,
+                               major);
         }
         
-        T& operator()(ptrdiff_t i, ptrdiff_t j) {
-            assert(i >= 0);
-            assert(j >= 0);
-            assert(i < this->_rows);
-            assert(j < this->_columns);
-            return *(this->_begin + i * this->_stride + j);
+        void print() const {
+            for (auto&& row : *this) {
+                for (auto&& value : row)
+                    std::cout << value << ' ';
+                std::cout << '\n';
+            }
         }
         
-        T& operator()(simd_long2 ij) {
-            return operator()(ij.x, ij.y);
+        T* data() {
+            return base.base;
         }
-        
-        void swap(matrix_view<T> v) {
-            for (ptrdiff_t i = 0; i != this->_rows; ++i)
-                operator[](i).swap(v[i]);
-        }
-        
-        matrix_view& operator/=(const T& x) {
-            for (ptrdiff_t i = 0; i != this->_rows; ++i)
-                for (ptrdiff_t j = 0; j != this->_columns; ++j)
-                    operator()(i, j) /= x;
-            return *this;
-        }
-        
-        matrix_view& operator*=(const T& x) {
-            for (ptrdiff_t i = 0; i != this->_rows; ++i)
-                for (ptrdiff_t j = 0; j != this->_columns; ++j)
-                    operator()(i, j) *= x;
-            return *this;
-        }
-        
-        matrix_view& operator+=(const_matrix_view<T> x) {
-            for (ptrdiff_t i = 0; i != this->_rows; ++i)
-                for (ptrdiff_t j = 0; j != this->_columns; ++j)
-                    operator()(i, j) += x(i, j);
-            return *this;
-        }
-        
-        matrix_view& operator-=(const_matrix_view<T> x) {
-            for (ptrdiff_t i = 0; i != this->_rows; ++i)
-                for (ptrdiff_t j = 0; j != this->_columns; ++j)
-                    operator()(i, j) -= x(i, j);
-            return *this;
-        }
-        
-        matrix_view& operator*=(const_matrix_view<T> x) {
-            for (ptrdiff_t i = 0; i != this->_rows; ++i)
-                for (ptrdiff_t j = 0; j != this->_columns; ++j)
-                    operator()(i, j) *= x(i, j);
-            return *this;
-        }
-        
-        
-    }; // struct matrix_view<T>
-    
-    template<typename T>
-    void swap(matrix_view<T> a, matrix_view<T> b) {
-        a.swap(b);
-    }
-    
-} // namespace manic
 
-#endif /* matrix_view_h */
+        const T* data() const {
+            return base.base;
+        }
+        
+        std::size_t bytes_per_row() const {
+            return base._stride;
+        }
+
+    }; // struct matrix_view
+    
+} // namespace wry
+
+#endif /* matrix_view_hpp */
+

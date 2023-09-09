@@ -14,9 +14,9 @@
 #include <cstring>    // strlen
 #include <ostream>    // ostream
 
+#include "array_view.hpp"
 #include "common.hpp" // u8, u32
 #include "unicode.hpp"
-#include "const_vector_view.hpp"
 #include "hash.hpp"
 #include "serialize.hpp"
 
@@ -24,7 +24,7 @@ namespace wry {
     
     struct string_view {
         
-        // almost a const_vector_view<u8>, but utf8 iterators and no size
+        // almost an array_view<u8>, but utf8 iterators and no size
         
         using const_iterator = utf8_iterator;
         using iterator = const_iterator;
@@ -72,8 +72,9 @@ namespace wry {
         string_view operator--(int) { assert(!empty()); string_view old{*this}; --b; return old; }
         explicit operator bool() const { return a != b; }
         
-        const_vector_view<u8> as_bytes() const {
-            return const_vector_view<u8>(a._ptr, b._ptr);
+        array_view<const byte> as_bytes() const {
+            return array_view<const byte>(reinterpret_cast<const byte*>(a._ptr),
+                                          reinterpret_cast<const byte*>(b._ptr));
         }
         
     }; // struct string_view

@@ -64,10 +64,10 @@ namespace wry {
         
         // pointer find
         for (auto j : v) {
-            printf("find %d -> %d\n", j.first, j.second);
+            //printf("find %d -> %d\n", j.first, j.second);
             auto p = b._inner.pfind(j.first);
             assert(p && (*p == j));
-            printf("    found {%d, %d}\n", p->first, p->second);
+            //printf("    found {%d, %d}\n", p->first, p->second);
         }
         
         // pointer find absent

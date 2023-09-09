@@ -12,11 +12,6 @@ using namespace metal;
 
 #include "ShaderTypes.h"
 
-enum AAPLRasterOrderGroup {
-    AAPLRasterOrderGroupGBuffer,
-    AAPLRasterOrderGroupLighting,
-};
-
 # pragma mark - Deferred physically-based rendering
 
 // Physically-Based Rendering functions
@@ -33,7 +28,7 @@ enum AAPLRasterOrderGroup {
 //
 //     [3] https://blog.selfshadow.com/publications/s2012-shading-course/burley/s2012_pbs_disney_brdf_notes_v3.pdf
 //
-// which describes the lighting model used in Wreck-It Ralph by Disney
+// which describes the lighting model used by Disney in Wreck-It Ralph
 
 struct DeferredGBufferVertexShaderOutput
 {
@@ -320,7 +315,7 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     float metallic = float(gbuffer.albedoMetallic.a);
     float3 N = float3(gbuffer.normalRoughness.xyz);
     float roughness = float(gbuffer.normalRoughness.w);
-    float occlusion = 1.0f;
+    [[maybe_unused]] float occlusion = 1.0f;
     float depth = gbuffer.depth;
 
     float3 V = -normalize(in.direction.xyz);
@@ -814,3 +809,220 @@ fragmentShader_sdf(RasterizerData in [[stage_in]],
     return in.color * float4(a, a, a, c * (1 - b) + b);
 }
 
+
+struct TrivialVertexFunctionOutput {
+    float4 position [[position]];
+    float4 coordinate;
+    
+};
+
+[[vertex]] TrivialVertexFunctionOutput TrivialVertexFunction(uint vertex_id [[vertex_id]],
+                                                             const device float4* vertices [[ buffer(AAPLBufferIndexVertices)]]) {
+    float4 position = vertices[vertex_id];
+    TrivialVertexFunctionOutput out;
+    out.position = position;
+    out.coordinate.x = position.x * 0.5f + 0.5f;
+    out.coordinate.y = position.y * -0.5f + 0.5f;
+    return out;
+}
+
+[[fragment]] half4 TrivialFragmentFunction(TrivialVertexFunctionOutput stage_in [[stage_in]],
+                                            texture2d<half> texture [[ texture(AAPLTextureIndexColor) ]]) {
+    constexpr sampler linearSampler(mag_filter::linear,
+                                    min_filter::linear);
+    return texture.sample(linearSampler, stage_in.coordinate.xy);
+}
+
+
+constant bool has_per_draw_position_transform [[function_constant(AAPLFunctionConstantIndexHasPerDrawPositionTransform)]];
+constant bool has_per_instance_position_transform [[function_constant(AAPLFunctionConstantIndexHasPerInstancePositionTransform)]];
+constant bool has_per_draw_coordinate_transform [[function_constant(AAPLFunctionConstantIndexHasPerDrawCoordinateTransform)]];
+constant bool has_per_instance_coordinate_transform [[function_constant(AAPLFunctionConstantIndexHasPerInstanceCoordinateTransform)]];
+constant bool has_per_draw_color_transform [[function_constant(AAPLFunctionConstantIndexHasPerDrawColorTransform)]];
+
+struct direct_vertex_per_draw {
+    float4x4 position_transform;
+    float4x4 coordinate_transform;
+};
+
+struct direct_vertex_per_instance {
+    float4x4 position_transform;
+    float4x4 coordinate_transform;
+};
+
+struct direct_vertex_stage_in {
+    float4 position [[attribute(AAPLAttributeIndexPosition)]];
+    float4 coordinate [[attribute(AAPLAttributeIndexCoordinate)]];
+};
+
+struct direct_fragment_per_draw {
+    half4x4 color_transform;
+};
+
+struct direct_fragment_stage_in {
+    float4 position [[position]];
+    float4 coordinate;
+};
+
+struct direct_fragment_stage_out {
+    half4 color [[color(AAPLColorIndexColor)]];
+};
+
+[[vertex]] auto
+direct_vertex_function(uint vertex_id [[vertex_id]],
+                       uint instance_id [[instance_id]],
+                       direct_vertex_stage_in stage_in [[stage_in]],
+                       constant direct_vertex_per_draw& per_draw [[buffer(AAPLBufferIndexUniforms)]],
+                       device const direct_vertex_per_instance* per_instance[[buffer(AAPLBufferIndexInstanced)]])
+-> direct_fragment_stage_in
+{
+    direct_fragment_stage_in stage_out;
+    
+    float4 position;
+    position = stage_in.position;
+    
+    float4x4 position_transform;
+    if (has_per_draw_position_transform) {
+        position_transform = per_draw.position_transform;
+    }
+    if (has_per_instance_position_transform) {
+        position_transform = per_instance[instance_id].position_transform;
+    }
+    
+    stage_out.position = position_transform * position;
+    
+    float4 coordinate;
+    coordinate = stage_in.coordinate;
+
+    float4x4 coordinate_transform;
+    if (has_per_draw_coordinate_transform)
+        coordinate_transform = per_draw.coordinate_transform;
+    if (has_per_instance_coordinate_transform)
+        coordinate = per_instance[instance_id].coordinate_transform * coordinate;
+    stage_out.coordinate = coordinate;
+    
+    return stage_out;
+};
+
+
+[[fragment]] auto
+direct_fragment_function(direct_fragment_stage_in stage_in [[stage_in]],
+                         constant direct_fragment_per_draw& per_draw [[buffer(AAPLBufferIndexUniforms)]],
+                         texture2d<half> texture_color [[texture(AAPLTextureIndexColor)]])
+-> direct_fragment_stage_out {
+    sampler bilinear(mag_filter::linear, min_filter::linear);
+    direct_fragment_stage_out stage_out;
+    half4 color;
+    color = texture_color.sample(bilinear, stage_in.coordinate.xy);
+    
+    half4x4 color_transform;
+    color_transform = per_draw.color_transform;
+    color = color_transform * color;
+    
+    stage_out.color = color;
+    return stage_out;
+}
+
+
+
+
+
+constant float3 kRec709Luma = float3(0.2126, 0.7152, 0.0722);
+
+[[kernel]] void DepthProcessing(texture2d<float, access::write> outTexture [[texture(0)]],
+                                texture2d<float, access::read> luminanceTexture [[texture(1)]],
+                                texture2d<float, access::sample> maskTexture [[texture(2)]],
+                                uint2 thread_position_in_grid [[thread_position_in_grid]]) {
+    
+    constexpr sampler linearSampler(mag_filter::linear,
+                                    min_filter::linear,
+                                    s_address::clamp_to_zero,
+                                    t_address::clamp_to_zero);
+    
+    // (output) coordinates
+    
+    uint i = thread_position_in_grid.x;
+    uint j = thread_position_in_grid.y;
+
+    float4 result = 0.0f;
+    
+    uint w = outTexture.get_width();
+    uint h = outTexture.get_height();
+    
+    float s = (i + 0.5) / w;
+    float t = (j + 0.5) / h;
+
+    float tanTheta = (t - 0.5) * 2.0 * 95.0 / 250.0;
+    float f = 140.0;
+
+    
+    /*
+     
+     // debug output
+     
+    result.g = maskTexture.sample(linearSampler, float2(s, t)).r;
+    result.r = luminanceTexture.read(uint2(i, j)).r;
+    outTexture.write(result, thread_position_in_grid);
+    return;
+     
+     */
+    
+    //result.g = luminanceTexture.read(uint2(i, j)).r;
+
+    
+    // simulation:
+
+    /*
+    float d = 250.0;
+    float c = tanTheta * d;
+    
+    uint k = i;
+    float a = (k + 0.5) / h * 220.0f * 2.0f + 10.0f;
+
+    float b = mix(a, c, f / d) / 240.0f;
+    
+    result.b = maskTexture.sample(linearSampler, float2(0.5, b)).g;
+
+    outTexture.write(result, thread_position_in_grid);
+     */
+    
+    
+    // computation
+    
+    float d = 200.0 + s * 240.0;
+    float c = tanTheta * d;
+    
+    for (uint k = 0; k != h; ++k) {
+        float a = (k + 0.5) / h * 220.0f + 10.0f;
+        float b = mix(a, c, f / d) / 240.0f;
+        
+        float s1 = dot(luminanceTexture.read(uint2(k, j)).rgb, kRec709Luma);
+        float s2 = maskTexture.sample(linearSampler, float2(0.5, b)).g;
+                                         
+        result += s1 * s2;
+                   
+    }
+    
+    // intuitively:
+    //
+    // we have proposed a specific point in space and a specifc light position
+    // if the point is inside the shadow volume of the light, it should be dark
+    // if the point is illuminated by the light, it will depend on the surface
+    // properties, which we don't know
+    //
+    // thus, the brightness of a shadowed point counts against the hypothesis;
+    // we get no depth information from a lit point.
+    //
+    // so, accumulate when shadowed
+    
+    // P(x) ~ e(-2x)
+    //
+    // int_0^1 e(-2x) dx = -1/2 e^(-2x) |_0^1 = -1/2 (e^-2) + 1/2 = 0.432
+
+    result = 1.0 - exp(-result);
+    
+
+    outTexture.write(result, thread_position_in_grid);
+
+    
+}

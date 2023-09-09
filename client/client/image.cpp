@@ -31,7 +31,7 @@ namespace wry {
     // perceptually more distinguishable.  GPU makes it free.  Makes meddling
     // with the images hard though.
     
-    image from_png(string_view v) {
+    matrix<RGBA8Unorm_sRGB> from_png(string_view v) {
         png_image a;
         memset(&a, 0, sizeof(a));
         a.version = PNG_IMAGE_VERSION;
@@ -40,54 +40,49 @@ namespace wry {
             abort();
         }
         a.format = PNG_FORMAT_RGBA;
-        image c(a.height, a.width);
-        if (!png_image_finish_read(&a, nullptr, c.data(), (png_int_32) c.stride() * sizeof(pixel), nullptr)) {
+        matrix<RGBA8Unorm_sRGB> result(a.height, a.width);
+        if (!png_image_finish_read(&a, nullptr, result.data(), (png_int_32) result.bytes_per_row(), nullptr)) {
             printf("png_image_finish_read -> \"%s\"\n", a.message);
             abort();
         }
         png_image_free(&a);
-        return c;
+        return result;
     }
     
-    imagef from_png_and_multiply_alpha_f(string_view v) {
-        image c = from_png(v);
-        imagef d(c.height(), c.width());
-        for (std::size_t i = 0; i != c.height(); ++i) {
-            for (std::size_t j = 0; j != c.width(); ++j) {
-                simd_uchar4 a = c(i, j);
-                float alpha = a.a / 255.0f;
-                d(i, j) = simd_float4{
-                    from_sRGB(a.r / 255.0f) * alpha,
-                    from_sRGB(a.g / 255.0f) * alpha,
-                    from_sRGB(a.b / 255.0f) * alpha,
-                    alpha
-                };
-                //printf("%g\n", d(i, j).r);
+    matrix<simd_float4> multiply_alpha(const matrix<RGBA8Unorm_sRGB>& source) {
+        matrix<simd_float4> result(source.get_minor(), source.get_major());
+        for (std::size_t i = 0; i != source.get_minor(); ++i) {
+            for (std::size_t j = 0; j != source.get_major(); ++j) {
+                const RGBA8Unorm_sRGB& x = source(i, j);
+                float alpha = x.a;
+                result(i, j) = simd_make_float4(x.r * alpha,
+                                                x.g * alpha,
+                                                x.b * alpha,
+                                                alpha);
             }
         }
-        return d;
+        return result;
     }
     
-    image from_png_and_multiply_alpha(string_view v) {
-        // timer _((const char*) v.a._ptr);
-        image c = from_png(v);
-        multiply_alpha(c);
-        return c;
+    void multiply_alpha_inplace(matrix<RGBA8Unorm_sRGB>& target) {
+        for (auto&& row : target)
+            for (auto&& x : row) {
+                uchar* p = _multiply_alpha_table[x.a._];
+                x.r._ = p[x.r._];
+                x.g._ = p[x.g._];
+                x.b._ = p[x.b._];
+            }
     }
     
-    void to_png(const image& img, const char* filename) {
-        
-        image img2(img);
-        
-        // divide alpha?
-        
-        png_image a;
-        memset(&a, 0, sizeof(a));
+    void to_png(const matrix<RGBA8Unorm_sRGB>& source, string_view filename) {
+        png_image a = {};
         a.format = PNG_FORMAT_RGBA;
-        a.height = (png_uint_32) img2.rows();
+        a.height = (png_uint_32) source.get_minor();
         a.version =  PNG_IMAGE_VERSION;
-        a.width = (png_uint_32) img2.columns();
-        png_image_write_to_file(&a, filename, 0, img2.data(), (png_int_32) img2.stride() * sizeof(pixel), nullptr);
+        a.width = (png_uint_32) source.get_major();
+        string filename0(filename);
+        png_image_write_to_file(&a, filename0.c_str(), 0, source.data(),
+                                (png_int_32) source.bytes_per_row(), nullptr);
         std::cout << a.message << std::endl;
         png_image_free(&a);
     }
@@ -124,24 +119,7 @@ namespace wry {
         } while (++color);
         return p;
     }();
-    
-    void multiply_alpha(image& img) {
-        // To premultiply sRGB data we have to convert the color channel from
-        // sRGB to linear, multiply by alpha, and then convert back to sRGB, which
-        // is a whole lotta floating-point math
         
-        for (auto&& row : img)
-            for (auto&& px : row) {
-                px.r = _multiply_alpha_table[px.a][px.r];
-                px.g = _multiply_alpha_table[px.a][px.g];
-                px.b = _multiply_alpha_table[px.a][px.b];
-                
-            }
-        
-        // sprintf(s, "%.2f ms | %lu quads\n%lux%lu\nf%d", (new_t - old_t) * 1e-6, n, _width, _height, frame);
-        
-    }
-    
     u8 (*_divide_alpha_table)[256] = []() {
         u8 (*p)[256] = (u8 (*)[256]) malloc(256 * 256);
         // We expect to have long blocks of alpha = 0 or alpha = 255, so to be
@@ -164,6 +142,7 @@ namespace wry {
     }();
     
     
+    /*
     void divide_alpha(image& img) {
         assert(false); // this is broken for sRGB
         for (auto&& row : img)
@@ -173,7 +152,7 @@ namespace wry {
                 px.b = _divide_alpha_table[px.a][px.b];
             }
     }
-    
+    */
     
     /*
      void halve(image& img) {
@@ -207,11 +186,14 @@ namespace wry {
      }
      }*/
     
-    void draw_rect(image& img, ptrdiff_t x, ptrdiff_t y, ptrdiff_t width, ptrdiff_t height, pixel c) {
+    /*
+    template<typename T>
+    void draw_rect(image<T>& img, ptrdiff_t x, ptrdiff_t y, ptrdiff_t width, ptrdiff_t height, T c) {
         for (auto j = y; j != y + height; ++j)
             for (auto i = 0; i != x + width; ++i)
                 img(i, j) = c;
     }
+     */
     
     /*
      void image::clear(pixel c) {
@@ -233,6 +215,7 @@ namespace wry {
     // All these image filtering operations are broken.  It is not enough that
     // the
     
+    /*
     void blur(matrix_view<pixel> a, const_matrix_view<pixel> b) {
         assert(false); // sRGB
         std::vector<double> c(5, 0.0);
@@ -345,6 +328,7 @@ namespace wry {
         }
         return b;
     }
+     */
 
         
 }
