@@ -173,13 +173,13 @@ namespace wry {
     struct raw_vector {
         
         T* _allocation;
-        isize _capacity;
+        ptrdiff_t _capacity;
         
         raw_vector() : _allocation(nullptr), _capacity(0) {}
         
         raw_vector(const raw_vector&) = delete;
         raw_vector(raw_vector&& v) : raw_vector() { swap(v); }
-        explicit raw_vector(isize capacity) {
+        explicit raw_vector(ptrdiff_t capacity) {
 #if defined _WIN64
             HANDLE heap = GetProcessHeap();
             _allocation = (T*) HeapAlloc(heap, HEAP_ZERO_MEMORY, capacity * sizeof(T));
@@ -193,7 +193,7 @@ namespace wry {
             _capacity = capacity;
 #endif
         }
-        raw_vector(T* ptr, isize n) : _allocation(ptr), _capacity(n) {}
+        raw_vector(T* ptr, ptrdiff_t n) : _allocation(ptr), _capacity(n) {}
         
         ~raw_vector() {
 #if defined _WIN64
@@ -212,14 +212,14 @@ namespace wry {
             swap(_capacity, v._capacity);
         }
         
-        isize capacity() const { return _capacity; }
+        ptrdiff_t capacity() const { return _capacity; }
         
         // Unsafe methods
         
-        isize size() const { return _capacity; }
+        ptrdiff_t size() const { return _capacity; }
         T* begin() const { return _allocation; }
         T* end() const { return _allocation + _capacity; }
-        T& operator[](isize i) const { return _allocation[i]; }
+        T& operator[](ptrdiff_t i) const { return _allocation[i]; }
         
     };
     

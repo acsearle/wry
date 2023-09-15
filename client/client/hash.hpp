@@ -26,30 +26,30 @@ namespace wry {
     
     class rand {
         
-        u64 _x;
+        uint64_t _x;
         
     public:
         
-        explicit rand(u64 seed = 0)
+        explicit rand(uint64_t seed = 0)
         : _x(4101842887655102017ull) {
             _x ^= seed;
         }
         
-        u64 operator()() {
+        uint64_t operator()() {
             _x ^= _x >> 21; _x ^= _x << 35; _x ^= _x >> 4;
             return _x * 2685821657736338717ull;
         }
         
-        using result_type = u64;
-        static constexpr u64 min() { return 1; }
-        static constexpr u64 max() { return -1ull; }
+        using result_type = uint64_t;
+        static constexpr uint64_t min() { return 1; }
+        static constexpr uint64_t max() { return -1ull; }
         
     };
     
     template<typename T = rand>
     struct uniform {
         T _x;
-        explicit uniform(u64 seed = 0)
+        explicit uniform(uint64_t seed = 0)
         : _x(seed) {
         }
         double operator()() {
@@ -64,7 +64,7 @@ namespace wry {
         
     public:
         
-        explicit normal(u64 seed = 0) : _x(seed) {}
+        explicit normal(uint64_t seed = 0) : _x(seed) {}
         
         double operator()() {
             // normal deviate by ratio of uniforms
@@ -95,7 +95,7 @@ namespace wry {
     // unlike libc++'s trivial std::hash implementation, suitable for direct
     // use in hash tables (in non-adversarial environments)
     //
-    inline u64 hash(u64 x) {
+    inline uint64_t hash(uint64_t x) {
         x = x * 3935559000370003845ull + 2691343689449507681ull;
         x ^= x >> 21; x ^= x << 37; x ^= x >> 4;
         x *= 4768777513237032717ull;
@@ -103,7 +103,7 @@ namespace wry {
         return x;
     }
     
-    inline u32 hash32(u32 x) {
+    inline uint32_t hash32(uint32_t x) {
         // NR does not provide a 32-bit version of hash(), but we construct one
         // from the 32-bit versions of the components.  Test to make sure we
         // haven't gotten unlucky.
@@ -119,7 +119,7 @@ namespace wry {
     //
     // https://en.wikipedia.org/wiki/Z-order_curve
     
-    constexpr u64 _morton_expand(u64 x) noexcept {
+    constexpr uint64_t _morton_expand(uint64_t x) noexcept {
         assert(x == (x & 0x00000000FFFFFFFF));
         x = (x | (x << 16)) & 0x0000FFFF0000FFFF;
         x = (x | (x <<  8)) & 0x00FF00FF00FF00FF;
@@ -129,7 +129,7 @@ namespace wry {
         return x;
     }
     
-    constexpr u64 _morton_contract(u64 x) noexcept {
+    constexpr uint64_t _morton_contract(uint64_t x) noexcept {
         assert(x == (x & 0x5555555555555555));
         x = (x | (x >>  1)) & 0x3333333333333333;
         x = (x | (x >>  2)) & 0x0F0F0F0F0F0F0F0F;
@@ -139,15 +139,15 @@ namespace wry {
         return x;
     }
     
-    constexpr u64 morton(u64 x, u64 y) noexcept {
+    constexpr uint64_t morton(uint64_t x, uint64_t y) noexcept {
         return _morton_expand(x) | (_morton_expand(y) << 1);
     }
     
-    constexpr u64 morton2(u64 x) noexcept {
+    constexpr uint64_t morton2(uint64_t x) noexcept {
         // We use the XOR-trick to swap bit ranges.  We achive interleaving
         // by swapping the middle quarters of the bit range, and then recursing
         // down.
-        u64 b = (x ^ (x >> 16)) & 0x00000000FFFF0000;
+        uint64_t b = (x ^ (x >> 16)) & 0x00000000FFFF0000;
         x ^= b | (b << 16);
         b = (x ^ (x >> 8)) & 0x0000FF000000FF00;
         x ^= b | (b << 8);
@@ -160,9 +160,9 @@ namespace wry {
         return x;
     }
     
-    constexpr u64 morton2_reverse(u64 x) noexcept {
+    constexpr uint64_t morton2_reverse(uint64_t x) noexcept {
         // Reverse the operation
-        u64 b = (x ^ (x >> 1)) & 0x2222222222222222;
+        uint64_t b = (x ^ (x >> 1)) & 0x2222222222222222;
         x ^= b | (b << 1);
         b = (x ^ (x >> 2)) & 0x0C0C0C0C0C0C0C0C;
         x ^= b | (b << 2);
@@ -177,16 +177,16 @@ namespace wry {
     
     // hash bytes
     
-    inline u64 hash_combine(const void* src, isize bytes, u64 already_hashed = 0) {
+    inline uint64_t hash_combine(const void* src, ptrdiff_t bytes, uint64_t already_hashed = 0) {
         while (bytes >= 8) {
-            u64 x;
+            uint64_t x;
             std::memcpy(&x, src, 8);
             already_hashed = hash(already_hashed ^ x);
             src = ((const unsigned char*) src) + 8;
             bytes -= 8;
         }
         if (bytes) {
-            u64 x = 0;
+            uint64_t x = 0;
             std::memcpy(&x, src, bytes);
             already_hashed = hash(already_hashed ^ x);
         }

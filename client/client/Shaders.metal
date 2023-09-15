@@ -291,6 +291,9 @@ meshLightingFragment(LightingVertexOutput in [[stage_in]],
     float3 Lo = (kD * diffuse + specular) * occlusion * uniforms.ibl_scale.rgb;
     
     out.color.rgb = half3(Lo);
+    out.color.a = 1.0f;
+
+    out.color = clamp(out.color, 0.0h, HALF_MAX);
 
     return out;
         
@@ -356,8 +359,12 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     
     float3 Lo = (kD * albedo * M_1_PI_F + specular) * NdotL * uniforms.radiance * shadowFactor;
     
+    // Lo = clamp(Lo, 0.0f, 4096.0f);
+    
     out.color.rgb = half3(Lo);
     out.color.a = 1.0h;
+    
+    out.color = clamp(out.color, 0.0f, HALF_MAX);
     
     return out;
     
@@ -782,7 +789,7 @@ fragmentShader_sdf(RasterizerData in [[stage_in]],
     
     // aka, the distance is in texels+8, in 4.4 fixed point
     //
-    // so, * 255.0 takes us back to original u8 value (linear interpolated)
+    // so, * 255.0 takes us back to original uchar value (linear interpolated)
     // - 128.0 to put the zero where it should be
     // / 16.0 to give signed distance in texels
     

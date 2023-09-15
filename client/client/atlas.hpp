@@ -27,9 +27,9 @@ namespace wry {
         subvertex b;
     };
     
-    inline sprite operator+(sprite s, simd_float2 x) {
-        s.a.position += simd_make_float4(x, 0, 0);
-        s.b.position += simd_make_float4(x, 0, 0);
+    inline sprite operator+(sprite s, simd_float2 xy) {
+        s.a.position.xy += xy;
+        s.b.position.xy += xy;
         return s;
     }
     

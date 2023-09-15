@@ -20,8 +20,8 @@ namespace wry {
         
         // utf-8 string
         //
-        // stored in a vector of u8.  to permit efficient c_str(), we guarantee
-        // that the allocation extends at least one u8 beyond end(), and that
+        // stored in a vector of uchar.  to permit efficient c_str(), we guarantee
+        // that the allocation extends at least one uchar beyond end(), and that
         // *end() == 0; this often leads to a
         //
         //     _bytes.push_back(0)
@@ -29,11 +29,11 @@ namespace wry {
         //
         // idiom
         
-        array<u8> _bytes;
+        array<uchar> _bytes;
         
         using const_iterator = utf8_iterator;
         using iterator = const_iterator;
-        using value_type = u32;
+        using value_type = uint;
         
         string() = default;
         
@@ -44,7 +44,7 @@ namespace wry {
             _bytes.pop_back();
         }
         
-        string(char const* p, usize n) {
+        string(char const* p, size_t n) {
             _bytes.reserve(n + 1);
             _bytes.assign(p, p + n);
             _bytes.push_back(0);
@@ -75,28 +75,28 @@ namespace wry {
             _bytes.pop_back();
         }
         
-        explicit string(array<u8>&& bytes) : _bytes(std::move(bytes)) {
+        explicit string(array<uchar>&& bytes) : _bytes(std::move(bytes)) {
             _bytes.push_back(0);
             _bytes.pop_back();
         }
         
-        operator array_view<const u8>() const {
-            return array_view<const u8>(_bytes.begin(), _bytes.end());
+        operator array_view<const uchar>() const {
+            return array_view<const uchar>(_bytes.begin(), _bytes.end());
         }
         operator string_view() const { return string_view(begin(), end()); }
         
         const_iterator begin() const { return utf8_iterator{_bytes.begin()}; }
         const_iterator end() const { return utf8_iterator{_bytes.end()}; }
         
-        u8 const* data() const { return _bytes.begin(); }
+        uchar const* data() const { return _bytes.begin(); }
         
-        array_view<const u8> as_bytes() const {
-            return array_view<const u8>(_bytes.begin(), _bytes.end());
+        array_view<const uchar> as_bytes() const {
+            return array_view<const uchar>(_bytes.begin(), _bytes.end());
         }
         
         char const* c_str() const { return (char const*) _bytes.begin(); }
         
-        void push_back(u32 c) {
+        void push_back(uint c) {
             if (c < 0x80) {
                 _bytes.push_back(c);
             } else if (c < 0x800) {
@@ -116,7 +116,7 @@ namespace wry {
             _bytes.pop_back();
         }
 
-        void push_front(u32 c) {
+        void push_front(uint c) {
             _bytes.push_back(0);
             _bytes._reserve_front(4);
             if (c < 0x80) {
@@ -137,28 +137,28 @@ namespace wry {
             _bytes.pop_back();
         }
 
-        u32 pop_back() {
+        uint pop_back() {
             assert(!empty());
             iterator e = end();
             --e;
-            u32 c = *e;
+            uint c = *e;
             // this is a good argument for const_vector_view having _end rather than
             // _size
             // _bytes._size = (e._ptr - _bytes._begin);
-            _bytes._end = const_cast<u8*>(e._ptr); // <-- fixme
+            _bytes._end = const_cast<uchar*>(e._ptr); // <-- fixme
             // _bytes._begin[_bytes._size] = 0;
             *(_bytes._end) = 0;
             return c;
         }
         
-        u32 pop_front() {
+        uint pop_front() {
             assert(!empty());
             iterator b = begin();
-            u32 c = *b;
+            uint c = *b;
             ++b;
             //_bytes._size -= (b._ptr - _bytes._begin);
             //_bytes._begin += (b._ptr - _bytes._begin);
-            _bytes._begin = const_cast<u8*>(b._ptr);
+            _bytes._begin = const_cast<uchar*>(b._ptr);
             return c;
         }
         
@@ -174,7 +174,7 @@ namespace wry {
         
         void append(const char* z) {
             auto n = strlen(z);
-            _bytes.append((u8 const*) z, (u8 const*) z + n + 1);
+            _bytes.append((uchar const*) z, (uchar const*) z + n + 1);
             _bytes.pop_back();
         }
         
@@ -183,15 +183,14 @@ namespace wry {
             _bytes.pop_back();
         }
         
-        /*
-         friend bool operator==(string const& a, string const& b) {
-         return std::equal(a.begin(), a.end(), b.begin(), b.end());
+         bool operator==(const string& other) const {
+             return std::equal(begin(), end(), other.begin(), other.end());
          }
-         
-         friend bool operator!=(string const& a, string const& b) {
-         return !(a == b);
-         }
-         */
+
+        bool operator==(const string_view& other) const {
+            return std::equal(begin(), end(), other.begin(), other.end());
+        }
+
     };
     
     inline string operator+(string_view a, char const* b) {
@@ -207,7 +206,7 @@ namespace wry {
     
     template<typename Deserializer>
     inline auto deserialize(placeholder<string>, Deserializer& d) {
-        return string{deserialize<array<u8>>(d)};
+        return string{deserialize<array<uchar>>(d)};
     }
     
     
@@ -229,8 +228,8 @@ namespace wry {
         
         struct implementation {
             
-            u8* _end;
-            u8 _begin[];
+            uchar* _end;
+            uchar _begin[];
             
             static implementation* make(string_view v) {
                 auto n = v.as_bytes().size();
@@ -296,13 +295,13 @@ namespace wry {
             return _body ? (char const*) _body->_begin : nullptr;
         }
         
-        u8 const* data() const {
-            return _body ? (u8 const*) _body->_begin : nullptr;
+        uchar const* data() const {
+            return _body ? (uchar const*) _body->_begin : nullptr;
         }
         
-        array_view<const byte> as_bytes() const {
-            return array_view<const byte>(_body ? reinterpret_cast<const byte*>(_body->_begin) : nullptr,
-                                          _body ? reinterpret_cast<const byte*>(_body->_end + 1) : nullptr);
+        array_view<const uchar> as_bytes() const {
+            return array_view<const uchar>(_body ? reinterpret_cast<const uchar*>(_body->_begin) : nullptr,
+                                          _body ? reinterpret_cast<const uchar*>(_body->_end + 1) : nullptr);
         }
         
         operator string_view() const {
@@ -316,7 +315,7 @@ namespace wry {
         
     };
     
-    
+    string _string_from_file(string_view);
     
 } // namespace manic
 

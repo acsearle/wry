@@ -125,7 +125,7 @@ namespace wry {
  
  template<typename T>
  T sum(const_vector_view<T> a, T b = 0.0) {
- for (isize i = 0; i != a.size(); ++i)
+ for (ptrdiff_t i = 0; i != a.size(); ++i)
  b += a(i);
  return b;
  }

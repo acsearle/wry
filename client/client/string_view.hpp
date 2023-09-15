@@ -15,30 +15,37 @@
 #include <ostream>    // ostream
 
 #include "array_view.hpp"
-#include "common.hpp" // u8, u32
+#include "common.hpp" // uchar, uint
 #include "unicode.hpp"
 #include "hash.hpp"
 #include "serialize.hpp"
+#include "utility.hpp"
 
 namespace wry {
     
     struct string_view {
         
-        // almost an array_view<u8>, but utf8 iterators and no size
+        // almost an array_view<uchar>, but utf8 iterators and no size
         
         using const_iterator = utf8_iterator;
         using iterator = const_iterator;
-        using value_type = u32;
+        using value_type = uint;
         
         const_iterator a, b;
         
         string_view() : a(nullptr), b(nullptr) {}
         string_view(char const* z) : a(z), b(z + strlen(z)) {}
-        string_view(char const* p, usize n) : a(p), b(p + n) {}
+        string_view(char const* p, size_t n) : a(p), b(p + n) {}
         string_view(char const* p, char const* q) : a(p), b(q) {}
-        string_view(u8 const* p, u8 const* q) : a{p}, b{q} {}
+        string_view(uchar const* p, uchar const* q) : a{p}, b{q} {}
         string_view(const_iterator p, const_iterator q) : a(p), b(q) {}
         string_view(string_view const&) = default;
+        
+        bool operator=(const string_view& other) {
+            a = other.a;
+            b = other.b;
+            return true;
+        }
         
         bool empty() const { return a == b; }
         
@@ -47,60 +54,67 @@ namespace wry {
         const_iterator cbegin() const { return a; }
         const_iterator cend() const { return b; }
         
-        u32 front() const { assert(!empty()); return *a; }
-        u32 back() const { assert(!empty()); utf8_iterator c(b); return *--c; }
+        uint front() const { assert(!empty()); return *a; }
+        uint back() const { assert(!empty()); utf8_iterator c(b); return *--c; }
         
-        friend bool operator==(string_view a, string_view b);
-        
-        friend bool operator!=(string_view a, string_view b);
-        
-        friend bool operator<(string_view a, string_view b) {
-            return std::lexicographical_compare(a.a, a.b, b.a, b.b);
+        bool operator==(const string_view& other) const {
+            return std::equal(a, b, other.a, other.b);
         }
         
-        friend bool operator>(string_view a, string_view b);
-        friend bool operator<=(string_view a, string_view b);
-        friend bool operator>=(string_view a, string_view b);
+        auto operator<=>(const string_view& other) const {
+            return lexicographical_compare_three_way(a, b, other.a, other.b);
+        }
         
+        array_view<const uchar> as_bytes() const {
+            return array_view<const uchar>(a._ptr,
+                                           b._ptr);
+        }
         
+        void pop_front() { assert(!empty()); ++a; }
+        void pop_back() { assert(!empty()); --b; }
+        void unsafe_pull_front() { --a; }
+        void unsafe_pull_back() { ++b; }
+
+        // terse and frankly dangerous syntax for parsing
         
-        // terse (dangerous?) operations useful for parsing
-        u32 operator*() const { assert(!empty()); return *a; }
-        string_view& operator++() { assert(!empty());++a; return *this; }
-        string_view& operator--() { assert(!empty()); --b; return *this; }
-        string_view operator++(int) { assert(!empty()); string_view old{*this}; ++a; return old; }
-        string_view operator--(int) { assert(!empty()); string_view old{*this}; --b; return old; }
+        uint operator*() const { assert(!empty()); return *a; }
         explicit operator bool() const { return a != b; }
+        bool operator++() { pop_front(); return true; }
+        bool operator--() { unsafe_pull_front(); return true; }
+        bool operator++(int) { unsafe_pull_back(); return true; }
+        bool operator--(int) { pop_back(); return true; }
         
-        array_view<const byte> as_bytes() const {
-            return array_view<const byte>(reinterpret_cast<const byte*>(a._ptr),
-                                          reinterpret_cast<const byte*>(b._ptr));
+        // string concatenation is often modelled as + but it is better thought
+        // of as noncommutative *
+        
+        // concatenate views, which must be consecutive
+        string_view operator*(const string_view& other) const {
+            assert(b == other.a);
+            return string_view(a, other.b);
         }
         
+        // division is the complementary operation to concatenation, removing
+        // a suffix so that for c = a * b we have a = c / b
+        
+        // difference of a view and its suffix
+        string_view operator/(const string_view& other) const {
+            assert(b == other.b);
+            assert(a._ptr <= other.a._ptr);
+            return string_view(a, other.a);
+        }
+                
     }; // struct string_view
-    
-    
-    inline bool operator==(string_view a, string_view b) {
-        return std::equal(a.a, a.b, b.a, b.b);
-    }
-    
-    
-    inline bool operator!=(string_view a, string_view b) { return !(a == b); }
-    inline bool operator>(string_view a, string_view b) { return b < a; }
-    inline bool operator<=(string_view a, string_view b) { return !(b < a); }
-    inline bool operator>=(string_view a, string_view b) { return !(a < b); }
-    
     
     inline std::ostream& operator<<(std::ostream& a, string_view b) {
         a.write((char const*) b.a._ptr, b.b._ptr - b.a._ptr);
         return a;
     }
     
-    inline u64 hash(string_view v) {
+    inline uint64_t hash(string_view v) {
         return hash_combine(v.as_bytes().begin(), v.as_bytes().size(), 0);
     }
     
-    inline u64 hash(const char* c) {
+    inline uint64_t hash(const char* c) {
         return hash(string_view(c));
     }
     

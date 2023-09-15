@@ -29,23 +29,23 @@ namespace wry {
         
         // ~mask selects bits 0, 2, 4, ... which contains x
         //  mask selects bits 1, 3, 5, ... which contains y
-        static constexpr u64 mask = 0xAAAA'AAAA'AAAA'AAAA;
+        static constexpr uint64_t mask = 0xAAAA'AAAA'AAAA'AAAA;
         
-        u64 data;
+        uint64_t data;
         
         // when an integer is represented as a subsequence of bits, we can
         // perform addition [subtraction] by setting the uninvolved bits to
         // one [zero] so that the carrys [borrows] propagate up to the next
         // representation bit
         
-        coordinate xinc() { return coordinate { bitselect((data |  mask) + 1, data, mask) }; }
-        coordinate xdec() { return coordinate { bitselect((data & ~mask) - 1, data, mask) }; }
-        coordinate yinc() { return coordinate { bitselect(data, (data | ~mask) + 1, mask) }; }
-        coordinate ydec() { return coordinate { bitselect(data, (data &  mask) - 1, mask) }; }
+        coordinate xinc() { return coordinate { simd_bitselect((data |  mask) + 1, data, mask) }; }
+        coordinate xdec() { return coordinate { simd_bitselect((data & ~mask) - 1, data, mask) }; }
+        coordinate yinc() { return coordinate { simd_bitselect(data, (data | ~mask) + 1, mask) }; }
+        coordinate ydec() { return coordinate { simd_bitselect(data, (data &  mask) - 1, mask) }; }
         
         coordinate sum(coordinate other) {
             return coordinate {
-                bitselect((data |  mask) + (other.data & ~mask),
+                simd_bitselect((data |  mask) + (other.data & ~mask),
                           (data | ~mask) + (other.data &  mask),
                           mask)
             };
@@ -53,7 +53,7 @@ namespace wry {
         
         coordinate difference(coordinate other) {
             return coordinate {
-                bitselect((data & ~mask) - (other.data & ~mask),
+                simd_bitselect((data & ~mask) - (other.data & ~mask),
                           (data &  mask) - (other.data &  mask),
                           mask)
             };
@@ -61,13 +61,13 @@ namespace wry {
         
         simd_int2 deinterleave() {
             simd_int2 yx = {};
-            u64 z = morton2_reverse(data);
+            uint64_t z = morton2_reverse(data);
             std::memcpy(&yx, &z, 8);
             return yx;
         }
         
         static coordinate interleave(simd_int2 yx) {
-            u64 z = {};
+            uint64_t z = {};
             std::memcpy(&z, &yx, 8);
             return coordinate { z };
         }
@@ -109,11 +109,11 @@ namespace wry {
         
         
         
-        table<u64, chunk*> _map;
+        table<uint64_t, chunk*> _map;
         simd_ulong2& operator()(simd_int2 yx) {
-            u64 a;
+            uint64_t a;
             std::memcpy(&a, &yx, 8);
-            u64 b = a & 0xFFFF'FFF0'FFFF'FFF0;
+            uint64_t b = a & 0xFFFF'FFF0'FFFF'FFF0;
             auto& r = _map[b];
             if (!r) {
                 auto p = new chunk;

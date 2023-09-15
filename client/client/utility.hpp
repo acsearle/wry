@@ -9,6 +9,7 @@
 #define utility_hpp
 
 #include <bit>
+#include <compare>
 #include <memory>
 #include <utility>
 
@@ -55,30 +56,12 @@ namespace wry {
         
     }
     
-    // from Rust
-    
-    using u8 = std::uint8_t;
-    using u16 = std::uint16_t;
-    using u32 = std::uint32_t;
-    using u64 = std::uint64_t;
-
-    using i8 = std::int8_t;
-    using i16 = std::int16_t;
-    using i32 = std::int32_t;
-    using i64 = std::int64_t;
-    
-    using isize = std::ptrdiff_t;
-    using usize = std::size_t;
-    
-    using iaddr = std::intptr_t;
-    using uaddr = std::uintptr_t;
-
-    // simd-like functions
-    
-    inline constexpr u64 bitselect(u64 a, u64 b, u64 c) {
-        return (a & ~c) | (b & c);
+    template<class I1, class I2>
+    constexpr auto lexicographical_compare_three_way(I1 f1, I1 l1, I2 f2, I2 l2) {
+        return lexicographical_compare_three_way(f1, l1, f2, l2, std::compare_three_way());
     }
-
+        
+  
     namespace detail {
         
         template<typename F, typename X>

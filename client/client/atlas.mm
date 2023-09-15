@@ -84,6 +84,7 @@ namespace wry {
         
         // for debug, also shade the split regions
         
+        /*
         {
             for (auto&& a : _packer._last_split) {
                 auto n = max(a.width(), a.height());
@@ -98,7 +99,7 @@ namespace wry {
                 [_texture replaceRegion:MTLRegionMake2D(a.a.x, a.a.y, a.width(), 1)
                             mipmapLevel:0
                               withBytes:b.data()
-                            bytesPerRow:b.size() * sizeof(RGBA8Unorm_sRGB)];
+                            bytesPerRow:a.width() * sizeof(RGBA8Unorm_sRGB)];
                 [_texture replaceRegion:MTLRegionMake2D(a.a.x, a.a.y, 1, a.height())
                             mipmapLevel:0
                               withBytes:b.data()
@@ -106,13 +107,13 @@ namespace wry {
                 [_texture replaceRegion:MTLRegionMake2D(a.a.x, a.a.y + a.height() - 1, a.width(), 1)
                             mipmapLevel:0
                               withBytes:b.data()
-                            bytesPerRow:b.size() * sizeof(RGBA8Unorm_sRGB)];
+                            bytesPerRow:a.width() * sizeof(RGBA8Unorm_sRGB)];
                 [_texture replaceRegion:MTLRegionMake2D(a.a.x + a.width() - 1, a.a.y, 1, a.height())
                             mipmapLevel:0
                               withBytes:b.data()
                             bytesPerRow:sizeof(RGBA8Unorm_sRGB)];
             }
-        }
+        }*/
         
         
         return s;

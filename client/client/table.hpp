@@ -695,25 +695,6 @@ namespace wry {
                 return e._kv.first == keylike;
             });
         }
-        /*
-        reference find_or_value_construct(auto&& key) {
-            std::uint64_t h = _inner._hasher.get_hash(key);
-            std::uint64_t i = _inner._insert_uninitialized(h, [&key](const Entry& e) {
-                return e._kv.first == key;
-            });
-            Entry* p = _inner._begin + i;
-            if (p->_hash) {
-                return *p;
-            } else {
-                p->_hash = h;
-                std::construct_at(&(p->_kv),
-                                  std::piecewise_construct,
-                                  std::forward_as_tuple(std::forward<decltype(k)>(k)),
-                                  std::tuple<>());
-                return {iterator{p, &_inner}, true};
-            }
-        }
-         */
         
         T& operator[](auto&& key) {
             std::uint64_t h = _inner._hasher.get_hash(key);
@@ -760,6 +741,399 @@ namespace wry {
             });
         }
     };
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    template<typename Key>
+    struct hash_set {
+        
+       
+        struct Entry {
+            
+            std::uint64_t _hash;
+            union {
+                Key _key;
+            };
+
+            
+            Entry()
+            : _hash(0) {
+            }
+            
+            Entry(const Entry& other)
+            : _hash(other._hash) {
+                if (_hash)
+                    std::construct_at(&_key, other._key);
+            }
+            
+            Entry(Entry&& other)
+            : _hash(other._hash) {
+                if (_hash)
+                    std::construct_at(&_key, std::move(other._key));
+            }
+            
+            ~Entry() {
+                if (_hash)
+                    std::destroy_at(&_key);
+            }
+            
+            Entry& operator=(Entry&& other) {
+                assert(other._hash);
+                if (_hash) {
+                    if (other._hash) {
+                        _key = std::move(other._key);
+                    } else {
+                        std::destroy_at(&_key);
+                    }
+                } else {
+                    if (other._hash) {
+                        std::construct_at(&_key, std::move(other._key));
+                    } else {
+                        //
+                    }
+                }
+                _hash = other._hash;
+                return *this;
+            }
+                        
+            bool operator!() const {
+                return !_hash;
+            }
+            
+            explicit operator bool() const {
+                return static_cast<bool>(_hash);
+            }
+            
+        };
+        
+        struct Hasher {
+            
+            std::uint64_t get_hash(const Entry& e) const {
+                return e._hash;
+            }
+            
+            std::uint64_t get_hash(const auto& keylike) const {
+                return hash(keylike) | 1;
+            }
+                        
+        };
+        
+        using value_type = const Key;
+        using reference = value_type&;
+        using pointer = value_type*;
+        using const_reference = const value_type&;
+        using const_pointer = const value_type*;
+        
+        struct iterator {
+            
+            Entry* _pointer;
+            basic_table<Entry, Hasher>* _context;
+            
+            Entry* _begin() {
+                return _context->begin();
+            }
+            
+            Entry* _end() {
+                return _context->end();
+            }
+            
+            void _advance() {
+                while ((_pointer != _end()) && (!*_pointer))
+                    ++_pointer;
+                
+            }
+            
+            void _retreat() {
+                do {
+                    --_pointer;
+                } while (!*_pointer);
+            }
+            
+            iterator(Entry* b, basic_table<Entry, Hasher>* c)
+            : _pointer(b)
+            , _context(c) {
+            }
+            
+            iterator& operator++() {
+                assert(_pointer != _end());
+                ++_pointer;
+                _advance();
+                return *this;
+            }
+            
+            iterator& operator--() {
+                _retreat();
+            }
+            
+            reference operator*() const {
+                return reinterpret_cast<reference>(_pointer->_key);
+            }
+            
+            pointer operator->() const {
+                return &(_pointer->_key);
+            }
+            
+            bool operator==(const iterator& other) const {
+                assert(_context == other._context);
+                return _pointer == other._pointer;
+            }
+            
+            auto operator<=>(const iterator& other) const {
+                assert(_context == other._context);
+                return _pointer <=> other._pointer;
+            }
+            
+        };
+        
+        
+        struct const_iterator {
+            
+            const Entry* _pointer;
+            const basic_table<Entry, Hasher>* _context;
+            
+            const Entry* _begin() {
+                return _context->begin();
+            }
+            
+            const Entry* _end() {
+                return _context->end();
+            }
+            
+            void _advance() {
+                while ((_pointer != _end()) && !*_pointer)
+                    ++_pointer;
+                
+            }
+            
+            void _retreat() {
+                do {
+                    --_pointer;
+                } while (!*_pointer);
+            }
+            
+            const_iterator(const Entry* b, const basic_table<Entry, Hasher>* c)
+            : _pointer(b)
+            , _context(c) {
+            }
+            
+            const_iterator& operator++() {
+                assert(_pointer != _end());
+                ++_pointer;
+                _advance();
+                return *this;
+            }
+            
+            const_iterator& operator--() {
+                _retreat();
+            }
+            
+            const_reference operator*() const {
+                return reinterpret_cast<const_reference>(_pointer->_key);
+            }
+            
+            const_pointer operator->() const {
+                return &reinterpret_cast<const_reference>(_pointer->_key);
+            }
+            
+            bool operator==(const const_iterator& other) const {
+                assert(_context == other._context);
+                return _pointer == other._pointer;
+            }
+            
+            auto operator<=>(const const_iterator& other) const {
+                assert(_context == other._context);
+                return _pointer <=> other._pointer;
+            }
+            
+            bool operator==(const iterator& other) const {
+                assert(_context == other._context);
+                return _pointer == other._pointer;
+            }
+            
+            auto operator<=>(const iterator& other) const {
+                assert(_context == other._context);
+                return _pointer <=> other._pointer;
+            }
+            
+        };
+        
+        
+        basic_table<Entry, Hasher> _inner;
+        
+        hash_set() = default;
+        hash_set(with_capacity_t, std::size_t count)
+        : _inner(with_capacity, count) {
+        }
+        
+        iterator begin() {
+            iterator it{_inner.begin(), &_inner};
+            it._advance();
+            return it;
+        }
+        
+        iterator end() {
+            return iterator(_inner.end(), &_inner);
+        }
+        
+        const_iterator begin() const {
+            const_iterator it{_inner.begin(), &_inner};
+            it._advance();
+            return it;
+        }
+        
+        const_iterator end() const {
+            return const_iterator(_inner.end(), &_inner);
+        }
+        
+        bool empty() const {
+            return !size();
+        }
+        
+        std::size_t size() const {
+            return _inner.count();
+        }
+        
+        void clear() {
+            _inner.clear();
+        }
+        
+        const_iterator find(const auto& keylike) const {
+            Entry* p = _inner.find(_inner._hasher.get_hash(keylike),
+                                   [&](const Entry& e) {
+                return e._key == keylike;
+            });
+            return const_iterator((p ? p : _inner.end()), &_inner);
+        }
+        
+        std::pair<iterator, bool> emplace(auto&& key) {
+            std::uint64_t h = _inner._hasher.get_hash(key);
+            std::uint64_t i = _inner._insert_uninitialized(h, [&key](Entry& e) {
+                return e._key == key;
+            });
+            Entry* p = _inner._begin + i;
+            if (p->_hash) {
+                return {iterator{p, &_inner}, false};
+            } else {
+                p->_hash = h;
+                std::construct_at(&(p->_kv),
+                                  std::forward<decltype(key)>(key));
+                return {iterator{p, &_inner}, true};
+            }
+        }
+        
+        
+        std::pair<iterator, bool> insert(auto&& key) {
+            std::uint64_t h = _inner._hasher.get_hash(key);
+            std::uint64_t i = _inner._insert_uninitialized(h,
+                                                           [&](Entry& e) {
+                return e._key == key;
+            });
+            Entry* p = _inner._begin + i;
+            if (p->_hash) {
+                return {iterator{p, &_inner}, false};
+            } else {
+                p->_hash = h;
+                std::construct_at(&(p->_key), std::forward<decltype(key)>(key));
+                return {iterator{p, &_inner}, true};
+            }
+        }
+        
+        template<typename InputIt>
+        void insert(InputIt first, InputIt last) {
+            for (; first != last; ++first)
+                insert(*first);
+        }
+        
+        std::pair<iterator, bool> insert_or_assign(auto&& key) {
+            std::uint64_t h = _inner._hasher.get_hash(key);
+            std::uint64_t i = _inner._insert_uninitialized(h,
+                                                           [&](Entry& e) {
+                return e._key == key;
+            });
+            Entry* p = _inner._begin + i;
+            if (p->_hash) {
+                p->_key = std::forward<decltype(key)>(key);
+                return {iterator{p, &_inner}, false};
+            } else {
+                p->_hash = h;
+                std::construct_at(&(p->_key),
+                                  std::forward<decltype(key)>(key));
+                return {iterator{p, &_inner}, true};
+            }
+        }
+        
+        
+        
+        
+        std::size_t erase(iterator pos) {
+            _inner._relocate_backward_from(pos._pointer - _inner._begin);
+        }
+        
+        // range erase makes no sense for unordered map
+        
+        std::size_t erase(const auto& keylike) {
+            return _inner.erase(_inner._hasher.get_hash(keylike),
+                                [&](const Entry& e) {
+                return e._kv.first == keylike;
+            });
+        }
+        
+        
+        const Key& operator[](auto&& key) {
+            std::uint64_t h = _inner._hasher.get_hash(key);
+            std::uint64_t i = _inner._insert_uninitialized(h, [&key](const Entry& e) {
+                return e._kv.first == key;
+            });
+            Entry* p = _inner._begin + i;
+            if (!(p->_hash)) {
+                p->_hash = h;
+                std::construct_at(&(p->_kv),
+                                  std::piecewise_construct,
+                                  std::forward_as_tuple(std::forward<decltype(key)>(key)),
+                                  std::tuple<>());
+            }
+            return p->_kv.second;
+        }
+        
+        const Key& at(auto&& key) const {
+            Entry* p = _inner.find(_inner._hasher.get_hash(key),
+                                   [&key](const Entry& e) {
+                return e._kv.first == key;
+            });
+            assert(p);
+            return p->_kv.second;
+        }
+        
+        Key& at(auto&& key) {
+            Entry* p = _inner.find(_inner._hasher.get_hash(key),
+                                   [&key](const Entry& e) {
+                return e._kv.first == key;
+            });
+            assert(p);
+            return p->_kv.second;
+        }
+        
+        std::size_t count(auto&& key) {
+            return _inner.find(key) ? 1 : 0;
+        }
+        
+        bool contains(auto&& key) {
+            return _inner.find(_inner._hasher.get_hash(key),
+                               [&key](const Entry& e) {
+                return e._key == key;
+            });
+        }
+    };
+    
+    
+    
+    
     
 } // namespace wry
 

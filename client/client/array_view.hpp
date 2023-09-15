@@ -89,6 +89,15 @@ namespace wry {
             _size -= count;
         }
         
+        void pull_front(ptrdiff_t count = 1) {
+            _begin -= count;
+            _size += count;
+        }
+        
+        void pull_back(ptrdiff_t count = 1) {
+            _size += count;
+        }
+        
         reference front() const {
             assert(_size);
             return _begin;
@@ -119,6 +128,16 @@ namespace wry {
         
         std::size_t size_in_bytes() const {
             return _size * sizeof(T);
+        }
+        
+        using B = std::conditional_t<std::is_const_v<T>, const unsigned char, unsigned char>;
+        
+        array_view<B> as_bytes() const {
+            return array_view<B>{(const unsigned char*) _begin, size_in_bytes()};
+        }
+        
+        array_view<T> sub(ptrdiff_t i, size_t n) const {
+            return array_view<T>{_begin + i, n};
         }
 
     };

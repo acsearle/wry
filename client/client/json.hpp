@@ -47,7 +47,7 @@ namespace wry {
         table<string, json> const& as_object() const;
         array<json> const& as_array() const;
         
-        i64 as_i64() const;
+        long as_long() const;
         
     }; // json
     

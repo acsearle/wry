@@ -21,8 +21,7 @@ namespace wry {
             float advance;
         };
         
-        // std::map<u32, glyph> charmap;
-        table<u32, glyph> charmap;
+        table<uint, glyph> charmap;
         
         float ascender;
         float descender;

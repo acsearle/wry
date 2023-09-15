@@ -24,13 +24,13 @@ namespace wry {
     
     void multiply_alpha_inplace(matrix<RGBA8Unorm_sRGB>& target);
 
-    inline f32 from_sRGB(f32 u) {
+    inline float from_sRGB(float u) {
         return ((u <= 0.04045f)
                 ? (u / 12.92f)
                 : (std::powf((u + 0.055f) / 1.055f, 2.4f)));
     }
     
-    inline f32 from_sRBG(u8 u) {
+    inline float from_sRBG(uchar u) {
         return _from_sRGB_table[u];
     }
     
@@ -43,7 +43,7 @@ namespace wry {
     }
      */
     
-    inline f32 to_sRGB(f32 u) {
+    inline float to_sRGB(float u) {
         return ((u <= 0.0031308f)
                 ? (u * 12.92f)
                 : (1.055f * powf(u, 1.0f / 2.4f) - 0.055f));
@@ -69,7 +69,7 @@ namespace wry {
     }
     */
     /*
-    extern u8 (*_divide_alpha_table)[256];
+    extern uchar (*_divide_alpha_table)[256];
     
     inline pixel divide_alpha(pixel x) {
         return pixel{
@@ -89,11 +89,11 @@ namespace wry {
             b = b * 0.5f + 0.5f;
             x(i, j).a = b;
         };
-        for (i64 j = 0; j != x.get_major(); ++j) {
+        for (size_t j = 0; j != x.get_major(); ++j) {
             foo(0, j);
             foo(x.get_minor() - 1, j);
         }
-        for (i64 i = 1; i != x.get_minor() - 1; ++i) {
+        for (size_t i = 1; i != x.get_minor() - 1; ++i) {
             foo(i, 0);
             foo(i, x.get_major() - 1);
         }

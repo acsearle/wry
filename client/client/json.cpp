@@ -19,14 +19,20 @@
 namespace wry {
     
     string _string_from_file(string_view v) {
+        // todo: filesystem for better length?
         string s(v);
         FILE* f = fopen(s.c_str(), "rb");
         assert(f);
         s.clear();
-        int c;
-        while ((c = fgetc(f)) != EOF)
-            s.push_back(c);
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        s._bytes.may_write_back(n + 1);
+        size_t m = fread(s._bytes.data(), 1, n, f);
         fclose(f);
+        s._bytes.did_write_back(m);
+        s._bytes.push_back(0);
+        s._bytes.pop_back();
         return s;
     }
     
@@ -75,9 +81,9 @@ namespace wry {
     table<string, json> const& json::as_object() const { return _ptr->as_object(); }
     array<json> const& json::as_array() const { return _ptr->as_array(); }
     
-    i64 json::as_i64() const {
+    long json::as_long() const {
         double a = _ptr->as_number();
-        i64 b = (i64) a;
+        long b = (long) a;
         assert(((double) b) == a);
         return b;
     }
@@ -121,7 +127,7 @@ namespace wry {
     double _number_from(string_view& v) {
         char* q;
         double d = std::strtod((char const*) v.a._ptr, &q);
-        v.a._ptr = (u8*) q;
+        v.a._ptr = (uchar*) q;
         return d;
     }
     

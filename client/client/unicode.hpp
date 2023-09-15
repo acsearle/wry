@@ -14,7 +14,7 @@
 
 namespace wry {
     
-    inline const u8* utf8advance(const u8* p) {
+    inline const uchar* utf8advance(const uchar* p) {
         if (((p[0] & 0b10000000) == 0b00000000))
             return p + 1;
         if (((p[0] & 0b11100000) == 0b11000000) &&
@@ -32,7 +32,7 @@ namespace wry {
         abort();
     }
     
-    inline bool utf8validatez(u8* p) {
+    inline bool utf8validatez(uchar* p) {
         for (;;) {
             if (p[0] == 0) {
                 return true;
@@ -56,7 +56,7 @@ namespace wry {
         }
     }
     
-    inline u8* utf8_encode(u32 a, u8 b[4]) {
+    inline uchar* utf8_encode(uint a, uchar b[4]) {
         if (a < 0x8F) {
             b[0] = a;
             return b + 1;
@@ -118,22 +118,22 @@ namespace wry {
     
     struct utf8_iterator {
         
-        u8 const* _ptr;
+        uchar const* _ptr;
         
         bool _is_continuation_byte() const {
             return (*_ptr & 0xC0) == 0x80;
         }
         
-        using difference_type = std::ptrdiff_t;
-        using value_type = u32;
-        using reference = u32;
+        using difference_type = ptrdiff_t;
+        using value_type = uint;
+        using reference = uint;
         using pointer = void;
         using iterator_category = std::bidirectional_iterator_tag;
         
         utf8_iterator() = default;
         
         explicit utf8_iterator(void const* ptr)
-        : _ptr((u8 const*) ptr) {
+        : _ptr((uchar const*) ptr) {
         }
         
         explicit utf8_iterator(std::nullptr_t) : _ptr(nullptr) {}
@@ -159,13 +159,13 @@ namespace wry {
             utf8_iterator a(*this); operator--(); return a;
         }
         
-        u32 operator*() const {
+        uint operator*() const {
             if (!(_ptr[0] & 0x80))
                 return *_ptr;
             return _deref_multibyte(); // slow path
         }
         
-        u32 _deref_multibyte() const {
+        uint _deref_multibyte() const {
             if ((_ptr[0] & 0xE0) == 0xC0)
                 return (((_ptr[0] & 0x1F) <<  6) |
                         ((_ptr[1] & 0x3F)      ));
@@ -181,29 +181,12 @@ namespace wry {
             abort();
         }
         
-        friend bool operator==(utf8_iterator a, utf8_iterator b) {
-            return a._ptr == b._ptr;
-        }
+        bool operator==(const utf8_iterator& other) const = default;
         
-        friend bool operator!=(utf8_iterator a, utf8_iterator b) {
-            return a._ptr != b._ptr;
+        bool operator==(std::nullptr_t) const {
+            return _ptr == nullptr;
         }
-        
-        friend bool operator==(utf8_iterator a, std::nullptr_t) {
-            return a._ptr == nullptr;
-        }
-        
-        friend bool operator==(std::nullptr_t, utf8_iterator b) {
-            return nullptr == b._ptr;
-        }
-        
-        friend bool operator!=(utf8_iterator a, std::nullptr_t) {
-            return a._ptr != nullptr;
-        }
-        
-        friend bool operator!=(std::nullptr_t, utf8_iterator b) {
-            return nullptr != b._ptr;
-        }
+
         
     }; // utf8_iterator
     

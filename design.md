@@ -570,3 +570,42 @@ N = L as the peak.
 Whatever the situation, we will be brightest when N lies in the LV plane,
 letting us constrain one of the degrees of freedom of N immediately.
 
+
+
+### Subdivision
+
+Suppose that edge a-b is the least-squared error representation of a quadratic
+curve,
+
+```
+f(x) = x^2
+
+e = \int_{-1}^{1} (f(x) - y)^2 dx
+  = \int (x^2 - y)^2 dx
+  = \int x^4 - 2x^2y + y^2 dx
+  = [ 1/5 x^5 - 2/3 x^3 y + x y^2 ] _{-1}^{+1}
+e = 2/5 - 4/3 y + 2 y^2
+```
+With minimum error at
+```
+0 = -4/3 + 4 y
+0 = -1/3 + y
+y = 1/3
+```
+and intercept
+```
+x = f^-1(y) = sqrt(1/3) = 0.577
+```
+Note that the endpoints of the line do not lie on the surface, it crosses
+the true curve twice.
+
+So, given the points (-1, 0), (+1, 0), (+3, 1) what curve is represented?
+
+
+
+Suppose we subdivide the line, then we get
+x,y = (+/- 1/2, +1/12)
+
+So, for a shape -1, +1, +3 -> 0, 0, 
+
+

@@ -26,7 +26,7 @@
 @property (nonatomic, nonnull, readonly) CAMetalLayer *metalLayer;
 @property (nonatomic, nullable) id<WryMetalViewDelegate> delegate;
 
-- (nonnull instancetype) initWithFrame:(CGRect)frame model:(std::shared_ptr<wry::model>)model_;
+- (nonnull instancetype) initWithFrame:(CGRect)frame;
 - (void)render;
 - (void)resizeDrawable:(CGFloat)scaleFactor;
 - (void)stopRenderLoop;

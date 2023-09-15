@@ -28,8 +28,6 @@
 @implementation WryMetalView
 {
     CVDisplayLinkRef _displayLink;
-    std::shared_ptr<wry::model> _model;
-    // AVAudioPlayer* _audio_player;
 }
 
 - (CALayer *)makeBackingLayer
@@ -39,12 +37,11 @@
     return _metalLayer = [CAMetalLayer layer];
 }
 
-- (nonnull instancetype) initWithFrame:(CGRect)frame model:(std::shared_ptr<wry::model>)model_
+- (nonnull instancetype) initWithFrame:(CGRect)frame
 {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 
     if ((self = [super initWithFrame:frame])) {
-        _model = model_;
         self.wantsLayer = YES;
         self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
     }
@@ -57,7 +54,6 @@
     [self stopRenderLoop];
     // ARC calls [super dealloc];
 }
-
 
 - (void)resizeDrawable:(CGFloat)scaleFactor
 {
@@ -110,16 +106,6 @@
     @synchronized(_metalLayer)
     {
         [_delegate renderToMetalLayer:_metalLayer];
-    }
-}
-
-- (void)viewDidMoveToWindow
-{
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    if (self.window) {
-        [super viewDidMoveToWindow];
-        [self setupCVDisplayLinkForScreen:self.window.screen];
-        [self resizeDrawable:self.window.screen.backingScaleFactor];
     }
 }
 
@@ -199,11 +185,17 @@ static CVReturn DispatchRenderLoop(CVDisplayLinkRef displayLink,
                                    CVOptionFlags* flagsOut,
                                    void* displayLinkContext)
 {
+    // At 120 Hz CVDisplayLink seems to fire two cycles in advance
+    
     @autoreleasepool
     {
+        //static uint64_t last = 0;
+        //printf("%lld\n", outputTime->hostTime - last);
+        //last = outputTime->hostTime;
         WryMetalView* view = (__bridge WryMetalView*)displayLinkContext;
         [view render];
     }
+        
     return kCVReturnSuccess;
 }
 
@@ -220,6 +212,12 @@ static CVReturn DispatchRenderLoop(CVDisplayLinkRef displayLink,
         // assert(cvReturn == kCVReturnSuccess);
         CVDisplayLinkRelease(_displayLink);
     }
+}
+
+- (BOOL)acceptsFirstResponder {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    // we accept first responder and chain to nextResponder, the big delegate
+    return YES;
 }
 
 - (void)viewDidChangeBackingProperties
@@ -243,17 +241,20 @@ static CVReturn DispatchRenderLoop(CVDisplayLinkRef displayLink,
     [self resizeDrawable:self.window.screen.backingScaleFactor];
 }
 
+- (void)viewDidMoveToWindow
+{
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    if (self.window) {
+        [super viewDidMoveToWindow];
+        [self setupCVDisplayLinkForScreen:self.window.screen];
+        [self resizeDrawable:self.window.screen.backingScaleFactor];
+    }
+}
 
 - (void)viewWillMoveToWindow:(NSWindow *)newWindow
 {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     [super viewWillMoveToWindow:newWindow];
-}
-
-- (BOOL)acceptsFirstResponder {
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    // we accept first responder and chain to nextResponder, the big delegate
-    return YES;
 }
 
 @end

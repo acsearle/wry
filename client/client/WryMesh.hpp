@@ -29,7 +29,7 @@
 
 -(instancetype _Nonnull)initWithDevice:(id<MTLDevice> _Nonnull)device;
 
--(void) drawWithRenderCommandEncoder:(id<MTLRenderCommandEncoder> _Nonnull)encoder;
+-(void) drawWithRenderCommandEncoder:(id<MTLRenderCommandEncoder> _Nonnull)encoder commandBuffer:(id<MTLCommandBuffer> _Nonnull)buffer;
 
 @end
 

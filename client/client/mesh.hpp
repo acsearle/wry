@@ -16,6 +16,7 @@
 
 #include "array.hpp"
 #include "image.hpp"
+#include "packed.hpp"
 #include "simd.hpp"
 #include "table.hpp"
 
@@ -90,7 +91,7 @@ namespace wry {
         
         struct edge {
             
-            usize indices[2];
+            size_t indices[2];
             
             bool operator==(const edge&) const = default;
             void flip() {
@@ -99,13 +100,13 @@ namespace wry {
             
         };
         
-        inline u64 hash(edge e) {
+        inline uint64_t hash(edge e) {
             return hash_combine(&e, sizeof(e));
         }
         
         struct triangle {
             
-            usize indices[3];
+            size_t indices[3];
             
             bool operator==(const triangle&) const = default;
             auto operator<=>(const triangle&) const = default;
@@ -144,14 +145,14 @@ namespace wry {
         }
 
         struct quad {
-            usize indices[4];
+            size_t indices[4];
             void flip() {
                 std::swap(indices[1], indices[3]);
             }
         };
 
         struct face {
-            array<usize> indices;
+            array<size_t> indices;
             void flip() {
                 std::reverse(std::begin(indices), std::end(indices));
             }
@@ -161,22 +162,28 @@ namespace wry {
             
             array<vertex> vertices;
             
+            array<simd_float4> positions;
+            array<simd_float4> coordinates;
+            array<simd_float4> tangents;
+            array<simd_float4> bitangents;
+            array<simd_float4> normals;
+
             array<edge> edges;
             array<quad> quads;
 
             array<face> faces;
             array<triangle> triangles;
-            array<usize> triangle_strip;
+            array<size_t> triangle_strip;
             
             array<MeshVertex> hack_MeshVertex;
             array<float4> hack_lines;
             array<uint> hack_triangle_strip;
             
-            float distance(usize i, usize j) {
+            float distance(size_t i, size_t j) {
                 return simd_distance(vertices[i].position.xyz, vertices[j].position.xyz);
             }
 
-            float distance_squared(usize i, usize j) {
+            float distance_squared(size_t i, size_t j) {
                 return simd_distance_squared(vertices[i].position.xyz, vertices[j].position.xyz);
             }
 
@@ -193,6 +200,20 @@ namespace wry {
                                     - vertices[t.indices[0]].position.xyz,
                                     vertices[t.indices[2]].position.xyz
                                     - vertices[t.indices[1]].position.xyz);
+            }
+            
+            float3 weighted_normal(triangle t) {
+                
+                float4 a = vertices[t.indices[0]].position;
+                float4 b = vertices[t.indices[1]].position;
+                float4 c = vertices[t.indices[2]].position;
+                
+                float3 d = normalize(b.xyz * a.w - a.xyz * b.w);
+                float3 e = normalize(c.xyz * a.w - a.xyz * c.w);
+                
+                float3 y = cross(d, e); // normal * sin\theta
+                
+                return y;
             }
             
             void add_quads_box(simd_float4 a, simd_float4 b) {
@@ -243,7 +264,7 @@ namespace wry {
                                           simd_float4{  0.0f,  0.0f,  0.0f,  1.0f, });
                 
                 auto foo = [&](quad q, float4x4 A) {
-                    for (usize& j : q.indices) {
+                    for (size_t& j : q.indices) {
                         vertex v = vertices[j];
                         j = vertices.size();
                         v.jacobian = A * v.jacobian;
@@ -263,17 +284,17 @@ namespace wry {
                 float4x4 C = simd_matrix_translate(a.xyz);
                 float4x4 T = C * B * A;
                                 
-                for (usize i = offset; i != vertices.size(); ++i) {
+                for (size_t i = offset; i != vertices.size(); ++i) {
                     vertices[i].jacobian = T * vertices[i].jacobian;
                 }
 
             }
             
-            void add_edges_circle(usize n) {
+            void add_edges_circle(size_t n) {
                 auto offset = vertices.size();
-                for (usize i = 0;; ++i) {
+                for (size_t i = 0;; ++i) {
                     vertex v;
-                    float theta = 2 * M_PI_F * i / n;
+                    float theta = 2 * M_PI * i / n;
                     float c = cos(theta);
                     float s = sin(theta);
                     v.coordinate = vector4(theta, 0.0f, 0.0f, 1.0f);
@@ -291,11 +312,11 @@ namespace wry {
                 }
             }
 
-            void add_edges_superquadric(usize n) {
+            void add_edges_superquadric(size_t n) {
                 auto offset = vertices.size();
-                for (usize i = 0;; ++i) {
+                for (size_t i = 0;; ++i) {
                     vertex v;
-                    float theta = 2 * M_PI_F * (i + 0.5f) / n;
+                    float theta = 2 * M_PI * (i + 0.5f) / n;
                     
                     float c = cos(theta);
                     float s = sin(theta);
@@ -325,11 +346,12 @@ namespace wry {
                     }});
                 }
             }
-            void add_face_disk(usize n) {
+            
+            void add_face_disk(size_t n) {
                 auto offset = vertices.size();
-                for (usize i = 0; i != n; ++i) {
+                for (size_t i = 0; i != n; ++i) {
                     vertex v;
-                    float theta = 2 * M_PI_F * i / n;
+                    float theta = 2 * M_PI * i / n;
                     float c = cos(theta);
                     float s = sin(theta);
                     v.coordinate = vector4(c, s, 0.0f, 1.0f);
@@ -345,16 +367,16 @@ namespace wry {
                 }
             }
 
-            void add_edges_polygon(usize n) {
-                usize offset = vertices.size();
+            void add_edges_polygon(size_t n) {
+                size_t offset = vertices.size();
                 float s = 0.0f;
-                for (usize i = 0; i != n; ++i) {
+                for (size_t i = 0; i != n; ++i) {
                     
                     vertex v0;
                     vertex v1;
                     
-                    float theta0 = 2 * M_PI_F * (i + 0) / n;
-                    float theta1 = 2 * M_PI_F * (i + 1) / n;
+                    float theta0 = 2 * M_PI * (i + 0) / n;
+                    float theta1 = 2 * M_PI * (i + 1) / n;
                     
                     v0.position = vector4(cos(theta0), sin(theta0), 0.0f, 1.0f);
                     v1.position = vector4(cos(theta1), sin(theta1), 0.0f, 1.0f);
@@ -411,7 +433,7 @@ namespace wry {
                     const float epsilon = 0.00034526698f;
                     const float k = 0.5f / epsilon;
                     float4x4 A, B;
-                    for (usize i = 0; i != 4; ++i) {
+                    for (size_t i = 0; i != 4; ++i) {
                         float4 delta = 0.0f;
                         delta[i] = epsilon;
                         A.columns[i] = (h(position + delta, coordinate) -
@@ -424,12 +446,12 @@ namespace wry {
                 transform_with_differentiable_function(d);
             }
             
-            void extrude(usize n, float4 delta = vector4(0.0f, 1.0f, 0.0f, 0.0f)) {
+            void extrude(size_t n, float4 delta = vector4(0.0f, 1.0f, 0.0f, 0.0f)) {
                 // extrude edges along a tangent space vector
-                for (usize i = 0; i != n; ++i) {
-                    for (usize j = 0; j != edges.size(); ++j) {
-                        usize j0 = edges[j].indices[0];
-                        usize j1 = edges[j].indices[1];
+                for (size_t i = 0; i != n; ++i) {
+                    for (size_t j = 0; j != edges.size(); ++j) {
+                        size_t j0 = edges[j].indices[0];
+                        size_t j1 = edges[j].indices[1];
                         vertex v0 = vertices[j0];
                         vertex v1 = vertices[j1];
                         vertex v2 = v0;
@@ -438,9 +460,9 @@ namespace wry {
                         v2.position += v2.jacobian * delta;
                         v3.coordinate += delta;
                         v3.position += v3.jacobian * delta;
-                        usize j2 = vertices.size();
+                        size_t j2 = vertices.size();
                         vertices.push_back(v2);
-                        usize j3 = vertices.size();
+                        size_t j3 = vertices.size();
                         vertices.push_back(v3);
                         edges[j].indices[0] = j2;
                         edges[j].indices[1] = j3;
@@ -449,34 +471,31 @@ namespace wry {
                 }
             }
             
-            // call f with usize& of every piece of geometry
+            // call f with size_t& of every piece of geometry
             void for_each_index(auto&& f) {
                 for (edge& e : edges)
-                    for (usize& i : e.indices)
+                    for (size_t& i : e.indices)
                         f(i);
                 for (triangle& t : triangles)
-                    for (usize& i : t.indices)
+                    for (size_t& i : t.indices)
                         f(i);
                 for (quad& q : quads)
-                    for (usize& i : q.indices)
+                    for (size_t& i : q.indices)
                         f(i);
                 for (face& g : faces)
-                    for (usize& i : g.indices)
+                    for (size_t& i : g.indices)
                         f(i);
             }
             
             void erase_unindexed_vertices() {
-                usize n = vertices.size();
-                array<usize> a;
-                a.resize(n);
-                for (usize i = 0; i != n; ++i)
-                    a[i] = 0;
-                for_each_index([&](usize& i) {
+                size_t n = vertices.size();
+                array<size_t> a(n, 0);
+                for_each_index([&](size_t& i) {
                     ++a[i];
                 });
                 {
-                    usize j = 0;
-                    for (usize i = 0; i != n; ++i) {
+                    size_t j = 0;
+                    for (size_t i = 0; i != n; ++i) {
                         if (a[i] > 0) {
                             if (j != i)
                                 vertices[j] = std::move(vertices[i]);
@@ -487,31 +506,31 @@ namespace wry {
                     printf("erasing %g%% of vertices\n", (100.0f * (n-j)) / n);
                     vertices.erase(vertices.begin() + j, vertices.end());
                 }
-                for_each_index([&](usize& i) {
+                for_each_index([&](size_t& i) {
                     i = a[i];
                 });
             }
             
             // groups nearby vertices and returns mapping from indices to the
             // index of a representative vertex of each group
-            array<usize> identify_colocated_vertices() {
-                usize n = vertices.size();
-                array<usize> a(n);
-                for (usize i = 0; i != n; ++i)
+            array<size_t> identify_colocated_vertices() {
+                size_t n = vertices.size();
+                array<size_t> a(n);
+                for (size_t i = 0; i != n; ++i)
                     a[i] = i;
                 // one dimensional sort against a pattern-defeating direction
                 float4 direction = simd_normalize(simd_make_float4(61, 59, 53, 47));
-                auto metric = [&](usize i) -> float {
+                auto metric = [&](size_t i) -> float {
                     return simd_dot(vertices[i].position, direction);
                 };
-                auto compare = [&](usize i, usize j) -> bool {
+                auto compare = [&](size_t i, size_t j) -> bool {
                     return metric(i) < metric(j);
                 };
                 std::sort(a.begin(), a.end(), compare);
                 
                 // b unscrambles a
-                array<usize> b(n);
-                for (usize i = 0; i != n; ++i)
+                array<size_t> b(n);
+                for (size_t i = 0; i != n; ++i)
                     b[a[i]] = i;
                 
                 float threshold = 0.00034526698f;
@@ -520,12 +539,12 @@ namespace wry {
                 threshold *= 100;
                 threshold2 *= 10000;
                 
-                usize count = 0;
-                usize j0 = 0;
-                for (usize i = 1; i != n; ++i) {
+                size_t count = 0;
+                size_t j0 = 0;
+                for (size_t i = 1; i != n; ++i) {
                     float4 vi = vertices[a[i]].position;
                     float dt = metric(a[i]) - threshold;
-                    for (usize j = j0; j != i; ++j) {
+                    for (size_t j = j0; j != i; ++j) {
                         float4 vj = vertices[a[j]].position;
                         float dj = metric(a[j]);
                         float d2 = simd_distance_squared(vi, vj);
@@ -542,7 +561,7 @@ namespace wry {
                     }
                 }
                 // remove one layer of indirection
-                for (usize i = 0; i != n; ++i)
+                for (size_t i = 0; i != n; ++i)
                     b[i] = a[b[i]];
                 printf("identify_colocated_vertices: %ld/%ld\n", count, n);
                 return b;
@@ -550,11 +569,11 @@ namespace wry {
             
             void colocate_similar_vertices() {
                 
-                array<usize> a = identify_colocated_vertices();
-                usize n = vertices.size();
+                array<size_t> a = identify_colocated_vertices();
+                size_t n = vertices.size();
                 assert(a.size() == n);
-                usize count = 0;
-                for (usize i = 0; i != n; ++i) {
+                size_t count = 0;
+                for (size_t i = 0; i != n; ++i) {
                     if (a[i] != i) {
                         vertices[i].position = vertices[a[i]].position;
                         ++count;
@@ -572,30 +591,30 @@ namespace wry {
                 // otherwise smooth surface, we should also harmonize
                 // similar positions
                 
-                usize n = vertices.size();
-                array<usize> a(n);
-                for (usize i = 0; i != n; ++i)
+                size_t n = vertices.size();
+                array<size_t> a(n);
+                for (size_t i = 0; i != n; ++i)
                     a[i] = i;
 
                 // we can use std::sort here because we are going to merge
                 // equivalent vertices
                 std::sort(a.begin(), a.end(),
-                          [&](usize x, usize y) {
+                          [&](size_t x, size_t y) {
                     return vertices[x] < vertices[y];
                 });
                 
                 // a[i] now holds the sorted order of vertices
                 
-                array<usize> b(n);
-                for (usize i = 0; i != n; ++i) {
+                array<size_t> b(n);
+                for (size_t i = 0; i != n; ++i) {
                     b[a[i]] = i;
                 }
                 
                 // b[i] now holds the reverse sort
 
                 // redirect duplicates to first occurrence
-                usize m = 0;
-                for (usize i = 1; i != vertices.size(); ++i) {
+                size_t m = 0;
+                for (size_t i = 1; i != vertices.size(); ++i) {
                     if (!(vertices[a[i-1]] < vertices[a[i]])) {
                         ++m;
                         a[i] = a[i-1];
@@ -604,7 +623,7 @@ namespace wry {
                 
                 printf("redirected %g%% vertices\n", (100.0f * m) / n);
                 
-                for_each_index([&](usize& i) {
+                for_each_index([&](size_t& i) {
                     i = a[b[i]];
                 });
                 
@@ -615,7 +634,7 @@ namespace wry {
             void triangulate() {
                 for (face& f : faces) {
                     if (f.indices.size() >= 3) {
-                        for (usize i = 1; i + 1 != f.indices.size(); ++i) {
+                        for (size_t i = 1; i + 1 != f.indices.size(); ++i) {
                             triangles.push_back(triangle{{
                                 f.indices[0],
                                 f.indices[i],
@@ -667,14 +686,45 @@ namespace wry {
                 }
             }
             
+            void repair_jacobian() {
+                for (auto& v : vertices) {
+                    v.normal = 0.0f;
+                }
+                for (auto t : triangles) {
+                    for (auto i = 0; i != 3; ++i) {
+                        auto a = vertices[t.indices[0]].position.xyz;
+                        auto b = vertices[t.indices[1]].position.xyz;
+                        auto c = vertices[t.indices[2]].position.xyz;
+                        auto d = simd_normalize(b - a);
+                        auto e = simd_normalize(c - a);
+                        auto f = simd_cross(d, e);
+                        auto g = simd_make_float4(f, 0.0);
+                        vertices[t.indices[0]].normal.xyz += f;
+                        t.rotate_left();
+                    }
+                }
+                for (auto& v : vertices) {
+                    v.normal.xyz = simd_normalize(v.normal.xyz);
+                    v.normal.w = 0;
+                    if (abs(v.normal.x) < 0.577f) {
+                        v.bitangent.xyz = simd_normalize(simd_cross(v.normal.xyz, simd_make_float3(1,0,0)));
+                    } else {
+                        v.bitangent.xyz = simd_normalize(simd_cross(v.normal.xyz, simd_make_float3(0,1,0)));
+                    }
+                    v.bitangent.w = 0;
+                    v.tangent.xyz = simd_normalize(simd_cross(v.normal.xyz, v.bitangent.xyz));
+                    v.tangent.w = 0;
+                }
+            }
+            
             void strip() {
                 // In O(N) time, build a table to O(1) lookup triangles by
                 // directed edge; each directed edge should appear only once
                 // else the mesh is bad
-                table<edge, usize> tbl;
+                table<edge, size_t> tbl;
                 std::set<triangle> st;
-                usize n = triangles.size();
-                for (usize i = 0; i != n; ++i) {
+                size_t n = triangles.size();
+                for (size_t i = 0; i != n; ++i) {
                     //printf("%ld: ", i);
                     triangle t = triangles[i];
                     //print(t); printf(" -> ");
@@ -692,10 +742,10 @@ namespace wry {
                         assert(st.size() == i + 1);
                         //printf("   *st.find(");  print(t); printf(" == "); print(*p); printf("\n");
                     }
-                    for (usize j = 0; j != 3; ++j) {
+                    for (size_t j = 0; j != 3; ++j) {
                         edge e = {{ t.indices[0], t.indices[1] }};
                         assert(!tbl.contains(e));
-                        std::pair<edge, usize> peu = { e, t.indices[2] };
+                        std::pair<edge, size_t> peu = { e, t.indices[2] };
                         auto [dummy, did_insert] = tbl.insert(peu);
                         assert(did_insert);
                         assert(tbl.contains(e));
@@ -715,7 +765,7 @@ namespace wry {
                 
                 
                 auto erase_everywhere = [&](triangle t) {
-                    for (usize i = 0; i != 3; ++i) {
+                    for (size_t i = 0; i != 3; ++i) {
                         if (t.is_standard_form()) {
                             assert(st.contains(t));
                             auto p = st.find(t);
@@ -738,14 +788,14 @@ namespace wry {
                     }
                 };
                 
-                usize restarts = 0;
+                size_t restarts = 0;
                 
                 while (!st.empty()) {
                     if (triangle_strip.size() >= 2) {
                         //printf("pairing with triangle_strip.size()==%ld\n", triangle_strip.size());
                         auto p = triangle_strip.end();
-                        usize b = *--p;
-                        usize a = *--p;
+                        size_t b = *--p;
+                        size_t a = *--p;
                         edge e{{a, b}};
                         if (((triangle_strip.size() & 1)))
                             e.flip();
@@ -776,7 +826,7 @@ namespace wry {
                     assert(st.size()*3 == tbl.size());
                     //printf("restarting with triangle_strip.size()=%ld\n", triangle_strip.size());
                     //printf("       restart triangle: "); print(t); printf("\n");
-                    for (usize j = 0; j != 3; ++j) {
+                    for (size_t j = 0; j != 3; ++j) {
                         edge e = {{t.indices[2], t.indices[1]}};
                         auto p = tbl.find(e);
                         if (p != tbl.end()) {
@@ -786,7 +836,7 @@ namespace wry {
                         t.rotate_left();
                     }
                     if (!triangle_strip.empty()) {
-                        usize j = triangle_strip.back();
+                        size_t j = triangle_strip.back();
                         //printf("    push_back(%ld)\n", j);
                         triangle_strip.push_back(j);
                         //printf("    push_back(%ld)\n", t.indices[0]);
@@ -817,32 +867,32 @@ namespace wry {
             
             void reindex_for_strip() {
 
-                usize n = vertices.size();
-                usize m = triangle_strip.size();
+                size_t n = vertices.size();
+                size_t m = triangle_strip.size();
                 // we start with:
                 // vertex[triangle_strip[i]]
                 
                 // add a layer of indirection
-                array<usize> a(n), b(n);
-                for (usize i = 0; i != n; ++i) {
+                array<size_t> a(n), b(n);
+                for (size_t i = 0; i != n; ++i) {
                     a[i] = i; // forward
                     b[i] = i; // backward
                 }
 
                 // we now have vertex[a[triangle_strip[i]]]
-                usize j = 0;
-                for (usize i = 0; i != m; ++i) {
+                size_t j = 0;
+                for (size_t i = 0; i != m; ++i) {
                     // vertex[a[triangle_strip[i]] is now the highest priority
                     // we want to swap it into the earliest non-finalized
                     // location, triangle_strip[j]
-                    usize k = triangle_strip[i];
-                    usize l = a[k];
+                    size_t k = triangle_strip[i];
+                    size_t l = a[k];
                     assert(b[l] == k); // check the backwards link is consistent
                     if (l >= j) {
                         if (l > j) {
                             assert(l >= j);
                             // we need to know which element of a points to j
-                            usize o = b[j];
+                            size_t o = b[j];
                             // check the forwards link is consistent
                             assert(a[o] == j);
                             // swap everything
@@ -862,7 +912,7 @@ namespace wry {
                 }
                 
                 // unscramble the indirection so we index directly into the vertices
-                for (usize i = 0; i != m; ++i) {
+                for (size_t i = 0; i != m; ++i) {
                     triangle_strip[i] = a[triangle_strip[i]];
                     // printf("triangle_strip[%ld] == %ld\n", i, triangle_strip[i]);
                 }
@@ -881,30 +931,30 @@ namespace wry {
                     //u.normal.xyz = normalize(cross(v.tangent.xyz, -v.bitangent.xyz));
                     //u.tangent.xyz = normalize(v.tangent.xyz);
                     hack_MeshVertex.push_back(u);
-                    for (usize j = 0; j != 3; ++j) {
+                    for (size_t j = 0; j != 3; ++j) {
                         hack_lines.push_back(v.position);
                         hack_lines.push_back(v.position + v.jacobian.columns[j]);
                     }
                 }
                 
                 assert(triangle_strip.size() <= INT32_MAX);
-                for (usize i : triangle_strip) {
+                for (size_t i : triangle_strip) {
                     hack_triangle_strip.push_back((uint) i);
                 }
             }
             
             void copy_under_transform(float4x4 A) {
                 bool mirror = determinant(A) < 0.0f;
-                usize offset = vertices.size();
-                for (usize i = 0; i != offset; ++i) {
+                size_t offset = vertices.size();
+                for (size_t i = 0; i != offset; ++i) {
                     vertex v = vertices[i];
                     v.jacobian = A * v.jacobian;
                     vertices.push_back(v);
                 }
-                usize n = triangles.size();
-                for (usize i = 0; i != n; ++i) {
+                size_t n = triangles.size();
+                for (size_t i = 0; i != n; ++i) {
                     triangle t = triangles[i];
-                    for (usize& j: t.indices)
+                    for (size_t& j: t.indices)
                         j += offset;
                     if (mirror)
                         t.flip();
@@ -922,7 +972,7 @@ namespace wry {
                 // lenth, reasonable in a mesh with variation due to numerical
                 // error, we can do this by mapping indices to representatives
                 
-                array<usize> r = identify_colocated_vertices();
+                array<size_t> r = identify_colocated_vertices();
 
                 // The following conditions should now hold
                 //
@@ -941,10 +991,10 @@ namespace wry {
                              
                 std::set<triangle> st;
                 table<edge, triangle> tbl;
-                usize n = triangles.size();
-                for (usize i = 0; i != n; ++i) {
+                size_t n = triangles.size();
+                for (size_t i = 0; i != n; ++i) {
                     triangle t = triangles[i];
-                    for (usize j = 0; j != 3; ++j) {
+                    for (size_t j = 0; j != 3; ++j) {
                         edge e = {{ r[t.indices[0]], r[t.indices[1]] }};
                         std::pair<edge, triangle> peu = { e, t };
                         auto [dummy, did_insert] = tbl.insert(peu);
@@ -958,7 +1008,7 @@ namespace wry {
                 
                 
                 array<array<triangle>> groups;
-                array<usize> perimeter;
+                array<size_t> perimeter;
                 while (!st.empty()) {
                     groups.emplace_back();
                     triangle t = *st.begin();
@@ -978,8 +1028,416 @@ namespace wry {
         
     } // namespace mesh3
     
+    namespace mesh4 {
+        
+
+        struct iedge { int indices[2]; };
+        struct itriangle { int indices[3]; };
+        struct iquad { int indices[4]; };
+
+        struct iface {
+            array<int> indices;
+        };
+
+        struct mesh {
+            
+            // normalized-database-style storage for mesh manipulation
+            
+            // many of the mesh operations involve building lookup structures,
+            // which we could alternatively always maintain
+            
+            // a way to handle faces is to store as a bag of tuples,
+            // (face_id, face_vertices_count)
+            // (face_id, vertex_id, ith_vertex_in_face)
+            
+            table<int, packed_float3> positions;
+            table<int, packed_float3> normals;
+            table<int, packed_float3> coordinates;
+
+            array<iedge> edges;
+            array<itriangle> triangles;
+            array<iquad> quads;
+            array<iface> faces;
+            
+            table<std::pair<int, int>, int> vertices_to_edge;
+            table<int, int> edge_to_triangle;
+            table<int, int> edge_to_quad;
+            table<int, int> edge_to_face;
+
+        };
+        
+        struct point {
+            simd_double4 x;
+        };
+        
+        struct plane {
+            simd_double4 x;
+        };
+        
+        struct directed_edge {
+            simd_double2x4 x;
+            simd_float4 tangent() const;
+        };
+        
+        struct curve {
+            simd_float4 operator()(simd_double1) const;
+            simd_float4 tangent(simd_double4) const;
+        };
+        
+        struct parametric_surface {
+            simd_double4 operator()(simd_double4) const;
+            simd_double4x4 jacobian(simd_double4) const;
+            simd_double4x4x4 hessian(simd_double4) const;
+        };
+        
+        struct implicit_surface {
+            simd_double1 operator()(simd_double4) const;
+            simd_double4 gradient(simd_double4) const;
+            simd_double4x4 hessian(simd_double4) const;
+        };
+        
+        struct parametric_cylinder {
+            
+            simd_double4 operator()(simd_double4 x) const {
+                return {  x.y * cos(x.x),  x.y * sin(x.x),  x.z,  x.w, };
+            }
+            
+            simd_double4x4 jacobian(simd_double4 x) const {
+                return simd_double4x4{{
+                    { -x.y * sin(x.x),   x.y * cos(x.x),  0.0,  0.0, },
+                    {        cos(x.x),         sin(x.x),  0.0,  0.0, },
+                    {             0.0,              0.0,  1.0,  0.0, },
+                    {             0.0,              0.0,  0.0,  1.0, },
+                }};
+            }
+            
+            simd_double4x4x4 hessian(simd_double4 x) const {
+                return simd_double4x4x4{{
+                    {{
+                        { -x.y * cos(x.x), -x.y * sin(x.x) },
+                        { -      sin(x.x),        cos(x.x) },
+                    }},
+                    {{
+                        { -      sin(x.x),        cos(x.x) },
+                    }},
+                }};
+            }
+            
+        };
+        
+        struct implicit_cylinder {
+            
+            simd_double1 operator()(simd_double4 x) const {
+                return x.x * x.x + x.y * x.y - x.w * x.w;
+            }
+            
+            simd_double4 gradient(simd_double4 x) const {
+                return {  2.0 * x.x,  2.0 * x.y,  0.0, -2.0 * x.w};
+            }
+            
+            simd_double4x4 hessian(simd_double4 x) const {
+                return {{
+                    {  2.0,  0.0,  0.0,  0.0, },
+                    {  0.0,  2.0,  0.0,  0.0, },
+                    {  0.0,  0.0,  0.0,  0.0, },
+                    {  0.0,  0.0,  0.0, -2.0, },
+                }};
+            }
+            
+        };
+        
+        
+        struct parametric_sphere {
+            
+            simd_double4 operator()(simd_double4 x) const {
+                return {
+                    sin(x.x) * cos(x.y) * x.z * x.w,
+                    sin(x.y) * x.z * x.w,
+                    cos(x.x) * cos(x.y) * x.z * x.w,
+                    x.w,
+                };
+            }
+            
+            simd_double4x4 jacobian(simd_double4 x) const {
+                return {{
+                    {  cos(x.x) * cos(x.y) * x.z * x.w,                   0.0, -sin(x.x) * cos(x.y) * x.z * x.w,  0.0, },
+                    { -sin(x.x) * sin(x.y) * x.z * x.w,  cos(x.y) * x.z * x.w, -cos(x.x) * sin(x.y) * x.z * x.w,  0.0, },
+                    {  sin(x.x) * cos(x.y) *       x.w,  sin(x.y) *       x.w,  cos(x.x) * cos(x.y)       * x.w,  0.0, },
+                    {  sin(x.x) * cos(x.y) * x.z      ,  sin(x.y) * x.z      ,  cos(x.x) * cos(x.y) * x.z      ,  0.0, },
+                }};
+            }
+            
+        };
+        
+        struct implicit_sphere {
+            
+            simd_double1 operator()(simd_double4 x) const {
+                return x.x * x.x + x.y * x.y + x.z * x.z - x.w * x.w;
+            }
+            
+            simd_double4 gradient(simd_double4 x) const {
+                return {  2.0 * x.x,  2.0 * x.y,  2.0 * x.z, -2.0 * x.w };
+            }
+            
+            simd_double4x4 hessian(simd_double4 x) const {
+                return {{
+                    {  2.0,  0.0,  0.0,  0.0 },
+                    {  0.0,  2.0,  0.0,  0.0 },
+                    {  0.0,  0.0,  2.0,  0.0 },
+                    {  0.0,  0.0,  0.0, -2.0 },
+                }};
+            }
+            
+        };
+        
+        using namespace ::simd;
+        
+        // for CSG we need to determine mesh interiors; we can use ray
+        // intersection for this (when the interior is well defined)
+        
+        // mirror the Metal structures
+        
+        struct ray {
+            double3 origin;
+            double3 direction;
+            double min_distance;
+            double max_distance;
+        };
+        
+        struct intersection_result {
+            // intersetcion_type type;
+            double distance;
+            double2 triangle_barycentric_coord;
+            bool triangle_front_facing;
+        };
+        
+        struct triangle {
+            double3x3 vertices;
+            
+            bool intersect(ray& r, intersection_result& s) {
+                // Möller–Trumbore
+                
+                double3 v0 = vertices.columns[0];
+                double3 v1 = vertices.columns[1];
+                double3 v2 = vertices.columns[2];
+                
+                // r.origin + t*r.direction = (1 - u - v) v0 + u v1 + v v2
+                // (r.origin-x) + t*r.direction = u*(y-x) + v*z(-x)
+                
+                double3 d = r.direction;
+                double3 o = r.origin - v0;
+                double3 e0 = v1 - v0;
+                double3 e1 = v2 - v0;
+                
+                // o = [-d, e0, e1] * [t u v]
+                
+                double3 h = cross(d, e1); // directed area
+                double a = dot(h, e0); // signed volume
+                
+                if ((-1e-7 < a) && (a < 1e-7))
+                    // parallel
+                    return false;
+                double f = 1.0 / a;
+                double2 uv;
+                uv.x = f * dot(o, h);
+                if (uv.x < 0.0f || uv.x > 1.0f)
+                    // out of strip
+                    return false;
+                // inside strip
+                double3 q = cross(o, e0);
+                uv.y = f * dot(d, q);
+                if ((uv.y < 0.0f) || (uv.x + uv.y > 1.0f))
+                    // out of triangle
+                    return false;
+                // line intersects triangle
+                double t = f * dot(e1, q);
+                if ((t < r.min_distance) || (r.max_distance < t))
+                    // before or after ray
+                    return false;
+                // ray intersects triangle
+                s.triangle_front_facing = a < 0;
+                s.triangle_barycentric_coord = uv;
+                return true;
+
+            }
+            
+        };
+        
+        
+        
+    } // namespace mesh4
     
 } // namespace wry
+
+
+namespace wry {
+    
+#define fwd( X ) std::forward<decltype( X )>( X )
+    
+    auto min3(auto&& a, auto&& b, auto&& c) {
+        return b < a ? c < b ? fwd(c) : fwd(b) : c < a ? fwd(c) : fwd(a);
+    }
+
+    auto median3(auto&& a, auto&& b, auto&& c) {
+        if (b < a) {
+            if (c < b) {
+                // b < a && c < b : c < b < a
+                return b;
+            } else if (c < a) {
+                // b < a && b <= c && c < a : b <= c < a
+                return c;
+            } else {
+                // b < a && b <= c && a <= c : b < a <= c
+                return a;
+            }
+        } else {
+            if (c < a) {
+                // a <= b && c < a : c < a <= b
+                return a;
+            } else if (c < b) {
+                // a <= b && a <= c && c < b : a <= c < b
+                return c;
+            } else {
+                // a <= b && a <= c && b <= c : a <= b <= c
+                return b;
+            }
+            
+        }
+    }
+    
+    auto sort3(auto&& a, auto&& b, auto&& c) {
+        if (b < a) {
+            if (c < b) {
+                // b < a && c < b : c < b < a
+                return std::tuple(c, b, a);
+            } else if (c < a) {
+                // b < a && b <= c && c < a : b <= c < a
+                return std::tuple(b, c, a);
+            } else {
+                // b < a && b <= c && a <= c : b < a <= c
+                return std::tuple(b, a, c);
+            }
+        } else {
+            if (c < a) {
+                // a <= b && c < a : c < a <= b
+                return std::tuple(c, a, b);
+            } else if (c < b) {
+                // a <= b && a <= c && c < b : a <= c < b
+                return std::tuple(a, c, b);
+            } else {
+                // a <= b && a <= c && b <= c : a <= b <= c
+                return std::tuple(a, b, c);
+            }
+            
+        }
+    }
+
+    
+    inline simd_float3 closest_axis(simd_float3 a) {
+        simd_float3 b = simd_abs(a);
+        if (b.x < b.y) {
+            if (b.y < b.z) {
+                a.xy = 0.0f;
+            } else {
+                a.xz = 0.0f;
+            }
+        } else {
+            if (b.x < b.z) {
+                a.xy = 0.0f;
+            } else {
+                a.yz = 0.0f;
+            }
+        }
+        return a;
+    }
+    
+    // compute two vectors orthogonal to v
+    inline simd_float2x3 perpendicular(simd_float3 v) {
+        simd_float3 u = closest_axis(v);
+        simd_quatf q = simd_quaternion(u, v);
+        return {{
+            simd_act(q, u.yzx),
+            simd_act(q, u.zxy),
+        }};
+    }
+    
+    
+    struct interval {
+        simd_double2 inner;
+        
+        interval operator+(interval other) {
+            return { inner + other.inner };
+        }
+        
+        interval operator-(interval other) {
+            return { inner - other.inner.yx };
+        }
+        
+        interval operator*(double other) {
+            return (other < 0) ? interval{ inner.yx * other } : interval{ inner * other };
+        }
+        
+    };
+    
+    
+    struct aabb {
+        simd_double4 a, b;
+    };
+    
+    struct differential {
+        simd_double4 value;
+        simd_double4x4 jacobian;
+        simd_double4x4x4 hessian;
+    };
+    
+    struct rational {
+        int64_t numerator;
+        int32_t denominator;
+        int32_t exponent2;
+        
+        void _assert_invariant() const {
+            assert((numerator & 1) || (!numerator));
+            assert(denominator & 1);
+            assert(std::gcd(numerator, denominator) == 1);
+        }
+        
+        void _repair_invariant() {
+            int a = __builtin_ctzll(numerator);
+            numerator >>= a;
+            exponent2 += a;
+            int b = __builtin_ctzll(denominator);
+            denominator >>= b;
+            exponent2 -= b;
+            int64_t c = std::gcd(numerator, denominator);
+            a /= c;
+            b /= c;
+            _assert_invariant();
+        }
+
+        rational operator*(rational other) {
+            auto a = std::gcd(numerator, other.denominator);
+            auto b = std::gcd(other.numerator, denominator);
+            rational c{
+                (numerator / a) * (other.numerator / b),
+                denominator = (denominator / b) * (other.denominator / b),
+                exponent2 + other.exponent2,
+            };
+            c._assert_invariant();
+            return c;
+        }
+        
+        rational operator+(rational other) {
+            auto a = std::gcd(denominator, other.denominator);
+            rational c{
+                numerator * (other.denominator / a) + other.numerator * (denominator / a),
+                denominator * (other.denominator / a),
+            };
+            _repair_invariant();
+            return c;
+        }
+    };
+    
+}
 
 
 #if 0
@@ -1055,7 +1513,7 @@ namespace wry {
 /*
  void extrude(vector_float4 delta = vector4(0.0f, 1.0f, 0.0f, 0.0f)) {
  // step one, copy existing vertices
- usize offset = vertices.size();
+ size_t offset = vertices.size();
  for (int i = 0; i != vertices.size(); ++i) {
  vertex v = vertices[i];
  target.vertices.push_back(v);

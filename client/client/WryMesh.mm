@@ -11,6 +11,10 @@
 {
     id<MTLDevice> _device;
     MeshInstanced* _instances;
+    
+    NSMutableArray<id<MTLBuffer>>* _instanceBuffers;
+    
+    
 }
 
 - (instancetype)initWithDevice:(id<MTLDevice> _Nonnull)device
@@ -18,6 +22,7 @@
     if (self = [super init]) {
         _device = device;
         _instances = (MeshInstanced*) malloc(sizeof(MeshInstanced) * 100);
+        _instanceBuffers = [NSMutableArray new];
     }
     return self;
 }
@@ -26,17 +31,34 @@
     return _instances;
 }
 
-- (void)drawWithRenderCommandEncoder:(id<MTLRenderCommandEncoder> _Nonnull)encoder
+- (void)drawWithRenderCommandEncoder:(id<MTLRenderCommandEncoder> _Nonnull)encoder commandBuffer:(id<MTLCommandBuffer> _Nonnull)buffer
 {
     [encoder setVertexBuffer:_vertexBuffer
                       offset:0
                      atIndex:AAPLBufferIndexVertices];
     
+    id<MTLBuffer> instanceBuffer = nil;
+    @synchronized (_instanceBuffers) {
+        if ([_instanceBuffers count]) {
+            instanceBuffer = [_instanceBuffers lastObject];
+            [_instanceBuffers removeLastObject];
+        } else {
+            size_t length = sizeof(MeshInstanced) * 100;
+            instanceBuffer = [_device newBufferWithLength:length options:MTLStorageModeShared];
+        }
+    }
+    
+    [buffer addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
+        @synchronized (self->_instanceBuffers) {
+            [self->_instanceBuffers addObject:instanceBuffer];
+        }
+    }];
+    
     assert(_instanceCount < 100);
-    NSUInteger length = sizeof(MeshInstanced) * _instanceCount;
-    id<MTLBuffer> instanceBuffer = [_device newBufferWithBytes:_instances
-                                                        length:length
-                                                       options:MTLStorageModeShared];
+    size_t length = sizeof(MeshInstanced) * _instanceCount;
+
+    memcpy([instanceBuffer contents], _instances, length);
+        
     [encoder setVertexBuffer:instanceBuffer
                       offset:0
                      atIndex:AAPLBufferIndexInstanced];

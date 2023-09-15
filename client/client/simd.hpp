@@ -11,14 +11,15 @@
 #include <simd/simd.h>
 #include <cassert>
 
+#include "common.hpp"
+
+#include "half.h"
+
+#define M_PI_H ((half) M_PI)
 #define M_PI_F ((float) M_PI)
+#define M_PI_D ((double) M_PI)
 
-// add in the half type
-
-typedef unsigned char uchar;
-typedef _Float16 half;
-
-typedef half half1;
+typedef half simd_half1;
 typedef __attribute__((__ext_vector_type__(2))) half simd_half2;
 typedef __attribute__((__ext_vector_type__(3))) half simd_half3;
 typedef __attribute__((__ext_vector_type__(4))) half simd_half4;
@@ -31,6 +32,7 @@ typedef __attribute__((__ext_vector_type__(4),__aligned__(2))) half simd_packed_
 typedef __attribute__((__ext_vector_type__(8),__aligned__(2))) half simd_packed_half8;
 typedef __attribute__((__ext_vector_type__(16),__aligned__(2))) half simd_packed_half16;
 typedef __attribute__((__ext_vector_type__(32),__aligned__(2))) half simd_packed_half32;
+
 
 typedef struct { simd_half2 columns[2]; } simd_half2x2;
 typedef struct { simd_half2 columns[3]; } simd_half3x2;
@@ -83,6 +85,11 @@ inline simd_half4x4 simd_matrix(simd_half4 col0, simd_half4 col1, simd_half4 col
     result.columns[2] = col2;
     result.columns[3] = col3;
     return result;
+}
+
+
+inline constexpr ulong simd_bitselect(ulong a, ulong b, ulong c) {
+    return (a & ~c) | (b & c);
 }
 
 template<typename T> T simd_saturate(T x) {
@@ -162,7 +169,20 @@ inline simd_float4x4 simd_matrix_scale(simd_float4 u) {
                        simd_make_float4(0.0f, u.y, 0.0f, 0.0f),
                        simd_make_float4(0.0f, 0.0f, u.z, 0.0f),
                        simd_make_float4(0.0f, 0.0f, 0.0f, u.w));
-}           
+}
+
+
+
+typedef struct {
+    
+    simd_double4x4 slices[4];
+    
+} simd_double4x4x4;
+
+
+namespace wry {
+    
+} // namespace wry
 
 
 namespace wry {
@@ -270,7 +290,5 @@ namespace wry {
     };
     
 } // namespace wry
-
-
 
 #endif /* simd_hpp */

@@ -20,13 +20,10 @@ int main(int argc, const char** argv) {
     });
 #endif
     
-    // create model
-    auto mdl = std::make_shared<wry::model>();
-    
     // create UIKit application
     @autoreleasepool {
         NSApplication* application = [NSApplication sharedApplication];
-        WryDelegate* delegate = [[WryDelegate alloc] initWithModel:mdl];
+        WryDelegate* delegate = [[WryDelegate alloc] init];
         [application setDelegate:delegate];
         return NSApplicationMain(argc, argv); // noreturn
     }

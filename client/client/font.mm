@@ -58,13 +58,21 @@ namespace wry {
                 
         matrix<float> a(x.get_minor() + 4, x.get_major() + 4);
         matrix<R8Unorm> b(x.get_minor() + 4 + 4, x.get_major() + 4 + 4);
+        
+        for (auto&& q : b)
+            for (auto&& r : q)
+                r = 0.0f;
+        
         b.sub(4, 4, x.get_minor(), x.get_major()) = x;
         
+        
+        
         // Compute offset filter
-        for (i64 i = 0; i != a.get_minor(); ++i) {
-            for (i64 j = 0; j != a.get_major(); ++j) {
-                for (i64 u = 0; u != 5; ++u) {
-                    for (i64 v = 0; v != 5; ++v) {
+        for (size_t i = 0; i != a.get_minor(); ++i) {
+            for (size_t j = 0; j != a.get_major(); ++j) {
+                a(i, j) = 0.0f;
+                for (size_t u = 0; u != 5; ++u) {
+                    for (size_t v = 0; v != 5; ++v) {
                         a(i, j) += k[u] * k[v] * b(i + u, j + v);
                     }
                 }
@@ -72,27 +80,29 @@ namespace wry {
         }
         
         // Blend with offset glyph alpha
-        for (i64 i = 0; i != x.get_minor(); ++i) {
-            for (i64 j = 0; j != x.get_major(); ++j) {
+        for (size_t i = 0; i != x.get_minor(); ++i) {
+            for (size_t j = 0; j != x.get_major(); ++j) {
                 float alpha = x(i, j);
-                (a(i + 1, j + 2) *= (1.0 - alpha)) += alpha;
+                (a(i + 0, j + 2) *= (1.0 - alpha)) += alpha;
             }
         }
-                
         
         // Copy alpha into final result
         matrix<RGBA8Unorm_sRGB> c(a.get_minor(), a.get_major());
-        for (i64 i = 0; i != c.get_minor(); ++i) {
-            for (i64 j = 0; j != c.get_major(); ++j) {
+        for (size_t i = 0; i != c.get_minor(); ++i) {
+            for (size_t j = 0; j != c.get_major(); ++j) {
+                c(i, j).r._ = 0;
+                c(i, j).g._ = 0;
+                c(i, j).b._ = 0;
                 c(i, j).a = a(i, j);
             }
         }
         
         // Color is alpha to linear color to sRGB
-        for (i64 i = 0; i != x.get_minor(); ++i) {
-            for (i64 j = 0; j != x.get_major(); ++j) {
-                u8 d = _multiply_alpha_table[x(i, j)._][255];
-                auto& p = c(i + 2, j + 1);
+        for (size_t i = 0; i != x.get_minor(); ++i) {
+            for (size_t j = 0; j != x.get_major(); ++j) {
+                uchar d = _multiply_alpha_table[x(i, j)._][255];
+                auto& p = c(i + 0, j + 2);
                 p.r._ = d;
                 p.g._ = d;
                 p.b._ = d;
@@ -189,7 +199,7 @@ namespace wry {
                                           face->glyph->bitmap.rows,
                                           face->glyph->bitmap.width);
             matrix<RGBA8Unorm_sRGB> u = apply_shadow(v);
-            draw_bounding_box(u);
+            // draw_bounding_box(u);
             
             sprite s = atl.place(u,
                                  simd_make_float2(-face->glyph->bitmap_left + 2,
@@ -197,7 +207,7 @@ namespace wry {
                                                   ));
             
             float advance = face->glyph->advance.x * k;
-            result.charmap.insert(std::make_pair((u32) charcode, font::glyph{s, advance}));
+            result.charmap.insert(std::make_pair((uint) charcode, font::glyph{s, advance}));
             
             charcode = FT_Get_Next_Char(face, charcode, &gindex);
         }

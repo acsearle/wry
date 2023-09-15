@@ -9,6 +9,8 @@
 #define stride_iterator_hpp
 
 #include <iterator>
+
+#include "common.hpp"
 #include "type_traits.hpp"
 
 namespace wry {
@@ -33,7 +35,7 @@ namespace wry {
         using reference = T&;
         using iterator_category = std::random_access_iterator_tag;
         
-        using C = std::conditional_t<std::is_const_v<T>, const std::byte, std::byte>;
+        using C = std::conditional_t<std::is_const_v<T>, const uchar, uchar>;
         using V = std::conditional_t<std::is_const_v<T>, const void*, void*>;
         
         T* base;
@@ -168,7 +170,7 @@ namespace wry {
     
     template<typename T>
     stride_iterator<T> operator+(stride_iterator<T> a, std::ptrdiff_t b) {
-        using C = std::conditional_t<std::is_const_v<T>, const std::byte, std::byte>;
+        using C = std::conditional_t<std::is_const_v<T>, const uchar, uchar>;
         C* p = reinterpret_cast<C*>(a.base);
         p += a._stride * b;
         T* q = reinterpret_cast<T*>(p);
@@ -177,7 +179,7 @@ namespace wry {
     
     template<typename T>
     stride_iterator<T> operator+(std::ptrdiff_t a, stride_iterator<T> b) {
-        using C = std::conditional_t<std::is_const_v<T>, const std::byte, std::byte>;
+        using C = std::conditional_t<std::is_const_v<T>, const uchar, uchar>;
         C* p = reinterpret_cast<C*>(b.base);
         p += b._stride * a;
         T* q = reinterpret_cast<T*>(p);
@@ -186,7 +188,7 @@ namespace wry {
     
     template<typename T>
     stride_iterator<T> operator-(stride_iterator<T> a, std::ptrdiff_t b) {
-        using C = std::conditional_t<std::is_const_v<T>, const std::byte, std::byte>;
+        using C = std::conditional_t<std::is_const_v<T>, const uchar, uchar>;
         C* p = reinterpret_cast<C*>(a.base);
         p -= a._stride * b;
         T* q = reinterpret_cast<T*>(p);
@@ -196,7 +198,7 @@ namespace wry {
     template<typename T, typename U, typename = std::common_type_t<T*, U*>>
     ptrdiff_t operator-(stride_iterator<T> a, stride_iterator<U> b) {
         assert(a._stride == b._stride);
-        using C = std::conditional_t<std::is_const_v<T>, const std::byte, std::byte>;
+        using C = std::conditional_t<std::is_const_v<T>, const uchar, uchar>;
         C* p = reinterpret_cast<C*>(a.base);
         C* q = reinterpret_cast<C*>(b.base);
         assert(!(p - q) % a._stride);

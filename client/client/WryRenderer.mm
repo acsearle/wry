@@ -12,14 +12,17 @@
 #include <random>
 
 #include <MetalKit/MetalKit.h>
+#include <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
 #include "WryMesh.hpp"
 #include "WryRenderer.h"
 
 #include "atlas.hpp"
+#include "debug.hpp"
 #include "font.hpp"
 #include "mesh.hpp"
 #include "platform.hpp"
+#include "obj.hpp"
 
 @implementation WryRenderer
 {
@@ -32,7 +35,7 @@
 
     // view-only state
         
-    wry::usize _frame_count;
+    size_t _frame_count;
     simd::float2 _viewport_size;
             
     id<MTLBuffer> _screenTriangleStripVertexBuffer;
@@ -76,213 +79,19 @@
     wry::atlas* _atlas;
     wry::font* _font;
                     
-    // photometry
     
-    // receive incoming buffers
-    dispatch_queue_t _capture_video_queue;
-    dispatch_queue_t _process_video_queue;
+    // bloom
+    
+    MPSImageGaussianBlur* _gaussianBlur;
+    id<MTLTexture> _blurredTexture;
+    MPSImageAdd* _imageAdd;
+    id<MTLTexture> _addedTexture;
+    
+    // capture
+    
+    id<MTLCaptureScope> _captureScope;
+    
 
-    AVCaptureSession* _captureSession;
-    AVCaptureVideoDataOutput* _captureVideoDataOutput;
-    AVCaptureDevice* _captureDevice;
-    AVCaptureDeviceInput* _captureDeviceInput;
-    
-    NSMutableArray<id<MTLTexture>>* _capture_results;
-    
-    id<MTLRenderPipelineState> _trivialRenderPipelineState;
-    id<MTLTexture> _trivialTexture;
-    id<MTLTexture> _radienceTexture;
-    wry::matrix<wry::RGBA8Unorm_sRGB> _observationSlice;
-
-    int _head;
-    int _tail;
-
-}
-
-- (void)captureInit {
-
-    {
-        dispatch_queue_t interactive =  dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0);
-        _capture_video_queue = dispatch_queue_create_with_target("wry.capture_video",
-                                                                 DISPATCH_QUEUE_SERIAL,
-                                                                 interactive);
-        
-        dispatch_queue_t background =  dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0);
-        _process_video_queue = dispatch_queue_create_with_target("wry.process_video",
-                                                                 DISPATCH_QUEUE_SERIAL,
-                                                                 background);
-    }
-        
-    _captureSession = [AVCaptureSession new];
-    _captureSession.sessionPreset = AVCaptureSessionPreset1920x1080;
-    
-    _captureDevice = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
-    {
-        NSError* error = nil;
-        _captureDeviceInput = [[AVCaptureDeviceInput alloc] initWithDevice:_captureDevice error:&error];
-        if (error) {
-            NSLog(@"%@", [error localizedDescription]);
-            abort();
-        }
-    }
-    [_captureSession addInput:_captureDeviceInput];
-        
-    _captureVideoDataOutput = [AVCaptureVideoDataOutput new];
-    _captureVideoDataOutput.videoSettings = @{
-        (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey : @((int) kCVPixelFormatType_32BGRA)
-    };
-    [_captureVideoDataOutput setSampleBufferDelegate:self queue:_capture_video_queue];
-    [_captureSession addOutput:_captureVideoDataOutput];
-        
-    
-    _capture_results = [NSMutableArray new];
-    
-    {
-        MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
-        descriptor.vertexFunction = [self newFunctionWithName:@"TrivialVertexFunction"];
-        descriptor.fragmentFunction = [self newFunctionWithName:@"TrivialFragmentFunction"];
-        descriptor.colorAttachments[0].pixelFormat = _drawablePixelFormat;
-        _trivialRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
-    }
-    
-    {
-        MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
-        descriptor.textureType = MTLTextureType2D;
-        descriptor.pixelFormat = MTLPixelFormatRGBA8Unorm;
-        descriptor.height = 1080;
-        descriptor.width = 1;
-        descriptor.storageMode = MTLStorageModeShared;
-        descriptor.usage = MTLTextureUsageShaderRead;
-        _radienceTexture = [_device newTextureWithDescriptor:descriptor];
-        _radienceTexture.label = @"Source radience";
-        _trivialTexture = _radienceTexture;
-              
-    }
-    
-    {
-        _observationSlice = wry::matrix<wry::RGBA8Unorm_sRGB>(1080, 1080);
-    }
-        
-}
-
--(void) captureVideoStart {
-    [_captureSession startRunning];
-}
-
--(void) captureVideoStop {
-    [_captureSession stopRunning];
-    
-}
-
--(void) captureOutput:(AVCaptureOutput *)output
-  didDropSampleBuffer:(CMSampleBufferRef)sampleBuffer
-       fromConnection:(AVCaptureConnection *)connection {
-    NSLog(@"Dropped a video capture sample");
-}
-
--(void) captureOutput:(AVCaptureOutput *)output
-didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
-       fromConnection:(AVCaptureConnection *)connection {
-    
-    NSLog(@"%s", __PRETTY_FUNCTION__);
-    
-    int head;
-    @synchronized (self) {
-        if (_head >= 1080) {
-            return;
-        } else {
-            head = _head++;
-        }
-    }
-        
-    // we are on a high-priority queue and must do minimal work
-    // we can't retain the sample buffer permanently so we need to make a copy
-    // we can't deep copy any of these objects, we have to extract the
-    // image data
-        
-    CMTime presentationTimeStamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
-
-    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
-    assert(imageBuffer);
-    CVPixelBufferRef pixelBuffer = (CVPixelBufferRef) imageBuffer;
-    CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
-    void* baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer);
-    size_t height = CVPixelBufferGetHeight(pixelBuffer);
-    size_t width = CVPixelBufferGetWidth(pixelBuffer);
-    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer);
-    size_t dataSize = CVPixelBufferGetDataSize(pixelBuffer);
-    
-    void* dataCopy = malloc(dataSize);
-    memcpy(dataCopy, baseAddress, dataSize);
-    CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
-    
-    {
-        simd_uchar4 white;
-        white = 255;
-        simd_uchar4 black;
-        black = 0;
-                
-        [_trivialTexture replaceRegion:MTLRegionMake2D(0, head, 1, 1)
-                           mipmapLevel:0
-                             withBytes:&white
-                           bytesPerRow:4];
-        int thick = 16;
-        if (head >= thick) {
-            [_trivialTexture replaceRegion:MTLRegionMake2D(0, head-thick, 1, 1)
-                               mipmapLevel:0
-                                 withBytes:&black
-                               bytesPerRow:4];
-        }
-    }
-    
-    dispatch_async(_process_video_queue, ^{
-        
-        CMTimeShow(presentationTimeStamp);
-        
-        int tail;
-        @synchronized (self) {
-            tail = self->_tail;
-            if (self->_tail < 1080)
-                ++self->_tail;
-        }
-        
-        for (size_t j = 0; j != 1080; ++j) {
-            self->_observationSlice(j, tail) = *((wry::RGBA8Unorm_sRGB*)(((wry::u8*) dataCopy) + 960 * 4 + bytesPerRow * j));
-        }
-        
-        if (tail == 1079) {
-            wry::to_png(self->_observationSlice, "/Users/antony/Desktop/captures/slice.png");
-            std::terminate();
-        }
-        
-        free(dataCopy);
-        
-    });
-        
-}
-
--(void) captureLogic {
-    
-    static int state = 0;
-    static NSUInteger trigger = 0;
-    
-    if (_frame_count < trigger)
-        return;
-
-    switch (state) {
-        case 0:
-            [self captureVideoStart];
-            state = 10;
-            break;
-        case 10:
-            break;
-        default:
-            abort();
-    }
-    
-    
-    
-    
 }
 
 
@@ -542,7 +351,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                 
         auto newBufferWithArray = [&](auto& a) {
             void* bytes = a.data();
-            usize length = a.size() * sizeof(typename std::decay_t<decltype(a)>::value_type);
+            size_t length = a.size() * sizeof(typename std::decay_t<decltype(a)>::value_type);
             id<MTLBuffer> buffer = [_device newBufferWithBytes:bytes length:length options:MTLStorageModeShared];
             assert(buffer);
             return buffer;
@@ -589,7 +398,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
 
-        // Prepare shadow map ressources
+        // Prepare shadow map resources
         {
             MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
             descriptor.textureType = MTLTextureType2D;
@@ -632,7 +441,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                 // m.add_edges_polygon(4);
                 /*
                  m.add_edges_superquadric(8);
-                 m.extrude(12, vector4(0.0f, M_PI_F / 6, 0.0f, 0.0f));
+                 m.extrude(12, vector4(0.0f, M_PI / 6, 0.0f, 0.0f));
                  m.edges.clear();
                  m.transform_with_function([](float4 position, float4 coordinate) {
                  float4x4 A = simd_matrix_translate(vector3(-2.0f, 0.0f, +coordinate.y));
@@ -678,7 +487,7 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                 
                 m = wry::mesh::mesh();
                 m.add_edges_superquadric(8);
-                m.extrude(12, vector4(0.0f, M_PI_F / 6, 0.0f, 0.0f));
+                m.extrude(12, vector4(0.0f, M_PI_F / 6.0f, 0.0f, 0.0f));
                 m.edges.clear();
                 m.transform_with_function([](float4 position, float4 coordinate) {
                     float4x4 A = simd_matrix_translate(vector3(-2.0f, 0.0f, +coordinate.y));
@@ -710,15 +519,16 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                 _tireMesh.emissiveTexture = [self newTextureFromResource:@"black"
                                                               ofType:@"png"];
                 _tireMesh.albedoTexture = [self newTextureFromResource:@"black" ofType:@"png"];
-                _tireMesh.metallicTexture= [self newTextureFromResource:@"black"
+                _tireMesh.metallicTexture= [self newTextureFromResource:@"white"
                                                              ofType:@"png"];
                 _tireMesh.normalTexture = [self newTextureFromResource:@"blue"
                                                             ofType:@"png"
                                                    withPixelFormat:MTLPixelFormatRGBA8Unorm];
-                _tireMesh.roughnessTexture = [self newTextureFromResource:@"white"
+                _tireMesh.roughnessTexture = [self newTextureFromResource:@"darkgray"
                                                                ofType:@"png"];
                 _tireMesh.instanceCount = 6;
                 
+                /*
                 m = wry::mesh::mesh();
                 m.add_quads_box(float4{-1.5f,0.875f,-0.875f,1.0f}, float4{1.5f,1.0f,-0.8125f,1.0f});
                 m.add_quads_box(float4{-1.5f,0.875f,0.8125f,1.0f}, float4{1.5f,1.0f,0.875f,1.0f});
@@ -732,6 +542,11 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                 m.strip();
                 m.reindex_for_strip();
                 m.MeshVertexify();
+                 */
+                
+                m = from_obj("/Users/antony/Desktop/assets/16747_Mining_Truck_v1.obj");            
+                m.MeshVertexify();
+
 
                 _chassisMesh = [[WryMesh alloc] initWithDevice:_device];
                 _chassisMesh.vertexBuffer = newBufferWithArray(m.vertices);
@@ -739,17 +554,21 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                 
                 _chassisMesh.emissiveTexture = [self newTextureFromResource:@"black"
                                                               ofType:@"png"];
-                _chassisMesh.albedoTexture = [self newTextureFromResource:@"rustediron2_basecolor" ofType:@"png"];
-                _chassisMesh.metallicTexture= [self newTextureFromResource:@"rustediron2_metallic"
+                _chassisMesh.albedoTexture = [self newTextureFromResource:@"white" ofType:@"png"];
+                _chassisMesh.metallicTexture= [self newTextureFromResource:@"black"
                                                              ofType:@"png"];
-                _chassisMesh.normalTexture = [self newTextureFromResource:@"rustediron2_normal"
+                _chassisMesh.normalTexture = [self newTextureFromResource:@"blue"
                                                             ofType:@"png"
                                                    withPixelFormat:MTLPixelFormatRGBA8Unorm];
-                _chassisMesh.roughnessTexture = [self newTextureFromResource:@"rustediron2_roughness"
+                _chassisMesh.roughnessTexture = [self newTextureFromResource:@"white"
                                                                ofType:@"png"];
                 _chassisMesh.instanceCount = 1;
-                _chassisMesh.instances[0].model_transform = matrix_identity_float4x4;
-                _chassisMesh.instances[0].inverse_transpose_model_transform = matrix_identity_float4x4;
+                auto A = simd_matrix_scale(0.002f);
+                auto B = simd_matrix_rotate(-M_PI_F/2, simd_make_float3(1,0,0));
+                _chassisMesh.instances[0].model_transform = A * B;
+                _chassisMesh.instances[0].inverse_transpose_model_transform
+                = simd_transpose(simd_inverse(B));
+                // = matrix_identity_float4x4;
 
                 
             }
@@ -840,95 +659,22 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
             _atlas = new wry::atlas(2048, device);
             _font = new wry::font(build_font(*_atlas));
         }
-                
-        // [self captureInit];
-        
-        if (false) {
-            // load input data
-            id<MTLTexture> lightTexture = [self newTextureFromResource:@"../captures/slice"
-                                                               ofType:@"png"];
-
-            // make mask data
-            id<MTLTexture> maskTexture = nil;
-            {
-                MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
-                descriptor.textureType = MTLTextureType2D;
-                descriptor.pixelFormat = MTLPixelFormatRGBA32Float;
-                descriptor.width = 1;
-                descriptor.height = 240;
-                descriptor.usage = MTLTextureUsageShaderRead;
-                descriptor.storageMode = MTLStorageModeShared;
-                maskTexture = [_device newTextureWithDescriptor:descriptor];
-                wry::array<simd_float4> mask(240, simd_make_float4(0.0f, 0.0f, 0.0f, 0.0f));
-                for (int i = 0; i != 8; ++i) {
-                    for (int j = 0; j != 8; ++j) {
-                        mask[i * 16 + (240 - 166) + j] = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
-                    }
-                }
-                [maskTexture replaceRegion:MTLRegionMake2D(0,0,1,240)
-                               mipmapLevel:0
-                                 withBytes:mask.data()
-                               bytesPerRow:16];
-                assert(maskTexture);
-
-            }
-            
-            // make result texture
-            {
-                MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
-                descriptor.textureType = MTLTextureType2D;
-                descriptor.pixelFormat = MTLPixelFormatRGBA32Float;
-                descriptor.width = 1080;
-                descriptor.height = 1080;
-                descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-                descriptor.storageMode = MTLStorageModeShared;
-                _trivialTexture = [_device newTextureWithDescriptor:descriptor];
-                assert(_trivialTexture);
-                _trivialTexture.label = @"trivial Texture";
-            }
-            
-            // make pipeline
-            id<MTLComputePipelineState> pipelineState = nil;
-            {
-                //MTLComputePipelineDescriptor* descriptor = [MTLComputePipelineDescriptor new];
-                //descriptor.computeFunction = [self newFunctionWithName:@"DepthProcessing"];
-                //descriptor.label = @"DepthProcessing";
-                NSError* error = nil;
-                pipelineState = [_device newComputePipelineStateWithFunction:[self newFunctionWithName:@"DepthProcessing"]
-                                                       error:&error];
-                assert(!error);
-                assert(pipelineState);
-            }
-            
-            id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
-            id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
-            [encoder setComputePipelineState:pipelineState];
-            [encoder setTexture:_trivialTexture atIndex:0];
-            [encoder setTexture:lightTexture atIndex:1];
-            [encoder setTexture:maskTexture atIndex:2];
-
-            NSUInteger w = pipelineState.threadExecutionWidth;
-            NSUInteger h = pipelineState.maxTotalThreadsPerThreadgroup / w;
-            MTLSize threadsPerThreadgroup = MTLSizeMake(w, h, 1);
-
-            MTLSize threadsPerGrid = MTLSizeMake(_trivialTexture.width, _trivialTexture.height, 1);
-
-            [encoder dispatchThreadgroups:threadsPerGrid threadsPerThreadgroup:threadsPerThreadgroup];
-            [encoder endEncoding];
-            [commandBuffer commit];
-            
-            
-        }
         
         
+        _gaussianBlur = [[MPSImageGaussianBlur alloc] initWithDevice:_device sigma:32.0];
+        _imageAdd = [[MPSImageAdd alloc] initWithDevice:_device];
         
     }
-
-    NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
-    
-
     
     NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
+    
+    {
+        MTLCaptureManager* captureManager = [MTLCaptureManager sharedCaptureManager];
+        _captureScope = [captureManager newCaptureScopeWithCommandQueue:_commandQueue];
+        [_captureScope setLabel:@"Custom"];
+        [captureManager setDefaultCaptureScope:_captureScope];
+    }
+    
 
     return self;
 }
@@ -1018,56 +764,24 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
 }
 
 
-- (void)renderToMetalLayer2:(nonnull CAMetalLayer*)metalLayer
-{
-    //[self captureLogic];
-    
-    id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
-    id<CAMetalDrawable> currentDrawable = [metalLayer nextDrawable];
-    id <MTLRenderCommandEncoder> encoder = nil;
-    {
-        MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor new];
-        descriptor.colorAttachments[AAPLColorIndexColor].clearColor = MTLClearColorMake(1, 0, 1, 0);
-        descriptor.colorAttachments[AAPLColorIndexColor].loadAction = MTLLoadActionClear;
-        descriptor.colorAttachments[AAPLColorIndexColor].storeAction = MTLStoreActionStore;
-        descriptor.colorAttachments[AAPLColorIndexColor].texture = currentDrawable.texture;
-        encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
-    }
-    
-
-    [encoder setRenderPipelineState:_trivialRenderPipelineState];
-    [encoder setVertexBuffer:_screenTriangleStripVertexBuffer offset:0 atIndex:AAPLBufferIndexVertices];
-    if (_trivialTexture) {
-        [encoder setFragmentTexture:_trivialTexture atIndex:AAPLTextureIndexColor];
-        [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
-    }
-   
-    [encoder endEncoding];
-    
-    [command_buffer presentDrawable:currentDrawable];
-    [command_buffer commit];
-    
-    ++_frame_count;
-    
-}
-
-
 - (void)renderToMetalLayer:(nonnull CAMetalLayer*)metalLayer
 {
     using namespace ::simd;
     using namespace ::wry;
-    
-    id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
 
+    [_captureScope beginScope];
+
+    id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
+    
     MeshUniforms uniforms = {};
 
     {
-        _tireMesh.instances[ 0].model_transform = simd_matrix_translate(simd_make_float3( -1.0f,  0.0f, -0.5f));
-        _tireMesh.instances[ 1].model_transform = simd_matrix_translate(simd_make_float3( -1.0f,  0.0f, +0.5f));
-        _tireMesh.instances[ 2].model_transform = simd_matrix_translate(simd_make_float3(  0.0f,  0.0f, -0.5f));
-        _tireMesh.instances[ 3].model_transform = simd_matrix_translate(simd_make_float3(  0.0f,  0.0f, +0.5f));
-        _tireMesh.instances[ 4].model_transform = simd_matrix_translate(simd_make_float3( +1.0f,  0.0f, -0.5f));
-        _tireMesh.instances[ 5].model_transform = simd_matrix_translate(simd_make_float3( +1.0f,  0.0f, +0.5f));
+        _tireMesh.instances[ 0].model_transform = simd_matrix_translate(simd_make_float3( -1.0f,  -1.0f, -0.5f));
+        _tireMesh.instances[ 1].model_transform = simd_matrix_translate(simd_make_float3( -1.0f,  -1.0f, +0.5f));
+        _tireMesh.instances[ 2].model_transform = simd_matrix_translate(simd_make_float3(  0.0f,  -1.0f, -0.5f));
+        _tireMesh.instances[ 3].model_transform = simd_matrix_translate(simd_make_float3(  0.0f,  -1.0f, +0.5f));
+        _tireMesh.instances[ 4].model_transform = simd_matrix_translate(simd_make_float3( +1.0f,  -1.0f, -0.5f));
+        _tireMesh.instances[ 5].model_transform = simd_matrix_translate(simd_make_float3( +1.0f,  -1.0f, +0.5f));
 
         float2 center_of_turn = make_float2(0.5f, 2.0 / sin(_frame_count * 0.01));
         
@@ -1082,6 +796,17 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
             float4x4 D = simd_transpose(simd_inverse(C));
             _tireMesh.instances[i].model_transform = C;
             _tireMesh.instances[i].inverse_transpose_model_transform = D;
+        }
+        
+        {
+            auto A = simd_matrix_scale(0.002f);
+            auto B = simd_matrix_rotate(-M_PI_F/2, simd_make_float3(1,0,0));
+            auto C = simd_matrix_rotate(_frame_count * 0.01, simd_make_float3(0,1,0));
+            _chassisMesh.instances[0].model_transform = A * C * B;
+            _chassisMesh.instances[0].inverse_transpose_model_transform
+            = simd_transpose(simd_inverse(C * B));
+            // = matrix_identity_float4x4;
+
         }
     }
        
@@ -1122,52 +847,50 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                                           length:sizeof(MeshUniforms)
                                          atIndex:AAPLBufferIndexUniforms];
 
-        [_chassisMesh drawWithRenderCommandEncoder:render_command_encoder];
-        [_tireMesh drawWithRenderCommandEncoder:render_command_encoder];
+        [_chassisMesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
+        [_tireMesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
         
         [render_command_encoder endEncoding];
         
     }
     
-    
-    
-    id<CAMetalDrawable> currentDrawable = [metalLayer nextDrawable];
-
     {
         // Deferred render pass
         
-        id <MTLRenderCommandEncoder> encoder = ^ {
+        id <MTLRenderCommandEncoder> encoder = nil;
+        
+        {
             
             MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor new];
             
-            descriptor.colorAttachments[AAPLColorIndexColor].clearColor = MTLClearColorMake(0, 0, 0, 0);
+            descriptor.colorAttachments[AAPLColorIndexColor].clearColor = MTLClearColorMake(0, 0, 0, 1);
             descriptor.colorAttachments[AAPLColorIndexColor].loadAction = MTLLoadActionClear;
             descriptor.colorAttachments[AAPLColorIndexColor].storeAction = MTLStoreActionStore;
-            descriptor.colorAttachments[AAPLColorIndexColor].texture = currentDrawable.texture;
+            descriptor.colorAttachments[AAPLColorIndexColor].texture = _deferredLightColorAttachmentTexture;
             
             descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].clearColor = MTLClearColorMake(0, 0, 0, 0);
             descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].loadAction = MTLLoadActionClear;
             descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].storeAction = MTLStoreActionDontCare;
-            descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].texture = self->_deferredAlbedoMetallicColorAttachmentTexture;
+            descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].texture = _deferredAlbedoMetallicColorAttachmentTexture;
             
-            descriptor.colorAttachments[AAPLColorIndexNormalRoughness].clearColor = MTLClearColorMake(0, 0, 0, 0);
+            descriptor.colorAttachments[AAPLColorIndexNormalRoughness].clearColor = MTLClearColorMake(0, 0, 0, 1);
             descriptor.colorAttachments[AAPLColorIndexNormalRoughness].loadAction = MTLLoadActionClear;
             descriptor.colorAttachments[AAPLColorIndexNormalRoughness].storeAction = MTLStoreActionDontCare;
-            descriptor.colorAttachments[AAPLColorIndexNormalRoughness].texture = self->_deferredNormalRoughnessColorAttachmentTexture;
+            descriptor.colorAttachments[AAPLColorIndexNormalRoughness].texture = _deferredNormalRoughnessColorAttachmentTexture;
             
             descriptor.colorAttachments[AAPLColorIndexDepth].clearColor = MTLClearColorMake(1, 1, 1, 1);
             descriptor.colorAttachments[AAPLColorIndexDepth].loadAction = MTLLoadActionClear;
             descriptor.colorAttachments[AAPLColorIndexDepth].storeAction = MTLStoreActionDontCare;
-            descriptor.colorAttachments[AAPLColorIndexDepth].texture = self->_deferredDepthColorAttachmentTexture;
+            descriptor.colorAttachments[AAPLColorIndexDepth].texture = _deferredDepthColorAttachmentTexture;
             
             descriptor.depthAttachment.clearDepth = 1.0;
             descriptor.depthAttachment.loadAction = MTLLoadActionClear;
             descriptor.depthAttachment.storeAction = MTLStoreActionDontCare;
-            descriptor.depthAttachment.texture = self->_deferredDepthAttachmentTexture;
+            descriptor.depthAttachment.texture = _deferredDepthAttachmentTexture;
             
-            return [command_buffer renderCommandEncoderWithDescriptor:descriptor];
+            encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
             
-        } ();
+        }
         
         {
 
@@ -1252,9 +975,9 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                                    length:sizeof(MeshUniforms)
                                   atIndex:AAPLBufferIndexUniforms];
                 
-                [_chassisMesh drawWithRenderCommandEncoder:encoder];
-                [_tireMesh drawWithRenderCommandEncoder:encoder];
-                [_groundMesh drawWithRenderCommandEncoder:encoder];
+                [_chassisMesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
+                [_tireMesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
+                [_groundMesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
 
                 if (show_wireframe) {
                     [encoder setTriangleFillMode:MTLTriangleFillModeFill];
@@ -1316,14 +1039,66 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
         }
 
         [encoder endEncoding];
-
+            
     }
+    
+    // now blur
+    
+    
+    id<CAMetalDrawable> currentDrawable = nil;
+    {
+        // wry::timer t("nextDrawable");
+        //auto a = mach_absolute_time();
+        auto a = std::chrono::steady_clock::now();
+        currentDrawable = [metalLayer nextDrawable];
+        auto b = std::chrono::steady_clock::now();
+        static std::chrono::steady_clock::time_point t0, t1;
+        auto c = std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+        auto d = std::chrono::duration_cast<std::chrono::microseconds>(b - t0).count();
+        auto e = std::chrono::duration_cast<std::chrono::microseconds>(a - t1).count();
+        //if (c > 999) {
+            printf("! %lld\n", c);
+            //printf("        %lld\n", d);
+            //printf("        %lld\n", e);
+        //}
+        t0 = b;
+        t1 = a;
+        
+    }
+    
+    {
+        _gaussianBlur.edgeMode = MPSImageEdgeModeClamp;
+        
+        [_gaussianBlur encodeToCommandBuffer:command_buffer
+                               sourceTexture:_deferredLightColorAttachmentTexture
+                          destinationTexture:_blurredTexture];
+
+        _imageAdd.primaryScale = 15.0f/16.0f;
+        _imageAdd.secondaryScale = 1.0f/16.0f;
+
+        [_imageAdd encodeToCommandBuffer:command_buffer
+        primaryTexture:_deferredLightColorAttachmentTexture
+                        secondaryTexture:_blurredTexture
+                      destinationTexture:_addedTexture];
+        
+        
+    }
+    
+    {
+        id<MTLBlitCommandEncoder> encoder =  [command_buffer blitCommandEncoder];
+        [encoder copyFromTexture:_addedTexture toTexture:currentDrawable.texture];
+        [encoder endEncoding];
+    }
+
             
     [command_buffer presentDrawable:currentDrawable];
+    currentDrawable = nil;
     [command_buffer commit];
     
     ++_frame_count;
     
+    [_captureScope endScope];
+
 }
 
 
@@ -1342,12 +1117,17 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     descriptor.textureType = MTLTextureType2D;
     descriptor.width = _viewport_size.x;
     descriptor.height = _viewport_size.y;
-    descriptor.storageMode = MTLStorageModeMemoryless;
     
     // colorAttachments
     descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-    
+
     descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+    descriptor.storageMode = MTLStorageModePrivate;
+    _deferredLightColorAttachmentTexture = [_device newTextureWithDescriptor:descriptor];
+    _deferredLightColorAttachmentTexture.label = @"Light G-buffer";
+
+    descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+    descriptor.storageMode = MTLStorageModeMemoryless;
     _deferredAlbedoMetallicColorAttachmentTexture = [_device newTextureWithDescriptor:descriptor];
     _deferredAlbedoMetallicColorAttachmentTexture.label = @"Albedo-metallic G-buffer";
     
@@ -1364,6 +1144,16 @@ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
     descriptor.pixelFormat = MTLPixelFormatDepth32Float;
     _deferredDepthAttachmentTexture = [_device newTextureWithDescriptor:descriptor];
     _deferredDepthAttachmentTexture.label = @"Depth buffer";
+
+    descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+    descriptor.storageMode = MTLStorageModePrivate;
+    descriptor.usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
+    _blurredTexture = [_device newTextureWithDescriptor:descriptor];
+    _blurredTexture.label = @"Blur target";
+    
+    _addedTexture = [_device newTextureWithDescriptor:descriptor];
+    _addedTexture.label = @"Addition target";
+
     
 }
 
@@ -1977,7 +1767,7 @@ error:(NSError *)error {
     
     [texture replaceRegion:MTLRegionMake2D(self->_sliceCount, 0, 1, height)
                mipmapLevel:0
-                 withBytes:((wry::u8*) dataCopy) + (2 * 1920)
+                 withBytes:((wry::uchar*) dataCopy) + (2 * 1920)
                bytesPerRow:bytesPerRow];
     ++self->_sliceCount;
     free(dataCopy);
@@ -1985,4 +1775,328 @@ error:(NSError *)error {
     
     NSLog(@"Processed %ld", [self->_capture_results count]);
 
+    
+    // photometry
+    
+    // receive incoming buffers
+    dispatch_queue_t _capture_video_queue;
+    dispatch_queue_t _process_video_queue;
+    
+    AVCaptureSession* _captureSession;
+    AVCaptureVideoDataOutput* _captureVideoDataOutput;
+    AVCaptureDevice* _captureDevice;
+    AVCaptureDeviceInput* _captureDeviceInput;
+    
+    NSMutableArray<id<MTLTexture>>* _capture_results;
+    
+    id<MTLRenderPipelineState> _trivialRenderPipelineState;
+    id<MTLTexture> _trivialTexture;
+    id<MTLTexture> _radienceTexture;
+    wry::matrix<wry::RGBA8Unorm_sRGB> _observationSlice;
+    
+    int _head;
+    int _tail;
+    
+    
+    - (void)captureInit {
+        
+        {
+            dispatch_queue_t interactive =  dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0);
+            _capture_video_queue = dispatch_queue_create_with_target("wry.capture_video",
+                                                                     DISPATCH_QUEUE_SERIAL,
+                                                                     interactive);
+            
+            dispatch_queue_t background =  dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0);
+            _process_video_queue = dispatch_queue_create_with_target("wry.process_video",
+                                                                     DISPATCH_QUEUE_SERIAL,
+                                                                     background);
+        }
+        
+        _captureSession = [AVCaptureSession new];
+        _captureSession.sessionPreset = AVCaptureSessionPreset1920x1080;
+        
+        _captureDevice = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+        {
+            NSError* error = nil;
+            _captureDeviceInput = [[AVCaptureDeviceInput alloc] initWithDevice:_captureDevice error:&error];
+            if (error) {
+                NSLog(@"%@", [error localizedDescription]);
+                abort();
+            }
+        }
+        [_captureSession addInput:_captureDeviceInput];
+        
+        _captureVideoDataOutput = [AVCaptureVideoDataOutput new];
+        _captureVideoDataOutput.videoSettings = @{
+            (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey : @((int) kCVPixelFormatType_32BGRA)
+        };
+        [_captureVideoDataOutput setSampleBufferDelegate:self queue:_capture_video_queue];
+        [_captureSession addOutput:_captureVideoDataOutput];
+        
+        
+        _capture_results = [NSMutableArray new];
+        
+        {
+            MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
+            descriptor.vertexFunction = [self newFunctionWithName:@"TrivialVertexFunction"];
+            descriptor.fragmentFunction = [self newFunctionWithName:@"TrivialFragmentFunction"];
+            descriptor.colorAttachments[0].pixelFormat = _drawablePixelFormat;
+            _trivialRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
+        }
+        
+        {
+            MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+            descriptor.textureType = MTLTextureType2D;
+            descriptor.pixelFormat = MTLPixelFormatRGBA8Unorm;
+            descriptor.height = 1080;
+            descriptor.width = 1;
+            descriptor.storageMode = MTLStorageModeShared;
+            descriptor.usage = MTLTextureUsageShaderRead;
+            _radienceTexture = [_device newTextureWithDescriptor:descriptor];
+            _radienceTexture.label = @"Source radience";
+            _trivialTexture = _radienceTexture;
+            
+        }
+        
+        {
+            _observationSlice = wry::matrix<wry::RGBA8Unorm_sRGB>(1080, 1080);
+        }
+        
+    }
+    
+    -(void) captureVideoStart {
+        [_captureSession startRunning];
+    }
+    
+    -(void) captureVideoStop {
+        [_captureSession stopRunning];
+        
+    }
+    
+    -(void) captureOutput:(AVCaptureOutput *)output
+didDropSampleBuffer:(CMSampleBufferRef)sampleBuffer
+fromConnection:(AVCaptureConnection *)connection {
+    NSLog(@"Dropped a video capture sample");
+}
+    
+    -(void) captureOutput:(AVCaptureOutput *)output
+didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+fromConnection:(AVCaptureConnection *)connection {
+    
+    NSLog(@"%s", __PRETTY_FUNCTION__);
+    
+    int head;
+    @synchronized (self) {
+        if (_head >= 1080) {
+            return;
+        } else {
+            head = _head++;
+        }
+    }
+    
+    // we are on a high-priority queue and must do minimal work
+    // we can't retain the sample buffer permanently so we need to make a copy
+    // we can't deep copy any of these objects, we have to extract the
+    // image data
+    
+    CMTime presentationTimeStamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+    
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    assert(imageBuffer);
+    CVPixelBufferRef pixelBuffer = (CVPixelBufferRef) imageBuffer;
+    CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    void* baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer);
+    size_t height = CVPixelBufferGetHeight(pixelBuffer);
+    size_t width = CVPixelBufferGetWidth(pixelBuffer);
+    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer);
+    size_t dataSize = CVPixelBufferGetDataSize(pixelBuffer);
+    
+    void* dataCopy = malloc(dataSize);
+    memcpy(dataCopy, baseAddress, dataSize);
+    CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    
+    {
+        simd_uchar4 white;
+        white = 255;
+        simd_uchar4 black;
+        black = 0;
+        
+        [_trivialTexture replaceRegion:MTLRegionMake2D(0, head, 1, 1)
+                           mipmapLevel:0
+                             withBytes:&white
+                           bytesPerRow:4];
+        int thick = 16;
+        if (head >= thick) {
+            [_trivialTexture replaceRegion:MTLRegionMake2D(0, head-thick, 1, 1)
+                               mipmapLevel:0
+                                 withBytes:&black
+                               bytesPerRow:4];
+        }
+    }
+    
+    dispatch_async(_process_video_queue, ^{
+        
+        CMTimeShow(presentationTimeStamp);
+        
+        int tail;
+        @synchronized (self) {
+            tail = self->_tail;
+            if (self->_tail < 1080)
+                ++self->_tail;
+        }
+        
+        for (size_t j = 0; j != 1080; ++j) {
+            self->_observationSlice(j, tail) = *((wry::RGBA8Unorm_sRGB*)(((uchar*) dataCopy) + 960 * 4 + bytesPerRow * j));
+        }
+        
+        if (tail == 1079) {
+            wry::to_png(self->_observationSlice, "/Users/antony/Desktop/captures/slice.png");
+            std::terminate();
+        }
+        
+        free(dataCopy);
+        
+    });
+    
+}
+    
+    -(void) captureLogic {
+        
+        static int state = 0;
+        static NSUInteger trigger = 0;
+        
+        if (_frame_count < trigger)
+            return;
+        
+        switch (state) {
+            case 0:
+                [self captureVideoStart];
+                state = 10;
+                break;
+            case 10:
+                break;
+            default:
+                abort();
+        }
+        
+        
+        
+        
+    }
+
+    
+    // [self captureInit];
+    
+    if (false) {
+        // load input data
+        id<MTLTexture> lightTexture = [self newTextureFromResource:@"../captures/slice"
+                                                            ofType:@"png"];
+        
+        // make mask data
+        id<MTLTexture> maskTexture = nil;
+        {
+            MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+            descriptor.textureType = MTLTextureType2D;
+            descriptor.pixelFormat = MTLPixelFormatRGBA32Float;
+            descriptor.width = 1;
+            descriptor.height = 240;
+            descriptor.usage = MTLTextureUsageShaderRead;
+            descriptor.storageMode = MTLStorageModeShared;
+            maskTexture = [_device newTextureWithDescriptor:descriptor];
+            wry::array<simd_float4> mask(240, simd_make_float4(0.0f, 0.0f, 0.0f, 0.0f));
+            for (int i = 0; i != 8; ++i) {
+                for (int j = 0; j != 8; ++j) {
+                    mask[i * 16 + (240 - 166) + j] = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+                }
+            }
+            [maskTexture replaceRegion:MTLRegionMake2D(0,0,1,240)
+                           mipmapLevel:0
+                             withBytes:mask.data()
+                           bytesPerRow:16];
+            assert(maskTexture);
+            
+        }
+        
+        // make result texture
+        {
+            MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+            descriptor.textureType = MTLTextureType2D;
+            descriptor.pixelFormat = MTLPixelFormatRGBA32Float;
+            descriptor.width = 1080;
+            descriptor.height = 1080;
+            descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+            descriptor.storageMode = MTLStorageModeShared;
+            _trivialTexture = [_device newTextureWithDescriptor:descriptor];
+            assert(_trivialTexture);
+            _trivialTexture.label = @"trivial Texture";
+        }
+        
+        // make pipeline
+        id<MTLComputePipelineState> pipelineState = nil;
+        {
+            //MTLComputePipelineDescriptor* descriptor = [MTLComputePipelineDescriptor new];
+            //descriptor.computeFunction = [self newFunctionWithName:@"DepthProcessing"];
+            //descriptor.label = @"DepthProcessing";
+            NSError* error = nil;
+            pipelineState = [_device newComputePipelineStateWithFunction:[self newFunctionWithName:@"DepthProcessing"]
+                                                                   error:&error];
+            assert(!error);
+            assert(pipelineState);
+        }
+        
+        id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+        [encoder setComputePipelineState:pipelineState];
+        [encoder setTexture:_trivialTexture atIndex:0];
+        [encoder setTexture:lightTexture atIndex:1];
+        [encoder setTexture:maskTexture atIndex:2];
+        
+        NSUInteger w = pipelineState.threadExecutionWidth;
+        NSUInteger h = pipelineState.maxTotalThreadsPerThreadgroup / w;
+        MTLSize threadsPerThreadgroup = MTLSizeMake(w, h, 1);
+        
+        MTLSize threadsPerGrid = MTLSizeMake(_trivialTexture.width, _trivialTexture.height, 1);
+        
+        [encoder dispatchThreadgroups:threadsPerGrid threadsPerThreadgroup:threadsPerThreadgroup];
+        [encoder endEncoding];
+        [commandBuffer commit];
+        
+        
+    }
+    
+    
+    - (void)renderToMetalLayer2:(nonnull CAMetalLayer*)metalLayer
+    {
+        //[self captureLogic];
+        
+        id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
+        id<CAMetalDrawable> currentDrawable = [metalLayer nextDrawable];
+        id <MTLRenderCommandEncoder> encoder = nil;
+        {
+            MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor new];
+            descriptor.colorAttachments[AAPLColorIndexColor].clearColor = MTLClearColorMake(1, 0, 1, 0);
+            descriptor.colorAttachments[AAPLColorIndexColor].loadAction = MTLLoadActionClear;
+            descriptor.colorAttachments[AAPLColorIndexColor].storeAction = MTLStoreActionStore;
+            descriptor.colorAttachments[AAPLColorIndexColor].texture = currentDrawable.texture;
+            encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
+        }
+        
+        
+        [encoder setRenderPipelineState:_trivialRenderPipelineState];
+        [encoder setVertexBuffer:_screenTriangleStripVertexBuffer offset:0 atIndex:AAPLBufferIndexVertices];
+        if (_trivialTexture) {
+            [encoder setFragmentTexture:_trivialTexture atIndex:AAPLTextureIndexColor];
+            [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        }
+        
+        [encoder endEncoding];
+        
+        [command_buffer presentDrawable:currentDrawable];
+        [command_buffer commit];
+        
+        ++_frame_count;
+        
+    }
+
+    
 #endif

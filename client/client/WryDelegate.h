@@ -18,10 +18,10 @@
 // on the main thread, typically passing them on asynchronously to the
 // model or the render threads.
 
-@interface WryDelegate : NSResponder <NSApplicationDelegate, NSWindowDelegate,
-    WryMetalViewDelegate>
+@interface WryDelegate : NSResponder < NSApplicationDelegate,
+    NSWindowDelegate, WryMetalViewDelegate >
 
--(nonnull instancetype) initWithModel:(std::shared_ptr<wry::model>) mdl;
+-(nonnull instancetype) init;
 
 @end
 

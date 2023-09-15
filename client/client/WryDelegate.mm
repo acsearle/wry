@@ -37,11 +37,11 @@
     WryAudio *_audio;
 }
 
--(nonnull instancetype) initWithModel:(std::shared_ptr<wry::model>)mdl
+-(nonnull instancetype) init
 {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     if ((self = [super init])) {
-        _model = mdl;
+        _model = std::make_shared<wry::model>();
     }
     return self;
 }
@@ -67,19 +67,17 @@
     _window.title = @"WryApplication";
     _window.acceptsMouseMovedEvents = YES;
     [_window center];
-    //[_window setContentViewController:[[ViewController alloc] initWithModel:_model]];
-    // [_window setContentView:[
-    
     WryMetalView* view = [[WryMetalView alloc]
-                        initWithFrame:contentRect model:_model];
+                          initWithFrame:contentRect];
     
     view.metalLayer.device =  MTLCreateSystemDefaultDevice();
-    view.metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+    view.metalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
+    view.metalLayer.framebufferOnly = NO; // <--------------------- fixme
     view.delegate = self;
     
     _renderer = [[WryRenderer alloc] initWithMetalDevice:view.metalLayer.device
-                                        drawablePixelFormat:view.metalLayer.pixelFormat
-                                                      model:_model];
+                                     drawablePixelFormat:view.metalLayer.pixelFormat
+                                                   model:_model];
     
     _audio = [[WryAudio alloc] init];
     

@@ -90,18 +90,18 @@ namespace wry {
     
     // Use a table to perform premultiplication in sRGB color space.  Lots faster
     // in debug mode, at least
-    u8 (*_multiply_alpha_table)[256] = []() {
-        u8 (*p)[256] = (u8 (*)[256]) malloc(256 * 256);
+    uchar (*_multiply_alpha_table)[256] = []() {
+        uchar (*p)[256] = (uchar (*)[256]) malloc(256 * 256);
         // We expect to have long blocks of alpha = 0 or alpha = 255, so to be
         // cache friendly, we make color be the minor index
         
         // 64k table same size as modern L1 cache?
-        u8 alpha = 0;
+        uchar alpha = 0;
         do {
-            u8 color = 0;
+            uchar color = 0;
             do {
-                // perf: we can compute from_sRGB(u8) via a table
-                // perf: we can compute from_sRGB(u8) without the / 255.0 by
+                // perf: we can compute from_sRGB(uchar) via a table
+                // perf: we can compute from_sRGB(uchar) without the / 255.0 by
                 //       adjusting the other constants
                 // perf: we can transpose the loop and compute from_sRGB(color / 255.0) / 255.0 once for all alpha
                 p[alpha][color] = round(to_sRGB(from_sRGB(color / 255.0f) * alpha / 255.0f) * 255.0f);
@@ -111,32 +111,32 @@ namespace wry {
         return p;
     }();
     
-    f32* _from_sRGB_table = []() {
-        f32* p = (f32*) malloc(256 * 4);
-        u8 color = 0;
+    float* _from_sRGB_table = []() {
+        float* p = (float*) malloc(256 * sizeof(float));
+        uchar color = 0;
         do {
             p[color] = from_sRGB(color / 255.0f);
         } while (++color);
         return p;
     }();
         
-    u8 (*_divide_alpha_table)[256] = []() {
-        u8 (*p)[256] = (u8 (*)[256]) malloc(256 * 256);
+    uchar (*_divide_alpha_table)[256] = []() {
+        uchar (*p)[256] = (uchar (*)[256]) malloc(256 * 256);
         // We expect to have long blocks of alpha = 0 or alpha = 255, so to be
         // cache friendly, we make color be the minor index
         
         std::memset(p, 0, 256);
-        u8 alpha = 1;
+        uchar alpha = 1;
         do {
-            u8 color = 0;
+            uchar color = 0;
             do {
-                // perf: we can compute from_sRGB(u8) via a table
-                // perf: we can compute from_sRGB(u8) without the / 255.0 by
+                // perf: we can compute from_sRGB(uchar) via a table
+                // perf: we can compute from_sRGB(uchar) without the / 255.0 by
                 //       adjusting the other constants
                 // perf: we can transpose the loop and compute from_sRGB(color / 255.0) / 255.0 once for all alpha
                 p[alpha][color] = std::clamp<float>(round(to_sRGB(from_sRGB(color / 255.0f) / (alpha / 255.0f)) * 255.0f), 0, 255);
-            } while ((u8) ++color);
-        } while ((u8) ++alpha);
+            } while ((uchar) ++color);
+        } while ((uchar) ++alpha);
         
         return p;
     }();
