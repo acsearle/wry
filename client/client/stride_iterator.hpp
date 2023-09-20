@@ -29,17 +29,22 @@ namespace wry {
     template<typename T>
     struct stride_iterator {
         
-        using difference_type = std::ptrdiff_t;
-        using value_type = std::remove_const_t<T>;
+        using difference_type = ptrdiff_t;
+        using value_type = std::remove_cv_t<T>;
         using pointer = T*;
         using reference = T&;
         using iterator_category = std::random_access_iterator_tag;
         
-        using C = std::conditional_t<std::is_const_v<T>, const uchar, uchar>;
-        using V = std::conditional_t<std::is_const_v<T>, const void*, void*>;
+        using _byte_type = std::conditional_t<std::is_const_v<T>, const std::byte, std::byte>;
+        using _void_type = std::conditional_t<std::is_const_v<T>, const void*, void*>;
         
         T* base;
         difference_type _stride;
+        
+        void _assert_invariant() const {
+            assert(!(_stride % alignof(T)));
+            assert((std::abs(_stride) >= sizeof(T)) || !base);
+        }
         
         stride_iterator()
         : base(nullptr)
@@ -51,24 +56,17 @@ namespace wry {
         , _stride(0) {
         }
         
-        template<typename U, typename = std::enable_if_t<std::is_convertible_v<U, T*>>>
-        stride_iterator(U ptr, ptrdiff_t stride)
-        : base(ptr)
-        , _stride(stride) {
-            assert(!(_stride % alignof(T)));
-            assert((std::abs(_stride) >= sizeof(T)) || !base);
+        template<typename U, typename = std::enable_if_t<std::is_convertible_v<U*, T*>>>
+        stride_iterator(U* p, difference_type n)
+        : base(p)
+        , _stride(n) {
+            _assert_invariant();
         }
         
         template<typename U, typename = std::enable_if_t<std::is_convertible_v<U*, T*>>>
         stride_iterator(const stride_iterator<U>& other)
         : base(other.base)
         , _stride(other._stride) {
-        }
-
-        template<typename U, typename = std::enable_if_t<std::is_convertible_v<U*, T*>>>
-        stride_iterator& operator=(const stride_iterator<U>& other) {
-            base = other.base;
-            _stride = other._stride;return *this;
         }
         
         stride_iterator& operator=(std::nullptr_t) {
@@ -77,27 +75,26 @@ namespace wry {
             return *this;
         }
 
+        template<typename U, typename = std::enable_if_t<std::is_convertible_v<U*, T*>>>
+        stride_iterator& operator=(const stride_iterator<U>& other) {
+            base = other.base;
+            _stride = other._stride;return *this;
+        }
+        
         stride_iterator operator++(int) {
             stride_iterator result(*this);
-            C* p = reinterpret_cast<C*>(base);
-            p += _stride;
-            base = reinterpret_cast<T*>(p);
+            base = reinterpret_cast<T*>(reinterpret_cast<_byte_type*>(base) + _stride);
             return result;
         }
         
         stride_iterator operator--(int) {
             stride_iterator result(*this);
-            C* p = reinterpret_cast<C*>(base);
-            p -= _stride;
-            base = reinterpret_cast<T*>(p);
+            base = reinterpret_cast<T*>(reinterpret_cast<_byte_type*>(base) - _stride);
             return result;
         }
         
-        T& operator[](std::ptrdiff_t i) const {
-            C* p = reinterpret_cast<C*>(base);
-            p += _stride * i;
-            T* q = reinterpret_cast<T*>(p);
-            return *q;
+        T& operator[](difference_type i) const {
+            return *reinterpret_cast<T*>(reinterpret_cast<_byte_type*>(base) + _stride * i);
         }
         
         T* operator->() const {
@@ -105,16 +102,12 @@ namespace wry {
         }
         
         stride_iterator& operator++() {
-            C* p = reinterpret_cast<C*>(base);
-            p += _stride;
-            base = reinterpret_cast<T*>(p);
+            base = reinterpret_cast<T*>(reinterpret_cast<_byte_type*>(base) + _stride);
             return *this;
         }
         
         stride_iterator& operator--() {
-            C* p = reinterpret_cast<C*>(base);
-            p -= _stride;
-            base = reinterpret_cast<T*>(p);
+            base = reinterpret_cast<T*>(reinterpret_cast<_byte_type*>(base) - _stride);
             return *this;
         }
         
@@ -130,79 +123,69 @@ namespace wry {
             return base;
         }
         
-        explicit operator V() const {
-            return reinterpret_cast<V>(base);
+        explicit operator _void_type() const {
+            return static_cast<_void_type>(base);
         }
         
         T& operator*() const {
-            return *reinterpret_cast<T*>(base);
+            assert(base);
+            return *base;
         }
         
         bool operator==(std::nullptr_t) const {
             return !base;
         }
-        
-        bool operator==(const stride_iterator& other) const {
-            assert((_stride == other._stride)
-                   || !base
-                   || !other.base);
+
+        template<typename U>
+        bool operator==(const stride_iterator<U>& other) const {
+            assert((_stride == other._stride) || !base || !other.base);
             return base == other.base;
         }
         
-        stride_iterator& operator+=(std::ptrdiff_t i) {
-            C* p = reinterpret_cast<C*>(base);
-            p += _stride * i;
-            base = reinterpret_cast<T*>(p);
+        stride_iterator& operator+=(difference_type i) {
+            base = reinterpret_cast<T*>(reinterpret_cast<_byte_type*>(base) + _stride * i);
             return *this;
         }
         
-        stride_iterator& operator-=(std::ptrdiff_t i) {
-            C* p = reinterpret_cast<C*>(base);
-            p += _stride * i;
-            base = reinterpret_cast<T*>(p);
+        stride_iterator& operator-=(difference_type i) {
+            base = reinterpret_cast<T*>(reinterpret_cast<_byte_type*>(base) - _stride * i);
             return *this;
         }
         
     };
 
     template<typename T>
-    stride_iterator(T*, std::ptrdiff_t) -> stride_iterator<T>;
+    stride_iterator(T*, ptrdiff_t) -> stride_iterator<T>;
     
     template<typename T>
-    stride_iterator<T> operator+(stride_iterator<T> a, std::ptrdiff_t b) {
-        using C = std::conditional_t<std::is_const_v<T>, const uchar, uchar>;
-        C* p = reinterpret_cast<C*>(a.base);
-        p += a._stride * b;
-        T* q = reinterpret_cast<T*>(p);
-        return stride_iterator<T>(q, a._stride);
+    stride_iterator<T> operator+(stride_iterator<T> x, ptrdiff_t y) {
+        using U = typename stride_iterator<T>::_byte_type;
+        U* z = reinterpret_cast<U*>(x.base) + x._stride * y;
+        return stride_iterator<T>(reinterpret_cast<T*>(z), x._stride);
     }
     
     template<typename T>
-    stride_iterator<T> operator+(std::ptrdiff_t a, stride_iterator<T> b) {
-        using C = std::conditional_t<std::is_const_v<T>, const uchar, uchar>;
-        C* p = reinterpret_cast<C*>(b.base);
-        p += b._stride * a;
-        T* q = reinterpret_cast<T*>(p);
-        return stride_iterator<T>(q, b._stride);
+    stride_iterator<T> operator+(ptrdiff_t x, stride_iterator<T> y) {
+        using U = typename stride_iterator<T>::_byte_type;
+        U* z = x * y._stride + reinterpret_cast<U*>(y.base);
+        return stride_iterator<T>(reinterpret_cast<T*>(z), y._stride);
     }
     
     template<typename T>
-    stride_iterator<T> operator-(stride_iterator<T> a, std::ptrdiff_t b) {
-        using C = std::conditional_t<std::is_const_v<T>, const uchar, uchar>;
-        C* p = reinterpret_cast<C*>(a.base);
-        p -= a._stride * b;
-        T* q = reinterpret_cast<T*>(p);
-        return stride_iterator<T>(q, a._stride);
+    stride_iterator<T> operator-(stride_iterator<T> x, ptrdiff_t y) {
+        using U = typename stride_iterator<T>::_byte_type;
+        U* z = reinterpret_cast<U*>(x.base) - x._stride * y;
+        return stride_iterator<T>(reinterpret_cast<T*>(z), x._stride);
     }
     
-    template<typename T, typename U, typename = std::common_type_t<T*, U*>>
-    ptrdiff_t operator-(stride_iterator<T> a, stride_iterator<U> b) {
-        assert(a._stride == b._stride);
-        using C = std::conditional_t<std::is_const_v<T>, const uchar, uchar>;
-        C* p = reinterpret_cast<C*>(a.base);
-        C* q = reinterpret_cast<C*>(b.base);
-        assert(!(p - q) % a._stride);
-        return (p - q) / a._stride;
+    template<typename T, typename U>
+    ptrdiff_t operator-(stride_iterator<T> x, stride_iterator<U> y) {
+        assert(x._stride == y._stride);
+        using V = const std::byte;
+        V* z = reinterpret_cast<V*>(x.base);
+        V* w = reinterpret_cast<V*>(y.base);
+        assert(!(z - w) % x._stride);
+        return (z - w) / x._stride;
     }
     
 } // namespace wry

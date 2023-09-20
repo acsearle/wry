@@ -16,20 +16,18 @@
 
 @protocol WryMetalViewDelegate <NSObject>
 
-- (void)drawableResize:(CGSize)size;
-- (void)renderToMetalLayer:(nonnull CAMetalLayer *)metalLayer;
+- (void)viewDidChangeBackingProperties;
+- (void)viewDidChangeFrameSize;
+- (void)viewDidChangeBoundsSize;
+- (void)viewDidMoveToWindow;
 
 @end
 
 @interface WryMetalView : NSView
 
-@property (nonatomic, nonnull, readonly) CAMetalLayer *metalLayer;
 @property (nonatomic, nullable) id<WryMetalViewDelegate> delegate;
 
 - (nonnull instancetype) initWithFrame:(CGRect)frame;
-- (void)render;
-- (void)resizeDrawable:(CGFloat)scaleFactor;
-- (void)stopRenderLoop;
 
 @end
 

@@ -5,7 +5,7 @@
 //  Created by Antony Searle on 2/9/2023.
 //
 
-#include "WryMesh.hpp"
+#include "WryMesh.h"
 
 @implementation WryMesh
 {

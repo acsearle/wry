@@ -13,7 +13,7 @@ namespace wry {
     
     static double* _exponent5_table = []() {
         double* p = ((double*) malloc(8192)) + 512;
-        for (ptrdiff_t i = -512; i != 512; ++i) {
+        for (int i = -512; i != 512; ++i) {
             p[i] = std::pow(5.0, i);
         }
         return p;

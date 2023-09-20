@@ -14,6 +14,8 @@
 #include "utility.hpp"
 #include "table.hpp"
 
+/*
+ 
 namespace wry {
 
     // coordinates are stored as a u64 representing the interleaved bits of
@@ -141,5 +143,8 @@ namespace wry {
     };
     
 }
+ 
+ */
+
 
 #endif /* world_hpp */

@@ -24,17 +24,21 @@
 // Outstanding questions:
 // - does this include network events?
 // - does CoreAudio do any work on the calling thread (such as buffer prep)
-
-@interface WryDelegate ()
-
-@end
+//
+// There's no point using the main thread to just forward notifications to the
+// render thread, so pull the render thread functionality back onto main; it
+// can still dispatch some work elsewhere if needed
 
 @implementation WryDelegate
 {
     std::shared_ptr<wry::model> _model;
     NSWindow* _window;
-    WryRenderer *_renderer;
-    WryAudio *_audio;
+    WryMetalView* _metalView;
+    CAMetalLayer* _metalLayer;
+    CAMetalDisplayLink* _metalDisplayLink;
+    WryRenderer* _renderer;
+    NSThread* _renderThread;
+    WryAudio* _audio;
 }
 
 -(nonnull instancetype) init
@@ -46,16 +50,21 @@
     return self;
 }
 
--(void) dealloc {
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-}
-
 #pragma mark NSApplicationDelegate
 
 - (void)applicationWillFinishLaunching:(NSNotification *)aNotification {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+
+    _metalLayer = [[CAMetalLayer alloc] init];
+    _metalLayer.device = MTLCreateSystemDefaultDevice();
+    _metalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
+    _metalLayer.framebufferOnly = NO; // fixme: allegedly hurts performance
     
-    NSRect contentRect = NSMakeRect(0.0, 0.0, 960, 540);
+    
+    NSScreen* screen = [NSScreen mainScreen];
+    CGFloat scaleFactor = [screen backingScaleFactor];
+    NSRect contentRect = NSMakeRect(0.0, 0.0, 1920.0 / scaleFactor,
+                                    1080.0 / scaleFactor);
     _window = [[NSWindow alloc] initWithContentRect:contentRect
                                           styleMask:(NSWindowStyleMaskMiniaturizable
                                                      | NSWindowStyleMaskClosable
@@ -67,30 +76,35 @@
     _window.title = @"WryApplication";
     _window.acceptsMouseMovedEvents = YES;
     [_window center];
-    WryMetalView* view = [[WryMetalView alloc]
-                          initWithFrame:contentRect];
     
-    view.metalLayer.device =  MTLCreateSystemDefaultDevice();
-    view.metalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
-    view.metalLayer.framebufferOnly = NO; // <--------------------- fixme
-    view.delegate = self;
+    _metalView = [[WryMetalView alloc]
+                  initWithFrame:contentRect];
+    _metalView.delegate = self;
     
-    _renderer = [[WryRenderer alloc] initWithMetalDevice:view.metalLayer.device
-                                     drawablePixelFormat:view.metalLayer.pixelFormat
+    _metalView.layer = _metalLayer;
+    _metalView.wantsLayer = YES;
+    //_metalView.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
+    
+    _renderer = [[WryRenderer alloc] initWithMetalDevice:_metalLayer.device
+                                     drawablePixelFormat:_metalLayer.pixelFormat
                                                    model:_model];
     
-    _audio = [[WryAudio alloc] init];
-    
-    _window.contentView = view;
-    view.nextResponder = self;
+    _metalDisplayLink = [[CAMetalDisplayLink alloc] initWithMetalLayer:_metalLayer];
+    _metalDisplayLink.preferredFrameRateRange = CAFrameRateRangeMake(60.0, 60.0, 60.0);
+    _metalDisplayLink.preferredFrameLatency = 2;
+    _metalDisplayLink.paused = NO;
 
-    
+    _audio = [[WryAudio alloc] init];
+
+    _window.contentView = _metalView;
+    _metalView.nextResponder = self;
+
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
    
-    // [_window toggleFullScreen:nil]; // < --------------------------------
+    // [_window toggleFullScreen:nil];
 }
 
 - (void)applicationWillBecomeActive:(NSNotification *)notification {
@@ -152,18 +166,43 @@
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
-#pragma mark ClientViewDelegate
+#pragma mark WryMetalViewDelegate
+
+- (void)viewDidMoveToWindow {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    if (_metalView.window) {
+        _metalDisplayLink.delegate = _renderer;
+        _metalDisplayLink.paused = NO;
+        NSRunLoop* currentRunLoop = [NSRunLoop currentRunLoop];
+        [_metalDisplayLink addToRunLoop:currentRunLoop forMode:NSRunLoopCommonModes];
+    }
+}
+
+- (void)viewDidChangeFrameSize {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    [self drawableResize:_metalView.bounds.size];
+}
+
+- (void)viewDidChangeBoundsSize {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    [self drawableResize:_metalView.bounds.size];
+
+}
+
+- (void)viewDidChangeBackingProperties {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    [self drawableResize:_metalView.bounds.size];
+}
 
 - (void)drawableResize:(CGSize)size
 {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    [_renderer drawableResize:size];
-}
-
-- (void)renderToMetalLayer:(nonnull CAMetalLayer *)layer
-{
-    // NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    [_renderer renderToMetalLayer:layer];
+    CGFloat scaleFactor = _window.backingScaleFactor;
+    CGSize newSize = size;
+    newSize.width *= scaleFactor;
+    newSize.height *= scaleFactor;
+    _metalLayer.drawableSize = newSize;
+    [_renderer drawableResize:newSize];
 }
 
 #pragma mark NSResponder
@@ -180,27 +219,27 @@
     if (!event.ARepeat) {
         
     }
-
+    
     /*
-    {
-        // random location on a line in front of the listener
-        AVAudio3DPoint location = AVAudioMake3DPoint(// rand() & 1 ? -1.0 : +1.0,
-                                                     rand() * 2.0 / RAND_MAX - 1.0,
-                                                     0.0, //rand() & 1 ? -1.0 : +1.0,
-                                                     1.0 // rand() & 1 ? -1.0 : +1.0
-                                                     );
-        
-        
-        NSString* name = ((event.characters.length
-                           && ([event.characters characterAtIndex:0]
-                               == NSCarriageReturnCharacter))
-                          ? @"mixkit-typewriter-classic-return-1381"
-                          : @"Keyboard-Button-Click-07-c-FesliyanStudios.com2");
-        
-        [_audio play:name at:location];
-    }
+     {
+     // random location on a line in front of the listener
+     AVAudio3DPoint location = AVAudioMake3DPoint(// rand() & 1 ? -1.0 : +1.0,
+     rand() * 2.0 / RAND_MAX - 1.0,
+     0.0, //rand() & 1 ? -1.0 : +1.0,
+     1.0 // rand() & 1 ? -1.0 : +1.0
+     );
+     
+     
+     NSString* name = ((event.characters.length
+     && ([event.characters characterAtIndex:0]
+     == NSCarriageReturnCharacter))
+     ? @"mixkit-typewriter-classic-return-1381"
+     : @"Keyboard-Button-Click-07-c-FesliyanStudios.com2");
+     
+     [_audio play:name at:location];
+     }
      */
-        
+    
     
     // UTF-16 code for key, such as private use 0xf700 = NSUpArrowFunctionKey
     // printf("%x\n", [event.characters characterAtIndex:0]);
@@ -289,13 +328,13 @@
 - (void)flagsChanged:(NSEvent *)event {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     /*
-    NSEventModifierFlagCommand;
-    NSEventModifierFlagOption;
-    NSEventModifierFlagHelp;
-    NSEventModifierFlagControl;
-    NSEventModifierFlagCapsLock;
-    NSEventModifierFlagFunction;
-    NSEventModifierFlagNumericPad;
+     NSEventModifierFlagCommand;
+     NSEventModifierFlagOption;
+     NSEventModifierFlagHelp;
+     NSEventModifierFlagControl;
+     NSEventModifierFlagCapsLock;
+     NSEventModifierFlagFunction;
+     NSEventModifierFlagNumericPad;
      */
 }
 
@@ -307,10 +346,10 @@
 - (void) mouseDown:(NSEvent *)event {}
 - (void) mouseDragged:(NSEvent *)event {
     auto lock = std::unique_lock{_model->_mutex};
-    _model->_yx.x += event.deltaX * _window.screen.backingScaleFactor;
-    _model->_yx.y += event.deltaY * _window.screen.backingScaleFactor;
+    _model->_looking_at.x += event.deltaX * _window.screen.backingScaleFactor;
+    _model->_looking_at.y += event.deltaY * _window.screen.backingScaleFactor;
     // NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
-     
+    
 }
 - (void) mouseUp:(NSEvent *)event {}
 - (void) rightMouseDown:(NSEvent *)event {}
@@ -322,9 +361,13 @@
 
 -(void) scrollWheel:(NSEvent *)event {
     auto lock = std::unique_lock{_model->_mutex};
-    _model->_yx.x += event.scrollingDeltaX * _window.screen.backingScaleFactor;
-    _model->_yx.y += event.scrollingDeltaY * _window.screen.backingScaleFactor;
+    _model->_looking_at.x += event.scrollingDeltaX * _window.screen.backingScaleFactor;
+    _model->_looking_at.y += event.scrollingDeltaY * _window.screen.backingScaleFactor;
     // NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
+}
+
+- (void)encodeWithCoder:(nonnull NSCoder *)coder { 
+    
 }
 
 @end

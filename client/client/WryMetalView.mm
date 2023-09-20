@@ -24,41 +24,63 @@
 // [1] https://sarunw.com/posts/how-to-create-macos-app-without-storyboard/
 // [2] https://developer.apple.com/documentation/metal/onscreen_presentation/creating_a_custom_metal_view?language=objc
 // [3] https://developer.apple.com/documentation/metal/resource_synchronization/synchronizing_cpu_and_gpu_work?language=objc
+//
+// With CAMetalDisplayLink, this class becomes vestigial, merely delegating some
+// notifications (which might be available by subscription anyway?)
 
 @implementation WryMetalView
-{
-    CVDisplayLinkRef _displayLink;
-}
-
-- (CALayer *)makeBackingLayer
-{
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-
-    return _metalLayer = [CAMetalLayer layer];
-}
 
 - (nonnull instancetype) initWithFrame:(CGRect)frame
 {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
-
     if ((self = [super initWithFrame:frame])) {
-        self.wantsLayer = YES;
-        self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
     }
     return self;
 }
 
-- (void)dealloc
+- (BOOL)acceptsFirstResponder {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    return YES;
+}
+
+- (void)viewDidChangeBackingProperties
 {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    [self stopRenderLoop];
-    // ARC calls [super dealloc];
+    [super viewDidChangeBackingProperties];
+    [_delegate viewDidChangeBackingProperties];
 }
+
+- (void)setFrameSize:(NSSize)size
+{
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    [super setFrameSize:size];
+    [_delegate viewDidChangeFrameSize];
+}
+
+- (void)setBoundsSize:(NSSize)size
+{
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    [super setBoundsSize:size];
+    [_delegate viewDidChangeBoundsSize];
+}
+
+- (void)viewDidMoveToWindow
+{
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    [super viewDidMoveToWindow];
+    [_delegate viewDidMoveToWindow];
+}
+
+@end
+
+#if 0
+
+
 
 - (void)resizeDrawable:(CGFloat)scaleFactor
 {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
-
+    
     CGSize newSize = self.bounds.size;
     newSize.width *= scaleFactor;
     newSize.height *= scaleFactor;
@@ -90,171 +112,4 @@
     
 }
 
-- (void)render
-{
-
-    // Must synchronize if rendering on background thread to ensure resize operations from the
-    // main thread are complete before rendering which depends on the size occurs.
-    
-    // this is way too clunky; when the main thread resizes, we're holding up
-    // the main thread until the rendering is complete
-    
-    // we need to do the trick with a pipeline of several drawables from the other examples
-    
-    // we can resize the drawable from an atomic size as part of the render
-    // operation
-    @synchronized(_metalLayer)
-    {
-        [_delegate renderToMetalLayer:_metalLayer];
-    }
-}
-
-- (BOOL)setupCVDisplayLinkForScreen:(NSScreen*)screen
-{
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-
-    CVReturn cvReturn;
-    
-    // Create a display link capable of being used with all active displays
-    cvReturn = CVDisplayLinkCreateWithActiveCGDisplays(&_displayLink);
-    
-    if(cvReturn != kCVReturnSuccess)
-    {
-        return NO;
-    }
-    
-    // Set DispatchRenderLoop as the callback function and
-    // supply this view as the argument to the callback.
-    cvReturn = CVDisplayLinkSetOutputCallback(_displayLink, &DispatchRenderLoop, (__bridge void*)self);
-    
-    if(cvReturn != kCVReturnSuccess)
-    {
-        return NO;
-    }
-    
-    // Associate the display link with the display on which the
-    // view resides
-    CGDirectDisplayID viewDisplayID =
-    (CGDirectDisplayID) [self.window.screen.deviceDescription[@"NSScreenNumber"] unsignedIntegerValue];;
-    
-    cvReturn = CVDisplayLinkSetCurrentCGDisplay(_displayLink, viewDisplayID);
-    
-    if(cvReturn != kCVReturnSuccess)
-    {
-        return NO;
-    }
-    
-    cvReturn = CVDisplayLinkStart(_displayLink);
-    if(cvReturn != kCVReturnSuccess)
-    {
-        return NO;
-    }
-
-    
-    NSNotificationCenter* notificationCenter = [NSNotificationCenter defaultCenter];
-    
-    // Register to be notified when the window closes so that you
-    // can stop the display link
-    [notificationCenter addObserver:self
-                           selector:@selector(windowWillClose:)
-                               name:NSWindowWillCloseNotification
-                             object:self.window];
-    
-    return YES;
-}
-
-
-- (void)windowWillClose:(NSNotification*)notification
-{
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    // Stop the display link when the window is closing since there
-    // is no point in drawing something that can't be seen
-    if (notification.object == self.window)
-    {
-        CVReturn result = CVDisplayLinkStop(_displayLink);
-        assert(result == kCVReturnSuccess);
-    }
-}
-
-
-// This is the renderer output callback function
-static CVReturn DispatchRenderLoop(CVDisplayLinkRef displayLink,
-                                   const CVTimeStamp* now,
-                                   const CVTimeStamp* outputTime,
-                                   CVOptionFlags flagsIn,
-                                   CVOptionFlags* flagsOut,
-                                   void* displayLinkContext)
-{
-    // At 120 Hz CVDisplayLink seems to fire two cycles in advance
-    
-    @autoreleasepool
-    {
-        //static uint64_t last = 0;
-        //printf("%lld\n", outputTime->hostTime - last);
-        //last = outputTime->hostTime;
-        WryMetalView* view = (__bridge WryMetalView*)displayLinkContext;
-        [view render];
-    }
-        
-    return kCVReturnSuccess;
-}
-
-- (void)stopRenderLoop
-{
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    if (_displayLink)
-    {
-        // Stop the display link BEFORE releasing anything in the view otherwise the display link
-        // thread may call into the view and crash when it encounters something that no longer
-        // exists
-        CVReturn cvReturn;
-        cvReturn = CVDisplayLinkStop(_displayLink);
-        // assert(cvReturn == kCVReturnSuccess);
-        CVDisplayLinkRelease(_displayLink);
-    }
-}
-
-- (BOOL)acceptsFirstResponder {
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    // we accept first responder and chain to nextResponder, the big delegate
-    return YES;
-}
-
-- (void)viewDidChangeBackingProperties
-{
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    [super viewDidChangeBackingProperties];
-    [self resizeDrawable:self.window.screen.backingScaleFactor];
-}
-
-- (void)setFrameSize:(NSSize)size
-{
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    [super setFrameSize:size];
-    [self resizeDrawable:self.window.screen.backingScaleFactor];
-}
-
-- (void)setBoundsSize:(NSSize)size
-{
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    [super setBoundsSize:size];
-    [self resizeDrawable:self.window.screen.backingScaleFactor];
-}
-
-- (void)viewDidMoveToWindow
-{
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    if (self.window) {
-        [super viewDidMoveToWindow];
-        [self setupCVDisplayLinkForScreen:self.window.screen];
-        [self resizeDrawable:self.window.screen.backingScaleFactor];
-    }
-}
-
-- (void)viewWillMoveToWindow:(NSWindow *)newWindow
-{
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    [super viewWillMoveToWindow:newWindow];
-}
-
-@end
+#endif

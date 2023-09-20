@@ -47,9 +47,9 @@ namespace wry {
     };
     
     template<typename T = rand>
-    struct uniform {
+    struct uniform_distribution {
         T _x;
-        explicit uniform(uint64_t seed = 0)
+        explicit uniform_distribution(uint64_t seed = 0)
         : _x(seed) {
         }
         double operator()() {
@@ -57,14 +57,14 @@ namespace wry {
         }
     };
     
-    template<typename T = uniform<>>
-    class normal {
+    template<typename T = uniform_distribution<>>
+    class normal_distribution {
         
         T _x;
         
     public:
         
-        explicit normal(uint64_t seed = 0) : _x(seed) {}
+        explicit normal_distribution(uint64_t seed = 0) : _x(seed) {}
         
         double operator()() {
             // normal deviate by ratio of uniforms

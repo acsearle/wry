@@ -14,6 +14,7 @@
 #include "matrix.hpp"
 #include "simd.hpp"
 #include "string.hpp"
+#include "sRGB.hpp"
 
 namespace wry {
 
@@ -24,62 +25,6 @@ namespace wry {
     
     void multiply_alpha_inplace(matrix<RGBA8Unorm_sRGB>& target);
 
-    inline float from_sRGB(float u) {
-        return ((u <= 0.04045f)
-                ? (u / 12.92f)
-                : (std::powf((u + 0.055f) / 1.055f, 2.4f)));
-    }
-    
-    inline float from_sRBG(uchar u) {
-        return _from_sRGB_table[u];
-    }
-    
-    /*
-    inline simd_float4 from_sRGB_(pixel p) {
-        return simd_make_float4(_from_sRGB_table[p.r],
-                                _from_sRGB_table[p.g],
-                                _from_sRGB_table[p.b],
-                                p.a / 255.0f);
-    }
-     */
-    
-    inline float to_sRGB(float u) {
-        return ((u <= 0.0031308f)
-                ? (u * 12.92f)
-                : (1.055f * powf(u, 1.0f / 2.4f) - 0.055f));
-    }
-    
-    inline simd_float4 to_sRGB(simd_float4 v) {
-        return simd_float4{
-            to_sRGB(v.r)  * 255.0f,
-            to_sRGB(v.g)  * 255.0f,
-            to_sRGB(v.b)  * 255.0f,
-            v.a * 255.0f,
-        };
-    }
-        
-    /*
-    inline pixel multiply_alpha(pixel x) {
-        return pixel{
-            _multiply_alpha_table[x.a][x.r],
-            _multiply_alpha_table[x.a][x.g],
-            _multiply_alpha_table[x.a][x.g],
-            x.a
-        };
-    }
-    */
-    /*
-    extern uchar (*_divide_alpha_table)[256];
-    
-    inline pixel divide_alpha(pixel x) {
-        return pixel{
-            _multiply_alpha_table[x.a][x.r],
-            _multiply_alpha_table[x.a][x.g],
-            _multiply_alpha_table[x.a][x.g],
-            x.a
-        };
-    }
-     */
     
     template<typename ImageView>
     inline void draw_bounding_box(ImageView& x) {

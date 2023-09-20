@@ -14,13 +14,13 @@
 
 #include "model.hpp"
 
-@interface WryRenderer : NSObject <AVCapturePhotoCaptureDelegate, AVCaptureVideoDataOutputSampleBufferDelegate>
+@interface WryRenderer : NSObject <CAMetalDisplayLinkDelegate>
 
 - (nonnull instancetype)initWithMetalDevice:(nonnull id<MTLDevice>)device
                         drawablePixelFormat:(MTLPixelFormat)drawablePixelFormat
                                       model:(std::shared_ptr<wry::model>)model_;
 
-- (void)renderToMetalLayer:(nonnull CAMetalLayer*)metalLayer;
+- (void)renderToMetalLayer:(nonnull CAMetalDisplayLinkUpdate*)update;
 
 - (void)drawableResize:(CGSize)drawableSize;
 

@@ -194,6 +194,23 @@ namespace wry {
             return false;
         };
     }
+    
+    inline constexpr auto match_not_from(const char* zstr) {
+        assert(zstr);
+        return [zstr](string_view& v) -> bool {
+            if (!v)
+                return false;
+            int ch = *v;
+            utf8_iterator a(zstr);
+            while (*a) {
+                if (ch == *a)
+                    return false;
+            }
+            return ++v;
+        };
+    }
+    
+    
     inline constexpr auto match_predicate(auto&& predicate) {
         return [predicate=std::forward<decltype(predicate)>(predicate)](string_view& v) -> bool {
             return v && predicate(*v) && ++v;
@@ -216,7 +233,7 @@ namespace wry {
     }
 
     inline constexpr auto match_alnum_() {
-        return match_predicate(&isalnum);
+        return match_predicate(&isalnum_);
     }
     
     inline constexpr auto match_alpha() {
@@ -224,7 +241,7 @@ namespace wry {
     }
 
     inline constexpr auto match_alpha_() {
-        return match_predicate(&isalpha);
+        return match_predicate(&isalpha_);
     }
 
     inline constexpr auto match_ascii() {
@@ -265,6 +282,12 @@ namespace wry {
 
     inline constexpr auto match_xdigit() {
         return match_cctype(&isxdigit);
+    }
+    
+    inline constexpr auto match_nonzero_digit() {
+        return match_predicate([](int character) {
+            return isuchar(character) && isdigit(character) && (character != '0');
+        });
     }
     
     // multicharacter matchers

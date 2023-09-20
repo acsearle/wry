@@ -8,6 +8,7 @@
 #ifndef raw_vector_hpp
 #define raw_vector_hpp
 
+#include <cassert>
 #include <cstdlib>
 #include <utility>
 

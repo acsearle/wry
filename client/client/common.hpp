@@ -11,6 +11,9 @@
 #include <cstddef>
 #include <cstdint>
 
+using std::nullptr_t;
+using std::byte;
+
 // OpenCL conventional names
 
 using uchar = unsigned char;

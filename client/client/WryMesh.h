@@ -5,8 +5,8 @@
 //  Created by Antony Searle on 2/9/2023.
 //
 
-#ifndef WryMesh_hpp
-#define WryMesh_hpp
+#ifndef WryMesh_h
+#define WryMesh_h
 
 #import <Metal/Metal.h>
 
@@ -33,4 +33,4 @@
 
 @end
 
-#endif /* WryMesh_hpp */
+#endif /* WryMesh_h */

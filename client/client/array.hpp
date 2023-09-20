@@ -37,8 +37,10 @@ namespace wry {
     
     template<typename> struct array;
     
-    template<typename T> struct array<const T>; // undefined
-    
+    template<typename T>
+    struct rank<array<T>> : std::integral_constant<std::size_t, rank<T>::value + 1> {};
+
+        
     template<typename T>
     struct array {
                 

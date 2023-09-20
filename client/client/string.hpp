@@ -311,11 +311,10 @@ namespace wry {
         bool empty() const {
             return !(_body && (_body->_end - _body->_begin));
         }
-        
-        
+                
     };
     
-    string _string_from_file(string_view);
+    string string_from_file(string_view);
     
 } // namespace manic
 

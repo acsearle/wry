@@ -8,6 +8,7 @@
 #ifndef serialize_hpp
 #define serialize_hpp
 
+#include <cassert>
 #include <cstdio>
 
 #include "common.hpp"

@@ -14,47 +14,53 @@
 
 namespace wry {
     
-    inline const uchar* utf8advance(const uchar* p) {
-        if (((p[0] & 0b10000000) == 0b00000000))
-            return p + 1;
-        if (((p[0] & 0b11100000) == 0b11000000) &&
-            ((p[1] & 0b11000000) == 0b10000000))
-            return p + 2;
-        if (((p[0] & 0b11110000) == 0b11100000) &&
-            ((p[1] & 0b11000000) == 0b10000000) &&
-            ((p[2] & 0b11000000) == 0b10000000))
-            return p + 3;
-        if (((p[0] & 0b11111000) == 0b11110000) &&
-            ((p[1] & 0b11000000) == 0b10000000) &&
-            ((p[2] & 0b11000000) == 0b10000000) &&
-            ((p[3] & 0b11000000) == 0b10000000))
-            return p + 4;
-        abort();
-    }
-    
-    inline bool utf8validatez(uchar* p) {
+    inline bool utf8validatez(const uchar* strz) {
         for (;;) {
-            if (p[0] == 0) {
+            
+            if (strz[0] == 0)
                 return true;
-            } else if (((p[0] & 0b10000000) == 0b00000000)) {
-                ++p;
-            } else if (((p[0] & 0b11100000) == 0b11000000) &&
-                       ((p[1] & 0b11000000) == 0b10000000)) {
-                p += 2;
-            } else if (((p[0] & 0b11110000) == 0b11100000) &&
-                       ((p[1] & 0b11000000) == 0b10000000) &&
-                       ((p[2] & 0b11000000) == 0b10000000)) {
-                p += 3;
-            } else if (((p[0] & 0b11111000) == 0b11110000) &&
-                       ((p[1] & 0b11000000) == 0b10000000) &&
-                       ((p[2] & 0b11000000) == 0b10000000) &&
-                       ((p[3] & 0b11000000) == 0b10000000)) {
-                p += 4;
+            
+            if (((strz[0] & 0b10000000) == 0b00000000)) {
+                ++strz;
+            } else if (((strz[0] & 0b11100000) == 0b11000000) &&
+                       ((strz[1] & 0b11000000) == 0b10000000)) {
+                strz += 2;
+            } else if (((strz[0] & 0b11110000) == 0b11100000) &&
+                       ((strz[1] & 0b11000000) == 0b10000000) &&
+                       ((strz[2] & 0b11000000) == 0b10000000)) {
+                strz += 3;
+            } else if (((strz[0] & 0b11111000) == 0b11110000) &&
+                       ((strz[1] & 0b11000000) == 0b10000000) &&
+                       ((strz[2] & 0b11000000) == 0b10000000) &&
+                       ((strz[3] & 0b11000000) == 0b10000000)) {
+                strz += 4;
             } else {
                 return false;
             }
+            
         }
     }
+    
+    /*
+    inline bool utf8validate(const uchar*& first, const uchar* last) {
+        auto clo = [](
+    initial:
+        if (first == last)
+            return true;
+    expect_first:
+        switch (__builtin_clz(*((const char*) first))
+            case 4:
+                if (
+            case 3:
+            case 2:
+            case 1:
+                return false;
+            case 0:
+                goto initial;
+        }
+        
+    }
+     */
     
     inline uchar* utf8_encode(uint a, uchar b[4]) {
         if (a < 0x8F) {

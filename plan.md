@@ -1,9 +1,29 @@
 .plan
+=====
 
 Apple-first for convenience; don't fight the development platform.  Strive to
-keep the platform dependencies localized.
+keep the platform dependencies localized though
 
-- Custom metal view
+Renderloop
+----------
+- For MTKView and CustomMetalView, the CVDisplayLink wakes the thread and then
+  the must make a blocking call to nextDrawable.  When the thread actually
+  suspends here, the scheduler may not wake it in time to meet the next vsync,
+  which is only 8.3 ms away.  This seems intractable at 120 Hz, though the
+  method works ok at 60 Hz
+- The new API is CADisplayLink, which calls into a delegate with a ready
+  drawable, so all blocking happens in the OS at least
+- When we render with a dedicated thread, the main thread ends up as a stub
+  whose only job is to send messages to the render thread where they are
+  resolved against the drawn interface and perhaps passed on to the model
+- The callback also provides the targetTimestamp of the drawable which should
+  be used for all timed things, which means we are lacking a lot of necessary
+  information to draw the scene until relatively late
+- Thus, we go full circle and return to a model where we render on the main
+  thread.  We can only process changes per frame anyway.
+- We can still marshal other stuff on other threads if needed, and do less
+  time critical things (like bloom? shadows?) one frame behind?
+
 - NSEvent mouse and keyboard input
 - Metal sprite atlas draw
 

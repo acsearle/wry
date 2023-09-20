@@ -14,7 +14,7 @@
 #include <MetalKit/MetalKit.h>
 #include <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
-#include "WryMesh.hpp"
+#include "WryMesh.h"
 #include "WryRenderer.h"
 
 #include "atlas.hpp"
@@ -764,13 +764,23 @@
 }
 
 
-- (void)renderToMetalLayer:(nonnull CAMetalLayer*)metalLayer
+// - (void)renderToMetalLayer:(nonnull CAMetalLayer*)metalLayer
+- (void)renderToMetalLayer:(nonnull CAMetalDisplayLinkUpdate*)update
 {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+
     using namespace ::simd;
     using namespace ::wry;
 
-    [_captureScope beginScope];
-
+    //[_captureScope beginScope];
+    
+    
+    _model->_world.step();
+    
+    printf("%lx\n", _model->_world._waiting_on_time.begin()->second->_location);
+    
+    
+    
     id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
     
     MeshUniforms uniforms = {};
@@ -1044,28 +1054,6 @@
     
     // now blur
     
-    
-    id<CAMetalDrawable> currentDrawable = nil;
-    {
-        // wry::timer t("nextDrawable");
-        //auto a = mach_absolute_time();
-        auto a = std::chrono::steady_clock::now();
-        currentDrawable = [metalLayer nextDrawable];
-        auto b = std::chrono::steady_clock::now();
-        static std::chrono::steady_clock::time_point t0, t1;
-        auto c = std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
-        auto d = std::chrono::duration_cast<std::chrono::microseconds>(b - t0).count();
-        auto e = std::chrono::duration_cast<std::chrono::microseconds>(a - t1).count();
-        //if (c > 999) {
-            printf("! %lld\n", c);
-            //printf("        %lld\n", d);
-            //printf("        %lld\n", e);
-        //}
-        t0 = b;
-        t1 = a;
-        
-    }
-    
     {
         _gaussianBlur.edgeMode = MPSImageEdgeModeClamp;
         
@@ -1085,19 +1073,57 @@
     }
     
     {
+        // ultra-paranoid
+    }
+    
+    
+    /*
+    id<CAMetalDrawable> currentDrawable = nil;
+    {
+        // wry::timer t("nextDrawable");
+        //auto a = mach_absolute_time();
+        auto a = std::chrono::steady_clock::now();
+        currentDrawable = [metalLayer nextDrawable];
+        auto b = std::chrono::steady_clock::now();
+        static std::chrono::steady_clock::time_point t0, t1;
+        auto c = std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+        auto d = std::chrono::duration_cast<std::chrono::microseconds>(b - t0).count();
+        auto e = std::chrono::duration_cast<std::chrono::microseconds>(a - t0).count();
+        //b.time_since_epoch()
+        
+        //if (c > 999) {
+        // printf("! %lld\n", c);
+        //printf(" wake-to-wake  %lld\n", d);
+        //printf(" wake-to-sleep %lld\n", e);
+        //}
+        t0 = b;
+        t1 = a;
+        
+    }
+    
+    {
         id<MTLBlitCommandEncoder> encoder =  [command_buffer blitCommandEncoder];
         [encoder copyFromTexture:_addedTexture toTexture:currentDrawable.texture];
         [encoder endEncoding];
     }
-
             
     [command_buffer presentDrawable:currentDrawable];
     currentDrawable = nil;
     [command_buffer commit];
+     */
+    
+    @autoreleasepool {
+        id<CAMetalDrawable> currentDrawable = [update drawable];
+        id<MTLBlitCommandEncoder> encoder =  [command_buffer blitCommandEncoder];
+        [encoder copyFromTexture:_addedTexture toTexture:currentDrawable.texture];
+        [encoder endEncoding];
+        [command_buffer presentDrawable:currentDrawable];
+    }
+    [command_buffer commit];
     
     ++_frame_count;
     
-    [_captureScope endScope];
+    //[_captureScope endScope];
 
 }
 
@@ -1155,6 +1181,11 @@
     _addedTexture.label = @"Addition target";
 
     
+}
+
+- (void)metalDisplayLink:(CAMetalDisplayLink *)link needsUpdate:(CAMetalDisplayLinkUpdate *)update {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    [self renderToMetalLayer:update];
 }
 
 @end

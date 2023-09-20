@@ -253,7 +253,7 @@ namespace wry {
     };
     
     wry::mesh::mesh from_obj(string_view v) {
-        string s = _string_from_file(v);
+        string s = string_from_file(v);
         string_view u(s);
         obj o;
         o.parse_obj(u);

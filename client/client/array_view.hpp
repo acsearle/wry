@@ -11,47 +11,80 @@
 #include "utility.hpp"
 
 namespace wry {
+
+    // array_view into a contguous sequence
     
+    template<typename T>
+    struct array_view;
+    
+    template<typename T>
+    struct rank<array_view<T>> : std::integral_constant<std::size_t, rank<T>::value + 1> {};
+
     template<typename T>
     struct array_view {
         
-        using size_type = std::size_t;
-        using difference_type = std::ptrdiff_t;
-        using value_type = T;
+        using size_type = size_t;
+        using difference_type = ptrdiff_t;
+        using element_type = T;
+        using value_type = std::remove_cv<T>;
+        using pointer = T*;
+        using const_pointer = std::add_const_t<T>*;
         using iterator = T*;
         using const_iterator = std::add_const_t<T>*;
         using reference = T&;
         using const_reference = std::add_const_t<T>&;
         
-        T* _begin;
-        size_t _size;
         
-        template<typename U>
-        array_view(U* p, size_t n)
+        using byte_type = std::conditional_t<std::is_const_v<T>, const byte, byte>;
+        
+        pointer _begin;
+        size_type _size;
+        
+        
+        // construction
+        
+        array_view()
+        : _begin(nullptr)
+        , _size(0) {
+        }
+                
+        explicit array_view(auto& other)
+        : _begin(std::begin(other))
+        , _size(std::size(other)) {
+        }
+        
+        array_view(auto* p, size_type n)
         : _begin(p)
         , _size(n) {
         }
-
-        template<typename U>
-        array_view(U* first, U* last)
+        
+        array_view(auto* first, auto* last)
         : _begin(first)
         , _size(last - first) {
         }
-        
-        template<typename U>
-        array_view(const array_view<U>& other)
-        : _begin(other._begin)
-        , _size(other._size) {
+                     
+        array_view& operator=(auto&& other) {
+            if constexpr (wry::rank<decltype(other)>::value == 0) {
+                for (auto& x : *this)
+                    x = other;
+            } else {
+                wry::copy(std::begin(other),
+                          std::end(other),
+                          begin(),
+                          end());
+            }
+            return *this;
         }
         
-        template<typename V>
-        array_view& operator=(V&& other) {
-            wry::copy(std::begin(other), std::end(other), begin(), end());
+        array_view& assign(auto first, auto last) {
+            wry::copy(first, last, begin(), end());
         }
-
-        size_t size() const {
-            return _size;
+        
+        void swap(auto&& other) const {
+            wry::swap_ranges(std::begin(other), std::end(other), begin(), end());
         }
+        
+        // iteration
         
         iterator begin() const {
             return _begin;
@@ -60,7 +93,7 @@ namespace wry {
         iterator end() const {
             return _begin + _size;
         }
-
+        
         const_iterator cbegin() const {
             return _begin;
         }
@@ -69,78 +102,119 @@ namespace wry {
             return _begin + _size;
         }
         
-        bool empty() const {
-            return !_size;
-        }
-
-        reference operator[](ptrdiff_t i) const {
-            assert((0 <= i) && (i < _size));
-            return _begin[i];
-        }
-        
-        void pop_front(ptrdiff_t count = 1) {
-            assert((0 < count) && (count <= _size));
-            _begin += count;
-            _size -= count;
-        }
-        
-        void pop_back(ptrdiff_t count = 1) {
-            assert((0 < count) && (count <= _size));
-            _size -= count;
-        }
-        
-        void pull_front(ptrdiff_t count = 1) {
-            _begin -= count;
-            _size += count;
-        }
-        
-        void pull_back(ptrdiff_t count = 1) {
-            _size += count;
-        }
-        
+        // accessors
+                
         reference front() const {
             assert(_size);
             return _begin;
         }
-
+        
         reference back() const {
             assert(_size);
             return *(_begin + _size - 1);
         }
         
-        reference at(ptrdiff_t i) const {
+        reference at(size_type i) const {
             if ((i < 0) || (i >= _size))
                 throw std::range_error(__PRETTY_FUNCTION__);
             return _begin[i];
         }
-
-        T* to(ptrdiff_t i) const {
+        
+        reference operator[](size_type i) const {
+            assert((0 <= i) && (i < _size));
+            return _begin[i];
+        }
+        
+        pointer to(difference_type i) const {
             return _begin + i;
         }
         
-        T* data() const {
+        pointer data() const {
             return _begin;
         }
+
+        // observers
         
-        std::size_t stride_in_bytes() const {
-            return sizeof(T);
+        bool empty() const {
+            return !_size;
+        }
+
+        size_type size() const {
+            return _size;
         }
         
-        std::size_t size_in_bytes() const {
+        size_type size_bytes() const {
             return _size * sizeof(T);
         }
         
-        using B = std::conditional_t<std::is_const_v<T>, const unsigned char, unsigned char>;
-        
-        array_view<B> as_bytes() const {
-            return array_view<B>{(const unsigned char*) _begin, size_in_bytes()};
+        constexpr size_type stride_bytes() const {
+            return sizeof(T);
         }
         
-        array_view<T> sub(ptrdiff_t i, size_t n) const {
-            return array_view<T>{_begin + i, n};
+        // subviews
+        
+        array_view subview(size_type i, size_type n) const {
+            assert((i + n) <= _size);
+            return array_view(_begin + i, n);
         }
-
+        
+        array_view<byte_type> as_bytes() const {
+            return array_view<byte_type>(static_cast<byte_type*>(_begin), size_bytes());
+        }
+        
+        
+        // mutators
+        
+        array_view& reset() {
+            _begin = nullptr;
+            _size = 0;
+        }
+        
+        array_view& reset(std::nullptr_t, size_t n) {
+            _begin = nullptr;
+            _size = n;
+        }
+        
+        array_view& reset(auto&& other) {
+            _begin = std::begin(other);
+            _size = std::size(other);
+        }
+        
+        array_view& reset(auto* p, size_t n) {
+            _begin = p;
+            _size = n;
+        }
+        
+        array_view& reset(auto* first, auto* last) {
+            _begin = first;
+            _size = last - first;
+        }
+                                
+        void pop_front(difference_type n = 1) {
+            assert(n <= _size);
+            _begin += n;
+            _size -= n;
+        }
+        
+        void pop_back(difference_type n = 1) {
+            assert(n <= _size);
+            _size -= n;
+        }
+        
     };
+    
+    template<typename T>
+    void swap(const array_view<T>& x, const array_view<T>& y) {
+        x.swap(y);
+    }
+    
+    template<typename T, typename Serializer>
+    void serialize(const array_view<T>& x, Serializer& s) {
+        serialize(x.size(), s);
+        for (auto&& y : x)
+            serialize(y, s);
+    }
+    
     
 }
 

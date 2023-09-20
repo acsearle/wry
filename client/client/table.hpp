@@ -483,7 +483,7 @@ namespace wry {
             }
 
             pointer operator->() const {
-                return &(_pointer->_kv);
+                return (pointer) &(_pointer->_kv);
             }
             
             bool operator==(const iterator& other) const {
@@ -619,7 +619,15 @@ namespace wry {
             });
             return const_iterator((p ? p : _inner.end()), &_inner);
         }
-        
+
+        iterator find(const auto& keylike) {
+            Entry* p = _inner.find(_inner._hasher.get_hash(keylike),
+                                   [&](const Entry& e) {
+                return e._kv.first == keylike;
+            });
+            return iterator((p ? p : _inner.end()), &_inner);
+        }
+
         std::pair<iterator, bool> emplace(auto&& key, auto&& value) {
             std::uint64_t h = _inner._hasher.get_hash(key);
             std::uint64_t i = _inner._insert_uninitialized(h, [&key](Entry& e) {
@@ -685,6 +693,7 @@ namespace wry {
         
         std::size_t erase(iterator pos) {
             _inner._relocate_backward_from(pos._pointer - _inner._begin);
+            return 1;
         }
         
         // range erase makes no sense for unordered map

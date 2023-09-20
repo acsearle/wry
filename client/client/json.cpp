@@ -18,24 +18,6 @@
 
 namespace wry {
     
-    string _string_from_file(string_view v) {
-        // todo: filesystem for better length?
-        string s(v);
-        FILE* f = fopen(s.c_str(), "rb");
-        assert(f);
-        s.clear();
-        fseek(f, 0, SEEK_END);
-        long n = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        s._bytes.may_write_back(n + 1);
-        size_t m = fread(s._bytes.data(), 1, n, f);
-        fclose(f);
-        s._bytes.did_write_back(m);
-        s._bytes.push_back(0);
-        s._bytes.pop_back();
-        return s;
-    }
-    
     struct _json_value {
         
         [[noreturn]] static void unimplemented() { throw 0; }
@@ -46,6 +28,7 @@ namespace wry {
         virtual json const& at(string_view) const { unimplemented(); }
         virtual string_view as_string() const  { unimplemented(); }
         virtual double as_number() const  { unimplemented(); }
+        virtual bool as_bool() const { unimplemented(); }
         virtual table<string, json> const& as_object() const { unimplemented(); }
         virtual array<json> const& as_array() const { unimplemented(); }
         virtual bool is_string() const { unimplemented(); }
@@ -80,7 +63,8 @@ namespace wry {
     double json::as_number() const { return _ptr->as_number(); }
     table<string, json> const& json::as_object() const { return _ptr->as_object(); }
     array<json> const& json::as_array() const { return _ptr->as_array(); }
-    
+    bool json::as_bool() const { return _ptr->as_bool(); }
+
     long json::as_long() const {
         double a = _ptr->as_number();
         long b = (long) a;
@@ -88,11 +72,8 @@ namespace wry {
         return b;
     }
     
-    
     json json::from(string_view& v) {
-        
         return json(_json_value::from(v));
-        
     }
     
     json json::from(string_view&& v) {
@@ -303,10 +284,59 @@ namespace wry {
         
     };
     
+    struct _json_bool : _json_value {
+        
+        bool _bool;
+        
+        explicit _json_bool(bool b) : _bool(b) {}
+        
+        virtual double as_number() const override {
+            return _bool;
+        }
+        
+        static _json_bool* from(string_view& v) {
+            if (match_string("false")(v))
+                return new _json_bool(false);
+            if (match_string("true")(v))
+                return new _json_bool(true);
+            return nullptr;
+        }
+        
+        virtual string debug() const override {
+            return _bool ? "true" : "false";
+        }
+        
+        virtual _json_bool* clone() const override {
+            return new _json_bool(_bool);
+        }
+        
+    };
     
+    struct _json_null : _json_value {
+        
+        virtual double as_number() const override {
+            return 0;
+        }
+        
+        static _json_null* from(string_view& v) {
+            if (match_string("null")(v))
+                return new _json_null();
+            return nullptr;
+        }
+        
+        virtual string debug() const override {
+            return "null";
+        }
+        
+        virtual _json_null* clone() const override {
+            return new _json_null();
+        }
+        
+    };
     
     _json_value* _json_value::from(string_view& v) {
-        while (iswspace(*v)) ++v;
+        while (iswspace(*v))
+            ++v;
         
         switch (v.front()) {
             case '{': // object
@@ -337,6 +367,59 @@ namespace wry {
         return nullptr;
         
     }
+    
+    /*
+    
+    void _json_expect_value(const char*& first, const char* last) {
+        
+        for (;;) {
+            
+            if (first == last)
+                return;
+            
+            switch (*first) {
+                case '\t':
+                case '\n':
+                case '\r':
+                case ' ':
+                    ++first;
+                    continue;
+                case '\"':
+                    return _json_continue_string(++first, last);
+                case '-':
+                case '0':
+                case '1':
+                case '2':
+                case '3':
+                case '4':
+                case '5':
+                case '6':
+                case '7':
+                case '8':
+                case '9':
+                    return _json_continue_number(first, last);
+                case '[':
+                    return _json_continue_array(++first, last);
+                    ;
+                case 'f':
+                    ;
+                case 'n':
+                    ;
+                case 't':
+                    ;
+                case '{':
+                    return _json_continue_object(++first, last);
+                    ;
+                default:
+                    ;
+            }
+            
+        }
+        
+        
+    }
+     
+     */
     
     
 } // namespace wry

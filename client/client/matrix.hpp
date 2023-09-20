@@ -25,6 +25,9 @@ namespace wry {
     //
     // these objects differ only in our interpretation of the major and minor
     // indices
+    //
+    // like wry::array, we support expansion along any dimension by
+    // (ruinous) overallocation and amortization
 
     
     template<typename T>
@@ -32,6 +35,10 @@ namespace wry {
     
     template<typename T>
     struct matrix<const T>; // undefined
+    
+    template<typename T>
+    struct rank<matrix<T>> : std::integral_constant<std::size_t, wry::rank<T>::value + 2> {};
+    
 
     template<typename T>
     struct matrix {

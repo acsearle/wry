@@ -8,6 +8,13 @@
 #ifndef entity_hpp
 #define entity_hpp
 
-#include <stdio.h>
+#include "array.hpp"
+#include "utility.hpp"
+#include "simd.hpp"
+
+namespace wry {
+    
+  
+};
 
 #endif /* entity_hpp */

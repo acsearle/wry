@@ -33,6 +33,31 @@ namespace wry {
     template<typename T>
     constexpr bool is_relocatable_v = is_relocatable<T>::value;
     
+    // # Rank
+    //
+    // Provide a more general rank to classify things
+    
+    
+    template<typename>
+    struct rank : std::integral_constant<std::size_t, 0> {
+    };
+    
+    template<typename T>
+    constexpr inline size_t rank_v = rank<T>::value;
+    
+    template<typename T>
+    struct rank<T[]> : std::integral_constant<std::size_t, rank<T>::value + 1> {
+    };
+    
+    template<typename T, std::size_t N>
+    struct rank<T[N]> : std::integral_constant<std::size_t, rank<T>::value + 1> {
+    };
+    
+    using tag_scalar = std::integral_constant<std::size_t, 0>;
+    using tag_vector = std::integral_constant<std::size_t, 1>;
+    using tag_matrix = std::integral_constant<std::size_t, 2>;
+
+    
 }
 
 #endif /* type_traits_hpp */

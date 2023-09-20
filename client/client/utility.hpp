@@ -9,10 +9,12 @@
 #define utility_hpp
 
 #include <bit>
+#include <cassert>
 #include <compare>
 #include <memory>
 #include <utility>
 
+#include "common.hpp"
 #include "type_traits.hpp"
 
 namespace wry {

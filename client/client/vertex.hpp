@@ -11,6 +11,7 @@
 #include "ShaderTypes.h"
 
 #include "simd.hpp"
+#include "sRGB.hpp"
 
 namespace wry {
         
