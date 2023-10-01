@@ -6,7 +6,23 @@ Bite-sized
   - can we do an orthographic projection with 1/z depth somehow?
 - uniforms seem to be out of scope of meshes after all
   - can we set them up once and for all
-- shadow z-fighting apply depth bias and frontface
+
+Serialization
+- Lessons from Serde: 
+  - hint what we expect for non-self-describing formats
+  - handle poor matches to it
+  - avoid N^2 by passing through vocabulary types like int, string, array
+- Streaming
+  - For example, strings may be huge binary blobs or nested formats; we can't
+    pass a string once
+- interface should be something like
+   - array begins, strong begins with bytes, string ends, 
+     string begin with bytes, string continues with bytes, string ends with bytes, array ends
+- these are interacting produce-consumer state machines that can be chained up
+    to parse files to memory to json to string to base64
+- coroutines would be nice but typed multiple entry points may be too valuable
+    how do we pass type information around without exploding interfaces too
+    much?
 
 Computer science
 - How do we receive OS events and hand off a consistent view to the render

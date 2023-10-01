@@ -11,7 +11,7 @@
 #define string_hpp
 
 #include "array.hpp"
-#include "common.hpp"
+#include "hash.hpp"
 #include "string_view.hpp"
 
 namespace wry {
@@ -29,7 +29,7 @@ namespace wry {
         //
         // idiom
         
-        array<uchar> _bytes;
+        array<char> _bytes;
         
         using const_iterator = utf8_iterator;
         using iterator = const_iterator;
@@ -62,8 +62,7 @@ namespace wry {
             _bytes.reserve(v.as_bytes().size() + 1);
             // _bytes = v.as_bytes();
             auto u = v.as_bytes();
-            _bytes.assign(reinterpret_cast<const uchar*>(u.begin()),
-                          reinterpret_cast<const uchar*>(u.end()));
+            _bytes.assign(u.begin(), u.end());
             _bytes.push_back(0);
             _bytes.pop_back();
         }
@@ -75,23 +74,23 @@ namespace wry {
             _bytes.pop_back();
         }
         
-        explicit string(array<uchar>&& bytes) : _bytes(std::move(bytes)) {
+        explicit string(array<char>&& bytes) : _bytes(std::move(bytes)) {
             _bytes.push_back(0);
             _bytes.pop_back();
         }
         
-        operator array_view<const uchar>() const {
-            return array_view<const uchar>(_bytes.begin(), _bytes.end());
+        operator array_view<const char>() const {
+            return array_view<const char>(_bytes.begin(), _bytes.end());
         }
         operator string_view() const { return string_view(begin(), end()); }
         
         const_iterator begin() const { return utf8_iterator{_bytes.begin()}; }
         const_iterator end() const { return utf8_iterator{_bytes.end()}; }
         
-        uchar const* data() const { return _bytes.begin(); }
+        char const* data() const { return _bytes.begin(); }
         
-        array_view<const uchar> as_bytes() const {
-            return array_view<const uchar>(_bytes.begin(), _bytes.end());
+        array_view<const char> as_bytes() const {
+            return array_view<const char>(_bytes.begin(), _bytes.end());
         }
         
         char const* c_str() const { return (char const*) _bytes.begin(); }
@@ -142,11 +141,7 @@ namespace wry {
             iterator e = end();
             --e;
             uint c = *e;
-            // this is a good argument for const_vector_view having _end rather than
-            // _size
-            // _bytes._size = (e._ptr - _bytes._begin);
-            _bytes._end = const_cast<uchar*>(e._ptr); // <-- fixme
-            // _bytes._begin[_bytes._size] = 0;
+            _bytes._end += (e._ptr - _bytes._end);
             *(_bytes._end) = 0;
             return c;
         }
@@ -156,9 +151,7 @@ namespace wry {
             iterator b = begin();
             uint c = *b;
             ++b;
-            //_bytes._size -= (b._ptr - _bytes._begin);
-            //_bytes._begin += (b._ptr - _bytes._begin);
-            _bytes._begin = const_cast<uchar*>(b._ptr);
+            _bytes._begin += (b._ptr - _bytes._begin);
             return c;
         }
         
@@ -174,7 +167,7 @@ namespace wry {
         
         void append(const char* z) {
             auto n = strlen(z);
-            _bytes.append((uchar const*) z, (uchar const*) z + n + 1);
+            _bytes.append(z, z + n + 1);
             _bytes.pop_back();
         }
         
@@ -193,23 +186,15 @@ namespace wry {
 
     };
     
-    inline string operator+(string_view a, char const* b) {
-        string s(a);
-        s.append(b);
-        return s;
+    inline u64 hash(const string& x) {
+        return hash_combine(x._bytes.data(), x._bytes.size());
     }
     
     inline std::ostream& operator<<(std::ostream& a, string const& b) {
         a.write((char const*) b._bytes.begin(), b._bytes.size());
         return a;
     }
-    
-    template<typename Deserializer>
-    inline auto deserialize(placeholder<string>, Deserializer& d) {
-        return string{deserialize<array<uchar>>(d)};
-    }
-    
-    
+        
     struct immutable_string {
         
         // When a string is used as a hash table key, it is important to
@@ -228,8 +213,8 @@ namespace wry {
         
         struct implementation {
             
-            uchar* _end;
-            uchar _begin[];
+            char* _end;
+            char _begin[];
             
             static implementation* make(string_view v) {
                 auto n = v.as_bytes().size();
@@ -295,13 +280,13 @@ namespace wry {
             return _body ? (char const*) _body->_begin : nullptr;
         }
         
-        uchar const* data() const {
-            return _body ? (uchar const*) _body->_begin : nullptr;
+        char const* data() const {
+            return _body ? _body->_begin : nullptr;
         }
         
-        array_view<const uchar> as_bytes() const {
-            return array_view<const uchar>(_body ? reinterpret_cast<const uchar*>(_body->_begin) : nullptr,
-                                          _body ? reinterpret_cast<const uchar*>(_body->_end + 1) : nullptr);
+        array_view<const char> as_bytes() const {
+            return array_view<const char>(_body ? reinterpret_cast<const char*>(_body->_begin) : nullptr,
+                                          _body ? reinterpret_cast<const char*>(_body->_end + 1) : nullptr);
         }
         
         operator string_view() const {
@@ -315,6 +300,9 @@ namespace wry {
     };
     
     string string_from_file(string_view);
+    
+    
+    
     
 } // namespace manic
 

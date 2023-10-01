@@ -1271,9 +1271,7 @@ namespace wry {
 
 
 namespace wry {
-    
-#define fwd( X ) std::forward<decltype( X )>( X )
-    
+        
     auto min3(auto&& a, auto&& b, auto&& c) {
         return b < a ? c < b ? fwd(c) : fwd(b) : c < a ? fwd(c) : fwd(a);
     }

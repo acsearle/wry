@@ -14,12 +14,15 @@
 #include <memory>
 #include <utility>
 
-#include "common.hpp"
 #include "type_traits.hpp"
 
 namespace wry {
+
+    // this is pretty objectionable but makes life much easier
     
-    // from C++23
+#define FORWARD( X ) std::forward<decltype( X )>( X )
+    
+    // # from C++23
     
     template<typename T, typename U>
     [[nodiscard]] constexpr auto&& forward_like(U&& value) {
@@ -31,75 +34,56 @@ namespace wry {
         std::add_lvalue_reference_t<U4>, std::add_rvalue_reference_t<U4>>;
         return static_cast<U5>(value);
     }
-    
-    template<class I1, class I2, class Cmp>
-    constexpr auto lexicographical_compare_three_way(I1 f1, I1 l1, I2 f2, I2 l2, Cmp comp) -> decltype(comp(*f1, *f2)) {
-        using ret_t = decltype(comp(*f1, *f2));
-        static_assert(std::disjunction_v<
-                      std::is_same<ret_t, std::strong_ordering>,
-                      std::is_same<ret_t, std::weak_ordering>,
-                      std::is_same<ret_t, std::partial_ordering>>,
-                      "The return type must be a comparison category type.");
-        for (;;) {
-            bool exhaust1 = (f1 == l1);
-            bool exhaust2 = (f2 == l2);
-            if (exhaust1 || exhaust2) {
-                return (!exhaust1
-                        ? std::strong_ordering::greater
-                        : (!exhaust2
-                           ? std::strong_ordering::less:
-                           std::strong_ordering::equal));
-            }
-            if (auto c = comp(*f1, *f2); c != 0)
-                return c;
-            ++f1;
-            ++f2;
-        }
-        
-    }
-    
-    template<class I1, class I2>
-    constexpr auto lexicographical_compare_three_way(I1 f1, I1 l1, I2 f2, I2 l2) {
-        return lexicographical_compare_three_way(f1, l1, f2, l2, std::compare_three_way());
-    }
-        
-  
-    namespace detail {
+   
+    // # heterogenous reduce
+    //
+    // Performs reduce over parameter packs, enabling variadic extensions to
+    //
+    //    std::min
+    //    std::max
+    //    std::exchange
+    //
+    // and other operations on argument lists such as
+    //
+    //    wry::shift_left
+    //    wry::shift_right
+    //    wry::rotate_left
+    //    wry::rotate_right
+
+    namespace _detail {
         
         template<typename F, typename X>
-        struct fold_helper;
-        
-        template<typename F, typename X>
-        constexpr fold_helper<F, X> make_fold_helper(F& f, X&& x) {
-            return fold_helper<F, X>{f, std::forward<X>(x)};
-        }
-        
-        template<typename F, typename X>
-        struct fold_helper {
+        struct _reduce_by_fold_helper {
             
             F& _f;
             X _x;
             
-            constexpr X release() { return std::forward<X>(_x); }
+            _reduce_by_fold_helper(F& f, X&& x) : _f(f), _x(std::forward<X>(x)) {}
             
-            template<typename Y>
-            constexpr auto operator*(fold_helper<F, Y> y) {
-                assert(std::addressof(_f) == std::addressof(y._f));
-                return make_fold_helper(_f, _f(release(), y.release()));
-            }
+            constexpr X _release() { return std::forward<X>(_x); }
             
-        }; // struct fold_helper
+        }; // struct _fold_helper
         
-    } // namespace detail
-    
-    template<typename F, typename... Args>
-    constexpr decltype(auto) fold_right(F&& f, Args&&... args) {
-        return (detail::make_fold_helper(f, std::forward<Args>(args)) * ...).release();
+        template<typename F, typename X>
+        _reduce_by_fold_helper(F&, X&&) -> _reduce_by_fold_helper<F, X>;
+        
+        template<typename F, typename X, typename Y>
+        constexpr auto operator*(_reduce_by_fold_helper<F, X>&& x,
+                                 _reduce_by_fold_helper<F, Y>&& y) {
+            assert(std::addressof(x._f) == std::addressof(y._f));
+            return _reduce_by_fold_helper(x._f, x._f(x._release(), y._release()));
+        }
+        
     }
     
     template<typename F, typename... Args>
-    constexpr decltype(auto) fold_left(F&& f, Args&&... args) {
-        return (... * detail::make_fold_helper(f, std::forward<Args>(args))).release();
+    constexpr decltype(auto) reduce_right(F&& f, Args&&... args) {
+        return (_detail::_reduce_by_fold_helper(f, std::forward<Args>(args)) * ...)._release();
+    }
+    
+    template<typename F, typename... Args>
+    constexpr decltype(auto) reduce_left(F&& f, Args&&... args) {
+        return (... * _detail::_reduce_by_fold_helper(f, std::forward<Args>(args)))._release();
     }
     
     
@@ -113,14 +97,14 @@ namespace wry {
     
     template<typename... Args>
     constexpr decltype(auto) min(Args&&... args) {
-        return fold_left([](auto&& a, auto&& b) -> decltype(auto) {
+        return reduce_left([](auto&& a, auto&& b) -> decltype(auto) {
             return (b < a) ? std::forward<decltype(b)>(b) : std::forward<decltype(a)>(a);
         }, std::forward<Args>(args)...);
     }
     
     template<typename... Args>
     constexpr decltype(auto) max(Args&&... args) {
-        return fold_right([](auto&& a, auto&& b) -> decltype(auto) {
+        return reduce_right([](auto&& a, auto&& b) -> decltype(auto) {
             return (a < b) ? std::forward<decltype(b)>(b) : std::forward<decltype(a)>(a);
         }, std::forward<Args>(args)...);
     }
@@ -131,13 +115,13 @@ namespace wry {
     // Moves the values of its arguments one place left, or right, discarding
     // the last value or moving it back to the vacated beginning.
     //
-    // rotate_* is a fundamental operation in linked list manipulation
+    // `rotate_*` is a fundamental operation in linked list manipulation
     //
     // `exchange` may be implemented in terms of `shift_left`
     
     template<typename A, typename... B>
     void shift_left(A& a, B&&... b) {
-        (void) fold_left([](auto& a, auto&& b) -> auto& {
+        (void) reduce_left([](auto& a, auto&& b) -> decltype(auto) {
             a = std::move(b);
             return b;
         }, a, std::forward<B>(b)...);
@@ -145,7 +129,7 @@ namespace wry {
     
     template<typename A, typename... B>
     void shift_right(A&& a, B&... b) {
-        (void) fold_right([](auto&& a, auto& b) -> auto& {
+        (void) reduce_right([](auto&& a, auto& b) -> auto& {
             b = std::move(a);
             return a;
         }, std::forward<A>(a), b...);
@@ -173,106 +157,9 @@ namespace wry {
         shift_left(a, std::forward<B>(b)...);
         return c;
     }
-    
-    
-    
-    // # memswap
-    //
-    // Always enticing but rarely the best way of doing things, swaps the bytes
-    // of two disjoint regions
-    inline void memswap(void* __restrict__ lhs, void* __restrict__ rhs, std::size_t count) {
-        unsigned char* first1 = static_cast<unsigned char*>(lhs);
-        unsigned char* first2 = static_cast<unsigned char*>(rhs);
-        unsigned char* last1 = first1 + count;
-        while (first1 != last1) {
-            unsigned char temporary = *first1;
-            *first1 = *first2;
-            *first2 = temporary;
-            ++first1;
-            ++first2;
-        }
-    }
 
-    // # relocate
-    //
-    // A type `T` is _Relocatable_ if, for `T* dest, T *src`
-    // ```
-    //     std::construct_at(dest, std::move(*src));
-    //     std::destroy_at(src);
-    // ```
-    // is equivalent to
-    // ```
-    //     std::memcpy(dest, src, sizeof(T));
-    // ```
-    // _Movable_ types are typically _Relocatable_.  A type must introspect and
-    // store or publish its own address to become unrelocatable; mutexes are one
-    // example of this behavior.  STL containers and even smart pointers are
-    // movable.  Rust types are relocatable by default (see `Pin`).
-    // Is there a non-contrived example of a type that is _Movable_ but not
-    // _Relocatable_?
-    //
-    // In particular, we can perform bulk array relocates where
-    // ```
-    //     std::uninitialized_move(first, last, d_first);
-    //     std::destroy(first, last)
-    // ```
-    // becomes
-    // ```
-    //     std::memmove(d_first, first, first - last);
-    // ```
-    // which avoids writing move-from states back to the source range just to
-    // communicate to their destructors that no actions are needed.
-        
-    // `std::memmove` will do the right thing without having to worry about
-    // forward or backward copying in the sense of `std::copy_backward`, but
-    // we provide backward relocate operations for when it is more convenient
-    // to specify `d_last`.
-    //
-    // An optional argument signals if the ranges are known to be disjoint so
-    // we can use `std::memcpy` rather than `std::memmove`.  Since
-    // `std::memmove` (probably) performs this check internally and falls back
-    // to `std::memcpy` when possible, this argument should be set only when we
-    // know at compile time that the ranges are disjoint.
-    //
-    // Note that AddressSanitizer can detect overlapping misuses of
-    // `std::memcpy`.
     
-    template<typename T>
-    void relocate/*_one*/(const T* source, T* destination) {
-        std::memcpy(destination, source, sizeof(T));
-    }
-        
-    template<typename T, typename N>
-    T* relocate_n(const T* first, N count, T* d_first, bool disjoint = false) {
-        if (disjoint)
-            std::memcpy(d_first, first, sizeof(T) * count);
-        else
-            std::memmove(d_first, first, sizeof(T) * count);
-        return d_first + count;
-    }
-    
-    template<typename T>
-    T* relocate(const T* first, const T* last, T* d_first, bool disjoint = false) {
-        return relocate_n(first, last - first, d_first, disjoint);
-    }
-        
-    template<typename T>
-    T* relocate_backward(const T* first, const T* last, T* d_last, bool disjoint = false) {
-        auto count = last - first;
-        T* d_first = d_last - count;
-        relocate_n(first, count, d_first, disjoint);
-        return d_first;
-    }
-        
-    template<typename T, typename N>
-    T* relocate_backward_n(N count, const T* last, T* d_last, bool disjoint = false) {
-        const T* first = last - count;
-        T* d_first = d_last - count;
-        relocate_n(first, count, d_first, disjoint);
-        return d_first;
-    }
-    
-    
+
     
     template<typename T, typename U>
     T* allocate(U& count) noexcept {
@@ -287,33 +174,7 @@ namespace wry {
     inline void deallocate(void* ptr) noexcept {
         operator delete(ptr);
     }
-    
-
-    // std::copy, but checks destination ending
-    
-    template<typename InputIterator, typename InputSentinel, typename OutputIterator, typename OutputSentinel>
-    OutputIterator copy(InputIterator first, InputSentinel last, OutputIterator d_first, OutputSentinel d_last) {
-        for (; first != last; ++first, ++d_first) {
-            assert(d_first != d_last);
-            *d_first = *first;
-        }
-        assert(d_first == d_last);
-        return d_first;
-    }
-    
-    // std::swap_ranges, but checks 2nd range ending
-    template<typename ForwardIt1, typename Sentinel1, typename ForwardIt2, typename Sentinel2>
-    ForwardIt2 swap_ranges(ForwardIt1 first1, Sentinel1 last1, ForwardIt2 first2, Sentinel2 last2) {
-        for (; first1 != last1; ++first1, ++first2) {
-            assert(first2 != last2);
-            using std::iter_swap;
-            iter_swap(first1, first2);
-        }
-        assert(first2 == last2);
-        return first2;
-    }
-
-    
+   
     
 } // namespace wry
 

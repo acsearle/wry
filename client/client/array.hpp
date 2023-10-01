@@ -8,11 +8,14 @@
 #ifndef array_hpp
 #define array_hpp
 
-#include <algorithm>
 #include <iterator>
+#include <iostream>
+#include <optional>
+
+#include "algorithm.hpp"
+#include "utility.hpp"
 
 #include "array_view.hpp"
-#include "utility.hpp"
 #include "with_capacity.hpp"
 
 namespace wry {
@@ -39,7 +42,6 @@ namespace wry {
     
     template<typename T>
     struct rank<array<T>> : std::integral_constant<std::size_t, rank<T>::value + 1> {};
-
         
     template<typename T>
     struct array {
@@ -86,17 +88,17 @@ namespace wry {
         }
         
         array(const array& other) noexcept
-        : array(with_capacity_t{}, other.size()) {
+        : array(wry::with_capacity, other.size()) {
             _end = std::uninitialized_copy(other.begin(),
                                            other.end(),
                                            _begin);
         }
         
         array(array&& other)
-        : _begin(std::exchange(other._begin, nullptr))
-        , _end(std::exchange(other._end, nullptr))
-        , _allocation_begin(std::exchange(other._allocation_begin, nullptr))
-        , _allocation_end(std::exchange(other._allocation_end, nullptr)) {
+        : _begin(exchange(other._begin, nullptr))
+        , _end(exchange(other._end, nullptr))
+        , _allocation_begin(exchange(other._allocation_begin, nullptr))
+        , _allocation_end(exchange(other._allocation_end, nullptr)) {
         }
                 
         array& operator=(const array& other) {
@@ -123,6 +125,10 @@ namespace wry {
             _allocation_begin = std::exchange(other._allocation_begin, nullptr);
             _allocation_end = std::exchange(other._allocation_end, nullptr);
             return *this;
+        }
+        
+        array& operator=(const auto& other) {
+            return assign(std::begin(other), std::end(other));
         }
         
         ~array() { _destruct(); }
@@ -233,11 +239,11 @@ namespace wry {
         }
         
         template<typename InputIt>
-        void assign(InputIt first, InputIt last) {
-            _assign(first, last, typename std::iterator_traits<InputIt>::iterator_category());
+        array& assign(InputIt first, InputIt last) {
+            return _assign(first, last, typename std::iterator_traits<InputIt>::iterator_category());
         }
         
-        void assign(size_type count, const value_type& value) {
+        array& assign(size_type count, const value_type& value) {
             if (count <= size()) {
                 iterator pos = std::fill_n(begin(), count, value);
                 std::destroy(pos, _end);
@@ -250,6 +256,7 @@ namespace wry {
                 _construct_with_capacity(count);
                 _end = std::uninitialized_fill_n(begin(), count, value);
             }
+            return *this;
         }
         
         // [[C++ named requirement]] SequenceContainer (optional)
@@ -510,27 +517,27 @@ namespace wry {
         }
 
         template<typename InputIt>
-        void _assign(InputIt first, InputIt last, std::input_iterator_tag) {
+        array& _assign(InputIt first, InputIt last, std::input_iterator_tag) {
             T* pos = _begin;
             for (;; ++pos, ++first) {
                 if (first == last) {
                     std::destroy(pos, _end);
                     _end = pos;
-                    return;
+                    return *this;
                 }
                 if (pos == _end) {
                     do {
                         push_back(*first);
                         ++first;
                     } while (first != last);
-                    return;
+                    return *this;
                 }
                 *pos = *first;
             }
         }
         
         template<typename InputIt>
-        void _assign(InputIt first, InputIt last, std::random_access_iterator_tag) {
+        array& _assign(InputIt first, InputIt last, std::random_access_iterator_tag) {
             size_type count = std::distance(first, last);
             if (count <= size()) {
                 iterator end2 = std::copy(first, last, begin());
@@ -545,6 +552,7 @@ namespace wry {
                 _construct_with_capacity(count);
                 _end = std::uninitialized_copy(first, last, begin());
             }
+            return *this;
         }
         
         T* _insert_uninitialized_n(const T* pos, size_type count) {
@@ -679,9 +687,9 @@ namespace wry {
             _begin += n;
         }
                                 
-        // buffer interface
+        // bulk memcpy interface
         
-        size_t can_write_back() {
+        size_type can_write_back() {
             return _allocation_end - _end;
         }
         
@@ -700,24 +708,58 @@ namespace wry {
             _end += n;
         }
         
-        size_t can_read_front() {
+        size_t can_read_first() {
             return _end - _begin;
         }
         
-        T* may_read_front(size_t n) {
+        T* may_read_first(size_t n) {
             assert(n <= _end - _begin);
             return _begin;
         }
         
-        T* will_read_front(size_t n) {
+        T* will_read_first(size_t n) {
             assert(n <= _end - _begin);
             return exchange(_begin, _begin + n);
         }
         
-        void did_read_front(size_t n) {
+        void did_read_first(size_t n) {
             assert(n <= _end - _begin);
             _begin += n;
         }
+        
+        size_type can_read_last() {
+            return size();
+        }
+        
+        const_pointer will_read_last(size_type n) {
+            assert(n <= size());
+            return _end -= n;
+        }
+        
+        void did_read_last(size_type n) {
+            assert(n <= size());
+            return _end -= n;
+        }
+        
+        size_type can_write_front(size_type n) {
+            return _begin - _allocation_begin;
+        }
+        
+        void may_write_front(size_type n) {
+            _reserve_front(n);
+        }
+        
+        pointer will_write_front(size_type n) {
+            _reserve_front(n);
+            return _begin -= n;
+        }
+        
+        void did_write_front(size_type n) {
+            assert(n <= (_begin - _allocation_begin));
+            _begin -= n;
+        }
+        
+        //
                 
         template<typename I, typename J>
         void append(I first, J last) {
@@ -725,7 +767,22 @@ namespace wry {
                 push_back(*first);
             }
         }
-                
+        
+        //
+        
+        array_view<T> as_view() {
+            return array_view<T>(_begin, _end);
+        }
+
+        array_view<const T> as_view() const {
+            return array_view<const T>(_begin, _end);
+        }
+        
+        array_view<const unsigned char> as_bytes() {
+            return array_view<const unsigned char>(reinterpret_cast<const unsigned char*>(_begin),
+                                                   reinterpret_cast<const unsigned char*>(_end));
+        }
+        
         array_view<T> sub(std::ptrdiff_t i, std::size_t n) {
             assert(0 <= i);
             assert(i + n <= size());
@@ -744,12 +801,50 @@ namespace wry {
             return array_view(_begin + i, n);
         }
 
+        // arrays of all types share a compatible layout, so we can pun the
+        // entire structure and even mutate it in that form
+        // - relies on punning
+        // - relies on pointers being integer addresses
+        // - requires maintaining original
+        
+        template<typename U>
+        array<U>& reinterpret_as() {
+            return reinterpret_cast<array<U>&>(*this);
+        }
+        
+        array<unsigned char> reinterpret_as_bytes() {
+            return reinterpret_cast<array<unsigned char>&>(*this);
+        }
+
+
     }; // struct array<T>
     
     template<typename T>
     void swap(array<T>& a, array<T>& b) {
         a.swap(b);
     }
+   
+    template<typename T, typename Serializer>
+    void serialize(const array<T>& x, Serializer& s) {
+        auto t = serialize_sequence(x.size(), s);
+        for (auto&& y : x)
+            serialize(y, t);
+        // ~t
+    }
+    
+    template<typename T, typename Deserializer>
+    array<T> deserialize(std::in_place_type_t<array<T>>, Deserializer& d) {
+        array<T> result;
+        auto e = deserialize_sequence(d);
+        std::optional<size_t> f = deserialize_size(e);
+        if (f)
+            result.reserve(f);
+        for (;;) {
+            
+        }
+        
+    }
+   
     
 } // namespace wry
 

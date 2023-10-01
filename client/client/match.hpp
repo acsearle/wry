@@ -8,53 +8,25 @@
 #ifndef match_hpp
 #define match_hpp
 
+#include "cctype.hpp"
 #include "string_view.hpp"
 
 namespace wry {
 
-    // extended predicates
-    
-    inline constexpr bool isascii(int character) {
-        return !(character & 0xffffff80);
-    }
-
-    inline constexpr bool isuchar(int character) {
-        return !(character & 0xffffff00);
-    }
-    
-    inline constexpr bool isushort(int character) {
-        return !(character & 0xffff0000);
-    }
-    
-    inline constexpr bool isunicode(int character) {
-        return (character < 0x00110000) && ((character & 0xfffff800) != 0x0000d800);
-    }
-
-    inline constexpr bool isunderscore(int character) {
-        return character == '_';
-    }
-    
-    inline constexpr bool isalnum_(int character) {
-        return (isuchar(character) && isalnum(character)) || isunderscore(character);
-    }
-
-    inline constexpr bool isalpha_(int character) {
-        return (isuchar(character) && isalpha(character)) || isunderscore(character);
-    }
-
-    // matcher combinators
+    // # Matcher combinators
     //
-    // matchers look for a pattern at the start of their string_view argument,
-    // and if found, advance the view and 
+    // Matchers look for a pattern at the start of their string_view argument,
+    // and if found, advance the beginning of the view and return false
     //
-    // because we chain operations using short-circuiting operators, we use
-    // some terse syntax:
+    // We chain operations using short-circuiting operators using some terse
+    // syntax:
     //
     //         v -> !v.empty()
     //       ++v -> ((void) v.pop_front(), true)
     //     v = u -> ((void) (v = u), true)
     //     v / u -> string_view(v.a, u.a)
-
+    //
+    
     inline constexpr auto match_empty() {
         return [](string_view& v) -> bool {
             return !v;
@@ -142,6 +114,22 @@ namespace wry {
                     return v = u;
                 if (!many(u))
                     return false;
+            }
+        };
+    }
+        
+    inline auto match_delimited(auto&& value, auto&& delimiter) {
+        return [value=std::forward<decltype(value)>(value),
+                delimiter=std::forward<decltype(delimiter)>(delimiter)](string_view& v) {
+            int count = 0;
+            string_view u = v;
+            for (;;) {
+                if (!value(u))
+                    return count;
+                ++count;
+                v = u;
+                if (!delimiter(u))
+                    return count;
             }
         };
     }
@@ -233,7 +221,7 @@ namespace wry {
     }
 
     inline constexpr auto match_alnum_() {
-        return match_predicate(&isalnum_);
+        return match_cctype(&isalnum_);
     }
     
     inline constexpr auto match_alpha() {
@@ -241,11 +229,11 @@ namespace wry {
     }
 
     inline constexpr auto match_alpha_() {
-        return match_predicate(&isalpha_);
+        return match_cctype(&isalpha_);
     }
 
     inline constexpr auto match_ascii() {
-        return match_predicate(&isascii);
+        return match_cctype(&isascii);
     }
 
     inline constexpr auto match_blank() {
@@ -303,6 +291,10 @@ namespace wry {
     inline constexpr auto match_newline() {
         return match_and(match_optional(match_character('\r')),
                          match_character('\n'));
+    }
+    
+    inline constexpr auto match_line() {
+        return match_until(match_not_empty(), match_newline());
     }
     
     // match an identifier of the form [A-Za-z_][A-Za-z0-9_]*
@@ -366,6 +358,8 @@ namespace wry {
                            match_or(match_space(),
                                     match_empty()));
     }
+    
+    
 
     
 } // namespace wry

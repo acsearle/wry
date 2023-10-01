@@ -94,6 +94,10 @@ DeferredGBufferFragmentShader(DeferredGBufferVertexShaderOutput in [[stage_in]],
                                        t_address::repeat);
     
     half4 albedoSample = albedoTexture.sample(trilinearSampler, in.coordinate.xy);
+    
+    if (albedoSample.a < 0.5f)
+        discard_fragment();
+    
     half4 normalSample = normalTexture.sample(trilinearSampler, in.coordinate.xy);
     half4 roughnessSample = roughnessTexture.sample(trilinearSampler, in.coordinate.xy);
     half4 metallicSample = metallicTexture.sample(trilinearSampler, in.coordinate.xy);
@@ -119,6 +123,24 @@ DeferredGBufferFragmentShader(DeferredGBufferVertexShaderOutput in [[stage_in]],
 }
 
 
+
+[[fragment]] void
+DeferredGBufferShadowFragmentShader(DeferredGBufferVertexShaderOutput in [[stage_in]],
+                              texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]])
+
+{
+    constexpr sampler trilinearSampler(mag_filter::linear,
+                                       min_filter::linear,
+                                       mip_filter::linear,
+                                       s_address::repeat,
+                                       t_address::repeat);
+    
+    half4 albedoSample = albedoTexture.sample(trilinearSampler, in.coordinate.xy);
+    
+    if (albedoSample.a < 0.5f)
+        discard_fragment();
+    
+}
 
 
 
@@ -363,7 +385,8 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     
     out.color.rgb = half3(Lo);
     out.color.a = 1.0h;
-    
+    // out.color.rgb = half3(lightSpacePosition.xyz > 0.5f);
+
     out.color = clamp(out.color, 0.0f, HALF_MAX);
     
     return out;

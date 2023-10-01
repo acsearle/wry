@@ -8,11 +8,16 @@
 #ifndef array_view_hpp
 #define array_view_hpp
 
+#include <iterator>
+
+#include "algorithm.hpp"
 #include "utility.hpp"
 
 namespace wry {
 
     // array_view into a contguous sequence
+    
+    // compare span, slice, range
     
     template<typename T>
     struct array_view;
@@ -35,12 +40,11 @@ namespace wry {
         using const_reference = std::add_const_t<T>&;
         
         
-        using byte_type = std::conditional_t<std::is_const_v<T>, const byte, byte>;
+        using byte_type = std::conditional_t<std::is_const_v<T>, const char, char>;
         
         pointer _begin;
-        size_type _size;
-        
-        
+        size_type _size; // <-- going back and forth on _size or _end
+                
         // construction
         
         array_view()
@@ -106,7 +110,7 @@ namespace wry {
                 
         reference front() const {
             assert(_size);
-            return _begin;
+            return *_begin;
         }
         
         reference back() const {
@@ -162,7 +166,6 @@ namespace wry {
             return array_view<byte_type>(static_cast<byte_type*>(_begin), size_bytes());
         }
         
-        
         // mutators
         
         array_view& reset() {
@@ -201,21 +204,128 @@ namespace wry {
             _size -= n;
         }
         
-    };
+        
+        // byte-oriented interface
+        
+        // if we structure array and array_view appropriately, we can actually
+        // pun an array_view onto an array [_begin, _end) or [_end, _capacity)
+        // and directly manipulate _begin and _end
+        
+        // read from the front and move up _begin
+        
+        // how many can we read
+        size_type can_read_first() const {
+            return _size;
+        }
+        
+        // before reading an unspecified number
+        const_pointer may_read_first() const {
+            return _begin;
+        }
+        
+        // before reading up to a specified number
+        const_pointer may_read_first(size_t n) const {
+            assert(n <= _size);
+            return _begin;
+        }
+        
+        // the amount we actually did read
+        void did_read_first(size_t n) {
+            assert(n <= _size);
+            _begin += n;
+            _size -= n;
+        }
+        
+        // commit to reading exactly a specified number
+        const_pointer will_read_first(size_type n) {
+            assert(n <= _size);
+            T* ptr = _begin;
+            _begin += n;
+            _size -= n;
+            return ptr;
+        }
+                
+        // read from the back and decrease the size
+        //
+        // because most bulk memory operations operate forwards, we can't
+        // permit a short operation here like we can on the front
+        
+        size_type can_read_last() const {
+            return _size;
+        }
+        
+        const_pointer will_read_last(size_type n) {
+            assert(n <= _size);
+            _size -= n;
+            return _begin + _size;
+        }
+        
+        void did_read_last(size_type n) {
+            assert(n <= _size);
+            _size -= n;
+        }
+        
+        
+        // write to the front, over the existing data, and then move _begin
+        // to the end of the write
+        //
+        // this makes most sense when the view is into uninitialized or
+        // otherwise expendable data at the end of a larger sequence
+        
+        size_type can_overwrite_first() const {
+            return _size;
+        }
+        
+        pointer may_overwrite_first() const {
+            return _begin;
+        }
+        
+        pointer may_overwrite_first(size_type n) const {
+            assert(n <= _size);
+            return _begin;
+        }
+        
+        pointer will_overwrite_first(size_type n) {
+            assert(n <= _size);
+            T* ptr = _begin;
+            _begin += n;
+            _size -= n;
+            return ptr;
+        }
+        
+        void did_overwrite_first(size_type n) {
+            assert(n <= _size);
+            _begin += n;
+            _size -= n;
+        }
+        
+        // write to the back, over the existing data, having moved _end
+        // to the beginning of the write
+        //
+        // this makes most sense when the view is into uninitialized or
+        // otherwise expendable data at the beginning of a larger sequence
+        
+        size_type can_overwrite_last() {
+            return _size;
+        }
+        
+        pointer will_overwrite_last(size_type n) {
+            assert(n <= _size);
+            _size -= n;
+        }
+        
+        void did_overwrite_last(size_type n) {
+            assert(n <= _size);
+            _size -= n;
+        }
+                
+    }; // array_view
     
     template<typename T>
     void swap(const array_view<T>& x, const array_view<T>& y) {
         x.swap(y);
     }
-    
-    template<typename T, typename Serializer>
-    void serialize(const array_view<T>& x, Serializer& s) {
-        serialize(x.size(), s);
-        for (auto&& y : x)
-            serialize(y, s);
-    }
-    
-    
+        
 }
 
 #endif /* array_view_hpp */

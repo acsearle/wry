@@ -622,7 +622,7 @@ namespace wry {
 
         iterator find(const auto& keylike) {
             Entry* p = _inner.find(_inner._hasher.get_hash(keylike),
-                                   [&](const Entry& e) {
+                                   [&](const Entry& e) -> bool {
                 return e._kv.first == keylike;
             });
             return iterator((p ? p : _inner.end()), &_inner);

@@ -14,12 +14,10 @@
 #include <cstring>    // strlen
 #include <ostream>    // ostream
 
+#include "algorithm.hpp"
 #include "array_view.hpp"
-#include "common.hpp" // uchar, uint
 #include "unicode.hpp"
 #include "hash.hpp"
-#include "serialize.hpp"
-#include "utility.hpp"
 
 namespace wry {
     
@@ -34,10 +32,9 @@ namespace wry {
         const_iterator a, b;
         
         string_view() : a(nullptr), b(nullptr) {}
-        string_view(char const* z) : a(z), b(z + strlen(z)) {}
-        string_view(char const* p, size_t n) : a(p), b(p + n) {}
-        string_view(char const* p, char const* q) : a(p), b(q) {}
-        string_view(uchar const* p, uchar const* q) : a{p}, b{q} {}
+        string_view(const char* z) : a(z), b(z + strlen(z)) {}
+        string_view(const char* p, size_t n) : a(p), b(p + n) {}
+        string_view(const char* p, const char* q) : a(p), b(q) {}
         string_view(const_iterator p, const_iterator q) : a(p), b(q) {}
         string_view(string_view const&) = default;
         
@@ -65,8 +62,8 @@ namespace wry {
             return lexicographical_compare_three_way(a, b, other.a, other.b);
         }
         
-        array_view<const uchar> as_bytes() const {
-            return array_view<const uchar>(a._ptr,
+        array_view<const char> as_bytes() const {
+            return array_view<const char>(a._ptr,
                                            b._ptr);
         }
         
@@ -118,11 +115,7 @@ namespace wry {
         return hash(string_view(c));
     }
     
-    template<typename Serializer>
-    void serialize(string_view const& v, Serializer& s) {
-        serialize(v.as_bytes(), s);
-    }
     
-} // namespace manic
+} // namespace wry
 
 #endif /* string_view_hpp */

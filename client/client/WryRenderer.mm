@@ -23,6 +23,7 @@
 #include "mesh.hpp"
 #include "platform.hpp"
 #include "obj.hpp"
+#include "json.hpp"
 
 @implementation WryRenderer
 {
@@ -67,11 +68,7 @@
     
     id<MTLTexture> _deferredLightImageBasedTexture;
     id<MTLTexture> _deferredLightImageBasedFresnelTexture;
-    
-    WryMesh* _groundMesh;
-    WryMesh* _tireMesh;
-    WryMesh* _chassisMesh;
-
+        
     // conventional compositing for overlay
     
     id <MTLRenderPipelineState> _overlayRenderPipelineState;
@@ -86,11 +83,19 @@
     id<MTLTexture> _blurredTexture;
     MPSImageAdd* _imageAdd;
     id<MTLTexture> _addedTexture;
+
+    // symbols?
     
-    // capture
+    id<MTLTexture> _symbols;
+    WryMesh* _hackmesh;
     
-    id<MTLCaptureScope> _captureScope;
+    id<MTLTexture> _black;
+    id<MTLTexture> _white;
+    id<MTLTexture> _blue;
+    id<MTLBuffer> _instanced_things;
+    id<MTLTexture> _darkgray;
     
+    wry::table<ulong, simd_float4> _opcode_to_coordinate;
 
 }
 
@@ -414,6 +419,7 @@
             MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
             descriptor.label = @"Shadow map pipeline";
             descriptor.vertexFunction = [self newFunctionWithName:@"DeferredGBufferVertexShader"];
+            descriptor.fragmentFunction = [self newFunctionWithName:@"DeferredGBufferShadowFragmentShader"];
             descriptor.vertexBuffers[AAPLBufferIndexVertices].mutability = MTLMutabilityImmutable;
             descriptor.vertexBuffers[AAPLBufferIndexUniforms].mutability = MTLMutabilityImmutable;
             descriptor.depthAttachmentPixelFormat = _shadowMapTarget.pixelFormat;
@@ -426,156 +432,7 @@
         _deferredLightImageBasedTexture = [self prefilteredEnvironmentMapFromResource:@"day" ofType:@"png"];
 
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
-
-        {
-            {
-                
-               
-                
-                using namespace simd;
-                
-                // low-poly tire with superquadric cross-section
-                
-                wry::mesh::mesh m;
-                // m.add_face_disk(8);
-                // m.add_edges_polygon(4);
-                /*
-                 m.add_edges_superquadric(8);
-                 m.extrude(12, vector4(0.0f, M_PI / 6, 0.0f, 0.0f));
-                 m.edges.clear();
-                 m.transform_with_function([](float4 position, float4 coordinate) {
-                 float4x4 A = simd_matrix_translate(vector3(-2.0f, 0.0f, +coordinate.y));
-                 float4x4 B = simd_matrix_rotate(-coordinate.y, vector3(0.0f, 1.0f, 0.0f));
-                 //float4x4 C = simd_matrix_translate(vector3(0.0f, -10.0f, 0.0f));
-                 float4x4 D = simd_matrix_scale(0.5f);
-                 //position = D * (C * (B * (A * position)));
-                 // position = D * B * A * position;
-                 position = D * B * A * position;
-                 return position;
-                 });
-                 m.reparameterize_with_matrix(simd_matrix_scale(vector3(2.0f, 8.0f, 1.0f)));
-                 */
-                m.add_quads_box(float4{-8,-16,-8,1}, float4{8,0,8,1});
-                m.colocate_similar_vertices();
-                m.combine_duplicate_vertices();
-                m.triangulate();
-                m.strip();
-                m.reindex_for_strip();
-                m.MeshVertexify();
-                
-                _groundMesh = [[WryMesh alloc] initWithDevice:_device];
-                _groundMesh.vertexBuffer = newBufferWithArray(m.vertices);
-                _groundMesh.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
-             
-                _groundMesh.emissiveTexture = [self newTextureFromResource:@"black"
-                                                                ofType:@"png"];
-                //_cube_colors = [self newTextureFromResource:@"rustediron2_basecolor" ofType:@"png"];
-                //_cube_colors = [self newTextureFromResource:@"albedo" ofType:@"png"];
-                _groundMesh.albedoTexture = [self newTextureFromResource:@"wavy-sand_albedo" ofType:@"png"];
-                _groundMesh.metallicTexture= [self newTextureFromResource:@"wavy-sand_metallic"
-                                                               ofType:@"png"];
-                _groundMesh.normalTexture = [self newTextureFromResource:@"wavy-sand_normal-ogl"
-                                                              ofType:@"png"
-                                                     withPixelFormat:MTLPixelFormatRGBA8Unorm];
-                _groundMesh.roughnessTexture = [self newTextureFromResource:@"wavy-sand_roughness"
-                                                                 ofType:@"png"];
-                _groundMesh.instanceCount = 1;
-                _groundMesh.instances[0].albedo = 1.0f;
-                _groundMesh.instances[0].model_transform = matrix_identity_float4x4;
-                _groundMesh.instances[0].inverse_transpose_model_transform = matrix_identity_float4x4;
-
-                
-                m = wry::mesh::mesh();
-                m.add_edges_superquadric(8);
-                m.extrude(12, vector4(0.0f, M_PI_F / 6.0f, 0.0f, 0.0f));
-                m.edges.clear();
-                m.transform_with_function([](float4 position, float4 coordinate) {
-                    float4x4 A = simd_matrix_translate(vector3(-2.0f, 0.0f, +coordinate.y));
-                    float4x4 B = simd_matrix_rotate(-coordinate.y, vector3(0.0f, 1.0f, 0.0f));
-                    float4x4 C = simd_matrix_rotate(M_PI/2, vector3(1.0f, 0.0f, 0.0f));
-                    float4x4 D = simd_matrix_translate(vector3(0.0f, 3.0f, 2.0f));
-                    float4x4 E = simd_matrix_scale(0.125f);
-                    //float4x4 C = simd_matrix_translate(vector3(0.0f, -10.0f, 0.0f));
-                    //float4x4 D = simd_matrix_scale(0.5f);
-                    //position = D * (C * (B * (A * position)));
-                    // position = D * B * A * position;
-                    position = E * D * C * B * A * position;
-                    return position;
-                });
-                
-                //m.reparameterize_with_matrix(simd_matrix_scale(vector3(2.0f, 8.0f, 1.0f)));
-                m.colocate_similar_vertices();
-                m.combine_duplicate_vertices();
-                m.triangulate();
-                m.copy_under_transform(simd_matrix_rotate(M_PI, simd_make_float3(0,1,0)));
-                m.strip();
-                m.reindex_for_strip();
-                m.MeshVertexify();
-                
-                _tireMesh = [[WryMesh alloc] initWithDevice:_device];
-                _tireMesh.vertexBuffer = newBufferWithArray(m.vertices);
-                _tireMesh.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
-                
-                _tireMesh.emissiveTexture = [self newTextureFromResource:@"black"
-                                                              ofType:@"png"];
-                _tireMesh.albedoTexture = [self newTextureFromResource:@"black" ofType:@"png"];
-                _tireMesh.metallicTexture= [self newTextureFromResource:@"white"
-                                                             ofType:@"png"];
-                _tireMesh.normalTexture = [self newTextureFromResource:@"blue"
-                                                            ofType:@"png"
-                                                   withPixelFormat:MTLPixelFormatRGBA8Unorm];
-                _tireMesh.roughnessTexture = [self newTextureFromResource:@"darkgray"
-                                                               ofType:@"png"];
-                _tireMesh.instanceCount = 6;
-                
-                /*
-                m = wry::mesh::mesh();
-                m.add_quads_box(float4{-1.5f,0.875f,-0.875f,1.0f}, float4{1.5f,1.0f,-0.8125f,1.0f});
-                m.add_quads_box(float4{-1.5f,0.875f,0.8125f,1.0f}, float4{1.5f,1.0f,0.875f,1.0f});
-                m.add_quads_box(float4{-1.0625f,0.875f,-0.75f,1.0f}, float4{-0.9375,1.0f,0.75f,1.0f});
-                m.add_quads_box(float4{-0.0625f,0.875f,-0.75f,1.0f}, float4{+0.0625,1.0f,0.75f,1.0f});
-                m.add_quads_box(float4{+0.9375,0.875f,-0.75f,1.0f}, float4{+1.0625f,1.0f,0.75f,1.0f});
-                m.colocate_similar_vertices();
-                m.repair_texturing(4.0f);
-                m.combine_duplicate_vertices();
-                m.triangulate();
-                m.strip();
-                m.reindex_for_strip();
-                m.MeshVertexify();
-                 */
-                
-                m = from_obj("/Users/antony/Desktop/assets/16747_Mining_Truck_v1.obj");            
-                m.MeshVertexify();
-
-
-                _chassisMesh = [[WryMesh alloc] initWithDevice:_device];
-                _chassisMesh.vertexBuffer = newBufferWithArray(m.vertices);
-                _chassisMesh.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
-                
-                _chassisMesh.emissiveTexture = [self newTextureFromResource:@"black"
-                                                              ofType:@"png"];
-                _chassisMesh.albedoTexture = [self newTextureFromResource:@"white" ofType:@"png"];
-                _chassisMesh.metallicTexture= [self newTextureFromResource:@"black"
-                                                             ofType:@"png"];
-                _chassisMesh.normalTexture = [self newTextureFromResource:@"blue"
-                                                            ofType:@"png"
-                                                   withPixelFormat:MTLPixelFormatRGBA8Unorm];
-                _chassisMesh.roughnessTexture = [self newTextureFromResource:@"white"
-                                                               ofType:@"png"];
-                _chassisMesh.instanceCount = 1;
-                auto A = simd_matrix_scale(0.002f);
-                auto B = simd_matrix_rotate(-M_PI_F/2, simd_make_float3(1,0,0));
-                _chassisMesh.instances[0].model_transform = A * B;
-                _chassisMesh.instances[0].inverse_transpose_model_transform
-                = simd_transpose(simd_inverse(B));
-                // = matrix_identity_float4x4;
-
-                
-            }
-            NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
-
-            
-        }
+        
         
         {
             MTLRenderPipelineDescriptor *descriptor = [[MTLRenderPipelineDescriptor alloc] init];
@@ -659,22 +516,56 @@
             _atlas = new wry::atlas(2048, device);
             _font = new wry::font(build_font(*_atlas));
         }
-        
+
+        NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
         
         _gaussianBlur = [[MPSImageGaussianBlur alloc] initWithDevice:_device sigma:32.0];
         _imageAdd = [[MPSImageAdd alloc] initWithDevice:_device];
         
+        NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
+
+        {
+            _symbols = [self newTextureFromResource:@"assets" ofType:@"png"];
+            _hackmesh = [[WryMesh alloc] initWithDevice:_device];
+            _black = [self newTextureFromResource:@"black" ofType:@"png"];
+            _white = [self newTextureFromResource:@"white" ofType:@"png"];
+            _blue = [self newTextureFromResource:@"blue"
+                                          ofType:@"png"
+                                 withPixelFormat:MTLPixelFormatRGBA8Unorm];
+            _darkgray = [self newTextureFromResource:@"darkgray" ofType:@"png"];
+
+
+            MeshInstanced i;
+            i.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
+            i.inverse_transpose_model_transform = simd_inverse(simd_transpose(i.model_transform));
+            i.albedo = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+            _instanced_things = [_device newBufferWithBytes:&i length:sizeof(i) options:MTLStorageModeShared];
+            
+            auto a = json::from(wry::string_from_file("/Users/antony/Desktop/assets/assets.json"));
+            auto b = json::from(wry::string_from_file("/Users/antony/Desktop/assets/opcodes.json"));
+            
+            table<wry::string, ulong> _name_to_opcode;
+            for (int i = 0; i != b.size(); ++i) {
+                _name_to_opcode[b[i].as_string()] = i;
+            }
+            
+            for (int i = 0; i != a.size(); ++i) {
+                auto& c = a[i];
+                for (int j = 0; j != c.size(); ++j) {
+                    simd_float4 coordinate = simd_make_float4(j / 32.0f, i / 32.0f, 0.0f, 1.0f);
+                    auto p = _name_to_opcode.find(c[j].as_string());
+                    if (p != _name_to_opcode.end()) {
+                        _opcode_to_coordinate[p->second] = coordinate;
+                    }
+                }
+            }
+            
+
+        }
+        
     }
     
     NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
-    
-    {
-        MTLCaptureManager* captureManager = [MTLCaptureManager sharedCaptureManager];
-        _captureScope = [captureManager newCaptureScopeWithCommandQueue:_commandQueue];
-        [_captureScope setLabel:@"Custom"];
-        [captureManager setDefaultCaptureScope:_captureScope];
-    }
-    
 
     return self;
 }
@@ -767,7 +658,7 @@
 // - (void)renderToMetalLayer:(nonnull CAMetalLayer*)metalLayer
 - (void)renderToMetalLayer:(nonnull CAMetalDisplayLinkUpdate*)update
 {
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    // NSLog(@"%s\n", __PRETTY_FUNCTION__);
 
     using namespace ::simd;
     using namespace ::wry;
@@ -777,48 +668,239 @@
     
     _model->_world.step();
     
-    printf("%lx\n", _model->_world._waiting_on_time.begin()->second->_location);
+    // printf("%lx\n", _model->_world._waiting_on_time.begin()->second->_location);
     
     
     
     id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
     
-    MeshUniforms uniforms = {};
 
     {
-        _tireMesh.instances[ 0].model_transform = simd_matrix_translate(simd_make_float3( -1.0f,  -1.0f, -0.5f));
-        _tireMesh.instances[ 1].model_transform = simd_matrix_translate(simd_make_float3( -1.0f,  -1.0f, +0.5f));
-        _tireMesh.instances[ 2].model_transform = simd_matrix_translate(simd_make_float3(  0.0f,  -1.0f, -0.5f));
-        _tireMesh.instances[ 3].model_transform = simd_matrix_translate(simd_make_float3(  0.0f,  -1.0f, +0.5f));
-        _tireMesh.instances[ 4].model_transform = simd_matrix_translate(simd_make_float3( +1.0f,  -1.0f, -0.5f));
-        _tireMesh.instances[ 5].model_transform = simd_matrix_translate(simd_make_float3( +1.0f,  -1.0f, +0.5f));
-
-        float2 center_of_turn = make_float2(0.5f, 2.0 / sin(_frame_count * 0.01));
+        MeshInstanced i;
+        i.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
+        i.model_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
+        i.model_transform.columns[3].z -= _model->_looking_at.y / 1024.0f;
+        i.inverse_transpose_model_transform = simd_inverse(simd_transpose(i.model_transform));
+        i.albedo = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+        // _instanced_things = [_device newBufferWithBytes:&i length:sizeof(i) options:MTLStorageModeShared];
+        memcpy([_instanced_things contents], &i, sizeof(i));
+    }
+    
+    MeshUniforms uniforms = {};
+    
+    id<MTLBuffer> vertices = nil;
+    id<MTLBuffer> indices = nil;
+    NSUInteger index_count = 0;
+    // raid model for data
+    {
+        auto tnow = _model->_world._tick;
+        const auto& machines = _model->_world._waiting_on_time;
         
-        for (NSUInteger i = 0; i != _tireMesh.instanceCount; ++i) {
-            float4x4 A = _tireMesh.instances[i].model_transform;
-            float2 b = simd_normalize(A.columns[3].xz - center_of_turn);
-            float4x4 B = simd_matrix(simd_make_float4(  b.y ,  0.0f, -b.x,  0.0f  ),
-                                     simd_make_float4(  0.0f,  1.0f,0,0),
-                                     simd_make_float4(b.x,0,b.y,0),
-                                     simd_make_float4(0,0,0,1));
-            float4x4 C = A * B;
-            float4x4 D = simd_transpose(simd_inverse(C));
-            _tireMesh.instances[i].model_transform = C;
-            _tireMesh.instances[i].inverse_transpose_model_transform = D;
+        NSUInteger quad_count = 10 * 10 + machines.size() * 10;
+        NSUInteger vertex_count = quad_count * 4;
+        index_count = quad_count * 6;
+        vertices = [_device newBufferWithLength:vertex_count * sizeof(MeshVertex) options:MTLStorageModeShared];
+        indices = [_device newBufferWithLength:index_count * sizeof(uint) options:MTLStorageModeShared];
+        
+        MeshVertex* pv = (MeshVertex*) vertices.contents;
+        uint* pi = (uint*) indices.contents;
+        MeshVertex v;
+        v.tangent = simd_make_float4(-1.0f, 0.0f, 0.0f, 0.0f);
+        v.bitangent = simd_make_float4(0.0f, 1.0f, 0.0f, 0.0f);
+        v.normal = simd_make_float4(0.0f, 0.0f, -1.0f, 0.0f);
+        uint k = 0;
+        for (auto [t, p] : machines) {
+            simd_int2 xy = 0;
+            memcpy(&xy, &p->_location, 8);
+            simd_float4 location = simd_make_float4(xy.x, xy.y, 0.0f, 01.0f);
+            simd_float4 heading = {};
+            auto h = p->_heading & 3;
+            switch(h & 3) {
+                case 0:
+                    heading = simd_make_float4(0.0f, 1.0f, 0.0f, 0.0f);
+                    break;
+                case 1:
+                    heading = simd_make_float4(1.0f, 0.0f, 0.0f, 0.0f);
+                    break;
+                case 2:
+                    heading = simd_make_float4(0.0f, -1.0f, 0.0f, 0.0f);
+                    break;
+                case 3:
+                    heading = simd_make_float4(-1.0f, 0.0f, 0.0f, 0.0f);
+                    break;
+            }
+            location = location - heading * (t - tnow) / 64.0f;
+            
+            v.position = simd_make_float4(-0.5f, -0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = simd_make_float4(11.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
+            *pv++ = v;
+            v.position = simd_make_float4(+0.5f, -0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = simd_make_float4(12.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
+            *pv++ = v;
+            v.position = simd_make_float4(+0.5f, +0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = simd_make_float4(12.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
+            *pv++ = v;
+            v.position = simd_make_float4(-0.5f, +0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = simd_make_float4(11.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
+            *pv++ = v;
+            
+            while (h--) {
+                wry::rotate_left(pv[-4].coordinate,
+                                 pv[-3].coordinate,
+                                 pv[-2].coordinate,
+                                 pv[-1].coordinate
+                                 );
+                
+            }
+            
+            *pi++ = k;
+            *pi++ = k;
+            *pi++ = k + 1;
+            *pi++ = k + 3;
+            *pi++ = k + 2;
+            *pi++ = k + 2;
+            
+            k += 4;
+            
+            for (int i = 0; i != p->_stack.size(); ++i) {
+                location.z -= 0.5;
+                Value value = p->_stack[i];
+                simd_float4 coordinate = simd_make_float4((value.data & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                v.position = simd_make_float4(-0.5f, -0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = simd_make_float4(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                *pv++ = v;
+                v.position = simd_make_float4(+0.5f, -0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = simd_make_float4(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                *pv++ = v;
+                v.position = simd_make_float4(+0.5f, +0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = simd_make_float4(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                *pv++ = v;
+                v.position = simd_make_float4(-0.5f, +0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = simd_make_float4(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                *pv++ = v;
+                *pi++ = k;
+                *pi++ = k;
+                *pi++ = k + 1;
+                *pi++ = k + 3;
+                *pi++ = k + 2;
+                *pi++ = k + 2;
+                
+                k += 4;
+            }
+            
+            
+        }
+        
+        for (int i = -5; i != 5; ++i) {
+            for (int j = -5; j != 5; ++j) {
+
+                simd_float4 location = simd_make_float4(i, j, 0.5f, 1.0f);
+                simd_float4 coordinate = simd_make_float4(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
+                
+                {
+                    i64 value = _model->_world.get({i, j}).data;
+                    if (value) {
+                        auto p = _opcode_to_coordinate.find(value);
+                        if (p != _opcode_to_coordinate.end()) {
+                            coordinate = p->second;
+                        }
+                    }
+                }
+                
+                
+                v.position = simd_make_float4(-0.5f, -0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = simd_make_float4(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                *pv++ = v;
+                v.position = simd_make_float4(+0.5f, -0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = simd_make_float4(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                *pv++ = v;
+                v.position = simd_make_float4(+0.5f, +0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = simd_make_float4(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                *pv++ = v;
+                v.position = simd_make_float4(-0.5f, +0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = simd_make_float4(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                *pv++ = v;
+                
+                *pi++ = k;
+                *pi++ = k;
+                *pi++ = k + 1;
+                *pi++ = k + 3;
+                *pi++ = k + 2;
+                *pi++ = k + 2;
+                
+                k += 4;
+            }
         }
         
         {
-            auto A = simd_matrix_scale(0.002f);
-            auto B = simd_matrix_rotate(-M_PI_F/2, simd_make_float3(1,0,0));
-            auto C = simd_matrix_rotate(_frame_count * 0.01, simd_make_float3(0,1,0));
-            _chassisMesh.instances[0].model_transform = A * C * B;
-            _chassisMesh.instances[0].inverse_transpose_model_transform
-            = simd_transpose(simd_inverse(C * B));
-            // = matrix_identity_float4x4;
-
+            
+            // big ground plane
+            
+            v.coordinate = simd_make_float4(3.0 / 32.0f, 4.5f / 32.0f, 0.0f, 1.0f);
+            v.position = simd_make_float4(-5.0f, -5.0f, 0.52, 1.0f);
+            *pv++ = v;
+            v.position = simd_make_float4(+5.0f, -5.0f, 0.52, 1.0f);
+            *pv++ = v;
+            v.position = simd_make_float4(+5.0f, +5.0f, 0.52, 1.0f);
+            *pv++ = v;
+            v.position = simd_make_float4(-5.0f, +5.0f, 0.52, 1.0f);
+            *pv++ = v;
+            
+            *pi++ = k;
+            *pi++ = k;
+            *pi++ = k + 1;
+            *pi++ = k + 3;
+            *pi++ = k + 2;
+            *pi++ = k + 2;
+            
+            k += 4;
+            
         }
+        
+        {
+            // mouse cursor thing
+            simd_float4 location = _model->_mouse4.xzyw;
+            //location.x = round(location.x);
+            //location.y = round(location.y);
+            simd_float4 coordinate = simd_make_float4(3.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f);
+            
+            v.position = simd_make_float4(-0.5f, -0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = simd_make_float4(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+            *pv++ = v;
+            v.position = simd_make_float4(+0.5f, -0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = simd_make_float4(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+            *pv++ = v;
+            v.position = simd_make_float4(+0.5f, +0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = simd_make_float4(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+            *pv++ = v;
+            v.position = simd_make_float4(-0.5f, +0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = simd_make_float4(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+            *pv++ = v;
+            
+            *pi++ = k;
+            *pi++ = k;
+            *pi++ = k + 1;
+            *pi++ = k + 3;
+            *pi++ = k + 2;
+            *pi++ = k + 2;
+            
+            k += 4;
+            
+            simd_int2 xy;
+            xy.x = round(_model->_mouse4.x);
+            xy.y = round(_model->_mouse4.z);
+            ulong z = 0;
+            memcpy(&z, &xy, 8);
+            //ulong value = _model->_world.get(z);
+            //++value;
+            //_model->_world.set(z, value);
+            
+        }
+        
+        
     }
+
+   
        
     // Render shadow map
     
@@ -832,20 +914,20 @@
         
         // shadow map parameters
         
-        float light_radius = 4.0;
-        simd_float3 light_direction = simd_normalize(simd_make_float3(3, 1, -2));
+        float light_radius = 8.0;
+        simd_float3 light_direction = simd_normalize(simd_make_float3(2, 3, 1));
         
         simd_quatf q = simd_quaternion(light_direction, simd_make_float3(0, 0, -1));
         float4x4 A = simd_matrix4x4(q);
         float4x4 B = simd_matrix_scale(simd_make_float3(1.0f, 1.0f, 0.5f) / light_radius);
-        float4x4 C = simd_matrix_translate(simd_make_float3(0.0f, 0.0f, +0.5f));
+        float4x4 C = simd_matrix_translate(simd_make_float3(0.0f, 0.0f, 0.5f));
         
         uniforms.viewprojection_transform = C * B * A;
         uniforms.light_direction = -light_direction;
-        uniforms.radiance = 10.0f; //sqrt(simd_saturate(cos(phaseOfDay)));
+        uniforms.radiance = 2.0f; //sqrt(simd_saturate(cos(phaseOfDay)));
         
         [render_command_encoder setRenderPipelineState:_shadowMapRenderPipelineState];
-        [render_command_encoder setCullMode:MTLCullModeFront];
+        //[render_command_encoder setCullMode:MTLCullModeFront];
         [render_command_encoder setDepthStencilState:_enabledDepthStencilState];
         
 
@@ -856,9 +938,25 @@
         [render_command_encoder setFragmentBytes:&uniforms
                                           length:sizeof(MeshUniforms)
                                          atIndex:AAPLBufferIndexUniforms];
-
-        [_chassisMesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
-        [_tireMesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
+        [render_command_encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
+        [render_command_encoder setVertexBuffer:_instanced_things offset:0 atIndex:AAPLBufferIndexInstanced];
+        
+        
+        [render_command_encoder setDepthBias:0.0f // +100.0f
+                                  slopeScale:+1.0f // ?
+                                       clamp:0.0f];
+        
+        
+        [render_command_encoder setFragmentBytes:&uniforms
+                           length:sizeof(MeshUniforms)
+                          atIndex:AAPLBufferIndexUniforms];
+        [render_command_encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
+        
+        [render_command_encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
+                                           indexCount:index_count
+                                            indexType:MTLIndexTypeUInt32
+                                          indexBuffer:indices
+                                    indexBufferOffset:0];
         
         [render_command_encoder endEncoding];
         
@@ -906,20 +1004,21 @@
 
             {
                 // save shadow map transform
-                float4x4 A = matrix_ndc_to_tc_float4x4 * uniforms.viewprojection_transform;
+                float4x4 A = matrix_ndc_to_tc_float4x4 *
+                uniforms.viewprojection_transform;
                 uniforms.light_viewprojection_transform = A;
             }
 
             
             {
                 // rotate eye location to -Z
-                float4 origin = simd_make_float4(1.0f, 2.0f, -3.0f, 1.0f);
+                float4 origin = simd_make_float4(0.0f, 8.0, -4.0f, 1.0f);
                 quatf q = simd_quaternion(simd_normalize(origin.xyz),
                                           simd_make_float3(0.0, 0.0, -1.0));
                 float4x4 A = simd_matrix4x4(q);
                 float4x4 B = simd_matrix_translate(simd_make_float3(0.0f, 0.0f, simd_length(origin.xyz)));
                 float aspect_ratio =  _viewport_size.x / _viewport_size.y;
-                float4x4 C = simd_matrix_scale(simd_make_float3(1.0f, aspect_ratio, 1.0f));
+                float4x4 C = simd_matrix_scale(simd_make_float3(2.0f, 2.0f * aspect_ratio, 1.0f));
                 float4x4 V = C * B * A;
                 float4x4 iV = inverse(V);
                 float4x4 P = matrix_perspective_float4x4;
@@ -932,6 +1031,28 @@
                 uniforms.viewprojection_transform = VP;
                 uniforms.inverse_viewprojection_transform = iVP;
 
+  
+                //     float4 position = float4(in.direction * depth, 0) + uniforms.origin;
+
+                {
+                    simd_float4 direction = uniforms.inverse_view_transform
+                        * simd_make_float4(_model->_mouse.x, _model->_mouse.y, 1.0f, 0.0f);
+                    // we want to intersect with y == 0 plane
+                    //NSLog(@"%f %f %f\n", direction.x, direction.y, direction.z);
+                    float depth = - uniforms.origin.y / direction.y;
+                    simd_float3 position = direction.xyz * depth + uniforms.origin.xyz;
+                    _model->_mouse4 = simd_make_float4(position, 1.0f);
+                    _model->_mouse4.x -= _model->_looking_at.x / 1024.0f;
+                    _model->_mouse4.z += _model->_looking_at.y / 1024.0f;
+
+                    NSLog(@"%f %f %f\n", _model->_mouse4.x, _model->_mouse4.y, _model->_mouse4.z);
+
+                    
+                    
+                }
+
+                
+                
             }
             
             {
@@ -985,13 +1106,23 @@
                                    length:sizeof(MeshUniforms)
                                   atIndex:AAPLBufferIndexUniforms];
                 
-                [_chassisMesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
-                [_tireMesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
-                [_groundMesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
 
                 if (show_wireframe) {
                     [encoder setTriangleFillMode:MTLTriangleFillModeFill];
                 }
+
+                [encoder setFragmentTexture:_black atIndex:AAPLTextureIndexEmissive];
+                [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
+                [encoder setFragmentTexture:_black atIndex:AAPLTextureIndexMetallic];
+                [encoder setFragmentTexture:_blue atIndex:AAPLTextureIndexNormal];
+                [encoder setFragmentTexture:_white atIndex:AAPLTextureIndexRoughness];
+                [encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
+                [encoder setVertexBuffer:_instanced_things offset:0 atIndex:AAPLBufferIndexInstanced];
+                [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
+                                    indexCount:index_count
+                                     indexType:MTLIndexTypeUInt32
+                                   indexBuffer:indices
+                             indexBufferOffset:0];
 
                 /*
                 if (show_points) {
@@ -1072,45 +1203,7 @@
         
     }
     
-    {
-        // ultra-paranoid
-    }
-    
-    
-    /*
-    id<CAMetalDrawable> currentDrawable = nil;
-    {
-        // wry::timer t("nextDrawable");
-        //auto a = mach_absolute_time();
-        auto a = std::chrono::steady_clock::now();
-        currentDrawable = [metalLayer nextDrawable];
-        auto b = std::chrono::steady_clock::now();
-        static std::chrono::steady_clock::time_point t0, t1;
-        auto c = std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
-        auto d = std::chrono::duration_cast<std::chrono::microseconds>(b - t0).count();
-        auto e = std::chrono::duration_cast<std::chrono::microseconds>(a - t0).count();
-        //b.time_since_epoch()
-        
-        //if (c > 999) {
-        // printf("! %lld\n", c);
-        //printf(" wake-to-wake  %lld\n", d);
-        //printf(" wake-to-sleep %lld\n", e);
-        //}
-        t0 = b;
-        t1 = a;
-        
-    }
-    
-    {
-        id<MTLBlitCommandEncoder> encoder =  [command_buffer blitCommandEncoder];
-        [encoder copyFromTexture:_addedTexture toTexture:currentDrawable.texture];
-        [encoder endEncoding];
-    }
-            
-    [command_buffer presentDrawable:currentDrawable];
-    currentDrawable = nil;
-    [command_buffer commit];
-     */
+   
     
     @autoreleasepool {
         id<CAMetalDrawable> currentDrawable = [update drawable];
@@ -1184,7 +1277,7 @@
 }
 
 - (void)metalDisplayLink:(CAMetalDisplayLink *)link needsUpdate:(CAMetalDisplayLinkUpdate *)update {
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    //NSLog(@"%s\n", __PRETTY_FUNCTION__);
     [self renderToMetalLayer:update];
 }
 
@@ -2129,5 +2222,254 @@ fromConnection:(AVCaptureConnection *)connection {
         
     }
 
+    
+    {
+        _tireMesh.instances[ 0].model_transform = simd_matrix_translate(simd_make_float3( -1.0f,  -1.0f, -0.5f));
+        _tireMesh.instances[ 1].model_transform = simd_matrix_translate(simd_make_float3( -1.0f,  -1.0f, +0.5f));
+        _tireMesh.instances[ 2].model_transform = simd_matrix_translate(simd_make_float3(  0.0f,  -1.0f, -0.5f));
+        _tireMesh.instances[ 3].model_transform = simd_matrix_translate(simd_make_float3(  0.0f,  -1.0f, +0.5f));
+        _tireMesh.instances[ 4].model_transform = simd_matrix_translate(simd_make_float3( +1.0f,  -1.0f, -0.5f));
+        _tireMesh.instances[ 5].model_transform = simd_matrix_translate(simd_make_float3( +1.0f,  -1.0f, +0.5f));
+        
+        float2 center_of_turn = make_float2(0.5f, 2.0 / sin(_frame_count * 0.01));
+        
+        for (NSUInteger i = 0; i != _tireMesh.instanceCount; ++i) {
+            float4x4 A = _tireMesh.instances[i].model_transform;
+            float2 b = simd_normalize(A.columns[3].xz - center_of_turn);
+            float4x4 B = simd_matrix(simd_make_float4(  b.y ,  0.0f, -b.x,  0.0f  ),
+                                     simd_make_float4(  0.0f,  1.0f,0,0),
+                                     simd_make_float4(b.x,0,b.y,0),
+                                     simd_make_float4(0,0,0,1));
+            float4x4 C = A * B;
+            float4x4 D = simd_transpose(simd_inverse(C));
+            _tireMesh.instances[i].model_transform = C;
+            _tireMesh.instances[i].inverse_transpose_model_transform = D;
+        }
+        
+        {
+            auto A = simd_matrix_scale(0.002f);
+            auto B = simd_matrix_rotate(-M_PI_F/2, simd_make_float3(1,0,0));
+            auto C = simd_matrix_rotate(_frame_count * 0.01, simd_make_float3(0,1,0));
+            _chassisMesh.instances[0].model_transform = A * C * B;
+            _chassisMesh.instances[0].inverse_transpose_model_transform
+            = simd_transpose(simd_inverse(C * B));
+            // = matrix_identity_float4x4;
+            
+        }
+    }
+    
+    WryMesh* _groundMesh;
+    WryMesh* _tireMesh;
+    WryMesh* _chassisMesh;
+    
+    {
+        {
+            
+            
+            
+            using namespace simd;
+            
+            // low-poly tire with superquadric cross-section
+            
+            wry::mesh::mesh m;
+            // m.add_face_disk(8);
+            // m.add_edges_polygon(4);
+            /*
+             m.add_edges_superquadric(8);
+             m.extrude(12, vector4(0.0f, M_PI / 6, 0.0f, 0.0f));
+             m.edges.clear();
+             m.transform_with_function([](float4 position, float4 coordinate) {
+             float4x4 A = simd_matrix_translate(vector3(-2.0f, 0.0f, +coordinate.y));
+             float4x4 B = simd_matrix_rotate(-coordinate.y, vector3(0.0f, 1.0f, 0.0f));
+             //float4x4 C = simd_matrix_translate(vector3(0.0f, -10.0f, 0.0f));
+             float4x4 D = simd_matrix_scale(0.5f);
+             //position = D * (C * (B * (A * position)));
+             // position = D * B * A * position;
+             position = D * B * A * position;
+             return position;
+             });
+             m.reparameterize_with_matrix(simd_matrix_scale(vector3(2.0f, 8.0f, 1.0f)));
+             */
+            m.add_quads_box(float4{-8,-16,-8,1}, float4{8,0,8,1});
+            m.colocate_similar_vertices();
+            m.combine_duplicate_vertices();
+            m.triangulate();
+            m.strip();
+            m.reindex_for_strip();
+            m.MeshVertexify();
+            
+            _groundMesh = [[WryMesh alloc] initWithDevice:_device];
+            _groundMesh.vertexBuffer = newBufferWithArray(m.vertices);
+            _groundMesh.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
+            
+            _groundMesh.emissiveTexture = [self newTextureFromResource:@"black"
+                                                                ofType:@"png"];
+            //_cube_colors = [self newTextureFromResource:@"rustediron2_basecolor" ofType:@"png"];
+            //_cube_colors = [self newTextureFromResource:@"albedo" ofType:@"png"];
+            _groundMesh.albedoTexture = [self newTextureFromResource:@"wavy-sand_albedo" ofType:@"png"];
+            _groundMesh.metallicTexture= [self newTextureFromResource:@"wavy-sand_metallic"
+                                                               ofType:@"png"];
+            _groundMesh.normalTexture = [self newTextureFromResource:@"wavy-sand_normal-ogl"
+                                                              ofType:@"png"
+                                                     withPixelFormat:MTLPixelFormatRGBA8Unorm];
+            _groundMesh.roughnessTexture = [self newTextureFromResource:@"wavy-sand_roughness"
+                                                                 ofType:@"png"];
+            _groundMesh.instanceCount = 1;
+            _groundMesh.instances[0].albedo = 1.0f;
+            _groundMesh.instances[0].model_transform = matrix_identity_float4x4;
+            _groundMesh.instances[0].inverse_transpose_model_transform = matrix_identity_float4x4;
+            
+            
+            m = wry::mesh::mesh();
+            m.add_edges_superquadric(8);
+            m.extrude(12, vector4(0.0f, M_PI_F / 6.0f, 0.0f, 0.0f));
+            m.edges.clear();
+            m.transform_with_function([](float4 position, float4 coordinate) {
+                float4x4 A = simd_matrix_translate(vector3(-2.0f, 0.0f, +coordinate.y));
+                float4x4 B = simd_matrix_rotate(-coordinate.y, vector3(0.0f, 1.0f, 0.0f));
+                float4x4 C = simd_matrix_rotate(M_PI/2, vector3(1.0f, 0.0f, 0.0f));
+                float4x4 D = simd_matrix_translate(vector3(0.0f, 3.0f, 2.0f));
+                float4x4 E = simd_matrix_scale(0.125f);
+                //float4x4 C = simd_matrix_translate(vector3(0.0f, -10.0f, 0.0f));
+                //float4x4 D = simd_matrix_scale(0.5f);
+                //position = D * (C * (B * (A * position)));
+                // position = D * B * A * position;
+                position = E * D * C * B * A * position;
+                return position;
+            });
+            
+            //m.reparameterize_with_matrix(simd_matrix_scale(vector3(2.0f, 8.0f, 1.0f)));
+            m.colocate_similar_vertices();
+            m.combine_duplicate_vertices();
+            m.triangulate();
+            m.copy_under_transform(simd_matrix_rotate(M_PI, simd_make_float3(0,1,0)));
+            m.strip();
+            m.reindex_for_strip();
+            m.MeshVertexify();
+            
+            _tireMesh = [[WryMesh alloc] initWithDevice:_device];
+            _tireMesh.vertexBuffer = newBufferWithArray(m.vertices);
+            _tireMesh.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
+            
+            _tireMesh.emissiveTexture = [self newTextureFromResource:@"black"
+                                                              ofType:@"png"];
+            _tireMesh.albedoTexture = [self newTextureFromResource:@"black" ofType:@"png"];
+            _tireMesh.metallicTexture= [self newTextureFromResource:@"white"
+                                                             ofType:@"png"];
+            _tireMesh.normalTexture = [self newTextureFromResource:@"blue"
+                                                            ofType:@"png"
+                                                   withPixelFormat:MTLPixelFormatRGBA8Unorm];
+            _tireMesh.roughnessTexture = [self newTextureFromResource:@"darkgray"
+                                                               ofType:@"png"];
+            _tireMesh.instanceCount = 6;
+            
+            /*
+             m = wry::mesh::mesh();
+             m.add_quads_box(float4{-1.5f,0.875f,-0.875f,1.0f}, float4{1.5f,1.0f,-0.8125f,1.0f});
+             m.add_quads_box(float4{-1.5f,0.875f,0.8125f,1.0f}, float4{1.5f,1.0f,0.875f,1.0f});
+             m.add_quads_box(float4{-1.0625f,0.875f,-0.75f,1.0f}, float4{-0.9375,1.0f,0.75f,1.0f});
+             m.add_quads_box(float4{-0.0625f,0.875f,-0.75f,1.0f}, float4{+0.0625,1.0f,0.75f,1.0f});
+             m.add_quads_box(float4{+0.9375,0.875f,-0.75f,1.0f}, float4{+1.0625f,1.0f,0.75f,1.0f});
+             m.colocate_similar_vertices();
+             m.repair_texturing(4.0f);
+             m.combine_duplicate_vertices();
+             m.triangulate();
+             m.strip();
+             m.reindex_for_strip();
+             m.MeshVertexify();
+             */
+            
+            m = from_obj("/Users/antony/Desktop/assets/16747_Mining_Truck_v1.obj");
+            m.MeshVertexify();
+            
+            
+            _chassisMesh = [[WryMesh alloc] initWithDevice:_device];
+            _chassisMesh.vertexBuffer = newBufferWithArray(m.vertices);
+            _chassisMesh.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
+            
+            _chassisMesh.emissiveTexture = [self newTextureFromResource:@"black"
+                                                                 ofType:@"png"];
+            _chassisMesh.albedoTexture = [self newTextureFromResource:@"white" ofType:@"png"];
+            _chassisMesh.metallicTexture= [self newTextureFromResource:@"black"
+                                                                ofType:@"png"];
+            _chassisMesh.normalTexture = [self newTextureFromResource:@"blue"
+                                                               ofType:@"png"
+                                                      withPixelFormat:MTLPixelFormatRGBA8Unorm];
+            _chassisMesh.roughnessTexture = [self newTextureFromResource:@"white"
+                                                                  ofType:@"png"];
+            _chassisMesh.instanceCount = 1;
+            auto A = simd_matrix_scale(0.002f);
+            auto B = simd_matrix_rotate(-M_PI_F/2, simd_make_float3(1,0,0));
+            _chassisMesh.instances[0].model_transform = A * B;
+            _chassisMesh.instances[0].inverse_transpose_model_transform
+            = simd_transpose(simd_inverse(B));
+            // = matrix_identity_float4x4;
+            
+            
+        }
+        NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
+        
+        
+    }
+    
+    [_chassisMesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
+    [_tireMesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
+
+    [_chassisMesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
+    [_tireMesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
+    [_groundMesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
+
+    {
+        // ultra-paranoid
+    }
+    
+    
+    /*
+     id<CAMetalDrawable> currentDrawable = nil;
+     {
+     // wry::timer t("nextDrawable");
+     //auto a = mach_absolute_time();
+     auto a = std::chrono::steady_clock::now();
+     currentDrawable = [metalLayer nextDrawable];
+     auto b = std::chrono::steady_clock::now();
+     static std::chrono::steady_clock::time_point t0, t1;
+     auto c = std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+     auto d = std::chrono::duration_cast<std::chrono::microseconds>(b - t0).count();
+     auto e = std::chrono::duration_cast<std::chrono::microseconds>(a - t0).count();
+     //b.time_since_epoch()
+     
+     //if (c > 999) {
+     // printf("! %lld\n", c);
+     //printf(" wake-to-wake  %lld\n", d);
+     //printf(" wake-to-sleep %lld\n", e);
+     //}
+     t0 = b;
+     t1 = a;
+     
+     }
+     
+     {
+     id<MTLBlitCommandEncoder> encoder =  [command_buffer blitCommandEncoder];
+     [encoder copyFromTexture:_addedTexture toTexture:currentDrawable.texture];
+     [encoder endEncoding];
+     }
+     
+     [command_buffer presentDrawable:currentDrawable];
+     currentDrawable = nil;
+     [command_buffer commit];
+     */
+    
+    // capture
+    
+    id<MTLCaptureScope> _captureScope;
+    
+    
+    {
+        MTLCaptureManager* captureManager = [MTLCaptureManager sharedCaptureManager];
+        _captureScope = [captureManager newCaptureScopeWithCommandQueue:_commandQueue];
+        [_captureScope setLabel:@"Custom"];
+        [captureManager setDefaultCaptureScope:_captureScope];
+    }
+    
     
 #endif

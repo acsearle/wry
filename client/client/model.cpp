@@ -11,8 +11,8 @@ namespace wry {
     
     void machine::step(world& w) {
         
-        ulong a = 0, b = 0;
-        long c = 0, d = 0;
+        Value a = {};
+        Value b = {};
         
         // complete the current operation
         
@@ -47,7 +47,12 @@ namespace wry {
                 // for all other states we load the next instruction
                 
             default:
-                _state = w.get(_location);
+                a = w.get(_location);
+                if (a.discriminant == DISCRIMINANT_OPCODE) {
+                    _state = a.data;
+                } else {
+                    _state = OPCODE_NOOP;
+                }
                 break;
                 
         }
@@ -85,32 +90,30 @@ namespace wry {
                 break;
             case OPCODE_BRANCH_RIGHT:
                 a = pop();
-                _heading += a;
+                if (a.discriminant == DISCRIMINANT_NUMBER) {
+                    _heading += a.data;
+                }
                 break;
             case OPCODE_BRANCH_LEFT:
                 a = pop();
-                _heading -= a;
+                if (a.discriminant == DISCRIMINANT_NUMBER) {
+                    _heading -= a.data;
+                }
                 break;
             case OPCODE_HEADING_LOAD:
-                a = _heading;
+                a = {DISCRIMINANT_NUMBER, _heading};
                 push(a);
                 break;
             case OPCODE_HEADING_STORE:
                 a = pop();
-                _heading = a;
+                if (a.discriminant == DISCRIMINANT_NUMBER) {
+                    _heading = a.data;
+                }
                 break;
                 
                 // manipulate location
                 
-            case OPCODE_LOCATION_LOAD:
-                a = _location;
-                push(a);
-                break;
-            case OPCODE_LOCATION_STORE:
-                a = pop();
-                _location = a;
-                return;
-                
+           
                 // manipulate stack
                 
             case OPCODE_DROP:
@@ -121,10 +124,11 @@ namespace wry {
                 push(a);
                 break;
             case OPCODE_OVER:
-                a = 0;
-                if (_stack.size() >= 2)
-                    a = *(_stack.end() - 2);
+                a = pop();
+                b = pop();
+                push(b);
                 push(a);
+                push(b);
                 break;
             case OPCODE_SWAP:
                 b = pop();
@@ -135,57 +139,195 @@ namespace wry {
                 
                 // arithmetic / logic
                 
-            case OPCODE_NEGATE:
+            case OPCODE_IS_NOT_ZERO:
                 a = pop();
-                a = -a;
-                push(a);
-                break;
-            case OPCODE_ABS:
-                c = (long) pop();
-                c = abs(c);
-                push(c);
-                break;
-            case OPCODE_SIGN:
-                c = (long) pop();
-                c = (0 < c) - (c < 0);
-                push(c);
-                break;
-            case OPCODE_EQUAL:
-                d = pop();
-                c = pop();
-                push(c == d);
-                break;
-            case OPCODE_NOT_EQUAL:
-                d = pop();
-                c = pop();
-                push(c != d);
-                break;
-            case OPCODE_LESS_THAN:
-                d = pop();
-                c = pop();
-                push(c < d);
-                break;
-            case OPCODE_GREATER_THAN:
-                d = pop();
-                c = pop();
-                push(c > d);
-                break;
-            case OPCODE_LESS_THAN_OR_EQUAL_TO:
-                d = pop();
-                c = pop();
-                push(c <= d);
-                break;
-            case OPCODE_GREATER_THAN_OR_EQUAL_TO:
-                d = pop();
-                c = pop();
-                push(c >= d);
-                break;
-            case OPCODE_COMPARE:
-                d = pop();
-                c = pop();
-                push((c < d) - (d < c));
+                if (a.discriminant == DISCRIMINANT_NUMBER) {
+                    a.data = a.data != 0;
+                    push(a);
+                }
                 break;
                 
+            case OPCODE_LOGICAL_NOT:
+                a = pop();
+                if (a.discriminant == DISCRIMINANT_NUMBER) {
+                    a.data = !a.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_LOGICAL_AND:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = a.data && b.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_LOGICAL_OR:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = a.data || b.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_LOGICAL_XOR:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = !a.data != !b.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_BITWISE_NOT:
+                a = pop();
+                if (a.discriminant == DISCRIMINANT_NUMBER) {
+                    a.data = ~a.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_BITWISE_AND:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = a.data & b.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_BITWISE_OR:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = a.data | b.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_BITWISE_XOR:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = a.data ^ b.data;
+                    push(a);
+                }
+                break;
+                                
+            case OPCODE_BITWISE_SPLIT:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    u64 x = a.data & b.data;
+                    u64 y = a.data ^ b.data;
+                    a.data = x;
+                    b.data = y;
+                    push(a);
+                    push(b);
+                }
+                break;
+            case OPCODE_POPCOUNT:
+                a = pop();
+                if (a.discriminant == DISCRIMINANT_NUMBER) {
+                    a.data = __builtin_popcountll(a.data);
+                    push(a);
+                }
+                break;
+                
+            case OPCODE_NEGATE:
+                a = pop();
+                if (a.discriminant == DISCRIMINANT_NUMBER) {
+                    a.data = - a.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_ABS:
+                a = pop();
+                if (a.discriminant == DISCRIMINANT_NUMBER) {
+                    a.data = abs((i64) a.data);
+                    push(a);
+                }
+                break;
+            case OPCODE_SIGN:
+                a = pop();
+                if (a.discriminant == DISCRIMINANT_NUMBER) {
+                    a.data = (0 < (i64) a.data) - ((i64) a.data < 0);
+                    push(a);
+                }
+                break;
+            case OPCODE_EQUAL:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = a.data == b.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_NOT_EQUAL:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = a.data != b.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_LESS_THAN:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = (i64) a.data < (i64) b.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_GREATER_THAN:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = (i64) a.data > (i64) b.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_LESS_THAN_OR_EQUAL_TO:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = (i64) a.data <= (i64) b.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_GREATER_THAN_OR_EQUAL_TO:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = (i64) a.data >= (i64) b.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_COMPARE:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.data = ((i64) a.data < (i64) b.data) - ((i64) b.data < (i64) a.data);
+                    push(a);
+                }
+                break;
+
+                
+            case OPCODE_ADD:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.discriminant |= b.discriminant;
+                    a.data += b.data;
+                    push(a);
+                }
+                break;
+            case OPCODE_SUBTRACT:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.discriminant |= b.discriminant;
+                    a.data -= b.data;
+                    push(a);
+                }
+                break;
+
                 // no action
                 // no action on this location
                 

@@ -10,7 +10,6 @@
 
 #include <iterator>
 
-#include "common.hpp"
 #include "type_traits.hpp"
 
 namespace wry {

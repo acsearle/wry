@@ -26,8 +26,8 @@ namespace wry {
     
     auto parse_number(auto& x) {
         return [&x](string_view& v) -> bool {
-            std::from_chars_result result = wry::from_chars((const char*) v.a._ptr, (const char*) v.b._ptr, x);
-            const uchar* p = reinterpret_cast<const uchar*>(result.ptr);
+            std::from_chars_result result = wry::from_chars(v.a._ptr, v.b._ptr, x);
+            const char* p = result.ptr;
             return (v.a._ptr != p) && ((void) (v.a._ptr = p), true);
         };
     }

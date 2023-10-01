@@ -10,7 +10,6 @@
 
 #include "simd.hpp"
 
-#include "common.hpp"
 #include "utility.hpp"
 #include "table.hpp"
 

@@ -11,6 +11,7 @@
 
 #include "btree.hpp"
 #include "test.hpp"
+#include "relocate.hpp"
 
 namespace wry {
     

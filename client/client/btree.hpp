@@ -9,12 +9,12 @@
 #define btree_hpp
 
 #include <cassert>
-#include <cstdint>
 #include <cstring>
 
-#include <algorithm>
 #include <iostream> // ugh
 
+#include "algorithm.hpp"
+#include "cstdint.hpp"
 #include "utility.hpp"
 
 

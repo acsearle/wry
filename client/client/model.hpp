@@ -27,9 +27,33 @@ namespace wry {
     struct machine;
     struct world;
     
-    enum OPCODE : ulong {
+    // we can't use simd_int2 because the equality operator is vectorized
+    
+    struct coordinate {
+        int x;
+        int y;
+        bool operator==(const coordinate&) const = default;
+    };
+    
+    struct Value {
+        i64 discriminant;
+        i64 data;
         
-        OPCODE_NOOP = 0,
+        explicit operator bool() const { return discriminant; }
+        bool operator!() const { return !discriminant; }
+
+        
+    };
+    
+    enum DISCRIMINANT : i64 {
+        DISCRIMINANT_ZERO   = 0, // empty, null etc.
+        DISCRIMINANT_OPCODE = 1,
+        DISCRIMINANT_NUMBER = 2,
+    };
+    
+    enum OPCODE : i64 {
+        
+        OPCODE_NOOP,
         OPCODE_SKIP,
         OPCODE_HALT,
         
@@ -59,12 +83,26 @@ namespace wry {
         OPCODE_DUPLICATE, // a = pop(); push(a); push(a)
         OPCODE_OVER,      // a = pop(); b = pop(); push(b); push(a); push(b);
         OPCODE_SWAP,      // a = pop(); b = pop(); push(a); push(b);
+                
+        OPCODE_IS_ZERO,           // 010
+        OPCODE_IS_POSITIVE,       // 001
+        OPCODE_IS_NEGATIVE,       // 100
+        OPCODE_IS_NOT_ZERO,       // 101
+        OPCODE_IS_NOT_POSITIVE,   // 110
+        OPCODE_IS_NOT_NEGATIVE,   // 011
         
-        OPCODE_NOT,       // push(~pop())
+        OPCODE_LOGICAL_NOT,
+        OPCODE_LOGICAL_AND,
+        OPCODE_LOGICAL_OR,
+        OPCODE_LOGICAL_XOR,
         
-        OPCODE_AND,       // push(pop() & pop())
-        OPCODE_OR,
-        OPCODE_XOR,
+        OPCODE_BITWISE_NOT,
+        OPCODE_BITWISE_AND,
+        OPCODE_BITWISE_OR,
+        OPCODE_BITWISE_XOR,
+        
+        OPCODE_BITWISE_SPLIT,
+        OPCODE_POPCOUNT,
         
         OPCODE_NEGATE,    // push(-pop())
         OPCODE_ABS,       // push(abs(pop()))
@@ -83,22 +121,37 @@ namespace wry {
         
     };
     
+    enum HEADING : u64 {
+        HEADING_NORTH = 0,
+        HEADING_EAST = 1,
+        HEADING_SOUTH = 2,
+        HEADING_WEST = 3,
+        HAEDING_MASK = 3
+    };
+        
+    inline ulong hash(coordinate xy) {
+        return hash_combine(&xy, sizeof(xy));
+    }
+    
+    struct world;
+    
     struct machine {
         
-        ulong _state = 0;
-        ulong _location = 0;
-        ulong _heading = 0;
-        array<ulong> _stack;
+        i64 _state = OPCODE_NOOP;
+        coordinate _location = { 0, 0};
+        i64 _heading = 0;
+        array<Value> _stack;
         
-        void push(ulong x) {
-            assert(_stack.empty() || _stack.front());
-            if (x || _stack.size())
+        array<coordinate> _lock_enqueued;
+        array<coordinate> _wait_enqueued;
+        
+        void push(Value x) {
+            if (x)
                 _stack.push_back(x);
         }
         
-        ulong pop() {
-            assert(_stack.empty() || _stack.front());
-            ulong result = 0;
+        Value pop() {
+            Value result = {};
             if (!_stack.empty()) {
                 result = _stack.back();
                 _stack.pop_back();
@@ -106,65 +159,141 @@ namespace wry {
             return result;
         }
         
-        ulong peek() {
-            assert(_stack.empty() || _stack.front());
-            ulong result = 0;
+        Value peek() {
+            Value result = {};
             if (!_stack.empty()) {
                 result = _stack.back();
             }
             return result;
         }
         
+        std::pair<Value, Value> pop2() {
+            Value z = pop();
+            Value y = pop();
+            return {y, z};
+        }
+        
         void step(world& w);
+        
+        void notify_of(coordinate xy) {
+            auto pos = std::find(_wait_enqueued.begin(), _wait_enqueued.end(), xy);
+            assert(pos != _wait_enqueued.end());
+            _wait_enqueued.erase(pos);
+            _lock_enqueued.push_back(xy);
+        }
         
         
                 
+    };
+    
+    struct tile {
+                
+        // todo: we squander lots of memory here; there will be many more
+        // tiles than machines, so having multiple queue headers inline is
+        // wasteful; we should employ some sparse strategy
+        
+        // "infinite": procedural terrain
+        // explored: just terrain
+        // common: stuff
+        // rare: waiters
+
+        
+        // - separate tables for values?
+        // - machine-intrusive linked-list queues (but, each machine can be in
+        //   several queues)
+        // - tagged pointers; common values inline; point out to more complex
+        //   values; recycle the pointee as the values and queues vary
+        
+        
+        // todo: tiles (or tile chunks) should use basic_table and customize
+        // their layout
+        
+        Value _value;
+        array<machine*> _lock_queue; // mutex
+        array<machine*> _wait_queue; // condition variable
+        
+        bool is_locked() const {
+            return !_lock_queue.empty();
+        }
+
+        bool _not_in_queue(machine* p) const {
+            for (machine* q : _lock_queue)
+                if (q == p)
+                    return false;
+            return true;
+        }
+        
+        bool enqueue(machine* p) {
+            assert(p);
+            assert(_not_in_queue(p));
+            bool was_empty = _lock_queue.empty();
+            _lock_queue.push_back(p);
+            return was_empty;
+        }
+        
+        bool try_lock(machine* p) {
+            assert(p);
+            assert(_not_in_queue(p));
+            bool was_empty = _lock_queue.empty();
+            if (was_empty)
+                _lock_queue.push_back(p);
+            return was_empty;
+        }
+        
+        void unlock(machine* p, world& w);
+        
+        void wait_on(machine* p) {
+            _wait_queue.push_back(p);
+        }
+        
+        void notify_all(coordinate self) {
+            while (!_wait_queue.empty()) {
+                // todo: should we have multiple CVs for different conditions?
+                machine* p = _wait_queue.front();
+                _wait_queue.pop_front();
+                _lock_queue.push_back(p);
+                p->notify_of(self);
+            }
+        }
+        
     };
     
     
     struct world {
         
         ulong _tick = 0;
-        table<ulong, ulong> _tiles;
+        table<coordinate, tile> _tiles;
 
         std::multimap<ulong, machine*> _waiting_on_time;
-        table<ulong, array<machine*>> _waiting_on_location;
         array<machine*> _halted;
         
-        ulong get(ulong xy) {
+        Value get(coordinate xy) {
             auto p = _tiles.find(xy);
-            if (p == _tiles.end())
-                return 0;
-            ulong result = p->second;
-            assert(result != 0);
+            Value result = {};
+            if (p != _tiles.end()) {
+                result = p->second._value;
+                assert(result);
+            }
             return result;
         }
         
-        void set(int x, int y, ulong desired) {
-            set(simd_make_int2(x, y), desired);
-        }
-        
-        void set(simd_int2 xy, ulong desired) {
-            ulong z = 0;
-            memcpy(&z, &xy, 8);
-            set(z, desired);
-        }
-        
-        void set(ulong xy, ulong desired) {
+        void set(coordinate xy, Value value) {
             auto p = _tiles.find(xy);
             if (p == _tiles.end()) {
-                if (desired != 0) {
-                    _tiles.insert(std::make_pair(xy, desired));
+                if (value) {
+                    tile t;
+                    t._value = value;
+                    _tiles.insert(std::make_pair(xy, t));
                 }
             } else {
-                if (desired) {
-                    p->second = desired;
+                if (value) {
+                    p->second._value = value;
                 } else {
                     _tiles.erase(p);
                 }
             }
         }
-        
+                
         void step() {
             
             ++_tick;
@@ -188,6 +317,16 @@ namespace wry {
         
     };
     
+    
+    inline void tile::unlock(machine* p, world& w) {
+        assert(!_lock_queue.empty());
+        assert(_lock_queue.front() == p);
+        _lock_queue.pop_front();
+        if (_lock_queue.empty())
+            return;
+        p = _lock_queue.front();
+        w._waiting_on_time.emplace(w._tick + 1, p);
+    }
    
 
     struct model {
@@ -205,6 +344,8 @@ namespace wry {
         bool _show_wireframe = false;
 
         simd_float2 _looking_at = {};
+        simd_float2 _mouse = {};
+        simd_float4 _mouse4 = {};
         
         // simulation state
         
@@ -215,12 +356,16 @@ namespace wry {
             _console.emplace_back("");
             
             
-            _world.set(simd_make_int2(0, 1), OPCODE_TURN_RIGHT);
-            _world.set(simd_make_int2(2, 1), OPCODE_TURN_RIGHT);
-            _world.set(simd_make_int2(2, -1), OPCODE_TURN_RIGHT);
-            _world.set(simd_make_int2(0, -1), OPCODE_TURN_RIGHT);
+            _world.set({0, 1}, {DISCRIMINANT_OPCODE, OPCODE_TURN_RIGHT});
+            _world.set({1, 1}, {DISCRIMINANT_OPCODE, OPCODE_LOAD});
+            _world.set({2, 1}, {DISCRIMINANT_NUMBER, 1});
+            _world.set({3, 1}, {DISCRIMINANT_OPCODE, OPCODE_TURN_RIGHT});
+            _world.set({3, 0}, {DISCRIMINANT_OPCODE, OPCODE_ADD});
+            _world.set({3, -1}, {DISCRIMINANT_OPCODE, OPCODE_TURN_RIGHT});
+            _world.set({0, -1}, {DISCRIMINANT_OPCODE, OPCODE_TURN_RIGHT});
+            // _world.set(simd_make_int2(1, -1), OPCODE_HALT);
             
-            _world._waiting_on_time.emplace(128, new machine);
+            _world._waiting_on_time.emplace(64, new machine);
 
         }
         

@@ -10,35 +10,94 @@
 
 #include <iterator>
 
-#include "common.hpp"
+#include "rust.hpp"
 
 namespace wry {
     
-    inline bool utf8validatez(const uchar* strz) {
-        for (;;) {
-            
-            if (strz[0] == 0)
-                return true;
-            
-            if (((strz[0] & 0b10000000) == 0b00000000)) {
-                ++strz;
-            } else if (((strz[0] & 0b11100000) == 0b11000000) &&
-                       ((strz[1] & 0b11000000) == 0b10000000)) {
-                strz += 2;
-            } else if (((strz[0] & 0b11110000) == 0b11100000) &&
-                       ((strz[1] & 0b11000000) == 0b10000000) &&
-                       ((strz[2] & 0b11000000) == 0b10000000)) {
-                strz += 3;
-            } else if (((strz[0] & 0b11111000) == 0b11110000) &&
-                       ((strz[1] & 0b11000000) == 0b10000000) &&
-                       ((strz[2] & 0b11000000) == 0b10000000) &&
-                       ((strz[3] & 0b11000000) == 0b10000000)) {
-                strz += 4;
-            } else {
-                return false;
-            }
-            
+    // We use char to represent utf-8 code units so that string literals have
+    // the correct type
+    
+    inline bool utf8validatez(const char*& z) {
+        
+        if (!z)
+            // null string
+            return true;
+        
+        char a = 0;
+        char b = 0;
+        
+    first:
+        
+        // expect first code unit or terminating zero
+        
+        a = *z;
+        
+        if ((a & 0xC0) == 0x80) {
+            // 1xxxxxxx: unexpected contiunuation code unit
+            return false;
         }
+                
+        ++z;
+        
+        if (!a) {
+            // 00000000: teminating zero
+            return true;
+        }
+        
+        if (a & 0x80) {
+            // 00xxxxxx: one code unit encoded character
+            goto first;
+        }
+        
+        // 11xxxxxx: first code unit of multibyte encoded character
+                
+    second:
+        
+        b = *z;
+        if ((b & 0xC0) != 0x80) {
+            // !10xxxxxx: unexpected noncontinuation byte
+            return false;
+        }
+        
+        ++z;
+        
+        if (!(a & 0x20)) {
+            // end of two byte character
+            goto first;
+        }
+        
+    third:
+        
+        b = *z;
+        if ((b & 0xC0) != 0x80) {
+            // !10xxxxxx: unexpected noncontinuation byte
+            return false;
+        }
+        
+        ++z;
+        
+        if (!(a & 0x10)) {
+            // end of three byte character
+            goto first;
+        }
+        
+    fourth:
+        
+        b = *z;
+        if ((b & 0xC0) != 0x80) {
+            // !10xxxxxx: unexpected noncontinuation byte
+            return false;
+        }
+        
+        ++z;
+        
+        if (a & 0x08) {
+            // 11111xxx: more than four bytes
+            return false;
+        }
+
+        goto first;
+        
     }
     
     /*
@@ -62,7 +121,7 @@ namespace wry {
     }
      */
     
-    inline uchar* utf8_encode(uint a, uchar b[4]) {
+    inline char* utf8_encode(u32 a, char b[4]) {
         if (a < 0x8F) {
             b[0] = a;
             return b + 1;
@@ -124,22 +183,22 @@ namespace wry {
     
     struct utf8_iterator {
         
-        uchar const* _ptr;
+        const char* _ptr;
         
         bool _is_continuation_byte() const {
             return (*_ptr & 0xC0) == 0x80;
         }
         
         using difference_type = ptrdiff_t;
-        using value_type = uint;
-        using reference = uint;
+        using value_type = u32;
+        using reference = u32;
         using pointer = void;
         using iterator_category = std::bidirectional_iterator_tag;
         
         utf8_iterator() = default;
         
-        explicit utf8_iterator(void const* ptr)
-        : _ptr((uchar const*) ptr) {
+        explicit utf8_iterator(const void* ptr)
+        : _ptr((const char*) ptr) {
         }
         
         explicit utf8_iterator(std::nullptr_t) : _ptr(nullptr) {}
@@ -165,13 +224,13 @@ namespace wry {
             utf8_iterator a(*this); operator--(); return a;
         }
         
-        uint operator*() const {
+        u32 operator*() const {
             if (!(_ptr[0] & 0x80))
                 return *_ptr;
             return _deref_multibyte(); // slow path
         }
         
-        uint _deref_multibyte() const {
+        u32 _deref_multibyte() const {
             if ((_ptr[0] & 0xE0) == 0xC0)
                 return (((_ptr[0] & 0x1F) <<  6) |
                         ((_ptr[1] & 0x3F)      ));

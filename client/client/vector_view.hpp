@@ -9,6 +9,8 @@
 #define vector_view_hpp
 
 #include <iterator>
+
+#include "algorithm.hpp"
 #include "type_traits.hpp"
 #include "utility.hpp"
 

@@ -9,13 +9,12 @@
 #define hash_hpp
 
 #include <cassert>
-#include <cstdint>
 #include <cstring>
 #include <cmath>
 #include <tuple>
 #include <utility>
 
-#include "common.hpp"
+#include "cstdint.hpp"
 
 namespace wry {
     

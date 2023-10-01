@@ -10,7 +10,10 @@
 
 namespace wry {
     
-    struct with_capacity_t { explicit with_capacity_t() = default; };
+    struct with_capacity_t {
+        explicit with_capacity_t() = default;
+    };
+    
     inline constexpr with_capacity_t with_capacity{};
 
 } // namespace wry

@@ -8,8 +8,7 @@
 #ifndef packed_hpp
 #define packed_hpp
 
-#include "common.hpp"
-#include "half.h"
+#include "opencl.h"
 
 #define DEFINE_PACKED_T( T )\
 typedef struct { T x, y, z; } packed_##T##3;\
