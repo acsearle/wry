@@ -1,12 +1,12 @@
 //
-//  cctype.hpp
+//  chartype.hpp
 //  client
 //
 //  Created by Antony Searle on 28/9/2023.
 //
 
-#ifndef cctype_hpp
-#define cctype_hpp
+#ifndef chartype_hpp
+#define chartype_hpp
 
 #include <cassert>
 #include <cctype>
@@ -49,4 +49,4 @@ namespace wry {
     
 }
 
-#endif /* cctype_hpp */
+#endif /* chartype_hpp */

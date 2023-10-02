@@ -13,9 +13,9 @@
 #include <optional>
 
 #include "algorithm.hpp"
-#include "utility.hpp"
-
 #include "array_view.hpp"
+#include "stddef.hpp"
+#include "utility.hpp"
 #include "with_capacity.hpp"
 
 namespace wry {
@@ -38,10 +38,12 @@ namespace wry {
     //
     // Array assumes that the stored type is Relocatable
     
-    template<typename> struct array;
+    template<typename> 
+    struct array;
     
     template<typename T>
-    struct rank<array<T>> : std::integral_constant<std::size_t, rank<T>::value + 1> {};
+    struct rank<array<T>> 
+    : std::integral_constant<std::size_t, rank<T>::value + 1> {};
         
     template<typename T>
     struct array {
@@ -54,9 +56,9 @@ namespace wry {
         using reference = T&;
         using const_reference = const T&;
 
+        T* _allocation_begin;
         T* _begin;
         T* _end;
-        T* _allocation_begin;
         T* _allocation_end;
                 
         bool _invariant() const {
@@ -67,13 +69,13 @@ namespace wry {
                         == (_allocation_end == nullptr)));
         }
                 
-        array(T* begin_,
+        array(T* allocation_begin_,
+              T* begin_,
               T* end_,
-              T* allocation_begin_,
               T* allocation_end_) noexcept
-        : _begin(begin_)
+        : _allocation_begin(allocation_begin_)
+        , _begin(begin_)
         , _end(end_)
-        , _allocation_begin(allocation_begin_)
         , _allocation_end(allocation_end_) {
             assert(_invariant());
         }
@@ -81,9 +83,9 @@ namespace wry {
         // [[C++ named requirement]] Container
 
         array() noexcept
-        : _begin(nullptr)
+        : _allocation_begin(nullptr)
+        , _begin(nullptr)
         , _end(nullptr)
-        , _allocation_begin(nullptr)
         , _allocation_end(nullptr) {
         }
         
@@ -95,9 +97,9 @@ namespace wry {
         }
         
         array(array&& other)
-        : _begin(exchange(other._begin, nullptr))
+        : _allocation_begin(exchange(other._allocation_begin, nullptr))
+        , _begin(exchange(other._begin, nullptr))
         , _end(exchange(other._end, nullptr))
-        , _allocation_begin(exchange(other._allocation_begin, nullptr))
         , _allocation_end(exchange(other._allocation_end, nullptr)) {
         }
                 
@@ -120,9 +122,9 @@ namespace wry {
         
         array& operator=(array&& other) {
             _destruct();
+            _allocation_begin = std::exchange(other._allocation_begin, nullptr);
             _begin = std::exchange(other._begin, nullptr);
             _end = std::exchange(other._end, nullptr);
-            _allocation_begin = std::exchange(other._allocation_begin, nullptr);
             _allocation_end = std::exchange(other._allocation_end, nullptr);
             return *this;
         }
@@ -149,9 +151,9 @@ namespace wry {
         
         void swap(array& other) {
             using std::swap;
+            swap(_allocation_begin, other._allocation_begin);
             swap(_begin, other._begin);
             swap(_end, other._end);
-            swap(_allocation_begin, other._allocation_begin);
             swap(_allocation_end, other._allocation_end);
         }
 
@@ -410,18 +412,18 @@ namespace wry {
             return array(p, p, p, p + count);
         }
         
-        static array from_raw_parts(T* begin_,
+        static array from_raw_parts(T* allocation_begin_,
+                                    T* begin_,
                                     T* end_,
-                                    T* allocation_begin_,
                                     T* allocation_end_) {
-            return array(begin_, end_, allocation_begin_, allocation_end_);
+            return array(allocation_begin_, begin_, end_, allocation_end_);
         }
         
         std::tuple<T*, T*, T*, T*> into_raw_parts() && {
             return {
+                std::exchange(_allocation_begin, nullptr),
                 std::exchange(_begin, nullptr),
                 std::exchange(_end, nullptr),
-                std::exchange(_allocation_begin, nullptr),
                 std::exchange(_allocation_end, nullptr),
             };
         }
@@ -433,9 +435,9 @@ namespace wry {
                 T* p = static_cast<T*>(::operator new(m * sizeof(T)));
                 relocate(_begin, _end, p);
                 ::operator delete(_allocation_begin);
+                _allocation_begin = p;
                 _begin = p;
                 _end = p + n;
-                _allocation_begin = p;
                 _allocation_end = p + m;
             }
         }
@@ -466,9 +468,9 @@ namespace wry {
         // Extensions
         
         array(wry::with_capacity_t, size_type count)
-        : _begin(static_cast<T*>(::operator new(count * sizeof(T))))
+        : _allocation_begin(static_cast<T*>(::operator new(count * sizeof(T))))
+        , _begin(_allocation_begin)
         , _end(_begin)
-        , _allocation_begin(_begin)
         , _allocation_end(_begin + count) {
         }
                 
@@ -511,9 +513,9 @@ namespace wry {
         
         void _construct_with_capacity(size_type count) noexcept {
             _allocation_begin = static_cast<T*>(operator new(count * sizeof(T)));
-            _allocation_end = _allocation_begin + count;
             _begin = _allocation_begin;
             _end = _allocation_begin;
+            _allocation_end = _allocation_begin + count;
         }
 
         template<typename InputIt>
@@ -580,9 +582,9 @@ namespace wry {
                 // relocate_backward_n(j, _end, c);
                 std::memcpy(c - j, _end - j, j * sizeof(T));
                 ::operator delete(static_cast<void*>(_allocation_begin));
+                _allocation_begin = a;
                 _begin = b;
                 _end = c;
-                _allocation_begin = a;
                 _allocation_end = d;
             }
             return _begin + i;
@@ -628,9 +630,9 @@ namespace wry {
                 T* c = b + n;
                 std::memcpy(b, _begin, n * sizeof(T));
                 ::operator delete(static_cast<void*>(_allocation_begin));
+                _allocation_begin = a;
                 _begin = b;
                 _end = c;
-                _allocation_begin = a;
                 _allocation_end = d;
             }
             assert(count <= capacity_back());
@@ -646,9 +648,9 @@ namespace wry {
                 T* c = b + n;
                 std::memcpy(b, _begin, n * sizeof(T));
                 ::operator delete(static_cast<void*>(_allocation_begin));
+                _allocation_begin = a;
                 _begin = b;
                 _end = c;
-                _allocation_begin = a;
                 _allocation_end = d;
             }
             assert(count <= capacity_front());
@@ -778,11 +780,11 @@ namespace wry {
             return array_view<const T>(_begin, _end);
         }
         
-        array_view<const unsigned char> as_bytes() {
-            return array_view<const unsigned char>(reinterpret_cast<const unsigned char*>(_begin),
-                                                   reinterpret_cast<const unsigned char*>(_end));
+        array_view<const byte> as_bytes() {
+            return array_view<const byte>(reinterpret_cast<const byte*>(_begin),
+                                                   reinterpret_cast<const byte*>(_end));
         }
-        
+
         array_view<T> sub(std::ptrdiff_t i, std::size_t n) {
             assert(0 <= i);
             assert(i + n <= size());
@@ -801,19 +803,47 @@ namespace wry {
             return array_view(_begin + i, n);
         }
 
-        // arrays of all types share a compatible layout, so we can pun the
-        // entire structure and even mutate it in that form
-        // - relies on punning
-        // - relies on pointers being integer addresses
-        // - requires maintaining original
+        // Array structs for all T share a compatible layout of four pointers,
+        // so we can pun the entire array into an array of a different type,
+        // and even mutate it in that form.  This relies on common
+        // implementation-defined behavior:
+        //   - type punning
+        //   - pointers are addresses
+        //   - ?
+        // When mutating the reinterpreted array, we must leave it in a state
+        // that respects the size and alignment of the original array.
+        //
+        // Similarly, the three regions of the array (left, middle, and right)
+        // can themselves be punned to mutable array_views.  A common use
+        // case for this might be to supply the right region as a buffer
+        // for bulk writes, with the writer moving up the view's _begin
+        // which aliases the array's _end, and thus directly leaving the array
+        // in the right state.
+        //
+        // Compare with Rust `Vec::spare_capacity_mut` and `set_len`.
         
         template<typename U>
         array<U>& reinterpret_as() {
             return reinterpret_cast<array<U>&>(*this);
         }
         
-        array<unsigned char> reinterpret_as_bytes() {
-            return reinterpret_cast<array<unsigned char>&>(*this);
+        array<byte> reinterpret_as_bytes() {
+            return reinterpret_cast<array<byte>&>(*this);
+        }
+                
+        template<typename U = T>
+        array_view<U>& reinterpret_left_as() {
+            return reinterpret_cast<array_view<U>&>(_allocation_begin);
+        }
+        
+        template<typename U = T>
+        array_view<U>& reinterpret_middle_as() {
+            return reinterpret_cast<array_view<U>&>(_begin);
+        }
+
+        template<typename U = T>
+        array_view<U>& reinterprret_right_as() {
+            return reinterpret_cast<array_view<U>&>(_end);
         }
 
 
@@ -823,28 +853,6 @@ namespace wry {
     void swap(array<T>& a, array<T>& b) {
         a.swap(b);
     }
-   
-    template<typename T, typename Serializer>
-    void serialize(const array<T>& x, Serializer& s) {
-        auto t = serialize_sequence(x.size(), s);
-        for (auto&& y : x)
-            serialize(y, t);
-        // ~t
-    }
-    
-    template<typename T, typename Deserializer>
-    array<T> deserialize(std::in_place_type_t<array<T>>, Deserializer& d) {
-        array<T> result;
-        auto e = deserialize_sequence(d);
-        std::optional<size_t> f = deserialize_size(e);
-        if (f)
-            result.reserve(f);
-        for (;;) {
-            
-        }
-        
-    }
-   
     
 } // namespace wry
 

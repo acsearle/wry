@@ -8,7 +8,8 @@
 #ifndef Result_hpp
 #define Result_hpp
 
-#include "rust.hpp"
+#include "type_traits.hpp"
+#include "utility.hpp"
 
 namespace rust {
     

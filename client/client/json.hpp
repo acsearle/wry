@@ -9,6 +9,392 @@
 #ifndef json_hpp
 #define json_hpp
 
+#include "match.hpp"
+#include "parse.hpp"
+#include "serialize.hpp"
+#include "deserialize.hpp"
+#include "table.hpp"
+
+namespace wry {
+    
+    namespace json {
+        
+        // predicates
+        
+        inline constexpr bool is_json_whitespace(uint ch) {
+            return (ch == '\t') || (ch == '\n') || (ch == '\r') || (ch == ' ');
+        }
+        
+        // matchers
+        
+        inline auto match_json_whitespace() {
+            return match_star(match_from("\t\n\r "));
+        }
+        
+        // parsers
+        
+        inline auto parse_json_boolean(auto& x) {
+            return [&x](string_view& v) -> bool {
+                if (match_string("false")(v)) {
+                    x = false;
+                    return true;
+                } else if (match_string("true")(v)) {
+                    x = true;
+                    return true;
+                } else {
+                    return false;
+                }
+            };
+        }
+        
+        inline auto parse_json_number(auto& x) {
+            return [&x](string_view& v) -> bool {
+                std::from_chars_result result = wry::from_chars(v.a._ptr, v.b._ptr, x);
+                if (result.ptr == v.a._ptr)
+                    return false;
+                v.a._ptr = result.ptr;
+                return true;
+            };
+        }
+        
+        inline auto parse_json_string(string& x) {
+            return [&x](string_view& v) -> bool {
+                string_view u(v);
+                if (!u)
+                    return false;
+                auto ch = *u;
+                if (ch != '\"')
+                    return false;
+                for (;;) {
+                    ++u;
+                    if (!u)
+                        return false;
+                    ch = *u;
+                    if (ch == '\"') {
+                        ++u;
+                        v = u;
+                        printf("done with %s\n", x.c_str());
+                        return true;
+                    }
+                    printf("push_back %c (%d)\n", ch, ch);
+                    x.push_back(ch);
+                }
+                
+            };
+        }
+        
+        inline auto match_json_array_begin() {
+            return match_and(match_json_whitespace(),
+                             match_character('['));
+        }
+        
+        inline auto match_json_comma() {
+            return match_and(match_json_whitespace(),
+                             match_character(','));
+        }
+        
+        inline auto match_json_array_end() {
+            return match_and(match_json_whitespace(),
+                             match_character(']'));
+        }
+        
+        inline auto match_json_object_begin() {
+            return match_and(match_json_whitespace(),
+                             match_character('{'));
+        }
+        
+        inline auto match_json_colon() {
+            return match_and(match_json_whitespace(),
+                             match_character(':'));
+        }
+        
+        inline auto match_json_object_end() {
+            return match_and(match_json_whitespace(),
+                             match_character('}'));
+        }
+        
+        struct value {
+            
+            std::variant<
+                std::monostate,
+                bool,
+                uint64_t,
+                int64_t,
+                float64_t,
+                string,
+                array<value>,
+                table<string, value>
+            > inner;
+
+            bool is_null() const { return std::holds_alternative<std::monostate>(inner); }
+            bool is_boolean() const { return std::holds_alternative<bool>(inner); }
+            bool is_string() const { return std::holds_alternative<string>(inner); }
+            bool is_array() const { return std::holds_alternative<array<value>>(inner); }
+            bool is_object() const { return std::holds_alternative<table<string, value>>(inner); }
+
+            string& as_string() & {
+                return std::get<string>(inner);
+            }
+            
+            array<value>& as_array() & {
+                return std::get<array<value>>(inner);
+            }
+            
+            table<string, value>& as_object() & {
+                return std::get<table<string, value>>(inner);
+            }
+            
+            value& operator[](size_t i) & {
+                return as_array()[i];
+            }
+            
+            value& operator[](string_view j) & {
+                return as_object()[j];
+            }
+            
+        };
+        
+        // aliases
+        
+        struct error {
+        };
+        
+        template<typename T>
+        using expected = std::expected<T, error>;
+        
+        using unexpected = std::unexpected<error>;
+        
+        
+        struct _value_visitor {
+            
+            using value_type = value;
+
+            expected<value> visit_none() {
+                return value{{std::monostate{}}};
+            }
+
+            expected<value> visit_bool(bool x) {
+                return value{{x}};
+            }
+
+            expected<value> visit_string(string x) {
+                assert(x.invariant());
+                return value{{std::move(x)}};
+            }
+
+            expected<value> visit_float64_t(float64_t x) {
+                return value{{x}};
+            }
+
+            expected<value> visit_int64_t(int64_t x) {
+                return value{{x}};
+            }
+
+            expected<value> visit_uint64_t(uint64_t x) {
+                return value{{x}};
+            }
+            
+            expected<value> visit_seq(auto&& accessor) {
+                array<value> y;
+                for (;;) {
+                    std::optional<value> x(accessor.template next_element<value>());
+                    if (x) {
+                        printf("got a seq element\n");
+                        y.push_back(*(std::move(x)));
+                    }
+                    else
+                        return value{{std::move(y)}};
+                }
+            }
+            
+            expected<value> visit_map(auto&& accessor) {
+                table<string, value> y;
+                for (;;) {
+                    std::optional<std::pair<string, value>> x(accessor.template next_entry<string, value>());
+                    if (x) {
+                        auto [at, flag] = y.insert(*std::move(x));
+                        if (!flag)
+                            return unexpected(std::in_place);
+                    } else {
+                        return value{{std::move(y)}};
+                    }
+                }
+            }
+
+            
+        };
+
+        template<typename D>
+        std::expected<value, typename std::decay_t<D>::error_type>
+        deserialize(std::in_place_type_t<value>, D&& deserializer) {
+            return std::forward<D>(deserializer).deserialize_any(_value_visitor{});
+        }
+        
+        
+    
+     
+                
+        
+        // serialization
+        
+        struct serializer {
+            
+        };
+        
+        struct deserializer {
+            
+            using error_type = error;
+            
+            string_view& v;
+                        
+            struct seq_accessor {
+                
+                using error_type = error_type;
+                
+                deserializer* _parent;
+                bool _expect_delimiter = false;
+                
+                template<typename T>
+                std::optional<T> next_element() {
+                                        
+                    auto& v = _parent->v;
+                    
+                    if (match_json_array_end()(v) || (_expect_delimiter && !match_json_comma()(v)))
+                        return {};
+                    expected<T> result = wry::deserialize<T>(*_parent);
+                    if (!result)
+                        return {};
+                    _expect_delimiter = true;
+                    return *std::move(result);
+                }
+                
+            };
+            
+            seq_accessor make_seq_accessor() {
+                return seq_accessor{this};
+            };
+
+            struct map_accessor {
+                
+                using error_type = error_type;
+                
+                deserializer* _parent;
+                bool _expect_delimiter = false;
+                
+                template<typename K, typename T>
+                std::optional<std::pair<K, T>> next_entry() {
+                    auto& v = _parent->v;
+                    if (match_json_object_end()(v) || (_expect_delimiter && match_json_comma()(v)))
+                        return {};
+                    using wry::deserialize;
+                    expected<K> key = deserialize<K>(*_parent);
+                    if (!key)
+                        return {};
+                    if (!match_json_colon()(v))
+                        return {};
+                    expected<T> value = deserialize<T>(*_parent);
+                    if (!value)
+                        return {};
+                    _expect_delimiter = true;
+                    return std::make_pair(*std::move(key), *std::move(value));
+                }
+                
+            };
+            
+            map_accessor make_map_accessor() {
+                return map_accessor{this};
+            };
+
+            template<typename V>
+            expected<typename std::decay_t<V>::value_type>
+            deserialize_any(V&& visitor) {
+                
+                match_json_whitespace()(v);
+                
+                if (match_string("null")(v))
+                    return std::forward<V>(visitor).visit_none();
+                    
+                if (bool x = {}; parse_json_boolean(x)(v))
+                    return std::forward<V>(visitor).visit_bool(x);
+                    
+                if (uint64_t x = {}; parse_json_number(x)(v))
+                    return std::forward<V>(visitor).visit_uint64_t(x);
+                    
+                if (string x; parse_json_string(x)(v)) {
+                    return std::forward<V>(visitor).visit_string(x);
+                }
+                    
+                if (match_json_array_begin()(v))
+                    return std::forward<V>(visitor).visit_seq(make_seq_accessor());
+                
+                if (match_json_object_begin()(v))
+                    return std::forward<V>(visitor).visit_map(make_map_accessor());
+                
+                return unexpected(std::in_place);
+                
+            }
+            
+            template<typename V>
+            expected<typename std::decay_t<V>::value_type>
+            deserialize_bool(V&& visitor) {
+                match_json_whitespace()(v);
+                if (!v)
+                    return unexpected(std::in_place);
+                bool x;
+                if (!parse_json_boolean(x)(v))
+                    return unexpected(std::in_place);
+                return std::forward<V>(visitor).visit_bool(x);
+            }
+            
+            template<typename V> 
+            expected<typename std::decay_t<V>::value_type>
+            deserialize_int64_t(V&& visitor) {
+                match_json_whitespace()(v);
+                int64_t x;
+                if (!parse_json_number(x)(v))
+                    return unexpected(std::in_place);
+                return std::forward<V>(visitor).visit_int64_t(x);
+            }
+            
+            template<typename V>
+            expected<typename std::decay_t<V>::value_type>
+            deserialize_string(V&& visitor) {
+                match_json_whitespace()(v);
+                string x;
+                if (!parse_json_string(x)(v))
+                    return unexpected(std::in_place);
+                return std::forward<V>(visitor).visit_string(x);
+            }
+            
+            template<typename V>
+            expected<typename std::decay_t<V>::value_type>
+            deserialize_seq(V&& visitor) {
+                if (!match_json_array_begin()(v))
+                    return unexpected(std::in_place);
+                return std::forward<V>(visitor).visit_seq(make_seq_accessor());
+            }
+            
+        };
+        
+        template<typename T>
+        expected<T> from_string(string s) {
+            string_view v = s;
+            return wry::deserialize<T>(deserializer{v});
+        }
+        
+        template<typename T>
+        expected<T> from_file(string_view name) {
+            string s = string_from_file(name);
+            string_view v = s;
+            return wry::deserialize<T>(deserializer{v});
+        }
+        
+    } // namespace json
+    
+} // namespace wry
+
+#if 0
+
 #include <expected>
 #include <optional>
 
@@ -364,5 +750,7 @@ namespace wry {
             
     
 };
+
+#endif
 
 #endif /* json_hpp */

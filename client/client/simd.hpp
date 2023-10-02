@@ -11,7 +11,8 @@
 #include <simd/simd.h>
 #include <cassert>
 
-#include "opencl.h"
+#include "stdfloat.hpp"
+#include "stdint.hpp"
 
 #define M_PI_H ((half) M_PI)
 #define M_PI_F ((float) M_PI)

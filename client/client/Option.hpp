@@ -10,7 +10,8 @@
 
 #include <cassert>
 
-#include "rust.hpp"
+#include "type_traits.hpp"
+#include "utility.hpp"
 
 // Rust-like enums
 
@@ -73,7 +74,7 @@ namespace rust {
     };
 
     template<typename T>
-    Some(T&&) -> Some<std::decay_t<T>>;
+    Some(T&&) -> Some<T>;
     
     template<typename T>
     struct Option {
@@ -354,6 +355,20 @@ namespace rust {
             return is_none() ? FORWARD(visitor)(None{}) : FORWARD(visitor)(std::move(_some));
         }
 
+    };
+    
+    template<typename T>
+    struct Option<T&> {
+        T* _pointer;
+        
+        bool is_some() const {
+            return static_cast<bool>(_pointer);
+        }
+        
+        bool is_none() const {
+            return !_pointer;
+        }
+        
     };
     
     

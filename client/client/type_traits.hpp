@@ -36,8 +36,7 @@ namespace wry {
     // # Rank
     //
     // Provide a more general rank to classify things
-    
-    
+        
     template<typename>
     struct rank : std::integral_constant<std::size_t, 0> {
     };
@@ -56,8 +55,7 @@ namespace wry {
     using tag_scalar = std::integral_constant<std::size_t, 0>;
     using tag_vector = std::integral_constant<std::size_t, 1>;
     using tag_matrix = std::integral_constant<std::size_t, 2>;
-
     
-}
+} // namespace wry
 
 #endif /* type_traits_hpp */

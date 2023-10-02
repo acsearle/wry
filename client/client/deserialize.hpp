@@ -10,32 +10,47 @@
 
 #include <expected>
 
-#include "cstdint.hpp"
+#include "stdint.hpp"
 #include "stdfloat.hpp"
 #include "utility.hpp"
 #include "array.hpp"
 #include "string.hpp"
 
-
-using float32_t = float;
-using float64_t = double;
-
 namespace wry {
     
-    // Serde-inflected serialization and deserialization
+    // serde-rs deserialization
     
     template<typename T, typename D>
-    std::expected<T, typename std::decay_t<D>::Error> deserialize(D&& deserializer) {
+    std::expected<T, typename std::decay_t<D>::error_type> deserialize(D&& deserializer) {
         // tag dispatch to actual implementations
         return deserialize(std::in_place_type<T>, std::forward<D>(deserializer));
     }
+    
+    
+    
+    // define visitors
             
     template<typename T, typename E>
     struct basic_visitor {
-        std::expected<T, E> visit_int32_t(int32_t x) {
-            return std::unexpected<E>(ENOTSUP);
-        }
+        
+        using value_type = T;
+        
+        // default implementations
+        
+#define X(T)\
+        std::expected<T, E> visit_##T (T x) { return std::unexpected<E>(ENOTSUP); }
+
+        WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
+        WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES
+
+        X(string)
+        
+#undef X
+
     };
+    
+    
+    // define deserialization
 
 #define X(T)\
     template<typename D>\
@@ -43,7 +58,6 @@ namespace wry {
     deserialize(std::in_place_type_t<T>, D&& deserializer) {\
         using E = typename std::decay_t<D>::error_type;\
         struct visitor : basic_visitor<T, E> {\
-            using value_type = T;\
             std::expected<T, E> visit_##T(T x) { return x; }\
         };\
         return std::forward<D>(deserializer).deserialize_##T(visitor{});\
@@ -55,35 +69,65 @@ namespace wry {
 #undef X
     
     template<typename D>
+    std::expected<bool, typename std::decay_t<D>::error_type>
+    deserialize(std::in_place_type_t<bool>, D&& deserializer) {
+        using E = typename std::decay_t<D>::error_type;
+        struct visitor : basic_visitor<bool, E> {
+#define X(T)\
+            std::expected<bool, E> visit_##T (T value) const {\
+                return static_cast<bool>(value);\
+            }
+            WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
+            WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES
+#undef X
+        };
+        return std::forward<D>(deserializer).deserialize_string(visitor{});
+    }
+    
+    
+    template<typename D>
     std::expected<string, typename std::decay_t<D>::error_type>
     deserialize(std::in_place_type_t<string>, D&& deserializer) {
         using E = typename std::decay_t<D>::error_type;
         struct visitor : basic_visitor<string, E> {
             using value_type = string;
             std::expected<value_type, E> visit_string(string s) const {
-                return s;
+                return std::move(s);
             }
-            std::expected<value_type, E> visit_bytes(array_view<unsigned char> b);
         };
         return std::forward<D>(deserializer).deserialize_string(visitor{});
     }
         
     
+    
+    // simple little-endian binary deserializer
+    
     template<typename ByteSource>
     struct binary_deserializer {
         
         using error_type = int;
+        
         ByteSource _byte_source;
         array<unsigned char> _buffer;
+        
+        bool _ensure_available(size_t n) {
+            for (;;) {
+                size_t m = _buffer.size();
+                if (!(n < m))
+                    return true;
+                size_t k = max(m - n, 4096);
+                _buffer.may_write_back(k);
+                _byte_source.get_bytes(_buffer);
+                if (k == m)
+                    return false;
+            }
+        }
 
 #define X(T)\
         template<typename V>\
         std::expected<typename std::decay_t<V>::value_type, error_type>\
         deserialize_##T (V&& visitor) {\
-            while (_buffer.size() < sizeof( T )) {\
-                _buffer.may_write_back(sizeof( T ));\
-                _byte_source.get_bytes(_buffer);\
-            }\
+            _ensure_available(sizeof( T ));\
             T x{};\
             memcpy(&x, _buffer.will_read_first(sizeof( T )),  sizeof( T ));\
             return std::forward<V>(visitor).visit_##T (x);\
@@ -107,16 +151,12 @@ namespace wry {
         template<typename V>
         std::expected<typename std::decay_t<V>::value_type, error_type>
         deserialize_bytes(V&& visitor) {
-            while (_buffer.size() < sizeof(uint64_t)) {
-                _buffer.may_write_back(sizeof(uint64_t));
-                _byte_source.get_bytes(_buffer);
-            }
+            if (!_ensure_available(sizeof(uint64_t)))
+                return std::unexpected(ERANGE);
             uint64_t count{};
             memcpy(&count, _buffer.will_read_first(sizeof(uint64_t)), count);
-            while (_buffer.size() < count) {
-                _buffer.may_write_back(count);
-                _byte_source.get_bytes(_buffer);
-            }
+            if (!_ensure_available(count))
+                return std::unexpected(ERANGE);
             array_view<const unsigned char> result(_buffer.will_read_first(count), count);
             return std::forward<V>(visitor).visit_bytes(result);
         };
@@ -223,17 +263,26 @@ namespace wry {
     
     template<typename T>
     struct _deserialize_array_visitor {
-        array<T> visit_sequence(auto&& access) {
+        using value_type = array<T>;
+        
+        template<typename A>
+        std::expected<array<T>, typename std::decay_t<A>::error_type>
+        visit_seq(A&& access) {
             array<T> result;
-            while (auto&& x = access.template next<T>())
-                result.emplace_back(std::forward<decltype(x)>(x));
-            return result;
+            for (;;) {
+                printf("hello\n");
+                std::optional<T> x = access.template next_element<T>();
+                if (x)
+                    result.emplace_back(*std::move(x));
+                else
+                    return std::move(result);
+            }
         }
     };
     
-    template<typename T>
-    array<T> deserialize(std::in_place_type_t<array<T>>, auto&& deserializer) {
-        return deserializer.deserialize_sequence(_deserialize_array_visitor<T>{});
+    template<typename T, typename D>
+    std::expected<array<T>, typename std::decay_t<D>::error_type> deserialize(std::in_place_type_t<array<T>>, D&& deserializer) {
+        return std::forward<D>(deserializer).deserialize_seq(_deserialize_array_visitor<T>{});
     }
     
     

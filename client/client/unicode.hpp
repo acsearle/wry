@@ -14,6 +14,8 @@
 
 namespace wry {
     
+    using unichar = uint32_t;
+    
     // We use char to represent utf-8 code units so that string literals have
     // the correct type
     
@@ -121,7 +123,7 @@ namespace wry {
     }
      */
     
-    inline char* utf8_encode(u32 a, char b[4]) {
+    inline char* utf8_encode(uint32_t a, char b[4]) {
         if (a < 0x8F) {
             b[0] = a;
             return b + 1;
@@ -190,8 +192,8 @@ namespace wry {
         }
         
         using difference_type = ptrdiff_t;
-        using value_type = u32;
-        using reference = u32;
+        using value_type = unichar;
+        using reference = unichar;
         using pointer = void;
         using iterator_category = std::bidirectional_iterator_tag;
         
@@ -224,13 +226,13 @@ namespace wry {
             utf8_iterator a(*this); operator--(); return a;
         }
         
-        u32 operator*() const {
+        unichar operator*() const {
             if (!(_ptr[0] & 0x80))
                 return *_ptr;
             return _deref_multibyte(); // slow path
         }
         
-        u32 _deref_multibyte() const {
+        unichar _deref_multibyte() const {
             if ((_ptr[0] & 0xE0) == 0xC0)
                 return (((_ptr[0] & 0x1F) <<  6) |
                         ((_ptr[1] & 0x3F)      ));

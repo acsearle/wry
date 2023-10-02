@@ -7,7 +7,7 @@
 
 #include <cassert>
 
-#include "cctype.hpp"
+#include "chartype.hpp"
 #include "charconv.hpp"
 
 namespace wry {

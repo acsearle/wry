@@ -533,33 +533,38 @@
                                           ofType:@"png"
                                  withPixelFormat:MTLPixelFormatRGBA8Unorm];
             _darkgray = [self newTextureFromResource:@"darkgray" ofType:@"png"];
-
-
+            
+            
             MeshInstanced i;
             i.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
             i.inverse_transpose_model_transform = simd_inverse(simd_transpose(i.model_transform));
             i.albedo = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
             _instanced_things = [_device newBufferWithBytes:&i length:sizeof(i) options:MTLStorageModeShared];
             
-            auto a = json::from(wry::string_from_file("/Users/antony/Desktop/assets/assets.json"));
-            auto b = json::from(wry::string_from_file("/Users/antony/Desktop/assets/opcodes.json"));
-            
+            // auto b = json::from_string<json::value>(wry::string_from_file("/Users/antony/Desktop/assets/opcodes.json"));
+
             table<wry::string, ulong> _name_to_opcode;
-            for (int i = 0; i != b.size(); ++i) {
-                _name_to_opcode[b[i].as_string()] = i;
+
+            if (auto x = json::from_file<array<string>>("/Users/antony/Desktop/assets/opcodes.json")) {
+                ulong i = 0;
+                for (const string& y : *x)
+                    _name_to_opcode[y] = i++;
             }
             
-            for (int i = 0; i != a.size(); ++i) {
-                auto& c = a[i];
-                for (int j = 0; j != c.size(); ++j) {
-                    simd_float4 coordinate = simd_make_float4(j / 32.0f, i / 32.0f, 0.0f, 1.0f);
-                    auto p = _name_to_opcode.find(c[j].as_string());
-                    if (p != _name_to_opcode.end()) {
-                        _opcode_to_coordinate[p->second] = coordinate;
+            if (auto x = json::from_file<array<array<string>>>("/Users/antony/Desktop/assets/assets.json")) {
+                ulong i = 0;
+                for (const array<string>& y : *x) {
+                    ulong j = 0;
+                    for (const string& z : y) {
+                        simd_float4 coordinate = simd_make_float4(j / 32.0f, i / 32.0f, 0.0f, 1.0f);
+                        auto p = _name_to_opcode.find(z);
+                        if (p != _name_to_opcode.end())
+                            _opcode_to_coordinate[p->second] = coordinate;
+                        ++j;
                     }
+                    ++i;
                 }
-            }
-            
+            }            
 
         }
         
@@ -745,11 +750,11 @@
             *pv++ = v;
             
             while (h--) {
-                wry::rotate_left(pv[-4].coordinate,
-                                 pv[-3].coordinate,
-                                 pv[-2].coordinate,
-                                 pv[-1].coordinate
-                                 );
+                wry::rotate_args_left(pv[-4].coordinate,
+                                      pv[-3].coordinate,
+                                      pv[-2].coordinate,
+                                      pv[-1].coordinate
+                                      );
                 
             }
             

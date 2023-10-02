@@ -8,25 +8,32 @@
 #ifndef stdfloat_hpp
 #define stdfloat_hpp
 
-#include "cstring.hpp"
+// OpenCL
 
-using float16_t = __fp16; // <-- _Float16 clashes with NEON
-using float32_t = float;
-using float64_t = double;
+typedef _Float16 half;
 
-namespace std {
+namespace rust {
     
-    // From C++23
+    using f32 = float;
+    using f64 = double;
     
-    using float16_t = ::float16_t;
-    using float32_t = ::float32_t;
-    using float64_t = ::float64_t;
-    
-    // float128_t
-    
-    // bfloat16_t
+} // namespace rust
 
-} // namespace std
+namespace wry {
+    
+    // C++23 stdfloat
+    
+    using float16_t = _Float16;
+    using float32_t = float;
+    using float64_t = double;
+    struct float128_t;
+    struct bfloat16_t;
+    
+    // OpenCL
+    
+    using half = _Float16;
+    
+} // namespace wry
 
 #define WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES \
     X(float16_t) X(float32_t) X(float64_t)

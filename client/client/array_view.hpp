@@ -19,6 +19,9 @@ namespace wry {
     
     // compare span, slice, range
     
+    // array_view models a reference; assignment assigns to the elements, not
+    // the bounds
+    
     template<typename T>
     struct array_view;
     
@@ -41,30 +44,41 @@ namespace wry {
         
         
         using byte_type = std::conditional_t<std::is_const_v<T>, const char, char>;
-        
+        using const_byte_type = const char;
+
         pointer _begin;
-        size_type _size; // <-- going back and forth on _size or _end
+        pointer _end;
                 
         // construction
         
         array_view()
         : _begin(nullptr)
-        , _size(0) {
+        , _end(nullptr) {
         }
                 
-        explicit array_view(auto& other)
+        template<typename C>
+        explicit array_view(C& other)
         : _begin(std::begin(other))
-        , _size(std::size(other)) {
+        , _end(std::end(other)) {
         }
         
-        array_view(auto* p, size_type n)
+        template<typename U, size_t N>
+        explicit array_view(U (&other)[N])
+        : _begin(std::begin(other))
+        , _end(std::end(other)) {
+        }
+        
+        
+        template<typename U>
+        array_view(U* p, size_type n)
         : _begin(p)
-        , _size(n) {
+        , _end(p + n) {
         }
         
-        array_view(auto* first, auto* last)
+        template<typename U, typename V>
+        array_view(U* first, V* last)
         : _begin(first)
-        , _size(last - first) {
+        , _end(last) {
         }
                      
         array_view& operator=(auto&& other) {
@@ -95,7 +109,7 @@ namespace wry {
         }
         
         iterator end() const {
-            return _begin + _size;
+            return _end;
         }
         
         const_iterator cbegin() const {
@@ -103,29 +117,29 @@ namespace wry {
         }
         
         const_iterator cend() const {
-            return _begin + _size;
+            return _end;
         }
         
         // accessors
                 
         reference front() const {
-            assert(_size);
-            return *_begin;
+            assert(!empty());
+            return _begin[0];
         }
         
         reference back() const {
-            assert(_size);
-            return *(_begin + _size - 1);
+            assert(!empty());
+            return _end[-1];
         }
         
         reference at(size_type i) const {
-            if ((i < 0) || (i >= _size))
+            if ((i < 0) || (i >= size()))
                 throw std::range_error(__PRETTY_FUNCTION__);
             return _begin[i];
         }
         
         reference operator[](size_type i) const {
-            assert((0 <= i) && (i < _size));
+            assert((0 <= i) && (i < size()));
             return _begin[i];
         }
         
@@ -140,15 +154,15 @@ namespace wry {
         // observers
         
         bool empty() const {
-            return !_size;
+            return _end == _begin;
         }
 
         size_type size() const {
-            return _size;
+            return _end - _begin;
         }
         
         size_type size_bytes() const {
-            return _size * sizeof(T);
+            return (_end - _begin) * sizeof(T);
         }
         
         constexpr size_type stride_bytes() const {
@@ -158,50 +172,45 @@ namespace wry {
         // subviews
         
         array_view subview(size_type i, size_type n) const {
-            assert((i + n) <= _size);
+            assert((i + n) <= size());
             return array_view(_begin + i, n);
         }
         
         array_view<byte_type> as_bytes() const {
-            return array_view<byte_type>(static_cast<byte_type*>(_begin), size_bytes());
+            return array_view<byte_type>(reinterpret_cast<byte_type*>(_begin),
+                                         reinterpret_cast<byte_type*>(_end));
         }
-        
-        // mutators
+
+        // mutate the array_view itself
         
         array_view& reset() {
             _begin = nullptr;
-            _size = 0;
-        }
-        
-        array_view& reset(std::nullptr_t, size_t n) {
-            _begin = nullptr;
-            _size = n;
+            _end = nullptr;
         }
         
         array_view& reset(auto&& other) {
             _begin = std::begin(other);
-            _size = std::size(other);
+            _end = std::end(other);
         }
         
         array_view& reset(auto* p, size_t n) {
             _begin = p;
-            _size = n;
+            _end = p + n;
         }
         
         array_view& reset(auto* first, auto* last) {
             _begin = first;
-            _size = last - first;
+            _end = last;
         }
                                 
         void pop_front(difference_type n = 1) {
-            assert(n <= _size);
+            assert(n <= size());
             _begin += n;
-            _size -= n;
         }
         
         void pop_back(difference_type n = 1) {
-            assert(n <= _size);
-            _size -= n;
+            assert(n <= size());
+            _end -= n;
         }
         
         
@@ -214,8 +223,13 @@ namespace wry {
         // read from the front and move up _begin
         
         // how many can we read
+        
+        size_type can_read() const {
+            return size();
+        }
+        
         size_type can_read_first() const {
-            return _size;
+            return size();
         }
         
         // before reading an unspecified number
@@ -225,23 +239,21 @@ namespace wry {
         
         // before reading up to a specified number
         const_pointer may_read_first(size_t n) const {
-            assert(n <= _size);
+            assert(n <= size());
             return _begin;
         }
         
         // the amount we actually did read
         void did_read_first(size_t n) {
-            assert(n <= _size);
+            assert(n <= size());
             _begin += n;
-            _size -= n;
         }
         
         // commit to reading exactly a specified number
         const_pointer will_read_first(size_type n) {
-            assert(n <= _size);
+            assert(n <= size());
             T* ptr = _begin;
             _begin += n;
-            _size -= n;
             return ptr;
         }
                 
@@ -251,18 +263,17 @@ namespace wry {
         // permit a short operation here like we can on the front
         
         size_type can_read_last() const {
-            return _size;
+            return size();
         }
         
         const_pointer will_read_last(size_type n) {
-            assert(n <= _size);
-            _size -= n;
-            return _begin + _size;
+            assert(n <= size());
+            return _end -= n;
         }
         
         void did_read_last(size_type n) {
-            assert(n <= _size);
-            _size -= n;
+            assert(n <= size());
+            _end -= n;
         }
         
         
@@ -273,7 +284,7 @@ namespace wry {
         // otherwise expendable data at the end of a larger sequence
         
         size_type can_overwrite_first() const {
-            return _size;
+            return size();
         }
         
         pointer may_overwrite_first() const {
@@ -281,22 +292,20 @@ namespace wry {
         }
         
         pointer may_overwrite_first(size_type n) const {
-            assert(n <= _size);
+            assert(n <= size());
             return _begin;
         }
         
         pointer will_overwrite_first(size_type n) {
-            assert(n <= _size);
+            assert(n <= size());
             T* ptr = _begin;
             _begin += n;
-            _size -= n;
             return ptr;
         }
         
         void did_overwrite_first(size_type n) {
-            assert(n <= _size);
+            assert(n <= size());
             _begin += n;
-            _size -= n;
         }
         
         // write to the back, over the existing data, having moved _end
@@ -306,17 +315,17 @@ namespace wry {
         // otherwise expendable data at the beginning of a larger sequence
         
         size_type can_overwrite_last() {
-            return _size;
+            return size();
         }
         
         pointer will_overwrite_last(size_type n) {
-            assert(n <= _size);
-            _size -= n;
+            assert(n <= size());
+            _end -= n;
         }
         
         void did_overwrite_last(size_type n) {
-            assert(n <= _size);
-            _size -= n;
+            assert(n <= size());
+            _end -= n;
         }
                 
     }; // array_view

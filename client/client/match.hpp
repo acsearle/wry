@@ -8,7 +8,7 @@
 #ifndef match_hpp
 #define match_hpp
 
-#include "cctype.hpp"
+#include "chartype.hpp"
 #include "string_view.hpp"
 
 namespace wry {
@@ -178,6 +178,7 @@ namespace wry {
             while (*a) {
                 if (ch == *a)
                     return ++v;
+                ++a;
             }
             return false;
         };

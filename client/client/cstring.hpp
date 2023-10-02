@@ -14,7 +14,8 @@ namespace wry {
     
     // # memswap
     //
-    // Swaps the bytes of two disjoint regions
+    // Swaps the bytes of two disjoint regions.  Compilers seem to do a decent
+    // job of optimizing the inner loop.
     
     inline void memswap(void* __restrict__ lhs,
                         void* __restrict__ rhs,

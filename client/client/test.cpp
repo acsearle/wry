@@ -23,7 +23,7 @@ namespace wry {
                 // reverse intrusive list
                 base* p = nullptr;
                 while (head)
-                    rotate_left(p, head, head->next);
+                    rotate_args_left(p, head, head->next);
                 std::swap(head, p);
             }
             while (head) {

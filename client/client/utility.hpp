@@ -53,37 +53,37 @@ namespace wry {
     namespace _detail {
         
         template<typename F, typename X>
-        struct _reduce_by_fold_helper {
+        struct _reduce_args_by_fold_helper {
             
             F& _f;
             X _x;
             
-            _reduce_by_fold_helper(F& f, X&& x) : _f(f), _x(std::forward<X>(x)) {}
+            _reduce_args_by_fold_helper(F& f, X&& x) : _f(f), _x(std::forward<X>(x)) {}
             
             constexpr X _release() { return std::forward<X>(_x); }
             
-        }; // struct _fold_helper
+        }; // struct _reduce_args_by_fold_helper
         
         template<typename F, typename X>
-        _reduce_by_fold_helper(F&, X&&) -> _reduce_by_fold_helper<F, X>;
+        _reduce_args_by_fold_helper(F&, X&&) -> _reduce_args_by_fold_helper<F, X>;
         
         template<typename F, typename X, typename Y>
-        constexpr auto operator*(_reduce_by_fold_helper<F, X>&& x,
-                                 _reduce_by_fold_helper<F, Y>&& y) {
+        constexpr auto operator*(_reduce_args_by_fold_helper<F, X>&& x,
+                                 _reduce_args_by_fold_helper<F, Y>&& y) {
             assert(std::addressof(x._f) == std::addressof(y._f));
-            return _reduce_by_fold_helper(x._f, x._f(x._release(), y._release()));
+            return _reduce_args_by_fold_helper(x._f, x._f(x._release(), y._release()));
         }
         
     }
     
     template<typename F, typename... Args>
-    constexpr decltype(auto) reduce_right(F&& f, Args&&... args) {
-        return (_detail::_reduce_by_fold_helper(f, std::forward<Args>(args)) * ...)._release();
+    constexpr decltype(auto) reduce_args_right(F&& f, Args&&... args) {
+        return (_detail::_reduce_args_by_fold_helper(f, std::forward<Args>(args)) * ...)._release();
     }
     
     template<typename F, typename... Args>
-    constexpr decltype(auto) reduce_left(F&& f, Args&&... args) {
-        return (... * _detail::_reduce_by_fold_helper(f, std::forward<Args>(args)))._release();
+    constexpr decltype(auto) reduce_args_left(F&& f, Args&&... args) {
+        return (... * _detail::_reduce_args_by_fold_helper(f, std::forward<Args>(args)))._release();
     }
     
     
@@ -97,54 +97,54 @@ namespace wry {
     
     template<typename... Args>
     constexpr decltype(auto) min(Args&&... args) {
-        return reduce_left([](auto&& a, auto&& b) -> decltype(auto) {
+        return reduce_args_left([](auto&& a, auto&& b) -> decltype(auto) {
             return (b < a) ? std::forward<decltype(b)>(b) : std::forward<decltype(a)>(a);
         }, std::forward<Args>(args)...);
     }
     
     template<typename... Args>
     constexpr decltype(auto) max(Args&&... args) {
-        return reduce_right([](auto&& a, auto&& b) -> decltype(auto) {
+        return reduce_args_right([](auto&& a, auto&& b) -> decltype(auto) {
             return (a < b) ? std::forward<decltype(b)>(b) : std::forward<decltype(a)>(a);
         }, std::forward<Args>(args)...);
     }
     
     
-    // # shift_left, shift_right, rotate_left, rotate_right
+    // # Output argument permutations
     //
-    // Moves the values of its arguments one place left, or right, discarding
+    // Moves the values of the arguments one place left, or right, discarding
     // the last value or moving it back to the vacated beginning.
     //
-    // `rotate_*` is a fundamental operation in linked list manipulation
+    // `rotate_args_*` is a fundamental operation in linked list manipulation
     //
-    // `exchange` may be implemented in terms of `shift_left`
+    // A variadic `std::exchange` may be implemented in terms of `shift_args_left`
     
     template<typename A, typename... B>
-    void shift_left(A& a, B&&... b) {
-        (void) reduce_left([](auto& a, auto&& b) -> decltype(auto) {
+    void shift_args_left(A& a, B&&... b) {
+        (void) reduce_args_left([](auto& a, auto&& b) -> decltype(auto) {
             a = std::move(b);
             return b;
         }, a, std::forward<B>(b)...);
     }
     
     template<typename A, typename... B>
-    void shift_right(A&& a, B&... b) {
-        (void) reduce_right([](auto&& a, auto& b) -> auto& {
+    void shift_args_right(A&& a, B&... b) {
+        (void) reduce_args_right([](auto&& a, auto& b) -> auto& {
             b = std::move(a);
             return a;
         }, std::forward<A>(a), b...);
     }
     
     template<typename A, typename... B>
-    void rotate_left(A& a, B&... b) {
+    void rotate_args_left(A& a, B&... b) {
         A c = std::move(a);
-        shift_left(a, b..., std::move(c));
+        shift_args_left(a, b..., std::move(c));
     }
     
     template<typename A, typename... B>
-    void rotate_right(A& a, B&... b) {
+    void rotate_args_right(A& a, B&... b) {
         A c = std::move(a);
-        shift_right(std::move(c), b..., a);
+        shift_args_right(std::move(c), b..., a);
     }
     
     // # Exchange
@@ -154,11 +154,22 @@ namespace wry {
     template<typename A, typename... B>
     A exchange(A& a, B&&... b) {
         A c = std::move(a);
-        shift_left(a, std::forward<B>(b)...);
+        shift_args_left(a, std::forward<B>(b)...);
         return c;
     }
 
     
+    // # Overloaded
+    //
+    // Combine multiple lambdas into a single object with an overloaded set of
+    // call operators
+    //
+    // https://en.cppreference.com/w/cpp/utility/variant/visit#Example
+    
+    template<class... Ts>
+    struct overloaded : Ts... { using Ts::operator()...; };
+    template<class... Ts>
+    overloaded(Ts...) -> overloaded<Ts...>;
 
     
     template<typename T, typename U>

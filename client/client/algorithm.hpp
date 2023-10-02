@@ -9,22 +9,29 @@
 #define algorithm_hpp
 
 #include <algorithm>
+#include <cassert>
+
+#include "stddef.hpp"
 
 namespace wry {
     
     // # From C++23
+    //
+    // https://en.cppreference.com/w/cpp/algorithm/lexicographical_compare_three_way
     
-    template<class I1, class I2, class Cmp>
-    constexpr auto lexicographical_compare_three_way(I1 f1, I1 l1, I2 f2, I2 l2, Cmp comp) -> decltype(comp(*f1, *f2)) {
-        using ret_t = decltype(comp(*f1, *f2));
+    template<typename I1, typename I2, typename Cmp = std::compare_three_way>
+    constexpr auto lexicographical_compare_three_way(I1 first1, I1 last1,
+                                                     I2 first2, I2 last2,
+                                                     Cmp comp = Cmp{}) -> decltype(comp(*first1, *first2)) {
+        using ret_t = decltype(comp(*first1, *first2));
         static_assert(std::disjunction_v<
                       std::is_same<ret_t, std::strong_ordering>,
                       std::is_same<ret_t, std::weak_ordering>,
                       std::is_same<ret_t, std::partial_ordering>>,
                       "The return type must be a comparison category type.");
         for (;;) {
-            bool exhaust1 = (f1 == l1);
-            bool exhaust2 = (f2 == l2);
+            bool exhaust1 = (first1 == last1);
+            bool exhaust2 = (first2 == last2);
             if (exhaust1 || exhaust2) {
                 return (!exhaust1
                         ? std::strong_ordering::greater
@@ -32,23 +39,17 @@ namespace wry {
                            ? std::strong_ordering::less:
                            std::strong_ordering::equal));
             }
-            if (auto c = comp(*f1, *f2); c != 0)
+            if (auto c = comp(*first1, *first2); c != 0)
                 return c;
-            ++f1;
-            ++f2;
+            ++first1;
+            ++first2;
         }
         
     }
     
-    template<class I1, class I2>
-    constexpr auto lexicographical_compare_three_way(I1 f1, I1 l1, I2 f2, I2 l2) {
-        return lexicographical_compare_three_way(f1, l1, f2, l2, std::compare_three_way());
-    }
-    
     // # Extend some algorithms to check for second range ending
     
-    template<typename InputIterator, typename InputSentinel, typename OutputIterator, typename OutputSentinel>
-    OutputIterator copy(InputIterator first, InputSentinel last, OutputIterator d_first, OutputSentinel d_last) {
+    auto copy(auto first, auto last, auto d_first, auto d_last) -> decltype(d_first) {
         for (; first != last; ++first, ++d_first) {
             assert(d_first != d_last);
             *d_first = *first;
@@ -57,15 +58,16 @@ namespace wry {
         return d_first;
     }
     
-    template<typename ForwardIt1, typename Sentinel1, typename ForwardIt2, typename Sentinel2>
-    ForwardIt2 swap_ranges(ForwardIt1 first1, Sentinel1 last1, ForwardIt2 first2, Sentinel2 last2) {
-        for (; first1 != last1; ++first1, ++first2) {
-            assert(first2 != last2);
+    auto swap_ranges(auto first1, auto last1, auto first2, auto last2) -> decltype(first2) {
+        for (;; ++first1, ++first2) {
+            bool exhaust1 = (first1 == last1);
+            bool exhaust2 = (first2 == last2);
+            assert(exhaust1 == exhaust2);
+            if (exhaust1)
+                return first2;
             using std::iter_swap;
             iter_swap(first1, first2);
         }
-        assert(first2 == last2);
-        return first2;
     }
     
     // # Relocate
@@ -112,10 +114,10 @@ namespace wry {
     // Note that AddressSanitizer can detect overlapping misuses of
     // `std::memcpy`.
     
-    inline unsigned char* relocate_n(const unsigned char* first,
-                                     size_t count,
-                                     unsigned char* d_first,
-                                     bool disjoint = false) {
+    inline byte* relocate_n(const byte* first,
+                            size_t count,
+                            byte* d_first,
+                            bool disjoint = false) {
         if (disjoint)
             std::memcpy(d_first, first, count);
         else
@@ -123,58 +125,56 @@ namespace wry {
         return d_first + count;
     }
     
-    inline unsigned char* relocate(const unsigned char* first,
-                                   const unsigned char* last,
-                                   unsigned char* d_first,
-                                   bool disjoint = false) {
+    inline byte* relocate(const byte* first,
+                          const byte* last,
+                          byte* d_first,
+                          bool disjoint = false) {
         return relocate_n(first, last - first, d_first, disjoint);
     }
     
     template<typename T>
     T* relocate(const T* first, const T* last, T* d_first, bool disjoint = false) {
-        return (T*) relocate((const unsigned char*) first,
-                             (const unsigned char*) last,
-                             (unsigned char*) d_first,
+        return (T*) relocate((const byte*) first,
+                             (const byte*) last,
+                             (byte*) d_first,
                              disjoint);
     }
     
     template<typename T, typename N>
     T* relocate_n(const T* first, N count, T* d_first, bool disjoint = false) {
-        return (T*) relocate_n((const unsigned char*) first,
+        return (T*) relocate_n((const byte*) first,
                                count * sizeof(T),
-                               (unsigned char*) d_first,
+                               (byte*) d_first,
                                disjoint);
     }
     
     template<typename T>
     T* relocate_backward(const T* first, const T* last, T* d_last, bool disjoint = false) {
-        const unsigned char* first2 = (const unsigned char*) first;
-        const unsigned char* last2 = (const unsigned char*) last;
-        unsigned char* d_last2 = (unsigned char*) d_last;
+        const byte* first2 = (const byte*) first;
+        const byte* last2 = (const byte*) last;
+        byte* d_last2 = (byte*) d_last;
         ptrdiff_t count = last2 - first2;
-        unsigned char* d_first2 = d_last2 - count;
+        byte* d_first2 = d_last2 - count;
         relocate_n(first2, count, d_first2, disjoint);
         return (T*) d_first2;
     }
     
     template<typename T, typename N>
     T* relocate_backward_n(N count, const T* last, T* d_last, bool disjoint = false) {
-        const unsigned char* last2 = (const unsigned char*) last;
-        unsigned char* d_last2 = (unsigned char*) d_last;
+        const byte* last2 = (const byte*) last;
+        byte* d_last2 = (byte*) d_last;
         auto count2 = count * sizeof(T);
-        const unsigned char* first2 = last2 - count;
-        unsigned char* d_first2 = d_last2 - count;
+        const byte* first2 = last2 - count;
+        byte* d_first2 = d_last2 - count;
         relocate_n(first2, count2, d_first2, disjoint);
         return (T*) d_first2;
     }
-
+    
     template<typename T>
     T* relocate(const T* src, T* dest) {
         std::memcpy(dest, src, sizeof(T));
         return dest + 1;
     }
-    
-
     
 } // namespace wry
 

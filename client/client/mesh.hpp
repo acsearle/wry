@@ -116,7 +116,7 @@ namespace wry {
             }
             
             void rotate_left() {
-                wry::rotate_left(indices[0], indices[1], indices[2]);
+                rotate_args_left(indices[0], indices[1], indices[2]);
             }
             
             bool is_standard_form() {

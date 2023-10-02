@@ -28,20 +28,47 @@ namespace wry {
         //     _bytes.pop_back()
         //
         // idiom
-        
+                
         array<char> _bytes;
         
         using const_iterator = utf8_iterator;
         using iterator = const_iterator;
         using value_type = uint;
         
+        
+        bool invariant() const {
+            return ((_bytes._begin == nullptr)
+                    || ((_bytes._end < _bytes._allocation_end)
+                        && !*_bytes._end));
+        }
+
+        
         string() = default;
         
+        string(const string& other) : _bytes(other._bytes) {
+            _bytes.push_back(0);
+            _bytes.pop_back();
+        }
+
+        string(string&&) = default;
+        
+        ~string() = default;
+        
+        string& operator=(const string& other) {
+            _bytes = other._bytes;
+            _bytes.push_back(0);
+            _bytes.pop_back();
+            return *this;
+        }
+        
+        string& operator=(string&&) = default;
+
         string(char const* z) {
             assert(z);
             std::size_t n = std::strlen(z);
             _bytes.assign(z, z + n + 1);
             _bytes.pop_back();
+            assert(invariant());
         }
         
         string(char const* p, size_t n) {
@@ -49,6 +76,7 @@ namespace wry {
             _bytes.assign(p, p + n);
             _bytes.push_back(0);
             _bytes.pop_back();
+            assert(invariant());
         }
         
         string(char const* p, char const* q) {
@@ -56,6 +84,7 @@ namespace wry {
             _bytes.assign(p, q);
             _bytes.push_back(0);
             _bytes.pop_back();
+            assert(invariant());
         }
         
         string(string_view v) {
@@ -65,6 +94,7 @@ namespace wry {
             _bytes.assign(u.begin(), u.end());
             _bytes.push_back(0);
             _bytes.pop_back();
+            assert(invariant());
         }
         
         explicit string(const_iterator a, const_iterator b) {
@@ -72,30 +102,51 @@ namespace wry {
             _bytes.assign(a._ptr, b._ptr);
             _bytes.push_back(0);
             _bytes.pop_back();
+            assert(invariant());
         }
         
         explicit string(array<char>&& bytes) : _bytes(std::move(bytes)) {
             _bytes.push_back(0);
             _bytes.pop_back();
+            assert(invariant());
         }
         
         operator array_view<const char>() const {
+            assert(invariant());
             return array_view<const char>(_bytes.begin(), _bytes.end());
         }
-        operator string_view() const { return string_view(begin(), end()); }
+
+        operator string_view() const {
+            assert(invariant());
+            return string_view(begin(), end());
+        }
         
-        const_iterator begin() const { return utf8_iterator{_bytes.begin()}; }
-        const_iterator end() const { return utf8_iterator{_bytes.end()}; }
+        const_iterator begin() const {
+            assert(invariant());
+            return utf8_iterator{ _bytes.begin() };
+        }
         
-        char const* data() const { return _bytes.begin(); }
+        const_iterator end() const {             
+            assert(invariant());
+            return utf8_iterator{ _bytes.end() }; }
+        
+        char const* data() const {
+            assert(invariant());
+            return _bytes.begin();
+        }
         
         array_view<const char> as_bytes() const {
+            assert(invariant());
             return array_view<const char>(_bytes.begin(), _bytes.end());
         }
         
-        char const* c_str() const { return (char const*) _bytes.begin(); }
+        char const* c_str() const {
+            assert(invariant());
+            return (char const*) _bytes.begin();
+        }
         
         void push_back(uint c) {
+            assert(invariant());
             if (c < 0x80) {
                 _bytes.push_back(c);
             } else if (c < 0x800) {
@@ -113,9 +164,11 @@ namespace wry {
             }
             _bytes.push_back(0);
             _bytes.pop_back();
+            assert(invariant());
         }
 
         void push_front(uint c) {
+            assert(invariant());
             _bytes.push_back(0);
             _bytes._reserve_front(4);
             if (c < 0x80) {
@@ -134,63 +187,79 @@ namespace wry {
                 _bytes.push_back(0xC0 | ((c >> 18)       ));
             }
             _bytes.pop_back();
+            assert(invariant());
         }
 
         uint pop_back() {
+            assert(invariant());
             assert(!empty());
             iterator e = end();
             --e;
             uint c = *e;
             _bytes._end += (e._ptr - _bytes._end);
             *(_bytes._end) = 0;
+            assert(invariant());
             return c;
         }
         
         uint pop_front() {
+            assert(invariant());
             assert(!empty());
             iterator b = begin();
             uint c = *b;
             ++b;
             _bytes._begin += (b._ptr - _bytes._begin);
+            assert(invariant());
             return c;
         }
         
         bool empty() const {
+            assert(invariant());
             return _bytes.empty();
         }
         
         void clear() {
+            assert(invariant());
             _bytes.clear();
             _bytes.push_back(0);
             _bytes.pop_back();
+            assert(invariant());
         }
         
         void append(const char* z) {
+            assert(invariant());
             auto n = strlen(z);
             _bytes.append(z, z + n + 1);
             _bytes.pop_back();
+            assert(invariant());
         }
         
         void append(string const& s) {
+            assert(invariant());
             _bytes.append(s._bytes.begin(), s._bytes.end() + 1);
             _bytes.pop_back();
+            assert(invariant());
         }
         
          bool operator==(const string& other) const {
+             assert(invariant());
              return std::equal(begin(), end(), other.begin(), other.end());
          }
 
         bool operator==(const string_view& other) const {
+            assert(invariant());
             return std::equal(begin(), end(), other.begin(), other.end());
         }
 
     };
     
-    inline u64 hash(const string& x) {
+    inline uint64_t hash(const string& x) {
+        assert(x.invariant());
         return hash_combine(x._bytes.data(), x._bytes.size());
     }
     
     inline std::ostream& operator<<(std::ostream& a, string const& b) {
+        assert(b.invariant());
         a.write((char const*) b._bytes.begin(), b._bytes.size());
         return a;
     }

@@ -13,7 +13,7 @@
 #include <variant>
 
 #include "array.hpp"
-#include "cstdint.hpp"
+#include "stdint.hpp"
 #include "type_traits.hpp"
 #include "stdfloat.hpp"
 #include "string.hpp"
@@ -188,7 +188,7 @@ namespace wry {
         
         template<typename T>
         void set_bytes(array_view<T>& buffer) {
-            size_t n = _byte_view.can_overwite_first() / sizeof(T);
+            size_t n = _byte_view.can_overwrite_first() / sizeof(T);
             size_t m = buffer.size();
             size_t count = min(m, n);
             memcpy(_byte_view.will_overwrite_first(count * sizeof(T)),
