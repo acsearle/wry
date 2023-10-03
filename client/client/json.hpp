@@ -167,68 +167,73 @@ namespace wry {
         
         using unexpected = std::unexpected<error>;
         
+        template<typename T>
+        using Result = Result<T, error>;
+        
+        using Err = Err<error>;
+        
         
         struct _value_visitor {
             
             using value_type = value;
             
-            expected<value> visit_none() {
-                return value{{std::monostate{}}};
+            Result<value> visit_none() {
+                return Ok(value{{std::monostate{}}});
             }
 
-            expected<value> visit_bool(bool x) {
-                return value{{x}};
+            Result<value> visit_bool(bool x) {
+                return Ok(value{{x}});
             }
             
-            expected<value> visit_int8_t(bool x) {
-                return value{{(float64_t) x}};
+            Result<value> visit_int8_t(bool x) {
+                return Ok(value{{(float64_t) x}});
             }
 
-            expected<value> visit_int16_t(bool x) {
-                return value{{(float64_t) x}};
+            Result<value> visit_int16_t(bool x) {
+                return Ok(value{{(float64_t) x}});
             }
             
-            expected<value> visit_int32_t(bool x) {
-                return value{{(float64_t) x}};
+            Result<value> visit_int32_t(bool x) {
+                return Ok(value{{(float64_t) x}});
             }
 
-            expected<value> visit_int64_t(bool x) {
-                return value{{(float64_t) x}};
+            Result<value> visit_int64_t(bool x) {
+                return Ok(value{{(float64_t) x}});
             }
             
-            expected<value> visit_uint8_t(bool x) {
-                return value{{(float64_t) x}};
+            Result<value> visit_uint8_t(bool x) {
+                return Ok(value{{(float64_t) x}});
             }
 
-            expected<value> visit_uint16_t(bool x) {
-                return value{{(float64_t) x}};
+            Result<value> visit_uint16_t(bool x) {
+                return Ok(value{{(float64_t) x}});
             }
             
-            expected<value> visit_uint32_t(bool x) {
-                return value{{(float64_t) x}};
+            Result<value> visit_uint32_t(bool x) {
+                return Ok(value{{(float64_t) x}});
             }
 
-            expected<value> visit_uint64_t(bool x) {
-                return value{{(float64_t) x}};
+            Result<value> visit_uint64_t(bool x) {
+                return Ok(value{{(float64_t) x}});
             }
 
-            expected<value> visit_float32_t(float32_t x) {
-                return value{{(float64_t) x}};
+            Result<value> visit_float32_t(float32_t x) {
+                return Ok(value{{(float64_t) x}});
             }
             
-            expected<value> visit_float64_t(float64_t x) {
-                return value{{x}};
+            Result<value> visit_float64_t(float64_t x) {
+                return Ok(value{{x}});
             }
 
-            expected<value> visit_string(string x) {
-                return value{{std::move(x)}};
+            Result<value> visit_string(string x) {
+                return Ok(value{{std::move(x)}});
             }
 
-            expected<value> visit_string_view(string_view x) {
-                return value{{string(x)}};
+            Result<value> visit_string_view(string_view x) {
+                return Ok(value{{string(x)}});
             }
 
-            expected<value> visit_seq(auto&& accessor) {
+            Result<value> visit_seq(auto&& accessor) {
                 array<value> y;
                 for (;;) {
                     std::optional<value> x(accessor.template next_element<value>());
@@ -237,20 +242,20 @@ namespace wry {
                         y.push_back(*(std::move(x)));
                     }
                     else
-                        return value{{std::move(y)}};
+                        return Ok(value{{std::move(y)}});
                 }
             }
             
-            expected<value> visit_map(auto&& accessor) {
+            Result<value> visit_map(auto&& accessor) {
                 table<string, value> y;
                 for (;;) {
                     std::optional<std::pair<string, value>> x(accessor.template next_entry<string, value>());
                     if (x) {
                         auto [at, flag] = y.insert(*std::move(x));
                         if (!flag)
-                            return unexpected(std::in_place);
+                            return Err(error());
                     } else {
-                        return value{{std::move(y)}};
+                        return Ok(value{{std::move(y)}});
                     }
                 }
             }
@@ -259,7 +264,7 @@ namespace wry {
         };
 
         template<typename D>
-        std::expected<value, typename std::decay_t<D>::error_type>
+        rust::result::Result<value, typename std::decay_t<D>::error_type>
         deserialize(std::in_place_type_t<value>, D&& deserializer) {
             return std::forward<D>(deserializer).deserialize_any(_value_visitor{});
         }
@@ -412,11 +417,11 @@ namespace wry {
                     
                     if (match_json_array_end()(v) || (_expect_delimiter && !match_json_comma()(v)))
                         return {};
-                    expected<T> result = wry::deserialize<T>(*_parent);
-                    if (!result)
+                    Result<T> x = wry::deserialize<T>(*_parent);
+                    if (x.is_err())
                         return {};
                     _expect_delimiter = true;
-                    return *std::move(result);
+                    return std::move(x._ok).unwrap();
                 }
                 
             };
@@ -438,12 +443,12 @@ namespace wry {
                     if (match_json_object_end()(v) || (_expect_delimiter && match_json_comma()(v)))
                         return {};
                     using wry::deserialize;
-                    expected<K> key = deserialize<K>(*_parent);
+                    Result<K> key = deserialize<K>(*_parent);
                     if (!key)
                         return {};
                     if (!match_json_colon()(v))
                         return {};
-                    expected<T> value = deserialize<T>(*_parent);
+                    Result<T> value = deserialize<T>(*_parent);
                     if (!value)
                         return {};
                     _expect_delimiter = true;
@@ -457,7 +462,7 @@ namespace wry {
             };
 
             template<typename V>
-            expected<typename std::decay_t<V>::value_type>
+            Result<typename std::decay_t<V>::value_type>
             deserialize_any(V&& visitor) {
                 
                 match_json_whitespace()(v);
@@ -481,60 +486,60 @@ namespace wry {
                 if (match_json_object_begin()(v))
                     return std::forward<V>(visitor).visit_map(make_map_accessor());
                 
-                return unexpected(std::in_place);
+                return Err(error());
                 
             }
             
             template<typename V>
-            expected<typename std::decay_t<V>::value_type>
+            Result<typename std::decay_t<V>::value_type>
             deserialize_bool(V&& visitor) {
                 match_json_whitespace()(v);
                 if (!v)
-                    return unexpected(std::in_place);
+                    return Err(error());
                 bool x;
                 if (!parse_json_boolean(x)(v))
-                    return unexpected(std::in_place);
+                    return Err(error());
                 return std::forward<V>(visitor).visit_bool(x);
             }
             
             template<typename V> 
-            expected<typename std::decay_t<V>::value_type>
+            Result<typename std::decay_t<V>::value_type>
             deserialize_int64_t(V&& visitor) {
                 match_json_whitespace()(v);
                 int64_t x;
                 if (!parse_json_number(x)(v))
-                    return unexpected(std::in_place);
+                    return Err(error());
                 return std::forward<V>(visitor).visit_int64_t(x);
             }
             
             template<typename V>
-            expected<typename std::decay_t<V>::value_type>
+            Result<typename std::decay_t<V>::value_type>
             deserialize_string(V&& visitor) {
                 match_json_whitespace()(v);
                 string x;
                 if (!parse_json_string(x)(v))
-                    return unexpected(std::in_place);
+                    return Err(error());
                 return std::forward<V>(visitor).visit_string(x);
             }
             
             template<typename V>
-            expected<typename std::decay_t<V>::value_type>
+            Result<typename std::decay_t<V>::value_type>
             deserialize_seq(V&& visitor) {
                 if (!match_json_array_begin()(v))
-                    return unexpected(std::in_place);
+                    return Err(error());
                 return std::forward<V>(visitor).visit_seq(make_seq_accessor());
             }
             
         };
         
         template<typename T>
-        expected<T> from_string(string s) {
+        Result<T> from_string(string s) {
             string_view v = s;
             return wry::deserialize<T>(deserializer{v});
         }
         
         template<typename T>
-        expected<T> from_file(string_view name) {
+        Result<T> from_file(string_view name) {
             string s = string_from_file(name);
             string_view v = s;
             return wry::deserialize<T>(deserializer{v});

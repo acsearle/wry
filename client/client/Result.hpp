@@ -24,6 +24,22 @@ namespace rust::result {
     template<typename T>
     struct Ok {
         T value;
+        
+        Ok() = default;
+        Ok(const Ok& x) = default;
+        Ok(Ok&& x) = default;
+        ~Ok() = default;
+        Ok& operator=(const Ok&) = default;
+        Ok& operator=(Ok&&) = default;
+        
+        Ok(const T& other)
+        : value(other) {
+        }
+        
+        Ok(T&& other) 
+        : value(std::move(other)) {            
+        }
+        
         const T& unwrap() const& { return value; }
         T& unwrap() & { return value; }
         const T&& unwrap() && { return std::move(value); }
@@ -35,6 +51,22 @@ namespace rust::result {
     template<typename E>
     struct Err {
         E value;
+        
+        Err() = delete;
+        Err(const Err& x) = default;
+        Err(Err&& x) = default;
+        ~Err() = default;
+        Err& operator=(const Err&) = default;
+        Err& operator=(Err&&) = default;
+        
+        Err(const E& other)
+        : value(other) {
+        }
+        
+        Err(E&& other)
+        : value(std::move(other)) {
+        }
+        
         const E& unwrap() const& { return value; }
         E& unwrap() & { return value; }
         const E&& unwrap() && { return std::move(value); }
@@ -179,19 +211,19 @@ namespace rust::result {
         , _err(std::move(err)) {
         }
         
-        void _destruct_ok() const {
+        void _destruct_ok() {
             assert(_discriminant == OK);
             std::destroy_at(&_ok);
-            _discriminant == EMPTY;
-        }
-        
-        void _destruct_err() const {
-            assert(_discriminant == ERR);
-            std::destroy_at(&_err);
             _discriminant = EMPTY;
         }
         
-        void _destruct() const {
+        void _destruct_err() {
+            assert(_discriminant == ERR);
+            std::destroy_at(&_err);
+            _discriminant = ERR;
+        }
+        
+        void _destruct() {
             switch (_discriminant) {
                 case EMPTY:
                     break;
