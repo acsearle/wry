@@ -13,19 +13,13 @@
 #include "type_traits.hpp"
 #include "utility.hpp"
 
-// Rust-like enums
-
-// They store wrapped types, allowing cases to be distinguished by type as
-// well as by discriminant, even when the inner type appears several times
-
 namespace rust {
     
     struct None;
     template<typename> struct Some;
     template<typename> struct Option;
     
-}
-
+} // namespace rust
 
 namespace std {
     
@@ -36,45 +30,64 @@ namespace std {
     
 } // namespace std
 
-
 namespace rust {
     
-    struct None {
-    };
+    struct None {};
     
     template<typename T>
     struct Some {
         
         T value;
         
+        // basic
+        
         Some() = default;
         
-        template<typename U>
-        Some(const Some<U>& other)
-        : value(other.value) {
-        }
-
-        template<typename U>
-        Some(Some<U>&& other)
-        : value(other.value) {
+        Some(const Some&) = default;
+        Some(Some&&) = default;
+                
+        template<typename U> Some(const Some<U>& other) : value(other.value) {}
+        template<typename U> Some(Some<U>& other) : value(other.value) {}
+        template<typename U> Some(const Some<U>&& other) : value(std::move(other.value)) {}
+        template<typename U> Some(Some<U>&& other) : value(std::move(other.value)) {}
+        
+        template<typename... Args> Some(std::in_place_t, Args&&... args)
+        : value(std::forward<Args>(args)...) {
         }
         
-        template<typename U>
-        explicit Some(const U& x) 
-        : value(x) {
-        }
-
-        template<typename U>
-        explicit Some(U&& x)
-        : value(std::forward<U>(x)) {
-        }
+        template<typename U> explicit Some(U&& x) : value(std::forward<U>(x)) {}
         
         ~Some() = default;
+                
+        Some& operator=(const Some&) = default;
+        Some& operator=(Some&&) = default;
+
+        template<typename U>
+        Some& operator=(const Some<U>& other) {
+            value = other.value;
+            return *this;
+        }
         
+        template<typename U>
+        Some& operator=(Some<U>&& other) {
+            value = std::move(other.value);
+            return *this;
+        }
+        
+        template<typename U>
+        Some& operator=(U&& other) {
+            value = std::move(other);
+            return *this;
+        }
+        
+        operator T&() & { return value; }
+        operator const T&() const& { return value; }
+        operator T&&() && { return std::move(value); }
+        operator const T&&() const&& { return std::move(value); }
+
     };
 
-    template<typename T>
-    Some(T&&) -> Some<T>;
+    template<typename T> Some(T&&) -> Some<T>;
     
     template<typename T>
     struct Option {
@@ -359,20 +372,47 @@ namespace rust {
     
     template<typename T>
     struct Option<T&> {
+        
         T* _pointer;
         
+        Option() : _pointer(nullptr) {}
+        
+        Option(const Option&) = default;
+        Option(Option&&) = default;
+
+        Option(None) : _pointer(nullptr) {}
+        template<typename U> Option(Some<U&> some) : _pointer(&some.value) {}
+        
+        ~Option() = default;
+        
+        Option& operator=(const Option&) = default;
+        Option& operator=(Option&&) = default;
+        
+        Option& operator=(None) {
+            _pointer = nullptr;
+            return *this;
+        }
+        
+        template<typename U>
+        Option& operator=(Some<U&> other) {
+            _pointer = other._pointer; 
+            return *this;
+        }
+                
         bool is_some() const {
             return static_cast<bool>(_pointer);
+        }
+        
+        bool is_some_and(auto&& predicate) const {
+            return is_some() && FORWARD(predicate)(*_pointer);
         }
         
         bool is_none() const {
             return !_pointer;
         }
         
-    };
+    }; // struct Option<T&>
     
-    
-    
-}
+} // namespace rust
 
 #endif /* Option_hpp */

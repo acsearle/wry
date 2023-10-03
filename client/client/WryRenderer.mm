@@ -549,6 +549,10 @@
                 ulong i = 0;
                 for (const string& y : *x)
                     _name_to_opcode[y] = i++;
+                
+                json::serializer s;
+                serialize(x->as_view(), s);
+                printf("%s\n", s.s.c_str());
             }
             
             if (auto x = json::from_file<array<array<string>>>("/Users/antony/Desktop/assets/assets.json")) {

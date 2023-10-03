@@ -22,13 +22,36 @@
 
 namespace wry {
     
-    template<typename S>
-    std::expected<
-        typename std::decay_t<S>::value_type,
-        typename std::decay_t<S>::error_type>
-    serialize(const int32_t& x, S&& serializer) {
-        return std::forward<S>(serializer).serialize_i32(x);
+    // Serialize primitives
+    
+#define X(T) template<typename S> std::expected<typename std::decay_t<S>::\
+    value_type, typename std::decay_t<S>::error_type> serialize(const T& x, S&&\
+    serializer) { return std::forward<S>(serializer).serialize_##T(x); }
+    
+    WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
+    WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES
+    X(string)
+#undef X
+
+    // Serializer sequences
+    
+    template<typename T, typename S>
+    std::expected<typename std::decay_t<S>::value_type,
+                  typename std::decay_t<S>::error_type>
+    serialize(const array_view<T>& x, S&& serializer) {
+        using E = typename std::decay_t<S>::error_type;
+        auto seq = std::forward<S>(serializer).serialize_seq(std::optional<size_type>(x.size()));
+        if (!seq.has_value())
+            return std::unexpected<E>(std::in_place);
+        for (const auto& e : x) {
+            auto f = seq->serialize_element(e);
+            if (!f)
+                return std::unexpected<E>(std::in_place);
+        }
+        return seq->end();
     }
+    
+    
     
     template<typename ByteSink>
     struct binary_serializer {

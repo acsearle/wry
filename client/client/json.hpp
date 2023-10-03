@@ -112,14 +112,12 @@ namespace wry {
             return match_and(match_json_whitespace(),
                              match_character('}'));
         }
-        
+
         struct value {
             
             std::variant<
                 std::monostate,
                 bool,
-                uint64_t,
-                int64_t,
                 float64_t,
                 string,
                 array<value>,
@@ -128,35 +126,40 @@ namespace wry {
 
             bool is_null() const { return std::holds_alternative<std::monostate>(inner); }
             bool is_boolean() const { return std::holds_alternative<bool>(inner); }
+            bool is_number() const { return std::holds_alternative<float64_t>(inner); }
             bool is_string() const { return std::holds_alternative<string>(inner); }
             bool is_array() const { return std::holds_alternative<array<value>>(inner); }
             bool is_object() const { return std::holds_alternative<table<string, value>>(inner); }
 
-            string& as_string() & {
+            bool& as_boolean() & { return std::get<bool>(inner); }
+            float64_t as_number() & { return std::get<float64_t>(inner); }
+            string& as_string() & { return std::get<string>(inner); }
+            array<value>& as_array() & { return std::get<array<value>>(inner); }
+            table<string, value>& as_object() & { return std::get<table<string, value>>(inner); }
+            
+            operator float64_t() const {
+                return std::get<float64_t>(inner);
+            }
+            
+            operator size_t() const {
+                float64_t f = std::get<float64_t>(inner);
+                float64_t n = {};
+                f = modf(f, &n);
+                assert(f != 0);
+                assert(n >= 0);
+                return (size_t) n;
+            }
+            
+            operator const string&() {
                 return std::get<string>(inner);
             }
-            
-            array<value>& as_array() & {
-                return std::get<array<value>>(inner);
-            }
-            
-            table<string, value>& as_object() & {
-                return std::get<table<string, value>>(inner);
-            }
-            
-            value& operator[](size_t i) & {
-                return as_array()[i];
-            }
-            
-            value& operator[](string_view j) & {
-                return as_object()[j];
-            }
-            
+                        
         };
         
         // aliases
         
         struct error {
+            int q;
         };
         
         template<typename T>
@@ -168,7 +171,7 @@ namespace wry {
         struct _value_visitor {
             
             using value_type = value;
-
+            
             expected<value> visit_none() {
                 return value{{std::monostate{}}};
             }
@@ -176,24 +179,55 @@ namespace wry {
             expected<value> visit_bool(bool x) {
                 return value{{x}};
             }
-
-            expected<value> visit_string(string x) {
-                assert(x.invariant());
-                return value{{std::move(x)}};
+            
+            expected<value> visit_int8_t(bool x) {
+                return value{{(float64_t) x}};
             }
 
+            expected<value> visit_int16_t(bool x) {
+                return value{{(float64_t) x}};
+            }
+            
+            expected<value> visit_int32_t(bool x) {
+                return value{{(float64_t) x}};
+            }
+
+            expected<value> visit_int64_t(bool x) {
+                return value{{(float64_t) x}};
+            }
+            
+            expected<value> visit_uint8_t(bool x) {
+                return value{{(float64_t) x}};
+            }
+
+            expected<value> visit_uint16_t(bool x) {
+                return value{{(float64_t) x}};
+            }
+            
+            expected<value> visit_uint32_t(bool x) {
+                return value{{(float64_t) x}};
+            }
+
+            expected<value> visit_uint64_t(bool x) {
+                return value{{(float64_t) x}};
+            }
+
+            expected<value> visit_float32_t(float32_t x) {
+                return value{{(float64_t) x}};
+            }
+            
             expected<value> visit_float64_t(float64_t x) {
                 return value{{x}};
             }
 
-            expected<value> visit_int64_t(int64_t x) {
-                return value{{x}};
+            expected<value> visit_string(string x) {
+                return value{{std::move(x)}};
             }
 
-            expected<value> visit_uint64_t(uint64_t x) {
-                return value{{x}};
+            expected<value> visit_string_view(string_view x) {
+                return value{{string(x)}};
             }
-            
+
             expected<value> visit_seq(auto&& accessor) {
                 array<value> y;
                 for (;;) {
@@ -238,6 +272,123 @@ namespace wry {
         // serialization
         
         struct serializer {
+            
+            using value_type = std::monostate;
+            using error_type = error;
+            
+            string s;
+            
+            expected<value_type> serialize_bool(bool x) {
+                if (x) {
+                    s.append("true");
+                } else {
+                    s.append("false");
+                }
+                return {};
+            }
+            
+            expected<value_type> serialize_i8(int8_t x) {
+                return serialize_i64(x);
+            }
+
+            expected<value_type> serialize_i16(int16_t x) {
+                return serialize_i64(x);
+            }
+            
+            expected<value_type> serialize_i32(int32_t x) {
+                return serialize_i64(x);
+            }
+            
+            expected<value_type> serialize_i64(int64_t x) {
+                s._bytes.may_write_back(32);
+                std::to_chars_result r 
+                = std::to_chars(s._bytes._end, s._bytes._allocation_end, x);
+                if (r.ptr == s._bytes._end)
+                    return unexpected{std::in_place};
+                s._bytes._end += (r.ptr - s._bytes._end);
+                *s._bytes._end = 0;
+                return {};
+            }
+            
+            expected<value_type> serialize_uint8_t(uint8_t x) {
+                return serialize_uint64_t(x);
+            }
+            
+            expected<value_type> serialize_uint16_t(uint16_t x) {
+                return serialize_uint64_t(x);
+            }
+            
+            expected<value_type> serialize_uint32_t(uint32_t x) {
+                return serialize_uint64_t(x);
+            }
+            
+            expected<value_type> serialize_uint64_t(uint64_t x) {
+                s._bytes.may_write_back(32);
+                std::to_chars_result r
+                = std::to_chars(s._bytes._end, s._bytes._allocation_end, x);
+                if (r.ptr == s._bytes._end)
+                    return unexpected{std::in_place};
+                s._bytes._end += (r.ptr - s._bytes._end);
+                *s._bytes._end = 0;
+                return {};
+            }
+            
+            expected<value_type> serialize_float32_t(float32_t x) {
+                return serialize_float64_t(x);
+            }
+            
+            expected<value_type> serialize_float64_t(float64_t x) {
+                s._bytes.may_write_back(32);
+                std::to_chars_result r
+                = std::to_chars(s._bytes._end, s._bytes._allocation_end, x);
+                if (r.ptr == s._bytes._end)
+                    return unexpected{std::in_place};
+                s._bytes._end += (r.ptr - s._bytes._end);
+                *s._bytes._end = 0;
+                return {};
+            }
+
+            expected<value_type> serialize_string(string_view x) {
+                s.push_back('\"');
+                s.append(x);
+                s.push_back('\"');
+                return {};
+            }
+            
+            struct SerializeSeq {
+                
+               // using value_type = value_type;
+                //using error_type = error_type;
+                
+                serializer* _context;
+                bool _need_delimiter = false;
+                
+                template<typename T>
+                expected<std::monostate> serialize_element(T&& x) {
+                    if (_need_delimiter)
+                        _context->s.push_back(',');
+                    _need_delimiter = true;
+                    serialize(std::forward<T>(x), *_context);
+                    return {};
+                }
+                
+                expected<value_type> end() {
+                    _context->s.push_back(']');
+                    return {};
+                }
+                
+            };
+            
+            expected<SerializeSeq> serialize_seq(std::optional<size_type>) {
+                s.push_back('[');
+                
+                //auto seq = SerializeSeq{this};
+                std::expected<SerializeSeq, json::error> result;
+                result = SerializeSeq{this};
+                return result;
+            }
+
+
             
         };
         

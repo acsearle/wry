@@ -221,12 +221,7 @@ namespace wry {
     using stride_view = vector_view<T, stride_iterator<T>, stride_iterator<std::add_const_t<T>>>;
 
     
-    template<typename T, typename I, typename C, typename Serializer>
-    void serialize(const vector_view<T, I, C>& v, Serializer& s) {
-        serialize(v.size(), s);
-        for (auto&& x : v)
-            serialize(x, s);
-    }
+    
 
 } // namespace wry
 

@@ -11,156 +11,309 @@
 #include "type_traits.hpp"
 #include "utility.hpp"
 
-namespace rust {
+namespace rust::result {
     
+    struct Empty;
     template<typename> struct Ok;
     template<typename> struct Err;
     template<typename, typename> struct Result;
-    
-} // namespace rust
-
-namespace std {
-    
-    template<typename T, typename E>
-    struct common_type<rust::Ok<T>, rust::Err<E>> {
-        using type = rust::Result<T, E>;
+        
+    struct Empty {
     };
-    
-} // namespace std
-
-namespace rust {
-    
+        
     template<typename T>
     struct Ok {
-        T _value;
+        T value;
+        const T& unwrap() const& { return value; }
+        T& unwrap() & { return value; }
+        const T&& unwrap() && { return std::move(value); }
+        T&& unwrap() const&& { return std::move(value); }
     };
     
-    template<typename T>
-    Ok(T&&) -> Ok<std::decay_t<T>>;
+    template<typename T> Ok(T&&) -> Ok<T>;
     
     template<typename E>
     struct Err {
-        E _value;
+        E value;
+        const E& unwrap() const& { return value; }
+        E& unwrap() & { return value; }
+        const E&& unwrap() && { return std::move(value); }
+        E&& unwrap() const&& { return std::move(value); }
     };
     
-    template<typename E>
-    Err(E&&) -> Err<std::decay_t<E>>;
-        
+    template<typename E> Err(E&&) -> Err<E>;
+            
     template<typename T, typename E>
     struct Result {
         
-        bool _is_err;
+        enum {
+            EMPTY = -1,
+            OK = 0,
+            ERR = 1,
+        } _discriminant;
+        
         union {
+            Empty _empty;
             Ok<T> _ok;
             Err<E> _err;
         };
         
+        bool is_empty() const {
+            return _discriminant == EMPTY;
+        }
+        
+        bool is_ok() const {
+            return _discriminant == OK;
+        }
+        
+        bool is_err() const {
+            return _discriminant == ERR;
+        }
+        
         Result()
-        : _is_err(false)
+        : _discriminant(OK)
         , _ok() {
         }
         
+        template<typename... Args>
+        void _emplace_ok(Args&&... args) {
+            assert(_discriminant == EMPTY);
+            std::construct_at(&_ok, std::forward<Args>(args)...);
+            _discriminant = OK;
+        }
+
+        template<typename... Args>
+        void _emplace_err(Args&&... args) {
+            assert(_discriminant == ERR);
+            std::construct_at(&_err, std::forward<Args>(args)...);
+            _discriminant = OK;
+        }
+        
+        template<typename U, typename F>
+        void _emplace_copy(const Result<U, F>& other) {
+            assert(_discriminant == EMPTY);
+            switch (other._discriminant) {
+                case EMPTY:
+                    break;
+                case OK:
+                    _emplace_ok(other._ok);
+                    break;
+                case ERR:
+                    _empace_err(other._err);
+                    break;
+                default:
+                    abort();
+            }
+        }
+        
+        template<typename U, typename F>
+        void _emplace_copy(Result<U, F>&& other) {
+            assert(_discriminant == EMPTY);
+            switch (other._discriminant) {
+                case EMPTY:
+                    break;
+                case OK:
+                    _emplace_ok(std::move(other._ok));
+                    break;
+                case ERR:
+                    _empace_err(std::move(other._err));
+                    break;
+                default:
+                    abort();
+            }
+        }
+        
+        Result(const Result& other)
+        : _discriminant(EMPTY) {
+            _emplace_copy(other);
+        }
+
+        Result(Result&& other)
+        : _discriminant(EMPTY) {
+            _emplace_copy(std::move(other));
+        }
+
         template<typename U, typename F>
         Result(const Result<U, F>& other)
-        : _is_err(other._is_err) {
-            if (!_is_err)
-                new ((void*) &_ok) Ok<T>(other._ok);
-            else
-                new ((void*) &_err) Err<E>(other._err);
+        : _discriminant(EMPTY) {
+            _emplace_copy(other);
         }
 
         template<typename U, typename F>
         Result(Result<U, F>&& other)
-        : _is_err(other._is_err) {
-            if (!_is_err)
-                new ((void*) &_ok) Ok<T>(std::move(other._ok));
-            else
-                new ((void*) &_err) Err<E>(std::move(other._err));
+        : _discriminant(EMPTY) {
+            _emplace_copy(std::move(other));
+        }
+
+        Result(const Empty& empty)
+        : _discriminant(EMPTY)
+        , _empty(empty) {
+        }
+        
+        Result(Empty&& empty)
+        : _discriminant(EMPTY)
+        , _empty(std::move(empty)) {
         }
 
         template<typename U>
         Result(const Ok<U>& ok)
-        : _is_err(false)
+        : _discriminant(OK)
         , _ok(ok) {
         }
 
         template<typename U>
         Result(Ok<U>&& ok)
-        : _is_err(false)
+        : _discriminant(OK)
         , _ok(std::move(ok)) {
         }
         
         template<typename F>
         Result(const Err<F>& err)
-        : _is_err(true)
+        : _discriminant(ERR)
         , _err(err) {
         }
 
         template<typename F>
         Result(Err<F>&& err)
-        : _is_err(true)
+        : _discriminant(ERR)
         , _err(std::move(err)) {
         }
         
+        void _destruct_ok() const {
+            assert(_discriminant == OK);
+            std::destroy_at(&_ok);
+            _discriminant == EMPTY;
+        }
+        
+        void _destruct_err() const {
+            assert(_discriminant == ERR);
+            std::destroy_at(&_err);
+            _discriminant = EMPTY;
+        }
+        
+        void _destruct() const {
+            switch (_discriminant) {
+                case EMPTY:
+                    break;
+                case OK:
+                    _destruct_ok();
+                    break;
+                case ERR:
+                    _destruct_err();
+                    break;
+                default:
+                    abort();
+            }
+        }
+        
         ~Result() {
-            if (is_ok())
-                _ok.~Ok();
-            else
-                _err.~Err();
+            _destruct();
         }
         
         template<typename U, typename F>
         Result& operator=(const Result<U, F>& other) {
-            if (is_ok()) {
-                if (other.is_ok()) {
-                    _ok = other._ok;
-                } else {
-                    _ok.~Ok();
-                    new ((void*) &_err) Err(other._err);
-                }
+            if (_discriminant != other._discriminant) {
+                _destruct();
+                _emplace_copy(other);
             } else {
-                if (other.is_ok()) {
-                    _err.~T();
-                    new ((void*) &_ok) Ok(other._ok);
-                } else {
-                    _err = other._err;
+                switch (other._discriminant) {
+                    case EMPTY:
+                        break;
+                    case OK:
+                        _ok = other._ok;
+                        break;
+                    case ERR:
+                        _err = other._err;
+                        break;
+                    default:
+                        abort();
                 }
             }
-            _is_err = other._is_err;
+            return *this;
         }
         
         template<typename U, typename F>
         Result& operator=(Result<U, F>&& other) {
-            if (is_ok()) {
-                if (other.is_ok()) {
-                    _ok = std::move(other._ok);
-                } else {
-                    _ok.~Ok();
-                    new ((void*) &_err) Err(std::move(other._err));
-                }
+            if (_discriminant != other._discriminant) {
+                _destruct();
+                _emplace_copy(std::move(other));
             } else {
-                if (other.is_ok()) {
-                    _err.~T();
-                    new ((void*) &_ok) Ok(std::move(other._ok));
-                } else {
-                    _err = other._err;
+                switch (other._discriminant) {
+                    case EMPTY:
+                        break;
+                    case OK:
+                        _ok = std::move(other._ok);
+                        break;
+                    case ERR:
+                        _err = std::move(other._err);
+                        break;
+                    default:
+                        abort();
                 }
             }
-            _is_err = other._is_err;
+            return *this;
         }
         
-        bool is_ok() const {
-            return !_is_err;
+        Result& operator=(const Empty&) {
+            if (_discriminant != EMPTY)
+                _destruct();
+            return *this;
+        }
+
+        Result& operator=(Empty&&) {
+            if (_discriminant != EMPTY)
+                _destruct();
+            return *this;
+        }
+
+        template<typename U>
+        Result& operator=(const Ok<U>& ok) {
+            if (_discriminant != OK) {
+                _destruct();
+                _emplace_ok(ok);
+            } else {
+                _ok = ok;
+            }
+            return *this;
+        }
+     
+        template<typename U>
+        Result& operator=(Ok<U>&& ok) {
+            if (_discriminant != OK) {
+                _destruct();
+                _emplace_ok(std::move(ok));
+            } else {
+                _ok = std::move(ok);
+            }
+            return *this;
+        }
+        
+        template<typename F>
+        Result& operator=(const Err<F>& err) {
+            if (_discriminant != ERR) {
+                _destruct();
+                _emplace_err(err);
+            } else {
+                _err = err;
+            }
+            return *this;
+        }
+        
+        template<typename F>
+        Result& operator=(Err<F>&& err) {
+            if (_discriminant != ERR) {
+                _destruct();
+                _emplace_err(std::move(err));
+            } else {
+                _err = std::move(err);
+            }
+            return *this;
         }
         
         bool is_ok_and(auto&& predicate) const {
             return is_ok() && FORWARD(predicate)(_ok);
         }
-        
-        bool is_err() const {
-            return _is_err;
-        }
-        
+                
         bool is_err_and(auto&& predicate) const {
             return is_err() && FORWARD(predicate)(_err);
         }
@@ -169,7 +322,7 @@ namespace rust {
             if (is_ok())
                 return Ok(FORWARD(function)(_ok._value));
             else
-                return _err;
+                return *this;
         }
         
         auto map_or(auto&& otherwise, auto&& function) {
@@ -243,14 +396,18 @@ namespace rust {
         }
         
         auto visit(auto&& visitor) const {
-            if (is_ok())
-                FORWARD(visitor)(_ok);
-            else
-                FORWARD(visitor)(_err);
+            switch (_discriminant) {
+                case EMPTY:
+                    return visit(_empty);
+                case OK:
+                    return visit(_ok);
+                case ERR:
+                    return visit(_err);
+            }
         }
         
     }; // struct Result
     
-} // namespace rust
+} // namespace rust::result
 
 #endif /* Result_hpp */
