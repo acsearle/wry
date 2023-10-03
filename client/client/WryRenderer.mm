@@ -545,21 +545,26 @@
 
             table<wry::string, ulong> _name_to_opcode;
 
-            if (auto x = json::from_file<array<string>>("/Users/antony/Desktop/assets/opcodes.json");
-                x.is_ok()) {
+            {
+                auto x = 
+                    json::from_file<array<string>>("/Users/antony/Desktop/assets/opcodes.json")
+                    .expect("Could not read opcodes.json");
                 ulong i = 0;
-                for (const string& y : x._ok.value)
+                for (const string& y : x)
                     _name_to_opcode[y] = i++;
                 
                 json::serializer s;
-                serialize(x._ok.value.as_view(), s);
+                serialize(x.as_view(), s);
                 printf("%s\n", s.s.c_str());
             }
             
-            if (auto x = json::from_file<array<array<string>>>("/Users/antony/Desktop/assets/assets.json");
-                x.is_ok()) {
+                
+            {
+                auto x = 
+                    json::from_file<array<array<string>>>("/Users/antony/Desktop/assets/assets.json")
+                    .expect("Could not read assets.json");
                 ulong i = 0;
-                for (const array<string>& y : x._ok.value) {
+                for (const array<string>& y : x) {
                     ulong j = 0;
                     for (const string& z : y) {
                         simd_float4 coordinate = simd_make_float4(j / 32.0f, i / 32.0f, 0.0f, 1.0f);
@@ -570,7 +575,7 @@
                     }
                     ++i;
                 }
-            }            
+            }
 
         }
         

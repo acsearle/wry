@@ -8,8 +8,6 @@
 #ifndef deserialize_hpp
 #define deserialize_hpp
 
-#include <expected>
-
 #include "stdint.hpp"
 #include "stdfloat.hpp"
 #include "utility.hpp"
@@ -17,15 +15,17 @@
 #include "string.hpp"
 
 #include "Result.hpp"
+#include "Option.hpp"
 
 namespace wry {
     
     using namespace rust::result;
+    using namespace rust::option;
     
     // serde-rs deserialization
     
     template<typename T, typename D>
-    Result<T, typename std::decay_t<D>::error_type> deserialize(D&& deserializer) {
+    Result<T, typename std::decay_t<D>::Error> deserialize(D&& deserializer) {
         // tag dispatch to actual implementations
         return deserialize(std::in_place_type<T>, std::forward<D>(deserializer));
     }
@@ -34,15 +34,15 @@ namespace wry {
     
     // define visitors
             
-    template<typename T, typename E>
+    template<typename T>
     struct basic_visitor {
         
-        using value_type = T;
+        using Value = T;
         
         // default implementations
         
 #define X(T)\
-        Result<T, E> visit_##T (T x) { return std::unexpected<E>(ENOTSUP); }
+        template<typename E> Result<T, E> visit_##T(T x) { return Err(E()); }
 
         WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
         WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES
@@ -57,49 +57,49 @@ namespace wry {
     // define deserialization
 
 #define X(T)\
+    struct visitor_##T : basic_visitor<T> {\
+        template<typename E> Result<T, E> visit_##T(T x) { return x; }\
+    };\
     template<typename D>\
     Result<T, typename std::decay_t<D>::error_type>\
     deserialize(std::in_place_type_t<T>, D&& deserializer) {\
-        using E = typename std::decay_t<D>::error_type;\
-        struct visitor : basic_visitor<T, E> {\
-            Result<T, E> visit_##T(T x) { return x; }\
-        };\
-        return std::forward<D>(deserializer).deserialize_##T(visitor{});\
+        return std::forward<D>(deserializer).deserialize_##T(visitor_##T{});\
     }
     
     WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
     WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES
     
 #undef X
-    
+    struct visitor_bool  {
+#define X(T)\
+        template<typename E> Result<bool, E> visit_##T (T value) const {\
+            return static_cast<bool>(value);\
+        }
+        
+        WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
+        WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES
+#undef X
+    };
+
     template<typename D>
     Result<bool, typename std::decay_t<D>::error_type>
     deserialize(std::in_place_type_t<bool>, D&& deserializer) {
-        using E = typename std::decay_t<D>::error_type;
-        struct visitor : basic_visitor<bool, E> {
-#define X(T)\
-            Result<bool, E> visit_##T (T value) const {\
-                return static_cast<bool>(value);\
-            }
-            WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
-            WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES
-#undef X
-        };
-        return std::forward<D>(deserializer).deserialize_string(visitor{});
+        return std::forward<D>(deserializer).deserialize_string(visitor_bool{});
     }
     
+    struct visitor_string : basic_visitor<string> {
+        using value_type = string;
+        template<typename E>
+        Result<value_type, E> visit_string(string s) const {
+            return Ok(std::move(s));
+        }
+        
+    };
     
     template<typename D>
-    Result<string, typename std::decay_t<D>::error_type>
+    Result<string, typename std::decay_t<D>::Error>
     deserialize(std::in_place_type_t<string>, D&& deserializer) {
-        using E = typename std::decay_t<D>::error_type;
-        struct visitor : basic_visitor<string, E> {
-            using value_type = string;
-            Result<value_type, E> visit_string(string s) const {
-                return Ok(std::move(s));
-            }
-        };
-        return std::forward<D>(deserializer).deserialize_string(visitor{});
+        return std::forward<D>(deserializer).deserialize_string(visitor_string{});
     }
         
     
@@ -143,7 +143,7 @@ namespace wry {
         template<typename V>
         Result<typename std::decay_t<V>::value_type, error_type>
         deserialize_any(V&& visitor) {
-            return std::unexpected(ENOTSUP);
+            return Err(ENOTSUP);
         };
         
         template<typename V>
@@ -156,11 +156,11 @@ namespace wry {
         Result<typename std::decay_t<V>::value_type, error_type>
         deserialize_bytes(V&& visitor) {
             if (!_ensure_available(sizeof(uint64_t)))
-                return std::unexpected(ERANGE);
+                return Err(ERANGE);
             uint64_t count{};
             memcpy(&count, _buffer.will_read_first(sizeof(uint64_t)), count);
             if (!_ensure_available(count))
-                return std::unexpected(ERANGE);
+                return Err(ERANGE);
             array_view<const unsigned char> result(_buffer.will_read_first(count), count);
             return std::forward<V>(visitor).visit_bytes(result);
         };
@@ -176,12 +176,12 @@ namespace wry {
             uint64_t _count;
             
             template<typename T>
-            Result<std::optional<T>, error_type>
+            Result<Option<T>, error_type>
             next_element() {
                 if (!_count--)
-                    return std::optional<T>{};
+                    return None();
                 return deserialize<T>(*_context).transform([](T&& value) {
-                    return std::optional<T>(std::move(value));
+                    return Some(std::move(value));
                 });
             }
             
@@ -193,13 +193,13 @@ namespace wry {
             bool _expect_value = false;
             
             template<typename K>
-            Result<std::optional<K>, error_type>
+            Result<Option<K>, error_type>
             next_key() {
                 if (!_count--)
-                    return std::unexpected<error_type>(ERANGE);
+                    return Err(ERANGE);
                 _expect_value = true;
                 return deserialize<K>(*_context).transform([](K&& key) {
-                    return std::optional<K>(std::move(key));
+                    return Ok(Some(std::move(key)));
                 });
             }
             
@@ -207,7 +207,7 @@ namespace wry {
             Result<V, error_type>
             next_value() {
                 if (!_expect_value)
-                    return std::unexpected<error_type>(ERANGE);
+                    return Err(ERANGE);
                 _expect_value = false;
                 return deserialize<V>(*_context);
             }
@@ -267,17 +267,22 @@ namespace wry {
     
     template<typename T>
     struct _deserialize_array_visitor {
-        using value_type = array<T>;
+        
+        using Value = array<T>;
         
         template<typename A>
-        Result<array<T>, typename std::decay_t<A>::error_type>
+        Result<array<T>, typename std::decay_t<A>::Error>
         visit_seq(A&& access) {
+            using E = typename std::decay_t<A>::Error;
             array<T> x;
             for (;;) {
                 printf("hello\n");
-                std::optional<T> y = access.template next_element<T>();
-                if (y)
-                    x.emplace_back(*std::move(y));
+                Result<Option<T>, E> y = access.template next_element<T>();
+                if (y.is_err())
+                    return Err(std::move(y).unwrap_err());
+                Option<T> z = std::move(y).unwrap();
+                if (z.is_some())
+                    x.emplace_back(std::move(z).unwrap());
                 else
                     return Ok(std::move(x));
             }
@@ -285,7 +290,7 @@ namespace wry {
     };
     
     template<typename T, typename D>
-    Result<array<T>, typename std::decay_t<D>::error_type> deserialize(std::in_place_type_t<array<T>>, D&& deserializer) {
+    Result<array<T>, typename std::decay_t<D>::Error> deserialize(std::in_place_type_t<array<T>>, D&& deserializer) {
         return std::forward<D>(deserializer).deserialize_seq(_deserialize_array_visitor<T>{});
     }
     

@@ -8,8 +8,6 @@
 #ifndef serialize_hpp
 #define serialize_hpp
 
-#include <optional>
-#include <expected>
 #include <variant>
 
 #include "array.hpp"
@@ -19,13 +17,20 @@
 #include "string.hpp"
 #include "string_view.hpp"
 
+#include "Option.hpp"
+#include "Result.hpp"
+
 
 namespace wry {
     
+    using namespace rust;
+    using namespace rust::result;
+    using namespace rust::option;
+    
     // Serialize primitives
     
-#define X(T) template<typename S> std::expected<typename std::decay_t<S>::\
-    value_type, typename std::decay_t<S>::error_type> serialize(const T& x, S&&\
+#define X(T) template<typename S> Result<typename std::decay_t<S>::\
+    Ok, typename std::decay_t<S>::Error> serialize(const T& x, S&&\
     serializer) { return std::forward<S>(serializer).serialize_##T(x); }
     
     WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
@@ -36,19 +41,20 @@ namespace wry {
     // Serializer sequences
     
     template<typename T, typename S>
-    std::expected<typename std::decay_t<S>::value_type,
-                  typename std::decay_t<S>::error_type>
+    Result<typename std::decay_t<S>::Ok,
+                  typename std::decay_t<S>::Error>
     serialize(const array_view<T>& x, S&& serializer) {
-        using E = typename std::decay_t<S>::error_type;
-        auto seq = std::forward<S>(serializer).serialize_seq(std::optional<size_type>(x.size()));
-        if (!seq.has_value())
-            return std::unexpected<E>(std::in_place);
+        using E = typename std::decay_t<S>::Error;
+        auto seq = std::forward<S>(serializer).serialize_seq(Some(x.size()));
+        if (seq.is_err())
+            return Err(std::move(seq).unwrap_err());
+        auto seq2 = std::move(seq).unwrap();
         for (const auto& e : x) {
-            auto f = seq->serialize_element(e);
-            if (!f)
-                return std::unexpected<E>(std::in_place);
+            auto f = seq2.serialize_element(e);
+            if (f.is_err())
+                return Err(E());
         }
-        return seq->end();
+        return seq2.end();
     }
     
     
@@ -68,18 +74,18 @@ namespace wry {
         }
         
 #define X(T) \
-        std::expected<value_type, error_type> \
+        Result<value_type, error_type> \
         serialize_##T ( T x) {\
             memcpy(_buffer.will_write_back(sizeof( T )), &x, sizeof( T ));\
             _maybe_sink();\
-            return value_type{};\
+            return Ok(value_type{});\
         }
         
         WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
         WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES
 #undef X
         
-        std::expected<value_type, error_type>
+        Result<value_type, error_type>
         serialize_bool(bool x) {
             return serialize_int8_t(x);
         }
@@ -90,33 +96,34 @@ namespace wry {
             size_t _remaining;
             
             template<typename T>
-            std::expected<std::monostate, error_type>
+            Result<std::monostate, error_type>
             serialize_element(const T& x) {
                 if (!_remaining--)
-                    return std::unexpected(ERANGE);
+                    return Err(ERANGE);
                 return serialize(x, *_context);
             }
             
-            std::expected<value_type, error_type>
+            Result<value_type, error_type>
             end() {
                 if (_remaining)
-                    return std::unexpected(ERANGE);
+                    return Err(ERANGE);
                 return {};
             }
             
         };
         
-        std::expected<tuple_serializer, error_type> serialize_tuple(size_t count) {
+        Result<tuple_serializer, error_type> serialize_tuple(size_t count) {
             return tuple_serializer{this, count};
         }
         
         using seq_serializer = tuple_serializer;
         
-        std::expected<tuple_serializer, error_type> serialize_seq(std::optional<size_t> count) {
-            if (!count)
-                return std::unexpected(ERANGE);
-            serialize_uint64_t(*count);
-            return serialize_tuple(*count);
+        Result<tuple_serializer, error_type> serialize_seq(Option<size_type> count) {
+            if (count.is_none())
+                return Err(ERANGE);
+            auto n = std::move(count).unwrap();
+            serialize_uint64_t(n);
+            return serialize_tuple(n);
         }
         
         struct map_serializer {
@@ -126,9 +133,9 @@ namespace wry {
             bool _expecting_value = false;
             
             template<typename K>
-            std::expected<std::monostate, error_type> serialize_key(K&& key) {
+            Result<std::monostate, error_type> serialize_key(K&& key) {
                 if (!_remaining || _expecting_value)
-                    return std::unexpected(ERANGE);
+                    return Err(ERANGE);
                 return serialize(std::forward<K>(key), *_context).and_then([this](auto&&) {
                     _expecting_value = true;
                     return std::monostate{};
@@ -136,9 +143,9 @@ namespace wry {
             }
             
             template<typename V>
-            std::expected<std::monostate, error_type> serialize_value(V&& value) {
+            Result<std::monostate, error_type> serialize_value(V&& value) {
                 if (!_remaining || !_expecting_value)
-                    return std::unexpected(ERANGE);
+                    return Err(ERANGE);
                 return serialize(std::forward<V>(value), *_context).and_then([this](auto&&) {
                     --_remaining;
                     _expecting_value = false;
@@ -146,19 +153,20 @@ namespace wry {
                 });
             }
             
-            std::expected<value_type, error_type> end() {
+            Result<value_type, error_type> end() {
                 if (_remaining || _expecting_value)
-                    return std::unexpected(ERANGE);
-                return value_type{};
+                    return Err(ERANGE);
+                return Ok(value_type{});
             }
             
         };
         
-        std::expected<map_serializer, error_type> serialize_map(std::optional<size_t> count) {
-            if (!count)
-                return std::unexpected(ERANGE);
-            serialize_uint64_t(*count);
-            return map_serializer{this, *count};
+        Result<map_serializer, error_type> serialize_map(Option<size_t> count) {
+            if (count.is_none())
+                return Err(ERANGE);
+            size_type n = std::move(count).unwrap();
+            serialize_uint64_t(n);
+            return map_serializer{this, n};
         }
         
         struct struct_serializer {
@@ -167,10 +175,10 @@ namespace wry {
             size_t _remaining;
             
             template<typename V>
-            std::expected<std::monostate, error_type>
+            Result<std::monostate, error_type>
             serialize_field(string_view key, V&& value) {
                 if (!_remaining)
-                    return std::unexpected(ERANGE);
+                    return Err(ERANGE);
                 return serialize(key, *_context)
                     .and_then([this, value=std::forward<V>(value)](auto&&) mutable {
                         return serialize(std::forward<V>(value), *_context)
@@ -223,257 +231,7 @@ namespace wry {
     
     
     
-    
-    
-    /*
-    
-    struct file_deserializer {
-        
-        FILE* stream;
-        
-        string buffer;
-        
-#define X(T) auto deserialize_##T(auto&& visitor) {\
-            T x = {};\
-            fread(&x, sizeof(T), 1, stream);\
-            return visitor.visit_##T(x);\
-        }
-        WRY_X_FOR_ALL_RUST_INTEGERS
-#undef X
-        
-        auto deserialize_string(auto&& visitor) {
-            u64 count = {};
-            fread(&count, 8, 1, stream);
-            buffer._bytes.clear();
-            fread(buffer._bytes.will_write_back(count), 1, count, stream);
-            return visitor.visit_string(buffer);
-        }
-        
-        auto deserialize_bytes(auto&& visitor) {
-            u64 count = {};
-            fread(&count, 8, 1, stream);
-            buffer._bytes.clear();
-            fread(buffer._bytes.will_write_back(count), 1, count, stream);
-            return visitor.visit_bytes(buffer._bytes);
-        }
-        
-        // the accessor is essentially a deserializer but we can't provide
-        // the interface for it without stomping other stuff
-        
-        struct sequence_access {
-            
-            file_deserializer* _parent;
-            u64 _count;
-            
-            explicit sequence_access(file_deserializer* parent)
-            : _parent(parent)
-            , _count(0) {
-                fread(&_count, 8, 1, _parent->stream);
-            }
-            
-            sequence_access(file_deserializer* parent, u64 count) 
-            : _parent(parent)
-            , _count(count) {
-            }
-            
-            ~sequence_access() {
-                assert(!_count);
-            }
-            
-            template<typename T>
-            std::optional<T> next() {
-                if (!_count)
-                    return {};
-                --_count; // <-- side effect / statefulness counting down to end of seq
-                return deserialize<T>(*_parent);
-            }
-            
-        };
-                
-        auto deserialize_sequence(auto&& visitor) {
-            return visitor.visit_sequence(sequence_access(this));
-        }
-        
-        auto deserialize_tuple(size_t count, auto&& visitor) {
-            return visitor.visit_sequence(sequence_access(this, count));
-        }
-                
-                
-    };
-        
-// #define X(T) struct T##_vistor { T visit_##T(T x) { return x; } };
-//    WRY_X_FOR_ALL_RUST_INTEGERS
-// #undef X
-    
-    */
-        
-    /*
-    
-    // template<typename T, typename Serializer>
-    // void serialize(T const&, Serializer&);
-    
-    // template<typename T, typename Deserializer>
-    // T deserialize(Deserializer&);
-    
-    // To implement serialization for a (template) type, provide an overload of
-    // serialize for the (template) type.  The implementation should call
-    // serialize on its components in some fashion.  This recursion will ultimately
-    // resolve to fundamental types provided by the Serializer.
-    //
-    // template<typename A, typename B, typename Serializer>
-    // void serialize(std::pair<A, B> const& x, Serializer& s) {
-    //     serialize(x.first, s);
-    //     serialize(x.second, s);
-    // }
-    //
-    // To implement a Serializer, provide overloads of serialize for the
-    // Serializer and each fundamental type:
-    //
-    // void serialize(std::size_t, std::FILE*& s) {
-    //     fwrite(&x, sizeof(x), 1, s);
-    // }
-    //
-    // (Note that this serializer will expose both the endianness and word size
-    // of the platform)
-    //
-    // To implement deserialization for a (template) type, provide an overload of
-    // deserialize **using placeholder<T> as first argument** to overcome C++'s
-    // restriction on partial specialization of template functions.  The
-    // implementation shoud call deserialize on its components in some fashion.
-    // This recursion will ultimately resolve to fundamental types provided by the
-    // Deserializer.
-    //
-    // (use std::in_place_type_t as placeholder<T>?)
-    //
-    // template<typename A, typename B, typename Deserializer>
-    // std::pair<A, B> deserialize(placeholder<std::pair<A, B>>, Deserializer& d) {
-    //     auto a = deserialize<A>(d);
-    //     auto b = deserialize<B>(d);
-    //     // note that
-    //     //     return std::pair(deserialize<A>(d), deserialize<B>(d))
-    //     // would be incorrect because the order of evaluation of arguments is
-    //     // unspecified
-    //     return std::pair(std::move(a), std::move(b));
-    // }
-    //
-    // To implement a Deserializer, provide an overload of deserialize for each
-    // fundamental type and the Deserializer
-    //
-    // std::size_t deserialize(placeholder<std::size_t>, std::FILE*& d) {
-    //     std::size_t x = 0;
-    //     fread(&x, sizeof(x), 1, d);
-    //     return x;
-    // }
-    
-    
-    
-    template<typename T, typename Deserializer>
-    T deserialize(Deserializer& d) {
-        return deserialize(std::in_place_type<T>, d);
-    }
-    
-    
-    // Binary, native (little) endian serialization and deserialization
-    
-#define X(T)\
-\
-inline void serialize(T const& x, std::FILE*& s) {\
-[[maybe_unused]] auto r = fwrite(&x, sizeof(x), 1, s);\
-assert(r == 1);\
-}\
-\
-inline auto deserialize(std::in_place_type_t< T >, std::FILE*& d) {\
-T x;\
-[[maybe_unused]] auto r = fread(&x, sizeof(x), 1, d);\
-assert(r == 1);\
-return x;\
-}
-    
-    // Note that long and long long are distinct types even though they have
-    // identical properties on LP64 systems
-    
-    X(char)
-    X(signed char)
-    X(unsigned char)
-    
-    X(short)
-    X(int)
-    X(long)
-    X(long long)
-    
-    X(unsigned short)
-    X(unsigned)
-    X(unsigned long)
-    X(unsigned long long)
-    
-    X(float)
-    X(double)
-    X(long double)
-    
-#undef X
-    
-    bool serialize_iterable(auto first, auto last, FILE*& s) {
-        long a = ftell(s);
-        if (a == -1) 
-            return false;
-        if (fseek(s, +8, SEEK_CUR))
-            return false;
-        uint64_t count = 0;
-        for (; first != last; ++first, ++count)
-            serialize(*first, s);
-        long b = ftell(s);
-        if (b == -1) 
-            return false;
-        if (fseek(s, a, SEEK_SET))
-            return false;
-        if (fwrite(&count, 8, 1, s) != 1)
-            return false;
-        if (fseek(s, b, SEEK_SET))
-            return false;
-    }
-    
-    
-    
-    // std::pair
-    
-    template<typename A, typename B, typename Serializer>
-    void serialize(std::pair<A, B> const& x, Serializer& s) {
-        serialize(x.first, s);
-        serialize(x.second, s);
-    }
-    
-    template<typename A, typename B, typename Deserializer>
-    auto deserialize(std::in_place_type_t<std::pair<A, B>>, Deserializer& d) {
-        auto a = deserialize<A>(d);
-        auto b = deserialize<B>(d);
-        // note that
-        //     return std::pair(deserialize<A>(d), deserialize<B>(d))
-        // would be incorrect because the order of evaluation of arguments is
-        // unspecified
-        return std::pair(std::move(a), std::move(b));
-    }
-    
-    
-    // std::vector
-    
-    template<typename T, typename Serializer>
-    void serialize(std::vector<T> const& x, Serializer& s) {
-        serialize(x.size(), s);
-        for (auto&& y : x)
-            serialize(y, s);
-    }
-    
-    template<typename T, typename Deserializer>
-    auto deserialize(std::in_place_type_t<std::vector<T>>, Deserializer& d) {
-        auto n = deserialize<std::size_t>(d);
-        std::vector<T> x;
-        x.reserve(n);
-        while (n--)
-            x.push_back(deserialize<T>(d));
-        return x;
-    }
-    
-    */
+   
     
 } // namespace wry
 

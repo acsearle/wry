@@ -15,6 +15,9 @@
 #include "deserialize.hpp"
 #include "table.hpp"
 
+#include "Option.hpp"
+#include "Result.hpp"
+
 namespace wry {
     
     namespace json {
@@ -58,6 +61,11 @@ namespace wry {
         }
         
         inline auto parse_json_string(string& x) {
+            // todo:
+            //    currently only works on easy strings; doesn't expand
+            // escape sequences or skip escaped quotes
+            //    can we just present a view when the string is simple enough?
+            
             return [&x](string_view& v) -> bool {
                 string_view u(v);
                 if (!u)
@@ -113,29 +121,29 @@ namespace wry {
                              match_character('}'));
         }
 
-        struct value {
+        struct Value {
             
             std::variant<
                 std::monostate,
                 bool,
                 float64_t,
                 string,
-                array<value>,
-                table<string, value>
+                array<Value>,
+                table<string, Value>
             > inner;
 
             bool is_null() const { return std::holds_alternative<std::monostate>(inner); }
             bool is_boolean() const { return std::holds_alternative<bool>(inner); }
             bool is_number() const { return std::holds_alternative<float64_t>(inner); }
             bool is_string() const { return std::holds_alternative<string>(inner); }
-            bool is_array() const { return std::holds_alternative<array<value>>(inner); }
-            bool is_object() const { return std::holds_alternative<table<string, value>>(inner); }
+            bool is_array() const { return std::holds_alternative<array<Value>>(inner); }
+            bool is_object() const { return std::holds_alternative<table<string, Value>>(inner); }
 
             bool& as_boolean() & { return std::get<bool>(inner); }
             float64_t as_number() & { return std::get<float64_t>(inner); }
             string& as_string() & { return std::get<string>(inner); }
-            array<value>& as_array() & { return std::get<array<value>>(inner); }
-            table<string, value>& as_object() & { return std::get<table<string, value>>(inner); }
+            array<Value>& as_array() & { return std::get<array<Value>>(inner); }
+            table<string, Value>& as_object() & { return std::get<table<string, Value>>(inner); }
             
             operator float64_t() const {
                 return std::get<float64_t>(inner);
@@ -156,106 +164,114 @@ namespace wry {
                         
         };
         
-        // aliases
         
-        struct error {
-            int q;
+        // common error type for JSON de/serialization
+        
+        struct Error {
         };
-        
-        template<typename T>
-        using expected = std::expected<T, error>;
-        
-        using unexpected = std::unexpected<error>;
-        
-        template<typename T>
-        using Result = Result<T, error>;
-        
-        using Err = Err<error>;
-        
-        
-        struct _value_visitor {
+                                
+        struct ValueVisitor {
             
-            using value_type = value;
+            using Value = Value;
             
-            Result<value> visit_none() {
-                return Ok(value{{std::monostate{}}});
+            template<typename E>
+            Result<Value, E> visit_none() {
+                return Ok(Value{{std::monostate{}}});
             }
 
-            Result<value> visit_bool(bool x) {
-                return Ok(value{{x}});
+            template<typename E>
+            Result<Value, E> visit_bool(bool x) {
+                return Ok(Value{{x}});
             }
             
-            Result<value> visit_int8_t(bool x) {
-                return Ok(value{{(float64_t) x}});
+            template<typename E>
+            Result<Value, E> visit_int8_t(bool x) {
+                return Ok(Value{{(float64_t) x}});
             }
 
-            Result<value> visit_int16_t(bool x) {
-                return Ok(value{{(float64_t) x}});
+            template<typename E>
+            Result<Value, E> visit_int16_t(bool x) {
+                return Ok(Value{{(float64_t) x}});
             }
             
-            Result<value> visit_int32_t(bool x) {
-                return Ok(value{{(float64_t) x}});
+            template<typename E>
+            Result<Value, E> visit_int32_t(bool x) {
+                return Ok(Value{{(float64_t) x}});
             }
 
-            Result<value> visit_int64_t(bool x) {
-                return Ok(value{{(float64_t) x}});
+            template<typename E>
+            Result<Value, E> visit_int64_t(bool x) {
+                return Ok(Value{{(float64_t) x}});
             }
             
-            Result<value> visit_uint8_t(bool x) {
-                return Ok(value{{(float64_t) x}});
+            template<typename E>
+            Result<Value, E> visit_uint8_t(bool x) {
+                return Ok(Value{{(float64_t) x}});
             }
 
-            Result<value> visit_uint16_t(bool x) {
-                return Ok(value{{(float64_t) x}});
+            template<typename E>
+            Result<Value, E> visit_uint16_t(bool x) {
+                return Ok(Value{{(float64_t) x}});
             }
             
-            Result<value> visit_uint32_t(bool x) {
-                return Ok(value{{(float64_t) x}});
+            template<typename E>
+            Result<Value, E> visit_uint32_t(bool x) {
+                return Ok(Value{{(float64_t) x}});
             }
 
-            Result<value> visit_uint64_t(bool x) {
-                return Ok(value{{(float64_t) x}});
+            template<typename E>
+            Result<Value, E> visit_uint64_t(bool x) {
+                return Ok(Value{{(float64_t) x}});
             }
 
-            Result<value> visit_float32_t(float32_t x) {
-                return Ok(value{{(float64_t) x}});
+            template<typename E>
+            Result<Value, E> visit_float32_t(float32_t x) {
+                return Ok(Value{{(float64_t) x}});
             }
             
-            Result<value> visit_float64_t(float64_t x) {
-                return Ok(value{{x}});
+            template<typename E>
+            Result<Value, E> visit_float64_t(float64_t x) {
+                return Ok(Value{{x}});
             }
 
-            Result<value> visit_string(string x) {
-                return Ok(value{{std::move(x)}});
+            template<typename E>
+            Result<Value, E> visit_string(string x) {
+                return Ok(Value{{std::move(x)}});
             }
 
-            Result<value> visit_string_view(string_view x) {
-                return Ok(value{{string(x)}});
+            template<typename E>
+            Result<Value, E> visit_string_view(string_view x) {
+                return Ok(Value{{string(x)}});
             }
 
-            Result<value> visit_seq(auto&& accessor) {
-                array<value> y;
+            template<typename A>
+            Result<Value, typename std::decay_t<A>::Error> visit_seq(A&& accessor) {
+                array<Value> y;
                 for (;;) {
-                    std::optional<value> x(accessor.template next_element<value>());
-                    if (x) {
+                    Option<Value> x(accessor.template next_element<Value>());
+                    if (x.is_some()) {
                         printf("got a seq element\n");
-                        y.push_back(*(std::move(x)));
+                        y.push_back(std::move(x).unwrap());
                     }
                     else
-                        return Ok(value{{std::move(y)}});
+                        return Ok(Value{{std::move(y)}});
                 }
             }
             
-            Result<value> visit_map(auto&& accessor) {
-                table<string, value> y;
+            template<typename A>
+            Result<Value, typename std::decay_t<A>::Error> visit_map(A&& accessor) {
+                table<string, Value> z;
                 for (;;) {
-                    std::optional<std::pair<string, value>> x(accessor.template next_entry<string, value>());
-                    if (x) {
-                        auto [at, flag] = y.insert(*std::move(x));
+                    Result<Option<std::pair<string, Value>>, Error> x(accessor.template next_entry<string, Value>());
+                    if (x.is_err())
+                        return Err(std::move(x).unwrap_err());
+                    auto y = std::move(x).unwrap();
+                    if (y.is_some()) {
+                        auto [at, flag] = z.insert(std::move(y).unwrap());
                         if (!flag)
-                            return Err(error());
+                            return Err(Error());
                     } else {
-                        return Ok(value{{std::move(y)}});
+                        return Ok(Value{{std::move(z)}});
                     }
                 }
             }
@@ -263,10 +279,14 @@ namespace wry {
             
         };
 
+        // don't let this deserialize shadow the primitives which don't benefit
+        // from ADL
+        using wry::deserialize;
+
         template<typename D>
-        rust::result::Result<value, typename std::decay_t<D>::error_type>
-        deserialize(std::in_place_type_t<value>, D&& deserializer) {
-            return std::forward<D>(deserializer).deserialize_any(_value_visitor{});
+        rust::result::Result<Value, typename std::decay_t<D>::Error>
+        deserialize(std::in_place_type_t<Value>, D&& deserializer) {
+            return std::forward<D>(deserializer).deserialize_any(ValueVisitor{});
         }
         
         
@@ -278,12 +298,12 @@ namespace wry {
         
         struct serializer {
             
-            using value_type = std::monostate;
-            using error_type = error;
+            using Ok = Ok<std::monostate>;
+            using Error = Error;
             
             string s;
             
-            expected<value_type> serialize_bool(bool x) {
+            Result<Ok, Error> serialize_bool(bool x) {
                 if (x) {
                     s.append("true");
                 } else {
@@ -292,84 +312,84 @@ namespace wry {
                 return {};
             }
             
-            expected<value_type> serialize_i8(int8_t x) {
+            Result<Ok, Error> serialize_i8(int8_t x) {
                 return serialize_i64(x);
             }
 
-            expected<value_type> serialize_i16(int16_t x) {
+            Result<Ok, Error> serialize_i16(int16_t x) {
                 return serialize_i64(x);
             }
             
-            expected<value_type> serialize_i32(int32_t x) {
+            Result<Ok, Error> serialize_i32(int32_t x) {
                 return serialize_i64(x);
             }
             
-            expected<value_type> serialize_i64(int64_t x) {
+            Result<Ok, Error> serialize_i64(int64_t x) {
                 s._bytes.may_write_back(32);
                 std::to_chars_result r 
                 = std::to_chars(s._bytes._end, s._bytes._allocation_end, x);
                 if (r.ptr == s._bytes._end)
-                    return unexpected{std::in_place};
+                    return Err(Error{});
                 s._bytes._end += (r.ptr - s._bytes._end);
                 *s._bytes._end = 0;
-                return {};
+                return Ok{};
             }
             
-            expected<value_type> serialize_uint8_t(uint8_t x) {
+            Result<Ok, Error> serialize_uint8_t(uint8_t x) {
                 return serialize_uint64_t(x);
             }
             
-            expected<value_type> serialize_uint16_t(uint16_t x) {
+            Result<Ok, Error> serialize_uint16_t(uint16_t x) {
                 return serialize_uint64_t(x);
             }
             
-            expected<value_type> serialize_uint32_t(uint32_t x) {
+            Result<Ok, Error> serialize_uint32_t(uint32_t x) {
                 return serialize_uint64_t(x);
             }
             
-            expected<value_type> serialize_uint64_t(uint64_t x) {
+            Result<Ok, Error> serialize_uint64_t(uint64_t x) {
                 s._bytes.may_write_back(32);
                 std::to_chars_result r
                 = std::to_chars(s._bytes._end, s._bytes._allocation_end, x);
                 if (r.ptr == s._bytes._end)
-                    return unexpected{std::in_place};
+                    return Err(Error{});
                 s._bytes._end += (r.ptr - s._bytes._end);
                 *s._bytes._end = 0;
-                return {};
+                return Ok{};
             }
             
-            expected<value_type> serialize_float32_t(float32_t x) {
+            Result<Ok, Error> serialize_float32_t(float32_t x) {
                 return serialize_float64_t(x);
             }
             
-            expected<value_type> serialize_float64_t(float64_t x) {
+            Result<Ok, Error> serialize_float64_t(float64_t x) {
                 s._bytes.may_write_back(32);
                 std::to_chars_result r
                 = std::to_chars(s._bytes._end, s._bytes._allocation_end, x);
                 if (r.ptr == s._bytes._end)
-                    return unexpected{std::in_place};
+                    return Err(Error{});
                 s._bytes._end += (r.ptr - s._bytes._end);
                 *s._bytes._end = 0;
-                return {};
+                return Ok{};
             }
 
-            expected<value_type> serialize_string(string_view x) {
+            Result<Ok, Error> serialize_string(string_view x) {
                 s.push_back('\"');
                 s.append(x);
                 s.push_back('\"');
-                return {};
+                return Ok{};
             }
             
             struct SerializeSeq {
-                
-               // using value_type = value_type;
-                //using error_type = error_type;
-                
+               
+                using Ok = Ok;
+                using Error = Error;
+               
                 serializer* _context;
                 bool _need_delimiter = false;
                 
                 template<typename T>
-                expected<std::monostate> serialize_element(T&& x) {
+                Result<std::monostate, Error> serialize_element(T&& x) {
                     if (_need_delimiter)
                         _context->s.push_back(',');
                     _need_delimiter = true;
@@ -377,92 +397,106 @@ namespace wry {
                     return {};
                 }
                 
-                expected<value_type> end() {
+                Result<Ok, Error> end() {
                     _context->s.push_back(']');
                     return {};
                 }
                 
             };
             
-            expected<SerializeSeq> serialize_seq(std::optional<size_type>) {
+            Result<SerializeSeq, Error> serialize_seq(Option<size_type>) {
                 s.push_back('[');
-                
-                //auto seq = SerializeSeq{this};
-                std::expected<SerializeSeq, json::error> result;
-                result = SerializeSeq{this};
-                return result;
+                return rust::result::Ok(SerializeSeq{this});
             }
 
-
-            
         };
         
         struct deserializer {
             
-            using error_type = error;
+            using Error = Error;
             
             string_view& v;
                         
-            struct seq_accessor {
+            struct SeqAccess {
                 
-                using error_type = error_type;
+                using Error = Error;
                 
                 deserializer* _parent;
+                Option<usize> _size_hint;
                 bool _expect_delimiter = false;
                 
                 template<typename T>
-                std::optional<T> next_element() {
-                                        
+                Result<Option<T>, Error> next_element() {
                     auto& v = _parent->v;
+                    if (match_json_array_end()(v))
+                        return Ok(None());
+                    if (_expect_delimiter && !match_json_comma()(v))
+                        return Err(Error());
                     
-                    if (match_json_array_end()(v) || (_expect_delimiter && !match_json_comma()(v)))
-                        return {};
-                    Result<T> x = wry::deserialize<T>(*_parent);
-                    if (x.is_err())
-                        return {};
-                    _expect_delimiter = true;
-                    return std::move(x._ok).unwrap();
+                    return wry::deserialize<T>(*_parent)
+                        .map([&](T x){
+                            _expect_delimiter = true;
+                            return Some(std::move(x));
+                        });
+                }
+                
+                Option<usize> size_hint() const {
+                    return _size_hint;
                 }
                 
             };
             
-            seq_accessor make_seq_accessor() {
-                return seq_accessor{this};
-            };
-
-            struct map_accessor {
+            struct MapAccess {
                 
-                using error_type = error_type;
+                using Error = Error;
                 
                 deserializer* _parent;
+                Option<usize> _size_hint;
                 bool _expect_delimiter = false;
                 
                 template<typename K, typename T>
-                std::optional<std::pair<K, T>> next_entry() {
+                Result<Option<std::pair<K, T>>, Error> next_entry() {
                     auto& v = _parent->v;
-                    if (match_json_object_end()(v) || (_expect_delimiter && match_json_comma()(v)))
-                        return {};
+                    if (match_json_object_end()(v))
+                        return Ok(None());
+                    if (_expect_delimiter && match_json_comma()(v))
+                        return Err(Error());
                     using wry::deserialize;
-                    Result<K> key = deserialize<K>(*_parent);
-                    if (!key)
-                        return {};
+                    return deserialize<K>(*_parent)
+                        .and_then([&](K key) -> Result<Option<std::pair<K, T>>, Error> {
+                            if (!match_json_colon()(v))
+                                return Err(Error());
+                            return deserialize<T>(*_parent)
+                                .map([&](T value) {
+                                    _expect_delimiter = true;
+                                    return Some(std::make_pair(std::move(key),
+                                                               std::move(value)));
+                                });
+                        });
+                    /*
+                    Result<K, Error> key = deserialize<K>(*_parent);
+                    if (key.is_err())
+                        return Err(std::move(key).unwrap_err());
                     if (!match_json_colon()(v))
-                        return {};
-                    Result<T> value = deserialize<T>(*_parent);
-                    if (!value)
-                        return {};
+                        return Err(Error());
+                    Result<T, Error> value = deserialize<T>(*_parent);
+                    if (value.is_err())
+                        return Err(std::move(value).unwrap_err());
                     _expect_delimiter = true;
-                    return std::make_pair(*std::move(key), *std::move(value));
+                    return Some(std::make_pair(std::move(key).unwrap(),
+                                               std::move(value).unwrap()));
+                     */
+                }
+                
+                
+                Option<usize> size_hint() const {
+                    return _size_hint;
                 }
                 
             };
-            
-            map_accessor make_map_accessor() {
-                return map_accessor{this};
-            };
 
             template<typename V>
-            Result<typename std::decay_t<V>::value_type>
+            Result<typename std::decay_t<V>::Value, Error>
             deserialize_any(V&& visitor) {
                 
                 match_json_whitespace()(v);
@@ -481,65 +515,65 @@ namespace wry {
                 }
                     
                 if (match_json_array_begin()(v))
-                    return std::forward<V>(visitor).visit_seq(make_seq_accessor());
+                    return std::forward<V>(visitor).visit_seq(SeqAccess{this});
                 
                 if (match_json_object_begin()(v))
-                    return std::forward<V>(visitor).visit_map(make_map_accessor());
+                    return std::forward<V>(visitor).visit_map(MapAccess{this});
                 
-                return Err(error());
+                return Err(Error{});
                 
             }
             
             template<typename V>
-            Result<typename std::decay_t<V>::value_type>
+            Result<typename std::decay_t<V>::Value, Error>
             deserialize_bool(V&& visitor) {
                 match_json_whitespace()(v);
                 if (!v)
-                    return Err(error());
+                    return Err(Error{});
                 bool x;
                 if (!parse_json_boolean(x)(v))
-                    return Err(error());
-                return std::forward<V>(visitor).visit_bool(x);
+                    return Err(Error{});
+                return std::forward<V>(visitor).template visit_bool<Error>(x);
             }
             
             template<typename V> 
-            Result<typename std::decay_t<V>::value_type>
+            Result<typename std::decay_t<V>::Value, Error>
             deserialize_int64_t(V&& visitor) {
                 match_json_whitespace()(v);
                 int64_t x;
                 if (!parse_json_number(x)(v))
-                    return Err(error());
-                return std::forward<V>(visitor).visit_int64_t(x);
+                    return Err(Error{});
+                return std::forward<V>(visitor).template visit_int64_t<Error>(x);
             }
             
             template<typename V>
-            Result<typename std::decay_t<V>::value_type>
+            Result<typename std::decay_t<V>::Value, Error>
             deserialize_string(V&& visitor) {
                 match_json_whitespace()(v);
                 string x;
                 if (!parse_json_string(x)(v))
-                    return Err(error());
-                return std::forward<V>(visitor).visit_string(x);
+                    return Err(Error{});
+                return std::forward<V>(visitor).template visit_string<Error>(x);
             }
             
             template<typename V>
-            Result<typename std::decay_t<V>::value_type>
+            Result<typename std::decay_t<V>::Value, Error>
             deserialize_seq(V&& visitor) {
                 if (!match_json_array_begin()(v))
-                    return Err(error());
-                return std::forward<V>(visitor).visit_seq(make_seq_accessor());
+                    return Err(Error());
+                return std::forward<V>(visitor).visit_seq(SeqAccess{this});
             }
-            
+
         };
         
         template<typename T>
-        Result<T> from_string(string s) {
+        Result<T, Error> from_string(string s) {
             string_view v = s;
             return wry::deserialize<T>(deserializer{v});
         }
         
         template<typename T>
-        Result<T> from_file(string_view name) {
+        Result<T, Error> from_file(string_view name) {
             string s = string_from_file(name);
             string_view v = s;
             return wry::deserialize<T>(deserializer{v});
