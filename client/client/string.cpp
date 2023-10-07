@@ -1,0 +1,31 @@
+//
+//  string.cpp
+//  client
+//
+//  Created by Antony Searle on 26/6/2023.
+//
+
+#include "string.hpp"
+
+#include <filesystem>
+
+namespace wry {
+        
+    string string_from_file(string_view v) {
+        // todo: filesystem for better length?
+        FILE* f = fopen(std::filesystem::path(std::begin(v), std::end(v)).c_str(), "rb");
+        assert(f);
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        string s;
+        s.chars.may_write_back(n + 1);
+        size_t m = fread(s.chars.data(), 1, n, f);
+        fclose(f);
+        s.chars.did_write_back(m);
+        s.chars.push_back(0);
+        s.chars.pop_back();
+        return s;
+    }
+    
+}
