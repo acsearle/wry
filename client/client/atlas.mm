@@ -66,21 +66,21 @@ namespace wry {
     // Place a sprite within the free space of the atlas
     
     sprite atlas::place(matrix_view<const RGBA8Unorm_sRGB> v, simd_float2 origin) {
-        auto tl = _packer.place(simd_make_ulong2(v.get_major(),
-                                                 v.get_minor()));
+        auto tl = _packer.place(simd_make_ulong2(v.major(),
+                                                 v.minor()));
         [_texture replaceRegion:MTLRegionMake2D(tl.x, tl.y,
-                                                v.get_major(), v.get_minor())
+                                                v.major(), v.minor())
                     mipmapLevel:0
                       withBytes:v.data()
                     bytesPerRow:v.bytes_per_row()];
         sprite s;
         s.a.position = simd_make_float4(-origin, 0, 1);
         s.a.texCoord = simd_float(tl) / (float) _size;
-        s.b.position = simd_make_float4(v.get_major() - origin.x,
-                                        v.get_minor() - origin.y,
+        s.b.position = simd_make_float4(v.major() - origin.x,
+                                        v.minor() - origin.y,
                                         0,
                                         1);
-        s.b.texCoord = simd_make_float2(tl.x + v.get_major(), tl.y + v.get_minor()) / _size;
+        s.b.texCoord = simd_make_float2(tl.x + v.major(), tl.y + v.minor()) / _size;
         
         // for debug, also shade the split regions
         

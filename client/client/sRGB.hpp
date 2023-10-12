@@ -169,6 +169,8 @@ namespace wry {
         R8Unorm_sRGB r, g, b;
         R8Unorm a;
         
+        constexpr RGBA8Unorm_sRGB() = default;
+        
         constexpr RGBA8Unorm_sRGB(float red, float green, float blue, float alpha)
         : r(red)
         , g(green)

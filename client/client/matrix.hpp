@@ -17,14 +17,21 @@
 
 namespace wry {
     
-    // matrix is indexed (i, j) = (row, column)
-    // matrix is stored column major
+    // A matrix is indexed (i, j) = (row, column)
+    // and is stored column major
+    // p = i + stride * j;
     //
-    // image is indexed (x, y) = (column, row)
-    // image is stored row major
+    // An image is indexed (x, y) = (column, row)
+    // and is stored row major
+    // p = x + stride * y;
     //
-    // these objects differ only in our interpretation of the major and minor
+    // these objects differ only in our interpretation of the minor and major
     // indices
+    //
+    // our fundamental 2D array thus uses the neutral minor and major to
+    // describe its dimensions
+    //
+    // [i, j] ==> 0 <= i < minor, 0 <= j < major
     //
     // like wry::array, we support expansion along any dimension by
     // (ruinous) overallocation and amortization
@@ -43,8 +50,9 @@ namespace wry {
     template<typename T>
     struct matrix {
         
-        using size_type = std::size_t;
-        using difference_type = std::ptrdiff_t;
+        using element_type = T;
+        using size_type = size_type;
+        using difference_type = difference_type;
         using value_type = vector_view<T>;
         using iterator = minor_iterator<T>;
         using const_iterator = minor_iterator<const T>;
@@ -52,13 +60,25 @@ namespace wry {
         using const_reference = vector_view<const T>;
         
         stride_iterator<T> base;
-        size_t _minor;
-        size_t _major;
+        size_type _minor;
+        size_type _major;
         void* _allocation;
-        size_t _capacity;
-                
-        size_t bytes_per_row() const {
+        size_type _capacity;
+                   
+        size_type minor() const { return _minor; }
+        
+        size_type major() const { return _major; }
+        
+        size_type stride_in_bytes() const {
             return base._stride;
+        }
+        
+        size_type size_in_bytes() const {
+            return _minor * _major * sizeof(T);
+        }
+        
+        size_type size() const {
+            return _minor;
         }
         
         matrix()
@@ -77,6 +97,7 @@ namespace wry {
             _allocation = operator new(_capacity);
             assert(_allocation);
             base.base = static_cast<T*>(_allocation);
+            std::uninitialized_value_construct_n(base.base, _minor * _major);
         }
         
         matrix(const matrix& other)
@@ -114,13 +135,7 @@ namespace wry {
             wry::copy(std::begin(other), std::end(other), begin(), end());
             return *this;
         }
-        
-        size_type get_major() const { return _major; }
-        size_type get_minor() const { return _minor; }
-        difference_type get_stride() const { return base._stride; }
-        
-        size_type size() const { return _minor; }
-        
+                
         iterator begin() const {
             return iterator(base, _major);
         }
@@ -151,6 +166,11 @@ namespace wry {
 
         const T& operator[](difference_type i, difference_type j) const {
             return (base + i).base[j];
+        }
+        
+        T* to(difference_type i, difference_type j) {
+            assert((0 <= i) && (i < _minor) && (0 <= j) && (j < _major));
+            return (base + i).base + j;
         }
         
         reference front() const { return reference(base._pointer, _major); }

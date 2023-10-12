@@ -275,13 +275,14 @@
                     break;
                 case NSLeftArrowFunctionKey:
                     if (!_model->_console.back().empty()) {
-                        auto ch = _model->_console.back().pop_back();
+                        auto ch = _model->_console.back().back();
+                        _model->_console.back().pop_back();
                         _model->_console.back().push_front(ch);
                     }
                     break;
                 case NSRightArrowFunctionKey:
                     if (!_model->_console.back().empty()) {
-                        auto ch = _model->_console.back().pop_front();
+                        auto ch = _model->_console.back().front_and_pop_front();
                         _model->_console.back().push_back(ch);
                     }
                     break;
@@ -344,10 +345,10 @@
 - (void) mouseMoved:(NSEvent *)event {
     NSPoint location_in_window = [event locationInWindow];
     NSPoint location_in_view = [_metalView convertPoint:location_in_window fromView:nil];
-    _model->_mouse.x = 2.0f * location_in_view.x / _metalView.frame.size.width - 1.0f;
-    _model->_mouse.y = 2.0f * location_in_view.y / _metalView.frame.size.height - 1.0f;
+    _model->_mouse.x = 2.0f * location_in_view.x / _metalView.bounds.size.width - 1.0f;
+    _model->_mouse.y = 2.0f * location_in_view.y / _metalView.bounds.size.height - 1.0f;
     
-    //NSLog(@"(%g, %g)", _model->_mouse.x, _model->_mouse.y);
+    //NSLog(@"(%g, %g)", _metalView.bounds.size.width, _metalView.bounds.size.height);
 }
 
 - (void) mouseEntered:(NSEvent *)event {}

@@ -54,20 +54,20 @@ namespace wry {
         // double k[5] = { 1.0 / 6.0, 4.0 / 6.0, 6.0 / 6.0, 4.0 / 6.0, 1.0 / 6.0 };
         // double k[5] = { 0, 0, 1, 0, 0 };
                 
-        matrix<float> a(x.get_minor() + 4, x.get_major() + 4);
-        matrix<R8Unorm> b(x.get_minor() + 4 + 4, x.get_major() + 4 + 4);
+        matrix<float> a(x.minor() + 4, x.major() + 4);
+        matrix<R8Unorm> b(x.minor() + 4 + 4, x.major() + 4 + 4);
         
         for (auto&& q : b)
             for (auto&& r : q)
                 r = 0.0f;
         
-        b.sub(4, 4, x.get_minor(), x.get_major()) = x;
+        b.sub(4, 4, x.minor(), x.major()) = x;
         
         
         
         // Compute offset filter
-        for (size_t i = 0; i != a.get_minor(); ++i) {
-            for (size_t j = 0; j != a.get_major(); ++j) {
+        for (size_t i = 0; i != a.minor(); ++i) {
+            for (size_t j = 0; j != a.major(); ++j) {
                 a[i, j] = 0.0f;
                 for (size_t u = 0; u != 5; ++u) {
                     for (size_t v = 0; v != 5; ++v) {
@@ -78,17 +78,17 @@ namespace wry {
         }
         
         // Blend with offset glyph alpha
-        for (size_t i = 0; i != x.get_minor(); ++i) {
-            for (size_t j = 0; j != x.get_major(); ++j) {
+        for (size_t i = 0; i != x.minor(); ++i) {
+            for (size_t j = 0; j != x.major(); ++j) {
                 float alpha = x(i, j);
                 (a[i + 0, j + 2] *= (1.0 - alpha)) += alpha;
             }
         }
         
         // Copy alpha into final result
-        matrix<RGBA8Unorm_sRGB> c(a.get_minor(), a.get_major());
-        for (size_t i = 0; i != c.get_minor(); ++i) {
-            for (size_t j = 0; j != c.get_major(); ++j) {
+        matrix<RGBA8Unorm_sRGB> c(a.minor(), a.major());
+        for (size_t i = 0; i != c.minor(); ++i) {
+            for (size_t j = 0; j != c.major(); ++j) {
                 c[i, j].r._ = 0;
                 c[i, j].g._ = 0;
                 c[i, j].b._ = 0;
@@ -97,8 +97,8 @@ namespace wry {
         }
         
         // Color is alpha to linear color to sRGB
-        for (size_t i = 0; i != x.get_minor(); ++i) {
-            for (size_t j = 0; j != x.get_major(); ++j) {
+        for (size_t i = 0; i != x.minor(); ++i) {
+            for (size_t j = 0; j != x.major(); ++j) {
                 uchar d = _multiply_alpha_table[x(i, j)._][255];
                 auto& p = c[i + 0, j + 2];
                 p.r._ = d;

@@ -21,6 +21,7 @@ namespace wry {
         // by default we iterate across the minor axis and yield a contiguous
         // view of the major axis
         
+        using element_type = std::decay_t<T>;
         using value_type = vector_view<T>;
         using size_type = std::size_t;
         using difference_type = std::ptrdiff_t;
@@ -58,8 +59,8 @@ namespace wry {
             return *this;
         }
         
-        size_type get_major() const { return _major; }
-        size_type get_minor() const { return _minor; }
+        size_type minor() const { return _minor; }
+        size_type major() const { return _major; }
         difference_type get_stride() const { return base._stride; }
         
         size_type size() const { return _minor; }

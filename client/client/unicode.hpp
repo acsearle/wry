@@ -102,6 +102,49 @@ namespace wry {
     
     namespace utf8 {
         
+        namespace hoehrmann {
+            
+            // Copyright (c) 2008-2010 Bjoern Hoehrmann <bjoern@hoehrmann.de>
+            // See http://bjoern.hoehrmann.de/utf-8/decoder/dfa/ for details.
+            
+            #define UTF8_ACCEPT 0
+            #define UTF8_REJECT 12
+            
+            static const uint8_t utf8d[] = {
+                // The first part of the table maps bytes to character classes that
+                // to reduce the size of the transition table and create bitmasks.
+                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,  9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+                7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+                8,8,2,2,2,2,2,2,2,2,2,2,2,2,2,2,  2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+                10,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3, 11,6,6,6,5,8,8,8,8,8,8,8,8,8,8,8,
+                
+                // The second part is a transition table that maps a combination
+                // of a state of the automaton and a character class to a state.
+                0,12,24,36,60,96,84,12,12,12,48,72, 12,12,12,12,12,12,12,12,12,12,12,12,
+                12, 0,12,12,12,12,12, 0,12, 0,12,12, 12,24,12,12,12,12,12,24,12,24,12,12,
+                12,12,12,12,12,12,12,24,12,12,12,12, 12,24,12,12,12,12,12,12,12,24,12,12,
+                12,12,12,12,12,12,12,36,12,36,12,12, 12,36,12,12,12,12,12,36,12,36,12,12,
+                12,36,12,12,12,12,12,12,12,12,12,12,
+            };
+            
+            uint32_t inline
+            decode(uint32_t* state, uint32_t* codep, uint32_t byte) {
+                uint32_t type = utf8d[byte];
+                
+                *codep = (*state != UTF8_ACCEPT) ?
+                (byte & 0x3fu) | (*codep << 6) :
+                (0xff >> type) & (byte);
+                
+                *state = utf8d[256 + *state + type];
+                return *state;
+            }
+            
+        } // namespace hoehrmann
+        
         inline constexpr char _isutf8_table[256] = {
             
             1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,
@@ -157,6 +200,8 @@ namespace wry {
         
         
         inline bool isvalid(auto v) {
+            
+            // replace me with simdutf?
             
             u32 u = 0;
             auto b = 0;
@@ -297,7 +342,7 @@ namespace wry {
         // precondition: p points to the beginning of a character
         inline char32_t decode_one(const char8_t*& p) {
             
-            // -- fast path --------------------------------------------------
+            // -- hot path ----------------------------------------------------
             
             char8_t c = *p++;
             if (!(c & 0x80))
@@ -383,6 +428,44 @@ namespace wry {
             char32_t operator*() const {
                 const char8_t* p = base;
                 return decode_one(p);
+            }
+            
+            // *--it
+            char32_t next();
+            
+            // *it++
+            char32_t prev() {
+                // parse UTF-8 backwards
+                char8_t b = *--base;
+                if ((b & 0x80) == 0x00) { // ascii
+                    return static_cast<char32_t>(b);
+                }
+                assert((b & 0xC0) == 0x80); // <-- else seq ended inside multibyte
+                char32_t c = b & 0x0000003F;
+                if ((b & 0xE) == 0xC0) { // 2leading
+                    c |= (b & 0x0000001F) << 6;
+                    // 0 0000 0000 0000 0111 1111
+                    // 0 0000 0000 0222 2211 1111
+                    // 0 0000 3333 2222 2211 1111
+                    // 4 4433 3333 2222 2211 1111
+                    assert(c & 0x00000780); // <-- else overlong
+                    return c;
+                }
+                assert((b & 0xC0) == 0x80);
+                c |= (b & 0x0000003F) << 6;
+                if ((b & 0xF0) == 0xE0) { // 3leading
+                    c |= (b & 0x0000000F) << 12;
+                    assert(c & 0x0000F800); // <-- else overlong
+                    assert((c & 0x0000D800) != 0x0000D800); // <-- else surrogate
+                    return c;
+                }
+                assert((b & 0xC0) == 0x80);
+                c |= (b & 0x0000003F) << 12;
+                assert((b & 0xF8) == 0xF0); // 4leading
+                c |= (b & 0x00000007) << 18;
+                assert(c & 0x001F0000); // <-- else overlong
+                assert(c <= 0x0010FFFF); // <-- else too large
+                return c;
             }
         
             auto operator<=>(const iterator& other) const = default;
@@ -611,9 +694,11 @@ namespace wry {
 // one state:
 
 // 0xxxxxxx    ASCII
+
 // 1000xxxx    4 byte overlong, not overflow
 // 100xxxxx    3 byte overlong, not surrogate
 // 101xxxxx    3 byte surrogate
+
 // 1100000x    2 byte overlong
 // 110xxxxx    2 byte
 // 11100000    3 byte possible overlong
@@ -624,6 +709,31 @@ namespace wry {
 // 11110100    4 byte possible overflow
 // 111111xx    Overflow
 // 11111xxx    Overflow
+
+// Allowed masks:
+
+// x1111111
+
+// 00xxxxx0 2overlong
+// 00x11111 2leading
+
+// 000xxxxx 3overlong
+// 000x11x1 3surrogate
+// 000x1111 3leading
+
+// 0000xxxx 4overlong
+// 0000x1xx
+// 0000x111 4leading
+
+// how far apart can we space these cases ?
+
+// 00000000
+// 0000
+// 00001111
+
+
+
+
 
 // allocate unique IDs to them that also work as AND masks
 // The known zeros are precious, we basically use them to tag the
@@ -659,6 +769,13 @@ namespace wry {
 // 0000xx11  4 byte ordinary
 // 0000x1xx  4 byte possible overflow
 // xxxxxxxx  Always errors
+
+// take two, use as masks for next state
+//
+// 11111111
+// 00111111
+// 00011111
+// 00001111
 
 
 

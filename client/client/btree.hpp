@@ -10,10 +10,10 @@
 
 #include <cassert>
 #include <cstring>
-
 #include <iostream> // ugh
 
 #include "algorithm.hpp"
+#include "memory.hpp"
 #include "stdint.hpp"
 #include "utility.hpp"
 

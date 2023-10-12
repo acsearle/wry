@@ -14,6 +14,8 @@
 
 #include "algorithm.hpp"
 #include "array_view.hpp"
+#include "maybe.hpp"
+#include "memory.hpp"
 #include "stddef.hpp"
 #include "utility.hpp"
 #include "with_capacity.hpp"
@@ -40,6 +42,9 @@ namespace wry {
     
     template<typename> 
     struct array;
+    
+    template<typename T>
+    using Array = array<T>;
     
     template<typename T>
     struct rank<array<T>> 
@@ -887,8 +892,8 @@ namespace wry {
         const array<byte>& bytes() const {
             return reinterpret_cast<const array<byte>&>(*this);
         }
-
-        template<typename U = T>
+                
+        template<typename U = Maybe<T>>
         array_view<U>& reinterpret_left_as() {
             return reinterpret_cast<array_view<U>&>(_allocation_begin);
         }
@@ -898,9 +903,17 @@ namespace wry {
             return reinterpret_cast<array_view<U>&>(_begin);
         }
 
-        template<typename U = T>
+        template<typename U = Maybe<T>>
         array_view<U>& reinterprret_right_as() {
             return reinterpret_cast<array_view<U>&>(_end);
+        }
+        
+        array_view<Maybe<T>> prolog() {
+            return reinterpret_cast<array_view<Maybe<T>>&>(_allocation_begin);
+        }
+
+        array_view<Maybe<T>> epilog() {
+            return reinterpret_cast<array_view<Maybe<T>>&>(_end);
         }
 
         

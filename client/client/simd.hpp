@@ -170,6 +170,13 @@ inline simd_float4x4 simd_matrix_scale(simd_float4 u) {
                        simd_make_float4(0.0f, 0.0f, 0.0f, u.w));
 }
 
+inline simd_float2 simd_floor(simd_float2 a) {
+    return simd_make_float2(floor(a.x), floor(a.y));
+}
+
+inline simd_float2 simd_ceil(simd_float2 a) {
+    return simd_make_float2(ceil(a.x), ceil(a.y));
+}
 
 
 typedef struct {

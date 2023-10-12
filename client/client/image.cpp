@@ -43,7 +43,7 @@ namespace wry {
         }
         a.format = PNG_FORMAT_RGBA;
         matrix<RGBA8Unorm_sRGB> result(a.height, a.width);
-        if (!png_image_finish_read(&a, nullptr, result.data(), (png_int_32) result.bytes_per_row(), nullptr)) {
+        if (!png_image_finish_read(&a, nullptr, result.data(), (png_int_32) result.stride_in_bytes(), nullptr)) {
             printf("png_image_finish_read -> \"%s\"\n", a.message);
             abort();
         }
@@ -52,9 +52,9 @@ namespace wry {
     }
     
     matrix<simd_float4> multiply_alpha(const matrix<RGBA8Unorm_sRGB>& source) {
-        matrix<simd_float4> result(source.get_minor(), source.get_major());
-        for (std::size_t i = 0; i != source.get_minor(); ++i) {
-            for (std::size_t j = 0; j != source.get_major(); ++j) {
+        matrix<simd_float4> result(source.minor(), source.major());
+        for (std::size_t i = 0; i != source.minor(); ++i) {
+            for (std::size_t j = 0; j != source.major(); ++j) {
                 const RGBA8Unorm_sRGB& x = source[i, j];
                 float alpha = x.a;
                 result[i, j] = simd_make_float4(x.r * alpha,
@@ -79,13 +79,13 @@ namespace wry {
     void to_png(const matrix<RGBA8Unorm_sRGB>& source, string_view filename) {
         png_image a = {};
         a.format = PNG_FORMAT_RGBA;
-        a.height = (png_uint_32) source.get_minor();
+        a.height = (png_uint_32) source.minor();
         a.version =  PNG_IMAGE_VERSION;
-        a.width = (png_uint_32) source.get_major();
+        a.width = (png_uint_32) source.major();
         array<char> c_str(filename.chars);
         c_str.push_back(0);
         png_image_write_to_file(&a, c_str.data(), 0, source.data(),
-                                (png_int_32) source.bytes_per_row(), nullptr);
+                                (png_int_32) source.stride_in_bytes(), nullptr);
         std::cout << a.message << std::endl;
         png_image_free(&a);
     }

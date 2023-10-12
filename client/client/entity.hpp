@@ -9,11 +9,28 @@
 #define entity_hpp
 
 #include "array.hpp"
+#include "sim.hpp"
 #include "utility.hpp"
-#include "simd.hpp"
+#include "string.hpp"
 
-namespace wry {
+namespace wry::sim {
     
+    // This is the base class of things with behavior
+    
+    // Replace uses of Coordinate with Tile pointers, since we primarily
+    // use them to look up the tiles
+
+    struct Entity {
+        
+        u64 _persistent_id = {}; // use this to lookup all cold data
+        
+        virtual ~Entity() = default;
+        
+        virtual void wake_location_locked(World&, Coordinate) = 0;
+        virtual void wake_location_changed(World&, Coordinate) = 0;
+        virtual void wake_time_elapsed(World&, Time) = 0;
+
+    }; // struct Entity
   
 };
 

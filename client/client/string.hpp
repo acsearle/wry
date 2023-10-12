@@ -18,7 +18,18 @@ namespace wry {
     
     // A string presents a UTF-8 array<char8_t> as a sequence of UTF-32 scalars
     //
-    // Support for c_str is dropped
+    // String, string_view, array<char8_t> and array_view<char8_t> all maintain
+    // valid UTF-8 strings.
+    //
+    // std::string::c_str is not worth the complication it induces; we make a
+    // copy where we are forced to deal with a zero-terminated string API such
+    // as libpng, rather than maintaining a one-past-the end zero character.
+    //
+    // We are forced to consume zero-terminated strings in the form of string
+    // literals, whose const char8_t[N] arrays include the zero.
+    //
+    // Practically speaking, we can probably just blanket ban zeros from
+    // appearing in the strings
             
     struct string {
                 
@@ -76,6 +87,17 @@ namespace wry {
                                           reinterpret_cast<const byte*>(chars.end()));
         }
 
+        char32_t front() {
+            assert(!empty());
+            return *begin();
+        }
+        
+        char32_t back() {
+            assert(!empty());
+            auto a = end();
+            return *--a;
+        }
+        
         void push_back(char8_t ch) {
             // we can only push back an isolated char8_t if it is a single byte
             // encoding
@@ -90,60 +112,76 @@ namespace wry {
             push_back(static_cast<char32_t>(ch));
         }
                 
-        void push_back(char32_t c) {
-            if (c < 0x80) {
-                chars.push_back(c);
-            } else if (c < 0x800) {
-                chars.push_back(0xC0 | ((c >>  6)       ));
-                chars.push_back(0x80 | ((c      ) & 0x3F));
-            } else if (c < 0x10000) {
-                chars.push_back(0xE0 | ((c >> 12)       ));
-                chars.push_back(0x80 | ((c >>  6) & 0x3F));
-                chars.push_back(0x80 | ((c      ) & 0x3F));
+        void push_back(char32_t ch) {
+            // todo: fixme / use common code
+            if (ch < 0x80) {
+                chars.push_back(ch);
+            } else if (ch < 0x800) {
+                chars.push_back(0xC0 | ((ch >>  6)       ));
+                chars.push_back(0x80 | ((ch      ) & 0x3F));
+            } else if (ch < 0x10000) {
+                chars.push_back(0xE0 | ((ch >> 12)       ));
+                chars.push_back(0x80 | ((ch >>  6) & 0x3F));
+                chars.push_back(0x80 | ((ch      ) & 0x3F));
             } else {
-                chars.push_back(0xF0 | ((c >> 18)       ));
-                chars.push_back(0x80 | ((c >> 12) & 0x3F));
-                chars.push_back(0x80 | ((c >>  6) & 0x3F));
-                chars.push_back(0x80 | ((c      ) & 0x3F));
+                assert(ch <= 0x10FFFF);
+                chars.push_back(0xF0 | ((ch >> 18)       ));
+                chars.push_back(0x80 | ((ch >> 12) & 0x3F));
+                chars.push_back(0x80 | ((ch >>  6) & 0x3F));
+                chars.push_back(0x80 | ((ch      ) & 0x3F));
+            }
+        }
+        
+        void push_front(char8_t ch) {
+            assert(!(ch & 0x80));
+            chars.push_front(ch);
+        }
+
+        void push_front(char16_t ch) {
+            assert(!utf16::issurrogate(ch));
+            push_front(static_cast<char32_t>(ch));
+        }
+        
+        void push_front(char32_t ch) {
+            // fixme: use common / better code
+            if (ch < 0x80) {
+                chars.push_front(ch);
+            } else if (ch < 0x800) {
+                chars.push_front(0x80 | ((ch      ) & 0x3F));
+                chars.push_front(0xC0 | ((ch >>  6)       ));
+            } else if (ch < 0x10000) {
+                chars.push_front(0x80 | ((ch      ) & 0x3F));
+                chars.push_front(0x80 | ((ch >>  6) & 0x3F));
+                chars.push_front(0xE0 | ((ch >> 12)       ));
+            } else {
+                assert (ch <= 0x10FFFF);
+                chars.push_front(0x80 | ((ch      ) & 0x3F));
+                chars.push_front(0x80 | ((ch >>  6) & 0x3F));
+                chars.push_front(0x80 | ((ch >> 12) & 0x3F));
+                chars.push_front(0xF0 | ((ch >> 18)       ));
             }
         }
 
-        void push_front(uint c) {
-            if (c < 0x80) {
-                chars.push_front(c);
-            } else if (c < 0x800) {
-                chars.push_front(0x80 | ((c      ) & 0x3F));
-                chars.push_front(0xC0 | ((c >>  6)       ));
-            } else if (c < 0x10000) {
-                chars.push_front(0x80 | ((c      ) & 0x3F));
-                chars.push_front(0x80 | ((c >>  6) & 0x3F));
-                chars.push_front(0xE0 | ((c >> 12)       ));
-            } else {
-                chars.push_back(0x80 | ((c      ) & 0x3F));
-                chars.push_back(0x80 | ((c >>  6) & 0x3F));
-                chars.push_back(0x80 | ((c >> 12) & 0x3F));
-                chars.push_back(0xF0 | ((c >> 18)       ));
-            }
+        void pop_back() {
+            assert(!empty());
+            --reinterpret_cast<iterator&>(chars._end);
+        }
+        
+        char32_t back_and_pop_back() {
+            assert(!empty());
+            return *--reinterpret_cast<iterator&>(chars._end);
+        }
+        
+        void pop_front() {
+            assert(!empty());
+            ++reinterpret_cast<iterator&>(chars._begin);
         }
 
-        char32_t pop_back() {
+        char32_t front_and_pop_front() {
             assert(!empty());
-            iterator e = end();
-            --e;
-            uint c = *e;
-            chars._end += (e.base - chars._end);
-            return c;
+            return  *reinterpret_cast<iterator&>(chars._begin)++;
         }
-        
-        char32_t pop_front() {
-            assert(!empty());
-            iterator b = begin();
-            uint c = *b;
-            ++b;
-            chars._begin += (b.base - chars._begin);
-            return c;
-        }
-        
+
         bool empty() const {
             return chars.empty();
         }

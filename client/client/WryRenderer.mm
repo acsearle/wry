@@ -24,6 +24,7 @@
 #include "platform.hpp"
 #include "obj.hpp"
 #include "json.hpp"
+#include "palette.hpp"
 #include "csv.hpp"
 
 @implementation WryRenderer
@@ -146,17 +147,17 @@
     MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
     descriptor.textureType = MTLTextureType2D;
     descriptor.pixelFormat = pixelFormat;
-    descriptor.width = image.get_major();
-    descriptor.height = image.get_minor();
+    descriptor.width = image.major();
+    descriptor.height = image.minor();
     descriptor.mipmapLevelCount = std::countr_zero(descriptor.width | descriptor.height);
     descriptor.storageMode = MTLStorageModeShared;
     descriptor.usage = MTLTextureUsageShaderRead;
     
     id<MTLTexture> texture = [_device newTextureWithDescriptor:descriptor];
-    [texture replaceRegion:MTLRegionMake2D(0, 0, image.get_major(), image.get_minor())
+    [texture replaceRegion:MTLRegionMake2D(0, 0, image.major(), image.minor())
                     mipmapLevel:0
                       withBytes:image.data()
-                    bytesPerRow:image.bytes_per_row()];
+                    bytesPerRow:image.stride_in_bytes()];
     texture.label = name;
     
     id<MTLCommandBuffer> buffer = [_commandQueue commandBuffer];
@@ -703,12 +704,15 @@
     
     id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
     
+    
+    simd_float4x4 model_transform_hack;
 
     {
         MeshInstanced i;
         i.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
         i.model_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
         i.model_transform.columns[3].z -= _model->_looking_at.y / 1024.0f;
+        model_transform_hack = i.model_transform;
         i.inverse_transpose_model_transform = simd_inverse(simd_transpose(i.model_transform));
         i.albedo = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
         // _instanced_things = [_device newBufferWithBytes:&i length:sizeof(i) options:MTLStorageModeShared];
@@ -723,9 +727,9 @@
     // raid model for data
     {
         auto tnow = _model->_world._tick;
-        const auto& machines = _model->_world._waiting_on_time;
+        const auto& entities = _model->_world._all_entities;
         
-        NSUInteger quad_count = 10 * 10 + machines.size() * 1000;
+        NSUInteger quad_count = entities.size() * 4 + 10 * 10 + 2;
         NSUInteger vertex_count = quad_count * 4;
         index_count = quad_count * 6;
         vertices = [_device newBufferWithLength:vertex_count * sizeof(MeshVertex) options:MTLStorageModeShared];
@@ -738,13 +742,24 @@
         v.bitangent = simd_make_float4(0.0f, 1.0f, 0.0f, 0.0f);
         v.normal = simd_make_float4(0.0f, 0.0f, -1.0f, 0.0f);
         uint k = 0;
-        for (auto [t, p] : machines) {
+        for (auto q : entities) {
+            
+            auto p = dynamic_cast<wry::sim::Machine*>(q); // ugh
+            if (!p)
+                continue;
             
             auto h = p->_heading;
-            auto x0 = simd_make_float4(p->_location.x, p->_location.y, 0.0, 1.0f);
-            auto x1 = simd_make_float4(p->_previous_location.x, p->_previous_location.y, 0.0, 1.0f);
+            auto x0 = simd_make_float4(p->_old_location.x, p->_old_location.y, 0.0, 1.0f);
+            auto x1 = simd_make_float4(p->_new_location.x, p->_new_location.y, 0.0, 1.0f);
             
-            simd_float4 location = simd_mix(x0, x1, (t - tnow) / 64.0f);
+            simd_float4 location;
+            if (tnow >= p->_new_time) {
+                location = x1;
+            } else {
+                location = simd_mix(x0, x1, float(tnow - p->_old_time) / float(p->_new_time - p->_old_time));
+            }
+            
+            //printf("%lld, %g\n", tnow, location.x);
             
             v.position = simd_make_float4(-0.5f, -0.5f, 0.0f, 0.0f) + location;
             v.coordinate = simd_make_float4(11.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
@@ -779,8 +794,8 @@
             
             for (int i = 0; i != p->_stack.size(); ++i) {
                 location.z -= 0.5;
-                Value value = p->_stack[i];
-                simd_float4 coordinate = simd_make_float4((value.data & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                wry::sim::Value value = p->_stack[i];
+                simd_float4 coordinate = simd_make_float4((value.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                 v.position = simd_make_float4(-0.5f, -0.5f, 0.0f, 0.0f) + location;
                 v.coordinate = simd_make_float4(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
                 *pv++ = v;
@@ -806,72 +821,7 @@
             
         }
         
-        
-        
-        for (auto p : _model->_world._waiting_on_locks) {
-            
-            auto h = p->_heading;
-            simd_float4 location = simd_make_float4(p->_location.x, p->_location.y, 0.0, 1.0f);
-            
-            v.position = simd_make_float4(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = simd_make_float4(11.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
-            *pv++ = v;
-            v.position = simd_make_float4(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = simd_make_float4(12.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
-            *pv++ = v;
-            v.position = simd_make_float4(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = simd_make_float4(12.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
-            *pv++ = v;
-            v.position = simd_make_float4(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = simd_make_float4(11.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
-            *pv++ = v;
-            
-            while (h--) {
-                wry::rotate_args_left(pv[-4].coordinate,
-                                      pv[-3].coordinate,
-                                      pv[-2].coordinate,
-                                      pv[-1].coordinate
-                                      );
-                
-            }
-            
-            *pi++ = k;
-            *pi++ = k;
-            *pi++ = k + 1;
-            *pi++ = k + 3;
-            *pi++ = k + 2;
-            *pi++ = k + 2;
-            
-            k += 4;
-            
-            for (int i = 0; i != p->_stack.size(); ++i) {
-                location.z -= 0.5;
-                Value value = p->_stack[i];
-                simd_float4 coordinate = simd_make_float4((value.data & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
-                v.position = simd_make_float4(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = simd_make_float4(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                *pv++ = v;
-                v.position = simd_make_float4(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = simd_make_float4(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                *pv++ = v;
-                v.position = simd_make_float4(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = simd_make_float4(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                *pv++ = v;
-                v.position = simd_make_float4(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = simd_make_float4(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                *pv++ = v;
-                *pi++ = k;
-                *pi++ = k;
-                *pi++ = k + 1;
-                *pi++ = k + 3;
-                *pi++ = k + 2;
-                *pi++ = k + 2;
-                
-                k += 4;
-            }
-            
-            
-        }
+              
         
         for (int i = -5; i != 5; ++i) {
             for (int j = -5; j != 5; ++j) {
@@ -880,7 +830,7 @@
                 simd_float4 coordinate = simd_make_float4(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
-                    i64 value = _model->_world.get({i, j}).data;
+                    i64 value = _model->_world.get({i, j}).value;
                     if (value) {
                         auto p = _opcode_to_coordinate.find(value);
                         if (p != _opcode_to_coordinate.end()) {
@@ -941,7 +891,7 @@
         
         {
             // mouse cursor thing
-            simd_float4 location = _model->_mouse4.xzyw;
+            simd_float4 location = _model->_mouse4;
             //location.x = round(location.x);
             //location.y = round(location.y);
             simd_float4 coordinate = simd_make_float4(3.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f);
@@ -1094,7 +1044,7 @@
             
             {
                 // rotate eye location to -Z
-                float4 origin = simd_make_float4(0.0f, 8.0, -4.0f, 1.0f);
+                float4 origin = simd_make_float4(0.0f, 16.0, -8.0f, 1.0f);
                 quatf q = simd_quaternion(simd_normalize(origin.xyz),
                                           simd_make_float3(0.0, 0.0, -1.0));
                 float4x4 A = simd_matrix4x4(q);
@@ -1116,6 +1066,7 @@
   
                 //     float4 position = float4(in.direction * depth, 0) + uniforms.origin;
 
+                /*
                 {
                     simd_float4 direction = uniforms.inverse_view_transform
                         * simd_make_float4(_model->_mouse.x, _model->_mouse.y, 1.0f, 0.0f);
@@ -1128,9 +1079,14 @@
                     _model->_mouse4.z += _model->_looking_at.y / 1024.0f;
 
                     //NSLog(@"%f %f %f\n", _model->_mouse4.x, _model->_mouse4.y, _model->_mouse4.z);
-
-                    
-                    
+                }
+                 */
+                
+                {
+                    simd_float4x4 A = simd_mul(VP, model_transform_hack);
+                    _model->_mouse4 = simd_make_float4(project_mouse_ray(A, _model->_mouse),
+                                                            0.0f,
+                                                            1.0f);
                 }
 
                 

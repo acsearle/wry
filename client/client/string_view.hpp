@@ -80,6 +80,7 @@ namespace wry {
         template<size_type N>
         string_view(char (&literal)[N])
         : string_view(reinterpret_cast<const char8_t*>(literal), N - 1) {
+            assert(*chars._end == 0);
             if (!_invariant())
                 throw EINVAL;
         }
@@ -87,7 +88,8 @@ namespace wry {
         // validating strlen
         string_view(const char* p)
         : string_view(reinterpret_cast<const char8_t*>(p),
-                      strlen(p)) {
+                      strlen(p)) { // <-- validating strlen?
+            assert(_invariant());
         }
         
         string_view(const char* p, size_type n)

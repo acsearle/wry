@@ -8,10 +8,106 @@
 #ifndef world_hpp
 #define world_hpp
 
-#include "simd.hpp"
+#include <map>
 
-#include "utility.hpp"
+#include "sim.hpp"
+#include "simd.hpp"
 #include "table.hpp"
+#include "tile.hpp"
+#include "utility.hpp"
+
+namespace wry::sim {
+    
+    struct World {
+        
+        Time _tick = 0;
+        table<Coordinate, Tile> _tiles;
+        
+        array<Entity*> _all_entities;
+        
+        std::multimap<Time, Entity*> _waiting_on_time;
+        array<std::pair<Coordinate, Entity*>> _location_locked;
+        array<std::pair<Coordinate, Entity*>> _location_changed;
+        
+        
+        // tiles are now to complicated for this to be useful
+        Value get(Coordinate xy) {
+            return _tiles[xy]._value;
+        }
+        
+        void set(Coordinate xy, Value value) {
+            _tiles[xy]._value = value;
+        }
+        
+        void step() {
+            
+            ++_tick;
+            
+            auto zz = std::move(_location_locked);
+            for (auto [xy, p] : zz) {
+                //printf("%d %d\n", xy.x, xy.y);
+                p->wake_location_locked(*this, xy);
+            }
+            
+            for (;;) {
+                auto p = _waiting_on_time.begin();
+                if (p == _waiting_on_time.end())
+                    break;
+                assert(p->first >= _tick);
+                if (p->first != _tick)
+                    break;
+                Entity* q = p->second;
+                _waiting_on_time.erase(p);
+                // assert(q);
+                q->wake_time_elapsed(*this, _tick);
+                // q->step(*this);
+                // q may reschedule itself at some later time
+                // which invalidates the iterator for some containers
+            }
+            
+            
+                        
+        }
+        
+    };
+    
+    
+    inline void Tile::unlock(World& w, Entity* p, Coordinate self) {
+        
+        // we are executing, so we should be the first lock in the queue
+        
+        // assert(!_lock_queue.empty());
+        if (_lock_queue.empty())
+            return;
+                
+        // remove ourself from the queue
+        // we should occur exactly once at front
+        
+        // assert(_lock_queue.front() == p);
+        if (_lock_queue.front() != p) {
+            _lock_queue.erase(std::remove_if(_lock_queue.begin(), _lock_queue.end(), [=](auto&& x) {
+                return x == p;
+            }), _lock_queue.end());
+            return;
+        }
+        _lock_queue.pop_front();
+        
+        // notify the new front of the queue to run next cycle
+        if (_lock_queue.empty())
+            return;
+        p = _lock_queue.front();
+        w._location_locked.emplace_back(self, p);
+    }
+    
+    inline void Tile::notify_all(World& w, Coordinate self) {
+        while (!_wait_queue.empty()) {
+            Entity* p = _wait_queue.front();
+            _wait_queue.pop_front();
+            w._location_changed.emplace_back(self, p);
+        }
+    }
+    
+} // namespace wry::sim
 
 /*
  

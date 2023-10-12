@@ -8,13 +8,12 @@
 #ifndef table_hpp
 #define table_hpp
 
-#include <cassert>
-#include <compare>
-#include <cstdint>
-#include <map>
-
-#include "with_capacity.hpp"
+#include "assert.hpp"
+#include "algorithm.hpp"
 #include "hash.hpp"
+#include "memory.hpp"
+#include "stdint.hpp"
+#include "with_capacity.hpp"
 
 namespace wry {
     
