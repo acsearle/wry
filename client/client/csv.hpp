@@ -8,8 +8,8 @@
 #ifndef csv_hpp
 #define csv_hpp
 
+#include "deserialize.hpp"
 #include "parse.hpp"
-#include "Option.hpp"
 
 namespace wry::csv::de {
     

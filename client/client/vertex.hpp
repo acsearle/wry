@@ -26,6 +26,7 @@ namespace wry {
         RGBA8Unorm_sRGB color; // 4
         static void bind();
         
+        vertex() = default;
         vertex(subvertex s, RGBA8Unorm_sRGB c)
         : v(s)
         , color(c) {

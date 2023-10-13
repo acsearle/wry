@@ -361,7 +361,15 @@
     // NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
     
 }
-- (void) mouseUp:(NSEvent *)event {}
+
+- (void) mouseUp:(NSEvent *)event {
+    NSPoint location_in_window = [event locationInWindow];
+    NSPoint location_in_view = [_metalView convertPoint:location_in_window fromView:nil];
+    _model->_mouse.x = 2.0f * location_in_view.x / _metalView.bounds.size.width - 1.0f;
+    _model->_mouse.y = 2.0f * location_in_view.y / _metalView.bounds.size.height - 1.0f;
+    _model->_outstanding_click = true;
+}
+
 - (void) rightMouseDown:(NSEvent *)event {}
 - (void) rightMouseDragged:(NSEvent *)event {}
 - (void) rightMouseUp:(NSEvent *)event {}

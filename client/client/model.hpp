@@ -43,6 +43,12 @@ namespace wry {
         bool _show_jacobian = false;
         bool _show_points = false;
         bool _show_wireframe = false;
+        
+        bool _outstanding_click = false;
+        sim::Value _holding_value = {};
+        difference_type _selected_i = -1;
+        difference_type _selected_j = -1;
+
 
         simd_float2 _looking_at = {};
         simd_float2 _mouse = {};

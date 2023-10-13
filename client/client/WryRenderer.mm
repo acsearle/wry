@@ -18,14 +18,14 @@
 #include "WryRenderer.h"
 
 #include "atlas.hpp"
+#include "csv.hpp"
 #include "debug.hpp"
 #include "font.hpp"
-#include "mesh.hpp"
-#include "platform.hpp"
-#include "obj.hpp"
 #include "json.hpp"
+#include "mesh.hpp"
+#include "obj.hpp"
 #include "palette.hpp"
-#include "csv.hpp"
+#include "platform.hpp"
 
 @implementation WryRenderer
 {
@@ -43,11 +43,11 @@
             
     id<MTLBuffer> _screenTriangleStripVertexBuffer;
     id<MTLCommandQueue> _commandQueue;
-    id<MTLDepthStencilState> _enabledDepthStencilState;
     id<MTLDepthStencilState> _disabledDepthStencilState;
+    id<MTLDepthStencilState> _enabledDepthStencilState;
     id<MTLDevice> _device;
     id<MTLLibrary> _library;
-        
+    
     // shadow map pass
     
     id<MTLRenderPipelineState> _shadowMapRenderPipelineState;
@@ -98,6 +98,10 @@
     id<MTLTexture> _darkgray;
     
     wry::table<ulong, simd_float4> _opcode_to_coordinate;
+    
+    // controls
+    
+    wry::Palette<wry::sim::Value> _controls;
 
 }
 
@@ -590,6 +594,25 @@
             } catch (...) {
             }
 
+            _controls._payload = wry::matrix<wry::sim::Value>(20, 2);
+            
+            i64 j = 0;
+            for (i64 i = 0; i != _name_to_opcode.size(); ++i) {
+                if (_opcode_to_coordinate.contains(i)) {
+                    _controls._payload[j % 20, j / 20] = wry::sim::Value{wry::sim::DISCRIMINANT_OPCODE, i};
+                    ++j;
+                } else {
+                    printf("not found %lld\n", i);
+                }
+            }
+            
+            printf("%lld\n", j);
+            
+            _controls._transform
+            = simd_matrix_translate(simd_make_float3(0.0f, +0.5f, 0.5f))
+            * simd_matrix_scale(1.0f / 16.0f)
+            * simd_matrix_translate(simd_make_float3(-10.0f, -1.0f, 0.0f));
+            
         }
         
     }
@@ -601,9 +624,147 @@
 
 
 - (void) drawOverlay:(id<MTLRenderCommandEncoder>)encoder {
-    
-    [encoder setRenderPipelineState:_overlayRenderPipelineState];
+
     MyUniforms uniforms;
+
+    [encoder setRenderPipelineState:_overlayRenderPipelineState];
+    
+    {
+        using namespace wry;
+        using namespace wry::sim;
+
+        // render Palettes
+        
+        uniforms.position_transform = simd_mul(matrix_float4x4{{
+            {1.0f, 0.0f, 0.0f},
+            {0.0f, -_viewport_size.x / _viewport_size.y, 0.0f, 0.0f},
+            { 0.0f, 0.0f, 1.0f, 0.0f },
+            {0.0f, 0.0f, 0.0f, 1.0f},
+        }}, _controls._transform);
+        
+        wry::array<wry::vertex> v;
+        
+        simd_float4 b = simd_make_float4(_model->_mouse, 0.0f, 1.0f);
+        simd_float2 mmm = project_screen_ray(uniforms.position_transform, b);
+        auto& m = _controls._payload;
+
+        if (_model->_outstanding_click) {
+            
+            difference_type i = floor(mmm.x);
+            difference_type j = floor(mmm.y);
+            
+            if ((0 <= i) && (i < m.minor()) && (0 <= j) && (j < m.minor())) {
+                // we have clicked on the palette
+                _model->_selected_i = i;
+                _model->_selected_j = j;
+                _model->_holding_value = m[i, j];
+            } else {
+                // we clicked outside the palette
+                int i = round(_model->_mouse4.x);
+                int j = round(_model->_mouse4.y);
+                _model->_world._tiles[Coordinate{i, j}]._value = _model->_holding_value;
+            }
+            _model->_outstanding_click = false;
+            
+        }
+        
+            
+        for (difference_type j = 0; j != m.major(); ++j) {
+            for (difference_type i = 0; i != m.minor(); ++i) {
+                Value a = m[i, j];
+                if (a.discriminant == DISCRIMINANT_OPCODE) {
+
+                    vertex c;
+
+                    simd_float4 position = simd_make_float4(i, j, 0, 1);
+                    simd_float2 texCoord; 
+                    
+                    c.color = RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.875f);
+                    texCoord = simd_make_float2(9, 9) / 32.0f;
+                    
+                    if ((floor(mmm.x) == i) && floor(mmm.y) == j) {
+                        c.color.g.write(0.5f);
+                    }
+                    
+                    if ((_model->_selected_i == i) && _model->_selected_j == j) {
+                        c.color.r.write(0.5f);
+                    }
+
+                    
+                    c.v.position = simd_make_float4(0, 0, 0, 0) + position;
+                    c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
+                    v.push_back(c);
+                    
+                    c.v.position = simd_make_float4(1, 0, 0, 0) + position;
+                    c.v.texCoord = simd_make_float2(1, 0) / 32.0f + texCoord;
+                    v.push_back(c);
+                    
+                    c.v.position = simd_make_float4(1, 1, 0, 0) + position;
+                    c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
+                    v.push_back(c);
+                    
+                    c.v.position = simd_make_float4(0, 0, 0, 0) + position;
+                    c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
+                    v.push_back(c);
+                    
+                    c.v.position = simd_make_float4(1, 1, 0, 0) + position;
+                    c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
+                    v.push_back(c);
+                    
+                    c.v.position = simd_make_float4(0, 1, 0, 0) + position;
+                    c.v.texCoord = simd_make_float2(0, 1) / 32.0f + texCoord;
+                    v.push_back(c);
+                    
+                    texCoord = _opcode_to_coordinate[a.value].xy;
+                    c.color = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f);
+
+                    c.v.position = simd_make_float4(0, 0, 0, 0) + position;
+                    c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
+                    v.push_back(c);
+
+                    c.v.position = simd_make_float4(1, 0, 0, 0) + position;
+                    c.v.texCoord = simd_make_float2(1, 0) / 32.0f + texCoord;
+                    v.push_back(c);
+
+                    c.v.position = simd_make_float4(1, 1, 0, 0) + position;
+                    c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
+                    v.push_back(c);
+
+                    c.v.position = simd_make_float4(0, 0, 0, 0) + position;
+                    c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
+                    v.push_back(c);
+
+                    c.v.position = simd_make_float4(1, 1, 0, 0) + position;
+                    c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
+                    v.push_back(c);
+
+                    c.v.position = simd_make_float4(0, 1, 0, 0) + position;
+                    c.v.texCoord = simd_make_float2(0, 1) / 32.0f + texCoord;
+                    v.push_back(c);
+                }
+            }
+        }
+        
+        id<MTLBuffer> vb = [_device newBufferWithLength:v.size_in_bytes() options:MTLStorageModeShared];
+        memcpy(vb.contents, v.data(), v.size_in_bytes());
+        
+        
+        [encoder setVertexBytes:&uniforms
+                         length:sizeof(uniforms)
+                        atIndex:AAPLBufferIndexUniforms ];
+        [encoder setVertexBuffer:vb
+                          offset:0
+                         atIndex:AAPLBufferIndexVertices];
+        [encoder setFragmentTexture:_symbols
+                            atIndex:AAPLTextureIndexColor];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                    vertexStart:0
+                    vertexCount:v.size()];
+        
+        
+    }
+    
+    
     uniforms.position_transform = matrix_float4x4{{
         {2.0f / _viewport_size.x, 0.0f, 0.0f},
         {0.0f, -2.0f / _viewport_size.y, 0.0f, 0.0f},
@@ -682,6 +843,9 @@
         }
     }
     _atlas->commit(encoder);
+    
+    
+    
 }
 
 
@@ -705,21 +869,16 @@
     id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
     
     
-    simd_float4x4 model_transform_hack;
-
-    {
-        MeshInstanced i;
-        i.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
-        i.model_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
-        i.model_transform.columns[3].z -= _model->_looking_at.y / 1024.0f;
-        model_transform_hack = i.model_transform;
-        i.inverse_transpose_model_transform = simd_inverse(simd_transpose(i.model_transform));
-        i.albedo = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
-        // _instanced_things = [_device newBufferWithBytes:&i length:sizeof(i) options:MTLStorageModeShared];
-        memcpy([_instanced_things contents], &i, sizeof(i));
-    }
-    
     MeshUniforms uniforms = {};
+    MeshInstanced mesh_instanced_things = {};
+    
+    mesh_instanced_things.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
+    mesh_instanced_things.model_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
+    mesh_instanced_things.model_transform.columns[3].z -= _model->_looking_at.y / 1024.0f;
+    mesh_instanced_things.inverse_transpose_model_transform = simd_inverse(simd_transpose(mesh_instanced_things.model_transform));
+    mesh_instanced_things.albedo = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+    memcpy([_instanced_things contents], &mesh_instanced_things, sizeof(mesh_instanced_things));
+    
     
     id<MTLBuffer> vertices = nil;
     id<MTLBuffer> indices = nil;
@@ -748,7 +907,7 @@
             if (!p)
                 continue;
             
-            auto h = p->_heading;
+            auto h = p->_heading & 3;
             auto x0 = simd_make_float4(p->_old_location.x, p->_old_location.y, 0.0, 1.0f);
             auto x1 = simd_make_float4(p->_new_location.x, p->_new_location.y, 0.0, 1.0f);
             
@@ -1083,10 +1242,12 @@
                  */
                 
                 {
-                    simd_float4x4 A = simd_mul(VP, model_transform_hack);
-                    _model->_mouse4 = simd_make_float4(project_mouse_ray(A, _model->_mouse),
-                                                            0.0f,
-                                                            1.0f);
+                    simd_float4x4 A = simd_mul(VP, mesh_instanced_things.model_transform);
+                    simd_float4 b = simd_make_float4(_model->_mouse, 0.0f, 1.0f);
+                    _model->_mouse4 = simd_make_float4(project_screen_ray(A, b), 0.0f, 1.0f);
+                    // b now contains the screen space coordinates of the
+                    // intersection, aka b.z is now the depth
+                    assert((0.0f <= b.z) && (b.z <= 1.0f));
                 }
 
                 

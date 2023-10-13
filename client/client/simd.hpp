@@ -178,11 +178,50 @@ inline simd_float2 simd_ceil(simd_float2 a) {
     return simd_make_float2(ceil(a.x), ceil(a.y));
 }
 
+inline simd_float2 project_screen_ray(const simd_float4x4& A, simd_float4& b) {
+    
+    // Project the mouse ray with z the unknown ray parameter onto the XY
+    // plane
+    //
+    //     A [s t 0 u]^T = [x y z 1]^T
+    //
+    // We want the plane parametric coordinates (s/u, t/u)
+    
+    // For unknowns s,t, u and z, rearrange the equation:
+    //
+    // [ a00 a01  0 a03 ] [ s ]   [ x ]
+    // [ a10 a11  0 a13 ] [ t ] = [ y ]
+    // [ a20 a21 -1 a23 ] [ z ]   [ 0 ]
+    // [ a30 a31  0 a33 ] [ u ]   [ 1 ]
+    
+    simd_float4x4 B = simd_matrix(A.columns[0],
+                                  A.columns[1],
+                                  simd_make_float4(0.0f, 0.0f, -1.0f, 0.0f),
+                                  A.columns[3]);
+    
+    // Multiplication inverse is generally a poor way to solve linear
+    // equations; is this small, modest accuracy case OK?
+    
+    simd_float4x4 C = simd_inverse(B);
+    simd_float4 d = simd_mul(C, simd_make_float4(b.xy, 0.0f, b.w));
+    b.z = d.z;
+    
+    return d.xy / d.w;
+}
+
+
+inline simd_float2 project_screen_ray(const simd_float4x4& A, const simd_float4& b) {
+    simd_float4 c = b;
+    return project_screen_ray(A, c);
+}
 
 typedef struct {
     
     simd_double4x4 slices[4];
     
 } simd_double4x4x4;
+
+
+
 
 #endif /* simd_hpp */

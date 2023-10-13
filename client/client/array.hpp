@@ -255,7 +255,8 @@ namespace wry {
         }
 
         size_type size() const { return _end - _begin; }
-        
+        size_type size_in_bytes() const { return size() * sizeof(T); }
+
         size_type max_size() const {
             return std::numeric_limits<std::ptrdiff_t>::max();
         }

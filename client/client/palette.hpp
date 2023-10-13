@@ -24,32 +24,6 @@ namespace wry {
         return v.to(i, j);
     }
     
-    inline simd_float2 project_mouse_ray(simd_float4x4 A, simd_float2 b) {
-        
-        // Project the mouse ray with z the unknown ray parameter onto the XY
-        // plane
-        //
-        //     A [s t 0 u]^T = [x y z 1]^T
-        //
-        // We want the plane parametric coordinates (s/u, t/u)
-        
-        // For unknowns s,t, u and z, rearrange the equation:
-        //
-        // [ a00 a01  0 a03 ] [ s ]   [ x ]
-        // [ a10 a11  0 a13 ] [ t ] = [ y ]
-        // [ a20 a21 -1 a23 ] [ z ]   [ 0 ]
-        // [ a30 a31  0 a33 ] [ u ]   [ 1 ]
-        
-        simd_float4x4 B = simd_matrix(A.columns[0],
-                                      A.columns[1],
-                                      simd_make_float4(0.0f, 0.0f, -1.0f, 0.0f),
-                                      A.columns[3]);
-        simd_float4x4 C = simd_inverse(B);
-        simd_float4 d = simd_mul(C, simd_make_float4(b, 0.0f, 1.0f));
-        // printf("d.z = %g\n", d.z);
-        return d.xy / d.w;
-    }
-    
     template<typename T>
     struct Palette {
         
@@ -59,14 +33,14 @@ namespace wry {
         
         // intersect mouse ray with Palette
         // mouse ray is (u, v, ?, 1)
-        std::optional<simd_float2> intersect(simd_float4 ray) {
+        std::optional<simd_float2> intersect(simd_float4 screen_ray) {
             
             // the Palette is drawn with the transform
             
             // xy / w = MVP . uv01;
             // z and w unknown
             
-            simd_float4 a = simd_mul(_inverse_transform, ray);
+            simd_float4 a = simd_mul(_inverse_transform, screen_ray);
             
             return a.xy / a.w;
             
@@ -82,7 +56,7 @@ namespace wry {
                 return nullptr;
             return matrix_lookup(*a);
         }
-        
+                
     };
     
 } // namespace wry
