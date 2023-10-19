@@ -42,6 +42,7 @@
     if ((self = [super init])) {
         _audio_engine = [[AVAudioEngine alloc] init];
         _audio_environment = [[AVAudioEnvironmentNode alloc] init];
+        _audio_environment.position = AVAudioMake3DPoint(0.0f, 0.0f, 1.0f);
         [_audio_engine attachNode:_audio_environment];
         [_audio_engine connect:_audio_environment
                             to:_audio_engine.mainMixerNode format:nil];

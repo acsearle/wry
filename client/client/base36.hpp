@@ -10,10 +10,6 @@
 
 namespace wry {
     
-    // alnum digits up to 36, notably including binary, octal, decimal, hex
-    // as subsets; invalid characters are marked as 64; for a given base,
-    // invalid characters are marked as
-    
     namespace base36 {
         
         inline constexpr char to_base36lower_table[37] =

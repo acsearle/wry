@@ -34,6 +34,8 @@
     
     std::shared_ptr<wry::model> _model;
     
+    
+    
     MTLPixelFormat _drawablePixelFormat;
 
     // view-only state
@@ -852,32 +854,79 @@
 // - (void)renderToMetalLayer:(nonnull CAMetalLayer*)metalLayer
 - (void)renderToMetalLayer:(nonnull CAMetalDisplayLinkUpdate*)update
 {
-    // NSLog(@"%s\n", __PRETTY_FUNCTION__);
-
     using namespace ::simd;
     using namespace ::wry;
 
-    //[_captureScope beginScope];
-    
-    
     _model->_world.step();
-    
-    // printf("%lx\n", _model->_world._waiting_on_time.begin()->second->_location);
-    
-    
     
     id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
     
-    
+
+    // Construct camera transforms
     MeshUniforms uniforms = {};
-    MeshInstanced mesh_instanced_things = {};
+    MeshUniforms shadowMapUniforms = {};
+    {
+        // rotate eye location to -Z
+        float4 origin = simd_make_float4(0.0f, 16.0, -8.0f, 1.0f);
+        quatf q = simd_quaternion(simd_normalize(origin.xyz),
+                                  simd_make_float3(0.0, 0.0, -1.0));
+        float4x4 A = simd_matrix4x4(q);
+        float4x4 B = simd_matrix_translate(simd_make_float3(0.0f, 0.0f, simd_length(origin.xyz)));
+        float aspect_ratio =  _viewport_size.x / _viewport_size.y;
+        float4x4 C = simd_matrix_scale(simd_make_float3(2.0f, 2.0f * aspect_ratio, 1.0f));
+        float4x4 V = C * B * A;
+        float4x4 iV = inverse(V);
+        float4x4 P = matrix_perspective_float4x4;
+        float4x4 VP = P * V;
+        float4x4 iVP = inverse(VP);
+        
+        uniforms.origin = origin;
+        uniforms.view_transform = V;
+        uniforms.inverse_view_transform = iV;
+        uniforms.viewprojection_transform = VP;
+        uniforms.inverse_viewprojection_transform = iVP;
+    }
     
-    mesh_instanced_things.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
-    mesh_instanced_things.model_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
-    mesh_instanced_things.model_transform.columns[3].z -= _model->_looking_at.y / 1024.0f;
-    mesh_instanced_things.inverse_transpose_model_transform = simd_inverse(simd_transpose(mesh_instanced_things.model_transform));
-    mesh_instanced_things.albedo = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
-    memcpy([_instanced_things contents], &mesh_instanced_things, sizeof(mesh_instanced_things));
+    // Construct ground plane transforms
+    MeshInstanced mesh_instanced_things = {};
+
+    {
+        mesh_instanced_things.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
+        mesh_instanced_things.model_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
+        mesh_instanced_things.model_transform.columns[3].z -= _model->_looking_at.y / 1024.0f;
+        mesh_instanced_things.inverse_transpose_model_transform = simd_inverse(simd_transpose(mesh_instanced_things.model_transform));
+        mesh_instanced_things.albedo = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+        memcpy([_instanced_things contents], &mesh_instanced_things, sizeof(mesh_instanced_things));
+    }
+    
+    // Project things onto ground plane
+    rect<i32> grid_bounds;
+    {
+        simd_float4x4 A = simd_mul(uniforms.viewprojection_transform,
+                                   mesh_instanced_things.model_transform);
+        
+        // Mouse
+        simd_float4 b = simd_make_float4(_model->_mouse, 0.0f, 1.0f);
+        _model->_mouse4 = simd_make_float4(project_screen_ray(A, b), 0.0f, 1.0f);
+        // b now contains the screen space coordinates of the
+        // intersection, aka b.z is now the depth
+        assert((0.0f <= b.z) && (b.z <= 1.0f));
+        
+        // Screen corners
+        simd_float4x2 c = project_screen_frustum(A);
+        rect<float> uv(c.columns[0], c.columns[0]);
+        for (int i = 1; i != 4; ++i) {
+            uv.a = simd_min(uv.a, c.columns[i]);
+            uv.b = simd_max(uv.b, c.columns[i]);
+        }
+        grid_bounds.a = simd_make_int2(floor(uv.a.x), floor(uv.a.y));
+        grid_bounds.b = simd_make_int2(ceil(uv.b.x) + 1, ceil(uv.b.y) + 1);
+        
+    }
+    
+    
+    
+    
     
     
     id<MTLBuffer> vertices = nil;
@@ -888,7 +937,7 @@
         auto tnow = _model->_world._tick;
         const auto& entities = _model->_world._all_entities;
         
-        NSUInteger quad_count = entities.size() * 4 + 10 * 10 + 2;
+        NSUInteger quad_count = entities.size() * 4 + 1000 + 2;
         NSUInteger vertex_count = quad_count * 4;
         index_count = quad_count * 6;
         vertices = [_device newBufferWithLength:vertex_count * sizeof(MeshVertex) options:MTLStorageModeShared];
@@ -908,8 +957,8 @@
                 continue;
             
             auto h = p->_heading & 3;
-            auto x0 = simd_make_float4(p->_old_location.x, p->_old_location.y, 0.0, 1.0f);
-            auto x1 = simd_make_float4(p->_new_location.x, p->_new_location.y, 0.0, 1.0f);
+            auto x0 = simd_make_float4(p->_old_location.x, p->_old_location.y, -0.2, 1.0f);
+            auto x1 = simd_make_float4(p->_new_location.x, p->_new_location.y, -0.2, 1.0f);
             
             simd_float4 location;
             if (tnow >= p->_new_time) {
@@ -982,10 +1031,10 @@
         
               
         
-        for (int i = -5; i != 5; ++i) {
-            for (int j = -5; j != 5; ++j) {
+        for (int i = grid_bounds.a.x; i != grid_bounds.b.x; ++i) {
+            for (int j = grid_bounds.a.y; j != grid_bounds.b.y; ++j) {
 
-                simd_float4 location = simd_make_float4(i, j, 0.5f, 1.0f);
+                simd_float4 location = simd_make_float4(i, j, -0.1f, 1.0f);
                 simd_float4 coordinate = simd_make_float4(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
@@ -1028,13 +1077,13 @@
             // big ground plane
             
             v.coordinate = simd_make_float4(3.0 / 32.0f, 4.5f / 32.0f, 0.0f, 1.0f);
-            v.position = simd_make_float4(-5.0f, -5.0f, 0.52, 1.0f);
+            v.position = simd_make_float4(grid_bounds.a.x - 1, grid_bounds.a.y - 1, 0.0, 1.0f);
             *pv++ = v;
-            v.position = simd_make_float4(+5.0f, -5.0f, 0.52, 1.0f);
+            v.position = simd_make_float4(grid_bounds.b.x, grid_bounds.a.y - 1, 0.0, 1.0f);
             *pv++ = v;
-            v.position = simd_make_float4(+5.0f, +5.0f, 0.52, 1.0f);
+            v.position = simd_make_float4(grid_bounds.b.x, grid_bounds.b.y, 0.0, 1.0f);
             *pv++ = v;
-            v.position = simd_make_float4(-5.0f, +5.0f, 0.52, 1.0f);
+            v.position = simd_make_float4(grid_bounds.a.x - 1, grid_bounds.b.y, 0.0, 1.0f);
             *pv++ = v;
             
             *pi++ = k;
@@ -1104,43 +1153,60 @@
         id<MTLRenderCommandEncoder> render_command_encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
         
         // shadow map parameters
-        
-        float light_radius = 8.0;
+
         simd_float3 light_direction = simd_normalize(simd_make_float3(2, 3, 1));
+
+        // conventional projection:
+        //float light_radius = 12.0;
         
-        simd_quatf q = simd_quaternion(light_direction, simd_make_float3(0, 0, -1));
-        float4x4 A = simd_matrix4x4(q);
-        float4x4 B = simd_matrix_scale(simd_make_float3(1.0f, 1.0f, 0.5f) / light_radius);
-        float4x4 C = simd_matrix_translate(simd_make_float3(0.0f, 0.0f, 0.5f));
+        //simd_quatf q = simd_quaternion(light_direction, simd_make_float3(0, 0, -1));
+        //float4x4 A = simd_matrix4x4(q);
+        //float4x4 B = simd_matrix_scale(simd_make_float3(1.0f, 1.0f, 0.5f) / light_radius);
+        //float4x4 C = simd_matrix_translate(simd_make_float3(0.0f, 0.0f, 0.5f));
         
-        uniforms.viewprojection_transform = C * B * A;
-        uniforms.light_direction = -light_direction;
-        uniforms.radiance = 2.0f; //sqrt(simd_saturate(cos(phaseOfDay)));
+        // suppose instead we take the camera's projection of the XZ plane and
+        // map it to shadow:
+        
+        // uniform.viewprojection_transform
+        // we want x0z1 to go to the same part of the screen:
+        //
+        // Thus our new view_projection must be of the form
+        //
+        
+        float4x4 D = simd_matrix(uniforms.viewprojection_transform.columns[0],
+                                 //uniforms.viewprojection_transform.columns[1],
+                                 //simd_make_float4(0, 0, 0, 0),
+                                 simd_make_float4(-light_direction.x / light_direction.y,
+                                                  -light_direction.z / light_direction.y,
+                                                  -0.1f,
+                                                  0.0f),
+                                 uniforms.viewprojection_transform.columns[2],
+                                 uniforms.viewprojection_transform.columns[3]);
+                                 
+        
+        
+        shadowMapUniforms.viewprojection_transform = D; // C * B * A;
+        shadowMapUniforms.light_direction = -light_direction;
+        shadowMapUniforms.radiance = 2.0f; //sqrt(simd_saturate(cos(phaseOfDay)));
         
         [render_command_encoder setRenderPipelineState:_shadowMapRenderPipelineState];
         //[render_command_encoder setCullMode:MTLCullModeFront];
         [render_command_encoder setDepthStencilState:_enabledDepthStencilState];
         
-
-        [render_command_encoder setVertexBytes:&uniforms
-                                        length:sizeof(MeshUniforms)
-                                       atIndex:AAPLBufferIndexUniforms];
-        
-        [render_command_encoder setFragmentBytes:&uniforms
-                                          length:sizeof(MeshUniforms)
-                                         atIndex:AAPLBufferIndexUniforms];
-        [render_command_encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
-        [render_command_encoder setVertexBuffer:_instanced_things offset:0 atIndex:AAPLBufferIndexInstanced];
-        
-        
         [render_command_encoder setDepthBias:0.0f // +100.0f
                                   slopeScale:+1.0f // ?
                                        clamp:0.0f];
+
+        [render_command_encoder setVertexBytes:&shadowMapUniforms
+                                        length:sizeof(MeshUniforms)
+                                       atIndex:AAPLBufferIndexUniforms];
         
-        
-        [render_command_encoder setFragmentBytes:&uniforms
-                           length:sizeof(MeshUniforms)
-                          atIndex:AAPLBufferIndexUniforms];
+        [render_command_encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
+        [render_command_encoder setVertexBuffer:_instanced_things offset:0 atIndex:AAPLBufferIndexInstanced];
+                    
+        [render_command_encoder setFragmentBytes:&shadowMapUniforms
+                                          length:sizeof(MeshUniforms)
+                                         atIndex:AAPLBufferIndexUniforms];
         [render_command_encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
         
         [render_command_encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
@@ -1195,66 +1261,10 @@
 
             {
                 // save shadow map transform
-                float4x4 A = matrix_ndc_to_tc_float4x4 *
-                uniforms.viewprojection_transform;
-                uniforms.light_viewprojection_transform = A;
-            }
+                uniforms.light_viewprojection_transform = matrix_ndc_to_tc_float4x4 * shadowMapUniforms.viewprojection_transform;
+                uniforms.light_direction = shadowMapUniforms.light_direction;
+                uniforms.radiance = shadowMapUniforms.radiance;
 
-            
-            {
-                // rotate eye location to -Z
-                float4 origin = simd_make_float4(0.0f, 16.0, -8.0f, 1.0f);
-                quatf q = simd_quaternion(simd_normalize(origin.xyz),
-                                          simd_make_float3(0.0, 0.0, -1.0));
-                float4x4 A = simd_matrix4x4(q);
-                float4x4 B = simd_matrix_translate(simd_make_float3(0.0f, 0.0f, simd_length(origin.xyz)));
-                float aspect_ratio =  _viewport_size.x / _viewport_size.y;
-                float4x4 C = simd_matrix_scale(simd_make_float3(2.0f, 2.0f * aspect_ratio, 1.0f));
-                float4x4 V = C * B * A;
-                float4x4 iV = inverse(V);
-                float4x4 P = matrix_perspective_float4x4;
-                float4x4 VP = P * V;
-                float4x4 iVP = inverse(VP);
-                                                
-                uniforms.origin = origin;
-                uniforms.view_transform = V;
-                uniforms.inverse_view_transform = iV;
-                uniforms.viewprojection_transform = VP;
-                uniforms.inverse_viewprojection_transform = iVP;
-
-  
-                //     float4 position = float4(in.direction * depth, 0) + uniforms.origin;
-
-                /*
-                {
-                    simd_float4 direction = uniforms.inverse_view_transform
-                        * simd_make_float4(_model->_mouse.x, _model->_mouse.y, 1.0f, 0.0f);
-                    // we want to intersect with y == 0 plane
-                    //NSLog(@"%f %f %f\n", direction.x, direction.y, direction.z);
-                    float depth = - uniforms.origin.y / direction.y;
-                    simd_float3 position = direction.xyz * depth + uniforms.origin.xyz;
-                    _model->_mouse4 = simd_make_float4(position, 1.0f);
-                    _model->_mouse4.x -= _model->_looking_at.x / 1024.0f;
-                    _model->_mouse4.z += _model->_looking_at.y / 1024.0f;
-
-                    //NSLog(@"%f %f %f\n", _model->_mouse4.x, _model->_mouse4.y, _model->_mouse4.z);
-                }
-                 */
-                
-                {
-                    simd_float4x4 A = simd_mul(VP, mesh_instanced_things.model_transform);
-                    simd_float4 b = simd_make_float4(_model->_mouse, 0.0f, 1.0f);
-                    _model->_mouse4 = simd_make_float4(project_screen_ray(A, b), 0.0f, 1.0f);
-                    // b now contains the screen space coordinates of the
-                    // intersection, aka b.z is now the depth
-                    assert((0.0f <= b.z) && (b.z <= 1.0f));
-                }
-
-                
-                
-            }
-            
-            {
                 uniforms.ibl_scale = 1.0f;
                 uniforms.ibl_transform = matrix_identity_float3x3;
 
@@ -1273,7 +1283,6 @@
 
                 bool show_jacobian, show_points, show_wireframe;
                 {
-                    auto guard = std::unique_lock(_model->_mutex);
                     show_jacobian = _model->_show_jacobian;
                     show_points = _model->_show_points;
                     show_wireframe = _model->_show_wireframe;
@@ -1371,7 +1380,6 @@
         
         
         {
-            auto guard = std::unique_lock(_model->_mutex);
             [self drawOverlay:encoder];
             [command_buffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
                 dispatch_semaphore_signal(self->_atlas->_semaphore);

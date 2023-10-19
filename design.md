@@ -6,27 +6,41 @@ SpaceChem + Factorio
 SpaceChem has unique and excellent mechanics where the programming is spatial, 
 geometrical, and on the same surface as the action.
 - Subsequent Zachtronics walked back from this choice into sequencing virtual 
-  robots in one space, with a document in another space 
-SpaceChem conceptualizes itself as puzzle game, with very small grids of 
-specified tasks.
+  robots in one space, with a document in another space. 
+- SpaceChem conceptualizes itself as puzzle game, with very small grids of 
+  specified tasks.
 
-By contrast, Factorio has 
-- an unbounded grid, and an unbounded and very large amount of stuff happening
-- an emergent tree of goals, where the high level goal of survive/grow leads
+By contrast, Factorio has:
+- An unbounded grid
+- An unbounded number of "actors"
+- Emergent tactical goals, where the strategic survive/grow objective leads
   to solving a tree of self-defined sub-goals
-- much more about "just" routing than logic
-  - the inserters are shockingly intelligent (and the splitters can be)
-  - endgame logistic robots remove the routing, leaving... not much? 
-Though Factorio belts are probably doing computations, there is also another
-off-grid layer of circuit programming
+Factorio is must more about just routing than logic
+- The primitives are too smart
+  - Burner inserters choose from belt on the basis of what target can accept
+  - Splitters prioritize and sort
+  - Trains route
+- Only logistic robots are dumb
+- Circuit networks are optional and "offscreen"
+At endgame, trains and bots replace belts at the macro and micro scale, and
+the game devolves to debugging train AI
+
+Only belts and pipes are fully described by their onscreen appearance and
+orientation.  Other mechanics rely on windows to choose mostly hidden settings,
+some of which may be shown in ALT-mode.
+
+Fluids are implemented as a crude ODE that uses lots of CPU for poor results,
+such as order and direction effects. 
+
+
 
 Combined, we can envision a game with
 - An unbounded grid
   - Procedurally generated with resources and obstacles
 - The player has a limited ability to write symbols to the grid cells
   - For instance, lay down arrows
-- An (increasing) number of agents move around the grid reading the symbols
-  and acting on them
+- A (large, increasing) number of agents move around the grid reading the
+  symbols and acting on them
   - Go east, pick up, compare with X, conditional left turn, drop
   - SpaceChem waldos, Turing machines, "trucks"
 - Most agents will be running around some relatively small loop with a few
@@ -140,12 +154,46 @@ unlock the ones already acquired atomically).  We also want to wait on changes
 of value?
 
 
+
+
 Multiplayer
 -----------
 
-Purely cooperative and unsecret
+Purely cooperative and unsecret.  Server cannot provide state, which is
+enormous and expensive to step.  Instead, the sever acts only to
+authoritatively order player actions.  Clients must accept user input to
+generate actions and send them; then wait for the server to return the
+authoritative list of actions.  Incoming actions, from self or other players,
+are not guaranteed to be valid; each client must check if they are allowed.
+They may become invalid because of other actions by other players.
 
+Each (good faith) client will have the same game state at a given tick, but
+different knowledge of sent actions, and different partial receipt of future
+actions.
 
+"Bad" clients (hacked or bugged) can submit malformed or too many actions or
+request too many resends etc.
+
+Clients cannot progress past their latest server knowledge, but the server is
+not required to wait for any client; it will keep resending allowing a client
+to scramble back to real time.  
+
+A client that experiences a temporary outage will progress to last known server
+state, then wait there requesting until re-established.  It will have fallen
+behind though, and has to fast forward to get back to near-real time.  This
+can be done off-screen.
+
+For a severed network, the client can checkpoint last known state and fork a
+new local game.  On clean shutdown of server, all clients will be informed to 
+take a checkpoint to resume the game.  New players can join an existing game
+by requesting transfer of a checkpoint from peer(s) and then fast forwarding it.
+
+Because action lists are small and cheap, we can store them plus checkpoints to
+reconstruct game state over some number of seconds.  It is expensive to fast
+forward, though, so we must checkpoint (we can't just save seed + actions)
+
+Checkpointing without interrupting the game will impose significant
+requirements on the engine
 
 
 
@@ -189,423 +237,11 @@ and sends minimal data to render; advances game state
 
 `WryNetwork` lives on a fourth thread for multiplayer
 
+Take two:
+
+Do user interface and rendering on the main thread.
+
+Loosely coupled work like audio, IO and the actual simulation on other threads 
  
-
-
-NSView
-CALayerDelegate
-
-
-# ZZZ
-
-Rotating a vector 
-
-(a, b)
-
-by 60 degrees is
-
-( c, -s)
-( s,  c)
-
-(ca - sb)
-(sa + cb)
-
-(a - b sqrt(3)) / 2
-(sqrt(3) a + b) / 2
-
-sqrt(3) = 1.73    1.75 = 7/4
-
-( 1/2   -7/8)
-( 7/8   +1/2)
-
-(4 a - 7 b) / 8
-(7 a + 4 b) / 8
-
-
-(1, 1) -> (- 3, 13) / 8
-
-(1, 2) -> (-10, 18) / 8
-(1, 3) -> (-17, 19) / 8
-(2, 3) -> (-13, 26) / 8 = (
-(1, 4) -> (-24, 23) / 8 = (-3, 2.875)
-(3, 4) -> (-16, 37) / 8 = (-2, 4.625)
-
-ASPMT
-
-
-
-// projection
-// isometric looks nice but square is better for drafting
-
-// isometric angle is (1,1,1)
-// right triangle is 1, sqrt(2), sqrt(3)
-// so we are talking about 1/sqrt(3) as the v:h pitch
-// 0.577 = 37/64
-
-
-
-
-// Illumination
-
-What shape is the shadow of a rectangle:
-
-Consider the shadow of a quadrant illuminated by a uniform hemisphere sky
-
-Shadow cast on a surface by blocker on plane 1 unit up
-
-In the coordinates of the plane, an unobstructed region dxdy contributes in
-proportion to the solid angle it subtends
-
-area:
-
-dx dy
-
-distance:
-
-1 / (x^2 + y^2 + 1)
-
-angle:
-
-cos theta = 1 / sqrt(x^2 + y^2 + 1)
-
-dx dy / (x^2 + y^2 + 1)^1.5
-
-and another factor of cos theta for the glancing incidence
-
-dx dy / (x^2 + y^2 + 1)^2
-
-This is the radiosity _view factor_, cos theta1 const theta2 / (pi s^2)
-
-Compute the shadow of a corner, which is 1/(x^2 + y^2 + 1) convolved
-This is now a cumulative shadow/illumination map
-We can make any rectangular shadow by corners:
-```
- + -
- - + 
-```
-And scaling the shadow map by distance
-And using the texture map edge clamped mode to extend beyond the map
-Shadow is now four lookups in the same texture
-
-
-### Notes on deferred physically-based rendering
-
-- On Apple silicon the gbuffer can be entirely memoryless if we do everything 
-in the screen pass
-
-- No readback from the current depth texture, but can we bind it as an
-attachment?
-
-Importance sampling:
-
-To integrate f cos\theta over a hemisphere, we can importance sample from an
-offset sphere:
-```
-(x, y) = (cos theta, sin theta) * cos theta
-(r, theta) = (cos theta, theta)
-```
-describes a circle of radius 0.5 centered at (0.5, 0.0).
-
-As a probility distribution of theta, this sphere is
-```
-P(r, theta, phi) = r^2 sin(theta)
-P(theta, phi) = 1/3 cos(theta)^3 * sin(theta)
-```
-And the indefinite integral wrt theta is
-```
-CDF(theta) * PDF(phi) = cos(theta)^4
-```
-
-so we can importance sample directions with `x, y in [0, 1]` mapped to
-```
-theta = acos(pow(x, 0.25))
-phi = 2 * pi * y
-```
-and thus
-``` 
-u = r sin(theta) * cos(phi) 
-v = r sin(theta) * sin(phi)
-w = r cos(theta)
-
-w = pow(x, 0.25)
-v = sqrt(1.0 - sqrt(x)) * cos(phi))
-u = sqrt(1.0 - sqrt(x)) * sin(phi))
-```
-
-Step two:
-
-Now sample from a sphere scaled by a,
-```
-(s, z) = (a sin psi, cos psi) * cos psi
-```
-We again have the spherical polar weights
-```
-P(r, theta, phi) = r^2 sin(theta)
-```
-We need to relate psi and theta
-```
-```
-
-But now theta and psi are different, we need to integrate out to
-`r_max` such that 
-
-```
-r sin theta = a sin psi cos psi = a sin 2 psi
-r = a sin 2 psi / sin theta
-``` 
-
-```
-P(theta, phi) = 1/3 r^3 sin(theta)
-    = (a sin 2 psi)^3 / (3 sin(theta)^2)
-```
-
-
-
-
-Volume of our sphere is 4/3 pi r^3 vs cube = 1 so sphere occupies
-4/3 pi / 8 = pi / 6 of bounds
-so rejection sampling will waste half the samples
-
-to sample from a sphere:
-
-x^2 + y^2 + z^2 = 1
-
-x^2 + y^2 = 1 - z^2
-
-area of slice at z is pi(1 - z^2)
-
-cumulative area is pi(z - 1/3 z^3)
-
-solve    y = z - 1/3 z^3
-
-y = z (1 - 1 / 3 z^2) ugh
-
-aha:
-
-Malley's method:
-
-given samples on a unit disk
-`x, y`
-or
-`r, phi`
-project to hemisphere
-`z = sqrt(1 - r^2)`
-this is now a cos theta weighted importance sampling of a hemisphere
-
- 
-
-now rescale horizontal plane 
-```
-u, v = x * a, y * a
-s = r * a, phi
-```
-
-no longer normalized, but it doesn't need to be for cube sampling 
-
-now compute a second normalization (if needed) 
-```
-= sqrt(s^2 + z^2)
-= sqrt(a^2 r^2 + 1 - r^2)
-= sqrt((a^2 - 1)r^2 + 1)
-```
-finally,
-```
-t = r*a / sqrt((a^2-1) r^2 + 1)
-zz = sqrt((1 - r^2)/((a^2-1)r^2+1))
-
-```
-
-
-
-
-
-
-
-  // derivation:
-    //
-    // recall that to integrate over angle
-    // ```
-    //     \int f dw
-    // ```
-    // in polar coordinates
-    // ```
-    //     \int\int f sin(\theta) d\theta d\phi
-    // ```
-    // is equivalent to
-    // ```
-    //     \int\int f d\cos(\theta) d\phi
-    // ```
-    //
-    // For the Trowbridge-Reitz distribution, we have
-    //
-    // p(\theta) = \alpha^2 / [ \pi ( cos^2(\theta)^2 (\alpha^2 - 1) + 1)^2 ]
-    //
-    // which is a rather nasty integral, but fortunately we always want to
-    // integrate it as multiplied by
-    // ```
-    //     cos(\theta)    \theta < M_PI
-    //     0              otherwise
-    // ```
-    // and the combined function,
-    // ```
-    //    g = \alpha^2 cos(\theta) / [ \pi ( cos^2(\theta) (\alpha^2 - 1) + 1)^2 ]
-    // ```
-    // has a much simpler integral
-    // ```
-    //     \int \alpha^2 cos(\theta) / [ \pi ( cos^2(\theta) (\alpha^2 - 1) + 1)^2 ] d cos(\theta)
-    //
-    //        = \alpha^2 / [ 2\pi (1-\alpha^2) ((\alpha^2 - 1) * cos^2(\theta) + 1)
-    // ```
-    // When \theta = 0, cos\theta = 1,
-    // ```
-    //        = \alpha^2 / [2\pi (1-\alpha^2) ((\alpha^2 - 1) + 1)
-    //        = 1 / [2\pi (1 - \alpha^2)]
-    // ```
-    // And when \theta = \pi/2, cos\theta = 0
-    // ```
-    //        = \alpha^2 / [2\pi (1 - \alpha^2)]
-    // ```
-    // thus the total integral is
-    // ```
-    //        = (1 - \alpha^2) / (2\pi (1 - \alpha^2))
-    //        = 1 / 2\pi
-    // ```
-    // Note that this indicates that the T-R form used is actually normalized
-    // over the cos\theta weighted hemisphere, not the sphere.  Is that OK?
-    //
-    // Pulling out the 2\pi term that normalizes the integral over \phi, we
-    // have obtained the cumulative density function
-    //
-    // and the CDF is
-    // ```
-    //     \Chi = \alpha^2 / [(1-\alpha^2)((\alpha^2-1)*cos^2(\theta)+1) - \alpha^2/(1-\alpha^2)
-    // ```
-    // Solving for cos\theta,
-    // ```
-    //     X*(1-a^2) = a^2/[(a^2-1)c^2+1] - a^2
-    //     X*(1-a^2)+a^2 = a^2/[(a^2-1)c^2+1]
-    //     (a^2-1)c^2+1 = a^2/[X*(1-a^2)+a^2]
-    //     (a^2-1)c^2 = [a^2-X*(1-a^2)-a^2]/[X*(1-a^2)+a^2]
-    //     (a^2-1)c^2 = [-X*(1-a^2)/[X*(1-a^2)+a^2]
-    //     c^2 = X/[X*(1-a^2)+a^2]
-    //     c^2 = 1 / [(1-a^2) + a^2 / X ]
-    // ```
-    // The final form's only dependence on X is in the a^2 / X term showing how
-    // the scale factor if the problem changes with alpha (?)
-    //
-    // If we change variables X = 1-Y
-    // ```
-    //     c^2 = (1-Y)/[(1-Y)(1-a^2)+a^2]
-    //         = (1-Y)/[Y(a^2-1) + 1]
-    // ```
-    // we recover the UE4 expression, indicating they chose the other direction
-    // of CDF convention
-
-
-
-
-For normal recovery from image:
-
-For a given camera pixel, we know V, the camera direction.
-
-For a given screen pixel, L is a function of the surface distance d along the
-camera ray
-
-For a circle of screen pixels centered on the camera, VdotL is constant
-
-The BRDF model we use:
-
-```
-k / (k - k * NdotH^2)
-*
-NdotV / (k * NdotV + k)
-*
-NdotL / (k * NdotL + k)
-*
-k + k (1 - HdotV)^5
-*
-1 / NdotV  xxxx
-*
-1 / NdotL  xxxx
-* 
-NdotL 
-```
-
-We can actually look at the logarithm and linearize lots of these specular 
-terms:
-```
--log((k - k * NdotH^2)
--log(k * NdotV)
-+NdotL
--log(k * NdotL + k)
-+
-...
-```
-
-The fresnel term requires (1 - HdotV) approxeq 1 to be significant, which requires 
-H to be nearly perpendicular to V and thus L to be nearly opposite to V.
-
-The camera and screen geometry constrain L and V to be quite similar, within 30
-degrees, and H is between them.
-
-When the light source is close to the camera, L, V and H are the same.  We
-could look to a different parameterization,
-```
-V = (0, 0, 1)
-H = (x, 0, 1 - x^2)
-L = (2x, 0, 1 - 4x^2)
-
-NdotV = Nz
-NdotH = Nx*x + Nz*(1-x^2)
-NodtL = Nx*2*x + Nz*(1-4x^2)
-```
-Where the scale of x is determined by the distance d
-
-If the camera pixel is dominated by specular lighting, we can directly
-find N = H = V + L as the peak.
-
-If the camera pixel is dominated by diffuse lighting, we can directly find
-N = L as the peak.
-
-Whatever the situation, we will be brightest when N lies in the LV plane,
-letting us constrain one of the degrees of freedom of N immediately.
-
-
-
-### Subdivision
-
-Suppose that edge a-b is the least-squared error representation of a quadratic
-curve,
-
-```
-f(x) = x^2
-
-e = \int_{-1}^{1} (f(x) - y)^2 dx
-  = \int (x^2 - y)^2 dx
-  = \int x^4 - 2x^2y + y^2 dx
-  = [ 1/5 x^5 - 2/3 x^3 y + x y^2 ] _{-1}^{+1}
-e = 2/5 - 4/3 y + 2 y^2
-```
-With minimum error at
-```
-0 = -4/3 + 4 y
-0 = -1/3 + y
-y = 1/3
-```
-and intercept
-```
-x = f^-1(y) = sqrt(1/3) = 0.577
-```
-Note that the endpoints of the line do not lie on the surface, it crosses
-the true curve twice.
-
-So, given the points (-1, 0), (+1, 0), (+3, 1) what curve is represented?
-
-
-
-Suppose we subdivide the line, then we get
-x,y = (+/- 1/2, +1/12)
-
-So, for a shape -1, +1, +3 -> 0, 0, 
 
 

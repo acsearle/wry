@@ -20,6 +20,8 @@ namespace wry::sim {
         DISCRIMINANT_NUMBER   = 0,
         DISCRIMINANT_OPCODE   = 1,
         DISCRIMINANT_RESOURCE = 2,
+        DISCRIMINANT_HEADING  = 4,
+        DISCRIMINANT_LOCATION = 8,
         
     };
     
@@ -94,76 +96,87 @@ namespace wry::sim {
         
     };
     
-    enum OPCODE 
+    struct ENUM_PAIR {
+        i64 first;
+        const char* second;
+    };
+
+    
+#define WRY_OPCODES_X \
+X(OPCODE_NOOP),\
+X(OPCODE_SKIP),\
+X(OPCODE_HALT),\
+X(OPCODE_TURN_NORTH),\
+X(OPCODE_TURN_EAST),\
+X(OPCODE_TURN_SOUTH),\
+X(OPCODE_TURN_WEST),\
+X(OPCODE_TURN_RIGHT),\
+X(OPCODE_TURN_LEFT),\
+X(OPCODE_TURN_BACK),\
+X(OPCODE_BRANCH_RIGHT),\
+X(OPCODE_BRANCH_LEFT),\
+X(OPCODE_LOAD),\
+X(OPCODE_STORE),\
+X(OPCODE_EXCHANGE),\
+X(OPCODE_HEADING_LOAD),\
+X(OPCODE_HEADING_STORE),\
+X(OPCODE_LOCATION_LOAD),\
+X(OPCODE_LOCATION_STORE),\
+X(OPCODE_DROP),\
+X(OPCODE_DUPLICATE),\
+X(OPCODE_SWAP),\
+X(OPCODE_OVER),\
+X(OPCODE_IS_ZERO),\
+X(OPCODE_IS_POSITIVE),\
+X(OPCODE_IS_NEGATIVE),\
+X(OPCODE_IS_NOT_ZERO),\
+X(OPCODE_IS_NOT_POSITIVE),\
+X(OPCODE_IS_NOT_NEGATIVE),\
+X(OPCODE_LOGICAL_NOT),\
+X(OPCODE_LOGICAL_AND),\
+X(OPCODE_LOGICAL_OR),\
+X(OPCODE_LOGICAL_XOR),\
+X(OPCODE_BITWISE_NOT),\
+X(OPCODE_BITWISE_AND),\
+X(OPCODE_BITWISE_OR),\
+X(OPCODE_BITWISE_XOR),\
+X(OPCODE_BITWISE_SPLIT),\
+X(OPCODE_POPCOUNT),\
+X(OPCODE_ABS),\
+X(OPCODE_NEGATE),\
+X(OPCODE_SIGN),\
+X(OPCODE_ADD),\
+X(OPCODE_SUBTRACT),\
+X(OPCODE_EQUAL),\
+X(OPCODE_NOT_EQUAL),\
+X(OPCODE_LESS_THAN),\
+X(OPCODE_GREATER_THAN),\
+X(OPCODE_LESS_THAN_OR_EQUAL_TO),\
+X(OPCODE_GREATER_THAN_OR_EQUAL_TO),\
+X(OPCODE_COMPARE),\
+
+    enum OPCODE
     : i64 {
         
-        OPCODE_NOOP,
-        OPCODE_SKIP,
-        OPCODE_HALT,
+#define X(Y) Y
         
-        OPCODE_TURN_NORTH, // _heading:2 = 0   // clockwise
-        OPCODE_TURN_EAST,  // _heading:2 = 1
-        OPCODE_TURN_SOUTH, // _heading:2 = 2
-        OPCODE_TURN_WEST,  // _heading:2 = 3
+        WRY_OPCODES_X
         
-        OPCODE_TURN_RIGHT, // ++_heading
-        OPCODE_TURN_LEFT,  // --_heading
-        OPCODE_TURN_BACK,  // _heading += 2;
-        
-        OPCODE_BRANCH_RIGHT, // _heading += pop()
-        OPCODE_BRANCH_LEFT, // _heading -= pop();
-        
-        OPCODE_LOAD,     // push([_location])
-        OPCODE_STORE,    // [_location] = pop()
-        OPCODE_EXCHANGE, // push(exchange([_location], pop())
-        
-        OPCODE_HEADING_LOAD, // push(_heading)
-        OPCODE_HEADING_STORE, // _heading = pop()
-        
-        OPCODE_LOCATION_LOAD,  // push(_location)
-        OPCODE_LOCATION_STORE, // _location = pop()
-        
-        OPCODE_DROP,      // pop()
-        OPCODE_DUPLICATE, // a = pop(); push(a); push(a)
-        OPCODE_OVER,      // a = pop(); b = pop(); push(b); push(a); push(b);
-        OPCODE_SWAP,      // a = pop(); b = pop(); push(a); push(b);
-        
-        OPCODE_IS_ZERO,           // 010
-        OPCODE_IS_POSITIVE,       // 001
-        OPCODE_IS_NEGATIVE,       // 100
-        OPCODE_IS_NOT_ZERO,       // 101
-        OPCODE_IS_NOT_POSITIVE,   // 110
-        OPCODE_IS_NOT_NEGATIVE,   // 011
-        
-        OPCODE_LOGICAL_NOT,
-        OPCODE_LOGICAL_AND,
-        OPCODE_LOGICAL_OR,
-        OPCODE_LOGICAL_XOR,
-        
-        OPCODE_BITWISE_NOT,
-        OPCODE_BITWISE_AND,
-        OPCODE_BITWISE_OR,
-        OPCODE_BITWISE_XOR,
-        
-        OPCODE_BITWISE_SPLIT,
-        OPCODE_POPCOUNT,
-        
-        OPCODE_NEGATE,    // push(-pop())
-        OPCODE_ABS,       // push(abs(pop()))
-        OPCODE_SIGN,      // push(sign(pop()))
-        
-        OPCODE_ADD,       // a = pop(); b = pop(); push(b + a)
-        OPCODE_SUBTRACT,  // a = pop(); b = pop(); push(b - a)
-        
-        OPCODE_EQUAL,         // a = pop(); b = pop(); push(b == a)
-        OPCODE_NOT_EQUAL,     // a = pop(); b = pop(); push(b != a)
-        OPCODE_LESS_THAN,     // a = pop(); b = pop(); push(b - a)
-        OPCODE_GREATER_THAN,
-        OPCODE_LESS_THAN_OR_EQUAL_TO,
-        OPCODE_GREATER_THAN_OR_EQUAL_TO, // a <= b
-        OPCODE_COMPARE, // sign(a - b)
+#undef X
         
     };
+        
+    inline constexpr ENUM_PAIR OPCODE_NAMES[] = {
+
+#define X(Y) { Y, #Y }
+        
+        WRY_OPCODES_X
+        
+#undef X
+        
+    };
+    
+#undef WRY_OPCODES_X
     
     
     

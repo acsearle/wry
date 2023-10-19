@@ -209,6 +209,24 @@ inline simd_float2 project_screen_ray(const simd_float4x4& A, simd_float4& b) {
     return d.xy / d.w;
 }
 
+inline simd_float4x2 project_screen_frustum(const simd_float4x4& A) {
+    
+    simd_float4x4 B = simd_matrix(A.columns[0],
+                                  A.columns[1],
+                                  simd_make_float4(0.0f, 0.0f, -1.0f, 0.0f),
+                                  A.columns[3]);
+    simd_float4x4 C = simd_inverse(B);
+    B = simd_matrix(simd_make_float4(-1, -1, 0, 1),
+                    simd_make_float4(-1, +1, 0, 1),
+                    simd_make_float4(+1, +1, 0, 1),
+                    simd_make_float4(+1, -1, 0, 1));
+    simd_float4x4 D = simd_mul(C, B);
+    return simd_matrix(D.columns[0].xy / D.columns[0].w,
+                       D.columns[1].xy / D.columns[1].w,
+                       D.columns[2].xy / D.columns[2].w,
+                       D.columns[3].xy / D.columns[3].w);
+}
+
 
 inline simd_float2 project_screen_ray(const simd_float4x4& A, const simd_float4& b) {
     simd_float4 c = b;

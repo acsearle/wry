@@ -16,11 +16,12 @@
 namespace wry {
 
     // array_view into a contguous sequence
-    
+    //
     // compare span, slice, range
-    
+    //
     // array_view models a reference; assignment assigns to the elements, not
-    // the bounds
+    // the bounds.  array_view<const T>::operator= is an error.  use ::reset to
+    // change what the array_view points into
     
     template<typename T>
     struct array_view;
@@ -43,8 +44,8 @@ namespace wry {
         using const_reference = std::add_const_t<T>&;
         
         
-        using byte_type = std::conditional_t<std::is_const_v<T>, const char, char>;
-        using const_byte_type = const char;
+        using byte_type = std::conditional_t<std::is_const_v<T>, const byte, byte>;
+        using const_byte_type = const byte;
 
         pointer _begin;
         pointer _end;

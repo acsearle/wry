@@ -12,6 +12,82 @@ using namespace metal;
 
 #include "ShaderTypes.h"
 
+# pragma mark - Utility functions
+
+// Hammersley low-discrepency sequence for quasi-Monte-Carlo integration
+
+float2 HammersleySequence(ushort i, ushort N) {
+    return float2(float(i) / float(N), reverse_bits(i) * 0.00001525878f);
+}
+
+// Microfacet distribution
+
+float DistributionTrowbridgeReitz(float NdotH, float alpha2) {
+    float nh2 = NdotH * NdotH;
+    float d = (nh2 * (alpha2 - 1.0f) + 1.0f);
+    float d2 = d * d;
+    float d3 = M_PI_F * d2;
+    return alpha2 / d3;
+}
+
+float3 SampleTrowbridgeReitz(float2 chi, float alpha2) {
+    
+    // note that this form of the quotient is robust against both
+    // \alpha = 0 and \alpha = 1
+    float cosTheta2 = (1.0 - chi.y) / (1.0 + (alpha2 - 1.0) * chi.y);
+    
+    float phi = 2.0f * M_PI_F * chi.x;
+    float cosPhi = cos(phi);
+    float sinPhi = sin(phi);
+    
+    float cosTheta = sqrt(cosTheta2);
+    float sinTheta = sqrt(1.0 - cosTheta2);
+    
+    return float3(sinTheta * cosPhi,
+                  sinTheta * sinPhi,
+                  cosTheta);
+    
+}
+
+// Geometry factor
+
+// Associated with microfacet self-shadowing on rough surfaces and glancing
+// rays; tends to darken edges
+
+float GeometrySchlick(float NdotV, float k) {
+    return NdotV / (NdotV * (1.0f - k) + k);
+}
+
+float GeometrySmithK(float NdotV, float NdotL, float k) {
+    float viewFactor = GeometrySchlick(NdotV, k);
+    float lightFactor = GeometrySchlick(NdotL, k);
+    return viewFactor * lightFactor;}
+
+float GeometrySmithPoint(float NdotV, float NdotL, float roughness) {
+    float r = roughness + 1.0f;
+    float k = r * r / 8.0f;
+    return GeometrySmithK(NdotV, NdotL, k);
+}
+
+float GeometrySmithArea(float NdotV, float NdotL, float roughness) {
+    float k = roughness * roughness / 2.0f;
+    return GeometrySmithK(NdotV, NdotL, k);
+}
+
+
+// Fresnel factor
+
+// Increased reflectivity at glancing angles; tends to brighten edges
+
+float3 FresnelSchlick(float cosTheta, float3 F0) {
+    return F0 + (1.0f - F0) * pow(saturate(1.0f - cosTheta), 5.0f);
+}
+
+float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
+    return F0 + (max(float3(1.0 - roughness), F0) - F0) * pow(saturate(1.0f - cosTheta), 5.0);
+}
+
+
 # pragma mark - Deferred physically-based rendering
 
 // Physically-Based Rendering functions
@@ -30,16 +106,16 @@ using namespace metal;
 //
 // which describes the lighting model used by Disney in Wreck-It Ralph
 
-struct DeferredGBufferVertexShaderOutput
-{
+struct DeferredGBufferVertexShaderOutput {
+    
     float4 clipSpacePosition [[position]];
-    float4 worldSpacePosition;
     float4 eyeSpacePosition;
     float4 lightSpacePosition;
     float4 coordinate;
     float4 worldNormal;
     float4 worldTangent;
     float4 worldBitangent;
+    
 };
 
 struct DeferredGBufferFragmentShaderOutput {
@@ -65,10 +141,10 @@ DeferredGBufferVertexShader(uint vertex_id [[ vertex_id ]],
 
     out.coordinate = in.coordinate;
 
-    out.worldSpacePosition = instance.model_transform * in.position;
-    out.eyeSpacePosition   = uniforms.view_transform * out.worldSpacePosition;
-    out.clipSpacePosition  = uniforms.viewprojection_transform * out.worldSpacePosition;
-    out.lightSpacePosition = uniforms.light_viewprojection_transform * out.worldSpacePosition;
+    float4 worldSpacePosition = instance.model_transform * in.position;
+    out.eyeSpacePosition   = uniforms.view_transform * worldSpacePosition;
+    out.clipSpacePosition  = uniforms.viewprojection_transform * worldSpacePosition;
+    out.lightSpacePosition = uniforms.light_viewprojection_transform * worldSpacePosition;
     out.worldTangent       = instance.inverse_transpose_model_transform * in.tangent;
     out.worldBitangent     = instance.inverse_transpose_model_transform * -in.bitangent;
     out.worldNormal        = instance.inverse_transpose_model_transform * in.normal;
@@ -142,84 +218,21 @@ DeferredGBufferShadowFragmentShader(DeferredGBufferVertexShaderOutput in [[stage
     
 }
 
+// we also need a shader that draws the shadows of smoke, dust, clouds onto an
+// illumination map from the light's perspective; these don't write the z-buffer
+// but they are masked by it, and are just absorption
 
 
 
-
-// Hammersley low-discrepency sequence for quasi-Monte-Carlo integration
-
-float2 HammersleySequence(ushort i, ushort N) {
-    return float2(float(i) / float(N), reverse_bits(i) * 0.00001525878f);
-}
-
-
-// Microfacet distribution
-
-float DistributionTrowbridgeReitz(float NdotH, float alpha2) {
-    float nh2 = NdotH * NdotH;
-    float d = (nh2 * (alpha2 - 1.0f) + 1.0f);
-    float d2 = d * d;
-    float d3 = M_PI_F * d2;
-    return alpha2 / d3;
-}
-
-float3 SampleTrowbridgeReitz(float2 chi, float alpha2) {
-    
-    // note that this form of the quotient is robust against both
-    // \alpha = 0 and \alpha = 1
-    float cosTheta2 = (1.0 - chi.y) / (1.0 + (alpha2 - 1.0) * chi.y);
-    
-    float phi = 2.0f * M_PI_F * chi.x;
-    float cosPhi = cos(phi);
-    float sinPhi = sin(phi);
-    
-    float cosTheta = sqrt(cosTheta2);
-    float sinTheta = sqrt(1.0 - cosTheta2);
-    
-    return float3(sinTheta * cosPhi,
-                  sinTheta * sinPhi,
-                  cosTheta);
-    
-}
+// Deferred GBuffer decals
+//
+// Some decals - like tire tracks - will replace all surface properties with
+// changed normals, roughness etc.
+//
+// Others, like augmented reality symbols projected onto a surface, will not be
+// lit and are just emssive and supressing albedo
 
 
-// Geometry factor
-
-// Associated with microfacet self-shadowing on rough surfaces and glancing
-// rays; tends to darken edges
-
-float GeometrySchlick(float NdotV, float k) {
-    return NdotV / (NdotV * (1.0f - k) + k);
-}
-
-float GeometrySmithK(float NdotV, float NdotL, float k) {
-    float viewFactor = GeometrySchlick(NdotV, k);
-    float lightFactor = GeometrySchlick(NdotL, k);
-    return viewFactor * lightFactor;}
-
-float GeometrySmithPoint(float NdotV, float NdotL, float roughness) {
-    float r = roughness + 1.0f;
-    float k = r * r / 8.0f;
-    return GeometrySmithK(NdotV, NdotL, k);
-}
-
-float GeometrySmithArea(float NdotV, float NdotL, float roughness) {
-    float k = roughness * roughness / 2.0f;
-    return GeometrySmithK(NdotV, NdotL, k);
-}
-
-
-// Fresnel factor
-
-// Increased reflectivity at glancing angles; tends to brighten edges
-
-float3 FresnelSchlick(float cosTheta, float3 F0) {
-    return F0 + (1.0f - F0) * pow(saturate(1.0f - cosTheta), 5.0f);
-}
-
-float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
-    return F0 + (max(float3(1.0 - roughness), F0) - F0) * pow(saturate(1.0f - cosTheta), 5.0);
-}
 
 
 struct LightingVertexInput {
@@ -349,6 +362,7 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     
     float4 position = float4(in.direction * depth, 0) + uniforms.origin;
     float4 lightSpacePosition = uniforms.light_viewprojection_transform * position;
+    lightSpacePosition /= lightSpacePosition.w;
         
     float shadowSample = shadowTexture.sample(nearestSampler, lightSpacePosition.xy).r;
     float shadowFactor = step(lightSpacePosition.z, shadowSample);
@@ -384,6 +398,9 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     // Lo = clamp(Lo, 0.0f, 4096.0f);
     
     out.color.rgb = half3(Lo);
+    //out.color.rg = half2(lightSpacePosition.xy);
+    //out.color.b = shadowSample;
+    //out.color.rgb = lightSpacePosition.z;
     out.color.a = 1.0h;
     // out.color.rgb = half3(lightSpacePosition.xyz > 0.5f);
 
@@ -1054,5 +1071,78 @@ constant float3 kRec709Luma = float3(0.2126, 0.7152, 0.0722);
 
     outTexture.write(result, thread_position_in_grid);
 
+    
+}
+
+
+
+// Draw a grid of squares, with geometry from the thread grid, and per-tile
+// properties from a 2D index into some buffer
+
+// All threads in a threadgroup share a single
+//     object_data [[payload]]
+//     metal::mesh
+
+// Which is alarming
+// threadgroups of only one thread are presumably a big waste
+
+#define kMeshThreadgroups 32
+
+struct GridObjectOutput {
+    // User-defined payload; one entry for each mesh threadgroup. This
+    // is an array because the data will be shared by the mesh grid.
+    float value[kMeshThreadgroups];
+};
+
+// Only one thread per must write to mesh_grid_properties
+
+[[object, max_total_threadgroups_per_mesh_grid(kMeshThreadgroups)]]
+void GridObjectFunction(uint2 threadgroup_size [[threads_per_threadgroup]],
+                        uint lane [[thread_index_in_threadgroup]],
+                        object_data GridObjectOutput& output [[payload]],
+                        mesh_grid_properties mgp) {
+    
+}
+
+struct vertex_t {
+    float4 position [[position]];
+    float2 coordinate;
+    // other user-defined properties
+};
+struct primitive_t {
+    float3 normal;
+};
+// A mesh declaration that can export one cube.
+using tile_mesh_t = metal::mesh<DeferredGBufferVertexShaderOutput, primitive_t, 8 /*corners*/, 6*2 /*faces*/, metal::topology::triangle>;
+
+// "uniform"
+struct view_info_t {
+    float4x4 view_proj;
+};
+
+// from Object shader
+struct cube_info_t {
+    float4x3 world;
+    float3 color;
+};
+
+
+
+
+// [[payload]] is common to all threads in the threadgroup
+// mesh<...> is common to all threads in the threadgroup
+
+// do we actually need any payload compute?
+
+[[mesh, max_total_threads_per_threadgroup(12)]]
+void GridMeshFunction(tile_mesh_t output,
+                const object_data GridObjectOutput &cube [[payload]],
+                constant view_info_t &view [[buffer(0)]],
+                // uint2 gid [[threadgroup_position_in_grid]],
+                // uint lane [[thread_index_in_threadgroup]]
+                      uint2 thread_position_in_grid [[thread_position_in_grid]]
+                      ) {
+    
+    
     
 }

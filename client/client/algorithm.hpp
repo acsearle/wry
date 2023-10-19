@@ -9,13 +9,14 @@
 #define algorithm_hpp
 
 #include <algorithm>
-#include <cassert>
+#include <compare>
 
+#include "assert.hpp"
 #include "stddef.hpp"
 
 namespace wry {
     
-    // # From C++23
+    // # From C++20
     //
     // https://en.cppreference.com/w/cpp/algorithm/lexicographical_compare_three_way
     
@@ -47,7 +48,7 @@ namespace wry {
         
     }
     
-    // # Extend some algorithms to check for second range ending
+    // # Extend standard algorithms to check for second range ending
     
     auto copy(auto first, auto last, auto d_first, auto d_last) -> decltype(d_first) {
         for (; first != last; ++first, ++d_first) {

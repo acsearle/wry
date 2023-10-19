@@ -252,7 +252,6 @@
           [event charactersByApplyingModifiers:0]);
     if (event.characters.length) {
         // NSLog(@"keyDown: (%x)\n", [event.characters characterAtIndex:0]);
-        auto guard = std::unique_lock{_model->_mutex};
         
         if (_model->_console_active) {
             switch ([event.characters characterAtIndex:0]) {
@@ -355,9 +354,9 @@
 - (void) mouseExited:(NSEvent *)event {}
 - (void) mouseDown:(NSEvent *)event {}
 - (void) mouseDragged:(NSEvent *)event {
-    auto lock = std::unique_lock{_model->_mutex};
-    _model->_looking_at.x += event.deltaX * _window.screen.backingScaleFactor;
-    _model->_looking_at.y += event.deltaY * _window.screen.backingScaleFactor;
+    //auto lock = std::unique_lock{_model->_mutex};
+    //_model->_looking_at.x += event.deltaX * _window.screen.backingScaleFactor;
+    //_model->_looking_at.y += event.deltaY * _window.screen.backingScaleFactor;
     // NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
     
 }
@@ -378,7 +377,7 @@
 - (void) otherMouseUp:(NSEvent *)event {}
 
 -(void) scrollWheel:(NSEvent *)event {
-    auto lock = std::unique_lock{_model->_mutex};
+    //auto lock = std::unique_lock{_model->_mutex};
     _model->_looking_at.x += event.scrollingDeltaX * _window.screen.backingScaleFactor;
     _model->_looking_at.y += event.scrollingDeltaY * _window.screen.backingScaleFactor;
     // NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);

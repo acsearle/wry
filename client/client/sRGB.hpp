@@ -136,33 +136,6 @@ namespace wry {
         
     };
     
-
-
-
-    
-    /*
-     inline pixel multiply_alpha(pixel x) {
-     return pixel{
-     _multiply_alpha_table[x.a][x.r],
-     _multiply_alpha_table[x.a][x.g],
-     _multiply_alpha_table[x.a][x.g],
-     x.a
-     };
-     }
-     */
-    /*
-     extern uchar (*_divide_alpha_table)[256];
-     
-     inline pixel divide_alpha(pixel x) {
-     return pixel{
-     _multiply_alpha_table[x.a][x.r],
-     _multiply_alpha_table[x.a][x.g],
-     _multiply_alpha_table[x.a][x.g],
-     x.a
-     };
-     }
-     */
-        
     extern uchar (*_multiply_alpha_table)[256];
         
     struct alignas(4) RGBA8Unorm_sRGB {
@@ -181,8 +154,18 @@ namespace wry {
     };
     
     struct alignas(4) BGRA8Unorm_sRGB {
+        
         R8Unorm_sRGB b, g, r;
         R8Unorm a;
+        
+        constexpr BGRA8Unorm_sRGB() = default;
+        
+        constexpr BGRA8Unorm_sRGB(float blue, float green, float red, float alpha)
+        : b(blue)
+        , g(green)
+        , r(red)
+        , a(alpha) {
+        }
     };
     
 } // namespace wry

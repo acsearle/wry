@@ -1,5 +1,196 @@
 # Todo
 
+Interface
+
+- Cursor images of what we hold, and cursor state
+- How to hide delay of anything drawn in Metal to represent cursor
+
+- Pass events to model in a platform-independent way without excessive duplication
+of NSEvent
+
+- Improve text rendering 
+  - linebreaking
+  - italics and subscripts
+
+
+
+IDs vs pointers
+
+- For serialization and lookup, we have unique IDs (and unique Coordinates)
+
+- In some contexts we can use pointers directly if we can guarantee "iterator
+  stability".  Seems likely for agents, not for tiles
+  
+- Cold storage by ID for things not used by simulation
+- Hot storage in main struct
+
+- Classic SoA vs AoS problem; ECS; eventaully, relational database
+
+
+sim::Tile
+
+- how do we efficiently store the rarely-nonempty queues associated with tiles
+- are chunks good?  Do we actually use spatial locality a lot given that we are
+  working on scattered agends?
+  - spatial locality is a huge deal for visualization, which is perhaps less
+    important (since it is bounded)
+
+sim::Value
+
+- what does lock mean?  mutal exclusion of trucks, less clear otherwise
+- should an observer get to keep its place in the queue and get priority for
+  the lock?
+- though we don't want to walk a list of waiters, how long can that list
+  actually be?  not long surely.  one list of people to notify, with some
+  flags maybe?
+  
+- opcodes can be flipped or rotated, so there are families and rings of
+  successors to key through.  table of pred and succ?  triggered by
+  R or shift-R (or Q/E), or INCREMENT if we let trucks edit opcodes
+  
+- if sorting is going to be important, we are going to get mixed things
+  - some materials will have quantities, purities etc.
+  - where to store and how to deal with this "metadata"?
+  - important if we want everything to break down without impossibility
+
+
+sim::Entity
+
+- Trucks have been thought about extensively
+
+
+- It's attractive to have all entities interact strictly via the cell grid,
+  but is it powerful enough?  Seems very awkward for some structures
+  - For example, a stack.  Put onto input cell.  Stack takes it, puts on
+    output cell, and internalizes the prior contents of output.  Take from
+    output cell.  Stack notices it is empty, takes from internal storage and
+    puts something on output.  This is weird double-handling where stuff gets
+    moved unncessarily.
+- Alternatives:
+  - Can push into or pull from entities in adjacent cells?
+    - "Sideloading"?
+      - snap on processing chains
+    - Does this become a Sokoban-style thing?
+    - Note that Sokoban chains are prohbited by dogma (non-local, stiff)
+  - Can load down onto waiting (or passing) truck 
+
+
+- Static producers are simple
+  - Oil well, artesian well, shaft mine, air separation plant, desalination plant
+  - deplete a patch or a global thing
+
+- Processing facilities
+  - Wait on input cells
+  - Take inputs
+  - When all inputs present, wait for process to complete
+  - Wait for clear output cell
+  - Internal buffers may decouple these processes somewhat
+  
+- Can we make them plug-and-play; e.g., 
+  - one output is heat, needs to be connected to cooling tower, or engine, or
+    radiator, or injected into ground
+  - output is CO2, place chimney there, then scrubber, then injector
+  - Chloralkali plant produces H2, burn it off; then cryo-plant
+
+- Area facilities
+  - surface mines
+    - bagger 288!
+    - combine harvester-style surface miner
+  - logging and agriculture
+  - salt evaporation
+  - Really hard to see how to square these with grid cells
+  - Do trucks drive up to the side, snap on, and then go slow as they are
+    filled?  How do trucks find them?  Do they just plough a row back and forth?  Good half-measure
+    Do they write their own instructions for truck pickup?  Too smart.  Do they
+    dump at the end of their row for aggregation by a column thing (like a belt)
+  
+- Buffers
+  - One in cell, one out cell?
+    - FIFO?  Stacks are more useful but also a bit ambiguous in what goes
+      where
+    - Notably, you can make a fifo from two stacks but only by blocking them
+      to transfer-reverse all of the input when the output is empty.
+  - Storage tanks, silos, hoppers all easy
+  - Yards and piles take varying area
+  
+- Bulk material conveyors
+  - Slow teleport
+  - Straight-line only
+  - No compacting
+  - Again, layers (stilts or underground) with gentle slopes
+- Smart floors?
+  - Microscale, more like factorio, they slide stuff around
+  
+- How do we handle gas liquid heat and electricity flow?
+  - Option 1, just make them global resource pools
+  - Option 2, make them local resource pools by proximity to radiators or explicit connections
+    - These connections probably require underground / aboveground layers or they will block roads  
+  - Option 3, make them special roads where the resources move slowly and truck-like
+  - Option 4, pre-emptively ruled out by dogma, ODEs
+
+
+Text assets
+
+- Description panes for opcodes tc.
+- Story treatment, storyboard
+
+
+Graphics assets
+
+- Reference scrapbook
+
+- Decide on if we commit to a signed distance field for
+  - fonts
+  - symbols
+  - hard surface alpha
+  
+- Quality symbols
+  - Define in SVG or similar?
+
+- Placeholder 3D, beginning with just cubes
+
+
+Graphics engine
+
+- Clean up clip space depth reconstruction stuff in GBuffer
+- Instanced non-shadow-casting light sources (headlights etc)
+- Decals
+  - Full material and normal replacement, as in tire tracks
+    - After GBuffer but before lighting
+    - Reads Z, writes everything else
+  - "Augmented Reality" that is more like an overlay projected onto (and
+    obstructed by) geometry
+    - After GBuffer, after other decals, lighting agnostic (cuts albedo)
+    - Reads Z only, writes light-buffer
+
+- Nice placeholder cubes
+
+- Generate missing textures from test pattern + plus name rendered on  
+
+- Simple shaped smoke  
+  - Decals draw from sun perspective in shadow stage onto an irradiance map
+    - Gated by z but does not write to it
+  - Use to illuminate solid surfaces in other stage
+
+- Smoke/dust/fog extinction and emission
+  - "Easy", just sort draw order
+
+- Hard shadows cast onto smoke:
+  Each pixel=ray has to sample the shadow map several times, in a way that
+  resists artifacts
+  - If sampling already, volumetric?
+  
+- Smoke self-shadowing... hard!  Analytic expression for a 3 gaussian of density?
+  - In particular, self-shadowing needs us to sample across 2D - depth into
+    the smoke, and along the ray from those ray depths to the sun
+  
+- Efficient mesh instanced object, the 3d analog of Atlas.  Contains e.g. wheel,
+  not a whole model, perhaps.  One draw call, many objects.
+  
+- Vs, bone rigged models.  Per vertex index of transform matrices.   
+
+
+
 ## Serialization
 
 - A lot of serialization is utf8 -> utf8, it is wasteful to decode and encode 
@@ -46,7 +237,9 @@ System
 
 Renderer
 - Convolution post-processing - bloom, scatter, flare, bokeh
+  - Check, good performance
 - Object-mesh pipeline for generating debug normals
+- Object-mesh pipeline for generating big cell grids just from 2d arrays of central texCoords
 - Instanced small lights
 - Cloud/smoke and partial-shadow-map
 - Parallax mapping

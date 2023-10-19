@@ -17,29 +17,13 @@ namespace wry {
     // critical use case is guessed to be constructing quad vertices.  Storing
     // top-left and bottom-right vertices means that two vertices are copies, and
     // the other two corners are component-wise copies.
-    
-    template<typename T, int N>
-    struct simd_TN;
-    
-    template<typename T, int N>
-    using simd_TN_t = typename simd_TN<T, N>::type;
-    
-    template<>
-    struct simd_TN<float, 2> {
-        using type = simd_float2;
-    };
-
-    template<>
-    struct simd_TN<unsigned long, 2> {
-        using type = simd_ulong2;
-    };
 
     template<typename T>
     class rect {
         
     public:
         
-        using T2 = typename simd_TN<T, 2>::type;
+        using T2 = simd::Vector_t<T, 2>;
         
         T2 a, b;
         
@@ -134,24 +118,24 @@ namespace wry {
     
     // shift
     template<typename T>
-    rect<T> operator+(const rect<T>& a, const simd_TN_t<T, 2>& b) {
+    rect<T> operator+(const rect<T>& a, const simd::Vector_t<T, 2>& b) {
         return rect{a.a + b, a.b + b};
     }
     
     template<typename T>
-    rect<T>& operator+=(rect<T>& a, const simd_TN_t<T, 2>& b) {
+    rect<T>& operator+=(rect<T>& a, const simd::Vector_t<T, 2>& b) {
         a.a += b;
         a.b += b;
         return a;
     }
     
     template<typename T>
-    rect<T> operator-(const rect<T>& a, const simd_TN_t<T, 2>& b) {
+    rect<T> operator-(const rect<T>& a, const simd::Vector_t<T, 2>& b) {
         return rect{a.a - b, a.b - b};
     }
     
     template<typename T>
-    rect<T>& operator-=(rect<T>& a, const simd_TN_t<T, 2>& b) {
+    rect<T>& operator-=(rect<T>& a, const simd::Vector_t<T, 2>& b) {
         a.a -= b;
         a.b -= b;
         return a;
@@ -186,7 +170,7 @@ namespace wry {
     }
     
     template<typename T>
-    rect<T> hull(const rect<T>& a, const simd_TN_t<T, 2>& b) {
+    rect<T> hull(const rect<T>& a, const simd::Vector_t<T, 2>& b) {
         return rect<T>(min(a.a.x, b.x),
                        min(a.a.y, b.y),
                        max(a.b.x, b.x),
