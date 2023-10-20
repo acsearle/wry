@@ -41,7 +41,6 @@
     // view-only state
         
     size_t _frame_count;
-    simd::float2 _viewport_size;
             
     id<MTLBuffer> _screenTriangleStripVertexBuffer;
     id<MTLCommandQueue> _commandQueue;
@@ -424,9 +423,16 @@
             _shadowMapTarget.label = @"Shadow map texture";
         }
         {
+            // todo: make a dedicated ShadowVertexShader so that we can use the
+            // same uniforms
+            // todo: use vertex amplification to render the gbuffer and the
+            // shadow buffer from the same draw command?  probably not, even if
+            // the fragment shader could handle missing render targets, it would
+            // still not be optimized to not compute them
+            
             MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
             descriptor.label = @"Shadow map pipeline";
-            descriptor.vertexFunction = [self newFunctionWithName:@"DeferredGBufferVertexShader"];
+            descriptor.vertexFunction = [self newFunctionWithName:@"DeferredGBufferShadowVertexShader"];
             descriptor.fragmentFunction = [self newFunctionWithName:@"DeferredGBufferShadowFragmentShader"];
             descriptor.vertexBuffers[AAPLBufferIndexVertices].mutability = MTLMutabilityImmutable;
             descriptor.vertexBuffers[AAPLBufferIndexUniforms].mutability = MTLMutabilityImmutable;
@@ -639,7 +645,7 @@
         
         uniforms.position_transform = simd_mul(matrix_float4x4{{
             {1.0f, 0.0f, 0.0f},
-            {0.0f, -_viewport_size.x / _viewport_size.y, 0.0f, 0.0f},
+            {0.0f, -_model->_viewport_size.x / _model->_viewport_size.y, 0.0f, 0.0f},
             { 0.0f, 0.0f, 1.0f, 0.0f },
             {0.0f, 0.0f, 0.0f, 1.0f},
         }}, _controls._transform);
@@ -654,17 +660,19 @@
             
             difference_type i = floor(mmm.x);
             difference_type j = floor(mmm.y);
-            
+                        
             if ((0 <= i) && (i < m.minor()) && (0 <= j) && (j < m.minor())) {
                 // we have clicked on the palette
                 _model->_selected_i = i;
                 _model->_selected_j = j;
                 _model->_holding_value = m[i, j];
+                printf(" Clicked palette (%td, %td)\n", i, j);
             } else {
                 // we clicked outside the palette
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
                 _model->_world._tiles[Coordinate{i, j}]._value = _model->_holding_value;
+                printf(" Clicked world (%d, %d)\n", i, j);
             }
             _model->_outstanding_click = false;
             
@@ -768,8 +776,8 @@
     
     
     uniforms.position_transform = matrix_float4x4{{
-        {2.0f / _viewport_size.x, 0.0f, 0.0f},
-        {0.0f, -2.0f / _viewport_size.y, 0.0f, 0.0f},
+        {2.0f / _model->_viewport_size.x, 0.0f, 0.0f},
+        {0.0f, -2.0f / _model->_viewport_size.y, 0.0f, 0.0f},
         { 0.0f, 0.0f, 1.0f, 0.0f },
         {-1.0f, +1.0f, 0.0f, 1.0f},
     }};
@@ -863,37 +871,15 @@
     
 
     // Construct camera transforms
-    MeshUniforms uniforms = {};
-    MeshUniforms shadowMapUniforms = {};
-    {
-        // rotate eye location to -Z
-        float4 origin = simd_make_float4(0.0f, 16.0, -8.0f, 1.0f);
-        quatf q = simd_quaternion(simd_normalize(origin.xyz),
-                                  simd_make_float3(0.0, 0.0, -1.0));
-        float4x4 A = simd_matrix4x4(q);
-        float4x4 B = simd_matrix_translate(simd_make_float3(0.0f, 0.0f, simd_length(origin.xyz)));
-        float aspect_ratio =  _viewport_size.x / _viewport_size.y;
-        float4x4 C = simd_matrix_scale(simd_make_float3(2.0f, 2.0f * aspect_ratio, 1.0f));
-        float4x4 V = C * B * A;
-        float4x4 iV = inverse(V);
-        float4x4 P = matrix_perspective_float4x4;
-        float4x4 VP = P * V;
-        float4x4 iVP = inverse(VP);
-        
-        uniforms.origin = origin;
-        uniforms.view_transform = V;
-        uniforms.inverse_view_transform = iV;
-        uniforms.viewprojection_transform = VP;
-        uniforms.inverse_viewprojection_transform = iVP;
-    }
+    MeshUniforms uniforms = _model->_uniforms;
     
     // Construct ground plane transforms
     MeshInstanced mesh_instanced_things = {};
 
     {
-        mesh_instanced_things.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
+        mesh_instanced_things.model_transform = matrix_identity_float4x4;
         mesh_instanced_things.model_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
-        mesh_instanced_things.model_transform.columns[3].z -= _model->_looking_at.y / 1024.0f;
+        mesh_instanced_things.model_transform.columns[3].y -= _model->_looking_at.y / 1024.0f;
         mesh_instanced_things.inverse_transpose_model_transform = simd_inverse(simd_transpose(mesh_instanced_things.model_transform));
         mesh_instanced_things.albedo = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
         memcpy([_instanced_things contents], &mesh_instanced_things, sizeof(mesh_instanced_things));
@@ -910,7 +896,7 @@
         _model->_mouse4 = simd_make_float4(project_screen_ray(A, b), 0.0f, 1.0f);
         // b now contains the screen space coordinates of the
         // intersection, aka b.z is now the depth
-        assert((0.0f <= b.z) && (b.z <= 1.0f));
+        //assert((0.0f <= b.z) && (b.z <= 1.0f));
         
         // Screen corners
         simd_float4x2 c = project_screen_frustum(A);
@@ -1152,42 +1138,10 @@
         descriptor.depthAttachment.texture = _shadowMapTarget;
         id<MTLRenderCommandEncoder> render_command_encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
         
-        // shadow map parameters
+        // shadow map for a light source at infinity
 
-        simd_float3 light_direction = simd_normalize(simd_make_float3(2, 3, 1));
-
-        // conventional projection:
-        //float light_radius = 12.0;
+       
         
-        //simd_quatf q = simd_quaternion(light_direction, simd_make_float3(0, 0, -1));
-        //float4x4 A = simd_matrix4x4(q);
-        //float4x4 B = simd_matrix_scale(simd_make_float3(1.0f, 1.0f, 0.5f) / light_radius);
-        //float4x4 C = simd_matrix_translate(simd_make_float3(0.0f, 0.0f, 0.5f));
-        
-        // suppose instead we take the camera's projection of the XZ plane and
-        // map it to shadow:
-        
-        // uniform.viewprojection_transform
-        // we want x0z1 to go to the same part of the screen:
-        //
-        // Thus our new view_projection must be of the form
-        //
-        
-        float4x4 D = simd_matrix(uniforms.viewprojection_transform.columns[0],
-                                 //uniforms.viewprojection_transform.columns[1],
-                                 //simd_make_float4(0, 0, 0, 0),
-                                 simd_make_float4(-light_direction.x / light_direction.y,
-                                                  -light_direction.z / light_direction.y,
-                                                  -0.1f,
-                                                  0.0f),
-                                 uniforms.viewprojection_transform.columns[2],
-                                 uniforms.viewprojection_transform.columns[3]);
-                                 
-        
-        
-        shadowMapUniforms.viewprojection_transform = D; // C * B * A;
-        shadowMapUniforms.light_direction = -light_direction;
-        shadowMapUniforms.radiance = 2.0f; //sqrt(simd_saturate(cos(phaseOfDay)));
         
         [render_command_encoder setRenderPipelineState:_shadowMapRenderPipelineState];
         //[render_command_encoder setCullMode:MTLCullModeFront];
@@ -1197,14 +1151,14 @@
                                   slopeScale:+1.0f // ?
                                        clamp:0.0f];
 
-        [render_command_encoder setVertexBytes:&shadowMapUniforms
+        [render_command_encoder setVertexBytes:&uniforms
                                         length:sizeof(MeshUniforms)
                                        atIndex:AAPLBufferIndexUniforms];
         
         [render_command_encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
         [render_command_encoder setVertexBuffer:_instanced_things offset:0 atIndex:AAPLBufferIndexInstanced];
                     
-        [render_command_encoder setFragmentBytes:&shadowMapUniforms
+        [render_command_encoder setFragmentBytes:&uniforms
                                           length:sizeof(MeshUniforms)
                                          atIndex:AAPLBufferIndexUniforms];
         [render_command_encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
@@ -1260,11 +1214,6 @@
         {
 
             {
-                // save shadow map transform
-                uniforms.light_viewprojection_transform = matrix_ndc_to_tc_float4x4 * shadowMapUniforms.viewprojection_transform;
-                uniforms.light_direction = shadowMapUniforms.light_direction;
-                uniforms.radiance = shadowMapUniforms.radiance;
-
                 uniforms.ibl_scale = 1.0f;
                 uniforms.ibl_transform = matrix_identity_float3x3;
 
@@ -1431,8 +1380,9 @@
 -(void)drawableResize:(CGSize)drawableSize
 {
     
-    _viewport_size.x = drawableSize.width;
-    _viewport_size.y = drawableSize.height;
+    _model->_viewport_size.x = drawableSize.width;
+    _model->_viewport_size.y = drawableSize.height;
+    _model->_regenerate_uniforms();
         
     // The G-buffers must be recreated at the new size
 
@@ -1441,8 +1391,8 @@
     // Common attributes
     
     descriptor.textureType = MTLTextureType2D;
-    descriptor.width = _viewport_size.x;
-    descriptor.height = _viewport_size.y;
+    descriptor.width = drawableSize.width;
+    descriptor.height = drawableSize.height;
     
     // colorAttachments
     descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;

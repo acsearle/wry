@@ -110,7 +110,6 @@ struct DeferredGBufferVertexShaderOutput {
     
     float4 clipSpacePosition [[position]];
     float4 eyeSpacePosition;
-    float4 lightSpacePosition;
     float4 coordinate;
     float4 worldNormal;
     float4 worldTangent;
@@ -142,9 +141,8 @@ DeferredGBufferVertexShader(uint vertex_id [[ vertex_id ]],
     out.coordinate = in.coordinate;
 
     float4 worldSpacePosition = instance.model_transform * in.position;
-    out.eyeSpacePosition   = uniforms.view_transform * worldSpacePosition;
+    // out.eyeSpacePosition   = uniforms.view_transform * worldSpacePosition;
     out.clipSpacePosition  = uniforms.viewprojection_transform * worldSpacePosition;
-    out.lightSpacePosition = uniforms.light_viewprojection_transform * worldSpacePosition;
     out.worldTangent       = instance.inverse_transpose_model_transform * in.tangent;
     out.worldBitangent     = instance.inverse_transpose_model_transform * -in.bitangent;
     out.worldNormal        = instance.inverse_transpose_model_transform * in.normal;
@@ -192,16 +190,39 @@ DeferredGBufferFragmentShader(DeferredGBufferVertexShaderOutput in [[stage_in]],
     out.albedoMetallic.a = front_facing ? metallicSample.r : 0.0h;
     out.normalRoughness.xyz = front_facing ? normal : 0.0h;
     out.normalRoughness.w = front_facing ? roughnessSample.r : 1.0h;
-    out.depth = in.eyeSpacePosition.z;
+    // out.depth = in.eyeSpacePosition.z;
+    out.depth = in.clipSpacePosition.z;
     
     return out;
    
 }
 
 
+struct DeferredGBufferShadowVertexShaderOutput {
+    float4 clipSpacePosition [[position]];
+    float4 coordinate;
+};
+
+
+[[vertex]] DeferredGBufferShadowVertexShaderOutput
+DeferredGBufferShadowVertexShader(uint vertex_id [[ vertex_id ]],
+                            uint instance_id [[ instance_id ]],
+                            constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
+                            const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
+                            const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
+{
+    DeferredGBufferShadowVertexShaderOutput out;
+    MeshVertex in = vertexArray[vertex_id];
+    MeshInstanced instance = instancedArray[instance_id];
+    out.coordinate = in.coordinate;
+    float4 worldSpacePosition = instance.model_transform * in.position;
+    out.clipSpacePosition = uniforms.light_viewprojection_transform * worldSpacePosition;
+    return out;
+}
+
 
 [[fragment]] void
-DeferredGBufferShadowFragmentShader(DeferredGBufferVertexShaderOutput in [[stage_in]],
+DeferredGBufferShadowFragmentShader(DeferredGBufferShadowVertexShaderOutput in [[stage_in]],
                               texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]])
 
 {
@@ -235,13 +256,15 @@ DeferredGBufferShadowFragmentShader(DeferredGBufferVertexShaderOutput in [[stage
 
 
 
+
+
 struct LightingVertexInput {
     float4 position;
 };
 
 struct LightingVertexOutput {
-    float4 position [[position]];
-    float3 direction;
+    float4 near_clip [[ position ]];
+    float4 near_world;
 };
 
 
@@ -250,12 +273,10 @@ struct LightingVertexOutput {
 meshLightingVertex(uint vertexID [[ vertex_id ]],
                    const device float4 *vertexArray [[ buffer(AAPLBufferIndexVertices) ]],
                    constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]])
-
 {
     LightingVertexOutput out;
-    out.position = vertexArray[vertexID];
-    float4 direction = float4(out.position.x, out.position.y, 1.0, 0.0);
-    out.direction = (uniforms.inverse_view_transform * direction).xyz;
+    out.near_clip = vertexArray[vertexID];
+    out.near_world = uniforms.inverse_viewprojection_transform * out.near_clip;
     return out;
 }
 
@@ -290,8 +311,17 @@ meshLightingFragment(LightingVertexOutput in [[stage_in]],
     float3 normal = float3(gbuffer.normalRoughness.xyz);
     float roughness = float(gbuffer.normalRoughness.w);
     float occlusion = 1.0f;
+    
+    //albedo = 1.0f;
+    //metallic = 1.0f;
+    //roughness = 0.1f;
 
-    float3 V = -normalize(in.direction.xyz);
+    
+    // compute incoming direction
+    float4 far_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2];
+    float3 direction = far_world.xyz * in.near_world.w - in.near_world.xyz * far_world.w;
+
+    float3 V = -normalize(direction);
     float3 N = normal;
     float3 R = reflect(-V, N);
     
@@ -326,9 +356,10 @@ meshLightingFragment(LightingVertexOutput in [[stage_in]],
     float3 Lo = (kD * diffuse + specular) * occlusion * uniforms.ibl_scale.rgb;
     
     out.color.rgb = half3(Lo);
+    //out.color.rgb = half3(-V);
     out.color.a = 1.0f;
 
-    out.color = clamp(out.color, 0.0h, HALF_MAX);
+    // out.color = clamp(out.color, 0.0h, HALF_MAX);
 
     return out;
         
@@ -354,14 +385,22 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     float3 N = float3(gbuffer.normalRoughness.xyz);
     float roughness = float(gbuffer.normalRoughness.w);
     [[maybe_unused]] float occlusion = 1.0f;
+    
+    //albedo = 1.0f;
+    //metallic = 1.0f;
+    //roughness = 0.1f;
+    
+    // compute incoming direction
     float depth = gbuffer.depth;
+    // complete the inverse_viewprojection
+    float4 position_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2] * depth;
+    float3 direction = position_world.xyz * in.near_world.w - in.near_world.xyz * position_world.w;
 
-    float3 V = -normalize(in.direction.xyz);
+    float3 V = -normalize(direction);
     float3 L = -uniforms.light_direction;
     float3 H = normalize(V + L);
     
-    float4 position = float4(in.direction * depth, 0) + uniforms.origin;
-    float4 lightSpacePosition = uniforms.light_viewprojection_transform * position;
+    float4 lightSpacePosition = uniforms.light_viewprojectiontexture_transform * position_world;
     lightSpacePosition /= lightSpacePosition.w;
         
     float shadowSample = shadowTexture.sample(nearestSampler, lightSpacePosition.xy).r;
@@ -398,6 +437,7 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     // Lo = clamp(Lo, 0.0f, 4096.0f);
     
     out.color.rgb = half3(Lo);
+    //out.color.rgb = half3(in.position_clip.xyz/in.position_clip.w) * 0.01h;
     //out.color.rg = half2(lightSpacePosition.xy);
     //out.color.b = shadowSample;
     //out.color.rgb = lightSpacePosition.z;
@@ -566,8 +606,8 @@ CubeFilterAccumulate3(CubeFilterVertexOut in [[stage_in]],
         float2 X = HammersleySequence(i, M);
         float3 H = T * SampleTrowbridgeReitz(X, alpha2);
         float3 R = reflect(-V, H);
-        float phi = atan2(R.z, R.x) * 0.5 * M_1_PI_F;
-        float theta = acos(R.y) * M_1_PI_F;
+        float phi = atan2(R.y, R.x) * 0.5 * M_1_PI_F;
+        float theta = acos(R.z) * M_1_PI_F;
         // float4 environmentalSample = environmentMap.sample(bilinearSampler, R);
         float4 environmentalSample = environmentMap.sample(bilinearSampler, float2(phi, theta));
         sum += select(environmentalSample.rgb, float3(0), isinf(environmentalSample.rgb)) / M;

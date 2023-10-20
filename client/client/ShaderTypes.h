@@ -111,7 +111,7 @@ struct MeshUniforms {
     // tangent space -> model space -> world space -> eye space -> clip space
     //           normal           model            view        projection
     
-    vector_float4 origin;
+    vector_float4 camera_position_world;
     
     matrix_float4x4 view_transform;
     matrix_float4x4 inverse_view_transform;
@@ -127,7 +127,8 @@ struct MeshUniforms {
     vector_float3 light_direction;
     matrix_float4x4 light_viewprojection_transform;
     vector_float3 radiance;
-    
+    matrix_float4x4 light_viewprojectiontexture_transform;
+
     // IBL multiplier
     vector_float4 ibl_scale;
     matrix_float3x3 ibl_transform;

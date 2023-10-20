@@ -108,6 +108,11 @@ inline simd_float3x3 simd_matrix3x3(simd_float4x4 a) {
                        a.columns[2].xyz);
 }
 
+// map from normalized device coordinates
+//     [-1, 1] x [1, -1] x [0, 1]
+// to texture coordinates
+//     [ 0, 1] x [0,  1] x [0, 1]
+
 inline constexpr simd_float4x4 matrix_ndc_to_tc_float4x4 = {{
     {  0.5f,  0.0f,  0.0f,  0.0f },
     {  0.0f, -0.5f,  0.0f,  0.0f },
@@ -130,6 +135,34 @@ inline constexpr simd_float4x4 matrix_perspective_float4x4 = {{
 }};
 
 
+// fixme
+inline simd_float4x4 matrix_perspective_left_hand(float fovyRadians, float aspect, float nearZ, float farZ) {
+    float ys = 1 / tanf(fovyRadians * 0.5);
+    float xs = ys / aspect;
+    float zs = farZ / (farZ - nearZ);
+    return simd_matrix_from_rows(simd_make_float4(xs,  0,  0,           0),
+                            simd_make_float4(0, ys,  0,           0),
+                            simd_make_float4(0,  0, zs, -nearZ * zs),
+                            simd_make_float4(0,  0,  1,           0 ));
+}
+
+/*
+inline simd_float4x4 matrix_perspective_right_hand(float fovyRadians, float aspect, float nearZ, float farZ) {
+    float ys = 1 / tanf(fovyRadians * 0.5);
+    float xs = ys / aspect;
+    float zs = farZ / (nearZ - farZ);
+    return matrix_make_rows(xs,  0,  0,          0,
+                            0, ys,  0,          0,
+                            0,  0, zs, nearZ * zs,
+                            0,  0, -1,          0 );
+}
+ */
+
+
+
+
+
+
 inline simd_float4x4 simd_matrix_rotate(float theta, simd_float3 u) {
     assert(simd_all(u == simd_normalize(u)));
     return simd_matrix4x4(simd_quaternion(theta, u));
@@ -149,18 +182,26 @@ inline simd_float4x4 simd_matrix_translate(simd_float4 u) {
                        u);
 }
 
-inline simd_float4x4 simd_matrix_scale(float u) {
-    return simd_matrix(simd_make_float4(  u, 0.0f, 0.0f, 0.0f),
-                       simd_make_float4(0.0f,   u, 0.0f, 0.0f),
-                       simd_make_float4(0.0f, 0.0f,   u, 0.0f),
+inline simd_float4x4 simd_matrix_translate(float x, float y, float z = 0.0f, float w = 1.0f) {
+    return simd_matrix(simd_make_float4(w, 0.0f, 0.0f, 0.0f),
+                       simd_make_float4(0.0f, w, 0.0f, 0.0f),
+                       simd_make_float4(0.0f, 0.0f, w, 0.0f),
+                       simd_make_float4(x, y, z, w));
+}
+
+
+inline simd_float4x4 simd_matrix_scale(float x) {
+    return simd_matrix(simd_make_float4(  x, 0.0f, 0.0f, 0.0f),
+                       simd_make_float4(0.0f,   x, 0.0f, 0.0f),
+                       simd_make_float4(0.0f, 0.0f,   x, 0.0f),
                        simd_make_float4(0.0f, 0.0f, 0.0f, 1.0f));
 }
 
-inline simd_float4x4 simd_matrix_scale(simd_float3 u) {
+inline simd_float4x4 simd_matrix_scale(simd_float3 u, float w = 1.0f) {
     return simd_matrix(simd_make_float4(u.x, 0.0f, 0.0f, 0.0f),
                        simd_make_float4(0.0f, u.y, 0.0f, 0.0f),
                        simd_make_float4(0.0f, 0.0f, u.z, 0.0f),
-                       simd_make_float4(0.0f, 0.0f, 0.0f, 1.0f));
+                       simd_make_float4(0.0f, 0.0f, 0.0f, w));
 }
 
 inline simd_float4x4 simd_matrix_scale(simd_float4 u) {
@@ -169,6 +210,14 @@ inline simd_float4x4 simd_matrix_scale(simd_float4 u) {
                        simd_make_float4(0.0f, 0.0f, u.z, 0.0f),
                        simd_make_float4(0.0f, 0.0f, 0.0f, u.w));
 }
+
+inline simd_float4x4 simd_matrix_scale(float x, float y, float z = 1, float w = 1.0f) {
+    return simd_matrix(simd_make_float4(x, 0, 0, 0),
+                       simd_make_float4(0, y, 0, 0),
+                       simd_make_float4(0, 0, z, 0),
+                       simd_make_float4(0, 0, 0, w));
+}
+
 
 inline simd_float2 simd_floor(simd_float2 a) {
     return simd_make_float2(floor(a.x), floor(a.y));

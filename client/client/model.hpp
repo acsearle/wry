@@ -8,6 +8,8 @@
 #ifndef model_hpp
 #define model_hpp
 
+#include "ShaderTypes.h"
+
 #include <memory>
 #include <mutex>
 #include <map>
@@ -30,6 +32,10 @@ namespace wry {
         
         // The model holds all the app state, including the sim::world, but
         // also the visualization-only parts of the app state
+        
+        // We'll try to keep the model / WryRenderer distinction to roughly be
+        // the platform-independent / platform-specific code dividing line,
+        // though things like simd_ make this ambiguous
         
         // simulation state
         
@@ -57,6 +63,14 @@ namespace wry {
         simd_float2 _mouse = {};
         simd_float4 _mouse4 = {};
         
+        // visualization state
+        
+        
+        // Camera and sun projections
+        
+        simd_float2 _viewport_size;
+
+        MeshUniforms _uniforms;
 
         model() {
 
@@ -72,7 +86,12 @@ namespace wry {
             // ready to run its lock-acquired-action
             _world._location_locked.emplace_back(Coordinate{0,0}, p);
             
+            _uniforms.camera_position_world = simd_make_float4(0.0f, -8.0f, -16.0f, 1.0f);
+            _regenerate_uniforms();
+
         }
+        
+        void _regenerate_uniforms();
         
         ~model() {
             fprintf(stderr, "%s\n", __PRETTY_FUNCTION__);
