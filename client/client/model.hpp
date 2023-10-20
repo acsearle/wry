@@ -86,7 +86,7 @@ namespace wry {
             // ready to run its lock-acquired-action
             _world._location_locked.emplace_back(Coordinate{0,0}, p);
             
-            _uniforms.camera_position_world = simd_make_float4(0.0f, -8.0f, -16.0f, 1.0f);
+            _uniforms.camera_position_world = simd_make_float4(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();
 
         }

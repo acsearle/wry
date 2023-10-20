@@ -932,9 +932,9 @@
         MeshVertex* pv = (MeshVertex*) vertices.contents;
         uint* pi = (uint*) indices.contents;
         MeshVertex v;
-        v.tangent = simd_make_float4(-1.0f, 0.0f, 0.0f, 0.0f);
+        v.tangent = simd_make_float4(1.0f, 0.0f, 0.0f, 0.0f);
         v.bitangent = simd_make_float4(0.0f, 1.0f, 0.0f, 0.0f);
-        v.normal = simd_make_float4(0.0f, 0.0f, -1.0f, 0.0f);
+        v.normal = simd_make_float4(0.0f, 0.0f, 1.0f, 0.0f);
         uint k = 0;
         for (auto q : entities) {
             
@@ -943,8 +943,8 @@
                 continue;
             
             auto h = p->_heading & 3;
-            auto x0 = simd_make_float4(p->_old_location.x, p->_old_location.y, -0.2, 1.0f);
-            auto x1 = simd_make_float4(p->_new_location.x, p->_new_location.y, -0.2, 1.0f);
+            auto x0 = simd_make_float4(p->_old_location.x, p->_old_location.y, 0.2, 1.0f);
+            auto x1 = simd_make_float4(p->_new_location.x, p->_new_location.y, 0.2, 1.0f);
             
             simd_float4 location;
             if (tnow >= p->_new_time) {
@@ -1020,7 +1020,7 @@
         for (int i = grid_bounds.a.x; i != grid_bounds.b.x; ++i) {
             for (int j = grid_bounds.a.y; j != grid_bounds.b.y; ++j) {
 
-                simd_float4 location = simd_make_float4(i, j, -0.1f, 1.0f);
+                simd_float4 location = simd_make_float4(i, j, 0.1f, 1.0f);
                 simd_float4 coordinate = simd_make_float4(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
@@ -1144,7 +1144,7 @@
         
         
         [render_command_encoder setRenderPipelineState:_shadowMapRenderPipelineState];
-        //[render_command_encoder setCullMode:MTLCullModeFront];
+        //[render_command_encoder setCullMode:MTLCullModeBack];
         [render_command_encoder setDepthStencilState:_enabledDepthStencilState];
         
         [render_command_encoder setDepthBias:0.0f // +100.0f

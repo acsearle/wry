@@ -136,7 +136,7 @@ inline constexpr simd_float4x4 matrix_perspective_float4x4 = {{
 
 
 // fixme
-inline simd_float4x4 matrix_perspective_left_hand(float fovyRadians, float aspect, float nearZ, float farZ) {
+inline simd_float4x4 matrix_perspective_right_hand(float fovyRadians, float aspect, float nearZ, float farZ) {
     float ys = 1 / tanf(fovyRadians * 0.5);
     float xs = ys / aspect;
     float zs = farZ / (farZ - nearZ);
@@ -146,17 +146,7 @@ inline simd_float4x4 matrix_perspective_left_hand(float fovyRadians, float aspec
                             simd_make_float4(0,  0,  1,           0 ));
 }
 
-/*
-inline simd_float4x4 matrix_perspective_right_hand(float fovyRadians, float aspect, float nearZ, float farZ) {
-    float ys = 1 / tanf(fovyRadians * 0.5);
-    float xs = ys / aspect;
-    float zs = farZ / (nearZ - farZ);
-    return matrix_make_rows(xs,  0,  0,          0,
-                            0, ys,  0,          0,
-                            0,  0, zs, nearZ * zs,
-                            0,  0, -1,          0 );
-}
- */
+
 
 
 

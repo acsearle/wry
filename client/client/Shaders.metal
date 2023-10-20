@@ -109,7 +109,6 @@ float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
 struct DeferredGBufferVertexShaderOutput {
     
     float4 clipSpacePosition [[position]];
-    float4 eyeSpacePosition;
     float4 coordinate;
     float4 worldNormal;
     float4 worldTangent;
@@ -141,10 +140,9 @@ DeferredGBufferVertexShader(uint vertex_id [[ vertex_id ]],
     out.coordinate = in.coordinate;
 
     float4 worldSpacePosition = instance.model_transform * in.position;
-    // out.eyeSpacePosition   = uniforms.view_transform * worldSpacePosition;
     out.clipSpacePosition  = uniforms.viewprojection_transform * worldSpacePosition;
     out.worldTangent       = instance.inverse_transpose_model_transform * in.tangent;
-    out.worldBitangent     = instance.inverse_transpose_model_transform * -in.bitangent;
+    out.worldBitangent     = instance.inverse_transpose_model_transform * in.bitangent;
     out.worldNormal        = instance.inverse_transpose_model_transform * in.normal;
 
     return out;
@@ -311,12 +309,7 @@ meshLightingFragment(LightingVertexOutput in [[stage_in]],
     float3 normal = float3(gbuffer.normalRoughness.xyz);
     float roughness = float(gbuffer.normalRoughness.w);
     float occlusion = 1.0f;
-    
-    //albedo = 1.0f;
-    //metallic = 1.0f;
-    //roughness = 0.1f;
-
-    
+        
     // compute incoming direction
     float4 far_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2];
     float3 direction = far_world.xyz * in.near_world.w - in.near_world.xyz * far_world.w;
@@ -386,10 +379,6 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     float roughness = float(gbuffer.normalRoughness.w);
     [[maybe_unused]] float occlusion = 1.0f;
     
-    //albedo = 1.0f;
-    //metallic = 1.0f;
-    //roughness = 0.1f;
-    
     // compute incoming direction
     float depth = gbuffer.depth;
     // complete the inverse_viewprojection
@@ -397,7 +386,7 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     float3 direction = position_world.xyz * in.near_world.w - in.near_world.xyz * position_world.w;
 
     float3 V = -normalize(direction);
-    float3 L = -uniforms.light_direction;
+    float3 L = uniforms.light_direction;
     float3 H = normalize(V + L);
     
     float4 lightSpacePosition = uniforms.light_viewprojectiontexture_transform * position_world;
