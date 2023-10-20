@@ -326,8 +326,8 @@
     
     id<MTLRenderPipelineState> render_pipeline_state = nil;
     MTLRenderPipelineDescriptor* render_pipeline_descriptor = [MTLRenderPipelineDescriptor new];
-    render_pipeline_descriptor.vertexFunction = [self newFunctionWithName:@"SplitSumVertex"];
-    render_pipeline_descriptor.fragmentFunction = [self newFunctionWithName:@"SplitSumFragment"];
+    render_pipeline_descriptor.vertexFunction = [self newFunctionWithName:@"split_sum_vertex_function"];
+    render_pipeline_descriptor.fragmentFunction = [self newFunctionWithName:@"split_sum_fragment_function"];
     render_pipeline_descriptor.colorAttachments[0].pixelFormat = _deferredLightImageBasedFresnelTexture.pixelFormat;
     render_pipeline_descriptor.label = @"SplitSum";
     render_pipeline_state = [self newRenderPipelineStateWithDescriptor:render_pipeline_descriptor];
@@ -432,8 +432,8 @@
             
             MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
             descriptor.label = @"Shadow map pipeline";
-            descriptor.vertexFunction = [self newFunctionWithName:@"DeferredGBufferShadowVertexShader"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"DeferredGBufferShadowFragmentShader"];
+            descriptor.vertexFunction = [self newFunctionWithName:@"deferred_shadow_vertex_function"];
+            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred_shadow_fragment_function"];
             descriptor.vertexBuffers[AAPLBufferIndexVertices].mutability = MTLMutabilityImmutable;
             descriptor.vertexBuffers[AAPLBufferIndexUniforms].mutability = MTLMutabilityImmutable;
             descriptor.depthAttachmentPixelFormat = _shadowMapTarget.pixelFormat;
@@ -459,8 +459,8 @@
             descriptor.colorAttachments[AAPLColorIndexDepth].pixelFormat = MTLPixelFormatR32Float;
             descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
-            descriptor.vertexFunction = [self newFunctionWithName:@"DeferredGBufferVertexShader"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"DeferredGBufferFragmentShader"];
+            descriptor.vertexFunction = [self newFunctionWithName:@"deferred_vertex_function"];
+            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred_fragment_function"];
             descriptor.label = @"Deferred G-buffer";
             _deferredGBufferRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
             

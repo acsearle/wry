@@ -12,17 +12,37 @@ using namespace metal;
 
 #include "ShaderTypes.h"
 
-# pragma mark - Utility functions
+# pragma mark - Physically-based rendering functionaliy
+
+// Physically-based rendering functionality
+//
+// Mostly based on
+//
+//     [1] learnopengl.com/PBR
+//
+// itself based on
+//
+//     [2] https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf
+//
+// which describes the lighting model used by Epic in UE4, which is itself based on
+//
+//     [3] https://blog.selfshadow.com/publications/s2012-shading-course/burley/s2012_pbs_disney_brdf_notes_v3.pdf
+//
+// which describes the lighting model used by Disney in Wreck-It Ralph
+
+
 
 // Hammersley low-discrepency sequence for quasi-Monte-Carlo integration
 
-float2 HammersleySequence(ushort i, ushort N) {
+float2 sequence_Hammersley(ushort i, ushort N) {
     return float2(float(i) / float(N), reverse_bits(i) * 0.00001525878f);
 }
 
 // Microfacet distribution
 
-float DistributionTrowbridgeReitz(float NdotH, float alpha2) {
+// Determines reflection sharpness and highlight size
+
+float distribution_Trowbridge_Reitz(float NdotH, float alpha2) {
     float nh2 = NdotH * NdotH;
     float d = (nh2 * (alpha2 - 1.0f) + 1.0f);
     float d2 = d * d;
@@ -30,7 +50,7 @@ float DistributionTrowbridgeReitz(float NdotH, float alpha2) {
     return alpha2 / d3;
 }
 
-float3 SampleTrowbridgeReitz(float2 chi, float alpha2) {
+float3 sample_Trowbridge_Reitz(float2 chi, float alpha2) {
     
     // note that this form of the quotient is robust against both
     // \alpha = 0 and \alpha = 1
@@ -54,109 +74,150 @@ float3 SampleTrowbridgeReitz(float2 chi, float alpha2) {
 // Associated with microfacet self-shadowing on rough surfaces and glancing
 // rays; tends to darken edges
 
-float GeometrySchlick(float NdotV, float k) {
+//:todo: we can inline these better and eliminate some duplication
+float geometry_Schlick(float NdotV, float k) {
     return NdotV / (NdotV * (1.0f - k) + k);
 }
 
-float GeometrySmithK(float NdotV, float NdotL, float k) {
-    float viewFactor = GeometrySchlick(NdotV, k);
-    float lightFactor = GeometrySchlick(NdotL, k);
+float geometry_Smith_k(float NdotV, float NdotL, float k) {
+    float viewFactor = geometry_Schlick(NdotV, k);
+    float lightFactor = geometry_Schlick(NdotL, k);
     return viewFactor * lightFactor;}
 
-float GeometrySmithPoint(float NdotV, float NdotL, float roughness) {
+float geometry_Smith_point(float NdotV, float NdotL, float roughness) {
     float r = roughness + 1.0f;
     float k = r * r / 8.0f;
-    return GeometrySmithK(NdotV, NdotL, k);
+    return geometry_Smith_k(NdotV, NdotL, k);
 }
 
-float GeometrySmithArea(float NdotV, float NdotL, float roughness) {
+float geometry_Smith_area(float NdotV, float NdotL, float roughness) {
     float k = roughness * roughness / 2.0f;
-    return GeometrySmithK(NdotV, NdotL, k);
+    return geometry_Smith_k(NdotV, NdotL, k);
 }
-
 
 // Fresnel factor
 
 // Increased reflectivity at glancing angles; tends to brighten edges
 
-float3 FresnelSchlick(float cosTheta, float3 F0) {
+float3 Fresnel_Schlick(float cosTheta, float3 F0) {
     return F0 + (1.0f - F0) * pow(saturate(1.0f - cosTheta), 5.0f);
 }
 
-float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
+float3 Fresnel_Schlick_roughness(float cosTheta, float3 F0, float roughness) {
     return F0 + (max(float3(1.0 - roughness), F0) - F0) * pow(saturate(1.0f - cosTheta), 5.0);
 }
+
+// "Split sum" approximation lookup table
+
+// todo: make this a kernel operation
+[[vertex]] float4 split_sum_vertex_function(ushort i [[vertex_id]],
+                                            const device float4* vertices [[buffer(AAPLBufferIndexVertices)]])
+{
+    return vertices[i];
+}
+
+[[fragment]] float4 split_sum_fragment_function(float4 position [[position]]) {
+    
+    float cosTheta = position.x / 256.0f;
+    float roughness = position.y / 256.0f;
+    
+    float alpha = roughness * roughness;
+    float alpha2 = alpha * alpha;
+    float sinTheta = sqrt(1.0f - cosTheta * cosTheta);
+    float NdotV = cosTheta;
+    
+    // We are given N and V up to choice of coordinate system
+    
+    // We integrate over L, but the importance sampler generates samples of H
+    // around an assumed normal of N = +Z.  This constrains our coordinate system
+    // up to rotation around Z.  We chose to put V on the XZ plane.
+    
+    [[maybe_unused]] float3 N = float3(0, 0, 1);
+    float3 V = float3(sinTheta, 0.0, cosTheta);
+    
+    float scale = 0.0;
+    float offset = 0.0;
+    
+    ushort M = 1024;
+    for (ushort i = 0; i != M; ++i) {
+        float2 X = sequence_Hammersley(i, M);
+        float3 H = sample_Trowbridge_Reitz(X, alpha2);
+        float3 L = reflect(-V, H);
+        float NdotH = saturate(H.z);
+        float NdotL = saturate(L.z);
+        float VdotH = saturate(dot(V, H));
+        if (NdotL > 0) {
+            float G = geometry_Smith_area(NdotV, NdotL, roughness);
+            float G_vis = G * VdotH / (NdotV * NdotH);
+            float Fc = pow(1.0 - VdotH, 5);
+            scale += (1.0 - Fc) * G_vis;
+            offset += Fc * G_vis;
+            
+        }
+    }
+    return float4(scale / M, offset / M, 0.0f, 0.0f);
+    
+}
+
 
 
 # pragma mark - Deferred physically-based rendering
 
-// Physically-Based Rendering functions
+// We follow Apple's example for tile-based deferred rendering
 //
-// Mostly based on
-//
-//     [1] learnopengl.com/PBR
-//
-// itself based on
-//
-//     [2] https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf
-//
-// which describes the lighting model used by Epic in UE4, which is itself based on
-//
-//     [3] https://blog.selfshadow.com/publications/s2012-shading-course/burley/s2012_pbs_disney_brdf_notes_v3.pdf
-//
-// which describes the lighting model used by Disney in Wreck-It Ralph
+//     [4] https://developer.apple.com/documentation/metal/metal_sample_code_library/
+//         rendering_a_scene_with_forward_plus_lighting_using_tile_shaders?language=objc
 
-struct DeferredGBufferVertexShaderOutput {
-    
-    float4 clipSpacePosition [[position]];
+
+struct DeferredVertexFunctionOutput {
+    float4 position_clip [[position]];
     float4 coordinate;
-    float4 worldNormal;
-    float4 worldTangent;
-    float4 worldBitangent;
-    
+    float4 tangent_world;
+    float4 bitangent_world;
+    float4 normal_world;
 };
 
-struct DeferredGBufferFragmentShaderOutput {
+struct DeferredFragmentFunctionOutput {
     half4 light [[color(AAPLColorIndexColor), raster_order_group(AAPLRasterOrderGroupLighting)]];
-    half4 albedoMetallic [[color(AAPLColorIndexAlbedoMetallic), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
-    half4 normalRoughness [[color(AAPLColorIndexNormalRoughness), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+    half4 albedo_metallic [[color(AAPLColorIndexAlbedoMetallic), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+    half4 normal_roughness [[color(AAPLColorIndexNormalRoughness), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
     float depth [[color(AAPLColorIndexDepth), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
 };
 
 
-[[vertex]] DeferredGBufferVertexShaderOutput
-DeferredGBufferVertexShader(uint vertex_id [[ vertex_id ]],
-                            uint instance_id [[ instance_id ]],
-                            constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
-                            const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
-                            const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
+[[vertex]] DeferredVertexFunctionOutput
+deferred_vertex_function(uint vertex_id [[ vertex_id ]],
+                         uint instance_id [[ instance_id ]],
+                         constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
+                         const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
+                         const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
 {
-    
-    DeferredGBufferVertexShaderOutput out;
+    DeferredVertexFunctionOutput out;
     
     MeshVertex in = vertexArray[vertex_id];
     MeshInstanced instance = instancedArray[instance_id];
 
     out.coordinate = in.coordinate;
 
-    float4 worldSpacePosition = instance.model_transform * in.position;
-    out.clipSpacePosition  = uniforms.viewprojection_transform * worldSpacePosition;
-    out.worldTangent       = instance.inverse_transpose_model_transform * in.tangent;
-    out.worldBitangent     = instance.inverse_transpose_model_transform * in.bitangent;
-    out.worldNormal        = instance.inverse_transpose_model_transform * in.normal;
+    float4 position_world = instance.model_transform * in.position;
+    out.tangent_world   = instance.inverse_transpose_model_transform * in.tangent;
+    out.bitangent_world = instance.inverse_transpose_model_transform * in.bitangent;
+    out.normal_world    = instance.inverse_transpose_model_transform * in.normal;
+
+    out.position_clip   = uniforms.viewprojection_transform * position_world;
 
     return out;
 }
 
-[[fragment]] DeferredGBufferFragmentShaderOutput
-DeferredGBufferFragmentShader(DeferredGBufferVertexShaderOutput in [[stage_in]],
-                              bool front_facing [[front_facing]],
-                              constant MeshUniforms& uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
-                              texture2d<half> emissiveTexture [[texture(AAPLTextureIndexEmissive) ]],
-                              texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]],
-                              texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
-                              texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
-                              texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]])
+[[fragment]] DeferredFragmentFunctionOutput
+deferred_fragment_function(DeferredVertexFunctionOutput in [[stage_in]],
+                           bool front_facing [[front_facing]], //:todo: for debugging
+                           constant MeshUniforms& uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                           texture2d<half> emissiveTexture [[texture(AAPLTextureIndexEmissive) ]],
+                           texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]],
+                           texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
+                           texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
+                           texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]])
 
 {
     constexpr sampler trilinearSampler(mag_filter::linear,
@@ -177,39 +238,41 @@ DeferredGBufferFragmentShader(DeferredGBufferVertexShaderOutput in [[stage_in]],
     
     normalSample = normalSample * 2.0h - 1.0h;
 
-    half3 normal = normalize(half3x3(half3(in.worldTangent.xyz),
-                                     half3(in.worldBitangent.xyz),
-                                     half3(in.worldNormal.xyz)) * normalSample.xyz);
+    half3 normal = normalize(half3x3(half3(in.tangent_world.xyz),
+                                     half3(in.bitangent_world.xyz),
+                                     half3(in.normal_world.xyz)) * normalSample.xyz);
 
-    DeferredGBufferFragmentShaderOutput out;
+    DeferredFragmentFunctionOutput out;
     
     out.light = front_facing ? emissiveSample : half4(1.0h, 0.0h, 1.0h, 0.0h);
-    out.albedoMetallic.rgb = front_facing ? albedoSample.rgb : 0.0h;
-    out.albedoMetallic.a = front_facing ? metallicSample.r : 0.0h;
-    out.normalRoughness.xyz = front_facing ? normal : 0.0h;
-    out.normalRoughness.w = front_facing ? roughnessSample.r : 1.0h;
-    // out.depth = in.eyeSpacePosition.z;
-    out.depth = in.clipSpacePosition.z;
+    out.albedo_metallic.rgb = front_facing ? albedoSample.rgb : 0.0h;
+    out.albedo_metallic.a = front_facing ? metallicSample.r : 0.0h;
+    out.normal_roughness.xyz = front_facing ? normal : 0.0h;
+    out.normal_roughness.w = front_facing ? roughnessSample.r : 1.0h;
+    
+    // this choice of depth is the same as the hardware depth buffer
+    // note we cannot read the hardware depth buffer in the same pass
+    out.depth = in.position_clip.z;
     
     return out;
    
 }
 
 
-struct DeferredGBufferShadowVertexShaderOutput {
+struct DeferredShadowVertexFunctionOutput {
     float4 clipSpacePosition [[position]];
     float4 coordinate;
 };
 
 
-[[vertex]] DeferredGBufferShadowVertexShaderOutput
-DeferredGBufferShadowVertexShader(uint vertex_id [[ vertex_id ]],
+[[vertex]] DeferredShadowVertexFunctionOutput
+deferred_shadow_vertex_function(uint vertex_id [[ vertex_id ]],
                             uint instance_id [[ instance_id ]],
                             constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
                             const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
                             const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
 {
-    DeferredGBufferShadowVertexShaderOutput out;
+    DeferredShadowVertexFunctionOutput out;
     MeshVertex in = vertexArray[vertex_id];
     MeshInstanced instance = instancedArray[instance_id];
     out.coordinate = in.coordinate;
@@ -220,8 +283,8 @@ DeferredGBufferShadowVertexShader(uint vertex_id [[ vertex_id ]],
 
 
 [[fragment]] void
-DeferredGBufferShadowFragmentShader(DeferredGBufferShadowVertexShaderOutput in [[stage_in]],
-                              texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]])
+deferred_shadow_fragment_function(DeferredShadowVertexFunctionOutput in [[stage_in]],
+                                  texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]])
 
 {
     constexpr sampler trilinearSampler(mag_filter::linear,
@@ -285,7 +348,7 @@ struct LightingFragmentOutput {
 
 [[fragment]] LightingFragmentOutput
 meshLightingFragment(LightingVertexOutput in [[stage_in]],
-                     DeferredGBufferFragmentShaderOutput gbuffer,
+                     DeferredFragmentFunctionOutput gbuffer,
                      constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
                      texturecube<float> environmentTexture [[texture(AAPLTextureIndexEnvironment)]],
                      texture2d<float> fresnelTexture [[texture(AAPLTextureIndexFresnel)]])
@@ -304,10 +367,10 @@ meshLightingFragment(LightingVertexOutput in [[stage_in]],
 
     LightingFragmentOutput out;
     
-    float3 albedo = float3(gbuffer.albedoMetallic.rgb);
-    float metallic = float(gbuffer.albedoMetallic.a);
-    float3 normal = float3(gbuffer.normalRoughness.xyz);
-    float roughness = float(gbuffer.normalRoughness.w);
+    float3 albedo = float3(gbuffer.albedo_metallic.rgb);
+    float metallic = float(gbuffer.albedo_metallic.a);
+    float3 normal = float3(gbuffer.normal_roughness.xyz);
+    float roughness = float(gbuffer.normal_roughness.w);
     float occlusion = 1.0f;
         
     // compute incoming direction
@@ -335,9 +398,7 @@ meshLightingFragment(LightingVertexOutput in [[stage_in]],
     float3 F0 = 0.04f;
     F0 = mix(F0, albedo, metallic);
     
-    float3 F = FresnelSchlickRoughness(NdotV,
-                                       F0,
-                                       roughness);
+    float3 F = Fresnel_Schlick_roughness(NdotV, F0, roughness);
 
     float3 kS = F;
     float3 kD = 1.0 - kS;
@@ -361,7 +422,7 @@ meshLightingFragment(LightingVertexOutput in [[stage_in]],
 
 [[fragment]] LightingFragmentOutput
 meshPointLightFragment(LightingVertexOutput in [[stage_in]],
-                       DeferredGBufferFragmentShaderOutput gbuffer,
+                       DeferredFragmentFunctionOutput gbuffer,
                        constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
                        texture2d<float> shadowTexture [[texture(AAPLTextureIndexShadow)]])
 {
@@ -373,10 +434,10 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     
     LightingFragmentOutput out;
     
-    float3 albedo = float3(gbuffer.albedoMetallic.rgb);
-    float metallic = float(gbuffer.albedoMetallic.a);
-    float3 N = float3(gbuffer.normalRoughness.xyz);
-    float roughness = float(gbuffer.normalRoughness.w);
+    float3 albedo = float3(gbuffer.albedo_metallic.rgb);
+    float metallic = float(gbuffer.albedo_metallic.a);
+    float3 N = float3(gbuffer.normal_roughness.xyz);
+    float roughness = float(gbuffer.normal_roughness.w);
     [[maybe_unused]] float occlusion = 1.0f;
     
     // compute incoming direction
@@ -406,13 +467,13 @@ meshPointLightFragment(LightingVertexOutput in [[stage_in]],
     // distribution factor
     float alpha = roughness * roughness;
     float alpha2 = alpha * alpha;
-    float D = DistributionTrowbridgeReitz(NdotH, alpha2);
+    float D = distribution_Trowbridge_Reitz(NdotH, alpha2);
     
     // geometry factor
-    float G = GeometrySmithPoint(NdotV, NdotL, roughness);
+    float G = geometry_Smith_point(NdotV, NdotL, roughness);
     
     // fresnel factor
-    float3 F = FresnelSchlick(HdotV, F0);
+    float3 F = Fresnel_Schlick(HdotV, F0);
     
     float3 numerator = D * G * F;
     float denominator = 4.0f * NdotV * NdotL + 0.0001f;
@@ -473,97 +534,6 @@ CubeFilterVertex(ushort i [[vertex_id]],
     
 }
 
-
-
-[[fragment]] float4
-CubeFilterAccumulate(CubeFilterVertexOut in [[stage_in]],
-                    constant CubeFilterUniforms& uniforms [[ buffer(AAPLBufferIndexUniforms)]],
-                    texturecube<float> environmentMap [[ texture(AAPLTextureIndexColor) ]])
-{
-    
-    float3 n = normalize(in.normal.xyz);
-    float4 w = float4(0,0,0,1);
-    float3 sum = 0;
-    float weight = 0;
-    ushort2 coord;
-    ushort face;
-    ushort q = environmentMap.get_width();
-    
-    // cube filter by explicit summation over environment pixels
-    
-    for (face = 0; face != 6; ++face) {
-        coord.y = in.row;
-        // for (coord.y = 0; coord.y != q; ++coord.y) {
-            for (coord.x = 0; coord.x != q; ++coord.x) {
-                float4 environmentSample = environmentMap.read(coord.xy, face, 0);
-                w.xy = (float2(coord.xy) + 0.5f) * 2 / q - 1.0f;
-                w.y = -w.y;
-                float3 v = normalize((uniforms.transforms[face] * w).xyz);
-                
-                float k = dot(v, n);
-                v = (v - k * n) / uniforms.alpha2 + k * n;
-                v = normalize(v);
-                
-                // weight by (original) angle of emission
-                float u = w.w / length(w);
-                
-                // weight by (adjusted) angle of incidence
-                float t = saturate(dot(v, n));
-                
-                float s = u * t;
-                
-                weight += s;
-                sum += environmentSample.rgb * s;
-                
-            }
-        // }
-    }
-    
-    return float4(sum, weight);
-}
-
-
-
-
-[[fragment]] float4
-CubeFilterAccumulate2(CubeFilterVertexOut in [[stage_in]],
-                     constant CubeFilterUniforms& uniforms [[ buffer(AAPLBufferIndexUniforms)]],
-                     texturecube<float> environmentMap [[ texture(AAPLTextureIndexColor) ]])
-{
-    
-    constexpr sampler bilinearSampler(mag_filter::linear,
-                                      min_filter::linear);
-
-    float3 N = normalize(in.normal.xyz);
-    float3 V = N;
-    
-    float alpha2 = uniforms.alpha2;
-    
-    // construct sample coordinate system
-    float3 U = (N.z < 0.5) ? float3(0, 0, 1) : float3(0, 1, 0);
-    float3x3 T;
-    T.columns[0] = normalize(cross(N, U));
-    T.columns[1] = normalize(cross(N, T.columns[0]));
-    T.columns[2] = N;
-    
-    
-    float3 sum = 0;
-    ushort M = 16384;
-    for (ushort i = 0; i != M; ++i) {
-        float2 X = HammersleySequence(i, M);
-        float3 H = T * SampleTrowbridgeReitz(X, alpha2);
-        float3 R = reflect(-V, H);
-        float4 environmentalSample = environmentMap.sample(bilinearSampler, R);
-        sum += environmentalSample.rgb;
-    }
-    
-    return float4(sum / M, 1.0f);
-}
-
-
-
-
-
 [[fragment]] float4
 CubeFilterAccumulate3(CubeFilterVertexOut in [[stage_in]],
                       constant CubeFilterUniforms& uniforms [[ buffer(AAPLBufferIndexUniforms)]],
@@ -592,8 +562,8 @@ CubeFilterAccumulate3(CubeFilterVertexOut in [[stage_in]],
     float3 sum = 0;
     ushort M = 16384;
     for (ushort i = 0; i != M; ++i) {
-        float2 X = HammersleySequence(i, M);
-        float3 H = T * SampleTrowbridgeReitz(X, alpha2);
+        float2 X = sequence_Hammersley(i, M);
+        float3 H = T * sample_Trowbridge_Reitz(X, alpha2);
         float3 R = reflect(-V, H);
         float phi = atan2(R.y, R.x) * 0.5 * M_1_PI_F;
         float theta = acos(R.z) * M_1_PI_F;
@@ -608,17 +578,6 @@ CubeFilterAccumulate3(CubeFilterVertexOut in [[stage_in]],
 
 
 
-[[fragment]] float4
-CubeFilterNormalize(CubeFilterVertexOut in [[stage_in]],
-                    constant CubeFilterUniforms& uniforms [[ buffer(AAPLBufferIndexUniforms)]],
-                    texturecube<float> environmentMap [[ texture(AAPLTextureIndexColor) ]])
-{
-    constexpr sampler nearestSampler(mag_filter::nearest, min_filter::nearest);
-    float4 environmentSample = environmentMap.sample(nearestSampler, in.normal.xyz);
-    return float4(environmentSample.rgb / environmentSample.a, 1);
-}
-
-
 
 
 
@@ -629,59 +588,6 @@ CubeFilterNormalize(CubeFilterVertexOut in [[stage_in]],
 // interpolants, and do some simple stereotypical operation on them (like
 // a single matrix transform).  this lets the gpu use a fast fixed-function
 // pipeline for the vertices
-
-
-// should this just be a kernel op?
-
-[[vertex]] float4
-SplitSumVertex(ushort i [[vertex_id]],
-                      const device float4* vertices [[buffer(AAPLBufferIndexVertices)]]) {
-    return vertices[i];
-}
-
-[[fragment]] float4
-SplitSumFragment(float4 position [[position]]) {
-    
-    float cosTheta = position.x / 256.0f;
-    float roughness = position.y / 256.0f;
-    
-    float alpha = roughness * roughness;
-    float alpha2 = alpha * alpha;
-    float sinTheta = sqrt(1.0f - cosTheta * cosTheta);
-    float NdotV = cosTheta;
-        
-    // We are given N and V up to choice of coordinate system
-    
-    // We integrate over L, but the importance sampler generates samples of H
-    // around an assumed normal of N = +Z.  This constrains our coordinate system
-    // up to rotation around Z.  We chose to put V on the XZ plane.
-    
-    [[maybe_unused]] float3 N = float3(0, 0, 1);
-    float3 V = float3(sinTheta, 0.0, cosTheta);
-
-    float scale = 0.0;
-    float offset = 0.0;
-    
-    ushort M = 1024;
-    for (ushort i = 0; i != M; ++i) {
-        float2 X = HammersleySequence(i, M);
-        float3 H = SampleTrowbridgeReitz(X, alpha2);
-        float3 L = reflect(-V, H);
-        float NdotH = saturate(H.z);
-        float NdotL = saturate(L.z);
-        float VdotH = saturate(dot(V, H));
-        if (NdotL > 0) {
-            float G = GeometrySmithArea(NdotV, NdotL, roughness);
-            float G_vis = G * VdotH / (NdotV * NdotH);
-            float Fc = pow(1.0 - VdotH, 5);
-            scale += (1.0 - Fc) * G_vis;
-            offset += Fc * G_vis;
-            
-        }
-    }
-    return float4(scale / M, offset / M, 0.0f, 0.0f);
-    
-}
 
 
 
@@ -1142,7 +1048,7 @@ struct primitive_t {
     float3 normal;
 };
 // A mesh declaration that can export one cube.
-using tile_mesh_t = metal::mesh<DeferredGBufferVertexShaderOutput, primitive_t, 8 /*corners*/, 6*2 /*faces*/, metal::topology::triangle>;
+using tile_mesh_t = metal::mesh<DeferredVertexFunctionOutput, primitive_t, 8 /*corners*/, 6*2 /*faces*/, metal::topology::triangle>;
 
 // "uniform"
 struct view_info_t {
@@ -1175,3 +1081,111 @@ void GridMeshFunction(tile_mesh_t output,
     
     
 }
+
+
+
+#if 0
+
+
+
+
+
+[[fragment]] float4
+CubeFilterAccumulate(CubeFilterVertexOut in [[stage_in]],
+                     constant CubeFilterUniforms& uniforms [[ buffer(AAPLBufferIndexUniforms)]],
+                     texturecube<float> environmentMap [[ texture(AAPLTextureIndexColor) ]])
+{
+    
+    float3 n = normalize(in.normal.xyz);
+    float4 w = float4(0,0,0,1);
+    float3 sum = 0;
+    float weight = 0;
+    ushort2 coord;
+    ushort face;
+    ushort q = environmentMap.get_width();
+    
+    // cube filter by explicit summation over environment pixels
+    
+    for (face = 0; face != 6; ++face) {
+        coord.y = in.row;
+        // for (coord.y = 0; coord.y != q; ++coord.y) {
+        for (coord.x = 0; coord.x != q; ++coord.x) {
+            float4 environmentSample = environmentMap.read(coord.xy, face, 0);
+            w.xy = (float2(coord.xy) + 0.5f) * 2 / q - 1.0f;
+            w.y = -w.y;
+            float3 v = normalize((uniforms.transforms[face] * w).xyz);
+            
+            float k = dot(v, n);
+            v = (v - k * n) / uniforms.alpha2 + k * n;
+            v = normalize(v);
+            
+            // weight by (original) angle of emission
+            float u = w.w / length(w);
+            
+            // weight by (adjusted) angle of incidence
+            float t = saturate(dot(v, n));
+            
+            float s = u * t;
+            
+            weight += s;
+            sum += environmentSample.rgb * s;
+            
+        }
+        // }
+    }
+    
+    return float4(sum, weight);
+}
+
+
+
+
+[[fragment]] float4
+CubeFilterAccumulate2(CubeFilterVertexOut in [[stage_in]],
+                      constant CubeFilterUniforms& uniforms [[ buffer(AAPLBufferIndexUniforms)]],
+                      texturecube<float> environmentMap [[ texture(AAPLTextureIndexColor) ]])
+{
+    
+    constexpr sampler bilinearSampler(mag_filter::linear,
+                                      min_filter::linear);
+    
+    float3 N = normalize(in.normal.xyz);
+    float3 V = N;
+    
+    float alpha2 = uniforms.alpha2;
+    
+    // construct sample coordinate system
+    float3 U = (N.z < 0.5) ? float3(0, 0, 1) : float3(0, 1, 0);
+    float3x3 T;
+    T.columns[0] = normalize(cross(N, U));
+    T.columns[1] = normalize(cross(N, T.columns[0]));
+    T.columns[2] = N;
+    
+    
+    float3 sum = 0;
+    ushort M = 16384;
+    for (ushort i = 0; i != M; ++i) {
+        float2 X = sequence_Hammersley(i, M);
+        float3 H = T * sample_Trowbridge_Reitz(X, alpha2);
+        float3 R = reflect(-V, H);
+        float4 environmentalSample = environmentMap.sample(bilinearSampler, R);
+        sum += environmentalSample.rgb;
+    }
+    
+    return float4(sum / M, 1.0f);
+}
+
+
+[[fragment]] float4
+CubeFilterNormalize(CubeFilterVertexOut in [[stage_in]],
+                    constant CubeFilterUniforms& uniforms [[ buffer(AAPLBufferIndexUniforms)]],
+                    texturecube<float> environmentMap [[ texture(AAPLTextureIndexColor) ]])
+{
+    constexpr sampler nearestSampler(mag_filter::nearest, min_filter::nearest);
+    float4 environmentSample = environmentMap.sample(nearestSampler, in.normal.xyz);
+    return float4(environmentSample.rgb / environmentSample.a, 1);
+}
+
+
+
+#endif
