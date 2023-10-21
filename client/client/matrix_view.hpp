@@ -85,7 +85,7 @@ namespace wry {
             return reference((base + i).base, _major);
         }
         
-        const T& operator()(difference_type i, difference_type j) const {
+        const T& operator[](difference_type i, difference_type j) const {
             return (base + i).base[j];
         }
                 

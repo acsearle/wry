@@ -20,8 +20,10 @@ namespace wry {
     template<typename T>
     struct packer {
         
+        using T2 = typename rect<T>::T2;
+        
         std::multiset<rect<T>, area_cmp> _free;
-        std::vector<rect<T>> _last_split;
+        // std::vector<rect<T>> _last_split;
         
         bool invariant() {
             if (_free.empty())
@@ -42,11 +44,11 @@ namespace wry {
         }
         
         void _emplace(T a, T b, T c, T d) {
-            _last_split.emplace_back(a, b, c, d);
+            // _last_split.emplace_back(a, b, c, d);
             _free.emplace(a, b, c, d);
         }
         
-        simd::Vector_t<T, 2> place(simd::Vector_t<T, 2> wh) {
+        T2 place(T2 wh) {
             
             // Start with the smallest free rectangle with enough area
             auto i = _free.lower_bound(rect<T>(0, 0, wh.x, wh.y));
@@ -62,9 +64,9 @@ namespace wry {
             _free.erase(i);
             
             // Compute the new corner
-            simd::Vector_t<T, 2> c(old.a + wh);
+            T2 c(old.a + wh);
             
-            _last_split.clear();
+            // _last_split.clear();
             
             // Compute which split yields a bigger free rectangle
             if (((old.b.x - old.a.x) * (old.b.y - c.y)) >= ((old.b.x - c.x) * (old.b.y - old.a.y))) {
@@ -84,7 +86,7 @@ namespace wry {
             
         }
         
-        void release(simd::Vector_t<T, 2> a, simd::Vector_t<T, 2> b) {
+        void release(T2 a, T2 b) {
             _free.emplace(a, b);
         }
         

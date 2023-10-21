@@ -5,13 +5,12 @@
 //  Created by Antony Searle on 25/6/2023.
 //
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdocumentation"
-
+// include FreeType2, suppressing warnings
+//#pragma clang diagnostic push
+//#pragma clang diagnostic ignored "-Wdocumentation"
 #include <ft2build.h>
 #include FT_FREETYPE_H
-
-#pragma clang diagnostic pop
+//#pragma clang diagnostic pop
 
 #include <cassert>
 #include <iostream>
@@ -71,6 +70,7 @@ namespace wry {
                 a[i, j] = 0.0f;
                 for (size_t u = 0; u != 5; ++u) {
                     for (size_t v = 0; v != 5; ++v) {
+                        printf("%g\n", (float) b[i + u, j + v]);
                         a[i, j] += k[u] * k[v] * b[i + u, j + v];
                     }
                 }
@@ -80,7 +80,7 @@ namespace wry {
         // Blend with offset glyph alpha
         for (size_t i = 0; i != x.minor(); ++i) {
             for (size_t j = 0; j != x.major(); ++j) {
-                float alpha = x(i, j);
+                float alpha = x[i, j];
                 (a[i + 0, j + 2] *= (1.0 - alpha)) += alpha;
             }
         }
@@ -99,7 +99,8 @@ namespace wry {
         // Color is alpha to linear color to sRGB
         for (size_t i = 0; i != x.minor(); ++i) {
             for (size_t j = 0; j != x.major(); ++j) {
-                uchar d = _multiply_alpha_table[x(i, j)._][255];
+                uchar d = _multiply_alpha_table[x[i, j]._][255];
+                //printf("%d\n", (int) d);
                 auto& p = c[i + 0, j + 2];
                 p.r._ = d;
                 p.g._ = d;
@@ -163,11 +164,12 @@ namespace wry {
         e = FT_New_Face(ft,
                         path_for_resource(u8"Futura Medium Condensed", u8"otf").c_str(),
                         // path_for_resource("Hack-Regular", "ttf").c_str(),
+                        //"/Users/antony/Desktop/assets/OpenSans-VariableFont_wdth,wght.ttf",
                         0,
                         &face);
         assert(!e);
         
-        FT_Set_Pixel_Sizes(face, 0, 48);
+        FT_Set_Pixel_Sizes(face, 0, 40);
         
         FT_UInt gindex = 0;
         FT_ULong charcode = FT_Get_First_Char(face, &gindex);

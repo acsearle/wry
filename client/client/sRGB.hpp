@@ -82,6 +82,9 @@ namespace wry {
         
         R8Unorm() = default;
         
+        R8Unorm(const R8Unorm&) = default;
+        R8Unorm(R8Unorm&&) = default;
+
         constexpr explicit R8Unorm(float f) {
             write(f);
         }
@@ -89,7 +92,10 @@ namespace wry {
         operator float() const {
             return read();
         }
-        
+
+        R8Unorm& operator=(const R8Unorm&) = default;
+        R8Unorm& operator=(R8Unorm&&) = default;
+
         R8Unorm& operator=(float f) {
             write(f);
             return *this;

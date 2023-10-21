@@ -63,7 +63,17 @@ namespace wry {
         : _begin(first)
         , _size(count) {
         }
-        
+
+        vector_view& operator=(const vector_view& other) {
+            wry::copy(std::begin(other), std::end(other), begin(), end());
+            return *this;
+        }
+
+        vector_view& operator=(vector_view&& other) {
+            wry::copy(std::begin(other), std::end(other), begin(), end());
+            return *this;
+        }
+
         vector_view& operator=(auto&& other) {
             wry::copy(std::begin(other), std::end(other), begin(), end());
             return *this;

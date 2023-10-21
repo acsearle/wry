@@ -18,7 +18,7 @@
 namespace wry {
     
     
-    // sprite has to store texture rect and screen-space rect, so 8x floats
+    // sprite has to store axis-aligned texture rect and screen-space rect, so 8x floats
     // is minimal for full generality.  We store in the format that is closest
     // to the vertices that will be emitted - just add the offset and construct
     // the opposite corners.

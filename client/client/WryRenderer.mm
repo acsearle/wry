@@ -432,8 +432,8 @@
             
             MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
             descriptor.label = @"Shadow map pipeline";
-            descriptor.vertexFunction = [self newFunctionWithName:@"deferred_shadow_vertex_function"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred_shadow_fragment_function"];
+            descriptor.vertexFunction = [self newFunctionWithName:@"deferred::shadow_vertex_function"];
+            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred::shadow_fragment_function"];
             descriptor.vertexBuffers[AAPLBufferIndexVertices].mutability = MTLMutabilityImmutable;
             descriptor.vertexBuffers[AAPLBufferIndexUniforms].mutability = MTLMutabilityImmutable;
             descriptor.depthAttachmentPixelFormat = _shadowMapTarget.pixelFormat;
@@ -459,8 +459,8 @@
             descriptor.colorAttachments[AAPLColorIndexDepth].pixelFormat = MTLPixelFormatR32Float;
             descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
-            descriptor.vertexFunction = [self newFunctionWithName:@"deferred_vertex_function"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred_fragment_function"];
+            descriptor.vertexFunction = [self newFunctionWithName:@"deferred::vertex_function"];
+            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred::fragment_function"];
             descriptor.label = @"Deferred G-buffer";
             _deferredGBufferRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
             
@@ -483,13 +483,13 @@
             descriptor.colorAttachments[AAPLColorIndexColor].destinationRGBBlendFactor = MTLBlendFactorOne;
             descriptor.colorAttachments[AAPLColorIndexColor].destinationAlphaBlendFactor = MTLBlendFactorOne;
         
-            descriptor.vertexFunction = [self newFunctionWithName:@"meshLightingVertex"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"meshLightingFragment"];
+            descriptor.vertexFunction = [self newFunctionWithName:@"deferred::lighting_vertex_function"];
+            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred::image_based_lighting_fragment_function"];
             descriptor.label = @"Deferred image-based light";
             _deferredLightImageBasedRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
 
-            descriptor.vertexFunction = [self newFunctionWithName:@"meshLightingVertex"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"meshPointLightFragment"];
+            descriptor.vertexFunction = [self newFunctionWithName:@"deferred::lighting_vertex_function"];
+            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred::directional_lighting_fragment_function"];
             descriptor.label = @"Deferred shadowcasting directional light";
             _deferredLightDirectionalShadowcastingRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
 
@@ -554,9 +554,14 @@
             i.inverse_transpose_model_transform = simd_inverse(simd_transpose(i.model_transform));
             i.albedo = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
             _instanced_things = [_device newBufferWithBytes:&i length:sizeof(i) options:MTLStorageModeShared];
+            
+        }
                     
+        {
+            
             table<wry::string, ulong> _name_to_opcode;
 
+            /*
             try {
                 auto x = json::from_file<array<string>>("/Users/antony/Desktop/assets/opcodes.json");
                 ulong i = 0;
@@ -568,6 +573,11 @@
                 printf("%.*s\n", (int) s.s.chars.size(), (char*) s.s.chars.data());
             } catch (...) {
                 
+            }
+             */
+            
+            for (auto&& [k, v] : wry::sim::OPCODE_NAMES) {
+                _name_to_opcode.emplace(v + 7, k);
             }
             
                 
@@ -588,18 +598,6 @@
                 }
             } catch (...) {
                 
-            }
-            
-            try {
-                auto w = string_from_file("/Users/antony/Desktop/assets/Test.csv");
-                auto x = csv::de::Deserializer{w};
-                auto y = deserialize<array<array<string>>>(x);
-                for (auto& a : y) {
-                    for (auto& b : a) {
-                        DUMP(b);
-                    }
-                }
-            } catch (...) {
             }
 
             _controls._payload = wry::matrix<wry::sim::Value>(20, 2);

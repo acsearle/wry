@@ -163,346 +163,391 @@ float3 Fresnel_Schlick_roughness(float cosTheta, float3 F0, float roughness) {
 
 # pragma mark - Deferred physically-based rendering
 
-// We follow Apple's example for tile-based deferred rendering
-//
-//     [4] https://developer.apple.com/documentation/metal/metal_sample_code_library/
-//         rendering_a_scene_with_forward_plus_lighting_using_tile_shaders?language=objc
-
-
-struct DeferredVertexFunctionOutput {
-    float4 position_clip [[position]];
-    float4 coordinate;
-    float4 tangent_world;
-    float4 bitangent_world;
-    float4 normal_world;
-};
-
-struct DeferredFragmentFunctionOutput {
-    half4 light [[color(AAPLColorIndexColor), raster_order_group(AAPLRasterOrderGroupLighting)]];
-    half4 albedo_metallic [[color(AAPLColorIndexAlbedoMetallic), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
-    half4 normal_roughness [[color(AAPLColorIndexNormalRoughness), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
-    float depth [[color(AAPLColorIndexDepth), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
-};
-
-
-[[vertex]] DeferredVertexFunctionOutput
-deferred_vertex_function(uint vertex_id [[ vertex_id ]],
-                         uint instance_id [[ instance_id ]],
-                         constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
-                         const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
-                         const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
-{
-    DeferredVertexFunctionOutput out;
+namespace deferred {
     
-    MeshVertex in = vertexArray[vertex_id];
-    MeshInstanced instance = instancedArray[instance_id];
-
-    out.coordinate = in.coordinate;
-
-    float4 position_world = instance.model_transform * in.position;
-    out.tangent_world   = instance.inverse_transpose_model_transform * in.tangent;
-    out.bitangent_world = instance.inverse_transpose_model_transform * in.bitangent;
-    out.normal_world    = instance.inverse_transpose_model_transform * in.normal;
-
-    out.position_clip   = uniforms.viewprojection_transform * position_world;
-
-    return out;
-}
-
-[[fragment]] DeferredFragmentFunctionOutput
-deferred_fragment_function(DeferredVertexFunctionOutput in [[stage_in]],
-                           bool front_facing [[front_facing]], //:todo: for debugging
-                           constant MeshUniforms& uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
-                           texture2d<half> emissiveTexture [[texture(AAPLTextureIndexEmissive) ]],
-                           texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]],
-                           texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
-                           texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
-                           texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]])
-
-{
-    constexpr sampler trilinearSampler(mag_filter::linear,
-                                       min_filter::linear,
-                                       mip_filter::linear,
-                                       s_address::repeat,
-                                       t_address::repeat);
+    // We follow Apple's example for tile-based deferred rendering
+    //
+    //     [4] https://developer.apple.com/documentation/metal/metal_sample_code_library/
+    //         rendering_a_scene_with_forward_plus_lighting_using_tile_shaders?language=objc
     
-    half4 albedoSample = albedoTexture.sample(trilinearSampler, in.coordinate.xy);
     
-    if (albedoSample.a < 0.5f)
-        discard_fragment();
+    struct VertexFunctionOutput {
+        float4 position_clip [[position]];
+        float4 coordinate;
+        float4 tangent_world;
+        float4 bitangent_world;
+        float4 normal_world;
+    };
     
-    half4 normalSample = normalTexture.sample(trilinearSampler, in.coordinate.xy);
-    half4 roughnessSample = roughnessTexture.sample(trilinearSampler, in.coordinate.xy);
-    half4 metallicSample = metallicTexture.sample(trilinearSampler, in.coordinate.xy);
-    half4 emissiveSample = emissiveTexture.sample(trilinearSampler, in.coordinate.xy);
+    struct FragmentFunctionOutput {
+        half4 light [[color(AAPLColorIndexColor), raster_order_group(AAPLRasterOrderGroupLighting)]];
+        half4 albedo_metallic [[color(AAPLColorIndexAlbedoMetallic), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        half4 normal_roughness [[color(AAPLColorIndexNormalRoughness), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        float depth [[color(AAPLColorIndexDepth), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+    };
     
-    normalSample = normalSample * 2.0h - 1.0h;
-
-    half3 normal = normalize(half3x3(half3(in.tangent_world.xyz),
-                                     half3(in.bitangent_world.xyz),
-                                     half3(in.normal_world.xyz)) * normalSample.xyz);
-
-    DeferredFragmentFunctionOutput out;
     
-    out.light = front_facing ? emissiveSample : half4(1.0h, 0.0h, 1.0h, 0.0h);
-    out.albedo_metallic.rgb = front_facing ? albedoSample.rgb : 0.0h;
-    out.albedo_metallic.a = front_facing ? metallicSample.r : 0.0h;
-    out.normal_roughness.xyz = front_facing ? normal : 0.0h;
-    out.normal_roughness.w = front_facing ? roughnessSample.r : 1.0h;
-    
-    // this choice of depth is the same as the hardware depth buffer
-    // note we cannot read the hardware depth buffer in the same pass
-    out.depth = in.position_clip.z;
-    
-    return out;
-   
-}
-
-
-struct DeferredShadowVertexFunctionOutput {
-    float4 clipSpacePosition [[position]];
-    float4 coordinate;
-};
-
-
-[[vertex]] DeferredShadowVertexFunctionOutput
-deferred_shadow_vertex_function(uint vertex_id [[ vertex_id ]],
-                            uint instance_id [[ instance_id ]],
-                            constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
-                            const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
-                            const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
-{
-    DeferredShadowVertexFunctionOutput out;
-    MeshVertex in = vertexArray[vertex_id];
-    MeshInstanced instance = instancedArray[instance_id];
-    out.coordinate = in.coordinate;
-    float4 worldSpacePosition = instance.model_transform * in.position;
-    out.clipSpacePosition = uniforms.light_viewprojection_transform * worldSpacePosition;
-    return out;
-}
-
-
-[[fragment]] void
-deferred_shadow_fragment_function(DeferredShadowVertexFunctionOutput in [[stage_in]],
-                                  texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]])
-
-{
-    constexpr sampler trilinearSampler(mag_filter::linear,
-                                       min_filter::linear,
-                                       mip_filter::linear,
-                                       s_address::repeat,
-                                       t_address::repeat);
-    
-    half4 albedoSample = albedoTexture.sample(trilinearSampler, in.coordinate.xy);
-    
-    if (albedoSample.a < 0.5f)
-        discard_fragment();
-    
-}
-
-// we also need a shader that draws the shadows of smoke, dust, clouds onto an
-// illumination map from the light's perspective; these don't write the z-buffer
-// but they are masked by it, and are just absorption
-
-
-
-// Deferred GBuffer decals
-//
-// Some decals - like tire tracks - will replace all surface properties with
-// changed normals, roughness etc.
-//
-// Others, like augmented reality symbols projected onto a surface, will not be
-// lit and are just emssive and supressing albedo
-
-
-
-
-
-
-struct LightingVertexInput {
-    float4 position;
-};
-
-struct LightingVertexOutput {
-    float4 near_clip [[ position ]];
-    float4 near_world;
-};
-
-
-
-[[vertex]] LightingVertexOutput
-meshLightingVertex(uint vertexID [[ vertex_id ]],
-                   const device float4 *vertexArray [[ buffer(AAPLBufferIndexVertices) ]],
-                   constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]])
-{
-    LightingVertexOutput out;
-    out.near_clip = vertexArray[vertexID];
-    out.near_world = uniforms.inverse_viewprojection_transform * out.near_clip;
-    return out;
-}
-
-
-struct LightingFragmentOutput {
-    half4 color [[color(AAPLColorIndexColor), raster_order_group(AAPLRasterOrderGroupLighting)]];
-};
-
-[[fragment]] LightingFragmentOutput
-meshLightingFragment(LightingVertexOutput in [[stage_in]],
-                     DeferredFragmentFunctionOutput gbuffer,
-                     constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
-                     texturecube<float> environmentTexture [[texture(AAPLTextureIndexEnvironment)]],
-                     texture2d<float> fresnelTexture [[texture(AAPLTextureIndexFresnel)]])
-{
-
-    constexpr sampler bilinearSampler(mag_filter::linear,
-                                      min_filter::linear,
-                                      s_address::clamp_to_edge,
-                                      t_address::clamp_to_edge);
-
-    constexpr sampler trilinearSampler(mag_filter::linear,
-                                       min_filter::linear,
-                                       mip_filter::linear,
-                                       s_address::repeat,
-                                       t_address::repeat);
-
-    LightingFragmentOutput out;
-    
-    float3 albedo = float3(gbuffer.albedo_metallic.rgb);
-    float metallic = float(gbuffer.albedo_metallic.a);
-    float3 normal = float3(gbuffer.normal_roughness.xyz);
-    float roughness = float(gbuffer.normal_roughness.w);
-    float occlusion = 1.0f;
+    [[vertex]] VertexFunctionOutput
+    vertex_function(uint vertex_id [[ vertex_id ]],
+                    uint instance_id [[ instance_id ]],
+                    constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
+                    const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
+                    const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
+    {
+        VertexFunctionOutput out;
         
-    // compute incoming direction
-    float4 far_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2];
-    float3 direction = far_world.xyz * in.near_world.w - in.near_world.xyz * far_world.w;
-
-    float3 V = -normalize(direction);
-    float3 N = normal;
-    float3 R = reflect(-V, N);
-    
-    float NdotV = saturate(dot(N, V));
-    float lod = log2(roughness) + 4;
-    
-    float3 diffuseSample = environmentTexture.sample(trilinearSampler,
-                                                     uniforms.ibl_transform * N,
-                                                     level(4)).rgb;
-
-    float3 reflectedSample = environmentTexture.sample(trilinearSampler,
-                                                       uniforms.ibl_transform * R,
-                                                       level(lod)).rgb;
-
-    float4 fresnelSample = fresnelTexture.sample(bilinearSampler,
-                                                 float2(NdotV, roughness));
-
-    float3 F0 = 0.04f;
-    F0 = mix(F0, albedo, metallic);
-    
-    float3 F = Fresnel_Schlick_roughness(NdotV, F0, roughness);
-
-    float3 kS = F;
-    float3 kD = 1.0 - kS;
-    
-    float3 diffuse = albedo * diffuseSample.rgb * M_1_PI_F;
-    
-    float3 specular = (F * fresnelSample.r + fresnelSample.g) * reflectedSample.rgb;
-
-    float3 Lo = (kD * diffuse + specular) * occlusion * uniforms.ibl_scale.rgb;
-    
-    out.color.rgb = half3(Lo);
-    //out.color.rgb = half3(-V);
-    out.color.a = 1.0f;
-
-    // out.color = clamp(out.color, 0.0h, HALF_MAX);
-
-    return out;
+        MeshVertex in = vertexArray[vertex_id];
+        MeshInstanced instance = instancedArray[instance_id];
         
-}
-
-
-[[fragment]] LightingFragmentOutput
-meshPointLightFragment(LightingVertexOutput in [[stage_in]],
-                       DeferredFragmentFunctionOutput gbuffer,
-                       constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
-                       texture2d<float> shadowTexture [[texture(AAPLTextureIndexShadow)]])
-{
-    
-    constexpr sampler nearestSampler(mag_filter::nearest,
-                                     min_filter::nearest,
-                                     s_address::clamp_to_edge,
-                                     t_address::clamp_to_edge);
-    
-    LightingFragmentOutput out;
-    
-    float3 albedo = float3(gbuffer.albedo_metallic.rgb);
-    float metallic = float(gbuffer.albedo_metallic.a);
-    float3 N = float3(gbuffer.normal_roughness.xyz);
-    float roughness = float(gbuffer.normal_roughness.w);
-    [[maybe_unused]] float occlusion = 1.0f;
-    
-    // compute incoming direction
-    float depth = gbuffer.depth;
-    // complete the inverse_viewprojection
-    float4 position_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2] * depth;
-    float3 direction = position_world.xyz * in.near_world.w - in.near_world.xyz * position_world.w;
-
-    float3 V = -normalize(direction);
-    float3 L = uniforms.light_direction;
-    float3 H = normalize(V + L);
-    
-    float4 lightSpacePosition = uniforms.light_viewprojectiontexture_transform * position_world;
-    lightSpacePosition /= lightSpacePosition.w;
+        out.coordinate = in.coordinate;
         
-    float shadowSample = shadowTexture.sample(nearestSampler, lightSpacePosition.xy).r;
-    float shadowFactor = step(lightSpacePosition.z, shadowSample);
-    
-    float3 F0 = 0.04f;
-    F0 = mix(F0, albedo, metallic);
+        float4 position_world = instance.model_transform * in.position;
+        out.tangent_world   = instance.inverse_transpose_model_transform * in.tangent;
+        out.bitangent_world = instance.inverse_transpose_model_transform * in.bitangent;
+        out.normal_world    = instance.inverse_transpose_model_transform * in.normal;
         
-    float HdotV = saturate(dot(H, V));
-    float NdotL = saturate(dot(N, L));
-    float NdotV = saturate(dot(N, V));
-    float NdotH = saturate(dot(N, H));
+        out.position_clip   = uniforms.viewprojection_transform * position_world;
+        
+        return out;
+    }
+    
+    [[fragment]] FragmentFunctionOutput
+    fragment_function(VertexFunctionOutput in [[stage_in]],
+                               bool front_facing [[front_facing]], //:todo: for debugging
+                               constant MeshUniforms& uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                               texture2d<half> emissiveTexture [[texture(AAPLTextureIndexEmissive) ]],
+                               texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]],
+                               texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
+                               texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
+                               texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]])
+    
+    {
+        constexpr sampler trilinearSampler(mag_filter::linear,
+                                           min_filter::linear,
+                                           mip_filter::linear,
+                                           s_address::repeat,
+                                           t_address::repeat);
+        
+        FragmentFunctionOutput out;
+                
+        half4 albedoSample = albedoTexture.sample(trilinearSampler, in.coordinate.xy);
+        
+        if (albedoSample.a < 0.5f)
+            discard_fragment();
+        
+        half4 normalSample = normalTexture.sample(trilinearSampler, in.coordinate.xy);
+        half4 roughnessSample = roughnessTexture.sample(trilinearSampler, in.coordinate.xy);
+        half4 metallicSample = metallicTexture.sample(trilinearSampler, in.coordinate.xy);
+        half4 emissiveSample = emissiveTexture.sample(trilinearSampler, in.coordinate.xy);
+        
+        normalSample = normalSample * 2.0h - 1.0h;
+        
+        half3 normal = normalize(half3x3(half3(in.tangent_world.xyz),
+                                         half3(in.bitangent_world.xyz),
+                                         half3(in.normal_world.xyz)) * normalSample.xyz);
+                
+        out.light = front_facing ? emissiveSample : half4(1.0h, 0.0h, 1.0h, 0.0h);
+        out.albedo_metallic.rgb = front_facing ? albedoSample.rgb : 0.0h;
+        out.albedo_metallic.a = front_facing ? metallicSample.r : 0.0h;
+        out.normal_roughness.xyz = front_facing ? normal : 0.0h;
+        out.normal_roughness.w = front_facing ? roughnessSample.r : 1.0h;
+        
+        // this choice of depth is the same as the hardware depth buffer
+        // note we cannot read the hardware depth buffer in the same pass
+        out.depth = in.position_clip.z;
+        
+        return out;
+        
+    }
+        
+    struct ShadowVertexFunctionOutput {
+        float4 clipSpacePosition [[position]];
+        float4 coordinate;
+    };
+    
+    
+    [[vertex]] ShadowVertexFunctionOutput
+    shadow_vertex_function(uint vertex_id [[ vertex_id ]],
+                                    uint instance_id [[ instance_id ]],
+                                    constant MeshUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
+                                    const device MeshVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]],
+                                    const device MeshInstanced *instancedArray [[buffer(AAPLBufferIndexInstanced)]])
+    {
+        ShadowVertexFunctionOutput out;
+        MeshVertex in = vertexArray[vertex_id];
+        MeshInstanced instance = instancedArray[instance_id];
+        out.coordinate = in.coordinate;
+        float4 worldSpacePosition = instance.model_transform * in.position;
+        out.clipSpacePosition = uniforms.light_viewprojection_transform * worldSpacePosition;
+        return out;
+    }
+    
+    
+    [[fragment]] void
+    shadow_fragment_function(ShadowVertexFunctionOutput in [[stage_in]],
+                             texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]])
+    
+    {
+        constexpr sampler trilinearSampler(mag_filter::linear,
+                                           min_filter::linear,
+                                           mip_filter::linear,
+                                           s_address::repeat,
+                                           t_address::repeat);
+        
+        half4 albedoSample = albedoTexture.sample(trilinearSampler, in.coordinate.xy);
+        
+        if (albedoSample.a < 0.5f)
+            discard_fragment();
+        
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    // we also need a shader that draws the shadows of smoke, dust, clouds onto an
+    // illumination map from the light's perspective; these don't write the z-buffer
+    // but they are masked by it, and are just absorption
+    
+    
+    
+    // Deferred GBuffer decals
+    //
+    // Some decals - like tire tracks - will replace all surface properties with
+    // changed normals, roughness etc.
+    //
+    // Others, like augmented reality symbols projected onto a surface, will not be
+    // lit and are just emssive and supressing albedo
+    
+    
+    struct LightingVertexFunctionOutput {
+        float4 near_clip [[ position ]];
+        float4 near_world;
+    };
+    
+    struct LightingFragmentFunctionOutput {
+        half4 color [[color(AAPLColorIndexColor), raster_order_group(AAPLRasterOrderGroupLighting)]];
+    };
+        
+    [[vertex]] LightingVertexFunctionOutput
+    lighting_vertex_function(uint vertexID [[ vertex_id ]],
+                       const device float4 *vertexArray [[ buffer(AAPLBufferIndexVertices) ]],
+                       constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]])
+    {
+        LightingVertexFunctionOutput out;
+        out.near_clip = vertexArray[vertexID];
+        out.near_world = uniforms.inverse_viewprojection_transform * out.near_clip;
+        return out;
+    }
+    
+    
+    
+    [[fragment]] LightingFragmentFunctionOutput
+    image_based_lighting_fragment_function(LightingVertexFunctionOutput in [[stage_in]],
+                                           FragmentFunctionOutput gbuffer,
+                                           constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                                           texturecube<float> environmentTexture [[texture(AAPLTextureIndexEnvironment)]],
+                                           texture2d<float> fresnelTexture [[texture(AAPLTextureIndexFresnel)]])
+    {
+        constexpr sampler bilinearSampler(mag_filter::linear,
+                                          min_filter::linear,
+                                          s_address::clamp_to_edge,
+                                          t_address::clamp_to_edge);
+        
+        constexpr sampler trilinearSampler(mag_filter::linear,
+                                           min_filter::linear,
+                                           mip_filter::linear,
+                                           s_address::repeat,
+                                           t_address::repeat);
+        
+        LightingFragmentFunctionOutput out;
+        
+        float3 albedo    = float3(gbuffer.albedo_metallic.rgb);
+        float  metallic  = float(gbuffer.albedo_metallic.a);
+        float3 normal    = float3(gbuffer.normal_roughness.xyz);
+        float  roughness = float(gbuffer.normal_roughness.w);
+        // float  depth     = gbuffer.depth;
+        float  occlusion = 1.0f;
+        
+        // compute ray direction (towards camera)
+        float4 far_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2];
+        float3 direction = in.near_world.xyz * far_world.w - far_world.xyz * in.near_world.w;
+        
+        float3 V = normalize(direction);
+        float3 N = normal;
+        float3 R = reflect(-V, N);
+        
+        float NdotV = saturate(dot(N, V));
+        float lod = log2(roughness) + 4;
+        
+        float3 diffuseSample = environmentTexture.sample(trilinearSampler,
+                                                         uniforms.ibl_transform * N,
+                                                         level(4)).rgb;
+        
+        float3 reflectedSample = environmentTexture.sample(trilinearSampler,
+                                                           uniforms.ibl_transform * R,
+                                                           level(lod)).rgb;
+        
+        float4 fresnelSample = fresnelTexture.sample(bilinearSampler,
+                                                     float2(NdotV, roughness));
+        
+        float3 F0 = 0.04f;
+        F0 = mix(F0, albedo, metallic);
+        
+        float3 F = Fresnel_Schlick_roughness(NdotV, F0, roughness);
+        
+        float3 kS = F;
+        float3 kD = 1.0 - kS;
+        
+        float3 diffuse = albedo * diffuseSample.rgb * M_1_PI_F;
+        
+        float3 specular = (F * fresnelSample.r + fresnelSample.g) * reflectedSample.rgb;
+        
+        float3 Lo = (kD * diffuse + specular) * occlusion * uniforms.ibl_scale.rgb;
+        
+        out.color.rgb = half3(Lo);
+        //out.color.rgb = half3(-V);
+        out.color.a = 1.0f;
+        
+        // out.color = clamp(out.color, 0.0h, HALF_MAX);
+        
+        return out;
+        
+    }
+    
+    
+    [[fragment]] LightingFragmentFunctionOutput
+    directional_lighting_fragment_function(LightingVertexFunctionOutput in [[stage_in]],
+                                           FragmentFunctionOutput gbuffer,
+                                           constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                                           texture2d<float> shadowTexture [[texture(AAPLTextureIndexShadow)]])
+    {
+        constexpr sampler nearestSampler(mag_filter::nearest,
+                                         min_filter::nearest,
+                                         s_address::clamp_to_edge,
+                                         t_address::clamp_to_edge);
+        
+        LightingFragmentFunctionOutput out;
+        
+        float3 albedo    = float3(gbuffer.albedo_metallic.rgb);
+        float  metallic  = float(gbuffer.albedo_metallic.a);
+        float3 normal    = float3(gbuffer.normal_roughness.xyz);
+        float  roughness = float(gbuffer.normal_roughness.w);
+        float  depth     = gbuffer.depth;
+        // float  occlusion = 1.0f;
+        
+        float4 position_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2] * depth;
+        float3 direction = in.near_world.xyz * position_world.w - position_world.xyz * in.near_world.w;
+        
+        float3 V = normalize(direction);
+        float3 N = normal;
+        float3 L = uniforms.light_direction;
+        float3 H = normalize(V + L);
+        
+        float4 coordinate_light = uniforms.light_viewprojectiontexture_transform * position_world;
+        coordinate_light /= coordinate_light.w;
+        
+        float shadowSample = shadowTexture.sample(nearestSampler, coordinate_light.xy).r;
+        float shadowFactor = step(coordinate_light.z, shadowSample);
+        
+        float3 F0 = 0.04f;
+        F0 = mix(F0, albedo, metallic);
+        
+        float HdotV = saturate(dot(H, V));
+        float NdotL = saturate(dot(N, L));
+        float NdotV = saturate(dot(N, V));
+        float NdotH = saturate(dot(N, H));
+        
+        // distribution factor
+        float alpha = roughness * roughness;
+        float alpha2 = alpha * alpha;
+        float D = distribution_Trowbridge_Reitz(NdotH, alpha2);
+        
+        // geometry factor
+        float G = geometry_Smith_point(NdotV, NdotL, roughness);
+        
+        // fresnel factor
+        float3 F = Fresnel_Schlick(HdotV, F0);
+        
+        float3 numerator = D * G * F;
+        float denominator = 4.0f * NdotV * NdotL + 0.0001f;
+        float3 specular = numerator / denominator;
+        
+        float3 kS = F;
+        float3 kD = (1.0f - kS) * (1.0 - metallic);
+        
+        float3 Lo = (kD * albedo * M_1_PI_F + specular) * NdotL * uniforms.radiance * shadowFactor;
+        
+        // Lo = clamp(Lo, 0.0f, 4096.0f);
+        
+        out.color.rgb = half3(Lo);
+        //out.color.rgb = half3(in.position_clip.xyz/in.position_clip.w) * 0.01h;
+        //out.color.rg = half2(lightSpacePosition.xy);
+        //out.color.b = shadowSample;
+        //out.color.rgb = lightSpacePosition.z;
+        out.color.a = 1.0h;
+        // out.color.rgb = half3(lightSpacePosition.xyz > 0.5f);
+        
+        out.color = clamp(out.color, 0.0f, HALF_MAX);
+        
+        return out;
+        
+    }
+    
+    
+    // "decal"-like things
+    //
+    // simplest: screen-space overlay
+    //     example: GUI
+    //     implementation: in postprocessing pass
+    // "augmented-reality": respects Z, does not interact with lighting
+    //     example: glyph that is free-floating but associated with geometry
+    //     implementation: conventional depth-tested polygon
+    // "projected-ar": respects Z, projected onto real surface, no lighting
+    //     example: glyph wrapped on its associated geometry
+    //     implementation: draw bounding surface, lookup depth, compute
+    //     coordinate, clip discard, lookup texture, alpha discard, apply
+    // "greeble": respects Z, projected onto real surface, alters material
+    //     properties before lighting applied; example: stickers, tire tracks
+    
+    
+    [[fragment]] LightingFragmentFunctionOutput
+    decal_fragment_function(LightingVertexFunctionOutput in [[stage_in]],
+                            FragmentFunctionOutput gbuffer,
+                            constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                            texture2d<float> decal_texture [[texture(AAPLTextureIndexColor)]]) {
+        
+        LightingFragmentFunctionOutput out;
 
-    // distribution factor
-    float alpha = roughness * roughness;
-    float alpha2 = alpha * alpha;
-    float D = distribution_Trowbridge_Reitz(NdotH, alpha2);
-    
-    // geometry factor
-    float G = geometry_Smith_point(NdotV, NdotL, roughness);
-    
-    // fresnel factor
-    float3 F = Fresnel_Schlick(HdotV, F0);
-    
-    float3 numerator = D * G * F;
-    float denominator = 4.0f * NdotV * NdotL + 0.0001f;
-    float3 specular = numerator / denominator;
-    
-    float3 kS = F;
-    float3 kD = (1.0f - kS) * (1.0 - metallic);
-    
-    float3 Lo = (kD * albedo * M_1_PI_F + specular) * NdotL * uniforms.radiance * shadowFactor;
-    
-    // Lo = clamp(Lo, 0.0f, 4096.0f);
-    
-    out.color.rgb = half3(Lo);
-    //out.color.rgb = half3(in.position_clip.xyz/in.position_clip.w) * 0.01h;
-    //out.color.rg = half2(lightSpacePosition.xy);
-    //out.color.b = shadowSample;
-    //out.color.rgb = lightSpacePosition.z;
-    out.color.a = 1.0h;
-    // out.color.rgb = half3(lightSpacePosition.xyz > 0.5f);
+        // intersect the camera ray with the depth buffer
+        
+        float  depth          = gbuffer.depth;
+        float4 position_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2] * depth;
 
-    out.color = clamp(out.color, 0.0f, HALF_MAX);
+        // project the world to texture coordinate space
+        
+        // inverse_model_transform - per instance
+        // inverse_texture_transform - also per instance?
+        
+        // what is the relationship with tangent/bitangent/normal
+        
+        // discard out of bounds
+        
+        // write color
+        
+        return out;
+        
+    }
     
-    return out;
     
-}
-
-
-
-
+    
+    
+    
+} // namespace deferred
 
 
 
@@ -1048,7 +1093,7 @@ struct primitive_t {
     float3 normal;
 };
 // A mesh declaration that can export one cube.
-using tile_mesh_t = metal::mesh<DeferredVertexFunctionOutput, primitive_t, 8 /*corners*/, 6*2 /*faces*/, metal::topology::triangle>;
+using tile_mesh_t = metal::mesh<deferred::VertexFunctionOutput, primitive_t, 8 /*corners*/, 6*2 /*faces*/, metal::topology::triangle>;
 
 // "uniform"
 struct view_info_t {
