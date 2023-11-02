@@ -16,10 +16,10 @@ namespace wry {
         
         // rotate eye location to Z axis
         assert(_uniforms.camera_position_world.w == 1);
-        simd_float3 p = _uniforms.camera_position_world.xyz;
-        simd_quatf q = simd_quaternion(simd_normalize(p), simd_make_float3(0, 0, 1));
-        simd_float4x4 V = simd_mul(simd_matrix_translate(0, 0, -simd_length(p)),
-                                   simd_matrix4x4(q));
+        float3 p = _uniforms.camera_position_world.xyz;
+        quatf q(simd_normalize(p), simd_make_float3(0, 0, 1));
+        float4x4 V = simd_matrix_translate(0, 0, -simd_length(p)) *
+                              float4x4(q);
         
         simd_float4x4 F = simd_mul(matrix_perspective_right_hand(M_PI_2, 1, 5, 50),
                                    simd_matrix_scale(1, 1, -1, 1));
@@ -37,7 +37,7 @@ namespace wry {
         
         // sun setup
         
-        p = simd_normalize(simd_make_float3(0, 0, 3));
+        p = simd_normalize(simd_make_float3(1, -2, 3));
         _uniforms.light_direction = p;
         _uniforms.radiance = 2.0f;
 
@@ -60,12 +60,12 @@ namespace wry {
         // - the output x,y,w is the projection of a point on to the ground
         // - the output z is the distance above the plane of the point
         
-        simd_float4x4 A = simd_matrix(simd_make_float4(1.0f, 0.0f, 0.0, 0.0f),
-                                      simd_make_float4(0.0f, 1.0f, 0.0, 0.0f),
-                                      simd_make_float4(p.x / p.z,
+        simd_float4x4 A = simd_matrix(make<float4>(1.0f, 0.0f, 0.0, 0.0f),
+                                      make<float4>(0.0f, 1.0f, 0.0, 0.0f),
+                                      make<float4>(p.x / p.z,
                                                        p.y / p.z,
                                                        -1.0f, 0.0f),
-                                      simd_make_float4(0.0f, 0.0f, 0.0f, 1.0f));
+                                      make<float4>(0.0f, 0.0f, 0.0f, 1.0f));
         // :todo: for a light source not at infinity, we'll have to also
         // put in w = 1.0f - z / light_position.z or something; for a light
         // source inside / near the camera frustum, we need to go to a cube
@@ -77,7 +77,7 @@ namespace wry {
         // that will not affect its relative ordering
         simd_float4x4 B = simd_matrix(_uniforms.viewprojection_transform.columns[0],
                                       _uniforms.viewprojection_transform.columns[1],
-                                      simd_make_float4(0.0f, 0.0f, 1.0f, 0.0f),
+                                      make<float4>(0.0f, 0.0f, 1.0f, 0.0f),
                                       _uniforms.viewprojection_transform.columns[3]);
         // :todo: ensure that result fits in the clip space z range though
         

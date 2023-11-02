@@ -8,8 +8,10 @@
 #ifndef base64_hpp
 #define base64_hpp
 
-#include <cassert>
+#include <expected>
 
+#include "assert.hpp"
+#include "Result.hpp"
 #include "stddef.hpp"
 #include "stdint.hpp"
 #include "string.hpp"
@@ -29,21 +31,48 @@ namespace wry {
         
         // from RFC4648 and minor variants
         
+        #define X 127
+        
         inline constexpr char from_base64_table[128] = {
-            64, 64, 64, 64,  64, 64, 64, 64,  64, 64, 64, 64,  64, 64, 64, 64,
-            64, 64, 64, 64,  64, 64, 64, 64,  64, 64, 64, 64,  64, 64, 64, 64,
-            64, 64, 64, 64,  64, 64, 64, 64,  64, 64, 64, 62,  63, 62, 64, 63, //
-            52, 53, 54, 55,  59, 57, 58, 59,  60, 61, 64, 64,  64, 65, 64, 64, // <-- 0:9 -> 52:61, '=' -> 65
-            64,  0,  1,  2,   3,  4,  5,  6,   7,  8,  9, 10,  11, 12, 13, 14, // <-- A:O -> 0:14
-            15, 16, 17, 18,  19, 20, 21, 22,  23, 24, 25, 64,  64, 64, 64, 63, // <-- P:Z -> 15:25, _ -> 63
-            64, 26, 27, 28,  29, 30, 31, 32,  33, 34, 35, 36,  37, 38, 39, 40,
-            41, 42, 43, 44,  45, 46, 47, 48,  49, 50, 51, 64,  64, 64, 64, 64,
+             X,  X,  X,  X,   X,  X,  X,  X,   X,  X,  X,  X,   X,  X,  X,  X,
+             X,  X,  X,  X,   X,  X,  X,  X,   X,  X,  X,  X,   X,  X,  X,  X,
+             X,  X,  X,  X,   X,  X,  X,  X,   X,  X,  X, 62,  63, 62,  X, 63,
+            52, 53, 54, 55,  59, 57, 58, 59,  60, 61,  X,  X,   X, 65,  X,  X,
+             X,  0,  1,  2,   3,  4,  5,  6,   7,  8,  9, 10,  11, 12, 13, 14,
+            15, 16, 17, 18,  19, 20, 21, 22,  23, 24, 25,  X,   X,  X,  X, 63,
+             X, 26, 27, 28,  29, 30, 31, 32,  33, 34, 35, 36,  37, 38, 39, 40,
+            41, 42, 43, 44,  45, 46, 47, 48,  49, 50, 51,  X,   X,  X,  X,  X,
         };
+        
+        #undef X
+        
+        using rust::result::Err;
+        using rust::result::Ok;
+        using rust::usize;
+        using rust::unit;
+
+        struct Reader {
+            
+            std::expected<std::size_t, std::error_code> read(ArrayView<byte>& buffer);
+            
+        };
+        
+        
+        
+        struct Writer {
+            
+            std::expected<std::size_t, std::error_code> write(ArrayView<const byte>& buffer);
+            
+        };
+        
+        
+        
+        
         
         struct State {
             
-            uint32_t data = 0;   // bits to be serialized; garbage above count
-            int32_t count = 0;   // bits present; may be negative when we borrow padding bits
+            uint data = 0;   // bits to be serialized; garbage above count
+            int count = 0;   // bits present; may be negative when we borrow padding bits
             bool padded = false; // padding has been emitted by the encoder or
                                  //   encountered by the deconder; the sequence
                                  //   can only complete shutdown now

@@ -30,6 +30,12 @@ namespace wry {
     //
     // Practically speaking, we can probably just blanket ban zeros from
     // appearing in the strings
+    
+    struct string;
+    
+    using String = string;
+    
+    template<> struct rank<string> : std::integral_constant<std::size_t, 1> {};
             
     struct string {
                 
@@ -60,7 +66,8 @@ namespace wry {
             chars.assign(a.base, b.base);
         }
         
-        explicit string(array<char8_t>&& bytes) : chars(std::move(bytes)) {
+        explicit string(array<char8_t>&& bytes) 
+        : chars(std::move(bytes)) {
         }
         
         operator array_view<const char8_t>() const {
@@ -245,6 +252,11 @@ namespace wry {
         // but not the data slower.
         
         // We don't store the hash since the hash table will usually do this
+        
+        //:todo: But on the other hand, the hash will be cheap to store here?
+        
+        // We could reference count the implementation
+        // We could intern the strings of this sort
         
         struct implementation {
             

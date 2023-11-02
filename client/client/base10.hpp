@@ -8,6 +8,8 @@
 #ifndef base10_hpp
 #define base10_hpp
 
-#include <stdio.h>
+namespace wry {
+    
+} // namespace wry
 
 #endif /* base10_hpp */

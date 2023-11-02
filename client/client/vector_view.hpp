@@ -75,7 +75,11 @@ namespace wry {
         }
 
         vector_view& operator=(auto&& other) {
-            wry::copy(std::begin(other), std::end(other), begin(), end());
+            if constexpr (rank_v<std::decay_t<decltype(other)>>) {
+                wry::copy(std::begin(other), std::end(other), begin(), end());
+            } else {
+                std::fill(begin(), end(), std::forward<decltype(other)>(other));
+            }
             return *this;
         }
         

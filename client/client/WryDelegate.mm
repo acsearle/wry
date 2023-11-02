@@ -317,6 +317,9 @@
                     _model->append_log(buffer);
                     break;
                 default:
+                    if (isxdigit(ch)) {
+                        _model->_outstanding_keysdown.push_back((char32_t) ch);
+                    }
                     break;
             }
         }

@@ -11,6 +11,12 @@ of NSEvent
 - Improve text rendering 
   - linebreaking
   - italics and subscripts
+    - italics for vessel names
+    - subscripts for molecules
+    - in fact, basic latex / markdown / html?
+  - sdf
+  - glyph-on-demand
+  - packer as cache?
 
 
 
@@ -20,11 +26,23 @@ IDs vs pointers
 
 - In some contexts we can use pointers directly if we can guarantee "iterator
   stability".  Seems likely for agents, not for tiles
+  - Interaction with checkpointing mechanism?
   
 - Cold storage by ID for things not used by simulation
 - Hot storage in main struct
 
-- Classic SoA vs AoS problem; ECS; eventaully, relational database
+- Classic SoA vs AoS problem; ECS; eventaully, relational database?
+
+Checkpointing
+
+- How do we maintain a checkpoint while we save it, without imposing undue
+  overhead on the simulation?
+  - Copy on write will produce a big spike of activity on next frame
+  - Can we maintain a pending write list or an undo list? 
+  - Can we maintain two simulations, one that progresses more fitfully?
+    - Is holding a checkpoint gonna be equally bad in the worst case as just
+      having two copies of the simulation anyway (?!!)
+    - How much stuff is immutable or rarely changing?
 
 
 sim::Tile
@@ -73,6 +91,27 @@ sim::Entity
     - Does this become a Sokoban-style thing?
     - Note that Sokoban chains are prohbited by dogma (non-local, stiff)
   - Can load down onto waiting (or passing) truck 
+  
+  - Do we have one wait queue, or multiple ones?  Do we call each thing in turn
+    and let them decide what to do?  This is maybe the only extensible option
+    - Do domething to cell
+    - Schedule wake of first awaiter for next tick
+    - That waiter can inspect whatever state it needs to
+      - Is it worth having flags for common behaviors to skip options?
+    - If it does nothing, it immediately yields to next awaiter, until there
+      are no more awaiters
+      - We do this on the same clock tick, and can only do so because/when there
+        is no observable effect
+    - If it writes to the cell, it schedules the first awaiter for the next tick,
+      thus starting the process over
+      - This may livelock later-starting waiters until the first ones have
+        finished their business, ok I think
+      - The one-tick delay again prevents stiffness, guarantees progress. 
+    - Waiters may remove themselves from the list, but otherwise the order does
+      not change
+      - the queue is in order of when they started waiting
+      - waiters thus need to be able to find their successor
+    
 
 
 - Static producers are simple
@@ -143,6 +182,9 @@ Graphics assets
   - fonts
   - symbols
   - hard surface alpha
+  - Note that signed distance field alpha can be combined with regular rgb
+    images, might actually be awesome (no lumpy diagonals); a good fit for
+    hard-edged things that need to be z-buffered
   
 - Quality symbols
   - Define in SVG or similar?
@@ -152,7 +194,6 @@ Graphics assets
 
 Graphics engine
 
-- Clean up clip space depth reconstruction stuff in GBuffer
 - Instanced non-shadow-casting light sources (headlights etc)
 - Decals
   - Full material and normal replacement, as in tire tracks
@@ -193,11 +234,6 @@ Graphics engine
 
 ## Serialization
 
-- A lot of serialization is utf8 -> utf8, it is wasteful to decode and encode 
-  u32s in this context.  This implies that a lot of our code should operate not
-  on `string[_view]s` but on `chars[_view]`, one byte at a time, passing along
-  utf8-correctness without decoding the characters.  In this sense, is the 
-  string-as-u32-sequence ever useful?  
 - Lessons from Serde: 
   - hint what we expect for non-self-describing formats
   - handle poor matches to it
@@ -217,9 +253,6 @@ Graphics engine
 
 
 Bite-sized
-- wrap up perspective frustms better
-- wrap up depth handling / reconstruction better
-  - can we do an orthographic projection with 1/z depth somehow?
 - uniforms seem to be out of scope of meshes after all
   - can we set them up once and for all
 
@@ -236,8 +269,7 @@ System
 - Contraverse, leverage platform for ModelIO etc.?
 
 Renderer
-- Convolution post-processing - bloom, scatter, flare, bokeh
-  - Check, good performance
+- Bloom shape?  JJ Abrams long / CCD ?
 - Object-mesh pipeline for generating debug normals
 - Object-mesh pipeline for generating big cell grids just from 2d arrays of central texCoords
 - Instanced small lights
@@ -246,6 +278,7 @@ Renderer
 - HDR render target
 - Multisampling
 - ClearCoat, iridescence
+  - Specular colors vs Metalicity?
 - Understand what tiles can do
 - Bones vs instances; smooth blending requires bones, but we're not doing much 
   nonrigid materials

@@ -10,4 +10,7 @@
 
 #include <cassert>
 
+#define precondition assert
+#define postcondition assert
+
 #endif /* assert_hpp */

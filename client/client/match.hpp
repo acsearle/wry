@@ -15,20 +15,12 @@ namespace wry {
 
     // # Matcher combinators
     //
-    // Matchers look for a pattern at the start of their string_view argument,
+    // Matchers look for a pattern at the start of their View argument,
     // and if found, advance the beginning of the view and return false
     //
-    // We chain operations using short-circuiting operators using some terse
-    // syntax:
-    //
-    //         v -> !v.empty()
-    //       ++v -> ((void) v.pop_front(), true)
-    //     v = u -> ((void) (v = u), true)
-    //     v / u -> string_view(v.a, u.a)
-    //
-    // When we are transcoding between UTF-8 encoded formats (such as reading a
-    // wry::string from any text-based format) it is wasteful to decode to
-    // u32 and re-encode it.
+    // string_views or array_view<char8_t> views are the canonical arguments;
+    // since many formats are specified in terms of ASCII characters the same
+    // code can parse both, passing multibyte UTF-8 through unaltered.
     
     inline constexpr auto match_empty() {
         return [](auto& v) -> bool {

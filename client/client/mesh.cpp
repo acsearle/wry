@@ -18,14 +18,14 @@ namespace wry {
         static mesh box(simd_float3 a, simd_float3 b) {
             
             array<simd_float3> v({
-                simd_select(a, b, simd_make_int3(0, 0, 0)),
-                simd_select(a, b, simd_make_int3(0, 0, 1)),
-                simd_select(a, b, simd_make_int3(0, 1, 0)),
-                simd_select(a, b, simd_make_int3(0, 1, 1)),
-                simd_select(a, b, simd_make_int3(1, 0, 0)),
-                simd_select(a, b, simd_make_int3(1, 0, 1)),
-                simd_select(a, b, simd_make_int3(1, 1, 0)),
-                simd_select(a, b, simd_make_int3(1, 1, 1)),
+                simd::select(a, b, simd_make_int3(0, 0, 0)),
+                simd::select(a, b, simd_make_int3(0, 0, 1)),
+                simd::select(a, b, simd_make_int3(0, 1, 0)),
+                simd::select(a, b, simd_make_int3(0, 1, 1)),
+                simd::select(a, b, simd_make_int3(1, 0, 0)),
+                simd::select(a, b, simd_make_int3(1, 0, 1)),
+                simd::select(a, b, simd_make_int3(1, 1, 0)),
+                simd::select(a, b, simd_make_int3(1, 1, 1)),
             });
             
             array<int> u({

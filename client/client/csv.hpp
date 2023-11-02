@@ -13,6 +13,8 @@
 
 namespace wry::csv::de {
     
+    // Serde may be a bad fit for CSV, it simply isn't general enough a format
+    
     using rust::usize;
     using rust::option::Option;
     using rust::option::None;

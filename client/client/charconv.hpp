@@ -41,7 +41,7 @@ namespace wry {
     
     template<typename T>
     to_chars_result to_chars(char* first, char* last, T&& value) {
-        std::to_chars_result a = to_chars(first, last, std::forward<T>(value));
+        std::to_chars_result a = std::to_chars(first, last, std::forward<T>(value));
         return to_chars_result{
             first += (a.ptr - first),
             a.ec

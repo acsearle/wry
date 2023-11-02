@@ -15,6 +15,8 @@
 
 namespace wry {
     
+    using namespace simd;
+    
     // PNG stores its RGB in sRGB color space, with non-premultiplied linear alpha.
     //
     // Consider a white/black checkerboard
@@ -43,7 +45,7 @@ namespace wry {
         }
         a.format = PNG_FORMAT_RGBA;
         matrix<RGBA8Unorm_sRGB> result(a.height, a.width);
-        if (!png_image_finish_read(&a, nullptr, result.data(), (png_int_32) result.stride_in_bytes(), nullptr)) {
+        if (!png_image_finish_read(&a, nullptr, result.data(), (png_int_32) result.stride_bytes(), nullptr)) {
             printf("png_image_finish_read -> \"%s\"\n", a.message);
             abort();
         }
@@ -51,13 +53,13 @@ namespace wry {
         return result;
     }
     
-    matrix<simd_float4> multiply_alpha(const matrix<RGBA8Unorm_sRGB>& source) {
-        matrix<simd_float4> result(source.minor(), source.major());
+    matrix<float4> multiply_alpha(const matrix<RGBA8Unorm_sRGB>& source) {
+        matrix<float4> result(source.minor(), source.major());
         for (std::size_t i = 0; i != source.minor(); ++i) {
             for (std::size_t j = 0; j != source.major(); ++j) {
                 const RGBA8Unorm_sRGB& x = source[i, j];
                 float alpha = x.a;
-                result[i, j] = simd_make_float4(x.r * alpha,
+                result[i, j] = make<float4>(x.r * alpha,
                                                 x.g * alpha,
                                                 x.b * alpha,
                                                 alpha);
@@ -85,7 +87,7 @@ namespace wry {
         array<char> c_str(filename.chars);
         c_str.push_back(0);
         png_image_write_to_file(&a, c_str.data(), 0, source.data(),
-                                (png_int_32) source.stride_in_bytes(), nullptr);
+                                (png_int_32) source.stride_bytes(), nullptr);
         std::cout << a.message << std::endl;
         png_image_free(&a);
     }

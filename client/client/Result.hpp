@@ -13,9 +13,81 @@
 
 namespace rust::result {
     
+    // Sum types in C++
+    //
+    // std::variant does not permit customization of discriminant
+    // Rust does not expose discriminant at all
+    // Explicit discriminants are helpful for serialization and C++ switch
+    // statements
+    //
+    // std::variant can hold the same type more than once, but visit cannot
+    // distinguish between these occurances; visit does not get access to the
+    // discriminant
+    //
+    // std::variant cannot hold void or reference types or array types
+    //
+    // Rust alternatives look like structs but can't be accessed outside of
+    // pattern matching; note the duplication here:
+    //
+    // pub enum Entry<'a, K: 'a, V: 'a> {
+    //     Occupied(OccupiedEntry<'a, K, V>),
+    //     Vacant(VacantEntry<'a, K, V>),
+    // }
+    //
+    // Occupied is a Variant, OccupiedEntry is an ordinary struct that is its
+    // payload
+    //
+    // In Rust, Variants such as Ok and Err act as constructors for enums such
+    // as Result.  In C++, there is not enough information present (E or T) to
+    // do so, and they must construct an intermediate that is convertible to
+    // a specified common type.
+    //
+    // The discriminant should not increase the alignment of the type; if it is
+    // not of the same alignment as the union, there will be unused space in
+    // the type (though, there will be in general whenever it holds not-the
+    // largest type)
+    //
+    // In C++ we can have the empty-by-exception state if constructors are
+    // yesexcept
+    //
+    // The absence of a .? operator in C++ makes sum-type-based error handling
+    // unwieldy compared to exception-based
+    //
+    // enum discriminant_t { EMPTY = -1, OK = 0, ERR = 1 };
+    //
+    // the discriminant is a property of Ok, not of Ok<T>
+    //
+    // is every member type, like OK, a higher-order tuple?
+    //
+    // template<int D, typename T>
+    // struct VariantFactory {
+    //     static constexpr discriminant_t key = D;
+    //     T value;
+    // };
+    //
+    // template<typename T>
+    // using Ok = VariantFactory<OK, T>;
+    //
+    // template<typename T>
+    // struct Ok {
+    //     static constexpr discriminant_t discriminant = OK;
+    //     T value;
+    // };
+    //
+    // template<typename T, typename E>
+    // struct Result {
+    //     discriminant_t discriminant;
+    //     alignas(Ok<T>, Err<E>) unsigned char value[sizeof(Ok<T>, Err<E>)];
+    //     template<typename U> Result(Ok<U>);
+    //     template<typename F> Result(Err<F>);
+    // };
+    
     template<typename> struct Ok;
     template<typename> struct Err;
     template<typename, typename> struct Result;
+    
+    struct Error {
+    };
         
     template<typename T>
     struct Ok {
@@ -82,7 +154,7 @@ namespace rust::result {
     
     template<typename E> Err(E&&) -> Err<E>;
             
-    template<typename T, typename E>
+    template<typename T, typename E = Error>
     struct Result {
         
         enum {

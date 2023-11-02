@@ -55,9 +55,7 @@ namespace wry {
         // for diplacement mapping.  The normal is a dual vector, which
         // requires instead the covariant transformation, i.e. the inverse
         // transpose.
-        
-        using namespace ::simd;
-        
+                
         struct vertex {
             
             float4 coordinate;
@@ -162,11 +160,11 @@ namespace wry {
             
             array<vertex> vertices;
             
-            array<simd_float4> positions;
-            array<simd_float4> coordinates;
-            array<simd_float4> tangents;
-            array<simd_float4> bitangents;
-            array<simd_float4> normals;
+            array<float4> positions;
+            array<float4> coordinates;
+            array<float4> tangents;
+            array<float4> bitangents;
+            array<float4> normals;
 
             array<edge> edges;
             array<quad> quads;
@@ -180,11 +178,11 @@ namespace wry {
             array<uint> hack_triangle_strip;
             
             float distance(size_t i, size_t j) {
-                return simd_distance(vertices[i].position.xyz, vertices[j].position.xyz);
+                return simd::distance(vertices[i].position.xyz, vertices[j].position.xyz);
             }
 
             float distance_squared(size_t i, size_t j) {
-                return simd_distance_squared(vertices[i].position.xyz, vertices[j].position.xyz);
+                return simd::distance_squared(vertices[i].position.xyz, vertices[j].position.xyz);
             }
 
             float length(edge e) {
@@ -216,7 +214,7 @@ namespace wry {
                 return y;
             }
             
-            void add_quads_box(simd_float4 a, simd_float4 b) {
+            void add_quads_box(float4 a, float4 b) {
                 auto offset = vertices.size();
                 
                 // +Z face of a cube
@@ -253,15 +251,15 @@ namespace wry {
                 quad q = {{offset + 0, offset + 1, offset + 2, offset + 3}};
                 quads.push_back(q);
                 
-                float4x4 Rx = simd_matrix(simd_float4{  1.0f,  0.0f,  0.0f,  0.0f, },
-                                          simd_float4{  0.0f,  0.0f, -1.0f,  0.0f, },
-                                          simd_float4{  0.0f,  1.0f,  0.0f,  0.0f, },
-                                          simd_float4{  0.0f,  0.0f,  0.0f,  1.0f, });
+                float4x4 Rx(float4{  1.0f,  0.0f,  0.0f,  0.0f, },
+                            float4{  0.0f,  0.0f, -1.0f,  0.0f, },
+                            float4{  0.0f,  1.0f,  0.0f,  0.0f, },
+                            float4{  0.0f,  0.0f,  0.0f,  1.0f, });
 
-                float4x4 Ry = simd_matrix(simd_float4{  0.0f,  0.0f, -1.0f,  0.0f, },
-                                          simd_float4{  0.0f,  1.0f,  0.0f,  0.0f, },
-                                          simd_float4{  1.0f,  0.0f,  0.0f,  0.0f, },
-                                          simd_float4{  0.0f,  0.0f,  0.0f,  1.0f, });
+                float4x4 Ry(float4{  0.0f,  0.0f, -1.0f,  0.0f, },
+                            float4{  0.0f,  1.0f,  0.0f,  0.0f, },
+                            float4{  1.0f,  0.0f,  0.0f,  0.0f, },
+                            float4{  0.0f,  0.0f,  0.0f,  1.0f, });
                 
                 auto foo = [&](quad q, float4x4 A) {
                     for (size_t& j : q.indices) {
@@ -408,14 +406,14 @@ namespace wry {
             }
             
             void reparameterize_with_matrix(float4x4 A) {
-                float4x4 B = simd_inverse(A);
+                float4x4 B = inverse(A);
                 for (vertex& v : vertices) {
                     v.coordinate = A * v.coordinate;
                     v.jacobian = v.jacobian * B;
                 }
             }
             
-            void transform_with_matrix(simd_float4x4 A) {
+            void transform_with_matrix(float4x4 A) {
                 for (vertex& v : vertices) {
                     v.jacobian = A * v.jacobian;
                 }
@@ -519,7 +517,7 @@ namespace wry {
                 for (size_t i = 0; i != n; ++i)
                     a[i] = i;
                 // one dimensional sort against a pattern-defeating direction
-                float4 direction = simd_normalize(simd_make_float4(61, 59, 53, 47));
+                float4 direction = simd::normalize(make<float4>(61, 59, 53, 47));
                 auto metric = [&](size_t i) -> float {
                     return simd_dot(vertices[i].position, direction);
                 };
@@ -681,7 +679,7 @@ namespace wry {
                     v.tangent = normalize(v.tangent);
                     v.bitangent = normalize(v.bitangent);
                     v.normal = normalize(v.normal);
-                    float4 a = simd_make_float4(v.position.xyz, 0) / scale;
+                    float4 a = make<float4>(v.position.xyz, 0) / scale;
                     v.coordinate = v.jacobian * a;
                 }
             }
@@ -698,7 +696,7 @@ namespace wry {
                         auto d = simd_normalize(b - a);
                         auto e = simd_normalize(c - a);
                         auto f = simd_cross(d, e);
-                        auto g = simd_make_float4(f, 0.0);
+                        auto g = make<float4>(f, 0.0);
                         vertices[t.indices[0]].normal.xyz += f;
                         t.rotate_left();
                     }
@@ -1050,9 +1048,9 @@ namespace wry {
             // (face_id, face_vertices_count)
             // (face_id, vertex_id, ith_vertex_in_face)
             
-            table<int, packed_float3> positions;
-            table<int, packed_float3> normals;
-            table<int, packed_float3> coordinates;
+            table<int, wry::packed::float3> positions;
+            table<int, wry::packed::float3> normals;
+            table<int, wry::packed::float3> coordinates;
 
             array<iedge> edges;
             array<itriangle> triangles;
@@ -1076,12 +1074,12 @@ namespace wry {
         
         struct directed_edge {
             simd_double2x4 x;
-            simd_float4 tangent() const;
+            float4 tangent() const;
         };
         
         struct curve {
-            simd_float4 operator()(simd_double1) const;
-            simd_float4 tangent(simd_double4) const;
+            float4 operator()(simd_double1) const;
+            float4 tangent(simd_double4) const;
         };
         
         struct parametric_surface {
@@ -1590,14 +1588,14 @@ namespace wry {
 
 struct mesh {
     
-    static array<simd_float4> clip_space_quad() {
-        array<simd_float4> v = {
-            simd_make_float4(-1.0f, -1.0f, 0.0f, 1.0f),
-            simd_make_float4(-1.0f, +1.0f, 0.0f, 1.0f),
-            simd_make_float4(+1.0f, +1.0f, 0.0f, 1.0f),
-            simd_make_float4(-1.0f, -1.0f, 0.0f, 1.0f),
-            simd_make_float4(+1.0f, +1.0f, 0.0f, 1.0f),
-            simd_make_float4(+1.0f, -1.0f, 0.0f, 1.0f),
+    static array<float4> clip_space_quad() {
+        array<float4> v = {
+            make<float4>(-1.0f, -1.0f, 0.0f, 1.0f),
+            make<float4>(-1.0f, +1.0f, 0.0f, 1.0f),
+            make<float4>(+1.0f, +1.0f, 0.0f, 1.0f),
+            make<float4>(-1.0f, -1.0f, 0.0f, 1.0f),
+            make<float4>(+1.0f, +1.0f, 0.0f, 1.0f),
+            make<float4>(+1.0f, -1.0f, 0.0f, 1.0f),
         };
         return v;
     }
@@ -1623,22 +1621,22 @@ struct mesh {
                 float theta2 = theta;
                 //if (theta > M_PI / 2)
                 //    theta2 = M_PI - theta;
-                simd_float2 texCoord = (theta2 / M_PI) * simd_make_float2(cos(phi), -sin(phi)) * 0.5f + 0.5f;
+                float2 texCoord = (theta2 / M_PI) * simd_make_float2(cos(phi), -sin(phi)) * 0.5f + 0.5f;
                 
                 // interestingly, the quaternion's 4 floats is enough to
                 // encode the whole tangent-bitangent-normal coordinate
                 // system, since they are the columns of a rotation matrix
                 
                 simd_quatf q = simd_quaternion(theta, simd_make_float3(-sin(phi), cos(phi), 0.0f));
-                simd_float4x4 A = simd_matrix4x4(q);
+                float4x4 A = simd_matrix4x4(q);
                 
-                simd_float4 normal = A.columns[2];
-                simd_float4 tangent = A.columns[0];
+                float4 normal = A.columns[2];
+                float4 tangent = A.columns[0];
                 
                 
                 /*
                  v.push_back(MeshVertex{
-                 simd_make_float4(position, 1.0f),
+                 make<float4>(position, 1.0f),
                  texCoord,
                  normal,
                  tangent,
@@ -1775,14 +1773,14 @@ struct mesh {
  static mesh box(simd_float3 a, simd_float3 b) {
  
  array<simd_float3> v({
- simd_select(a, b, simd_make_int3(0, 0, 0)),
- simd_select(a, b, simd_make_int3(0, 0, 1)),
- simd_select(a, b, simd_make_int3(0, 1, 0)),
- simd_select(a, b, simd_make_int3(0, 1, 1)),
- simd_select(a, b, simd_make_int3(1, 0, 0)),
- simd_select(a, b, simd_make_int3(1, 0, 1)),
- simd_select(a, b, simd_make_int3(1, 1, 0)),
- simd_select(a, b, simd_make_int3(1, 1, 1)),
+ simd::select(a, b, simd_make_int3(0, 0, 0)),
+ simd::select(a, b, simd_make_int3(0, 0, 1)),
+ simd::select(a, b, simd_make_int3(0, 1, 0)),
+ simd::select(a, b, simd_make_int3(0, 1, 1)),
+ simd::select(a, b, simd_make_int3(1, 0, 0)),
+ simd::select(a, b, simd_make_int3(1, 0, 1)),
+ simd::select(a, b, simd_make_int3(1, 1, 0)),
+ simd::select(a, b, simd_make_int3(1, 1, 1)),
  });
  
  array<int> u({
@@ -1814,7 +1812,7 @@ namespace mesh2 {
     //     polytope
     
     
-    using vertex = simd_float4;
+    using vertex = float4;
     
     using face = array<vertex>;
     
@@ -1831,12 +1829,12 @@ namespace mesh2 {
         
         static triangulation clip_space_quad() {
             array<vertex> v = {
-                simd_make_float4(-1.0f, -1.0f, 0.0f, 1.0f),
-                simd_make_float4(-1.0f, +1.0f, 0.0f, 1.0f),
-                simd_make_float4(+1.0f, +1.0f, 0.0f, 1.0f),
-                simd_make_float4(-1.0f, -1.0f, 0.0f, 1.0f),
-                simd_make_float4(+1.0f, +1.0f, 0.0f, 1.0f),
-                simd_make_float4(+1.0f, -1.0f, 0.0f, 1.0f),
+                make<float4>(-1.0f, -1.0f, 0.0f, 1.0f),
+                make<float4>(-1.0f, +1.0f, 0.0f, 1.0f),
+                make<float4>(+1.0f, +1.0f, 0.0f, 1.0f),
+                make<float4>(-1.0f, -1.0f, 0.0f, 1.0f),
+                make<float4>(+1.0f, +1.0f, 0.0f, 1.0f),
+                make<float4>(+1.0f, -1.0f, 0.0f, 1.0f),
             };
             return triangulation{std::move(v)};
         }
@@ -1905,7 +1903,7 @@ namespace mesh2 {
                 float theta = (i + phase) * 2 * M_PI / n;
                 float x = cos(theta);
                 float y = sin(theta);
-                p.push_back(simd_make_float4(x, y, 0.0f, 1.0f));
+                p.push_back(make<float4>(x, y, 0.0f, 1.0f));
             }
             
             return p;
@@ -1918,7 +1916,7 @@ namespace mesh2 {
             return *this;
         }
         
-        polygon& apply(simd_float4x4 transform) {
+        polygon& apply(float4x4 transform) {
             for (auto& x : vertices) {
                 x = simd_mul(transform, x);
             }
@@ -1937,16 +1935,16 @@ namespace mesh2 {
             return simd_normalize(area());
         }
         
-        simd_float4 centroid() {
+        float4 centroid() {
             auto& v = *this;
             auto n = area();
             n /= simd_length_squared(n);
             n /= 3.0f;
-            simd_float4 centroid = 0;
+            float4 centroid = 0;
             for (size_t i = 0; i != size(); ++i) {
                 auto a = simd_cross(v[i].xyz, v[i + 1].xyz);
                 float b = simd_dot(n, a);
-                simd_float4 c = v[i] + v[i + 1];
+                float4 c = v[i] + v[i + 1];
                 centroid += b * c;
             }
             return centroid;
@@ -1960,8 +1958,8 @@ namespace mesh2 {
                 simd_float3 a = v[i].xyz;
                 simd_float3 b = v[i + 1].xyz;
                 simd_float3 c = simd_cross(b - a, n) + (b + a) * 0.5f;
-                z.push_back(simd_make_float4(a, 1.0f));
-                z.push_back(simd_make_float4(c, 1.0f));
+                z.push_back(make<float4>(a, 1.0f));
+                z.push_back(make<float4>(c, 1.0f));
             }
             vertices.swap(z);
         }
@@ -2082,7 +2080,7 @@ namespace mesh2 {
             return result;
         }
         
-        static polyhedron prismatoid(polygon base, simd_float4x4 transform) {
+        static polyhedron prismatoid(polygon base, float4x4 transform) {
             polygon top = base;
             top.apply(transform);
             polygon bottom = base;
@@ -2099,12 +2097,12 @@ namespace mesh2 {
         }
         
         static polyhedron frustum(polygon base, float scale) {
-            simd_float4x4 A = simd_matrix_scale(simd_make_float3(scale, scale, scale));
-            simd_float4x4 B = simd_matrix_translate(simd_make_float3(0, 0, 1));
+            float4x4 A = simd_matrix_scale(simd_make_float3(scale, scale, scale));
+            float4x4 B = simd_matrix_translate(simd_make_float3(0, 0, 1));
             return prismatoid(base, simd_mul(B, A));
         }
         
-        static polyhedron extrusion(polygon base, int n, simd_float4x4 transform) {
+        static polyhedron extrusion(polygon base, int n, float4x4 transform) {
             // fixme: repeated application of the transform will lead to
             // accumulation of numerical error
             polyhedron result;
@@ -2144,7 +2142,7 @@ namespace mesh2 {
             const float f = sqrt(d);
             const float g = sqrt(e);
             
-            simd_float4 u[12] = {
+            float4 u[12] = {
                 { 1, 0, 0, 1 },
                 { b, c, 0, 1 },
                 { b, d, g, 1 },
@@ -2203,7 +2201,7 @@ namespace mesh2 {
                 face.triangulate(target);
         }
         
-        void apply(simd_float4x4 transform) {
+        void apply(float4x4 transform) {
             for (polygon& face : faces)
                 face.apply(transform);
         }
@@ -2216,7 +2214,7 @@ namespace mesh2 {
                 auto b = simd_length(a);
                 a /= sqrt(b);
                 auto c = face.centroid();
-                auto p = c + simd_make_float4(a * factor, 0);
+                auto p = c + make<float4>(a * factor, 0);
                 for (size_t i = 0; i != face.size(); ++i) {
                     polygon g;
                     g.push_back(p);
@@ -2257,7 +2255,7 @@ namespace mesh2 {
                 simd_float3 a = vertices[i + 0].position.xyz;
                 simd_float3 b = vertices[i + 1].position.xyz;
                 simd_float3 c = vertices[i + 2].position.xyz;
-                simd_float4 n;
+                float4 n;
                 n.xyz = simd_normalize(simd_cross(b - a, c - b));
                 n.w = 0.0f;
                 vertices[i + 0].normal = n;
@@ -2266,13 +2264,13 @@ namespace mesh2 {
             }
         }
         
-        void texcoord_from_position(simd_float4x4 transform = matrix_identity_float4x4) {
+        void texcoord_from_position(float4x4 transform = matrix_identity_float4x4) {
             for (auto& v : vertices) {
                 v.texCoord = simd_mul(transform, v.position).xy;
             }
         }
         
-        void texcoord_from_normal(simd_float4x4 transform = matrix_identity_float4x4) {
+        void texcoord_from_normal(float4x4 transform = matrix_identity_float4x4) {
             // correctly maps flat surfaces of any orientation, but not
             // across non-flat edges; curves will be weird
             for (auto& v : vertices) {
@@ -2302,7 +2300,7 @@ namespace mesh2 {
                 
                 simd_float2x4 A = simd_mul(P, simd_inverse(C));
                 
-                simd_float4 tangent = A.columns[0];
+                float4 tangent = A.columns[0];
                 
                 vertices[i + 0].tangent = simd_normalize(tangent);
                 vertices[i + 1].tangent = simd_normalize(tangent);
@@ -2343,13 +2341,13 @@ namespace mesh2 {
                 done[i];
                 family.clear();
                 family.push_back(i);
-                simd_float4 a = vertices[i].position;
+                float4 a = vertices[i].position;
                 simd_float3 n = vertices[i].normal.xyz;
                 simd_float3 ni = simd_normalize(n);
                 for (int j = i + 1; j != vertices.size(); ++j) {
                     if (done.contains(j))
                         continue;
-                    simd_float4 b = vertices[j].position;
+                    float4 b = vertices[j].position;
                     if (simd_distance_squared(a, b) > distance2)
                         continue;
                     simd_float3 m = vertices[j].normal.xyz;

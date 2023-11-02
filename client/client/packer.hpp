@@ -22,8 +22,7 @@ namespace wry {
         
         using T2 = typename rect<T>::T2;
         
-        std::multiset<rect<T>, area_cmp> _free;
-        // std::vector<rect<T>> _last_split;
+        std::multiset<rect<T>, rect_area_cmp> _free;
         
         bool invariant() {
             if (_free.empty())
@@ -44,7 +43,6 @@ namespace wry {
         }
         
         void _emplace(T a, T b, T c, T d) {
-            // _last_split.emplace_back(a, b, c, d);
             _free.emplace(a, b, c, d);
         }
         
@@ -65,8 +63,6 @@ namespace wry {
             
             // Compute the new corner
             T2 c(old.a + wh);
-            
-            // _last_split.clear();
             
             // Compute which split yields a bigger free rectangle
             if (((old.b.x - old.a.x) * (old.b.y - c.y)) >= ((old.b.x - c.x) * (old.b.y - old.a.y))) {

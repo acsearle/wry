@@ -17,14 +17,13 @@ namespace wry {
         
     struct subvertex {
         simd_float4 position; // 16
-        simd_float2 texCoord; // 8
+        float2 texCoord; // 8
     };
     
     struct vertex {
         
         subvertex v; // 24
         RGBA8Unorm_sRGB color; // 4
-        static void bind();
         
         vertex() = default;
         vertex(subvertex s, RGBA8Unorm_sRGB c)

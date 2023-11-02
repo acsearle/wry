@@ -34,7 +34,20 @@ namespace wry {
         std::add_lvalue_reference_t<U4>, std::add_rvalue_reference_t<U4>>;
         return static_cast<U5>(value);
     }
-   
+    
+    template<typename T, typename U>
+    struct copy_const {
+        using type = U;
+    };
+
+    template<typename T, typename U>
+    struct copy_const<const T, U> {
+        using type = std::add_const_t<U>;
+    };
+    
+    template<typename T, typename U>
+    using copy_const_t = typename copy_const<T, U>::type;
+
     // # heterogenous reduce
     //
     // Performs reduce over parameter packs, enabling variadic extensions to

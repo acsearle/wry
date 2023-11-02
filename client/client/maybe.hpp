@@ -13,24 +13,15 @@
 
 namespace wry {
     
-    // externally discriminated optional
-    
     template<typename T>
     union Maybe {
         
-        Maybe() {
-        }
-        
-        template<typename... Args>
-        Maybe(std::in_place_t, Args&&... args)
-        : T(std::forward<Args>(args)...) {
-        }
-        
+        Maybe() = delete;
         Maybe(const Maybe&) = delete;
         Maybe(Maybe&&) = delete;
-        
-        Maybe& operator=(const Maybe&);
-        Maybe& operator=(Maybe&&);
+        ~Maybe() = delete;
+        Maybe& operator=(const Maybe&) = delete;
+        Maybe& operator=(Maybe&&) = delete;
 
         template<typename... Args>
         T& emplace(Args&&... args) {
@@ -43,8 +34,8 @@ namespace wry {
         
         T value;
         
-    };
-    
+    }; // union Maybe
+        
 }; // namespace wry
 
 #endif /* maybe_hpp */

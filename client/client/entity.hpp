@@ -17,12 +17,9 @@ namespace wry::sim {
     
     // This is the base class of things with behavior
     
-    // Replace uses of Coordinate with Tile pointers, since we primarily
-    // use them to look up the tiles
-
     struct Entity {
         
-        u64 _persistent_id = {}; // use this to lookup all cold data
+        u64 _persistent_id = {}; // use this to lookup all cold data?
         
         virtual ~Entity() = default;
         

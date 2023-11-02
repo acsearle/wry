@@ -32,13 +32,13 @@ namespace wry {
     //
     // + Amortized O(1) push_front and pop_front
     // + Amortized O(min(distance(begin, pos), distance(pos, end)) insert and erase
-    // + Contiguous / pointer iterators
+    // + Contiguous pointer iterators
     // - Higher constant factor for memory overhead
     // - Higher constant factor for amortized O(1) operations (4 vs 3?)
-    // - Larger stack footprint (4 pointers vs 3 for std::vector)
-    // - Less iterator stability
+    // - Larger stack footprint (4 pointers vs 3 for std::vector / Rust Vec)
+    // - Reduced iterator stability
     //
-    // Array assumes that the stored type is Relocatable
+    // Array currently assumes that the stored type is Relocatable
     
     template<typename> 
     struct array;
@@ -62,25 +62,25 @@ namespace wry {
         using const_reference = const T&;
         using byte_type = byte;
 
+        // this layout permits punning as array_views
+        
         T* _allocation_begin;
         T* _begin;
         T* _end;
         T* _allocation_end;
                 
-        bool _invariant() const {
+        bool invariant() const {
             return ((_allocation_begin <= _begin)
                     && (_begin <= _end)
-                    && (_end <= _allocation_end)
-                    && ((_allocation_begin == nullptr)
-                        == (_allocation_end == nullptr)));
+                    && (_end <= _allocation_end));
         }
         
-        static T* _allocate_size_in_bytes(size_type n) {
-            return static_cast<T*>(operator new(n));
+        static T* _allocate_size_in_bytes(size_type count) {
+            return static_cast<T*>(operator new(count));
         }
         
-        static T* _allocate_size(size_type n) {
-            return _allocate_size_in_bytes(n * sizeof(T));
+        static T* _allocate_size(size_type count) {
+            return _allocate_size_in_bytes(count * sizeof(T));
         }
         
         static void _deallocate(T* allocation_begin) {
@@ -92,11 +92,11 @@ namespace wry {
             _deallocate(_allocation_begin);
         }
 
-        void _construct_with_capacity(size_type n) noexcept {
-            _allocation_begin = _allocate_size(n);
+        void _construct_with_capacity(size_type count) noexcept {
+            _allocation_begin = _allocate_size(count);
             _begin = _allocation_begin;
             _end = _allocation_begin;
-            _allocation_end = _allocation_begin + n;
+            _allocation_end = _allocation_begin + count;
         }
         
         array() noexcept
@@ -108,7 +108,6 @@ namespace wry {
         
         array(const array& other) 
         : array(wry::with_capacity, other.size()) {
-            // todo: exception safety?
             _end = std::uninitialized_copy(other.begin(), other.end(), _end);
         }
         
@@ -117,71 +116,6 @@ namespace wry {
         , _begin(exchange(other._begin, nullptr))
         , _end(exchange(other._end, nullptr))
         , _allocation_end(exchange(other._allocation_end, nullptr)) {
-        }
-        
-        explicit array(size_type count)
-        : array(wry::with_capacity_t{}, count) {
-            _end = std::uninitialized_value_construct_n(_begin, count);
-        }
-
-        explicit array(std::initializer_list<T> x)
-        : array(x.begin(), x.end()) {
-        }
-
-        template<typename C>
-        explicit array(const C& other)
-        : array(std::begin(other), std::end(other)) {
-        }
-
-        // todo: steal the repr for rvalue construction from arrays of
-        // representation-interconvertible types such as {byte, char, char8_t},
-        // {intN_t and uintN_t}, {T*, intptr_t, uintptr_t, size_t, difference_t}
-        
-        template<typename U>
-        explicit array(array<U>&& other)
-        : array(std::make_move_iterator(std::begin(other)),
-                std::make_move_iterator(std::end(other))) {
-        }
-        
-        array(wry::with_capacity_t, size_type count)
-        : _allocation_begin(_allocate_size(count))
-        , _begin(_allocation_begin)
-        , _end(_begin)
-        , _allocation_end(_allocation_begin + count) {
-        }
-        
-        template<typename InputIt>
-        array(InputIt first, InputIt last, std::input_iterator_tag)
-        : array() {
-            std::copy(first, last, std::back_inserter(*this));
-        }
-        
-        template<typename RandomIt>
-        array(RandomIt first, RandomIt last, std::random_access_iterator_tag)
-        : array(wry::with_capacity_t{}, std::distance(first, last)) {
-            _end = std::copy(first, last, _end);
-        }
-        
-        template<typename I>
-        array(I first, I last)
-        : array(first, last, typename std::iterator_traits<I>::iterator_category{}) {
-        }
-
-        array(size_type count, const value_type& value) noexcept
-        : array(wry::with_capacity, count) {
-            _end = std::uninitialized_fill_n(_begin, count, value);
-        }
-                        
-        
-        array(T* allocation_begin_,
-              T* begin_,
-              T* end_,
-              T* allocation_end_) noexcept
-        : _allocation_begin(allocation_begin_)
-        , _begin(begin_)
-        , _end(end_)
-        , _allocation_end(allocation_end_) {
-            assert(_invariant());
         }
         
         ~array() {
@@ -195,9 +129,9 @@ namespace wry {
                 _end = last;
             } else if (other.size() <= capacity()) {
                 const_iterator middle = other.begin() + size();
-                [[maybe_unused]] iterator last = std::copy(other.begin(), middle, _begin);
-                assert(last == _end);
-                _end = std::uninitialized_copy(middle, other.end(), _end);
+                _end = std::uninitialized_copy(middle, other.end(),
+                                               std::copy(other.begin(), middle,
+                                                         _begin));
             } else {
                 _destroy();
                 _construct_with_capacity(other.size());
@@ -214,36 +148,107 @@ namespace wry {
             _allocation_end = std::exchange(other._allocation_end, nullptr);
             return *this;
         }
+
         
-        array& operator=(const auto& other) {
-            return assign(std::begin(other), std::end(other));
-        }
-        
-        
-        template<typename U>
-        explicit operator array_view<U>&() {
-            return reinterpret_cast<array_view<U>&>(_begin);
+        explicit array(size_type count)
+        : array(wry::with_capacity_t{}, count) {
+            _end = std::uninitialized_value_construct_n(_begin, count);
         }
 
         template<typename U>
-        explicit operator const array_view<const U>&() const {
-            return reinterpret_cast<const array_view<U>&>(_begin);
+        explicit array(std::initializer_list<U> x)
+        : array(x.begin(), x.end()) {
         }
 
+        explicit array(auto&& other) : array() {
+            using std::begin;
+            using std::end;
+            assign(begin(other), end(other));
+        }
+        
+        template<typename U>
+        explicit array(array<U>&& other)
+        : array(std::make_move_iterator(other.begin()),
+                std::make_move_iterator(other.end())) {
+        }
+
+        // todo: steal the repr for rvalue construction from arrays of
+        // representation-interconvertible types such as {byte, char, char8_t},
+        // {intN_t and uintN_t}, {T*, intptr_t, uintptr_t, size_t, difference_t}
+
+        array(wry::with_capacity_t, size_type count)
+        : _allocation_begin(_allocate_size(count))
+        , _begin(_allocation_begin)
+        , _end(_begin)
+        , _allocation_end(_allocation_begin + count) {
+        }
+        
+        array(auto first, auto last, std::input_iterator_tag)
+        : array() {
+            std::copy(first, last, std::back_inserter(*this));
+        }
+        
+        array(auto first, auto last, std::random_access_iterator_tag)
+        : array(wry::with_capacity_t{}, std::distance(first, last)) {
+            _end = std::uninitialized_copy(first, last, _end);
+        }
+        
+        array(auto first, decltype(first) last)
+        : array(first, last,
+                typename std::iterator_traits<std::decay_t<decltype(first)>>::iterator_category{}) {
+        }
+
+        array(size_type count, const value_type& value) noexcept
+        : array(wry::with_capacity, count) {
+            _end = std::uninitialized_fill_n(_begin, count, value);
+        }
+                                
+        array(T* allocation_begin_,
+              T* begin_,
+              T* end_,
+              T* allocation_end_) noexcept
+        : _allocation_begin(allocation_begin_)
+        , _begin(begin_)
+        , _end(end_)
+        , _allocation_end(allocation_end_) {
+            assert(invariant());
+        }
+                
+        array& operator=(auto&& other) {
+            if constexpr (wry::rank<std::decay_t<decltype(other)>>::value == 0) {
+                fill(std::forward<decltype(other)>(other));
+            } else {
+                using std::begin;
+                using std::end;
+                assign(begin(other), end(other));
+            }
+            return *this;
+        }
+        
+        operator array_view<T>&() {
+            return reinterpret_cast<array_view<T>&>(_begin);
+        }
+
+        operator const array_view<const T>&() const {
+            return reinterpret_cast<const array_view<const T>&>(_begin);
+        }
                 
         iterator& begin() { return _begin; }
-        const_iterator begin() const { return _begin; }
+        const const_iterator& begin() const { return _begin; }
 
         iterator& end() { return _end; }
-        const_iterator end() const { return _end; }
+        const const_iterator& end() const { return _end; }
 
-        const_iterator cbegin() const { return _begin; }
+        const_iterator& cbegin() { return _begin; }
+        const const_iterator& cbegin() const { return _begin; }
         
-        const_iterator cend() const { return _end; }
+        const_iterator& cend() { return _end; }
+        const const_iterator& cend() const { return _end; }
 
-        template<typename View>
-        bool operator==(const View& other) const {
-            return std::equal(begin(), end(), other.begin(), other.end());
+        bool operator==(const auto& other) const {
+            using std::begin;
+            using std::end;
+            return std::equal(begin(), end(), begin(other), end(other));
         }
         
         void swap(array& other) {
@@ -256,6 +261,7 @@ namespace wry {
 
         size_type size() const { return _end - _begin; }
         size_type size_in_bytes() const { return size() * sizeof(T); }
+        size_type stride_in_bytes() const { return sizeof(T); }
 
         size_type max_size() const {
             return std::numeric_limits<std::ptrdiff_t>::max();
@@ -263,16 +269,13 @@ namespace wry {
 
         bool empty() const { return _begin == _end; }
         
-        template<typename View>
-        auto operator<=>(const View& other) const {
+        auto operator<=>(const auto& other) const {
+            using std::begin;
+            using std::end;
             return lexicographical_compare_three_way(begin(), end(),
-                                                     other.begin(), other.end());
+                                                     begin(other), end(other));
         }
-        
-        // [[C++ named requirement]] SequenceContainer (core)
-        
-
-        
+                
         template<typename... Args>
         iterator emplace(const_iterator pos, Args&&... args) {
             iterator pos2 = _insert_uninitialized_n(pos, 1);
@@ -322,9 +325,9 @@ namespace wry {
             _end = _begin = _allocation_begin + (n >> 1);
         }
         
-        template<typename InputIt>
-        array& assign(InputIt first, InputIt last) {
-            return _assign(first, last, typename std::iterator_traits<InputIt>::iterator_category());
+        array& assign(auto first, decltype(first) last) {
+            return _assign(first, last,
+                           typename std::iterator_traits<std::decay_t<decltype(first)>>::iterator_category());
         }
         
         array& assign(size_type count, const value_type& value) {
@@ -343,6 +346,11 @@ namespace wry {
             return *this;
         }
         
+        array& fill(const value_type& value) {
+            std::fill(begin(), end(), value);
+            return *this;
+        }
+        
         // [[C++ named requirement]] SequenceContainer (optional)
 
         reference front() {
@@ -357,12 +365,12 @@ namespace wry {
         
         reference back() {
             assert(!empty());
-            return _end[-1];
+            return *(_end - 1);
         }
         
         const_reference back() const {
             assert(!empty());
-            return _end[-1];
+            return *(_end - 1);
         }
 
         template<typename... Args>
@@ -407,6 +415,18 @@ namespace wry {
         void pop_back() noexcept {
             assert(!is_empty());
             std::destroy_at(--_end);
+        }
+
+        void unsafe_unpop_front() {
+            static_assert(std::is_trivially_destructible_v<T>);
+            assert(_allocation_begin != _begin);
+            --_begin;
+        }
+        
+        void unsafe_unpop_back() {
+            static_assert(std::is_trivially_destructible_v<T>);
+            assert(_end != _allocation_end);
+            ++_end;
         }
         
         reference operator[](size_type pos) {
@@ -740,35 +760,35 @@ namespace wry {
                                 
         // bulk memcpy interface
         
-        size_type can_write_back() {
+        [[nodiscard]] size_type can_write_back() const {
             return _allocation_end - _end;
         }
         
-        T* may_write_back(size_t n) {
+        T* may_write_back(size_type n) {
             _reserve_back(n);
             return _end;
         }
         
-        T* will_write_back(size_t n) {
+        [[nodiscard]] T* will_write_back(size_type n) {
             _reserve_back(n);
             return exchange(_end, _end + n);
         }
         
-        void did_write_back(size_t n) {
+        void did_write_back(size_type n) {
             assert(n <= _allocation_end - _end);
             _end += n;
         }
         
-        size_t can_read_first() {
+        size_type can_read_first() {
             return _end - _begin;
         }
         
-        T* may_read_first(size_t n) {
+        T* may_read_first(size_type n) {
             assert(n <= _end - _begin);
             return _begin;
         }
         
-        T* will_read_first(size_t n) {
+        [[nodiscard]] T* will_read_first(size_type n) {
             assert(n <= _end - _begin);
             return exchange(_begin, _begin + n);
         }
@@ -778,11 +798,11 @@ namespace wry {
             _begin += n;
         }
         
-        size_type can_read_last() {
+        size_type can_read_last() const {
             return size();
         }
         
-        const_pointer will_read_last(size_type n) {
+        [[nodiscard]] const_pointer will_read_last(size_type n) {
             assert(n <= size());
             return _end -= n;
         }
@@ -792,15 +812,16 @@ namespace wry {
             return _end -= n;
         }
         
-        size_type can_write_front(size_type n) {
+        size_type can_write_front(size_type n) const {
             return _begin - _allocation_begin;
         }
         
-        void may_write_front(size_type n) {
+        pointer may_write_front(size_type n) {
             _reserve_front(n);
+            return _begin - n;
         }
         
-        pointer will_write_front(size_type n) {
+        [[nodiscard]] pointer will_write_front(size_type n) {
             _reserve_front(n);
             return _begin -= n;
         }
@@ -826,32 +847,40 @@ namespace wry {
         
         //
         
-        array_view<T> as_view() {
-            return array_view<T>(_begin, _end);
+        array_view<T>& as_view() {
+            return reinterpret_cast<array_view<T>&>(_begin);
         }
 
-        array_view<const T> as_view() const {
-            return array_view<const T>(_begin, _end);
+        const array_view<const T>& as_view() const {
+            return reinterpret_cast<const array_view<const T>&>(_begin);
         }
-        
+
+        array_view<const T>& as_const_view() {
+            return reinterpret_cast<array_view<const T>&>(_begin);
+        }
+
+        const array_view<const T>& as_const_view() const {
+            return reinterpret_cast<const array_view<const T>&>(_begin);
+        }
+
         array_view<const byte> as_bytes() {
             return array_view<const byte>(reinterpret_cast<const byte*>(_begin),
                                                    reinterpret_cast<const byte*>(_end));
         }
 
-        array_view<T> sub(std::ptrdiff_t i, std::size_t n) {
+        array_view<T> sub(difference_type i, size_type n) {
             assert(0 <= i);
             assert(i + n <= size());
             return array_view(_begin + i, n);
         }
 
-        array_view<const T> sub(std::ptrdiff_t i, std::size_t n) const {
+        array_view<const T> sub(difference_type i, size_type n) const {
             assert(0 <= i);
             assert(i + n <= size());
             return array_view(_begin + i, n);
         }
 
-        array_view<const T> csub(std::ptrdiff_t i, std::size_t n) const {
+        array_view<const T> csub(difference_type i, size_type n) const {
             assert(0 <= i);
             assert(i + n <= size());
             return array_view(_begin + i, n);
@@ -905,25 +934,10 @@ namespace wry {
         }
 
         template<typename U = Maybe<T>>
-        array_view<U>& reinterprret_right_as() {
+        array_view<U>& reinterpret_right_as() {
             return reinterpret_cast<array_view<U>&>(_end);
         }
-        
-        array_view<Maybe<T>> prolog() {
-            return reinterpret_cast<array_view<Maybe<T>>&>(_allocation_begin);
-        }
-
-        array_view<Maybe<T>> epilog() {
-            return reinterpret_cast<array_view<Maybe<T>>&>(_end);
-        }
-
-        
-        void unsafe_unpop_front() {
-            assert(_allocation_begin != _begin);
-            --_begin;
-        }
-        
-
+                
     }; // struct array<T>
     
     template<typename T>

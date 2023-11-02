@@ -26,6 +26,7 @@
 #include "obj.hpp"
 #include "palette.hpp"
 #include "platform.hpp"
+#include "sdf.hpp"
 
 @implementation WryRenderer
 {
@@ -162,7 +163,7 @@
     [texture replaceRegion:MTLRegionMake2D(0, 0, image.major(), image.minor())
                     mipmapLevel:0
                       withBytes:image.data()
-                    bytesPerRow:image.stride_in_bytes()];
+                    bytesPerRow:image.stride_bytes()];
     texture.label = name;
     
     id<MTLCommandBuffer> buffer = [_commandQueue commandBuffer];
@@ -178,6 +179,8 @@
 }
 
 -(id<MTLTexture>)prefilteredEnvironmentMapFromResource:(NSString*)name ofType:ext {
+    
+    using namespace simd;
     
     id<MTLTexture> input = [self newTextureFromResource:name ofType:ext];
     
@@ -220,10 +223,10 @@
         
         // translate z=0 near clip plane cordinates to z=1
         simd_float4x4 Z
-        = simd_matrix(simd_make_float4(1.0f, 0.0f, 0.0f, 0.0f),
-                      simd_make_float4(0.0f, 1.0f, 0.0f, 0.0f),
-                      simd_make_float4(0.0f, 0.0f, 1.0f, 0.0f),
-                      simd_make_float4(0.0f, 0.0f, 1.0f, 1.0f));
+        = simd_matrix(make<float4>(1.0f, 0.0f, 0.0f, 0.0f),
+                      make<float4>(0.0f, 1.0f, 0.0f, 0.0f),
+                      make<float4>(0.0f, 0.0f, 1.0f, 0.0f),
+                      make<float4>(0.0f, 0.0f, 1.0f, 1.0f));
         uniforms.transforms[0]
         = simd_mul(simd_matrix_rotate(M_PI_2, simd_make_float3(0.0f, 1.0f, 0.0f)), Z);
         uniforms.transforms[1]
@@ -552,14 +555,15 @@
             MeshInstanced i;
             i.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
             i.inverse_transpose_model_transform = simd_inverse(simd_transpose(i.model_transform));
-            i.albedo = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+            i.albedo = make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
             _instanced_things = [_device newBufferWithBytes:&i length:sizeof(i) options:MTLStorageModeShared];
             
         }
                     
         {
             
-            table<wry::string, ulong> _name_to_opcode;
+            table<wry::string, i64> _name_to_opcode;
+            table<i64, wry::string> _opcode_to_name;
 
             /*
             try {
@@ -577,6 +581,7 @@
              */
             
             for (auto&& [k, v] : wry::sim::OPCODE_NAMES) {
+                _opcode_to_name.emplace(k, v);
                 _name_to_opcode.emplace(v + 7, k);
             }
             
@@ -588,10 +593,46 @@
                     ulong j = 0;
                     for (const string& z : y) {
                         printf("%.*s\n", (int) z.chars.size(), (const char*) z.chars.data());
-                        simd_float4 coordinate = simd_make_float4(j / 32.0f, i / 32.0f, 0.0f, 1.0f);
+                        simd_float4 coordinate = make<float4>(j / 32.0f, i / 32.0f, 0.0f, 1.0f);
                         auto p = _name_to_opcode.find(z);
-                        if (p != _name_to_opcode.end())
+                        if (p != _name_to_opcode.end()) {
                             _opcode_to_coordinate[p->second] = coordinate;
+                            
+                            
+                            matrix<RGBA8Unorm_sRGB> tile(64, 64);
+                            MTLRegion region = MTLRegionMake2D(j*64, i*64, 64, 64);
+                            [_symbols getBytes:tile.data()
+                                   bytesPerRow:tile.stride_bytes()
+                                    fromRegion:region
+                                   mipmapLevel:0];
+                            
+                            float2 cursor{0.0f, 8.0f};
+                            for (char32_t charcode : z) {
+                                auto [offset, view, advance] = get_glyph(charcode);
+                                cursor.y += advance.y;
+                                if (charcode == u8'_') {
+                                    cursor.x = 0;
+                                    cursor.y += 4;
+                                    continue;
+                                }
+                                if (cursor.x + advance.x >= 64) {
+                                    cursor.x = 0;
+                                    cursor.y += advance.y + 4;
+                                }
+                                if ((view.major() < 2) || (view.minor() < 2))
+                                    continue;
+                                compose(tile, view, (cursor - offset).yx);
+                                cursor.x += advance.x;
+                                cursor.y -= advance.y;
+                            }
+                            
+                            [_symbols replaceRegion:region
+                                        mipmapLevel:0
+                                          withBytes:tile.data()
+                                        bytesPerRow:tile.stride_bytes()];
+
+                            
+                        }
                         ++j;
                     }
                     ++i;
@@ -600,15 +641,19 @@
                 
             }
 
-            _controls._payload = wry::matrix<wry::sim::Value>(20, 2);
+            size_type nn = 24;
+            _controls._payload = wry::matrix<wry::sim::Value>(nn, 2);
             
             i64 j = 0;
             for (i64 i = 0; i != _name_to_opcode.size(); ++i) {
                 if (_opcode_to_coordinate.contains(i)) {
-                    _controls._payload[j % 20, j / 20] = wry::sim::Value{wry::sim::DISCRIMINANT_OPCODE, i};
+                    
+                    _controls._payload[j % nn, j / nn] = wry::sim::Value{wry::sim::DISCRIMINANT_OPCODE, i};
                     ++j;
+                                        
                 } else {
-                    printf("not found %lld\n", i);
+                    auto s = _opcode_to_name[i].chars.as_view();
+                    printf("image not found for %.*s\n", (int) s.size(), (char*) s.data());
                 }
             }
             
@@ -617,7 +662,23 @@
             _controls._transform
             = simd_matrix_translate(simd_make_float3(0.0f, +0.5f, 0.5f))
             * simd_matrix_scale(1.0f / 16.0f)
-            * simd_matrix_translate(simd_make_float3(-10.0f, -1.0f, 0.0f));
+            * simd_matrix_translate(simd_make_float3(nn*-0.5f, -1.0f, 0.0f));
+            
+            {
+                int n = 64;
+                matrix<float> mm(n, n);
+                wry::sdf::render_arrow(mm);
+                for (auto&& a : mm) {
+                    for (auto&& b : a) {
+                        printf("%g\n", b);
+                    }
+                }
+                
+                matrix<RGBA8Unorm_sRGB> nn(n, n);
+                nn = mm;
+                _atlas->place(nn);
+                
+            }
             
         }
         
@@ -631,14 +692,16 @@
 
 - (void) drawOverlay:(id<MTLRenderCommandEncoder>)encoder {
 
+    using namespace simd;
+    using namespace wry;
+    using namespace wry::sim;
+
+    
     MyUniforms uniforms;
 
     [encoder setRenderPipelineState:_overlayRenderPipelineState];
     
     {
-        using namespace wry;
-        using namespace wry::sim;
-
         // render Palettes
         
         uniforms.position_transform = simd_mul(matrix_float4x4{{
@@ -650,8 +713,8 @@
         
         wry::array<wry::vertex> v;
         
-        simd_float4 b = simd_make_float4(_model->_mouse, 0.0f, 1.0f);
-        simd_float2 mmm = project_screen_ray(uniforms.position_transform, b);
+        simd_float4 b = make<float4>(_model->_mouse, 0.0f, 1.0f);
+        float2 mmm = project_screen_ray(uniforms.position_transform, b);
         auto& m = _controls._payload;
 
         if (_model->_outstanding_click) {
@@ -676,6 +739,16 @@
             
         }
         
+        while (!_model->_outstanding_keysdown.empty()) {
+            char32_t ch = _model->_outstanding_keysdown.front_and_pop_front();
+            if (wry::isascii((int) ch) && isxdigit(ch)) {
+                int64_t k = wry::base36::from_base36_table[ch];
+                int i = round(_model->_mouse4.x);
+                int j = round(_model->_mouse4.y);
+                _model->_world._tiles[Coordinate{i, j}]._value = { DISCRIMINANT_NUMBER, k };
+            }
+        }
+        
             
         for (difference_type j = 0; j != m.major(); ++j) {
             for (difference_type i = 0; i != m.minor(); ++i) {
@@ -684,8 +757,8 @@
 
                     vertex c;
 
-                    simd_float4 position = simd_make_float4(i, j, 0, 1);
-                    simd_float2 texCoord; 
+                    simd_float4 position = make<float4>(i, j, 0, 1);
+                    float2 texCoord; 
                     
                     c.color = RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.875f);
                     texCoord = simd_make_float2(9, 9) / 32.0f;
@@ -699,54 +772,54 @@
                     }
 
                     
-                    c.v.position = simd_make_float4(0, 0, 0, 0) + position;
+                    c.v.position = make<float4>(0, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
                     v.push_back(c);
                     
-                    c.v.position = simd_make_float4(1, 0, 0, 0) + position;
+                    c.v.position = make<float4>(1, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 0) / 32.0f + texCoord;
                     v.push_back(c);
                     
-                    c.v.position = simd_make_float4(1, 1, 0, 0) + position;
+                    c.v.position = make<float4>(1, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
                     v.push_back(c);
                     
-                    c.v.position = simd_make_float4(0, 0, 0, 0) + position;
+                    c.v.position = make<float4>(0, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
                     v.push_back(c);
                     
-                    c.v.position = simd_make_float4(1, 1, 0, 0) + position;
+                    c.v.position = make<float4>(1, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
                     v.push_back(c);
                     
-                    c.v.position = simd_make_float4(0, 1, 0, 0) + position;
+                    c.v.position = make<float4>(0, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 1) / 32.0f + texCoord;
                     v.push_back(c);
                     
                     texCoord = _opcode_to_coordinate[a.value].xy;
                     c.color = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f);
 
-                    c.v.position = simd_make_float4(0, 0, 0, 0) + position;
+                    c.v.position = make<float4>(0, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
                     v.push_back(c);
 
-                    c.v.position = simd_make_float4(1, 0, 0, 0) + position;
+                    c.v.position = make<float4>(1, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 0) / 32.0f + texCoord;
                     v.push_back(c);
 
-                    c.v.position = simd_make_float4(1, 1, 0, 0) + position;
+                    c.v.position = make<float4>(1, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
                     v.push_back(c);
 
-                    c.v.position = simd_make_float4(0, 0, 0, 0) + position;
+                    c.v.position = make<float4>(0, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
                     v.push_back(c);
 
-                    c.v.position = simd_make_float4(1, 1, 0, 0) + position;
+                    c.v.position = make<float4>(1, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
                     v.push_back(c);
 
-                    c.v.position = simd_make_float4(0, 1, 0, 0) + position;
+                    c.v.position = make<float4>(0, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 1) / 32.0f + texCoord;
                     v.push_back(c);
                 }
@@ -820,7 +893,7 @@
         wry::RGBA8Unorm_sRGB color(0.5f, 0.5f, 0.5f, 1.0f);
         // draw logs
         float y = _font->height / 2;
-        simd_float2 z;
+        float2 z;
         auto t = std::chrono::steady_clock::now();
         for (auto p = _model->_logs.begin(); p != _model->_logs.end();) {
             if (p->first < t) {
@@ -838,7 +911,7 @@
         // draw console
         wry::RGBA8Unorm_sRGB color(1.0f, 1.0f, 1.0f, 1.0f);
         float y = 1080 - _font->height / 2;
-        simd_float2 z;
+        float2 z;
         bool first = true;
         for (auto p = _model->_console.end(); (y >= 0) && (p != _model->_console.begin());) {
             --p;
@@ -879,7 +952,7 @@
         mesh_instanced_things.model_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
         mesh_instanced_things.model_transform.columns[3].y -= _model->_looking_at.y / 1024.0f;
         mesh_instanced_things.inverse_transpose_model_transform = simd_inverse(simd_transpose(mesh_instanced_things.model_transform));
-        mesh_instanced_things.albedo = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+        mesh_instanced_things.albedo = make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
         memcpy([_instanced_things contents], &mesh_instanced_things, sizeof(mesh_instanced_things));
     }
     
@@ -890,8 +963,8 @@
                                    mesh_instanced_things.model_transform);
         
         // Mouse
-        simd_float4 b = simd_make_float4(_model->_mouse, 0.0f, 1.0f);
-        _model->_mouse4 = simd_make_float4(project_screen_ray(A, b), 0.0f, 1.0f);
+        simd_float4 b = make<float4>(_model->_mouse, 0.0f, 1.0f);
+        _model->_mouse4 = make<float4>(project_screen_ray(A, b), 0.0f, 1.0f);
         // b now contains the screen space coordinates of the
         // intersection, aka b.z is now the depth
         //assert((0.0f <= b.z) && (b.z <= 1.0f));
@@ -930,9 +1003,9 @@
         MeshVertex* pv = (MeshVertex*) vertices.contents;
         uint* pi = (uint*) indices.contents;
         MeshVertex v;
-        v.tangent = simd_make_float4(1.0f, 0.0f, 0.0f, 0.0f);
-        v.bitangent = simd_make_float4(0.0f, 1.0f, 0.0f, 0.0f);
-        v.normal = simd_make_float4(0.0f, 0.0f, 1.0f, 0.0f);
+        v.tangent = make<float4>(1.0f, 0.0f, 0.0f, 0.0f);
+        v.bitangent = make<float4>(0.0f, 1.0f, 0.0f, 0.0f);
+        v.normal = make<float4>(0.0f, 0.0f, 1.0f, 0.0f);
         uint k = 0;
         for (auto q : entities) {
             
@@ -941,8 +1014,8 @@
                 continue;
             
             auto h = p->_heading & 3;
-            auto x0 = simd_make_float4(p->_old_location.x, p->_old_location.y, 0.2, 1.0f);
-            auto x1 = simd_make_float4(p->_new_location.x, p->_new_location.y, 0.2, 1.0f);
+            auto x0 = make<float4>(p->_old_location.x, p->_old_location.y, 0.2, 1.0f);
+            auto x1 = make<float4>(p->_new_location.x, p->_new_location.y, 0.2, 1.0f);
             
             simd_float4 location;
             if (tnow >= p->_new_time) {
@@ -953,17 +1026,17 @@
             
             //printf("%lld, %g\n", tnow, location.x);
             
-            v.position = simd_make_float4(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = simd_make_float4(11.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
+            v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = make<float4>(11.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
             *pv++ = v;
-            v.position = simd_make_float4(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = simd_make_float4(12.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
+            v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = make<float4>(12.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
             *pv++ = v;
-            v.position = simd_make_float4(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = simd_make_float4(12.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
+            v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = make<float4>(12.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
             *pv++ = v;
-            v.position = simd_make_float4(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = simd_make_float4(11.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
+            v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = make<float4>(11.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
             *pv++ = v;
             
             while (h--) {
@@ -985,20 +1058,20 @@
             k += 4;
             
             for (int i = 0; i != p->_stack.size(); ++i) {
-                location.z -= 0.5;
+                location.z += 0.5;
                 wry::sim::Value value = p->_stack[i];
-                simd_float4 coordinate = simd_make_float4((value.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
-                v.position = simd_make_float4(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = simd_make_float4(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                simd_float4 coordinate = make<float4>((value.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
                 *pv++ = v;
-                v.position = simd_make_float4(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = simd_make_float4(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
                 *pv++ = v;
-                v.position = simd_make_float4(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = simd_make_float4(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
                 *pv++ = v;
-                v.position = simd_make_float4(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = simd_make_float4(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
                 *pv++ = v;
                 *pi++ = k;
                 *pi++ = k;
@@ -1018,31 +1091,43 @@
         for (int i = grid_bounds.a.x; i != grid_bounds.b.x; ++i) {
             for (int j = grid_bounds.a.y; j != grid_bounds.b.y; ++j) {
 
-                simd_float4 location = simd_make_float4(i, j, 0.1f, 1.0f);
-                simd_float4 coordinate = simd_make_float4(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
+                simd_float4 location = make<float4>(i, j, 0.1f, 1.0f);
+                simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
-                    i64 value = _model->_world.get({i, j}).value;
-                    if (value) {
-                        auto p = _opcode_to_coordinate.find(value);
-                        if (p != _opcode_to_coordinate.end()) {
-                            coordinate = p->second;
+                    wry::sim::Value q = _model->_world.get({i, j});
+                    if (q.value) {
+                        using namespace wry::sim;
+                        switch (q.discriminant) {
+                            case DISCRIMINANT_OPCODE: {
+                                auto p = _opcode_to_coordinate.find(q.value);
+                                if (p != _opcode_to_coordinate.end()) {
+                                    coordinate = p->second;
+                                }
+                            } break;
+                            case DISCRIMINANT_NUMBER:
+                            default:
+                                coordinate = make<float4>((q.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                                break;
                         }
+                    } else {
+                        // don't draw "NOOP" or 0, too much clutter
+                        continue;
                     }
+                    
                 }
                 
-                
-                v.position = simd_make_float4(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = simd_make_float4(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
                 *pv++ = v;
-                v.position = simd_make_float4(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = simd_make_float4(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
                 *pv++ = v;
-                v.position = simd_make_float4(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = simd_make_float4(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
                 *pv++ = v;
-                v.position = simd_make_float4(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = simd_make_float4(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
                 *pv++ = v;
                 
                 *pi++ = k;
@@ -1060,14 +1145,14 @@
             
             // big ground plane
             
-            v.coordinate = simd_make_float4(3.0 / 32.0f, 4.5f / 32.0f, 0.0f, 1.0f);
-            v.position = simd_make_float4(grid_bounds.a.x - 1, grid_bounds.a.y - 1, 0.0, 1.0f);
+            v.coordinate = make<float4>(3.0 / 32.0f, 4.5f / 32.0f, 0.0f, 1.0f);
+            v.position = make<float4>(grid_bounds.a.x - 1, grid_bounds.a.y - 1, 0.0, 1.0f);
             *pv++ = v;
-            v.position = simd_make_float4(grid_bounds.b.x, grid_bounds.a.y - 1, 0.0, 1.0f);
+            v.position = make<float4>(grid_bounds.b.x, grid_bounds.a.y - 1, 0.0, 1.0f);
             *pv++ = v;
-            v.position = simd_make_float4(grid_bounds.b.x, grid_bounds.b.y, 0.0, 1.0f);
+            v.position = make<float4>(grid_bounds.b.x, grid_bounds.b.y, 0.0, 1.0f);
             *pv++ = v;
-            v.position = simd_make_float4(grid_bounds.a.x - 1, grid_bounds.b.y, 0.0, 1.0f);
+            v.position = make<float4>(grid_bounds.a.x - 1, grid_bounds.b.y, 0.0, 1.0f);
             *pv++ = v;
             
             *pi++ = k;
@@ -1084,21 +1169,22 @@
         {
             // mouse cursor thing
             simd_float4 location = _model->_mouse4;
-            //location.x = round(location.x);
-            //location.y = round(location.y);
-            simd_float4 coordinate = simd_make_float4(3.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f);
+            location.x = round(location.x);
+            location.y = round(location.y);
+            location.z = 0.1f;
+            simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
             
-            v.position = simd_make_float4(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = simd_make_float4(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+            v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
             *pv++ = v;
-            v.position = simd_make_float4(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = simd_make_float4(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+            v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
             *pv++ = v;
-            v.position = simd_make_float4(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = simd_make_float4(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+            v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
             *pv++ = v;
-            v.position = simd_make_float4(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = simd_make_float4(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+            v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
+            v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
             *pv++ = v;
             
             *pi++ = k;
@@ -1110,7 +1196,7 @@
             
             k += 4;
             
-            simd_int2 xy;
+            int2 xy;
             xy.x = round(_model->_mouse4.x);
             xy.y = round(_model->_mouse4.z);
             ulong z = 0;
@@ -1714,22 +1800,22 @@ Paste bin
 
 /*
  {
- auto o = simd_make_float4(512+zz.x, 512+zz.y, 0, 0);
+ auto o = make<float4>(512+zz.x, 512+zz.y, 0, 0);
  // simd_make_float2(512+zz.x, 512+zz.y)
  wry::vertex v[4];
  float h = -128.0f / _viewportSize.y;
- v[0].v.position = simd_make_float4(-32.0f, -32.0f, 0.0f, 1.0f);
- v[1].v.position = simd_make_float4(-32.0f, +32.0f, 0.0f, 1.0f);
- v[2].v.position = simd_make_float4(-32.0f, -32.0f, h, 1.0f);
- v[3].v.position = simd_make_float4(-32.0f, +32.0f, h, 1.0f);
+ v[0].v.position = make<float4>(-32.0f, -32.0f, 0.0f, 1.0f);
+ v[1].v.position = make<float4>(-32.0f, +32.0f, 0.0f, 1.0f);
+ v[2].v.position = make<float4>(-32.0f, -32.0f, h, 1.0f);
+ v[3].v.position = make<float4>(-32.0f, +32.0f, h, 1.0f);
  v[0].color = simd_make_uchar4(255, 255, 255, 255);
  v[1].color = simd_make_uchar4(255, 255, 255, 255);
  v[2].color = simd_make_uchar4(255, 255, 255, 255);
  v[3].color = simd_make_uchar4(255, 255, 255, 255);
  
  {
- simd_float2 a = _cube_sprites[1].a.texCoord;
- simd_float2 b = _cube_sprites[1].b.texCoord;
+ float2 a = _cube_sprites[1].a.texCoord;
+ float2 b = _cube_sprites[1].b.texCoord;
  a += 96.0f / 2048;
  b -= 96.0f / 2048;
  auto c = simd_make_float2(a.x, b.y);
@@ -1764,10 +1850,10 @@ Paste bin
  }
  
  // finally, top of cube
- v[0].v.position = simd_make_float4(-32.0f, -32.0f, h, 1.0f);
- v[1].v.position = simd_make_float4(-32.0f, +32.0f, h, 1.0f);
- v[2].v.position = simd_make_float4(+32.0f, -32.0f, h, 1.0f);
- v[3].v.position = simd_make_float4(+32.0f, +32.0f, h, 1.0f);
+ v[0].v.position = make<float4>(-32.0f, -32.0f, h, 1.0f);
+ v[1].v.position = make<float4>(-32.0f, +32.0f, h, 1.0f);
+ v[2].v.position = make<float4>(+32.0f, -32.0f, h, 1.0f);
+ v[3].v.position = make<float4>(+32.0f, +32.0f, h, 1.0f);
  {
  auto a = (_cube_sprites[0].a.texCoord + _cube_sprites[0].b.texCoord) / 2;
  for (int i = 0; i != 4; ++i) {
@@ -1844,23 +1930,23 @@ Paste bin
     };
     
     // dark ground
-    a = simd_make_float4(0.25, 0.125, 0.0625, 0);
+    a = make<float4>(0.25, 0.125, 0.0625, 0);
     foo(3);
     // bright sky
-    a = simd_make_float4(0.25, 0.5, 1, 0);
+    a = make<float4>(0.25, 0.5, 1, 0);
     foo(2);
     // ground
-    a.sub(n/2, 0, n/2, n) = simd_make_float4(0.5, 0.25, 0.125, 0);
+    a.sub(n/2, 0, n/2, n) = make<float4>(0.5, 0.25, 0.125, 0);
     // feature
-    a.sub(3*n/8, n/2, n/4, n/4) = simd_make_float4(1, 1, 1, 0) * 0.125;
+    a.sub(3*n/8, n/2, n/4, n/4) = make<float4>(1, 1, 1, 0) * 0.125;
     // lamp
-    a.sub(n/8, n/8, n/2, n/16) = simd_make_float4(1, 1, 1, 1) * 10;
+    a.sub(n/8, n/8, n/2, n/16) = make<float4>(1, 1, 1, 1) * 10;
     foo(0);
-    a.sub(n/8, n/8, n/2, n/16) = simd_make_float4(0, 1, 1, 0) * 10;
+    a.sub(n/8, n/8, n/2, n/16) = make<float4>(0, 1, 1, 0) * 10;
     foo(1);
-    a.sub(n/8, n/8, n/2, n/16) = simd_make_float4(1, 0, 1, 0) * 10;
+    a.sub(n/8, n/8, n/2, n/16) = make<float4>(1, 0, 1, 0) * 10;
     foo(4);
-    a.sub(n/8, n/8, n/2, n/16) = simd_make_float4(1, 1, 0, 0) * 10;
+    a.sub(n/8, n/8, n/2, n/16) = make<float4>(1, 1, 0, 0) * 10;
     foo(5);
     
 }
@@ -1873,7 +1959,7 @@ for (int y = 0; y != 256; y += 64) {
     for (int x = 0; x != 2048; x += 64) {
         auto v = img.sub(y, x, 64, 64);
         wry::draw_bounding_box(v);
-        wry::sprite s = _atlas->place(v, simd_float2{32, 32});
+        wry::sprite s = _atlas->place(v, float2{32, 32});
         _sprites.push_back(s);
     }
 }
@@ -2282,10 +2368,10 @@ fromConnection:(AVCaptureConnection *)connection {
             descriptor.usage = MTLTextureUsageShaderRead;
             descriptor.storageMode = MTLStorageModeShared;
             maskTexture = [_device newTextureWithDescriptor:descriptor];
-            wry::array<simd_float4> mask(240, simd_make_float4(0.0f, 0.0f, 0.0f, 0.0f));
+            wry::array<simd_float4> mask(240, make<float4>(0.0f, 0.0f, 0.0f, 0.0f));
             for (int i = 0; i != 8; ++i) {
                 for (int j = 0; j != 8; ++j) {
-                    mask[i * 16 + (240 - 166) + j] = simd_make_float4(1.0f, 1.0f, 1.0f, 1.0f);
+                    mask[i * 16 + (240 - 166) + j] = make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
                 }
             }
             [maskTexture replaceRegion:MTLRegionMake2D(0,0,1,240)
@@ -2391,10 +2477,10 @@ fromConnection:(AVCaptureConnection *)connection {
         for (NSUInteger i = 0; i != _tireMesh.instanceCount; ++i) {
             float4x4 A = _tireMesh.instances[i].model_transform;
             float2 b = simd_normalize(A.columns[3].xz - center_of_turn);
-            float4x4 B = simd_matrix(simd_make_float4(  b.y ,  0.0f, -b.x,  0.0f  ),
-                                     simd_make_float4(  0.0f,  1.0f,0,0),
-                                     simd_make_float4(b.x,0,b.y,0),
-                                     simd_make_float4(0,0,0,1));
+            float4x4 B = simd_matrix(make<float4>(  b.y ,  0.0f, -b.x,  0.0f  ),
+                                     make<float4>(  0.0f,  1.0f,0,0),
+                                     make<float4>(b.x,0,b.y,0),
+                                     make<float4>(0,0,0,1));
             float4x4 C = A * B;
             float4x4 D = simd_transpose(simd_inverse(C));
             _tireMesh.instances[i].model_transform = C;

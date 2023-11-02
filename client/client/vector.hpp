@@ -12,9 +12,9 @@
 
 namespace wry {
     
-    // we have a dynamic_array already
+    // we have a dynamic array already
     //
-    // tempting to make vector be dynamic_array plus arithmetic operators
+    // tempting to make vector be dynamic array plus arithmetic operators
     
 } // namespace wry
 

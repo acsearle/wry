@@ -22,26 +22,23 @@ namespace wry {
     // is minimal for full generality.  We store in the format that is closest
     // to the vertices that will be emitted - just add the offset and construct
     // the opposite corners.
+    
     struct sprite {
         subvertex a;
         subvertex b;
     };
     
-    inline sprite operator+(sprite s, simd_float2 xy) {
+    inline sprite operator+(sprite s, float2 xy) {
         s.a.position.xy += xy;
         s.b.position.xy += xy;
         return s;
     }
     
-    /*
-    inline sprite operator*(sprite s, float k) {
-        s.a.position *= k;
-        s.b.position *= k;
-        return s;
-    }
-     */
+    // large groups of squares or axis-aligned rectangles can be processed on
+    // the GPU with object-mesh shaders, so rethink what we need to pass
     
-    
+    // virtualize atlas to hide the explicitly Metal texture?
+            
     // atlas bundles together some functionality, some of which should move elsewhere
     //
     // allocate subregions of the texture atlas, returning sprite keys
@@ -110,7 +107,7 @@ namespace wry {
         
         void discard();
         
-        sprite place(matrix_view<const RGBA8Unorm_sRGB>, simd_float2 origin = { 0, 0 });
+        sprite place(matrix_view<const RGBA8Unorm_sRGB>, float2 origin = { 0, 0 });
         
         void release(sprite);
         

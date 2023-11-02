@@ -7,6 +7,7 @@
 
 #include "machine.hpp"
 #include "world.hpp"
+#include "debug.hpp"
 
 namespace wry::sim {
     
@@ -36,8 +37,8 @@ namespace wry::sim {
         Value a = {};
         Value b = {};
         
-        Tile& new_tile = w._tiles[_new_location];
         Tile& old_tile = w._tiles[_old_location];
+        Tile& new_tile = w._tiles[_new_location];
         
         old_tile.unlock(w, (Entity*) this, _old_location);
         
@@ -55,6 +56,8 @@ namespace wry::sim {
                 break;
                 
             case OPCODE_LOAD:
+                DUMP(new_tile._value.discriminant);
+                DUMP(new_tile._value.value);
                 push(new_tile._value);
                 _state = OPCODE_NOOP;
                 break;
@@ -354,6 +357,16 @@ namespace wry::sim {
                     push(a);
                 }
                 break;
+                
+            case OPCODE_FLIP_FLOP:
+                ++_heading;
+                new_tile._value = { DISCRIMINANT_OPCODE, OPCODE_FLOP_FLIP };
+                break;
+            case OPCODE_FLOP_FLIP:
+                --_heading;
+                new_tile._value = { DISCRIMINANT_OPCODE, OPCODE_FLIP_FLOP };
+                break;
+
                 
                 // no action
                 // no action on this location

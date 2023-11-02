@@ -15,27 +15,45 @@
 
 namespace wry {
     
+    template<typename> 
+    struct matrix_view;
+        
+    template<typename T>
+    struct rank<matrix_view<T>> 
+    : std::integral_constant<std::size_t, wry::rank<T>::value + 2> {
+    };
+    
     template<typename T>
     struct matrix_view {
         
-        // by default we iterate across the minor axis and yield a contiguous
-        // view of the major axis
-        
         using element_type = std::decay_t<T>;
         using value_type = vector_view<T>;
-        using size_type = std::size_t;
-        using difference_type = std::ptrdiff_t;
+        using size_type = size_type;
+        using difference_type = difference_type;
         using reference = vector_view<T>;
         using const_reference = vector_view<std::add_const_t<T>>;
         using iterator = minor_iterator<T>;
         using const_iterator = minor_iterator<std::add_const_t<T>>;
 
         stride_iterator<T> base;
-        std::size_t _minor;
-        std::size_t _major;
+        size_type _minor;
+        size_type _major;
         
         matrix_view() = delete;
+        matrix_view(const matrix_view&) = default;
+        matrix_view(matrix_view&&) = default;
+        ~matrix_view() = default;
+
+        matrix_view& operator=(const matrix_view& other) {
+            wry::copy(other.begin(), other.end(), begin(), end());
+            return *this;
+        }
         
+        matrix_view& operator=(matrix_view&& other) {
+            wry::copy(other.begin(), other.end(), begin(), end());
+            return *this;
+        }
+
         template<typename U>
         matrix_view(const matrix_view<U>& other)
         : base(other.base)
@@ -51,11 +69,15 @@ namespace wry {
         , _minor(minor)
         , _major(major) {
         }
-        
-        ~matrix_view() = default;
-        
-        matrix_view& operator=(auto&& x) {
-            wry::copy(std::begin(x), std::end(x), begin(), end());
+                
+        matrix_view& operator=(auto&& other) {
+            if constexpr (rank_v<std::decay_t<decltype(other)>>) {
+                using std::begin;
+                using std::end;
+                wry::copy(begin(other), end(other), this->begin(), this->end());
+            } else {
+                std::fill(begin(), end(), std::forward<decltype(other)>(other));
+            }
             return *this;
         }
         
@@ -85,17 +107,17 @@ namespace wry {
             return reference((base + i).base, _major);
         }
         
-        const T& operator[](difference_type i, difference_type j) const {
+        T& operator[](difference_type i, difference_type j) const {
             return (base + i).base[j];
         }
                 
         reference front() const { return reference(base.base, _major); }
         reference back() const { return reference((base + _minor - 1).base, _major); }
         
-        matrix_view<T> sub(ptrdiff_t i,
-                           ptrdiff_t j,
-                           ptrdiff_t minor,
-                           ptrdiff_t major) const {
+        matrix_view<T> sub(difference_type i,
+                           difference_type j,
+                           difference_type minor,
+                           difference_type major) const {
             assert(0 <= i);
             assert(0 <= j);
             assert(0 <= minor);
@@ -124,8 +146,8 @@ namespace wry {
             return base.base;
         }
         
-        std::size_t bytes_per_row() const {
-            return base._stride;
+        difference_type major_bytes() const {
+            return base._stride_bytes;
         }
 
     }; // struct matrix_view

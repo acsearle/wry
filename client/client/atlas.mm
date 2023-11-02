@@ -65,22 +65,22 @@ namespace wry {
     
     // Place a sprite within the free space of the atlas
     
-    sprite atlas::place(matrix_view<const RGBA8Unorm_sRGB> v, simd_float2 origin) {
-        auto tl = _packer.place(simd_make_ulong2(v.major(),
+    sprite atlas::place(matrix_view<const RGBA8Unorm_sRGB> v, float2 origin) {
+        auto tl = _packer.place(simd::make<simd::ulong2>(v.major(),
                                                  v.minor()));
         [_texture replaceRegion:MTLRegionMake2D(tl.x, tl.y,
                                                 v.major(), v.minor())
                     mipmapLevel:0
                       withBytes:v.data()
-                    bytesPerRow:v.bytes_per_row()];
+                    bytesPerRow:v.major_bytes()];
         sprite s;
-        s.a.position = simd_make_float4(-origin, 0, 1);
-        s.a.texCoord = simd_float(tl) / (float) _size;
-        s.b.position = simd_make_float4(v.major() - origin.x,
+        s.a.position = make<float4>(-origin, 0, 1);
+        s.a.texCoord = convert<float>(tl) / (float) _size;
+        s.b.position = make<float4>(v.major() - origin.x,
                                         v.minor() - origin.y,
                                         0,
                                         1);
-        s.b.texCoord = simd_make_float2(tl.x + v.major(), tl.y + v.minor()) / _size;
+        s.b.texCoord = make<float2>(tl.x + v.major(), tl.y + v.minor()) / _size;
         
         // for debug, also shade the split regions
         
@@ -127,8 +127,8 @@ namespace wry {
     
     
     void atlas::release(sprite s) {
-        auto a = simd_ulong(s.a.texCoord * _size);
-        auto b = simd_ulong(s.b.texCoord * _size);
+        auto a = convert<ulong>(s.a.texCoord * _size);
+        auto b = convert<ulong>(s.b.texCoord * _size);
         _packer.release(a, b);
     }
     

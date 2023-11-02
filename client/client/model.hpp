@@ -59,16 +59,18 @@ namespace wry {
         sim::Value _holding_value = {};
         difference_type _selected_i = -1;
         difference_type _selected_j = -1;
-        simd_float2 _looking_at = {};
-        simd_float2 _mouse = {};
+        float2 _looking_at = {};
+        float2 _mouse = {};
         simd_float4 _mouse4 = {};
+        
+        string _outstanding_keysdown;
         
         // visualization state
         
         
         // Camera and sun projections
         
-        simd_float2 _viewport_size;
+        float2 _viewport_size;
 
         MeshUniforms _uniforms;
 
@@ -86,7 +88,7 @@ namespace wry {
             // ready to run its lock-acquired-action
             _world._location_locked.emplace_back(Coordinate{0,0}, p);
             
-            _uniforms.camera_position_world = simd_make_float4(0.0f, -8.0f, 16.0f, 1.0f);
+            _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();
 
         }
@@ -101,9 +103,7 @@ namespace wry {
                         std::chrono::steady_clock::duration endurance = std::chrono::seconds(5)) {
             _logs.emplace(std::chrono::steady_clock::now() + endurance, v);
         }
-        
-        
-        
+                
     };
     
 } // namespace wry

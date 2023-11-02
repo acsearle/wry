@@ -14,16 +14,7 @@
 #include "simd.hpp"
 
 namespace wry {
-    
-    template<typename MatrixView>
-    typename MatrixView::value_type* matrix_lookup(MatrixView& v, simd_float2 xy) {
-        difference_type i = floor(xy.x);
-        difference_type j = floor(xy.y);
-        if ((i < 0) || (v.minor() <= i) || (j < 0) || (v.major() < j))
-            return nullptr;
-        return v.to(i, j);
-    }
-    
+        
     template<typename T>
     struct Palette {
         
@@ -33,7 +24,7 @@ namespace wry {
         
         // intersect mouse ray with Palette
         // mouse ray is (u, v, ?, 1)
-        std::optional<simd_float2> intersect(simd_float4 screen_ray) {
+        std::optional<float2> intersect(simd_float4 screen_ray) {
             
             // the Palette is drawn with the transform
             
@@ -46,15 +37,15 @@ namespace wry {
             
         }
         
-        std::optional<simd_int2> bucket(simd_float2 xy_viewport) {
-            std::optional<simd_float2> a = intersect(xy_viewport);
+        std::optional<simd_int2> bucket(float2 xy_viewport) {
+            std::optional<float2> a = intersect(xy_viewport);
         }
         
-        T* operator[](simd_float2 xy_viewport) {
+        T* operator[](float2 xy_viewport) {
             auto a = intersect(xy_viewport);
             if (!a)
                 return nullptr;
-            return matrix_lookup(*a);
+            return image_lookup(*a);
         }
                 
     };

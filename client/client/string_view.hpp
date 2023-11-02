@@ -23,6 +23,12 @@ namespace wry {
     
     // string_view presents an aray_view<const char8_t> as a UTF-32 sequence
     
+    struct string_view;
+    
+    using StringView = string_view;
+    
+    template<> struct rank<string_view> : std::integral_constant<std::size_t, 1> {};
+    
     struct string_view {
         
         using const_iterator = utf8::iterator;

@@ -25,9 +25,9 @@ namespace wry {
     }
     
     inline simd_float3 from_sRGB(simd_float3 rgb) {
-        return simd_make_float3(from_sRGB(rgb.r),
-                                from_sRGB(rgb.g),
-                                from_sRGB(rgb.b));
+        simd_float3 a = rgb / 12.92f;
+        simd_float3 b = simd::pow((rgb + 0.55f) / 1.055f, simd_make_float3(2.4f, 2.4f, 2.4f));
+        return simd::select(b, a, rgb <= 0.0031308f);
     }
             
     inline simd_float3 to_sRGB(simd_float3 rgb) {
@@ -37,14 +37,14 @@ namespace wry {
     }
     
     inline simd_float4 from_sRGB(simd_float4 rgba) {
-        return simd_make_float4(from_sRGB(rgba.r),
+        return make<float4>(from_sRGB(rgba.r),
                                 from_sRGB(rgba.g),
                                 from_sRGB(rgba.b),
                                 rgba.a);
     }
 
     inline simd_float4 to_sRGB(simd_float4 rgba) {
-        return simd_make_float4(to_sRGB(rgba.r),
+        return make<float4>(to_sRGB(rgba.r),
                                 to_sRGB(rgba.g),
                                 to_sRGB(rgba.b),
                                 rgba.a);
@@ -139,17 +139,37 @@ namespace wry {
         operator float() const {
             return read();
         }
+
+        R8Unorm_sRGB(const R8Unorm_sRGB&) = default;
+        R8Unorm_sRGB(R8Unorm_sRGB&&) = default;
+
+        R8Unorm_sRGB& operator=(const R8Unorm_sRGB&) = default;
+        R8Unorm_sRGB& operator=(R8Unorm_sRGB&&) = default;
+        
+        R8Unorm_sRGB& operator=(float f) {
+            write(f);
+            return *this;
+        }
+
         
     };
     
     extern uchar (*_multiply_alpha_table)[256];
         
     struct alignas(4) RGBA8Unorm_sRGB {
+        
+        // simd_uchar4 rgba;
+        
         R8Unorm_sRGB r, g, b;
         R8Unorm a;
         
         constexpr RGBA8Unorm_sRGB() = default;
-        
+        RGBA8Unorm_sRGB(const RGBA8Unorm_sRGB&) = default;
+        RGBA8Unorm_sRGB(RGBA8Unorm_sRGB&&) = default;
+        ~RGBA8Unorm_sRGB() = default;
+        RGBA8Unorm_sRGB& operator=(const RGBA8Unorm_sRGB&) = default;
+        RGBA8Unorm_sRGB& operator=(RGBA8Unorm_sRGB&&) = default;
+
         constexpr RGBA8Unorm_sRGB(float red, float green, float blue, float alpha)
         : r(red)
         , g(green)
@@ -157,9 +177,20 @@ namespace wry {
         , a(alpha) {
         }
         
+        RGBA8Unorm_sRGB& operator=(float f) {
+            r = f;
+            g = f;
+            b = f;
+            a = f;
+            return *this;
+        };
+
+
     };
     
     struct alignas(4) BGRA8Unorm_sRGB {
+        
+        // simd_uchar4 rgba
         
         R8Unorm_sRGB b, g, r;
         R8Unorm a;
@@ -172,7 +203,9 @@ namespace wry {
         , r(red)
         , a(alpha) {
         }
+        
     };
     
 } // namespace wry
+
 #endif /* sRGB_hpp */

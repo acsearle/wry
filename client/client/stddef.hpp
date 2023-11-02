@@ -14,6 +14,7 @@ namespace rust {
     
     using isize = std::ptrdiff_t;
     using usize = std::size_t;
+    struct unit {};
     
 } // namespace rust
 

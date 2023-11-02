@@ -56,13 +56,8 @@ namespace wry {
         matrix<float> a(x.minor() + 4, x.major() + 4);
         matrix<R8Unorm> b(x.minor() + 4 + 4, x.major() + 4 + 4);
         
-        for (auto&& q : b)
-            for (auto&& r : q)
-                r = 0.0f;
-        
+        b = 0.0f;
         b.sub(4, 4, x.minor(), x.major()) = x;
-        
-        
         
         // Compute offset filter
         for (size_t i = 0; i != a.minor(); ++i) {
@@ -70,7 +65,7 @@ namespace wry {
                 a[i, j] = 0.0f;
                 for (size_t u = 0; u != 5; ++u) {
                     for (size_t v = 0; v != 5; ++v) {
-                        printf("%g\n", (float) b[i + u, j + v]);
+                        //printf("%g\n", (float) b[i + u, j + v]);
                         a[i, j] += k[u] * k[v] * b[i + u, j + v];
                     }
                 }
@@ -89,9 +84,6 @@ namespace wry {
         matrix<RGBA8Unorm_sRGB> c(a.minor(), a.major());
         for (size_t i = 0; i != c.minor(); ++i) {
             for (size_t j = 0; j != c.major(); ++j) {
-                c[i, j].r._ = 0;
-                c[i, j].g._ = 0;
-                c[i, j].b._ = 0;
                 c[i, j].a = a[i, j];
             }
         }
@@ -174,7 +166,7 @@ namespace wry {
         FT_UInt gindex = 0;
         FT_ULong charcode = FT_Get_First_Char(face, &gindex);
         
-        matrix<simd_uchar4> u;
+        matrix<uchar4> u;
         constexpr float k = 1.0f / 64.0f; // metrics are in 26.6 fixed point
         
         // render all glyphs
@@ -183,15 +175,15 @@ namespace wry {
             // DUMP(charcode);
             
             // Render fractional pixel coverage
-            FT_Load_Glyph(face, gindex, FT_LOAD_RENDER); // load and render for gray level
+            // FT_Load_Glyph(face, gindex, FT_LOAD_RENDER); // load and render for gray level
             
             // Render signed distance field from Bezier curves
             // FT_Load_Glyph(face, gindex, FT_LOAD_DEFAULT); // load but do not render
             // FT_Render_Glyph(face->glyph, FT_RENDER_MODE_SDF);
 
             // Render signed distance field from bitmask
-            // FT_Load_Glyph(face, gindex, FT_LOAD_RENDER); // load and render for gray level
-            // FT_Render_Glyph(face->glyph, FT_RENDER_MODE_SDF); // re-render for SDF
+            FT_Load_Glyph(face, gindex, FT_LOAD_RENDER); // load and render for gray level
+            FT_Render_Glyph(face->glyph, FT_RENDER_MODE_SDF); // re-render for SDF
 
             // apply subtle dropshadow
             auto v = matrix_view<R8Unorm>(stride_iterator<R8Unorm>(reinterpret_cast<R8Unorm*>(face->glyph->bitmap.buffer),
@@ -202,7 +194,7 @@ namespace wry {
             // draw_bounding_box(u);
             
             sprite s = atl.place(u,
-                                 simd_make_float2(-face->glyph->bitmap_left + 2,
+                                 make<float2>(-face->glyph->bitmap_left + 2,
                                                   +face->glyph->bitmap_top + 1
                                                   ));
             
@@ -222,4 +214,89 @@ namespace wry {
         return result;
     }
     
-}
+} // namespace wry
+
+
+
+namespace wry {
+    
+    // source of glyph coverage maps or signed distance fields
+    
+    struct Font2 {
+        
+        FT_Library library;
+        FT_Face face;
+                
+        Font2() {
+            
+            FT_Error e;
+            
+            {
+                FT_Init_FreeType(&library);
+                e = FT_Init_FreeType(&library);
+                assert(!e);
+            }
+            
+            {
+                const char* filepathname
+                = "/Users/antony/Desktop/assets/Futura Medium Condensed.otf";
+                FT_Long face_index = 0;
+                e = FT_New_Face(library,
+                                filepathname,
+                                face_index,
+                                &face);
+                assert(!e);
+            }
+            
+            {
+                FT_UInt pixel_width = 24;
+                FT_UInt pixel_height = 0;
+                FT_Set_Pixel_Sizes(face, pixel_width, pixel_height);
+            }
+            
+        }
+        
+        ~Font2() {
+            FT_Done_FreeType(library);
+        }
+        
+        std::tuple<float2,
+        matrix_view<R8Unorm>,
+        float2> operator[](char32_t charcode) const {
+            
+            FT_UInt glyph_index = FT_Get_Char_Index(face, charcode);
+            assert(glyph_index);
+            
+            FT_Load_Glyph(face, glyph_index, FT_LOAD_RENDER);
+            
+            auto& glyph = *face->glyph;
+
+            float2 origin = make<float2>(-glyph.bitmap_left, glyph.bitmap_top);
+            
+            auto& bitmap = glyph.bitmap;
+            R8Unorm* pointer = reinterpret_cast<R8Unorm*>(bitmap.buffer);
+            stride_iterator row_iterator(pointer, bitmap.pitch);
+            matrix_view<R8Unorm> view(row_iterator, bitmap.rows, bitmap.width);
+
+            float advance = glyph.advance.x / 64.0f;
+            float height = face->height / 64.0f;
+
+            return { origin, view, make<float2>(advance, height) };
+            
+        }
+        
+    }; // struct Font2
+    
+    std::tuple<float2, matrix_view<R8Unorm>, float2> get_glyph(char32_t charcode) {
+        static auto* f = new Font2();
+        
+        return (*f)[charcode];
+        
+    }
+
+    
+    
+    
+} // namespace wry
+
+

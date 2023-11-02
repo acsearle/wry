@@ -18,21 +18,18 @@ namespace wry {
     template<typename T>
     struct matrix_transpose_view {
         
-        // iterate across the major axis and yield a strided view of the
-        // minor axis
-        
         using value_type = stride_view<T>;
-        using size_type = std::size_t;
-        using difference_type = std::ptrdiff_t;
+        using size_type = size_type;
+        using difference_type = difference_type;
         using reference = stride_view<T>;
         using const_reference = stride_view<std::add_const_t<T>>;
         using iterator = major_iterator<T>;
         using const_iterator = major_iterator<std::add_const_t<T>>;
         
         T* base;
-        std::ptrdiff_t _stride;
-        std::size_t _minor;
-        std::size_t _major;
+        difference_type _stride;
+        size_type _minor;
+        size_type _major;
         
         matrix_transpose_view() = delete;
         
@@ -46,8 +43,8 @@ namespace wry {
         
         template<typename U>
         matrix_transpose_view(stride_iterator<U> p,
-                              std::size_t minor,
-                              std::size_t major)
+                              size_type minor,
+                              size_type major)
         : base(p.base)
         , _stride(p._stride)
         , _minor(minor)
@@ -87,7 +84,7 @@ namespace wry {
             return reference(base + i, _stride, _minor);
         }
         
-        const T& operator()(difference_type i, difference_type j) const {
+        const T& operator[](difference_type i, difference_type j) const {
             return stride_iterator(base + i, _stride)[j];
         }
         

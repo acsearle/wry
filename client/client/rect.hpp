@@ -79,10 +79,17 @@ namespace wry {
         
     };
     
-    struct area_cmp {
-        template<typename A, typename B>
-        bool operator()(A&& a, B&& b) const {
-            return area(std::forward<A>(a)) < area(std::forward<B>(b));
+    struct rect_area_cmp {
+        template<typename T>
+        bool operator()(const rect<T>& a, const rect<T>& b) const {
+            return area(a) < area(b);
+        }
+    };
+    
+    struct rect_min_cmp {
+        template<typename T>
+        bool operator()(const rect<T>& a, const rect<T>& b) const {
+            return simd::reduce_min(a.size()) < simd::reduce_min(b.size());
         }
     };
     

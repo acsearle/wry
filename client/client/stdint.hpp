@@ -35,7 +35,7 @@ namespace rust {
 
 namespace wry {
     
-    // use cstdint names
+    // <cstdint> names
     
     using ::std::int8_t;
     using ::std::int16_t;
@@ -47,12 +47,10 @@ namespace wry {
     using ::std::uint32_t;
     using ::std::uint64_t;
 
-    // extend cstdint
-
     using int128_t  =   signed __int128;
     using uint128_t = unsigned __int128;
 
-    // use rust names
+    // Rust names
     
     using ::rust::i8;
     using ::rust::i16;

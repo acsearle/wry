@@ -11,6 +11,7 @@
 #include "array.hpp"
 #include "sim.hpp"
 #include "entity.hpp"
+#include "debug.hpp"
 
 namespace wry::sim {
     
@@ -30,6 +31,8 @@ namespace wry::sim {
         
         
         void push(Value x) {
+            DUMP(x.discriminant);
+            DUMP(x.value);
             _stack.push_back(x);
         }
         

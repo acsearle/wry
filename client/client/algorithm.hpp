@@ -44,8 +44,7 @@ namespace wry {
                 return c;
             ++first1;
             ++first2;
-        }
-        
+        }        
     }
     
     // # Extend standard algorithms to check for second range ending

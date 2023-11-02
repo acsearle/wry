@@ -14,6 +14,7 @@
 
 #include "matrix_transpose_view.hpp"
 #include "matrix_view.hpp"
+#include "simd.hpp"
 
 namespace wry {
     
@@ -28,6 +29,10 @@ namespace wry {
     // these objects differ only in our interpretation of the minor and major
     // indices
     //
+    // general: (minor,   major)
+    // matrix:  ( rows, columns)
+    // image:   (width,  height)
+    //
     // our fundamental 2D array thus uses the neutral minor and major to
     // describe its dimensions
     //
@@ -35,6 +40,18 @@ namespace wry {
     //
     // like wry::array, we support expansion along any dimension by
     // (ruinous) overallocation and amortization
+    
+    // The natural / consistent order of iteration for a matrix is
+    //
+    //    for (i = 0; i != matrix_rows(A); ++i) {
+    //        for (j = 0; j != matrix_columns(A); ++j) {
+    //            foo(A[i][j]
+    //        }
+    //    }
+    //
+    // Which unfortunately is the transpose of memory order
+    //
+    // Should we thus define begin() and end() to return column views?
 
     
     template<typename T>
@@ -69,11 +86,11 @@ namespace wry {
         
         size_type major() const { return _major; }
         
-        size_type stride_in_bytes() const {
-            return base._stride;
+        size_type stride_bytes() const {
+            return base._stride_bytes;
         }
         
-        size_type size_in_bytes() const {
+        size_type size_bytes() const {
             return _minor * _major * sizeof(T);
         }
         
@@ -92,8 +109,8 @@ namespace wry {
         matrix(size_t minor, size_t major) {
             _minor = minor;
             _major = major;
-            base._stride = _major * sizeof(T);
-            _capacity = base._stride * _minor;
+            base._stride_bytes = _major * sizeof(T);
+            _capacity = base._stride_bytes * _minor;
             _allocation = operator new(_capacity);
             assert(_allocation);
             base.base = static_cast<T*>(_allocation);
@@ -132,7 +149,13 @@ namespace wry {
         }
         
         matrix& operator=(auto&& other) {
-            wry::copy(std::begin(other), std::end(other), begin(), end());
+            if constexpr (rank_v<std::decay_t<decltype(other)>>) {
+                using std::begin;
+                using std::end;
+                wry::copy(begin(other), end(other), this->begin(), this->end());
+            } else {
+                std::fill(begin(), end(), std::forward<decltype(other)>(other));
+            }
             return *this;
         }
                 
@@ -167,19 +190,27 @@ namespace wry {
         const T& operator[](difference_type i, difference_type j) const {
             return (base + i).base[j];
         }
+
+        T& operator[](difference_type2 ij) {
+            return (base + ij.x).base[ij.y];
+        }
         
+        const T& operator[](difference_type2 ij) const {
+            return (base + ij.x).base[ij.y];
+        }
+
         T* to(difference_type i, difference_type j) {
             assert((0 <= i) && (i < _minor) && (0 <= j) && (j < _major));
             return (base + i).base + j;
         }
         
         reference front() const { return reference(base._pointer, _major); }
-        reference back() const { return reference((base + _minor - 1)._pointer, _major); }
+        reference back() const { return reference((base + (_minor - 1))._pointer, _major); }
         
-        matrix_view<T> sub(ptrdiff_t i,
-                           ptrdiff_t j,
-                           ptrdiff_t minor,
-                           ptrdiff_t major) const {
+        matrix_view<T> sub(difference_type i,
+                           difference_type j,
+                           difference_type minor,
+                           difference_type major) const {
             assert(0 <= i);
             assert(0 <= j);
             assert(0 <= minor);
@@ -187,13 +218,13 @@ namespace wry {
             assert(0 <= major);
             assert(j + major <= _major);
             return matrix_view(stride_iterator<T>(base.base + j,
-                                                  base._stride) + i,
+                                                  base._stride_bytes) + i,
                                minor,
                                major);
         }
         
         operator matrix_view<T>() {
-            return matrix_view<T>(base, _minor, major);
+            return matrix_view<T>(base, _minor, _major);
         }
         
         operator matrix_view<const T>() const {
@@ -217,7 +248,33 @@ namespace wry {
     template<typename T>
     matrix_view(stride_iterator<T>, std::size_t, std::size_t) -> matrix_view<T>;
     
+    size_type matrix_width(const auto& v) {
+        return v.major();
+    }
     
+    size_type matrix_height(const auto& v) {
+        return v.minor();
+    }
+    
+    size_type matrix_column_bytes(const auto& v) {
+        return v.stride_bytes();
+    }
+    
+    size_type matrix_rows(const auto& v) {
+        return v.minor();
+    }
+    
+    size_type matrix_columns(const auto& v) {
+        return v.major();
+    }
+    
+    auto* matrix_lookup(const auto& v, float2 xy) {
+        difference_type2 ji = convert<difference_type>(floor(xy));
+        if ((ji.x < 0) || (v.major() <= ji.x) || (ji.y < 0) || (v.minor() < ji.y))
+            return nullptr;
+        return v.to(ji.y, ji.x);
+    }
+        
 } // namespace wry
 
 

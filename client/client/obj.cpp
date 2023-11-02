@@ -263,8 +263,8 @@ namespace wry {
         wry::mesh::mesh m;
         for (auto& position : o._positions) {
             mesh::vertex w;
-            w.position = simd_make_float4(position.x, position.y, position.z, 1);
-            w.coordinate = simd_make_float4(position.x, position.y, 0, 1);
+            w.position = make<float4>(position.x, position.y, position.z, 1);
+            w.coordinate = make<float4>(position.x, position.y, 0, 1);
             m.vertices.push_back(w);
         }
         for (auto& s : o._smooth_faces) {

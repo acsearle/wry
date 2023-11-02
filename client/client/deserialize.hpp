@@ -40,7 +40,7 @@ namespace wry {
         // default implementations
         
 #define X(T)\
-        void visit_##T(T x) { throw ENOTSUP; }
+        T visit_##T(T x) { throw ENOTSUP; }
 
         WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
         WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES
