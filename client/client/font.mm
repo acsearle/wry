@@ -12,10 +12,10 @@
 #include FT_FREETYPE_H
 //#pragma clang diagnostic pop
 
-#include <cassert>
 #include <iostream>
 #include <string>
 
+#include "assert.hpp"
 #include "debug.hpp"
 #include "font.hpp"
 #include "image.hpp"

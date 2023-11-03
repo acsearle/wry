@@ -54,7 +54,7 @@ namespace wry {
             assert(d_first != d_last);
             *d_first = *first;
         }
-        assert(d_first == d_last);
+        postcondition(d_first == d_last);
         return d_first;
     }
     

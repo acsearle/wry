@@ -95,13 +95,13 @@ namespace wry {
     matrix<float4> to_RGB8Unorm_sRGB(const matrix<simd_float4>&);
     
     inline void compose(matrix_view<RGBA8Unorm_sRGB> target, matrix_view<const R8Unorm> source, float2 offset) {
-        for (difference_type y = 0; y != image_height(target); ++y) {
+        for (difference_type y = 0; y != image_height(target)-1; ++y) {
             difference_type y2 = y - offset.y;
             if (y2 < 0)
                 continue;
             if (y2 >= image_height(source))
                 break;
-            for (difference_type x = 0; x != image_width(target); ++x) {
+            for (difference_type x = 0; x != image_width(target)-1; ++x) {
                 // float alpha = image_interpolate(source, make<float2>(x, y) - offset);
                 //auto* p = image_lookup(source, make<float2>(x, y));
                 //if (!p)
@@ -119,13 +119,18 @@ namespace wry {
                 //if (alpha != 0)
                 //    DUMP(alpha);
                 
-                auto& a = target[x, y];
+                auto& a = target[x+1, y+1];
+                a.r = a.r * (1.0f - alpha);
+                a.g = a.g * (1.0f - alpha);
+                a.b = a.b * (1.0f - alpha);
+                a.a = a.a * (1.0f - alpha) + alpha;
 
                 // Place above
-                a.r = a.r * (1.0f - alpha) + alpha;
-                a.g = a.g * (1.0f - alpha) + alpha;
-                a.b = a.b * (1.0f - alpha) + alpha;
-                a.a = a.a * (1.0f - alpha) + alpha;
+                auto& b = target[x, y];
+                b.r = b.r * (1.0f - alpha) + alpha;
+                b.g = b.g * (1.0f - alpha) + alpha;
+                b.b = b.b * (1.0f - alpha) + alpha;
+                b.a = b.a * (1.0f - alpha) + alpha;
                 
                 /*
                 // Place below

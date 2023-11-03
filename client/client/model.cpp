@@ -34,10 +34,9 @@ namespace wry {
         _uniforms.inverse_view_transform = simd_inverse(_uniforms.view_transform);
         _uniforms.inverse_viewprojection_transform = simd_inverse(_uniforms.viewprojection_transform);
 
-        
         // sun setup
         
-        p = simd_normalize(simd_make_float3(1, -2, 3));
+        p = simd_normalize(simd_make_float3(1, -1, 3));
         _uniforms.light_direction = p;
         _uniforms.radiance = 2.0f;
 

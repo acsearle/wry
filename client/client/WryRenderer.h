@@ -24,6 +24,8 @@
 
 - (void)drawableResize:(CGSize)drawableSize;
 
+-(void)resetCursor;
+
 @end
 
 #endif /* WryRenderer_h */

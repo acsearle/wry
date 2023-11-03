@@ -8,8 +8,9 @@
 #ifndef chartype_hpp
 #define chartype_hpp
 
-#include <cassert>
 #include <cctype>
+
+#include "assert.hpp"
 
 namespace wry {
     
@@ -32,12 +33,12 @@ namespace wry {
     }
     
     inline constexpr int isalnum_(int ch) {
-        assert(isuchar(ch));
+        precondition(isuchar(ch));
         return isalnum(ch) || isunderscore(ch);
     }
     
     inline constexpr int isalpha_(int ch) {
-        assert(isuchar(ch));
+        precondition(isuchar(ch));
         return isalpha(ch) || isunderscore(ch);
     }
     

@@ -8,10 +8,10 @@
 #ifndef test_hpp
 #define test_hpp
 
-#include <cassert>
-
 #include <vector>
 #include <type_traits>
+
+#include "assert.hpp"
 
 namespace wry {
     

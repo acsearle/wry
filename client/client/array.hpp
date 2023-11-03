@@ -354,22 +354,22 @@ namespace wry {
         // [[C++ named requirement]] SequenceContainer (optional)
 
         reference front() {
-            assert(!empty());
+            precondition(!empty());
             return *_begin;
         }
         
         const_reference front() const {
-            assert(!empty());
+            precondition(!empty());
             return *_begin;
         }
         
         reference back() {
-            assert(!empty());
+            precondition(!empty());
             return *(_end - 1);
         }
         
         const_reference back() const {
-            assert(!empty());
+            precondition(!empty());
             return *(_end - 1);
         }
 
@@ -408,34 +408,34 @@ namespace wry {
         }
         
         void pop_front() noexcept {
-            assert(!is_empty());
+            precondition(!is_empty());
             std::destroy_at(_begin++);
         }
         
         void pop_back() noexcept {
-            assert(!is_empty());
+            precondition(!is_empty());
             std::destroy_at(--_end);
         }
 
         void unsafe_unpop_front() {
             static_assert(std::is_trivially_destructible_v<T>);
-            assert(_allocation_begin != _begin);
+            precondition(_allocation_begin != _begin);
             --_begin;
         }
         
         void unsafe_unpop_back() {
             static_assert(std::is_trivially_destructible_v<T>);
-            assert(_end != _allocation_end);
+            precondition(_end != _allocation_end);
             ++_end;
         }
         
         reference operator[](size_type pos) {
-            assert(pos < size());
+            precondition(pos < size());
             return _begin[pos];
         }
         
         const_reference operator[](size_type pos) const {
-            assert(pos < size());
+            precondition(pos < size());
             return _begin[pos];
         }
 
@@ -545,7 +545,7 @@ namespace wry {
         }
         
         void unsafe_set_size(size_type count) {
-            assert(count < capacity());
+            precondition(count < capacity());
             _end = _begin + count;
         }
         
@@ -570,13 +570,13 @@ namespace wry {
         // Extensions
         
         iterator to(difference_type pos) {
-            assert(((_allocation_begin - _begin) <= pos)
+            precondition(((_allocation_begin - _begin) <= pos)
                    && (pos <= (_allocation_end - _begin)));
             return _begin + pos;
         }
 
         const_iterator to(difference_type pos) const {
-            assert(((_allocation_begin - _begin) <= pos)
+            precondition(((_allocation_begin - _begin) <= pos)
                    && (pos <= (_allocation_end - _begin)));
             return _begin + pos;
         }
@@ -728,14 +728,14 @@ namespace wry {
                 
         template<typename... Args>
         void _emplace_front(Args&&... args) {
-            assert(_allocation_begin < _begin);
+            precondition(_allocation_begin < _begin);
             std::construct_at(_begin - 1, std::forward<Args>(args)...);
             --_begin;
         }
         
         template<typename... Args>
         void _emplace_back(Args&&... args) {
-            assert(_end < _allocation_end);
+            precondition(_end < _allocation_end);
             std::construct_at(_end, std::forward<Args>(args)...);
             ++_end;
         }
@@ -749,12 +749,12 @@ namespace wry {
         }
                 
         void _did_write_back(size_t n) {
-            assert(n <= _allocation_end - _end);
+            precondition(n <= _allocation_end - _end);
             _end += n;
         }
         
         void _did_read_front(size_t n) {
-            assert(n <= _end - _begin);
+            precondition(n <= _end - _begin);
             _begin += n;
         }
                                 
@@ -775,7 +775,7 @@ namespace wry {
         }
         
         void did_write_back(size_type n) {
-            assert(n <= _allocation_end - _end);
+            precondition(n <= _allocation_end - _end);
             _end += n;
         }
         
@@ -784,17 +784,17 @@ namespace wry {
         }
         
         T* may_read_first(size_type n) {
-            assert(n <= _end - _begin);
+            precondition(n <= _end - _begin);
             return _begin;
         }
         
         [[nodiscard]] T* will_read_first(size_type n) {
-            assert(n <= _end - _begin);
+            precondition(n <= _end - _begin);
             return exchange(_begin, _begin + n);
         }
         
         void did_read_first(size_t n) {
-            assert(n <= _end - _begin);
+            precondition(n <= _end - _begin);
             _begin += n;
         }
         
@@ -803,12 +803,12 @@ namespace wry {
         }
         
         [[nodiscard]] const_pointer will_read_last(size_type n) {
-            assert(n <= size());
+            precondition(n <= size());
             return _end -= n;
         }
         
         void did_read_last(size_type n) {
-            assert(n <= size());
+            precondition(n <= size());
             return _end -= n;
         }
         
@@ -827,7 +827,7 @@ namespace wry {
         }
         
         void did_write_front(size_type n) {
-            assert(n <= (_begin - _allocation_begin));
+            precondition(n <= (_begin - _allocation_begin));
             _begin -= n;
         }
         

@@ -9,11 +9,10 @@
 #ifndef string_view_hpp
 #define string_view_hpp
 
-#include <algorithm>  // lexicographical_compare
-#include <cassert>    // assert
 #include <cstring>    // strlen
 #include <ostream>    // ostream
 
+#include "assert.hpp"
 #include "algorithm.hpp"
 #include "array_view.hpp"
 #include "unicode.hpp"

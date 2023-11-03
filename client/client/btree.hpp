@@ -8,11 +8,11 @@
 #ifndef btree_hpp
 #define btree_hpp
 
-#include <cassert>
 #include <cstring>
 #include <iostream> // ugh
 
 #include "algorithm.hpp"
+#include "assert.hpp"
 #include "memory.hpp"
 #include "stdint.hpp"
 #include "utility.hpp"

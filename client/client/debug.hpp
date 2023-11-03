@@ -8,9 +8,9 @@
 #ifndef debug_hpp
 #define debug_hpp
 
-#include <cassert>
 #include <iostream>
 
+#include "assert.hpp"
 #include "typeinfo.hpp"
 
 namespace wry {

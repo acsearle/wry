@@ -8,10 +8,10 @@
 #ifndef unicode_hpp
 #define unicode_hpp
 
-#include <cassert>
 #include <compare>
 
 #include "array_view.hpp"
+#include "assert.hpp"
 #include "stddef.hpp"
 #include "stdint.hpp"
 

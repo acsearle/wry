@@ -153,12 +153,12 @@ namespace wry {
         // accessors
                 
         reference front() const {
-            assert(!empty());
+            precondition(!empty());
             return *_begin;
         }
         
         reference back() const {
-            assert(!empty());
+            precondition(!empty());
             return *(_end - 1);
         }
         
@@ -169,7 +169,7 @@ namespace wry {
         }
         
         reference operator[](size_type i) const {
-            assert((0 <= i) && (i < size()));
+            precondition((0 <= i) && (i < size()));
             return _begin[i];
         }
         
@@ -202,7 +202,7 @@ namespace wry {
         // subviews
         
         array_view subview(size_type i, size_type n) const {
-            assert((i + n) <= size());
+            precondition((i + n) <= size());
             return array_view(_begin + i, n);
         }
 
@@ -235,22 +235,22 @@ namespace wry {
         }
                                 
         void pop_front() {
-            assert(!empty());
+            precondition(!empty());
             ++_begin;
         }
         
         void pop_back() {
-            assert(!empty());
+            precondition(!empty());
             --_end;
         }
         
         void unsafe_unpop_front() {
-            assert(_begin);
+            precondition(_begin);
             --_begin;
         }
 
         void unsafe_unpop_back() {
-            assert(_end);
+            precondition(_end);
             --_end;
         }
         
@@ -285,19 +285,19 @@ namespace wry {
         
         // before reading up to a specified number
         const_pointer may_read_first(size_t n) const {
-            assert(n <= size());
+            precondition(n <= size());
             return _begin;
         }
         
         // the amount we actually did read
         void did_read_first(size_t n) {
-            assert(n <= size());
+            precondition(n <= size());
             _begin += n;
         }
         
         // commit to reading exactly a specified number
         [[nodiscard]] const_pointer will_read_first(size_type n) {
-            assert(n <= size());
+            precondition(n <= size());
             T* a = _begin;
             _begin += n;
             return a;
@@ -310,17 +310,17 @@ namespace wry {
         }
 
         [[nodiscard]] const_pointer may_read_last(size_type n) const {
-            assert(n <= size());
+            precondition(n <= size());
             return _end - n;
         }
 
         [[nodiscard]] const_pointer will_read_last(size_type n) {
-            assert(n <= size());
+            precondition(n <= size());
             return _end -= n;
         }
         
         void did_read_last(size_type n) {
-            assert(n <= size());
+            precondition(n <= size());
             _end -= n;
         }
         
@@ -336,19 +336,19 @@ namespace wry {
         }
         
         [[nodiscard]] pointer may_overwrite_first(size_type n) const {
-            assert(n <= size());
+            precondition(n <= size());
             return _begin;
         }
         
         [[nodiscard]] pointer will_overwrite_first(size_type n) {
-            assert(n <= size());
+            precondition(n <= size());
             T* ptr = _begin;
             _begin += n;
             return ptr;
         }
         
         void did_overwrite_first(size_type n) {
-            assert(n <= size());
+            precondition(n <= size());
             _begin += n;
         }
         
@@ -363,17 +363,17 @@ namespace wry {
         }
 
         [[nodiscard]] pointer may_overwrite_last(size_type n) const {
-            assert(n <= size());
+            precondition(n <= size());
             return _end - n;
         }
 
         [[nodiscard]] pointer will_overwrite_last(size_type n) {
-            assert(n <= size());
+            precondition(n <= size());
             return _end -= n;
         }
         
         void did_overwrite_last(size_type n) {
-            assert(n <= size());
+            precondition(n <= size());
             _end -= n;
         }
         
@@ -415,7 +415,7 @@ namespace wry {
                     assert(first2 != last2);\
                     *first += *first2;\
                 }\
-                assert(first2 == last2);\
+                postcondition(first2 == last2);\
             }\
             return *this;\
         }

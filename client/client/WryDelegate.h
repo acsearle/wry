@@ -23,6 +23,8 @@
 
 -(nonnull instancetype) init;
 
+@property (nonatomic, nullable) NSCursor* cursor;
+
 @end
 
 #endif /* WryDelegate_h */

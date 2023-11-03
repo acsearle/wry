@@ -8,8 +8,7 @@
 #ifndef Option_hpp
 #define Option_hpp
 
-#include <cassert>
-
+#include "assert.hpp"
 #include "type_traits.hpp"
 #include "utility.hpp"
 

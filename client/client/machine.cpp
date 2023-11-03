@@ -24,7 +24,7 @@ namespace wry::sim {
         
         //printf("%d %d\n", xy.x, xy.y);
 
-        assert(_desired_location == xy);
+        precondition(_desired_location == xy);
         _schedule_arrival(w);
         
     }
@@ -32,7 +32,7 @@ namespace wry::sim {
     
     void Machine::wake_time_elapsed(World &w, Time now) {
         
-        assert(now == _new_time);
+        precondition(now == _new_time);
         
         Value a = {};
         Value b = {};
@@ -327,6 +327,9 @@ namespace wry::sim {
                 if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
                     a.value = (i64) a.value >= (i64) b.value;
                     push(a);
+                } else {
+                    b = pop();
+                    a = pop();
                 }
                 break;
             case OPCODE_COMPARE:
@@ -335,6 +338,9 @@ namespace wry::sim {
                 if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
                     a.value = ((i64) a.value < (i64) b.value) - ((i64) b.value < (i64) a.value);
                     push(a);
+                } else {
+                    push(a);
+                    push(b);
                 }
                 break;
                 
@@ -346,6 +352,9 @@ namespace wry::sim {
                     a.discriminant |= b.discriminant;
                     a.value += b.value;
                     push(a);
+                } else {
+                    push(a);
+                    push(b);
                 }
                 break;
             case OPCODE_SUBTRACT:
@@ -355,6 +364,9 @@ namespace wry::sim {
                     a.discriminant |= b.discriminant;
                     a.value -= b.value;
                     push(a);
+                } else {
+                    push(a);
+                    push(b);
                 }
                 break;
                 
@@ -405,7 +417,7 @@ namespace wry::sim {
     
     
     void Machine::wake_location_changed(World&, Coordinate) {
-        assert(false);
+        precondition(false);
     }
 
     

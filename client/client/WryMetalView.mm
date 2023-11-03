@@ -29,6 +29,9 @@
 // notifications (which might be available by subscription anyway?)
 
 @implementation WryMetalView
+{
+    NSTrackingArea* _tracking_area;
+}
 
 - (nonnull instancetype) initWithFrame:(CGRect)frame
 {
@@ -70,6 +73,17 @@
     [super viewDidMoveToWindow];
     [_delegate viewDidMoveToWindow];
 }
+
+-(void) updateTrackingAreas {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    _tracking_area = [[NSTrackingArea alloc] initWithRect:self.bounds
+                                                  options:(NSTrackingMouseEnteredAndExited | NSTrackingActiveWhenFirstResponder)
+                                                    owner:_delegate userInfo:nil];
+    [self removeTrackingArea:_tracking_area];
+    [self addTrackingArea:_tracking_area];
+    [super updateTrackingAreas];
+}
+
 
 @end
 

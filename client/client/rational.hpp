@@ -8,8 +8,9 @@
 #ifndef rational_hpp
 #define rational_hpp
 
-#include <cassert>
 #include <numeric>
+
+#include "assert.hpp"
 #include "stdint.hpp"
 #include "utility.hpp"
 

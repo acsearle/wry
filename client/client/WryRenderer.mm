@@ -105,6 +105,8 @@
     
     wry::Palette<wry::sim::Value> _controls;
 
+    NSCursor* _cursor;
+    
 }
 
 
@@ -619,7 +621,7 @@
                                     cursor.x = 0;
                                     cursor.y += advance.y + 4;
                                 }
-                                if ((view.major() < 2) || (view.minor() < 2))
+                                if ((view.major() < 3) || (view.minor() < 3))
                                     continue;
                                 compose(tile, view, (cursor - offset).yx);
                                 cursor.x += advance.x;
@@ -660,9 +662,9 @@
             printf("%lld\n", j);
             
             _controls._transform
-            = simd_matrix_translate(simd_make_float3(0.0f, +0.5f, 0.5f))
-            * simd_matrix_scale(1.0f / 16.0f)
-            * simd_matrix_translate(simd_make_float3(nn*-0.5f, -1.0f, 0.0f));
+            =
+            simd_matrix_scale(1.0f / 16.0f)
+            * simd_matrix_translate(simd_make_float3(nn*-0.5f, -2.0f, 0.0f));
             
             {
                 int n = 64;
@@ -708,7 +710,7 @@
             {1.0f, 0.0f, 0.0f},
             {0.0f, -_model->_viewport_size.x / _model->_viewport_size.y, 0.0f, 0.0f},
             { 0.0f, 0.0f, 1.0f, 0.0f },
-            {0.0f, 0.0f, 0.0f, 1.0f},
+            {0.0f, -1.0f, 0.0f, 1.0f},
         }}, _controls._transform);
         
         wry::array<wry::vertex> v;
@@ -728,6 +730,42 @@
                 _model->_selected_j = j;
                 _model->_holding_value = m[i, j];
                 printf(" Clicked palette (%td, %td)\n", i, j);
+                
+                // replace cursor
+                {
+                    
+                    auto coordinate = _opcode_to_coordinate[_model->_holding_value.value];
+                    matrix<RGBA8Unorm_sRGB> tile(64, 64);
+                    
+                    MTLRegion region = MTLRegionMake2D(coordinate.x * _symbols.width, coordinate.y * _symbols.height, 64, 64);
+                    [_symbols getBytes:tile.data()
+                           bytesPerRow:tile.stride_bytes()
+                            fromRegion:region
+                           mipmapLevel:0];
+                    
+                    unsigned char* p[1];
+                    p[0] = (unsigned char*) tile.data();
+                    
+                    NSBitmapImageRep* a = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:p
+                                                                                  pixelsWide:64
+                                                                                  pixelsHigh:64
+                                                                               bitsPerSample:8
+                                                                             samplesPerPixel:4
+                                                                                    hasAlpha:YES
+                                                                                    isPlanar:NO
+                                                                              colorSpaceName:NSCalibratedRGBColorSpace
+                                                                                 bytesPerRow:tile.stride_bytes()
+                                                                                bitsPerPixel:32];
+                    NSImage* b = [[NSImage alloc] initWithSize:NSMakeSize(32.0, 32.0)];
+                    [b addRepresentation:a];
+                    NSCursor* c = [[NSCursor alloc] initWithImage:b hotSpot:NSMakePoint(0.0f, 0.0f)];
+                    [c set];
+                    _cursor = c;
+                    
+                }
+                
+                
+                
             } else {
                 // we clicked outside the palette
                 int i = round(_model->_mouse4.x);
@@ -929,6 +967,9 @@
     
 }
 
+-(void)resetCursor {
+    [_cursor set];
+}
 
 // - (void)renderToMetalLayer:(nonnull CAMetalLayer*)metalLayer
 - (void)renderToMetalLayer:(nonnull CAMetalDisplayLinkUpdate*)update
@@ -1060,7 +1101,16 @@
             for (int i = 0; i != p->_stack.size(); ++i) {
                 location.z += 0.5;
                 wry::sim::Value value = p->_stack[i];
-                simd_float4 coordinate = make<float4>((value.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                simd_float4 coordinate;
+                switch (value.discriminant) {
+                    case wry::sim::DISCRIMINANT_OPCODE:
+                        coordinate = _opcode_to_coordinate[value.value];
+                        break;
+                    case wry::sim::DISCRIMINANT_NUMBER:
+                    default:
+                        coordinate = make<float4>((value.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                        break;
+                }
                 v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
                 v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
                 *pv++ = v;
@@ -1078,8 +1128,7 @@
                 *pi++ = k + 1;
                 *pi++ = k + 3;
                 *pi++ = k + 2;
-                *pi++ = k + 2;
-                
+                *pi++ = k + 2;                
                 k += 4;
             }
             

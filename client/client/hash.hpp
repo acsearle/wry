@@ -8,12 +8,12 @@
 #ifndef hash_hpp
 #define hash_hpp
 
-#include <cassert>
 #include <cstring>
 #include <cmath>
 #include <tuple>
 #include <utility>
 
+#include "assert.hpp"
 #include "stdint.hpp"
 
 namespace wry {
@@ -119,7 +119,7 @@ namespace wry {
     // https://en.wikipedia.org/wiki/Z-order_curve
     
     constexpr uint64_t _morton_expand(uint64_t x) noexcept {
-        assert(x == (x & 0x00000000FFFFFFFF));
+        precondition(x == (x & 0x00000000FFFFFFFF));
         x = (x | (x << 16)) & 0x0000FFFF0000FFFF;
         x = (x | (x <<  8)) & 0x00FF00FF00FF00FF;
         x = (x | (x <<  4)) & 0x0F0F0F0F0F0F0F0F;
@@ -129,7 +129,7 @@ namespace wry {
     }
     
     constexpr uint64_t _morton_contract(uint64_t x) noexcept {
-        assert(x == (x & 0x5555555555555555));
+        precondition(x == (x & 0x5555555555555555));
         x = (x | (x >>  1)) & 0x3333333333333333;
         x = (x | (x >>  2)) & 0x0F0F0F0F0F0F0F0F;
         x = (x | (x >>  4)) & 0x00FF00FF00FF00FF;

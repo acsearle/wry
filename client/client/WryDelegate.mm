@@ -39,6 +39,7 @@
     WryRenderer* _renderer;
     NSThread* _renderThread;
     WryAudio* _audio;
+    NSCursor* _cursor;
 }
 
 -(nonnull instancetype) init
@@ -353,7 +354,11 @@
     //NSLog(@"(%g, %g)", _metalView.bounds.size.width, _metalView.bounds.size.height);
 }
 
-- (void) mouseEntered:(NSEvent *)event {}
+- (void) mouseEntered:(NSEvent *)event {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    [_renderer resetCursor];
+}
+
 - (void) mouseExited:(NSEvent *)event {}
 - (void) mouseDown:(NSEvent *)event {}
 - (void) mouseDragged:(NSEvent *)event {

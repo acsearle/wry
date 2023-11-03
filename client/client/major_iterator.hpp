@@ -118,8 +118,8 @@ namespace wry {
     
     template<typename T, typename U>
     auto operator-(const major_iterator<T>& a, const major_iterator<U>& b) {
-        assert(a._stride == b._stride);
-        assert(a._minor == b._minor);
+        precondition(a._stride == b._stride);
+        precondition(a._minor == b._minor);
         return a._pointer - b._pointer;
     }
     
