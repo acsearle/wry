@@ -252,6 +252,16 @@ namespace wry::sim {
                     push(b);
                 }
                 break;
+                
+            case OPCODE_SHIFT_RIGHT:
+                b = pop();
+                a = pop();
+                if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
+                    a.value = a.value >> b.value;
+                    push(a);
+                }
+                break;
+                
             case OPCODE_POPCOUNT:
                 a = pop();
                 if (a.discriminant == DISCRIMINANT_NUMBER) {
@@ -379,7 +389,6 @@ namespace wry::sim {
                 new_tile._value = { DISCRIMINANT_OPCODE, OPCODE_FLIP_FLOP };
                 break;
 
-                
                 // no action
                 // no action on this location
                 

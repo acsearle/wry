@@ -42,40 +42,58 @@ namespace wry::sim {
     
     enum ELEMENT
     : i64 {
-        // universe
-        HYDROGEN,
-        HELIUM,
-        OXYGEN,
-        CARBON,
-        NEON,
-        IRON,
-        NITROGEN,
-        SILICON,
-        MAGNESIUM,
-        SULFUR,
-        POTASSIUM,
-        NICKEL,
-        // humans
-        PHOSPHORUS,
-        CHLORINE,
-        SODIUM,
-        CALCIUM,
-        // seawater
-        BROMINE,
-        BORON,
-        FLUORINE,
-        // crust
-        ALUMINUM,
-        TITANIUM,
+        
+        ELEMENT_NONE,
+        
+        ELEMENT_HYDROGEN,
+        ELEMENT_HELIUM,
+        
+        ELEMENT_LITHIUM,
+        ELEMENT_BERYLLIUM,
+        ELEMENT_BORON,
+        ELEMENT_CARBON,
+        ELEMENT_NITROGEN,
+        ELEMENT_OXYGEN,
+        ELEMENT_FLUORINE,
+        ELEMENT_NEON,
+
+        ELEMENT_SODIUM,
+        ELEMENT_MAGNESIUM,
+        ELEMENT_ALUMINUM,
+        ELEMENT_SILICON,
+        ELEMENT_PHOSPHORUS,
+        ELEMENT_SULFUR,
+        ELEMENT_CHLORINE,
+        ELEMENT_ARGON,
+        
+        ELEMENT_POTASSIUM,
+        ELEMENT_CALCIUM,
+        ELEMENT_SCANDIUM,
+        ELEMENT_TITANIUM,
+        ELEMENT_VANADIUM,
+        
+        ELEMENT_CHROMIUM,
+        ELEMENT_MANGANESE,
+        ELEMENT_IRON,
+        ELEMENT_COBALT,
+        ELEMENT_NICKEL,
+        ELEMENT_COPPER,
+        ELEMENT_ZINC,
+        ELEMENT_GALLIUM,
+        ELEMENT_GERMANIUM,
+        ELEMENT_ARSENIC,
+        ELEMENT_SELENIUM,
+        ELEMENT_BROMINE,
+        ELEMENT_KRYPTON,
+        
+        ELEMENT_RUBIDIUM,
+        ELEMENT_STRONTIUM,
+        ELEMENT_YTTRIUM,
+        ELEMENT_ZIRCONIUM,
+        ELEMENT_NIOBIUM,
+        ELEMENT_MOLYBDENUM,
 
         // notable but relatively rare
-        LITHIUM,
-        CHROMIUM,
-        MANGANESE,
-        COBALT,
-        COPPER,
-        ZINC,
-        ARSENIC,
         SILVER,
         TIN,
         PLATINUM,
@@ -141,6 +159,7 @@ X(OPCODE_BITWISE_AND),\
 X(OPCODE_BITWISE_OR),\
 X(OPCODE_BITWISE_XOR),\
 X(OPCODE_BITWISE_SPLIT),\
+X(OPCODE_SHIFT_RIGHT),\
 X(OPCODE_POPCOUNT),\
 X(OPCODE_ABS),\
 X(OPCODE_NEGATE),\

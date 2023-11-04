@@ -937,6 +937,52 @@ namespace wry {
         array_view<U>& reinterpret_right_as() {
             return reinterpret_cast<array_view<U>&>(_end);
         }
+        
+        
+        // remove-erase idiom and friends
+        
+        size_type erase(const T& value) {
+            iterator last = std::remove(_begin, _end, value);
+            size_type n = _end - last;
+            std::destroy(last, _end);
+            _end = last;
+            return n;
+        }
+
+        size_type erase_if(auto&& predicate) {
+            iterator last = std::remove_if(_begin, _end, std::forward<decltype(predicate)>(predicate));
+            size_type n = _end - last;
+            std::destroy(last, _end);
+            _end = last;
+            return n;
+        }
+        
+        iterator erase_first(const T& value) {
+            iterator i = std::find(_begin, _end, value);
+            return this->erase(i);
+        }
+        
+        iterator erase_first_if(auto&& predicate) {
+            iterator i = std::find_if(_begin, _end, std::forward<decltype(predicate)>(predicate));
+            return this->erase(i);
+        }
+        
+        size_type count(const T& value) const {
+            return std::count(_begin, _end, value);
+        }
+
+        size_type count_if(auto&& predicate) const {
+            return std::count(_begin, _end, std::forward<decltype(predicate)>(predicate));
+        }
+        
+        bool contains(const T& value) const {
+            return std::find(_begin, _end, value) != _end;
+        }
+
+        bool contains_if(auto&& predicate) const {
+            return std::find_if(_begin, _end,  std::forward<decltype(predicate)>(predicate)) != _end;
+        }
+
                 
     }; // struct array<T>
     
