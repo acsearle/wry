@@ -43,27 +43,12 @@ namespace wry::sim {
     struct Tile {
         
         Value _value;
+        Entity* _occupant;
         array<Entity*> _lock_queue; // mutex
         array<Entity*> _wait_queue; // condition variable
-        
-        bool is_locked() const {
-            return !_lock_queue.empty();
-        }
-        
-        bool _not_in_queue(Entity* p) const {
-            for (Entity* q : _lock_queue)
-                if (q == p)
-                    return false;
-            return true;
-        }
-        
-        // rather than have enqueue return a bool, have it call
-        // Entity::wake_location_locked immediately?  Is this ever not the
-        // caller's intent?  If it is not the caller's intent, they have try_lock
-        
+                
         bool enqueue(Entity* p) {
-            assert(p);
-            assert(_not_in_queue(p));
+            precondition(p && !_lock_queue.contains(p));
             bool was_empty = _lock_queue.empty();
             _lock_queue.push_back(p);
             return was_empty;
@@ -72,8 +57,7 @@ namespace wry::sim {
         // should be last statement in wake_on_location_changed or wake_on_time
         // suspend for lock, resume for lock, resume with lock?
         void suspend_for_lock(Entity* p, World& w, Coordinate self) {
-            assert(p);
-            assert(_not_in_queue(p));
+            precondition(p && !_lock_queue.contains(p));
             bool was_empty = _lock_queue.empty();
             _lock_queue.push_back(p);
             if (was_empty)
@@ -82,8 +66,7 @@ namespace wry::sim {
         }
         
         bool try_lock(Entity* p) {
-            assert(p);
-            assert(_not_in_queue(p));
+            precondition(p && !_lock_queue.contains(p));
             bool was_empty = _lock_queue.empty();
             if (was_empty)
                 _lock_queue.push_back(p);

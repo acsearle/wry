@@ -672,7 +672,7 @@
                 wry::sdf::render_arrow(mm);
                 for (auto&& a : mm) {
                     for (auto&& b : a) {
-                        printf("%g\n", b);
+                        //printf("%g\n", b);
                     }
                 }
                 

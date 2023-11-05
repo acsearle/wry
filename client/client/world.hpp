@@ -42,30 +42,30 @@ namespace wry::sim {
         void step() {
             
             ++_tick;
-            
-            auto zz = std::move(_location_locked);
-            for (auto [xy, p] : zz) {
-                //printf("%d %d\n", xy.x, xy.y);
-                p->wake_location_locked(*this, xy);
+
+            while (!_location_locked.empty()) {
+                auto [k, v] = std::move(_location_locked.front());
+                _location_locked.pop_front();
+                v->wake_location_locked(*this, k);
             }
-            
+            while (!_location_changed.empty()) {
+                auto [k, v] = std::move(_location_changed.front());
+                _location_changed.pop_front();
+                v->wake_location_changed(*this, k);
+            }
+                        
             for (;;) {
-                auto p = _waiting_on_time.begin();
-                if (p == _waiting_on_time.end())
+                if (_waiting_on_time.empty())
                     break;
+                auto p = _waiting_on_time.begin();
                 assert(p->first >= _tick);
                 if (p->first != _tick)
                     break;
                 Entity* q = p->second;
                 _waiting_on_time.erase(p);
-                // assert(q);
+                assert(q);
                 q->wake_time_elapsed(*this, _tick);
-                // q->step(*this);
-                // q may reschedule itself at some later time
-                // which invalidates the iterator for some containers
             }
-            
-            
                         
         }
         

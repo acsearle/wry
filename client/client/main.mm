@@ -13,12 +13,10 @@
 
 int main(int argc, const char** argv) {
     
-#ifndef NDEBUG
     // execute unit tests on a background queue
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
         wry::run_tests();
     });
-#endif
     
     // create UIKit application
     @autoreleasepool {

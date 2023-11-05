@@ -27,36 +27,54 @@ namespace wry::sim {
         Time _new_time = 0;
         Coordinate _desired_location = { 0, 0};
 
-      
-        
-        
         void push(Value x) {
-            DUMP(x.discriminant);
-            DUMP(x.value);
             _stack.push_back(x);
         }
         
         Value pop() {
-            Value result = {};
             if (!_stack.empty()) {
-                result = _stack.back();
+                Value result{std::move(_stack.back())};
                 _stack.pop_back();
+                return result;
+            } else {
+                return Value{};
             }
-            return result;
         }
         
-        Value peek() {
-            Value result = {};
+        Value peek() const {
             if (!_stack.empty()) {
-                result = _stack.back();
+                return _stack.back();
+            } else {
+                return Value{};
             }
-            return result;
         }
         
         std::pair<Value, Value> pop2() {
             Value z = pop();
             Value y = pop();
             return {y, z};
+        }
+        
+        std::pair<Value, Value> peek2() const {
+            switch (_stack.size()) {
+                case 0:
+                    return std::pair<Value, Value>{Value{}, Value{}};
+                case 1:
+                    return std::pair<Value, Value>{Value{}, _stack.back()};
+                default:
+                    return std::pair<Value, Value>{_stack._end[-2], _stack._end[-1]};
+            }
+        }
+        
+        void pop2push1(Value x) {            
+            if (!_stack.empty()) {
+                _stack.pop_back();
+            }
+            if (_stack.empty()) {
+                _stack.push_back(std::move(x));
+            } else {
+                _stack.back() = std::move(x);
+            }
         }
         
         virtual void wake_location_locked(World&, Coordinate);
