@@ -96,6 +96,4 @@ namespace wry {
 
 #define define_test(...) static ::wry::detail::test_t WRY_CONCATENATE_TOKENS(_wry_detail_test_, __LINE__) = ::wry::detail::test_metadata_t{__VA_ARGS__} % []()
 
-#define assert_false(X) assert(!(X))
-
 #endif /* test_hpp */

@@ -1,3 +1,114 @@
+## Memory model
+
+Take 1: Cells are locks and condition variables
+
+
+Take 2: Transactional memory?
+
+Desiderata:
+
+Determinism
+Starvation-freedom
+Fairness
+
+Fairness is impossible due to cycles, which have to be broken at an arbitrary
+point
+
+Starvation-freedom; we can bound the time until an entity "wins" by ranking
+by time since last write?
+
+Inspired by STM:
+
+Entities attempt transactions where they read from and write to cells
+
+Transactions are not required to preannounce what they will do; in fact they
+can choose what to read/write based on things they read
+
+All transactions attempt "simultaneously"; those that read-write sets disjoint
+from all others succeed and are compatible with any ordering
+
+Transactions that conflict, one succeeds, others are retried until all succeed
+(or "successfully" block)
+
+STMs block by reading, finding an unwanted value, then signalling "retry", at
+which point the runtime enqueues them to be woken by writes to any of the
+read values.
+
+What happens in a game tick?
+o Everything that can happen without imposing an
+ordering?  There is no unique everything, but they can be non-increasing in the
+sense that no single additional action can be taken.
+  + Ordering in operations corresponds to global time advance, is nice
+  - Choices in ordering flow into macroscopic delays
+    o But choices also flow into macroscopic everything else anyway
+  + Can't run forever because new tasks happen on next tick
+o Everything that can happen without time elapsing
+  - this is actually unbounded since cycles can progress
+o Each entity gets at most one turn to do something
+
+So, game tick = a maximal (not optimal) set of disjoint actions
+
+Disjoint writes:
+
+Transaction 1 reads a, writes b'
+Transaction 2 reads b, writes a' -> conflicts with 1
+              reads b', writes a' -> ok, but implies after 1
+Transaction 3 reads b, writes c' -> ok, but implies before 1
+              reads b', writes c' -> ok, but implies after 1
+Transaction 4 reads c, writes a' -> after 1
+                                 -> conflicts with 2
+                                 -> before 3a, but 3a is before 1, so conflicts with 1
+                                 -> before 3b, ok
+
+
+Disjoint read-writes;
+
+In a given tick,
+- transactions abort if they read from a value that was written this tick by a
+  committed transaction
+- transactions abort if they write to a value that was read this tick by a
+  committed transaction which wrote to any value
+
+- corollary: information only moves by [transaction footprint] per tick
+- corollary: if the footprint is bounded, spatially separated transactions are
+  disjoint
+
+it's a conflict to read a value that has been written to, or write
+to a value that has been read as part of a transaction that wrote
+
+Transaction 1 reads ab, writes b
+Transaction 3 reads bc, writes c -> conflict, reading b orders it wrt 1
+Transaction 4 reads ac, writes a -> conflict, writing a orders it wrt 1
+Transaction 5 reads abc, requests retry -> as if it didn't run, or as if it conflicted
+
+
+If a transaction reads values and decides to wait for them to change, it does
+not mark the values immutable.  If the value changed during this tick, it would
+then be ordered wrt that change.
+
+So, transaction may
+
+- read a value
+  - abort if the value has been mutated this epoch
+  
+- write a value
+  - abort if the value has been observed this epoch
+  
+- succeed
+  - marks reads if publishes any side effects
+  
+- fail
+  - doesn't mark anything
+
+
+
+
+
+
+
+
+
+
 ## Sum types
 
 C style:
