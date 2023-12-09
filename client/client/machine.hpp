@@ -33,7 +33,6 @@ namespace wry::sim {
         Coordinate _new_location = { 0, 0 };
         Time _old_time = 0;
         Time _new_time = 0;
-        Coordinate _desired_location = { 0, 0};
 
         void push(Value x) {
             _stack.push_back(x);

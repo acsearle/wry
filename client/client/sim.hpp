@@ -17,12 +17,13 @@ namespace wry::sim {
     enum DISCRIMINANT 
     : i64 {
         
-        DISCRIMINANT_NUMBER   = 0,
-        DISCRIMINANT_OPCODE   = 1,
-        DISCRIMINANT_RESOURCE = 2,
+        DISCRIMINANT_NONE     = 0,
+        DISCRIMINANT_NUMBER   = 1,
+        DISCRIMINANT_OPCODE   = 2,
         DISCRIMINANT_HEADING  = 4,
         DISCRIMINANT_LOCATION = 8,
-        
+        DISCRIMINANT_RESOURCE = 16,
+
     };
     
     // Given the complexity of minerals etc., can we reasonably simplify

@@ -772,13 +772,8 @@
                 int j = round(_model->_mouse4.y);
                 auto& the_tile = _model->_world._tiles[Coordinate{i, j}];
                 the_tile._value = _model->_holding_value;
-                if (the_tile._occupant) {
-                    _model->_world._ready.push_back(the_tile._occupant);
-                }
-                while (!the_tile._observers.empty()) {
-                    _model->_world._ready.push_back(the_tile._observers.front());
-                    the_tile._observers.pop_front();
-                }
+                the_tile.notify_occupant(_model->_world);
+                the_tile.notify_observers(_model->_world);
 
                 printf(" Clicked world (%d, %d)\n", i, j);
             }
@@ -792,7 +787,11 @@
                 int64_t k = wry::base36::from_base36_table[ch];
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
-                _model->_world._tiles[Coordinate{i, j}]._value = { DISCRIMINANT_NUMBER, k };
+                auto& the_tile = _model->_world._tiles[Coordinate{i, j}];
+                the_tile._value = { DISCRIMINANT_NUMBER, k };
+                the_tile.notify_occupant(_model->_world);
+                the_tile.notify_observers(_model->_world);
+
             }
         }
         
@@ -1154,23 +1153,19 @@
                 
                 {
                     wry::sim::Value q = _model->_world._tiles[wry::sim::Coordinate{i, j}]._value;
-                    if (q.value) {
-                        using namespace wry::sim;
-                        switch (q.discriminant) {
-                            case DISCRIMINANT_OPCODE: {
-                                auto p = _opcode_to_coordinate.find(q.value);
-                                if (p != _opcode_to_coordinate.end()) {
-                                    coordinate = p->second;
-                                }
-                            } break;
-                            case DISCRIMINANT_NUMBER:
-                            default:
-                                coordinate = make<float4>((q.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
-                                break;
-                        }
-                    } else {
-                        // don't draw "NOOP" or 0, too much clutter
-                        continue;
+                    using namespace wry::sim;
+                    switch (q.discriminant) {
+                        case DISCRIMINANT_NUMBER: {
+                            coordinate = make<float4>((q.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                        } break;
+                        case DISCRIMINANT_OPCODE: {
+                            auto p = _opcode_to_coordinate.find(q.value);
+                            if (p != _opcode_to_coordinate.end()) {
+                                coordinate = p->second;
+                            }
+                        } break;
+                        default:
+                            continue;
                     }
                     
                 }

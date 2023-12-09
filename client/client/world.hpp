@@ -63,6 +63,20 @@ namespace wry::sim {
         
     };
     
+    inline void Tile::notify_occupant(World &w) {
+        if (_occupant) {
+            w._ready.push_back(_occupant);
+        }
+    }
+    
+    inline void Tile::notify_observers(World &w) {
+        while (!_observers.empty()) {
+            w._ready.push_back(_observers.front());
+            _observers.pop_front();
+        }
+    }
+
+    
     
 } // namespace wry::sim
 
