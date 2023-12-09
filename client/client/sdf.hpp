@@ -12,6 +12,8 @@
 
 namespace wry {
     
+    // signed distance field generators and transformers
+    
     namespace sdf {
         
         struct Value {

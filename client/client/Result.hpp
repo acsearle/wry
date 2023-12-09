@@ -55,7 +55,7 @@ namespace rust::result {
     //
     // enum discriminant_t { EMPTY = -1, OK = 0, ERR = 1 };
     //
-    // the discriminant is a property of Ok, not of Ok<T>
+    // the discriminant is a property of Result, not of Ok<T>
     //
     // is every member type, like OK, a higher-order tuple?
     //
@@ -81,14 +81,37 @@ namespace rust::result {
     //     template<typename U> Result(Ok<U>);
     //     template<typename F> Result(Err<F>);
     // };
-    
+
+    struct Error {
+    };
+
     template<typename> struct Ok;
     template<typename> struct Err;
     template<typename, typename> struct Result;
     
-    struct Error {
+    // where do these live?
+    
+    enum {
+        ERR = -1,
+        EMPTY = 0,
+        OK = 1,
     };
-        
+    
+    template<template<typename> typename>
+    struct discrimnator_mapping {
+    };
+
+    template<>
+    struct discrimnator_mapping<Ok> {
+        static constexpr int value = OK;
+    };
+
+    template<>
+    struct discrimnator_mapping<Err> {
+        static constexpr int value = ERR;
+    };
+
+            
     template<typename T>
     struct Ok {
         

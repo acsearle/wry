@@ -17,7 +17,15 @@ namespace wry::sim {
     
     struct Machine : Entity {
         
-        i64 _state = OPCODE_NOOP;
+        enum {
+            TRAVELLING,
+            WAITING_FOR_OLD,
+            WAITING_FOR_NEW,
+            WAITING_FOR_DESIRED,
+        };
+        
+        i64 _state2 = WAITING_FOR_NEW;
+        i64 _on_arrival = OPCODE_NOOP;
         array<Value> _stack;
         
         i64 _heading = 0;
@@ -77,9 +85,7 @@ namespace wry::sim {
             }
         }
         
-        virtual void wake_location_locked(World&, Coordinate);
-        virtual void wake_location_changed(World&, Coordinate);
-        virtual void wake_time_elapsed(World&, Time);
+        virtual void notify(World&);
         
         void _schedule_arrival(World& w);
                 

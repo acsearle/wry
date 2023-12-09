@@ -41,45 +41,12 @@ namespace wry::sim {
     
     
     struct Tile {
-        
+
+        Transactor _transaction;
         Value _value;
         Entity* _occupant;
-        array<Entity*> _lock_queue; // mutex
-        array<Entity*> _wait_queue; // condition variable
-                
-        bool enqueue(Entity* p) {
-            precondition(p && !_lock_queue.contains(p));
-            bool was_empty = _lock_queue.empty();
-            _lock_queue.push_back(p);
-            return was_empty;
-        }
         
-        // should be last statement in wake_on_location_changed or wake_on_time
-        // suspend for lock, resume for lock, resume with lock?
-        void suspend_for_lock(Entity* p, World& w, Coordinate self) {
-            precondition(p && !_lock_queue.contains(p));
-            bool was_empty = _lock_queue.empty();
-            _lock_queue.push_back(p);
-            if (was_empty)
-                p->wake_location_locked(w, self);
-            // caller should itself return
-        }
-        
-        bool try_lock(Entity* p) {
-            precondition(p && !_lock_queue.contains(p));
-            bool was_empty = _lock_queue.empty();
-            if (was_empty)
-                _lock_queue.push_back(p);
-            return was_empty;
-        }
-        
-        void unlock(World&, Entity* p, Coordinate self);
-        
-        void wait_on(Entity* p) {
-            _wait_queue.push_back(p);
-        }
-        
-        void notify_all(World& w, Coordinate self);
+        Array<Entity*> _observers;
         
     };
     
@@ -87,3 +54,45 @@ namespace wry::sim {
 } // namespace wry::sim
 
 #endif /* tile_hpp */
+
+
+/*
+ 
+ array<Entity*> _lock_queue; // mutex
+ array<Entity*> _wait_queue; // condition variable
+ 
+ bool enqueue(Entity* p) {
+ precondition(p && !_lock_queue.contains(p));
+ bool was_empty = _lock_queue.empty();
+ _lock_queue.push_back(p);
+ return was_empty;
+ }
+ 
+ // should be last statement in wake_on_location_changed or wake_on_time
+ // suspend for lock, resume for lock, resume with lock?
+ void suspend_for_lock(Entity* p, World& w, Coordinate self) {
+ precondition(p && !_lock_queue.contains(p));
+ bool was_empty = _lock_queue.empty();
+ _lock_queue.push_back(p);
+ if (was_empty)
+ p->wake_location_locked(w, self);
+ // caller should itself return
+ }
+ 
+ bool try_lock(Entity* p) {
+ precondition(p && !_lock_queue.contains(p));
+ bool was_empty = _lock_queue.empty();
+ if (was_empty)
+ _lock_queue.push_back(p);
+ return was_empty;
+ }
+ 
+ void unlock(World&, Entity* p, Coordinate self);
+ 
+ void wait_on(Entity* p) {
+ _wait_queue.push_back(p);
+ }
+ 
+ void notify_all(World& w, Coordinate self);
+ 
+ */

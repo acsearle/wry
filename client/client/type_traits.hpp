@@ -12,6 +12,19 @@
 
 namespace wry {
     
+    template<typename T, typename U>
+    struct copy_const {
+        using type = U;
+    };
+    
+    template<typename T, typename U>
+    struct copy_const<const T, U> {
+        using type = std::add_const_t<U>;
+    };
+    
+    template<typename T, typename U>
+    using copy_const_t = typename copy_const<T, U>::type;
+    
     // # Relocate
     //
     // A type T is concept Relocatable if
@@ -28,33 +41,36 @@ namespace wry {
     // Notable exceptions are the non-Moveable std::mutex.
     
     template<typename T>
-    struct is_relocatable : std::is_nothrow_move_constructible<T> {};
+    struct is_relocatable 
+    : std::is_nothrow_move_constructible<T> {
+    };
     
     template<typename T>
     constexpr bool is_relocatable_v = is_relocatable<T>::value;
     
-    // # Rank
+    // # Rank and extent
     //
-    // Provide a more general rank to classify things
+    // It is not permitted to specialize std::rank and std::extent so we make
+    // local customization points for them, and customize them for our vector,
+    // array, image, matrix containers and views
         
-    template<typename>
-    struct rank : std::integral_constant<std::size_t, 0> {
-    };
+    template<typename T>
+    struct rank : std::rank<T> {};
     
     template<typename T>
-    constexpr inline size_t rank_v = rank<T>::value;
-    
-    template<typename T>
-    struct rank<T[]> : std::integral_constant<std::size_t, rank<T>::value + 1> {
-    };
-    
-    template<typename T, std::size_t N>
-    struct rank<T[N]> : std::integral_constant<std::size_t, rank<T>::value + 1> {
-    };
-    
+    constexpr inline std::size_t rank_v = rank<T>::value;
+        
+    template<typename T, unsigned N = 0>
+    struct extent : std::extent<T, N> {};
+
+    template<typename T, unsigned N = 0>
+    constexpr inline std::size_t extent_v = extent<T, N>::value;
+
+    /*
     using tag_scalar = std::integral_constant<std::size_t, 0>;
     using tag_vector = std::integral_constant<std::size_t, 1>;
     using tag_matrix = std::integral_constant<std::size_t, 2>;
+     */
     
 } // namespace wry
 

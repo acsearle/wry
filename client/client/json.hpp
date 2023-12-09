@@ -17,10 +17,13 @@
 #include "table.hpp"
 
 #include "Option.hpp"
+#include "stddef.hpp"
 
 namespace wry {
     
     namespace json {
+        
+        using rust::usize;
         
         // JSON
         //

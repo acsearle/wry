@@ -8,5 +8,9 @@
 #ifndef rust_hpp
 #define rust_hpp
 
+// occasional resting-place for Rust-inspired bits and pieces
+
+namespace rust {
+}
 
 #endif /* rust_hpp */

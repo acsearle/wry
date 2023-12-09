@@ -73,6 +73,7 @@ namespace rust::option {
     
         bool _is_some;
         union {
+            None _none;
             Some<T> _some;
         };
         

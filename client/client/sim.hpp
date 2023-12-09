@@ -212,8 +212,41 @@ X(OPCODE_FLOP_FLIP),\
         
     };
 
-    struct World;
-    struct Entity;
+    using Time = i64;
+    
+    struct Transactor {
+        
+        Time _stamp;
+        
+        // _stamp < now   : old
+        // _stamp = now   : was read this step
+        // _stamp = now+1 : was written this step
+        // _stamp > now+1 : disallowed (wrap/error)
+        
+        bool can_read(Time now) {
+            precondition(!(now & 1));
+            assert(_stamp <= now + 1);
+            return _stamp <= now;
+        }
+        
+        bool can_write(Time now) {
+            precondition(!(now & 1));
+            assert(_stamp <= now + 1);
+            return _stamp < now;
+        }
+        
+        void did_read(Time now) {
+            assert(can_read(now));
+            if (_stamp != now)
+                _stamp = now;
+        }
+        
+        void did_write(Time now) {
+            assert(can_write(now));
+            _stamp = now | 1;
+        }
+        
+    };
     
     struct Coordinate {
         
@@ -227,9 +260,7 @@ X(OPCODE_FLOP_FLIP),\
     inline u64 hash(const Coordinate& x) {
         return hash_combine(&x, sizeof(x));
     }
-    
-    using Time = i64;
-    
+        
     struct Value {
         
         i64 discriminant;
@@ -247,6 +278,9 @@ X(OPCODE_FLOP_FLIP),\
         
         
     }; // struct Value
+    
+    struct World;
+    struct Entity;
 
 } // namespace wry::sim
 

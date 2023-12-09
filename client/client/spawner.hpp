@@ -20,9 +20,7 @@ namespace wry::sim {
     
     struct Spawner : LocalizedEntity {
                 
-        virtual void wake_location_locked(World&, Coordinate);
-        virtual void wake_location_changed(World&, Coordinate);
-        virtual void wake_time_elapsed(World&, Time);
+        virtual void notify(World&);
         
     };
 
@@ -30,18 +28,14 @@ namespace wry::sim {
         
         Value _of_this;
         
-        virtual void wake_location_locked(World&, Coordinate);
-        virtual void wake_location_changed(World&, Coordinate);
-        virtual void wake_time_elapsed(World&, Time);
-        
+        virtual void notify(World&);
+
     };
 
     struct Sink : LocalizedEntity {
                 
-        virtual void wake_location_locked(World&, Coordinate);
-        virtual void wake_location_changed(World&, Coordinate);
-        virtual void wake_time_elapsed(World&, Time);
-        
+        virtual void notify(World&);
+
     };
 
 } // namespace wry::sim

@@ -770,7 +770,16 @@
                 // we clicked outside the palette
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
-                _model->_world._tiles[Coordinate{i, j}]._value = _model->_holding_value;
+                auto& the_tile = _model->_world._tiles[Coordinate{i, j}];
+                the_tile._value = _model->_holding_value;
+                if (the_tile._occupant) {
+                    _model->_world._ready.push_back(the_tile._occupant);
+                }
+                while (!the_tile._observers.empty()) {
+                    _model->_world._ready.push_back(the_tile._observers.front());
+                    the_tile._observers.pop_front();
+                }
+
                 printf(" Clicked world (%d, %d)\n", i, j);
             }
             _model->_outstanding_click = false;
@@ -1033,7 +1042,7 @@
     // raid model for data
     {
         auto tnow = _model->_world._tick;
-        const auto& entities = _model->_world._all_entities;
+        const auto& entities = _model->_world._entities;
         
         NSUInteger quad_count = entities.size() * 4 + 1000 + 2;
         NSUInteger vertex_count = quad_count * 4;
@@ -1144,7 +1153,7 @@
                 simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
-                    wry::sim::Value q = _model->_world.get({i, j});
+                    wry::sim::Value q = _model->_world._tiles[wry::sim::Coordinate{i, j}]._value;
                     if (q.value) {
                         using namespace wry::sim;
                         switch (q.discriminant) {

@@ -25,16 +25,18 @@ namespace wry {
     
     // array_view is always a contiguous true pointer; compare vector_view which
     // may not be (as when iterating over a stride_ptr)
-    
+        
     template<typename T>
     struct array_view;
     
     template<typename T>
     using ArrayView = array_view<T>;
     
+    
     template<typename T>
-    struct rank<array_view<T>> : std::integral_constant<std::size_t, rank<T>::value + 1> {};
-
+    struct rank<array_view<T>> 
+    : std::integral_constant<std::size_t, rank<T>::value + 1> {};
+    
     template<typename T>
     struct array_view {
         
@@ -415,7 +417,7 @@ namespace wry {
                     assert(first2 != last2);\
                     *first += *first2;\
                 }\
-                postcondition(first2 == last2);\
+                assert(first2 == last2);\
             }\
             return *this;\
         }

@@ -164,6 +164,7 @@ Late game megalomania:
 *Elohim*
 *Lucifer*
 *Baphomet*
+*Be Not Afraid*
 
 
 
@@ -171,7 +172,6 @@ Late game megalomania:
 Ian M Banks:
 
 *I Can't Believe You've Done This*
-*Be Not Afraid*
 
 
 Witchcraft familiars:
@@ -184,6 +184,9 @@ Witchcraft familiars:
 
 
 
+Fast things:
+*Rememberance of Things Passed*
+*R17*
 
  
 

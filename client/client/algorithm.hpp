@@ -16,7 +16,7 @@
 
 namespace wry {
     
-    // # From C++20
+    // libc++ is missing std::lexicographical_compare_three_way
     //
     // https://en.cppreference.com/w/cpp/algorithm/lexicographical_compare_three_way
     
@@ -47,7 +47,7 @@ namespace wry {
         }        
     }
     
-    // # Extend standard algorithms to check for second range ending
+    // Extend standard algorithms to allow checking for second range
     
     auto copy(auto first, auto last, auto d_first, auto d_last) -> decltype(d_first) {
         for (; first != last; ++first, ++d_first) {

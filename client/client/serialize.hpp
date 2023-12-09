@@ -17,14 +17,8 @@
 #include "string.hpp"
 #include "string_view.hpp"
 
-#include "Option.hpp"
-
-
 namespace wry {
-    
-    using namespace rust;
-    using namespace rust::option;
-    
+        
     // Serialize primitives
     
 #define X(T) template<typename S>\
