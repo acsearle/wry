@@ -80,10 +80,31 @@ namespace wry {
             _console.emplace_back("");
 
             using namespace sim;
-            // new machine spawner at origin
-            Entity* p = new Spawner;
-            _world._entities.push_back(p);
-            _world._ready.push_back(p);
+            
+            {
+                // new machine spawner at origin
+                Spawner* p = new Spawner;
+                _world._entities.push_back(p);
+                _world._ready.push_back(p);
+            }
+            
+            {
+                // value source
+                Source* q = new Source;
+                q->_location = Coordinate{2, 2};
+                q->_of_this = Value{DISCRIMINANT_NUMBER, 1};
+                _world._entities.push_back(q);
+                _world._ready.push_back(q);
+            }
+            
+            {
+                // value sink
+                Sink* r = new Sink;
+                r->_location = Coordinate{4, 2};
+                _world._entities.push_back(r);
+                _world._ready.push_back(r);
+            }
+
             
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();

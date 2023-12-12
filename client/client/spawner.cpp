@@ -11,39 +11,63 @@
 
 namespace wry::sim {
     
+    void Source::notify(World& w) {
+        auto& our_tile = w._tiles[_location];
+        if (our_tile._occupant || our_tile._value.discriminant) {
+            // wait until state changes
+            our_tile._observers.push_back(this);
+            return;
+        }
+        if (!our_tile._transaction.can_write(w._tick)) {
+            w._ready.push_back(this);
+            return;
+        }
+        our_tile._value = _of_this;
+        our_tile._transaction.did_write(w._tick);
+        our_tile.notify_observers(w);
+        our_tile._observers.push_back(this);
+    }
+    
+    void Sink::notify(World& w) {
+        auto& our_tile = w._tiles[_location];
+        if (our_tile._occupant || !our_tile._value.discriminant) {
+            // wait until state changes
+            our_tile._observers.push_back(this);
+            return;
+        }
+        if (!our_tile._transaction.can_write(w._tick)) {
+            w._ready.push_back(this);
+            return;
+        }
+        our_tile._value = Value{DISCRIMINANT_NONE, 0};
+        our_tile._transaction.did_write(w._tick);
+        our_tile.notify_observers(w);
+        our_tile._observers.push_back(this);
+    }
+    
     void Spawner::notify(World& w) {
         
         auto& our_tile = w._tiles[_location];
-        if (our_tile._transaction.can_read(w._tick)) {
-            if (!our_tile._occupant) {
-                if (our_tile._transaction.can_write(w._tick)) {
-                    Machine* q = new Machine;
-                    q->_old_location = _location;
-                    q->_new_location = _location;
-                    q->_heading = HEADING_NORTH;
-                    w._entities.push_back(q);
-                    our_tile._occupant = q;
-                    while (!our_tile._observers.empty()) {
-                        w._ready.push_back(our_tile._observers.front());
-                        our_tile._observers.pop_front();
-                    }
-                    our_tile._observers.push_back(this);
-                    our_tile._transaction.did_write(w._tick);
-                    w._ready.push_back(q);
-                } else {
-                    // conflict: retry
-                    w._ready.push_back(this);
-                }
-            } else {
-                // bad state; wait
+        if (!our_tile._occupant) {
+            if (our_tile._transaction.can_write(w._tick)) {
+                Machine* q = new Machine;
+                q->_old_location = _location;
+                q->_new_location = _location;
+                q->_heading = HEADING_NORTH;
+                w._entities.push_back(q);
+                our_tile._occupant = q;
+                our_tile.notify_observers(w);
                 our_tile._observers.push_back(this);
+                our_tile._transaction.did_write(w._tick);
+                w._ready.push_back(q);
+            } else {
+                // conflict: retry
+                w._ready.push_back(this);
             }
         } else {
-            // conflict: retry
-            w._ready.push_back(this);
+            // blocked; wait
+            our_tile._observers.push_back(this);
         }
-
-      
     }
     
     /*

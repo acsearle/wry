@@ -2,11 +2,7 @@
 
 Interface
 
-- Cursor images of what we hold, and cursor state
 - How to hide delay of anything drawn in Metal to represent cursor
-
-- Pass events to model in a platform-independent way without excessive duplication
-of NSEvent
 
 - Improve text rendering 
   - linebreaking
@@ -18,6 +14,23 @@ of NSEvent
   - glyph-on-demand
   - packer as cache?
 
+Transactions
+- Inspired by transactional memory, detect conflicts and retry
+- Each tick processes a maximal (but not necessarily optimal) set
+  of ready operations that are (?)commutative / orthogonal / compatible with
+  reordering.  Conflicting operations are retried next tick.
+  - Nice feature: speed of light.  Information can't travel more than one
+    entity's reach per tick.
+- This has the potential to be both deterministic and parallelizable, if we
+  can do the partition right.  Determinism paramount, we can sacrifice some
+  fairness.
+  - Partition into spatial pattern, relying on locality of reads.  Strips for
+    example
+- We need to mark "things" as read or written this tick.  We can't overwrite
+  values that somebody else has read, nor can we read values that somebody
+  else has written.   Thus each memory cell is read by many xor written by one
+  (or the most common case, untouched).
+  - Seems bad to mark reads, is there an alternative? 
 
 
 IDs vs pointers
@@ -31,7 +44,7 @@ IDs vs pointers
 - Cold storage by ID for things not used by simulation
 - Hot storage in main struct
 
-- Classic SoA vs AoS problem; ECS; eventaully, relational database?
+- Classic SoA vs AoS problem; ECS; eventually, database?
 
 Checkpointing
 
@@ -43,24 +56,22 @@ Checkpointing
     - Is holding a checkpoint gonna be equally bad in the worst case as just
       having two copies of the simulation anyway (?!!)
     - How much stuff is immutable or rarely changing?
+  - Persistent data structure with one extra cell trick? 
 
 
 sim::Tile
 
 - how do we efficiently store the rarely-nonempty queues associated with tiles
+  - side tables (again ECS)
 - are chunks good?  Do we actually use spatial locality a lot given that we are
-  working on scattered agends?
+  working on scattered agents?
   - spatial locality is a huge deal for visualization, which is perhaps less
     important (since it is bounded)
+- transactional memory / atomic actions seems to be neat
+
+- do we need to support pimpl, or can we use ECS/side table for everything 
 
 sim::Value
-
-- what does lock mean?  mutal exclusion of trucks, less clear otherwise
-- should an observer get to keep its place in the queue and get priority for
-  the lock?
-- though we don't want to walk a list of waiters, how long can that list
-  actually be?  not long surely.  one list of people to notify, with some
-  flags maybe?
   
 - opcodes can be flipped or rotated, so there are families and rings of
   successors to key through.  table of pred and succ?  triggered by
@@ -70,6 +81,8 @@ sim::Value
   - some materials will have quantities, purities etc.
   - where to store and how to deal with this "metadata"?
   - important if we want everything to break down without impossibility
+  
+- scattered access patterns ; can we do anything as a bulk join type thing?
 
 
 sim::Entity
@@ -92,26 +105,7 @@ sim::Entity
     - Note that Sokoban chains are prohbited by dogma (non-local, stiff)
   - Can load down onto waiting (or passing) truck 
   
-  - Do we have one wait queue, or multiple ones?  Do we call each thing in turn
-    and let them decide what to do?  This is maybe the only extensible option
-    - Do domething to cell
-    - Schedule wake of first awaiter for next tick
-    - That waiter can inspect whatever state it needs to
-      - Is it worth having flags for common behaviors to skip options?
-    - If it does nothing, it immediately yields to next awaiter, until there
-      are no more awaiters
-      - We do this on the same clock tick, and can only do so because/when there
-        is no observable effect
-    - If it writes to the cell, it schedules the first awaiter for the next tick,
-      thus starting the process over
-      - This may livelock later-starting waiters until the first ones have
-        finished their business, ok I think
-      - The one-tick delay again prevents stiffness, guarantees progress. 
-    - Waiters may remove themselves from the list, but otherwise the order does
-      not change
-      - the queue is in order of when they started waiting
-      - waiters thus need to be able to find their successor
-    
+  
 
 
 - Static producers are simple
@@ -275,7 +269,6 @@ Renderer
 - Instanced small lights
 - Cloud/smoke and partial-shadow-map
 - Parallax mapping
-- HDR render target
 - Multisampling
 - ClearCoat, iridescence
   - Specular colors vs Metalicity?

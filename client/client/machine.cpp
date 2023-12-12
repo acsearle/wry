@@ -16,17 +16,17 @@ namespace wry::sim {
         Value a = {};
         Value b = {};
         
-        switch (_state2) {
+        switch (_phase) {
                 
-            case TRAVELLING: {
+            case PHASE_TRAVELLING: {
                 if (w._tick < _new_time) {
                     // TODO: assert that we are registered at _new_time
                     return;
                 }
-                _state2 = WAITING_FOR_OLD;
+                _phase = PHASE_WAITING_FOR_OLD;
             } [[fallthrough]];
                 
-            case WAITING_FOR_OLD: {
+            case PHASE_WAITING_FOR_OLD: {
                 assert(_old_location != _new_location);
                 Tile& old_tile = w._tiles[_old_location];
                 assert(old_tile._occupant == this);
@@ -40,10 +40,10 @@ namespace wry::sim {
                 old_tile.notify_observers(w);
                 _old_location = _new_location;
                 _old_time = w._tick;
-                _state2 = WAITING_FOR_NEW;
+                _phase = PHASE_WAITING_FOR_NEW;
             } [[fallthrough]];
                 
-            case WAITING_FOR_NEW: {
+            case PHASE_WAITING_FOR_NEW: {
                 
                 Tile& new_tile = w._tiles[_new_location];
                 assert(new_tile._occupant == this);
@@ -238,7 +238,8 @@ namespace wry::sim {
                         break;
                     case OPCODE_EXCHANGE:
                         a = pop();
-                        push(new_tile2._value);
+                        if (new_tile2._value.discriminant)
+                            push(new_tile2._value);
                         new_tile2._value = a;
                         break;
                     default:
@@ -409,49 +410,49 @@ namespace wry::sim {
                         std::tie(a, b) = peek2();
                         if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
                             a.value = a.value == b.value;
-                            pop(); push(a);
+                            pop2push1(a);
                         }
                         break;
                     case OPCODE_NOT_EQUAL:
                         std::tie(a, b) = peek2();
                         if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
                             a.value = a.value != b.value;
-                            pop(); push(a);
+                            pop2push1(a);
                         }
                         break;
                     case OPCODE_LESS_THAN:
                         std::tie(a, b) = peek2();
                         if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
                             a.value = (i64) a.value < (i64) b.value;
-                            pop(); push(a);
+                            pop2push1(a);
                         }
                         break;
                     case OPCODE_GREATER_THAN:
                         std::tie(a, b) = peek2();
                         if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
                             a.value = (i64) a.value > (i64) b.value;
-                            pop(); push(a);
+                            pop2push1(a);
                         }
                         break;
                     case OPCODE_LESS_THAN_OR_EQUAL_TO:
                         std::tie(a, b) = peek2();
                         if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
                             a.value = (i64) a.value <= (i64) b.value;
-                            pop(); push(a);
+                            pop2push1(a);
                         }
                         break;
                     case OPCODE_GREATER_THAN_OR_EQUAL_TO:
                         std::tie(a, b) = peek2();
                         if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
                             a.value = (i64) a.value >= (i64) b.value;
-                            pop(); push(a);
+                            pop2push1(a);
                         }
                         break;
                     case OPCODE_COMPARE:
                         std::tie(a, b) = peek2();
                         if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
                             a.value = ((i64) a.value < (i64) b.value) - ((i64) b.value < (i64) a.value);
-                            pop(); push(a);
+                            pop2push1(a);
                         }
                         break;
                         
@@ -461,7 +462,7 @@ namespace wry::sim {
                         if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
                             a.discriminant |= b.discriminant;
                             a.value += b.value;
-                            pop(); push(a);
+                            pop2push1(a);
                         }
                         break;
                     case OPCODE_SUBTRACT:
@@ -469,7 +470,7 @@ namespace wry::sim {
                         if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
                             a.discriminant |= b.discriminant;
                             a.value -= b.value;
-                            pop(); push(a);
+                            pop2push1(a);
                         }
                         break;
                         
@@ -484,18 +485,18 @@ namespace wry::sim {
                 
                 _on_arrival = next_action;
                 _heading = new_heading;
-                _state2 = TRAVELLING;
                 _new_location = next_location;
-                _new_time = w._tick + 128;
                 _old_time = w._tick;
+                _new_time = w._tick + 128;
+                _phase = PHASE_TRAVELLING;
                 w._waiting_on_time.emplace(_new_time, this);
                 return;
             }
                 
             default:
-                abort();
+                __builtin_unreachable();
                 
-        } // switch (_state2)
+        } // switch (_phase)
         
     }
  

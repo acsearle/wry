@@ -18,11 +18,11 @@ namespace wry::sim {
     : i64 {
         
         DISCRIMINANT_NONE     = 0,
-        DISCRIMINANT_NUMBER   = 1,
-        DISCRIMINANT_OPCODE   = 2,
-        DISCRIMINANT_HEADING  = 4,
-        DISCRIMINANT_LOCATION = 8,
-        DISCRIMINANT_RESOURCE = 16,
+        DISCRIMINANT_OPCODE   = 1,
+        DISCRIMINANT_NUMBER   = 2,
+        DISCRIMINANT_RESOURCE = 4,
+        DISCRIMINANT_HEADING  = 8,
+        DISCRIMINANT_LOCATION = 16,
 
     };
     

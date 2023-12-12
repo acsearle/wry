@@ -1058,88 +1058,140 @@
         uint k = 0;
         for (auto q : entities) {
             
-            auto p = dynamic_cast<wry::sim::Machine*>(q); // ugh
-            if (!p)
-                continue;
-            
-            auto h = p->_heading & 3;
-            auto x0 = make<float4>(p->_old_location.x, p->_old_location.y, 0.2, 1.0f);
-            auto x1 = make<float4>(p->_new_location.x, p->_new_location.y, 0.2, 1.0f);
-            
-            simd_float4 location;
-            if (tnow >= p->_new_time) {
-                location = x1;
-            } else {
-                location = simd_mix(x0, x1, float(tnow - p->_old_time) / float(p->_new_time - p->_old_time));
-            }
-            
-            //printf("%lld, %g\n", tnow, location.x);
-            
-            v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = make<float4>(11.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
-            *pv++ = v;
-            v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = make<float4>(12.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
-            *pv++ = v;
-            v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = make<float4>(12.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
-            *pv++ = v;
-            v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = make<float4>(11.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
-            *pv++ = v;
-            
-            while (h--) {
-                wry::rotate_args_left(pv[-4].coordinate,
-                                      pv[-3].coordinate,
-                                      pv[-2].coordinate,
-                                      pv[-1].coordinate
-                                      );
+            if (auto p = dynamic_cast<wry::sim::Machine*>(q)) {// ugh
                 
-            }
-            
-            *pi++ = k;
-            *pi++ = k;
-            *pi++ = k + 1;
-            *pi++ = k + 3;
-            *pi++ = k + 2;
-            *pi++ = k + 2;
-            
-            k += 4;
-            
-            for (int i = 0; i != p->_stack.size(); ++i) {
-                location.z += 0.5;
-                wry::sim::Value value = p->_stack[i];
-                simd_float4 coordinate;
-                switch (value.discriminant) {
-                    case wry::sim::DISCRIMINANT_OPCODE:
-                        coordinate = _opcode_to_coordinate[value.value];
-                        break;
-                    case wry::sim::DISCRIMINANT_NUMBER:
-                    default:
-                        coordinate = make<float4>((value.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
-                        break;
+                auto h = p->_heading & 3;
+                auto x0 = make<float4>(p->_old_location.x, p->_old_location.y, 0.2, 1.0f);
+                auto x1 = make<float4>(p->_new_location.x, p->_new_location.y, 0.2, 1.0f);
+                
+                simd_float4 location;
+                if (tnow >= p->_new_time) {
+                    location = x1;
+                } else {
+                    location = simd_mix(x0, x1, float(tnow - p->_old_time) / float(p->_new_time - p->_old_time));
                 }
+                
+                //printf("%lld, %g\n", tnow, location.x);
+                
                 v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                v.coordinate = make<float4>(11.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
                 *pv++ = v;
                 v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                v.coordinate = make<float4>(12.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
                 *pv++ = v;
                 v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                v.coordinate = make<float4>(12.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 *pv++ = v;
                 v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                v.coordinate = make<float4>(11.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 *pv++ = v;
+                
+                while (h--) {
+                    wry::rotate_args_left(pv[-4].coordinate,
+                                          pv[-3].coordinate,
+                                          pv[-2].coordinate,
+                                          pv[-1].coordinate
+                                          );
+                    
+                }
+                
                 *pi++ = k;
                 *pi++ = k;
                 *pi++ = k + 1;
                 *pi++ = k + 3;
                 *pi++ = k + 2;
-                *pi++ = k + 2;                
+                *pi++ = k + 2;
+                
                 k += 4;
+                
+                for (int i = 0; i != p->_stack.size(); ++i) {
+                    location.z += 0.5;
+                    wry::sim::Value value = p->_stack[i];
+                    simd_float4 coordinate;
+                    switch (value.discriminant) {
+                        case wry::sim::DISCRIMINANT_OPCODE:
+                            coordinate = _opcode_to_coordinate[value.value];
+                            break;
+                        case wry::sim::DISCRIMINANT_NUMBER:
+                        default:
+                            coordinate = make<float4>((value.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                            break;
+                    }
+                    v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
+                    v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                    *pv++ = v;
+                    v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
+                    v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                    *pv++ = v;
+                    v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
+                    v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                    *pv++ = v;
+                    v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
+                    v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
+                    *pv++ = v;
+                    *pi++ = k;
+                    *pi++ = k;
+                    *pi++ = k + 1;
+                    *pi++ = k + 3;
+                    *pi++ = k + 2;
+                    *pi++ = k + 2;
+                    k += 4;
+                }
+                
+            } else if (auto p = dynamic_cast<sim::LocalizedEntity*>(q)){
+                
+                simd_float4 location = make<float4>(p->_location.x, p->_location.y, 1.0, 1.0f);
+                
+                v.position = make<float4>(-0.5f, 0.0f, -0.5f, 0.0f) + location;
+                v.coordinate = make<float4>(4.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
+                *pv++ = v;
+                v.position = make<float4>(+0.5f, 0.0f, -0.5f, 0.0f) + location;
+                v.coordinate = make<float4>(5.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
+                *pv++ = v;
+                v.position = make<float4>(+0.5f, 0.0f, +0.5f, 0.0f) + location;
+                v.coordinate = make<float4>(5.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f);
+                *pv++ = v;
+                v.position = make<float4>(-0.5f, 0.0f, +0.5f, 0.0f) + location;
+                v.coordinate = make<float4>(4.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f);
+                *pv++ = v;
+                
+                *pi++ = k;
+                *pi++ = k;
+                *pi++ = k + 1;
+                *pi++ = k + 3;
+                *pi++ = k + 2;
+                *pi++ = k + 2;
+                k += 4;
+                
+                if (auto r = dynamic_cast<sim::Source*>(q)) {
+                    
+                    simd_float4 coordinate = make<float4>((r->_of_this.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                    
+                    v.position = make<float4>(-0.5f, -0.1f, -0.5f, 0.0f) + location;
+                    v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f) + coordinate;
+                    *pv++ = v;
+                    v.position = make<float4>(+0.5f, -0.1f, -0.5f, 0.0f) + location;
+                    v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f) + coordinate;
+                    *pv++ = v;
+                    v.position = make<float4>(+0.5f, -0.1f, +0.5f, 0.0f) + location;
+                    v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f) + coordinate;
+                    *pv++ = v;
+                    v.position = make<float4>(-0.5f, -0.1f, +0.5f, 0.0f) + location;
+                    v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f) + coordinate;
+                    *pv++ = v;
+                    
+                    *pi++ = k;
+                    *pi++ = k;
+                    *pi++ = k + 1;
+                    *pi++ = k + 3;
+                    *pi++ = k + 2;
+                    *pi++ = k + 2;
+                    k += 4;
+                    
+                }
+
+                
             }
-            
             
         }
         
@@ -1164,8 +1216,9 @@
                                 coordinate = p->second;
                             }
                         } break;
-                        default:
-                            continue;
+                        default: {
+                            coordinate = make<float4>(0.0 / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
+                        }
                     }
                     
                 }

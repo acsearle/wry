@@ -36,7 +36,7 @@ namespace wry {
 
         // sun setup
         
-        p = simd_normalize(simd_make_float3(1, -1, 3));
+        p = simd_normalize(simd_make_float3(-1, 1, 3));
         _uniforms.light_direction = p;
         _uniforms.radiance = 2.0f;
 

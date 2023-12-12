@@ -69,16 +69,21 @@ Airships:
 *Princess of Helium*
 *Queen of Helium*
 *Queen Regent of Helium*
-*Empress of Helium*
+*Empress of Solis*
+*Godess of Barsoom*
 *Chairwoman of the Council of People's Commisars of Helium*
+
 
 *Deja Thoris*
 *Deja Vu*
 
 
 Inoffensive early game Australiana:
-*Wombat* *Quokka* *Numbat* *Bandicoot* *Pademelon* *Wallaby* ...
+*Wombat* *Quokka* *Numbat* *Bandicoot* *Pademelon* *Wallaby* *Quoll* ...
+*Merino* *Brumby* *Saltie* *Buffalo* *Budgie* *Galah*
 *Big Banana* *Big Pineapple* *Big Merino*
+*Swagman* *Jumbuck* *Coolibah* *Billabong* *Tuckerbag* *Tuckerbox*
+
 
 
 
@@ -139,6 +144,10 @@ Resentful sentience mocking/meta names:
 
 
 
+Offensive British Empire archaisms 
+*Galoot* *Navvy* *Coolie* *Wallah*
+
+
 
 
 Midgame anti-human weaponry:
@@ -187,8 +196,46 @@ Witchcraft familiars:
 Fast things:
 *Rememberance of Things Passed*
 *R17*
+*Sound of Deadlines*
+
 
  
+ Big things
+ *Big Oof*
+ *Big Chungus*
+ *Big If True*
+ *Big Deal*
+ *Big Ly*
+ *Big Ot*
+ *Big Err*
+ *Big Mistake*
+ *Big Kahuna*
+ *Big Man*
+ 
+ *Huge Manatee*
+
+ 
+ 
+*Dabbler* 
+*Duckbill*
+*Shoebill*
+*Eggtooth*
+*Parrotfish*
+*Lithotroph*
+*Lapivore*
+*Petrophage*
+*Gastrolith*
+*Bezoar*
+*Geophage*
+*Terravore*
+*Kaolinguo*
+*Bayleen*
+*Cilium*
+
+*Zardoz*
+*Risky Clique*
+*Cheque, Mate*
+
 
 
 

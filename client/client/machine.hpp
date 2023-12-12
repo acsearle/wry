@@ -18,13 +18,11 @@ namespace wry::sim {
     struct Machine : Entity {
         
         enum {
-            TRAVELLING,
-            WAITING_FOR_OLD,
-            WAITING_FOR_NEW,
-            WAITING_FOR_DESIRED,
-        };
+            PHASE_TRAVELLING,
+            PHASE_WAITING_FOR_OLD,
+            PHASE_WAITING_FOR_NEW,
+        } _phase = PHASE_WAITING_FOR_NEW;
         
-        i64 _state2 = WAITING_FOR_NEW;
         i64 _on_arrival = OPCODE_NOOP;
         array<Value> _stack;
         
