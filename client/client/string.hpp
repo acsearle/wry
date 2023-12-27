@@ -86,7 +86,7 @@ namespace wry {
             return iterator{ chars.end() }; }
         
         const char8_t* data() const {
-            return chars.begin();
+            return chars.data();
         }
         
         array_view<const byte> as_bytes() const {
@@ -225,6 +225,10 @@ namespace wry {
         bool operator==(const string_view& other) const {
             return std::equal(begin(), end(), other.begin(), other.end());
         }
+        
+        auto operator<=>(const string& other) const {
+            return wry::lexicographical_compare_three_way(begin(), end(), other.begin(), other.end());
+        }
 
     };
     
@@ -351,11 +355,6 @@ namespace wry {
         }
                 
     };
-    
-    string string_from_file(string_view);
-    
-    
-    
     
 } // namespace manic
 

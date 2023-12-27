@@ -321,8 +321,9 @@ namespace wry {
         
         void clear() {
             std::destroy(_begin, _end);
-            difference_type n = _allocation_end - _allocation_begin;
-            _end = _begin = _allocation_begin + (n >> 1);
+            //difference_type n = _allocation_end - _allocation_begin;
+            //_end = _begin = _allocation_begin + (n >> 1);
+            _begin = _end;
         }
         
         array& assign(auto first, decltype(first) last) {
@@ -832,6 +833,8 @@ namespace wry {
         }
         
         //
+        
+        // TODO: use insert when std::distance is available
                 
         template<typename I, typename J>
         void append(I first, J last) {
@@ -844,7 +847,38 @@ namespace wry {
         void append(const X& x) {
             append(std::begin(x), std::end(x));
         }
-        
+
+        void append(array&& x) {
+            if (empty()) {
+                *this = std::move(x);
+            } else if ((capacity_back() >= x.size())
+                       && ((x.size() <= size())
+                           || (x.capacity_front() < size()))) {
+                // we can relocate x to free space at the back of this
+                // and it's the better or only option
+                relocate(x._begin, x._end, _end);
+                _end += x.size();
+                x._begin = x._end;
+            } else if (size() <= x.capacity_front()) {
+                // we can relocate this to free space at the front of x
+                x._begin -= size();
+                relocate(_begin, _end, x._begin);
+                _begin = _end;
+                swap(x);
+            } else {
+                array y(wry::with_capacity, size() + x.size());
+                assert(y.capacity_back() >= size());
+                relocate(_begin, _end, y._end);
+                y._end += size();
+                _begin = _end;
+                assert(y.capacity_back() >= x.size());
+                relocate(x._begin, x._end, y._end);
+                y._end += x.size();
+                x._begin = x._end;
+                swap(y);
+            }
+        }
+
         //
         
         array_view<T>& as_view() {
@@ -983,7 +1017,6 @@ namespace wry {
             return std::find_if(_begin, _end,  std::forward<decltype(predicate)>(predicate)) != _end;
         }
 
-                
     }; // struct array<T>
     
     template<typename T>

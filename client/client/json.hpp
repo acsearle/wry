@@ -10,6 +10,7 @@
 #define json_hpp
 
 #include "base36.hpp"
+#include "filesystem.hpp"
 #include "match.hpp"
 #include "parse.hpp"
 #include "serialize.hpp"
@@ -642,7 +643,7 @@ namespace wry {
             return wry::deserialize<T>(deserializer{v});
         }
         
-        template<typename T> T from_file(string_view name) {
+        template<typename T> T from_file(const std::filesystem::path& name) {
             string s = string_from_file(name);
             string_view v = s;
             return wry::deserialize<T>(deserializer{v});

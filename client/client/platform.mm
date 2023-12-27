@@ -15,14 +15,19 @@
 
 namespace wry {
     
-    // On macOS, this may point to a bundle
-    
-    std::filesystem::path path_for_resource(string_view name, string_view ext) {
+    // On macOS, this may point to a bundle?
+
+    std::filesystem::path path_for_resource(string_view name) {
         string s(u8"/Users/antony/Desktop/assets/");
         s.append(name);
+        return std::filesystem::path(s.begin(), s.end());
+    }
+
+    std::filesystem::path path_for_resource(string_view name, string_view ext) {
+        string s(name);
         s.push_back(u8'.');
         s.append(ext);
-        return std::filesystem::path(s.begin(), s.end());
+        return path_for_resource(s);
     }
 
 }

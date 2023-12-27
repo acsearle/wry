@@ -922,6 +922,7 @@ namespace wry {
                 for (vertex v : vertices) {
                     MeshVertex u = {};
                     u.position = v.position;
+                    DUMP(u.position.x);
                     u.coordinate = v.coordinate;
                     u.tangent = v.tangent;
                     u.bitangent = v.bitangent;
@@ -1890,7 +1891,7 @@ namespace mesh2 {
             vertices.erase(vertices.begin() + (i % size()));
         }
         
-        // apend
+        // append
         void push_back(vertex x) {
             vertices.push_back(x);
         }

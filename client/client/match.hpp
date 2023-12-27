@@ -38,7 +38,7 @@ namespace wry {
     }
 
     inline constexpr auto match_and(auto&&... matchers) {
-        return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) -> bool {
+        return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) mutable -> bool {
             auto u(v);
             if (!(... && matchers(u)))
                 return false;
@@ -48,20 +48,20 @@ namespace wry {
     }
     
     inline constexpr auto match_or(auto&&... matchers) {
-        return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) -> bool {
+        return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) mutable -> bool {
             return (... || matchers(v));
         };
     }
     
     inline constexpr auto match_optional(auto&&... matchers) {
-        return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) -> bool {
+        return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) mutable -> bool {
             (..., (void) matchers(v));
             return true;
         };
     }
             
     inline constexpr auto match_star(auto&& matcher) {
-        return [matcher=std::forward<decltype(matcher)>(matcher)](auto& v) -> bool {
+        return [matcher=std::forward<decltype(matcher)>(matcher)](auto& v) mutable -> bool {
             while (matcher(v))
                 ;
             return true;
@@ -114,7 +114,7 @@ namespace wry {
     
     auto match_until(auto&& many, auto&& once) {
         return [many=std::forward<decltype(many)>(many),
-                once=std::forward<decltype(once)>(once)](auto& v) -> bool {
+                once=std::forward<decltype(once)>(once)](auto& v) mutable -> bool {
             for (auto u(v); ; ) {
                 if (once(u)) {
                     v.reset(u);
@@ -324,6 +324,10 @@ namespace wry {
         return match_star(match_space());
     }
     
+    inline constexpr auto match_graphs() {
+        return match_plus(match_graph());
+    }
+    
     inline constexpr auto match_newline() {
         return match_and(match_optional(match_character('\r')),
                          match_character('\n'));
@@ -332,6 +336,7 @@ namespace wry {
     inline constexpr auto match_line() {
         return match_until(match_not_empty(), match_newline());
     }
+    
     
     // match an identifier of the form [A-Za-z_][A-Za-z0-9_]*
     

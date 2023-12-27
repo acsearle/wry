@@ -25,7 +25,7 @@ namespace wry {
         } else {
             double value2 = value;
             std::from_chars_result result = wry::_from_chars_double(first, last, value2);
-            if (result.ptr == first)
+            if (result.ptr != first)
                 value = value2;
             return result;
         }

@@ -23,10 +23,10 @@
 #include "font.hpp"
 #include "json.hpp"
 #include "mesh.hpp"
-#include "obj.hpp"
 #include "palette.hpp"
 #include "platform.hpp"
 #include "sdf.hpp"
+#include "Wavefront.hpp"
 
 @implementation WryRenderer
 {
@@ -100,6 +100,8 @@
     id<MTLTexture> _darkgray;
     
     wry::table<ulong, simd_float4> _opcode_to_coordinate;
+    
+    WryMesh* _mine_mesh;
     
     // controls
     
@@ -559,6 +561,38 @@
             i.inverse_transpose_model_transform = simd_inverse(simd_transpose(i.model_transform));
             i.albedo = make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
             _instanced_things = [_device newBufferWithBytes:&i length:sizeof(i) options:MTLStorageModeShared];
+            
+        }
+        
+        {
+            auto m = wry::from_obj("/Users/antony/Desktop/assets/truck2.obj");
+            m.MeshVertexify();
+            
+            _mine_mesh = [[WryMesh alloc] initWithDevice:_device];
+            _mine_mesh.vertexBuffer = newBufferWithArray(m.hack_MeshVertex);
+            _mine_mesh.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
+            
+            _mine_mesh.emissiveTexture = _black;
+            _mine_mesh.albedoTexture = [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Color" ofType:@"png"];
+            _mine_mesh.metallicTexture= [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Metalness" ofType:@"png"];
+            _mine_mesh.normalTexture = [self newTextureFromResource:@"PaintedMetal009_1K-PNG_NormalGL" ofType:@"png" withPixelFormat:MTLPixelFormatRGBA8Unorm];
+            _mine_mesh.roughnessTexture = [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Roughness" ofType:@"png"];;
+            _mine_mesh.instanceCount = 0;
+            auto A = simd_matrix(simd_make_float4(1.0, 0.0, 0.0, 0.0),
+                                 simd_make_float4(0.0, 1.0, 0.0, 0.0),
+                                 simd_make_float4(0.0, 0.0, 1.0, 0.0),
+                                 simd_make_float4(0.0, 0.0, 0.0, 1.0));
+                                 
+
+            /*
+            _mine_mesh.instances[0] =
+            MeshInstanced{
+                A,
+                transpose(inverse(A)),
+                make<float4>(1.0f, 0.5f, 1.0f, 1.0f),
+            };
+             */
+
             
         }
                     
@@ -1316,8 +1350,6 @@
         
     }
 
-   
-       
     // Render shadow map
     
     {
@@ -1358,7 +1390,10 @@
                                             indexType:MTLIndexTypeUInt32
                                           indexBuffer:indices
                                     indexBufferOffset:0];
-        
+
+
+        [_mine_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
+
         [render_command_encoder endEncoding];
         
     }
@@ -1470,6 +1505,8 @@
                                      indexType:MTLIndexTypeUInt32
                                    indexBuffer:indices
                              indexBufferOffset:0];
+                
+                [_mine_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
 
                 /*
                 if (show_points) {

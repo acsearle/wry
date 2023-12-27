@@ -36,7 +36,8 @@ namespace wry {
 
         // sun setup
         
-        p = simd_normalize(simd_make_float3(-1, 1, 3));
+        p = simd_normalize(simd_make_float3(2, -1, 4));
+        //p = simd_normalize(simd_make_float3(-1, 0, 1)); // Factorio lol
         _uniforms.light_direction = p;
         _uniforms.radiance = 2.0f;
 
@@ -61,8 +62,8 @@ namespace wry {
         
         simd_float4x4 A = simd_matrix(make<float4>(1.0f, 0.0f, 0.0, 0.0f),
                                       make<float4>(0.0f, 1.0f, 0.0, 0.0f),
-                                      make<float4>(p.x / p.z,
-                                                       p.y / p.z,
+                                      make<float4>(-p.x / p.z,
+                                                       -p.y / p.z,
                                                        -1.0f, 0.0f),
                                       make<float4>(0.0f, 0.0f, 0.0f, 1.0f));
         // :todo: for a light source not at infinity, we'll have to also

@@ -16,6 +16,7 @@
 namespace wry {
     
     std::filesystem::path path_for_resource(string_view name, string_view ext);
+    std::filesystem::path path_for_resource(string_view name);
     
 }
 
