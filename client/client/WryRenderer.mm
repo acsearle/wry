@@ -98,7 +98,8 @@
     id<MTLTexture> _blue;
     id<MTLBuffer> _instanced_things;
     id<MTLTexture> _darkgray;
-    
+    id<MTLTexture> _orange;
+
     wry::table<ulong, simd_float4> _opcode_to_coordinate;
     
     WryMesh* _mine_mesh;
@@ -553,8 +554,9 @@
             _blue = [self newTextureFromResource:@"blue"
                                           ofType:@"png"
                                  withPixelFormat:MTLPixelFormatRGBA8Unorm];
-            _darkgray = [self newTextureFromResource:@"darkgray" ofType:@"png"];
-            
+            _darkgray = [self newTextureFromResource:@"gray_sRGB" ofType:@"png"];
+            _orange = [self newTextureFromResource:@"orange" ofType:@"png"];
+
             
             MeshInstanced i;
             i.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
@@ -573,16 +575,17 @@
             _mine_mesh.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
             
             _mine_mesh.emissiveTexture = _black;
-            _mine_mesh.albedoTexture = [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Color" ofType:@"png"];
-            _mine_mesh.metallicTexture= [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Metalness" ofType:@"png"];
+            _mine_mesh.albedoTexture = _white; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Color" ofType:@"png"];
+            _mine_mesh.metallicTexture = _white; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Metalness" ofType:@"png"];
             _mine_mesh.normalTexture = [self newTextureFromResource:@"PaintedMetal009_1K-PNG_NormalGL" ofType:@"png" withPixelFormat:MTLPixelFormatRGBA8Unorm];
-            _mine_mesh.roughnessTexture = [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Roughness" ofType:@"png"];;
+            _mine_mesh.roughnessTexture = _darkgray; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Roughness" ofType:@"png"];;
             _mine_mesh.instanceCount = 0;
+            /*
             auto A = simd_matrix(simd_make_float4(1.0, 0.0, 0.0, 0.0),
                                  simd_make_float4(0.0, 1.0, 0.0, 0.0),
                                  simd_make_float4(0.0, 0.0, 1.0, 0.0),
                                  simd_make_float4(0.0, 0.0, 0.0, 1.0));
-                                 
+                                */
 
             /*
             _mine_mesh.instances[0] =
@@ -1029,11 +1032,13 @@
     
     // Construct ground plane transforms
     MeshInstanced mesh_instanced_things = {};
+    
+    auto lookat_transform =  matrix_identity_float4x4;
+    lookat_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
+    lookat_transform.columns[3].y -= _model->_looking_at.y / 1024.0f;
 
     {
-        mesh_instanced_things.model_transform = matrix_identity_float4x4;
-        mesh_instanced_things.model_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
-        mesh_instanced_things.model_transform.columns[3].y -= _model->_looking_at.y / 1024.0f;
+        mesh_instanced_things.model_transform = lookat_transform;
         mesh_instanced_things.inverse_transpose_model_transform = simd_inverse(simd_transpose(mesh_instanced_things.model_transform));
         mesh_instanced_things.albedo = make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
         memcpy([_instanced_things contents], &mesh_instanced_things, sizeof(mesh_instanced_things));
@@ -1072,6 +1077,7 @@
     id<MTLBuffer> vertices = nil;
     id<MTLBuffer> indices = nil;
     NSUInteger index_count = 0;
+    _mine_mesh.instanceCount = 0;
     // raid model for data
     {
         auto tnow = _model->_world._tick;
@@ -1095,8 +1101,8 @@
             if (auto p = dynamic_cast<wry::sim::Machine*>(q)) {// ugh
                 
                 auto h = p->_heading & 3;
-                auto x0 = make<float4>(p->_old_location.x, p->_old_location.y, 0.2, 1.0f);
-                auto x1 = make<float4>(p->_new_location.x, p->_new_location.y, 0.2, 1.0f);
+                auto x0 = make<float4>(p->_old_location.x, p->_old_location.y, 0.0, 1.0f);
+                auto x1 = make<float4>(p->_new_location.x, p->_new_location.y, 0.0, 1.0f);
                 
                 simd_float4 location;
                 if (tnow >= p->_new_time) {
@@ -1105,8 +1111,11 @@
                     location = simd_mix(x0, x1, float(tnow - p->_old_time) / float(p->_new_time - p->_old_time));
                 }
                 
+                auto A = simd_matrix_translate(location) * lookat_transform;
+                
                 //printf("%lld, %g\n", tnow, location.x);
                 
+                /*
                 v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
                 v.coordinate = make<float4>(11.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
                 *pv++ = v;
@@ -1119,6 +1128,7 @@
                 v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
                 v.coordinate = make<float4>(11.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 *pv++ = v;
+                 */
                 
                 while (h--) {
                     wry::rotate_args_left(pv[-4].coordinate,
@@ -1126,9 +1136,19 @@
                                           pv[-2].coordinate,
                                           pv[-1].coordinate
                                           );
-                    
+                    A = A * simd_matrix_rotate(M_PI_2, make<float3>(0.0, 0.0, -1.0));
                 }
                 
+                {
+                    // now make the instance
+                    MeshInstanced m;
+                    m.model_transform = A;
+                    m.inverse_transpose_model_transform = inverse(transpose(A));
+                    m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
+                    _mine_mesh.instances[_mine_mesh.instanceCount++] = m;
+                }
+                
+                /*
                 *pi++ = k;
                 *pi++ = k;
                 *pi++ = k + 1;
@@ -1137,6 +1157,7 @@
                 *pi++ = k + 2;
                 
                 k += 4;
+                 */
                 
                 for (int i = 0; i != p->_stack.size(); ++i) {
                     location.z += 0.5;

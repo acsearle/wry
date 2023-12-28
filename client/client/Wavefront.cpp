@@ -647,7 +647,7 @@ namespace wry {
             m.hack_triangle_strip.insert(m.hack_triangle_strip.end(), std::begin(js), std::end(js));
         }
         
-        
+        m.repair_jacobian();
         
         
         /*
