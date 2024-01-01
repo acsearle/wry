@@ -229,7 +229,7 @@ namespace deferred {
                                            t_address::repeat);
         
         FragmentFunctionOutput out;
-                
+        
         half4 albedoSample = albedoTexture.sample(trilinearSampler, in.coordinate.xy);
         
         if (albedoSample.a < 0.5f)
@@ -368,7 +368,7 @@ namespace deferred {
         
         float3 albedo    = float3(gbuffer.albedo_metallic.rgb);
         float  metallic  = float(gbuffer.albedo_metallic.a);
-        float3 normal    = float3(0,0,1); // float3(gbuffer.normal_roughness.xyz);
+        float3 normal    = float3(gbuffer.normal_roughness.xyz);
         float  roughness = float(gbuffer.normal_roughness.w);
         // float  depth     = gbuffer.depth;
         float  occlusion = 1.0f;

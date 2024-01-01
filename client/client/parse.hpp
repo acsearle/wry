@@ -24,7 +24,25 @@ namespace wry {
         };
     }
     
-    auto parse_number(auto& x) {
+    inline constexpr auto parse_until(auto&& many, auto&& once, auto&& action) {
+        return [many=std::forward<decltype(many)>(many),
+                once=std::forward<decltype(once)>(once),
+                action=std::forward<decltype(action)>(action)](auto& v) mutable -> bool {
+            auto w(v);
+            for (auto u(v); ; ) {
+                if (once(u)) {
+                    action(w / v, v / u);
+                    v.reset(u);
+                    return true;
+                }
+                if (!many(u))
+                    return false;
+            }
+        };
+    }
+    
+    
+    inline constexpr auto parse_number(auto& x) {
         return overloaded{
             [&x](string_view& v) -> bool {
                 //printf("parse_number(sv) %.10s\n", (const char*) v.begin().base);
@@ -50,7 +68,7 @@ namespace wry {
         };
     }
         
-    auto parse_number_relaxed(auto& x) {
+    inline constexpr auto parse_number_relaxed(auto& x) {
         return match_and(match_spaces(),
                          match_optional(match_character('+')),
                          parse_number(x));
@@ -68,7 +86,6 @@ namespace wry {
             value = match;
         });
     }
-    
     
 } // namespace wry
     

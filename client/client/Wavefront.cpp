@@ -31,34 +31,28 @@ namespace wry::Wavefront {
                                               match_empty())));
     }
     
-    auto parse_xyz(packed::double3& xyz) {
-        return [&xyz](string_view& v) {
-            double x, y, z;
-            return (match_and(parse_number_relaxed(x),
-                              parse_number_relaxed(y),
-                              parse_number_relaxed(z))(v)
-                    && ((void) (xyz = packed::double3{x, y, z}), true));
+    auto parse_xyz(auto xyz[]) {
+        return [xyz](string_view& v) {
+            return match_and(parse_number_relaxed(xyz[0]),
+                             parse_number_relaxed(xyz[1]),
+                             parse_number_relaxed(xyz[2]))(v);
         };
     }
     
-    auto parse_u_vw(packed::double3& u_vw) {
-        return [&u_vw](string_view& sv) {
-            double u, v = 0.0, w = 0.0;
-            return (match_and(parse_number_relaxed(u),
-                              match_optional(parse_number_relaxed(v),
-                                             parse_number_relaxed(w)))(sv)
-                    && ((void) (u_vw = packed::double3{u, v, w}), true));
+    auto parse_u_vw(auto u_vw[3]) {
+        return [u_vw](string_view& sv) {
+            return match_and(parse_number_relaxed(u_vw[0]),
+                             match_optional(parse_number_relaxed(u_vw[1]),
+                                            parse_number_relaxed(u_vw[2])))(sv);
         };
     }
     
-    auto parse_xyz_w(double4& xyz_w) {
-        return [&xyz_w](string_view& v) {
-            double x, y, z, w = 1.0;
-            return (match_and(parse_number_relaxed(x),
-                              parse_number_relaxed(y),
-                              parse_number_relaxed(z),
-                              match_optional(parse_number_relaxed(w)))(v)
-                    && ((void) (xyz_w = simd::make<double4>(x, y, z, w)), true));
+    auto parse_xyz_w(auto xyz_w[4]) {
+        return [xyz_w](string_view& v) {
+            return match_and(parse_number_relaxed(xyz_w[0]),
+                             parse_number_relaxed(xyz_w[1]),
+                             parse_number_relaxed(xyz_w[2]),
+                             match_optional(parse_number_relaxed(xyz_w[3])))(v);
         };
     }
         
@@ -68,14 +62,16 @@ namespace wry::Wavefront {
                                      match_newline()));
     }
     
-    // Parses until newline or end of file, but excludes the newline from the
+    // Parses until newline or end of file, but excludes the termination from the
     // view given to the effect
+    // special case of parse_until?
     auto parse_line(auto&& effect) {
         return [effect=std::forward<decltype(effect)>(effect)](string_view& v) -> bool {
             for (auto u(v);;) {
                 auto w = u;
                 if (match_or(match_newline(), match_empty())(u)) {
-                    effect(w / v);
+                    effect(v / w);
+                    v.reset(u);
                     return true;
                 }
                 u.pop_front();
@@ -150,7 +146,7 @@ namespace wry::Wavefront {
         
         auto parse_newmtl() {
             return match_and(match_string("newmtl"),
-                             match_blanks(),
+                             match_spaces(),
                              parse(match_graphs(),
                                    [this](string_view match) {
                 commit();
@@ -164,7 +160,7 @@ namespace wry::Wavefront {
                                    [this](string_view match) {
                 this->_current_key = match;
             }),
-                             match_blanks(),
+         match_spaces(),
                              parse(match_graphs(),
                                    [this](string_view match) {
                 commit();
@@ -174,12 +170,12 @@ namespace wry::Wavefront {
          */
                 
 #define PARSE_XYZ(X)\
-        match_and(match_string(#X),\
-                             parse_xyz(this->current_material. X ))
+match_and(match_string(#X),match_hspace(),\
+parse_xyz((double*) &this->current_material. X ))
 
 #define PARSE_FILENAME(X)\
-match_and(match_string(#X),match_blanks(),\
-parse(match_line(), [this](string_view match) { this->current_material. X  = match; }))
+match_and(match_string(#X),match_hspace(),\
+parse_line([this](string_view match) { this->current_material. X  = match; }))
 
 #define PARSE_NUMBER(X)\
 match_and(match_string(#X),\
@@ -348,9 +344,9 @@ parse_number_relaxed(this->current_material. X ))
         
         auto parse_position() {
             return [this](string_view& v) {
-                simd_double4 position;
+                simd_double4 position = {0, 0, 0, 1};
                 bool flag = match_and(match_character('v'),
-                                      parse_xyz_w(position))(v);
+                                      parse_xyz_w((double*)&position))(v);
                 if (flag) {
                     this->positions.push_back(position);
                 }
@@ -360,9 +356,9 @@ parse_number_relaxed(this->current_material. X ))
         
         auto parse_coordinate() {
             return [this](string_view& v) {
-                packed::double3 coordinate;
+                packed::double3 coordinate = {0, 0, 0};
                 return (match_and(match_string("vt"),
-                                  parse_u_vw(coordinate))(v)
+                                  parse_u_vw((double*)&coordinate))(v)
                         && ((void) this->coordinates.push_back(coordinate),
                             true));
             };
@@ -370,9 +366,9 @@ parse_number_relaxed(this->current_material. X ))
         
         auto parse_normal() {
             return [this](string_view& v) {
-                packed::double3 normal;
+                packed::double3 normal = {0, 0, 0};
                 return (match_and(match_string("vn"),
-                                  parse_xyz(normal))(v)
+                                  parse_xyz((double*)&normal))(v)
                         && ((void) this->normals.push_back(normal),
                             true));
             };
@@ -380,9 +376,9 @@ parse_number_relaxed(this->current_material. X ))
         
         auto parse_parameters() {
             return [this](string_view& v) {
-                packed::double3 parameter;
+                packed::double3 parameter = { 0, 0, 0};
                 return (match_and(match_string("vp"),
-                                  parse_u_vw(parameter))(v)
+                                  parse_u_vw((double*)&parameter))(v)
                         && ((void) this->parameters.push_back(parameter),
                             true));
             };
@@ -393,9 +389,9 @@ parse_number_relaxed(this->current_material. X ))
                 Index i = 0, j = 0, k = 0;
                 bool flag = match_and(parse_number_relaxed(i),
                                       match_optional(match_and(match_character('/'),
-                                                               match_optional(parse_number(j)),
+                                                               match_optional(parse_number_relaxed(j)),
                                                                match_optional(match_and(match_character('/'),
-                                                                                        parse_number(k))))))(v);
+                                                                                        parse_number_relaxed(k))))))(v);
                 if (flag) {
                     // negative indices are relative to the current size of the
                     // arrays, so we must convert them immediately
@@ -414,6 +410,7 @@ parse_number_relaxed(this->current_material. X ))
         }
         
         auto parse_face() {
+            // we could enforce triangles here and use a static sized index array
             Array<Index> indices;
             return [this, indices=std::move(indices)](string_view& v) mutable -> bool {
                 indices.clear();
@@ -447,7 +444,7 @@ parse_number_relaxed(this->current_material. X ))
         
         auto parse_mtllib() {
             return match_and(match_string("mtllib"),
-                             match_blanks(),
+                             match_spaces(),
                              parse(match_filename(),
                                    [this](string_view match) {
                 std::filesystem::path name = wry::path_for_resource(match);
@@ -470,22 +467,23 @@ parse_number_relaxed(this->current_material. X ))
         
         auto parse_usemtl() {
             return match_and(match_string("usemtl"),
-                             match_blanks(),
-                             parse(match_filename(),
-                                   [this](string_view match) {
+                             match_hspace(),
+                             parse_line([this](string_view match) {
+                printf("parse_line \"%.*s\"\n", (int) match.chars.size(), (const char*) match.chars.data());
                 commit();
                 auto it = _current_materials.named_materials.find(String(match));
-                if (it == _current_materials.named_materials.end()) {
-                    // Missing material is a fatal error
-                    abort();
+                if (it != _current_materials.named_materials.end()) {
+                    this->_current_material = it->second;
+                } else {
+                    // reset to default material
+                    this->_current_material = MTLFile::Material();
                 }
-                this->_current_material = it->second;
             }));
         }
         
         auto parse_group() {
             return match_and(match_character('g'),
-                             match_blanks(),
+                             match_spaces(),
                              parse(match_graphs(),
                                    [this](string_view match) {
                 commit();
@@ -495,7 +493,7 @@ parse_number_relaxed(this->current_material. X ))
         
         auto parse_object() {
             return match_and(match_character('o'),
-                             match_blanks(),
+                             match_spaces(),
                              parse(match_graphs(),
                                    [this](string_view match) {
                 commit();
@@ -622,10 +620,12 @@ namespace wry {
                                                       o.positions[i-1].y,
                                                       o.positions[i-1].z,
                                                       o.positions[i-1].w);
-                            w.coordinate = make<float4>(o.coordinates[j-1].x,
-                                                        o.coordinates[j-1].y,
-                                                        o.coordinates[j-1].z,
-                                                        1.0f);
+                            if (j) {
+                                w.coordinate = make<float4>(o.coordinates[j-1].x,
+                                                            o.coordinates[j-1].y,
+                                                            o.coordinates[j-1].z,
+                                                            1.0f);
+                            }
                             w.normal = make<float4>(o.normals[k-1].x,
                                                     o.normals[k-1].y,
                                                     o.normals[k-1].z,

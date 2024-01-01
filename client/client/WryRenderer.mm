@@ -102,7 +102,9 @@
 
     wry::table<ulong, simd_float4> _opcode_to_coordinate;
     
+    WryMesh* _truck_mesh;
     WryMesh* _mine_mesh;
+    WryMesh* _furnace_mesh;
     
     // controls
     
@@ -555,6 +557,7 @@
                                           ofType:@"png"
                                  withPixelFormat:MTLPixelFormatRGBA8Unorm];
             _darkgray = [self newTextureFromResource:@"gray_sRGB" ofType:@"png"];
+            //_darkgray = [self newTextureFromResource:@"darkgray" ofType:@"png"];
             _orange = [self newTextureFromResource:@"orange" ofType:@"png"];
 
             
@@ -567,36 +570,25 @@
         }
         
         {
-            auto m = wry::from_obj("/Users/antony/Desktop/assets/truck2.obj");
-            m.MeshVertexify();
-            
-            _mine_mesh = [[WryMesh alloc] initWithDevice:_device];
-            _mine_mesh.vertexBuffer = newBufferWithArray(m.hack_MeshVertex);
-            _mine_mesh.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
-            
-            _mine_mesh.emissiveTexture = _black;
-            _mine_mesh.albedoTexture = _white; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Color" ofType:@"png"];
-            _mine_mesh.metallicTexture = _white; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Metalness" ofType:@"png"];
-            _mine_mesh.normalTexture = [self newTextureFromResource:@"PaintedMetal009_1K-PNG_NormalGL" ofType:@"png" withPixelFormat:MTLPixelFormatRGBA8Unorm];
-            _mine_mesh.roughnessTexture = _darkgray; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Roughness" ofType:@"png"];;
-            _mine_mesh.instanceCount = 0;
-            /*
-            auto A = simd_matrix(simd_make_float4(1.0, 0.0, 0.0, 0.0),
-                                 simd_make_float4(0.0, 1.0, 0.0, 0.0),
-                                 simd_make_float4(0.0, 0.0, 1.0, 0.0),
-                                 simd_make_float4(0.0, 0.0, 0.0, 1.0));
-                                */
-
-            /*
-            _mine_mesh.instances[0] =
-            MeshInstanced{
-                A,
-                transpose(inverse(A)),
-                make<float4>(1.0f, 0.5f, 1.0f, 1.0f),
+            auto f = [&](WryMesh *__strong& p, std::filesystem::path v) {
+                auto m = wry::from_obj(v);
+                m.MeshVertexify();
+                
+                p = [[WryMesh alloc] initWithDevice:_device];
+                p.vertexBuffer = newBufferWithArray(m.hack_MeshVertex);
+                p.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
+                
+                p.emissiveTexture = _black;
+                p.albedoTexture = _white; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Color" ofType:@"png"];
+                p.metallicTexture = _white; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Metalness" ofType:@"png"];
+                p.normalTexture = _blue; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_NormalGL" ofType:@"png" withPixelFormat:MTLPixelFormatRGBA8Unorm];
+                p.roughnessTexture = _darkgray; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Roughness" ofType:@"png"];;
+                p.instanceCount = 0;
             };
-             */
-
             
+            f(_furnace_mesh, "/Users/antony/Desktop/assets/furnace.obj");
+            f(_mine_mesh, "/Users/antony/Desktop/assets/mine.obj");
+            f(_truck_mesh, "/Users/antony/Desktop/assets/truck2.obj");
         }
                     
         {
@@ -1077,7 +1069,9 @@
     id<MTLBuffer> vertices = nil;
     id<MTLBuffer> indices = nil;
     NSUInteger index_count = 0;
+    _furnace_mesh.instanceCount = 0;
     _mine_mesh.instanceCount = 0;
+    _truck_mesh.instanceCount = 0;
     // raid model for data
     {
         auto tnow = _model->_world._tick;
@@ -1113,29 +1107,7 @@
                 
                 auto A = simd_matrix_translate(location) * lookat_transform;
                 
-                //printf("%lld, %g\n", tnow, location.x);
-                
-                /*
-                v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(11.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
-                *pv++ = v;
-                v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(12.0f / 32.0f, 3.0f / 32.0f, 0.0f, 1.0f);
-                *pv++ = v;
-                v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(12.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
-                *pv++ = v;
-                v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(11.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
-                *pv++ = v;
-                 */
-                
                 while (h--) {
-                    wry::rotate_args_left(pv[-4].coordinate,
-                                          pv[-3].coordinate,
-                                          pv[-2].coordinate,
-                                          pv[-1].coordinate
-                                          );
                     A = A * simd_matrix_rotate(M_PI_2, make<float3>(0.0, 0.0, -1.0));
                 }
                 
@@ -1145,20 +1117,11 @@
                     m.model_transform = A;
                     m.inverse_transpose_model_transform = inverse(transpose(A));
                     m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
-                    _mine_mesh.instances[_mine_mesh.instanceCount++] = m;
+                    _truck_mesh.instances[_truck_mesh.instanceCount++] = m;
                 }
                 
-                /*
-                *pi++ = k;
-                *pi++ = k;
-                *pi++ = k + 1;
-                *pi++ = k + 3;
-                *pi++ = k + 2;
-                *pi++ = k + 2;
-                
-                k += 4;
-                 */
-                
+                // now make the stack
+                location.z += 0.8;
                 for (int i = 0; i != p->_stack.size(); ++i) {
                     location.z += 0.5;
                     wry::sim::Value value = p->_stack[i];
@@ -1195,8 +1158,10 @@
                 
             } else if (auto p = dynamic_cast<sim::LocalizedEntity*>(q)){
                 
-                simd_float4 location = make<float4>(p->_location.x, p->_location.y, 1.0, 1.0f);
-                
+                simd_float4 location = make<float4>(p->_location.x, p->_location.y + 1.0, 0.0, 1.0f);
+                auto A = simd_matrix_translate(location) * lookat_transform * simd_matrix_scale(0.5f);
+
+                /*
                 v.position = make<float4>(-0.5f, 0.0f, -0.5f, 0.0f) + location;
                 v.coordinate = make<float4>(4.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
                 *pv++ = v;
@@ -1217,6 +1182,25 @@
                 *pi++ = k + 2;
                 *pi++ = k + 2;
                 k += 4;
+                 */
+                
+                WryMesh* s = nil;
+                
+                if (auto r = dynamic_cast<sim::Source*>(q)) {
+                    s = _mine_mesh;
+                } else if (auto r = dynamic_cast<sim::Sink*>(q)) {
+                    s = _furnace_mesh;
+                }
+                
+                if (s) {
+                    // now make the instance
+                    MeshInstanced m;
+                    m.model_transform = A;
+                    m.inverse_transpose_model_transform = inverse(transpose(A));
+                    m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
+                    s.instances[s.instanceCount++] = m;
+                }
+
                 
                 if (auto r = dynamic_cast<sim::Source*>(q)) {
                     
@@ -1413,7 +1397,9 @@
                                     indexBufferOffset:0];
 
 
+        [_furnace_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
         [_mine_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
+        [_truck_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
 
         [render_command_encoder endEncoding];
         
@@ -1527,7 +1513,9 @@
                                    indexBuffer:indices
                              indexBufferOffset:0];
                 
+                [_furnace_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
                 [_mine_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
+                [_truck_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
 
                 /*
                 if (show_points) {

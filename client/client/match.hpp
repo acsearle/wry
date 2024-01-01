@@ -16,27 +16,19 @@ namespace wry {
     // # Matcher combinators
     //
     // Matchers look for a pattern at the start of their View argument,
-    // and if found, advance the beginning of the view and return false
+    // and if found, advance the beginning of the view and return Truthy
     //
     // string_views or array_view<char8_t> views are the canonical arguments;
     // since many formats are specified in terms of ASCII characters the same
     // code can parse both, passing multibyte UTF-8 through unaltered.
+    //
+    // Views must support
+    // .empty
+    // .pop_front
+    // .reset
+    // CopyConstuctible
+    //
     
-    inline constexpr auto match_empty() {
-        return [](auto& v) -> bool {
-            return v.empty();
-        };
-    }
-    
-    inline constexpr auto match_not_empty() {
-        return [](auto& v) -> bool {
-            if (v.empty())
-                return false;
-            v.pop_front();
-            return true;
-        };
-    }
-
     inline constexpr auto match_and(auto&&... matchers) {
         return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) mutable -> bool {
             auto u(v);
@@ -69,7 +61,13 @@ namespace wry {
     }
     
     inline auto constexpr match_plus(auto&& matcher) {
-        return match_and(matcher, match_star(matcher));
+        return [matcher=std::forward<decltype(matcher)>(matcher)](auto& v) mutable -> bool {
+            if (!matcher(v))
+                return false;
+            while (matcher(v))
+                ;
+            return true;
+        };
     }
     
     inline auto constexpr match_count(auto&& matcher, int count) {
@@ -84,7 +82,7 @@ namespace wry {
         };
     }
 
-    inline constexpr auto match_range(auto&& matcher, int min, int max) {
+    inline constexpr auto match_count_range(auto&& matcher, int min, int max) {
         assert((0 <= min) && (min <= max));
         return [matcher=std::forward<decltype(matcher)>(matcher), min, max](auto& v) -> bool {
             auto u(v);
@@ -99,33 +97,7 @@ namespace wry {
         };
     }
     
-    
-    auto match_not(auto&& matcher) {
-        return [matcher=std::forward<decltype(matcher)>(matcher)](auto& v) -> bool {
-            if (v.empty())
-                return false;
-            auto u(v);
-            if (matcher(u))
-                return false;
-            v.pop_front();
-            return true;
-        };
-    }
-    
-    auto match_until(auto&& many, auto&& once) {
-        return [many=std::forward<decltype(many)>(many),
-                once=std::forward<decltype(once)>(once)](auto& v) mutable -> bool {
-            for (auto u(v); ; ) {
-                if (once(u)) {
-                    v.reset(u);
-                    return true;
-                }
-                if (!many(u))
-                    return false;
-            }
-        };
-    }
-        
+    // value (delimiter value)*
     inline auto match_delimited(auto&& value, auto&& delimiter) {
         return [value=std::forward<decltype(value)>(value),
                 delimiter=std::forward<decltype(delimiter)>(delimiter)](auto& v) {
@@ -142,7 +114,115 @@ namespace wry {
         };
     }
     
-    inline constexpr auto match_character(auto character) {
+    // the following are weird matcher/combinators that deal with EOF, match
+    // negation, and other strange conditions.  Some of them are a kind of
+    // tribool problem.
+    //
+    // They may be variously
+    // - useless
+    // - ill-formed
+    // - misnamed
+    //
+    // Matchers that match empty can't advance, and when combined with
+    // match_star or similar constructs, won't termimnate
+    //
+    // Negation can't really happen without an alternative, and when we advance
+    // due to not-match, we are implicitly proposing match_any_char
+
+    // never match anything (nor nothing aka empty)
+    inline constexpr auto match_false() {
+        return [](auto& v) -> bool {
+            return false;
+        };
+    }
+    
+    // always match anything (including nothing aka empty), and advance if
+    // possible (aka if not empty)
+    // ill-posed; advance by one privileges char
+    // match_any_character_or_EOF?
+    inline constexpr auto match_true() {
+        return [](auto& v) -> bool {
+            if (!v.empty())
+                v.pop_front();
+            return true;
+        };
+    }
+
+    // match EOF/empty/end of view; never advances
+    // Use case: some constructs can be terminated by a newline or end of file
+    inline constexpr auto match_empty() {
+        return [](auto& v) -> bool {
+            return v.empty();
+        };
+    }
+
+    // match, regardless of value, the first character of a view that has a
+    // first element
+    // alernative name:  match_any_character?
+    inline constexpr auto match_not_empty() {
+        return [](auto& v) -> bool {
+            if (v.empty())
+                return false;
+            v.pop_front();
+            return true;
+        };
+    }
+    
+    // match anything (any char) except the given
+    constexpr auto match_not(auto&& matcher) {
+        return [matcher=std::forward<decltype(matcher)>(matcher)](auto& v) -> bool {
+            if (v.empty())
+                return false;
+            auto u(v);
+            if (matcher(u))
+                return false;
+            v.pop_front();
+            return true;
+        };
+    }
+    
+    // match_until
+    // This is actually well-posed; we try to match _once_, then try to match
+    // _many_, resulting in a priority-inverted version of
+    // match_star(many) && once
+    //
+    // This is an example of a matcher that needs a custom parser associated
+    // with it
+    constexpr auto match_until(auto&& many, auto&& once) {
+        return [many=std::forward<decltype(many)>(many),
+                once=std::forward<decltype(once)>(once)](auto& v) mutable -> bool {
+            for (auto u(v); ; ) {
+                if (once(u)) {
+                    v.reset(u);
+                    return true;
+                }
+                if (!many(u))
+                    return false;
+            }
+        };
+    }
+    
+    
+    
+    
+    constexpr auto match_predicate(auto&& predicate) {
+        return [predicate=std::forward<decltype(predicate)>(predicate)](auto& v) -> bool {
+            if (v.empty())
+                return false;
+            if (!predicate(v.front()))
+                return false;
+            v.pop_front();
+            return true;
+        };
+    }
+
+    
+
+    
+    // the usual unicode confusion about what actually constitutes a character
+    // applies; this is an exact match with whatever the view yields, which
+    // may be a char32_t code point or merely char8_t byte
+    constexpr auto match_character(auto character) {
         return [character](auto& v) -> bool {
             if (v.empty())
                 return false;
@@ -153,7 +233,7 @@ namespace wry {
         };
     }
     
-    inline constexpr auto match_letter(auto character) {
+    constexpr auto match_character_case_insensitive(auto character) {
         assert(isuchar(character));
         return [character=tolower(character)](auto& v) -> bool {
             if (v.empty())
@@ -168,14 +248,11 @@ namespace wry {
     }
     
     inline constexpr auto match_string(auto zstr) {
-        // todo: use the argument types to decide between upgrading a const
-        // char8_t* to a utf8::iterator when v is character oriented, and leaving
-        // it as a pointer when v is byte oriented
         return [zstr](auto& v) -> bool {
             auto u(v);
             auto a(zstr);
             for (;;) {
-                char32_t cha = *a;
+                auto cha = *a;
                 if (!cha) {
                     v.reset(u);
                     return true;
@@ -190,6 +267,8 @@ namespace wry {
         };
     }
 
+    // match a single character from the string
+    // match_from("abc") == match_or(match_character('a'), ...)
     inline constexpr auto match_from(auto zstr) {
         assert(zstr);
         return [zstr](auto& v) -> bool {
@@ -210,7 +289,8 @@ namespace wry {
         };
     }
     
-    inline constexpr auto match_not_from(auto zstr) {
+    // ill-posed
+    constexpr auto match_not_from(auto zstr) {
         assert(zstr);
         return [zstr](auto& v) -> bool {
             if (v.empty())
@@ -226,18 +306,10 @@ namespace wry {
         };
     }
     
+        
+    // character classes
     
-    inline constexpr auto match_predicate(auto&& predicate) {
-        return [predicate=std::forward<decltype(predicate)>(predicate)](auto& v) -> bool {
-            if (v.empty())
-                return false;
-            if (!predicate(v.front()))
-                return false;
-            v.pop_front();
-            return true;
-        };
-    }
-    
+    // (is this redundant with match_predicate?)
     inline constexpr auto match_cctype(int (*predicate)(int)) {
         return [predicate](auto& v) -> bool {
             if (v.empty())
@@ -249,23 +321,13 @@ namespace wry {
             return true;
         };
     }
-    
-    // character classes
         
     inline constexpr auto match_alnum() {
         return match_cctype(&isalnum);
     }
-
-    inline constexpr auto match_alnum_() {
-        return match_cctype(&isalnum_);
-    }
     
     inline constexpr auto match_alpha() {
         return match_cctype(&isalpha);
-    }
-
-    inline constexpr auto match_alpha_() {
-        return match_cctype(&isalpha_);
     }
 
     inline constexpr auto match_ascii() {
@@ -308,22 +370,39 @@ namespace wry {
         return match_cctype(&isxdigit);
     }
     
+    // extended character classes
+    
+    inline constexpr auto match_alnum_() {
+        return match_cctype(&isalnum_);
+    }
+    
+    inline constexpr auto match_alpha_() {
+        return match_cctype(&isalpha_);
+    }
+
     inline constexpr auto match_nonzero_digit() {
         return match_predicate([](auto character) {
-            return isuchar(character) && isdigit(character) && (character != '0');
+            return isuchar(character) && isdigit(character) && (character != u8'0');
         });
     }
+
+    inline constexpr auto match_hspace() {
+        return match_predicate([](auto character) {
+            return (character == u8' ') || (character == u8'\t');
+        });
+    }
+
     
     // multicharacter matchers
         
-    inline constexpr auto match_blanks() {
-        return match_star(match_space());
-    }
-
     inline constexpr auto match_spaces() {
         return match_star(match_space());
     }
-    
+
+    inline constexpr auto match_hspaces() {
+        return match_star(match_hspace());
+    }
+
     inline constexpr auto match_graphs() {
         return match_plus(match_graph());
     }
@@ -366,7 +445,7 @@ namespace wry {
     }
     
     inline constexpr auto match_exponent() {
-        return match_and(match_letter('e'),
+        return match_and(match_from(u8"eE"),
                          match_optional(match_sign()),
                          match_digits());
     }
@@ -379,10 +458,10 @@ namespace wry {
     
     // match a string literal of the fom "\""
     inline constexpr auto match_quotation() {
-        return match_and(match_character('"'),
-                         match_until(match_or(match_string("\\\""),
+        return match_and(match_character(u8'"'),
+                         match_until(match_or(match_string(u8"\\\""),
                                               match_not_empty()),
-                                     match_character('"')));
+                                     match_character(u8'"')));
     }
     
     // match a (posix compliant) filename
