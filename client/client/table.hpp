@@ -752,7 +752,8 @@ namespace wry {
     
     
     
-    
+    template<typename T, typename Key>
+    using Table = table<T, Key>;
     
     
     

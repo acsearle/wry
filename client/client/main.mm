@@ -15,7 +15,7 @@ int main(int argc, const char** argv) {
     
     // execute unit tests on a background queue
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
-        //wry::run_tests();
+        wry::run_tests();
     });
     
     // create UIKit application

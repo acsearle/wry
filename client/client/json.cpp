@@ -34,14 +34,14 @@ namespace wry {
         virtual string_view as_string() const  { unimplemented(); }
         virtual double as_number() const  { unimplemented(); }
         virtual bool as_bool() const { unimplemented(); }
-        virtual table<string, json> const& as_object() const { unimplemented(); }
+        virtual table<String, json> const& as_object() const { unimplemented(); }
         virtual array<json> const& as_array() const { unimplemented(); }
         virtual bool is_string() const { unimplemented(); }
         virtual bool is_number() const { unimplemented(); }
         virtual bool is_array() const { unimplemented(); }
         virtual bool is_object() const { unimplemented(); }
         static _json_value* from(string_view&);
-        virtual string debug() const = 0;
+        virtual String debug() const = 0;
         virtual _json_value* clone() const = 0;
         
     }; // _json_value
@@ -66,7 +66,7 @@ namespace wry {
     
     string_view json::as_string() const { return _ptr->as_string(); }
     double json::as_number() const { return _ptr->as_number(); }
-    table<string, json> const& json::as_object() const { return _ptr->as_object(); }
+    table<String, json> const& json::as_object() const { return _ptr->as_object(); }
     array<json> const& json::as_array() const { return _ptr->as_array(); }
     bool json::as_bool() const { return _ptr->as_bool(); }
 

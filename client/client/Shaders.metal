@@ -74,7 +74,7 @@ float3 sample_Trowbridge_Reitz(float2 chi, float alpha2) {
 // Associated with microfacet self-shadowing on rough surfaces and glancing
 // rays; tends to darken edges
 
-//:todo: we can inline these better and eliminate some duplication
+//TODO: we can inline these better and eliminate some duplication
 float geometry_Schlick(float NdotV, float k) {
     return NdotV / (NdotV * (1.0f - k) + k);
 }
@@ -109,14 +109,15 @@ float3 Fresnel_Schlick_roughness(float cosTheta, float3 F0, float roughness) {
 
 // "Split sum" approximation lookup table
 
-// todo: make this a kernel operation
-[[vertex]] float4 split_sum_vertex_function(ushort i [[vertex_id]],
-                                            const device float4* vertices [[buffer(AAPLBufferIndexVertices)]])
-{
+//TODO: make this a kernel operation
+[[vertex]] float4
+split_sum_vertex_function(ushort i [[vertex_id]],
+                          const device float4* vertices [[buffer(AAPLBufferIndexVertices)]]) {
     return vertices[i];
 }
 
-[[fragment]] float4 split_sum_fragment_function(float4 position [[position]]) {
+[[fragment]] float4 
+split_sum_fragment_function(float4 position [[position]]) {
     
     float cosTheta = position.x / 256.0f;
     float roughness = position.y / 256.0f;
@@ -169,6 +170,10 @@ namespace deferred {
     //
     //     [4] https://developer.apple.com/documentation/metal/metal_sample_code_library/
     //         rendering_a_scene_with_forward_plus_lighting_using_tile_shaders?language=objc
+    //
+    // In this technique, the g-buffers for many parameters don't actually need
+    // to be stored and loaded; instead the pipeline is transposed to do
+    // all work on small imageblocks and the whole g-buffer is never materialized
     
     
     struct VertexFunctionOutput {
@@ -180,10 +185,14 @@ namespace deferred {
     };
     
     struct FragmentFunctionOutput {
-        half4 light [[color(AAPLColorIndexColor), raster_order_group(AAPLRasterOrderGroupLighting)]];
-        half4 albedo_metallic [[color(AAPLColorIndexAlbedoMetallic), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
-        half4 normal_roughness [[color(AAPLColorIndexNormalRoughness), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
-        float depth [[color(AAPLColorIndexDepth), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        half4 light [[color(AAPLColorIndexColor), 
+                      raster_order_group(AAPLRasterOrderGroupLighting)]];
+        half4 albedo_metallic [[color(AAPLColorIndexAlbedoMetallic), 
+                                raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        half4 normal_roughness [[color(AAPLColorIndexNormalRoughness), 
+                                 raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        float depth [[color(AAPLColorIndexDepth), 
+                      raster_order_group(AAPLRasterOrderGroupGBuffer)]];
     };
     
     
@@ -210,6 +219,12 @@ namespace deferred {
         
         return out;
     }
+    
+    //TODO: replace with an object function and a mesh function?
+    // the object function will run once per instance
+    // the instance will contain the vertex range for the submesh
+    // the object function will spawn the appropriate number of mesh functions
+    // the mesh functions will emit triangles
     
     [[fragment]] FragmentFunctionOutput
     fragment_function(VertexFunctionOutput in [[stage_in]],

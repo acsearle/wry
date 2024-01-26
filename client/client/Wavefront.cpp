@@ -58,7 +58,8 @@ namespace wry::Wavefront {
         
     auto parse_comment() {
         return match_and(match_character('#'),
-                         match_until(match_not_empty(),
+                         match_until(match_or(match_print(),
+                                              match_hspace()),
                                      match_newline()));
     }
     
@@ -129,9 +130,9 @@ namespace wry::Wavefront {
 
         };
         
-        std::map<string, Material> named_materials;
+        std::map<String, Material> named_materials;
         
-        string current_name;
+        String current_name;
         // string _current_key;
         // std::map<string, string> _current_map;
         Material current_material;
@@ -147,7 +148,7 @@ namespace wry::Wavefront {
         auto parse_newmtl() {
             return match_and(match_string("newmtl"),
                              match_spaces(),
-                             parse(match_graphs(),
+                             parse(match_posix_portable_filename(),
                                    [this](string_view match) {
                 commit();
                 this->current_name = match;
@@ -170,16 +171,26 @@ namespace wry::Wavefront {
          */
                 
 #define PARSE_XYZ(X)\
-match_and(match_string(#X),match_hspace(),\
-parse_xyz((double*) &this->current_material. X ))
+match_and(match_string(#X),\
+          match_plus(match_hspace()),\
+          parse_xyz((double*) &this->current_material. X ))
 
 #define PARSE_FILENAME(X)\
-match_and(match_string(#X),match_hspace(),\
-parse_line([this](string_view match) { this->current_material. X  = match; }))
+match_and(match_string(#X),\
+          match_plus(match_hspace()),\
+          match_optional(match_and(match_string("-bm"),\
+                                   match_plus(match_hspace()),\
+                                   match_number(),\
+                                   match_plus(match_hspace()))),\
+          parse(match_posix_portable_filename(),\
+                [this](string_view match) {\
+    this->current_material. X  = match;\
+}))
 
 #define PARSE_NUMBER(X)\
 match_and(match_string(#X),\
-parse_number_relaxed(this->current_material. X ))
+          match_plus(match_hspace()),\
+          parse_number_relaxed(this->current_material. X ))
 
         
         void parse_mtl(string_view& v) {
@@ -321,14 +332,14 @@ parse_number_relaxed(this->current_material. X ))
             // TODO: What level is material changed at; is it always at a
             // group boundary?
             MTLFile::Material usemtl;
-            std::map<string, SmoothingGroup> smoothing_groups;
+            std::map<String, SmoothingGroup> smoothing_groups;
         };
         
         struct Object {
-            std::map<string, Group> named_groups;
+            std::map<String, Group> named_groups;
         };
         
-        std::map<string, Object> named_objects;
+        std::map<String, Object> named_objects;
         
         void commit() {
             auto& a = named_objects[_current_object_name];
@@ -427,10 +438,10 @@ parse_number_relaxed(this->current_material. X ))
         
         auto parse_smoothing_group() {
             return [this](string_view& v) {
-                string value;
+                String value;
                 bool flag = match_and(match_character('s'),
                                       match_plus(match_space()),
-                                      parse(match_plus(match_graph()),
+                                      parse(match_plus(match_posix_portable_filename()),
                                             [&value](string_view match) {
                     value = match;
                 }))(v);
@@ -444,8 +455,8 @@ parse_number_relaxed(this->current_material. X ))
         
         auto parse_mtllib() {
             return match_and(match_string("mtllib"),
-                             match_spaces(),
-                             parse(match_filename(),
+                             match_plus(match_hspace()),
+                             parse(match_posix_portable_path(),
                                    [this](string_view match) {
                 std::filesystem::path name = wry::path_for_resource(match);
                 auto s = string_from_file(name);
@@ -467,7 +478,7 @@ parse_number_relaxed(this->current_material. X ))
         
         auto parse_usemtl() {
             return match_and(match_string("usemtl"),
-                             match_hspace(),
+                             match_plus(match_hspace()),
                              parse_line([this](string_view match) {
                 printf("parse_line \"%.*s\"\n", (int) match.chars.size(), (const char*) match.chars.data());
                 commit();
@@ -483,8 +494,8 @@ parse_number_relaxed(this->current_material. X ))
         
         auto parse_group() {
             return match_and(match_character('g'),
-                             match_spaces(),
-                             parse(match_graphs(),
+                             match_plus(match_hspace()),
+                             parse(match_posix_portable_filename(),
                                    [this](string_view match) {
                 commit();
                 this->_current_group_name = match;
@@ -493,8 +504,8 @@ parse_number_relaxed(this->current_material. X ))
         
         auto parse_object() {
             return match_and(match_character('o'),
-                             match_spaces(),
-                             parse(match_graphs(),
+                             match_plus(match_hspace()),
+                             parse(match_posix_portable_filename(),
                                    [this](string_view match) {
                 commit();
                 this->_current_object_name = match;
@@ -567,7 +578,7 @@ parse_number_relaxed(this->current_material. X ))
 namespace wry {
     
     wry::mesh::mesh from_obj(const std::filesystem::path& v) {
-        string s = string_from_file(v);
+        String s = string_from_file(v);
         string_view u(s);
         Wavefront::OBJFile o;
         o.parse_obj(u);

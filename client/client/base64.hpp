@@ -24,9 +24,9 @@ namespace wry {
         
         inline constexpr char8_t to_base64_table[65] =
         u8"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "abcdefghijklmnopqrstuvwxyz"
-        "0123456789"
-        "+/"
+        u8"abcdefghijklmnopqrstuvwxyz"
+        u8"0123456789"
+        u8"+/"
         ;
         
         // from RFC4648 and minor variants

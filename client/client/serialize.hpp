@@ -28,7 +28,7 @@ namespace wry {
     
     WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
     WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES
-    X(string)
+    X(String)
 #undef X
 
     // Serialize sequences

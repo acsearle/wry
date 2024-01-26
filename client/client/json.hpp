@@ -62,8 +62,6 @@ namespace wry {
         }
         
         // std::from_chars is appropriate for JSON numbers
-        //
-        // When deserializing to any, we could
         
         // JSON strings are the most interesting part of the format.  We only
         // need to support UTF-8-encoded JSON, but we must still validate the
@@ -111,7 +109,7 @@ namespace wry {
             return true;
         }
         
-        inline auto parse_json_string(string& x) {
+        inline auto parse_json_string(String& x) {
             return [&x](array_view<const char8_t>& v) -> bool {
                 auto u(v);
                 if (u.empty())
@@ -243,23 +241,23 @@ namespace wry {
                 std::monostate,
                 bool,
                 float64_t,
-                string,
+                String,
                 array<Value>,
-                table<string, Value>
+                table<String, Value>
             > inner;
 
             bool is_null() const { return std::holds_alternative<std::monostate>(inner); }
             bool is_boolean() const { return std::holds_alternative<bool>(inner); }
             bool is_number() const { return std::holds_alternative<float64_t>(inner); }
-            bool is_string() const { return std::holds_alternative<string>(inner); }
+            bool is_string() const { return std::holds_alternative<String>(inner); }
             bool is_array() const { return std::holds_alternative<array<Value>>(inner); }
-            bool is_object() const { return std::holds_alternative<table<string, Value>>(inner); }
+            bool is_object() const { return std::holds_alternative<table<String, Value>>(inner); }
 
             bool& as_boolean() & { return std::get<bool>(inner); }
             float64_t as_number() & { return std::get<float64_t>(inner); }
-            string& as_string() & { return std::get<string>(inner); }
+            String& as_string() & { return std::get<String>(inner); }
             array<Value>& as_array() & { return std::get<array<Value>>(inner); }
-            table<string, Value>& as_object() & { return std::get<table<string, Value>>(inner); }
+            table<String, Value>& as_object() & { return std::get<table<String, Value>>(inner); }
             
             operator float64_t() const {
                 return std::get<float64_t>(inner);
@@ -274,8 +272,8 @@ namespace wry {
                 return (size_t) n;
             }
             
-            operator const string&() {
-                return std::get<string>(inner);
+            operator const String&() {
+                return std::get<String>(inner);
             }
                         
         };
@@ -351,13 +349,13 @@ namespace wry {
             }
 
             template<typename E>
-            Value visit_string(string x) {
+            Value visit_string(String x) {
                 return Value{{std::move(x)}};
             }
 
             template<typename E>
             Value visit_string_view(string_view x) {
-                return Value{{string(x)}};
+                return Value{{String(x)}};
             }
 
             template<typename A>
@@ -376,9 +374,9 @@ namespace wry {
             
             template<typename A>
             Value visit_map(A&& accessor) {
-                table<string, Value> z;
+                table<String, Value> z;
                 for (;;) {
-                    Option<std::pair<string, Value>> x(accessor.template next_entry<string, Value>());
+                    Option<std::pair<String, Value>> x(accessor.template next_entry<String, Value>());
                     if (x.is_some()) {
                         auto [at, flag] = z.insert(std::move(x).unwrap());
                         if (!flag)
@@ -410,7 +408,7 @@ namespace wry {
         
         struct serializer {
             
-            string s;
+            String s;
             
             void serialize_bool(bool x) {
                 s.append(x ? u8"true" : u8"false");
@@ -587,7 +585,7 @@ namespace wry {
                 if (float64_t x = {}; parse_number(x)(v))
                     return std::forward<V>(visitor).visit_float64_t(x);
                     
-                if (string x; parse_json_string(x)(v.chars))
+                if (String x; parse_json_string(x)(v.chars))
                     return std::forward<V>(visitor).visit_string(x);
                     
                 if (match_json_array_begin()(v))
@@ -623,7 +621,7 @@ namespace wry {
             template<typename V>
             typename std::decay_t<V>::Value deserialize_string(V&& visitor) {
                 match_json_whitespace()(v);
-                string x;
+                String x;
                 if (!parse_json_string(x)(v.chars))
                     throw ERANGE;
                 return std::forward<V>(visitor).visit_string(x);
@@ -638,18 +636,440 @@ namespace wry {
 
         };
         
-        template<typename T> T from_string(string s) {
+        template<typename T> T from_string(String s) {
             string_view v = s;
             return wry::deserialize<T>(deserializer{v});
         }
         
         template<typename T> T from_file(const std::filesystem::path& name) {
-            string s = string_from_file(name);
+            String s = string_from_file(name);
             string_view v = s;
             return wry::deserialize<T>(deserializer{v});
         }
         
     } // namespace json
+    
+} // namespace wry
+
+namespace wry {
+    
+    namespace jsonx {
+        
+        /*
+        void parse(const char* first, const char* last) {
+            
+            enum discriminant { ARRAY, OBJECT };
+            
+            std::vector<int> stack;
+            std::String string;
+            
+            char ch;
+            
+            std::uintptr_t mantissa;
+            bool mantissa_is_negative;
+            std::uintptr_t exponent;
+            bool exponent_is_negative;
+                                        
+        expect_value:
+            
+            if (first == last)
+                return;
+            ch = *first;
+            ++first;
+            
+            switch (ch) {
+                    
+                case '\t': // 0x09  TAB  horizontal tab
+                case '\n': // 0x0A  LF   line feed, new line
+                case '\r': // 0x0D  CR   carriage return
+                case ' ' : // 0x20       space
+                    goto expect_value;
+                    
+                case '\"':
+                    goto start_string;
+                    
+                case '-' :
+                    mantissa_is_negative = true;
+                    goto expect_number_mantissa;
+                case '0' :
+                    mantissa_is_negative = false;
+                    mantissa = 0;
+                    goto expect_number_decimal_point;
+                case '1' :
+                case '2' :
+                case '3' :
+                case '4' :
+                case '5' :
+                case '6' :
+                case '7' :
+                case '8' :
+                case '9' :
+                    mantissa_is_negative = false;
+                    mantissa = ch - '0';
+                    goto expect_number_mantissa_digit;
+                    
+                case '[' :
+                    goto start_array;
+                
+                case '{' :
+                    goto start_object;
+                    
+                default:
+                    return;
+                    
+            }
+            
+        start_string:
+        continue_string:
+            
+            if (first == last)
+                return;
+            ch = *first;
+            ++first;
+            switch (first) {
+                case '\"':
+                    goto finalize_string;
+                case '\\':
+                    goto expect_string_escape;
+                default:
+                    string.push_back(ch);
+                    goto continue_string;
+            }
+            
+        expect_string_escape:
+            
+            if (first == last)
+                return;
+            ch = *first;
+            ++first;
+            switch (first) {
+                case '\"':
+                case '\\':
+                case '/' :
+                    string.push_back(ch);
+                    goto continue_string;
+                case 'b' :
+                    string.push_back('\b');
+                    goto continue_string;
+                case 'f' :
+                    string.push_back('\f');
+                    goto continue_string;
+                case 'n' :
+                    string.push_back('\n');
+                    goto continue_string;
+                case 'r' :
+                    string.push_back('\r');
+                    goto continue_string;
+                case 't' :
+                    string.push_back('\b');
+                    goto continue_string;
+                case 'u' :
+                    goto expect_string_four_hex_digits;
+            }
+            
+        expect_string_four_hex_digits:
+            mantissa = 0;
+            for (int i = 0; i != 4; ++i) {
+                mantissa <<= 4;;
+                if (first == last)
+                    return;
+                ch = *first;
+                ++first;
+                if (ch < '0') {
+                    return;
+                }
+                if (ch <= '9') {
+                    mantissa += (ch - '0');
+                    continue;
+                }
+                if (ch < 'A') {
+                    return;
+                }
+                if (ch <= 'F') {
+                    mantissa += (ch - ('A' - 10));
+                    continue;
+                }
+                if (ch < 'a') {
+                    return;
+                }
+                if (ch <= 'f') {
+                    mantissa += (ch - ('a' - 10));
+                }
+            }
+            // This is a UTF-16 code point that must be converted to UTF8 for
+            // storage
+            assert(false);
+            goto expect_string_body;
+            
+        finalize_string:
+            // do something with string
+            if (stack.empty())
+                return;
+            switch (stack.back()) {
+                case ARRAY:
+                    goto expect_array_comma;
+                case OBJECT:
+                    goto expect_object_comma;
+            }
+            
+        
+        expect_number_mantissa:
+            
+            if (first == last)
+                return;
+            ch = *first;
+            ++ch;
+            
+            switch (ch) {
+                case '0' :
+                    mantissa = 0;
+                    goto expect_number_decimal_point;
+                case '1' :
+                case '2' :
+                case '3' :
+                case '4' :
+                case '5' :
+                case '6' :
+                case '7' :
+                case '8' :
+                case '9' :
+                    mantissa = ch - '0';
+                    goto expect_number_mantissa_digit;
+                default:
+                    return;
+            }
+            
+        expect_number_mantissa_digit:
+            
+            if (first == last)
+                goto finalize_number;
+            ch = first;
+            ++first;
+            
+            switch (ch) {
+                case '.':
+                    exponent = 0;
+                    goto expect_number_mantissa_fractional_digit;
+                case '0' :
+                case '1' :
+                case '2' :
+                case '3' :
+                case '4' :
+                case '5' :
+                case '6' :
+                case '7' :
+                case '8' :
+                case '9' :
+                    mantissa *= 10;
+                    mantissa += ch - '0';
+                    goto expect_number_mantissa_digit;
+                default:
+                    goto finalize_number;
+            }
+            
+        start_number_decimal_point:
+            
+            if (ch == '.') {
+                goto expect_number_fractional_digit;
+            }
+            
+        
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+        
+
+            
+            
+            
+        }
+        */
+        
+       
+        /*
+        bool validate(const char* first, const char* last) {
+            
+            enum discriminant { ARRAY, OBJECT, KEY }
+            
+            std::vector<discriminant> stack;
+            
+            char ch;
+            std::string string;
+            bool mantissa_is_negative =  false;
+            std::uint64_t mantissa = 0;
+            
+        start_value:
+            
+            if (first == last)
+                return false;
+            ch = *first;
+            ++first;
+            
+            switch (ch) {
+                    
+                case '\t':
+                case '\n':
+                case '\r':
+                case ' ' :
+                    goto start_value;
+                    
+                case '\"':
+                    goto start_string;
+                    
+                case '-' :
+                case '0' :
+                case '1' :
+                case '2' :
+                case '3' :
+                case '4' :
+                case '5' :
+                case '6' :
+                case '7' :
+                case '8' :
+                case '9' :
+                    goto start_number;
+                    
+                case '[' :
+                    goto start_array;
+                    
+                case '{' :
+                    goto start_object;
+                    
+                default:
+                    return;
+            }
+            
+        end_value:
+            
+            
+            
+        start_string:
+            
+            string.clear();
+            
+        continue_string:
+            
+            if (first == last)
+                return false;
+            ch = *first;
+            ++first;
+            
+            switch (ch) {
+                case '\"':
+                    goto end_string;
+                case '\\':
+                    goto string_escape;
+                default:
+                    string.push_back(ch);
+                    goto continue_string;
+            }
+
+        string_escape:
+            assert(false);
+            
+        end_string:
+            goto end_value;
+            
+        start_number:
+            
+            if (mantissa_is_negative = (ch == '-')) {
+                if (first == last)
+                    return false;
+                ch = *first;
+                ++first;
+            }
+            
+            if (ch == '0') {
+                mantissa = 0;
+                goto expect_fraction;
+            }
+            
+            if (isdigit(ch)) {
+                mantissa = ch - '0';
+                goto continue_mantissa;
+            }
+            
+            return false;
+            
+        continue_mantissa:
+            
+            if (first == last)
+                return false;
+            ch = *first;
+            ++first;
+            
+            if (isdigit(ch)) {
+                mantissa *= 10;
+                mantissa += ch - '0';
+                goto continue_mantissa;
+            }
+            
+        
+            
+            
+            
+        
+            
+            
+            
+            
+            
+            
+            
+            
+            
+        };
+        */
+        
+        // table
+        
+        // 1: control character
+        // 2: whitespace
+        // 4: digit
+        // 8: hexdigit
+        // 16: postescape
+        /*
+        constexpr char C = 4 | 8;
+        
+        char classify[256] = {
+            
+            1,1,1,1, 1,1,1,1, 1,2,2,1, 1,2,1,1,
+            1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,
+            2,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+            C,C,C,C, C,C,C,C, C,C,0,0, 0,0,0,0,
+
+            0,8,8,8, 8,8,8,0, 0,0,0,0, 0,0,0,0,
+            0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+            0,8,8,8, 8,8,8,0, 0,0,0,0, 0,0,0,0,
+            0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,1,
+
+            0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+            0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+            0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+            0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+
+            0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+            0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+            0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+            0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,
+
+        };
+        */
+        
+        //struct Value {
+        //    std::variant<std::vector<Value>, std::unordered_map<std::string, Value>> derp;
+        //};
+        
+    } // namespace jsonx
+    
+    
     
 } // namespace wry
 

@@ -5,8 +5,6 @@
 //  Created by Antony Searle on 26/6/2023.
 //
 
-
-
 #ifndef string_hpp
 #define string_hpp
 
@@ -16,13 +14,25 @@
 
 namespace wry {
     
-    // A string presents a UTF-8 array<char8_t> as a sequence of UTF-32 scalars
+    // <cstring>
+    
+    // two-way compares two null-terminated byte strings lexicographically
+    
+    inline bool strlt(const char* s1, const char* s2) {
+        for (; *s1 && (*s1 == *s2); ++s1, ++s2)
+            ;
+        return ((unsigned char) *s1) < ((unsigned char) *s2);
+    }
+
+    // <string>
+    
+    // A String presents a UTF-8 array<char8_t> as a sequence of UTF-32 scalars
     //
     // String, string_view, array<char8_t> and array_view<char8_t> all maintain
     // valid UTF-8 strings.
     //
-    // std::string::c_str is not worth the complication it induces; we make a
-    // copy where we are forced to deal with a zero-terminated string API such
+    // std::string::c_str() is not worth the complication it induces; we make a
+    // copy where we are forced to deal with a zero-terminated String API such
     // as libpng, rather than maintaining a one-past-the end zero character.
     //
     // We are forced to consume zero-terminated strings in the form of string
@@ -31,13 +41,13 @@ namespace wry {
     // Practically speaking, we can probably just blanket ban zeros from
     // appearing in the strings
     
-    struct string;
+    struct String;
     
-    using String = string;
+    template<> struct rank<String> : std::integral_constant<std::size_t, 1> {};
     
-    template<> struct rank<string> : std::integral_constant<std::size_t, 1> {};
-            
-    struct string {
+    
+    
+    struct String {
                 
         array<char8_t> chars;
         
@@ -45,28 +55,28 @@ namespace wry {
         using iterator = const_iterator;
         using value_type = char32_t;
                 
-        string() = default;
-        string(const string& other) = default;
-        string(string&&) = default;
-        ~string() = default;
-        string& operator=(const string& other) = default;
-        string& operator=(string&&) = default;
+        String() = default;
+        String(const String& other) = default;
+        String(String&&) = default;
+        ~String() = default;
+        String& operator=(const String& other) = default;
+        String& operator=(String&&) = default;
 
-        explicit string(string_view other)
+        explicit String(string_view other)
         : chars(other.chars) {
         }
         
-        string& operator=(string_view other) {
+        String& operator=(string_view other) {
             chars = other;
             return *this;
         }
         
-        explicit string(const_iterator a, const_iterator b) {
+        explicit String(const_iterator a, const_iterator b) {
             chars.reserve(b.base - a.base + 1);
             chars.assign(a.base, b.base);
         }
         
-        explicit string(array<char8_t>&& bytes) 
+        explicit String(array<char8_t>&& bytes) 
         : chars(std::move(bytes)) {
         }
         
@@ -218,7 +228,7 @@ namespace wry {
         }
         
         
-         bool operator==(const string& other) const {
+         bool operator==(const String& other) const {
              return std::equal(begin(), end(), other.begin(), other.end());
          }
 
@@ -226,28 +236,28 @@ namespace wry {
             return std::equal(begin(), end(), other.begin(), other.end());
         }
         
-        auto operator<=>(const string& other) const {
+        auto operator<=>(const String& other) const {
             return wry::lexicographical_compare_three_way(begin(), end(), other.begin(), other.end());
         }
 
     };
     
-    inline uint64_t hash(const string& x) {
+    inline uint64_t hash(const String& x) {
         return hash_combine(x.chars.data(), x.chars.size());
     }
     
-    inline std::ostream& operator<<(std::ostream& a, string const& b) {
+    inline std::ostream& operator<<(std::ostream& a, String const& b) {
         a.write((char const*) b.chars.begin(), b.chars.size());
         return a;
     }
         
     struct immutable_string {
         
-        // When a string is used as a hash table key, it is important to
+        // When a String is used as a hash table key, it is important to
         // keep the inline size small.  It will only be accessed for strcmp
         // to check hash collisions, and never mutated.  We can dispense
         // with _data and _capacity, place _end at the beginning of the
-        // allocation, place the string after it, and infer _begin from
+        // allocation, place the String after it, and infer _begin from
         // the allocation.
         
         // This is the simplest of several ways we can lay out the data, allowing

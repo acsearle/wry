@@ -13,13 +13,13 @@
 //#pragma clang diagnostic pop
 
 #include <iostream>
-#include <string>
 
 #include "assert.hpp"
 #include "debug.hpp"
 #include "font.hpp"
 #include "image.hpp"
 #include "utility.hpp"
+#include "string.hpp"
 #include "platform.hpp"
 
 namespace wry {

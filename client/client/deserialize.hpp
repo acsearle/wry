@@ -45,7 +45,7 @@ namespace wry {
         WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
         WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES
 
-        X(string)
+        X(String)
         
 #undef X
 
@@ -88,16 +88,16 @@ namespace wry {
         return std::forward<D>(deserializer).deserialize_string(visitor_bool{});
     }
     
-    struct visitor_string : basic_visitor<string> {
-        using Value = string;
-        Value visit_string(string s) const {
+    struct visitor_string : basic_visitor<String> {
+        using Value = String;
+        Value visit_string(String s) const {
             return s;
         }
         
     };
     
     template<typename D>
-    string deserialize(std::in_place_type_t<string>, D&& deserializer) {
+    String deserialize(std::in_place_type_t<String>, D&& deserializer) {
         return std::forward<D>(deserializer).deserialize_string(visitor_string{});
     }
         

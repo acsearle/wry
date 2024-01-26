@@ -593,14 +593,14 @@
                     
         {
             
-            table<wry::string, i64> _name_to_opcode;
-            table<i64, wry::string> _opcode_to_name;
+            table<wry::String, i64> _name_to_opcode;
+            table<i64, wry::String> _opcode_to_name;
 
             /*
             try {
-                auto x = json::from_file<array<string>>("/Users/antony/Desktop/assets/opcodes.json");
+                auto x = json::from_file<array<String>>("/Users/antony/Desktop/assets/opcodes.json");
                 ulong i = 0;
-                for (const string& y : x)
+                for (const String& y : x)
                     _name_to_opcode[y] = i++;
                 
                 json::serializer s;
@@ -618,11 +618,11 @@
             
                 
             try {
-                auto x = json::from_file<array<array<string>>>("/Users/antony/Desktop/assets/assets.json");
+                auto x = json::from_file<array<array<String>>>("/Users/antony/Desktop/assets/assets.json");
                 ulong i = 0;
-                for (const array<string>& y : x) {
+                for (const array<String>& y : x) {
                     ulong j = 0;
-                    for (const string& z : y) {
+                    for (const String& z : y) {
                         printf("%.*s\n", (int) z.chars.size(), (const char*) z.chars.data());
                         simd_float4 coordinate = make<float4>(j / 32.0f, i / 32.0f, 0.0f, 1.0f);
                         auto p = _name_to_opcode.find(z);

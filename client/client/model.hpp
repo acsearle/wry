@@ -44,8 +44,8 @@ namespace wry {
         
         // debug state
         
-        array<string> _console;
-        std::multimap<std::chrono::steady_clock::time_point, string> _logs;
+        array<String> _console;
+        std::multimap<std::chrono::steady_clock::time_point, String> _logs;
         
         bool _console_active = false;        
         bool _show_jacobian = false;
@@ -63,7 +63,7 @@ namespace wry {
         float2 _mouse = {};
         simd_float4 _mouse4 = {};
         
-        string _outstanding_keysdown;
+        String _outstanding_keysdown;
         
         // visualization state
         

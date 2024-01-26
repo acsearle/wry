@@ -129,25 +129,6 @@ namespace wry {
     // Negation can't really happen without an alternative, and when we advance
     // due to not-match, we are implicitly proposing match_any_char
 
-    // never match anything (nor nothing aka empty)
-    inline constexpr auto match_false() {
-        return [](auto& v) -> bool {
-            return false;
-        };
-    }
-    
-    // always match anything (including nothing aka empty), and advance if
-    // possible (aka if not empty)
-    // ill-posed; advance by one privileges char
-    // match_any_character_or_EOF?
-    inline constexpr auto match_true() {
-        return [](auto& v) -> bool {
-            if (!v.empty())
-                v.pop_front();
-            return true;
-        };
-    }
-
     // match EOF/empty/end of view; never advances
     // Use case: some constructs can be terminated by a newline or end of file
     inline constexpr auto match_empty() {
@@ -247,6 +228,10 @@ namespace wry {
         };
     }
     
+    // exact match a zero-terminated string, usually a literal
+    //
+    // note that this is not a whole world search, and will happily match "cat"
+    // when it is the just prefix of the larger word "cathederal"
     inline constexpr auto match_string(auto zstr) {
         return [zstr](auto& v) -> bool {
             auto u(v);
@@ -307,9 +292,9 @@ namespace wry {
     }
     
         
-    // character classes
+    // match one character that is drawn from a character class defined by
+    // a predicate function
     
-    // (is this redundant with match_predicate?)
     inline constexpr auto match_cctype(int (*predicate)(int)) {
         return [predicate](auto& v) -> bool {
             if (v.empty())
@@ -321,6 +306,8 @@ namespace wry {
             return true;
         };
     }
+    
+    // from <cctype>
         
     inline constexpr auto match_alnum() {
         return match_cctype(&isalnum);
@@ -382,7 +369,7 @@ namespace wry {
 
     inline constexpr auto match_nonzero_digit() {
         return match_predicate([](auto character) {
-            return isuchar(character) && isdigit(character) && (character != u8'0');
+            return (isuchar(character) && isdigit(character)) && (character != u8'0');
         });
     }
 
@@ -398,24 +385,11 @@ namespace wry {
     inline constexpr auto match_spaces() {
         return match_star(match_space());
     }
-
-    inline constexpr auto match_hspaces() {
-        return match_star(match_hspace());
-    }
-
-    inline constexpr auto match_graphs() {
-        return match_plus(match_graph());
-    }
     
     inline constexpr auto match_newline() {
         return match_and(match_optional(match_character('\r')),
                          match_character('\n'));
     }
-    
-    inline constexpr auto match_line() {
-        return match_until(match_not_empty(), match_newline());
-    }
-    
     
     // match an identifier of the form [A-Za-z_][A-Za-z0-9_]*
     
@@ -464,19 +438,20 @@ namespace wry {
                                      match_character(u8'"')));
     }
     
-    // match a (posix compliant) filename
-    inline constexpr auto match_filename() {
+    // match a POSIX portable filename
+    // A-Z, a-z, 0-9, '.' and '_' are permitted
+    // '-' is permitted
+    inline constexpr auto match_posix_portable_filename() {
         return match_and(match_or(match_alnum(),
                                   match_from("._")),
                          match_star(match_or(match_alnum(),
                                              match_from("-._"))));
     }
     
-    // match a path (crudely)
-    inline constexpr auto match_path() {
-        return match_until(match_not_empty(),
-                           match_or(match_space(),
-                                    match_empty()));
+    // match a POSIX portable path
+    inline constexpr auto match_posix_portable_path() {
+        return match_plus(match_or(match_posix_portable_filename(),
+                                   match_character(u8'/')));
     }
     
     

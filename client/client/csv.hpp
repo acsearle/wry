@@ -114,7 +114,7 @@ namespace wry::csv::de {
         array_view<const char8_t>& v;
         
         auto deserialize_string(auto&& visitor) {
-            string x{};
+            String x{};
             if (!parse_field(x.chars)(v) || !utf8::isvalid(x.chars))
                 throw EINVAL;            
             return std::forward<decltype(visitor)>(visitor).visit_string(std::move(x));

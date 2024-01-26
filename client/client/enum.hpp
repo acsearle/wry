@@ -21,7 +21,7 @@ namespace wry {
     
     auto enum_parse_definition(auto& x) {
         return [&x](auto& v) -> bool {
-            string identifier;
+            String identifier;
             int64_t value;
             if (match_and(match_spaces(),
                           parse_identifier(identifier),
@@ -39,10 +39,10 @@ namespace wry {
     }
     
     struct enum_parse_result {
-        string name;
-        string type;
-        string instance;
-        array<std::pair<string, int64_t>> values;
+        String name;
+        String type;
+        String instance;
+        array<std::pair<String, int64_t>> values;
     };
     
     auto enum_parse_declaration(enum_parse_result& x) {

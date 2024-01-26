@@ -61,3 +61,25 @@ Renderloop
 - Games can easily be forked local but not reconciled, though we could make an
   offline merge tool.
 
+
+
+
+
+  // Null, numbers, strings, arrays are obvious
+    //
+    // Stockpile of 3t haematite coarse 3t quartz fine
+    //
+    //
+    // Pallet of discrete items
+    // Shipping container of discrete items
+    //
+    // Barrel of liquid
+    //
+    // Pond of liquid
+    //
+    // Cylinder of gas
+    //
+    // Grind -> solid -> coarse -> fine
+    //
+    // Heat -> evaporate liquids, evaporate hydrates, reduce, pyrolosis
+    
