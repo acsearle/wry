@@ -33,7 +33,7 @@ namespace wry {
     // perceptually more distinguishable.  GPU makes it free.  Makes meddling
     // with the images hard though.
     
-    matrix<RGBA8Unorm_sRGB> from_png(string_view v) {
+    matrix<RGBA8Unorm_sRGB> from_png(StringView v) {
         png_image a;
         memset(&a, 0, sizeof(a));
         a.version = PNG_IMAGE_VERSION;
@@ -78,7 +78,7 @@ namespace wry {
             }
     }
     
-    void to_png(const matrix<RGBA8Unorm_sRGB>& source, string_view filename) {
+    void to_png(const matrix<RGBA8Unorm_sRGB>& source, StringView filename) {
         png_image a = {};
         a.format = PNG_FORMAT_RGBA;
         a.height = (png_uint_32) source.minor();

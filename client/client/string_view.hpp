@@ -20,15 +20,15 @@
 
 namespace wry {
     
-    // string_view presents an aray_view<const char8_t> as a UTF-32 sequence
+    // StringView presents an aray_view<const char8_t> as a UTF-32 sequence
     
-    struct string_view;
+    struct StringView;
     
-    using StringView = string_view;
+    template<> 
+    struct rank<StringView>
+    : std::integral_constant<std::size_t, 1> {};
     
-    template<> struct rank<string_view> : std::integral_constant<std::size_t, 1> {};
-    
-    struct string_view {
+    struct StringView {
         
         using const_iterator = utf8::iterator;
         using iterator = const_iterator;
@@ -40,64 +40,64 @@ namespace wry {
             return utf8::isvalid(chars);
         }
                 
-        string_view() : chars() {}
+        StringView() : chars() {}
         
-        string_view(const string_view&) = default;
-        string_view(string_view&&) = default;
+        StringView(const StringView&) = default;
+        StringView(StringView&&) = default;
         
-        ~string_view() = default;
+        ~StringView() = default;
 
         // views are reference-like, so assignment to const can't change the
         // data and won't change the pointers
         //
         // instead, use .reset(...) to swing the view
         
-        string_view& operator=(const string_view&) = delete;
-        string_view& operator=(string_view&&) = delete;
+        StringView& operator=(const StringView&) = delete;
+        StringView& operator=(StringView&&) = delete;
 
         template<size_type N>
-        string_view(const char8_t (&literal)[N])
-        : string_view(literal, N - 1) {
+        StringView(const char8_t (&literal)[N])
+        : StringView(literal, N - 1) {
             assert(_invariant());
         }
 
-        string_view(const char8_t* zstr)
+        StringView(const char8_t* zstr)
         : chars(zstr, zstr + ::std::strlen(reinterpret_cast<const char*>(zstr))) {
             assert(_invariant());
         }
         
-        string_view(const char8_t* p, size_type n)
+        StringView(const char8_t* p, size_type n)
         : chars(p, n) {
             assert(_invariant());
         }
         
-        string_view(const char8_t* first, const char8_t* last) 
+        StringView(const char8_t* first, const char8_t* last) 
         : chars(first, last) {
             assert(_invariant());
         }
         
-        string_view(const_iterator first, const_iterator last) 
+        StringView(const_iterator first, const_iterator last) 
         : chars(first.base, last.base) {
             assert(_invariant());
         }
         
     
         template<size_type N>
-        string_view(char (&literal)[N])
-        : string_view(reinterpret_cast<const char8_t*>(literal), N - 1) {
+        StringView(char (&literal)[N])
+        : StringView(reinterpret_cast<const char8_t*>(literal), N - 1) {
             assert(*chars._end == 0);
             if (!_invariant())
                 throw EINVAL;
         }
 
         // validating strlen
-        string_view(const char* p)
-        : string_view(reinterpret_cast<const char8_t*>(p),
+        StringView(const char* p)
+        : StringView(reinterpret_cast<const char8_t*>(p),
                       strlen(p)) { // <-- validating strlen?
             assert(_invariant());
         }
         
-        string_view(const char* p, size_type n)
+        StringView(const char* p, size_type n)
         : chars(reinterpret_cast<const char8_t*>(p), n) {
             if (!_invariant())
                 throw EINVAL;
@@ -129,11 +129,11 @@ namespace wry {
             return *--it;
         }
         
-        bool operator==(const string_view& other) const {
+        bool operator==(const StringView& other) const {
             return std::equal(begin(), end(), other.begin(), other.end());
         }
         
-        auto operator<=>(const string_view& other) const {
+        auto operator<=>(const StringView& other) const {
             return lexicographical_compare_three_way(begin(), end(), other.begin(), other.end());
         }
         
@@ -155,7 +155,7 @@ namespace wry {
         }
 
         
-        void reset(string_view other) {
+        void reset(StringView other) {
             chars.reset(other.chars);
         }
         
@@ -163,35 +163,35 @@ namespace wry {
         // of as noncommutative *
         
         // concatenate views, which must be consecutive
-        string_view operator*(const string_view& other) const {
+        StringView operator*(const StringView& other) const {
             assert(chars._end == other.chars._begin);
-            return string_view(chars._begin, other.chars._end);
+            return StringView(chars._begin, other.chars._end);
         }
         
         // division is the complementary operation to concatenation, removing
         // a suffix so that for c = a * b we have a = c / b
         
         // difference of a view and its suffix
-        string_view operator/(const string_view& other) const {
+        StringView operator/(const StringView& other) const {
             assert(chars._end == other.chars._end);
             assert(chars._begin <= other.chars._begin);
-            return string_view(chars._begin, other.chars._begin);
+            return StringView(chars._begin, other.chars._begin);
         }
                 
-    }; // struct string_view
+    }; // struct StringView
     
-    inline std::ostream& operator<<(std::ostream& a, string_view b) {
+    inline std::ostream& operator<<(std::ostream& a, StringView b) {
         a.write(reinterpret_cast<const char*>(b.chars.begin()),
                 b.chars.size());
         return a;
     }
     
-    inline uint64_t hash(string_view v) {
+    inline uint64_t hash(StringView v) {
         return hash_combine(v.chars.begin(), v.chars.size(), 0);
     }
     
     inline uint64_t hash(const char8_t* c) {
-        return hash(string_view(c));
+        return hash(StringView(c));
     }
     
     

@@ -48,7 +48,7 @@ namespace wry {
         // parsers
         
         inline auto parse_json_boolean(auto& x) {
-            return [&x](string_view& v) -> bool {
+            return [&x](StringView& v) -> bool {
                 if (match_string(u8"false")(v)) {
                     x = false;
                     return true;
@@ -354,7 +354,7 @@ namespace wry {
             }
 
             template<typename E>
-            Value visit_string_view(string_view x) {
+            Value visit_string_view(StringView x) {
                 return Value{{String(x)}};
             }
 
@@ -481,7 +481,7 @@ namespace wry {
                 *s.chars._end = 0;
             }
 
-            void serialize_string(string_view x) {
+            void serialize_string(StringView x) {
                 s.push_back(u8'\"');
                 s.append(x);
                 s.push_back(u8'\"');
@@ -517,7 +517,7 @@ namespace wry {
             
             using Error = Error;
             
-            string_view& v;
+            StringView& v;
                         
             struct SeqAccess {
                                 
@@ -637,13 +637,13 @@ namespace wry {
         };
         
         template<typename T> T from_string(String s) {
-            string_view v = s;
+            StringView v = s;
             return wry::deserialize<T>(deserializer{v});
         }
         
         template<typename T> T from_file(const std::filesystem::path& name) {
             String s = string_from_file(name);
-            string_view v = s;
+            StringView v = s;
             return wry::deserialize<T>(deserializer{v});
         }
         

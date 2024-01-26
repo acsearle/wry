@@ -28,7 +28,7 @@ namespace wry {
     
     // A String presents a UTF-8 array<char8_t> as a sequence of UTF-32 scalars
     //
-    // String, string_view, array<char8_t> and array_view<char8_t> all maintain
+    // String, StringView, array<char8_t> and array_view<char8_t> all maintain
     // valid UTF-8 strings.
     //
     // std::string::c_str() is not worth the complication it induces; we make a
@@ -62,11 +62,11 @@ namespace wry {
         String& operator=(const String& other) = default;
         String& operator=(String&&) = default;
 
-        explicit String(string_view other)
+        explicit String(StringView other)
         : chars(other.chars) {
         }
         
-        String& operator=(string_view other) {
+        String& operator=(StringView other) {
             chars = other;
             return *this;
         }
@@ -84,8 +84,8 @@ namespace wry {
             return array_view<const char8_t>(chars.begin(), chars.end());
         }
 
-        operator string_view() const {
-            return string_view(begin(), end());
+        operator StringView() const {
+            return StringView(begin(), end());
         }
         
         const_iterator begin() const {
@@ -219,7 +219,7 @@ namespace wry {
         }
 
         
-        void append(string_view& v) {
+        void append(StringView& v) {
             chars.append(v.chars.begin(), v.chars.end());
         }
         
@@ -232,7 +232,7 @@ namespace wry {
              return std::equal(begin(), end(), other.begin(), other.end());
          }
 
-        bool operator==(const string_view& other) const {
+        bool operator==(const StringView& other) const {
             return std::equal(begin(), end(), other.begin(), other.end());
         }
         
@@ -277,7 +277,7 @@ namespace wry {
             char8_t* _end;
             char8_t _begin[];
             
-            static implementation* make(string_view v) {
+            static implementation* make(StringView v) {
                 size_type n = v.chars.size();
                 implementation* p = (implementation*) operator new(sizeof(implementation) + n + 1);
                 p->_end = p->_begin + n;
@@ -328,7 +328,7 @@ namespace wry {
             return r;
         }
         
-        explicit immutable_string(string_view v)
+        explicit immutable_string(StringView v)
         : _body(implementation::make(v)) {
         }
         
@@ -356,8 +356,8 @@ namespace wry {
                                           _body ? reinterpret_cast<const byte*>(_body->_end + 1) : nullptr);
         }
         
-        operator string_view() const {
-            return string_view(begin(), end());
+        operator StringView() const {
+            return StringView(begin(), end());
         }
         
         bool empty() const {

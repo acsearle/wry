@@ -15,7 +15,6 @@
 #include "type_traits.hpp"
 #include "stdfloat.hpp"
 #include "string.hpp"
-#include "string_view.hpp"
 
 namespace wry {
         

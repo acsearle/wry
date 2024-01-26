@@ -18,8 +18,8 @@ namespace wry {
     
     auto parse(auto&& matcher, auto&& effect) {
         return [matcher=std::forward<decltype(matcher)>(matcher),
-                effect=std::forward<decltype(effect)>(effect)](string_view& v) mutable -> bool {
-            string_view u = v;
+                effect=std::forward<decltype(effect)>(effect)](StringView& v) mutable -> bool {
+            StringView u = v;
             return matcher(v) && ((void) effect(u / v), true);
         };
     }
@@ -44,7 +44,7 @@ namespace wry {
     
     inline constexpr auto parse_number(auto& x) {
         return overloaded{
-            [&x](string_view& v) -> bool {
+            [&x](StringView& v) -> bool {
                 auto first = reinterpret_cast<const char*>(v.chars.begin());
                 auto last = reinterpret_cast<const char*>(v.chars.end());
                 std::from_chars_result result = wry::from_chars(first, last, x);
@@ -73,7 +73,7 @@ namespace wry {
 
     inline auto parse_identifier(String& value) {
         return parse(match_identifier(), 
-                     [&value](string_view match) {
+                     [&value](StringView match) {
             value = match;
         });
     }

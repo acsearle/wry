@@ -117,7 +117,7 @@ namespace wry {
             fprintf(stderr, "%s\n", __PRETTY_FUNCTION__);
         }
         
-        void append_log(string_view v,
+        void append_log(StringView v,
                         std::chrono::steady_clock::duration endurance = std::chrono::seconds(5)) {
             _logs.emplace(std::chrono::steady_clock::now() + endurance, v);
         }

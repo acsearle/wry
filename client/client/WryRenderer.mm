@@ -931,7 +931,7 @@
                      length:sizeof(uniforms)
                     atIndex:AAPLBufferIndexUniforms ];
     
-    auto draw_text = [=](wry::rect<float> x, wry::string_view v, wry::RGBA8Unorm_sRGB color) {
+    auto draw_text = [=](wry::rect<float> x, wry::StringView v, wry::RGBA8Unorm_sRGB color) {
         
         auto valign = (_font->height + _font->ascender + _font->descender) / 2; // note descender is negative
         

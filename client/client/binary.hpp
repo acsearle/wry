@@ -129,7 +129,7 @@ _maybe_sink();\
             size_t _remaining;
             
             template<typename V>
-            void serialize_field(string_view key, V&& value) {
+            void serialize_field(StringView key, V&& value) {
                 if (!_remaining)
                     throw ERANGE;
                 serialize(key, *_context);

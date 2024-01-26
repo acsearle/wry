@@ -32,7 +32,7 @@ namespace wry::Wavefront {
     }
     
     auto parse_xyz(auto xyz[]) {
-        return [xyz](string_view& v) {
+        return [xyz](StringView& v) {
             return match_and(parse_number_relaxed(xyz[0]),
                              parse_number_relaxed(xyz[1]),
                              parse_number_relaxed(xyz[2]))(v);
@@ -40,7 +40,7 @@ namespace wry::Wavefront {
     }
     
     auto parse_u_vw(auto u_vw[3]) {
-        return [u_vw](string_view& sv) {
+        return [u_vw](StringView& sv) {
             return match_and(parse_number_relaxed(u_vw[0]),
                              match_optional(parse_number_relaxed(u_vw[1]),
                                             parse_number_relaxed(u_vw[2])))(sv);
@@ -48,7 +48,7 @@ namespace wry::Wavefront {
     }
     
     auto parse_xyz_w(auto xyz_w[4]) {
-        return [xyz_w](string_view& v) {
+        return [xyz_w](StringView& v) {
             return match_and(parse_number_relaxed(xyz_w[0]),
                              parse_number_relaxed(xyz_w[1]),
                              parse_number_relaxed(xyz_w[2]),
@@ -67,7 +67,7 @@ namespace wry::Wavefront {
     // view given to the effect
     // special case of parse_until?
     auto parse_line(auto&& effect) {
-        return [effect=std::forward<decltype(effect)>(effect)](string_view& v) -> bool {
+        return [effect=std::forward<decltype(effect)>(effect)](StringView& v) -> bool {
             for (auto u(v);;) {
                 auto w = u;
                 if (match_or(match_newline(), match_empty())(u)) {
@@ -149,7 +149,7 @@ namespace wry::Wavefront {
             return match_and(match_string("newmtl"),
                              match_spaces(),
                              parse(match_posix_portable_filename(),
-                                   [this](string_view match) {
+                                   [this](StringView match) {
                 commit();
                 this->current_name = match;
             }));
@@ -158,12 +158,12 @@ namespace wry::Wavefront {
         /*
         auto parse_key_value() {
             return match_and(parse(match_graphs(),
-                                   [this](string_view match) {
+                                   [this](StringView match) {
                 this->_current_key = match;
             }),
          match_spaces(),
                              parse(match_graphs(),
-                                   [this](string_view match) {
+                                   [this](StringView match) {
                 commit();
                 this->_current_map[this->_current_key] = match;
             }));
@@ -183,7 +183,7 @@ match_and(match_string(#X),\
                                    match_number(),\
                                    match_plus(match_hspace()))),\
           parse(match_posix_portable_filename(),\
-                [this](string_view match) {\
+                [this](StringView match) {\
     this->current_material. X  = match;\
 }))
 
@@ -193,7 +193,7 @@ match_and(match_string(#X),\
           parse_number_relaxed(this->current_material. X ))
 
         
-        void parse_mtl(string_view& v) {
+        void parse_mtl(StringView& v) {
             auto description = match_or(
                                         parse_comment(),
                                         parse_newmtl(),
@@ -354,7 +354,7 @@ match_and(match_string(#X),\
         
         
         auto parse_position() {
-            return [this](string_view& v) {
+            return [this](StringView& v) {
                 simd_double4 position = {0, 0, 0, 1};
                 bool flag = match_and(match_character('v'),
                                       parse_xyz_w((double*)&position))(v);
@@ -366,7 +366,7 @@ match_and(match_string(#X),\
         }
         
         auto parse_coordinate() {
-            return [this](string_view& v) {
+            return [this](StringView& v) {
                 packed::double3 coordinate = {0, 0, 0};
                 return (match_and(match_string("vt"),
                                   parse_u_vw((double*)&coordinate))(v)
@@ -376,7 +376,7 @@ match_and(match_string(#X),\
         }
         
         auto parse_normal() {
-            return [this](string_view& v) {
+            return [this](StringView& v) {
                 packed::double3 normal = {0, 0, 0};
                 return (match_and(match_string("vn"),
                                   parse_xyz((double*)&normal))(v)
@@ -386,7 +386,7 @@ match_and(match_string(#X),\
         }
         
         auto parse_parameters() {
-            return [this](string_view& v) {
+            return [this](StringView& v) {
                 packed::double3 parameter = { 0, 0, 0};
                 return (match_and(match_string("vp"),
                                   parse_u_vw((double*)&parameter))(v)
@@ -396,7 +396,7 @@ match_and(match_string(#X),\
         }
         
         auto parse_face_indices(Array<Index>& indices) {
-            return [this, &indices](string_view& v) {
+            return [this, &indices](StringView& v) {
                 Index i = 0, j = 0, k = 0;
                 bool flag = match_and(parse_number_relaxed(i),
                                       match_optional(match_and(match_character('/'),
@@ -423,7 +423,7 @@ match_and(match_string(#X),\
         auto parse_face() {
             // we could enforce triangles here and use a static sized index array
             Array<Index> indices;
-            return [this, indices=std::move(indices)](string_view& v) mutable -> bool {
+            return [this, indices=std::move(indices)](StringView& v) mutable -> bool {
                 indices.clear();
                 bool flag = match_and(match_character('f'),
                                       match_star(parse_face_indices(indices)))(v);
@@ -437,12 +437,12 @@ match_and(match_string(#X),\
         }
         
         auto parse_smoothing_group() {
-            return [this](string_view& v) {
+            return [this](StringView& v) {
                 String value;
                 bool flag = match_and(match_character('s'),
                                       match_plus(match_space()),
                                       parse(match_plus(match_posix_portable_filename()),
-                                            [&value](string_view match) {
+                                            [&value](StringView match) {
                     value = match;
                 }))(v);
                 if (flag) {
@@ -457,11 +457,11 @@ match_and(match_string(#X),\
             return match_and(match_string("mtllib"),
                              match_plus(match_hspace()),
                              parse(match_posix_portable_path(),
-                                   [this](string_view match) {
+                                   [this](StringView match) {
                 std::filesystem::path name = wry::path_for_resource(match);
                 auto s = string_from_file(name);
                 printf("%.*s", (int) s.chars.size(), (const char*) s.data());
-                string_view v(s);
+                StringView v(s);
                 this->_current_materials.parse_mtl(v);
                 if (!v.empty()) {
                     if (v.chars.size() > 40) {
@@ -479,7 +479,7 @@ match_and(match_string(#X),\
         auto parse_usemtl() {
             return match_and(match_string("usemtl"),
                              match_plus(match_hspace()),
-                             parse_line([this](string_view match) {
+                             parse_line([this](StringView match) {
                 printf("parse_line \"%.*s\"\n", (int) match.chars.size(), (const char*) match.chars.data());
                 commit();
                 auto it = _current_materials.named_materials.find(String(match));
@@ -496,7 +496,7 @@ match_and(match_string(#X),\
             return match_and(match_character('g'),
                              match_plus(match_hspace()),
                              parse(match_posix_portable_filename(),
-                                   [this](string_view match) {
+                                   [this](StringView match) {
                 commit();
                 this->_current_group_name = match;
             }));
@@ -506,14 +506,14 @@ match_and(match_string(#X),\
             return match_and(match_character('o'),
                              match_plus(match_hspace()),
                              parse(match_posix_portable_filename(),
-                                   [this](string_view match) {
+                                   [this](StringView match) {
                 commit();
                 this->_current_object_name = match;
             }));
         }
         
         
-        void parse_obj(string_view& v) {
+        void parse_obj(StringView& v) {
             auto description = match_or(parse_face(),
                                         parse_position(),
                                         parse_coordinate(),
@@ -579,7 +579,7 @@ namespace wry {
     
     wry::mesh::mesh from_obj(const std::filesystem::path& v) {
         String s = string_from_file(v);
-        string_view u(s);
+        StringView u(s);
         Wavefront::OBJFile o;
         o.parse_obj(u);
         o.print();

@@ -63,8 +63,8 @@ namespace wry {
 
 
 
-    matrix<RGBA8Unorm_sRGB> from_png(string_view);
-    void to_png(matrix<RGBA8Unorm_sRGB> const&, string_view);
+    matrix<RGBA8Unorm_sRGB> from_png(StringView);
+    void to_png(matrix<RGBA8Unorm_sRGB> const&, StringView);
     
     matrix<float4> multiply_alpha(const matrix<RGBA8Unorm_sRGB>& source);
     
