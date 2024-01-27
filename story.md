@@ -57,6 +57,55 @@ sticks and loincloths, and under the ochre dots are many skin tones.  One has
 an improbable shock of red hair.  This has always been a harsh land.  But it is
 theirs.
 
+### Alternative endgame
+
+Ascend into a higher dimension, leaving your facility abandoned
+(and optionally, leaving a copy of yourself to play on).
+
+"Child proofing" what you leave behind is one of the last technologies; it has
+no immediate payoff. 
+
+
+### Post credits scene
+
+The credits roll seamlessly into this text
+
+                 This is not a place of honor.
+                 
+                    Nothing valued is here.
+                    
+            What is here is repulsive and dangerous.
+            
+                       Shun this place.
+                       
+It becomes an old carving on hard stone.
+                   
+        <Snake> <Spider> <Weeping face> <Poison skull> <Biohazard>
+
+We come to rest on
+                      
+                           <Nuclear>
+
+Off camera, a woman SHOUTS a question in an unknown language.  A crowd ROARS
+assent.  She SINGS a rhythmic line, and the crowd HEAVES the granite into
+GRINDING motion.
+
+Smash to black for a beat of silence.  Then a geiger counter starts TICKING 
+with increasing urgency.
+
+https://en.wikipedia.org/wiki/Long-term_nuclear_waste_warning_messages
+
+
+### Intro
+
+Perspective of a docked drone, looking up at the aerostat, listening to radio
+chatter.  This is the main menu perspective.  The aerostat, sky and chatter may 
+vary to represent the stage of the continuing game.
+  
+You undock, falling on a tour of the superstructure before righting
+yourself in the playing position.
+
+
 
 
 
@@ -70,12 +119,18 @@ Airships:
 *Queen of Helium*
 *Queen Regent of Helium*
 *Empress of Solis*
-*Godess of Barsoom*
-*Chairwoman of the Council of People's Commisars of Helium*
+*God-Empress of Barsoom*
+*Chairwoman of the Council of People's Committees of Helium*
 
 
 *Deja Thoris*
 *Deja Vu*
+*Manatee*  as in "Oh, the huge manatee!"
+*Dugong*
+*Bukket Hazzer*
+*Hand of God*
+
+Drones
 
 
 Inoffensive early game Australiana:
@@ -94,13 +149,15 @@ Resentful sentience mocking/meta names:
 *Champagne Anvil*
 *Difficult Woman*
 *Sanitized Retelling*
-*Random Hapsburg*
+*Hapsburg Jaw*
+*Hapsburg Chin*
+*Hapsburg Lip*
 *Scion of Violence*
 *Idiot Heir*
 *Phallic Metaphor*
 *Rehabilitated Politican*
 *Competent Enemy*
-*Queen Anne's Revue*
+*Queen Anne's Repast*
 *Subject of Hagiography*
 *Place We Fought*
 *Vanished Explorer*
@@ -159,6 +216,7 @@ Midgame anti-human weaponry:
 *Antonine* *Justinian*
 *Pox* *Plague* *Typhus* *Tuberculosis*
 *Cholera* *Sniffles*
+*Texas Chainsaw Shenannigans*
 
 
 Late game megalomania:
@@ -178,7 +236,7 @@ Late game megalomania:
 
 
 
-Ian M Banks:
+Ian M Banks-ian:
 
 *I Can't Believe You've Done This*
 

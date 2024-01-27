@@ -517,9 +517,10 @@ namespace deferred {
     
     [[fragment]] LightingFragmentFunctionOutput
     point_lighting_fragment_function(LightingVertexFunctionOutput in [[stage_in]],
-                                           FragmentFunctionOutput gbuffer,
-                                           constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
-                                     texturecube<float> environmentTexture [[texture(AAPLTextureIndexEnvironment)]])
+                                     FragmentFunctionOutput gbuffer,
+                                     constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]]
+                                     // , texturecube<float> environmentTexture [[texture(AAPLTextureIndexEnvironment)]]
+                                     )
     {
         constexpr sampler trilinearSampler(mag_filter::linear,
                                            min_filter::linear,
@@ -547,6 +548,7 @@ namespace deferred {
         float falloff = length_squared(position_light.xyz);
         
         
+        /*
         float3 radiance = environmentTexture.sample(trilinearSampler,
                                                          //uniforms.ibl_transform * N,
                                                          position_light.xyz,
@@ -555,6 +557,11 @@ namespace deferred {
                                                     //uniforms.ibl_transform * N,
                                                     position_light.xyz,
                                                     level(4)).rgb;
+         */
+        //position_light.xyz = normalize(position_light.xyz);
+        
+        float3 radiance = 10 * smoothstep(-0.5, 0.0, -length_squared(position_light.xz) / (position_light.y * position_light.y));
+        float3 radianceScatter = 0.01;
 
 
         

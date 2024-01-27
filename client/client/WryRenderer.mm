@@ -1549,7 +1549,7 @@
                                  atIndex:AAPLBufferIndexVertices];
                 [encoder setDepthStencilState:_disabledDepthStencilState];
 
-                
+                /*
                 // Image-based lights:
 
                 [encoder setRenderPipelineState:_deferredLightImageBasedRenderPipelineState];
@@ -1572,14 +1572,16 @@
                 [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                             vertexStart:0
                             vertexCount:4];
-                
+                */
                 // Point lights
 
                 [encoder setRenderPipelineState:_deferredLightPointRenderPipelineState];
                 uniforms.radiance = simd_make_float3(1.0, 1.0, 1.0);
-                uniforms.light_viewprojection_transform = simd_matrix_translate(simd_make_float3(M_PI*sin(_frame_count*0.016),
-                                                                                                 M_PI*sin(_frame_count*0.015),
-                                                                                                 -M_PI_2+sin(_frame_count*0.014)));
+                auto A = simd_matrix_translate(simd_make_float3(M_PI*sin(_frame_count*0.016),
+                                                           M_PI*sin(_frame_count*0.015),
+                                                           -M_PI_2+sin(_frame_count*0.014)));
+                auto B = simd_matrix_rotate(_frame_count*0.1, simd_normalize(simd_make_float3(0.4,0.3,1)));
+                uniforms.light_viewprojection_transform = B*A;
                 uniforms.light_position = inverse(uniforms.light_viewprojection_transform).columns[3];
                 uniforms.light_position /= uniforms.light_position.w;
 
