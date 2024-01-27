@@ -67,7 +67,7 @@ namespace wry::atom {
             assert(f);
             {
                 auto guard2 = std::unique_lock(_atom_to_string_mutex);
-                _atom_to_string.emplace(next, s);
+                _atom_to_string.try_emplace(next, s);
             }
             next.data = xorshift64(next.data);
             return i;

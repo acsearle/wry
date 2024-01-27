@@ -514,6 +514,138 @@ namespace deferred {
     }
     
     
+    
+    [[fragment]] LightingFragmentFunctionOutput
+    point_lighting_fragment_function(LightingVertexFunctionOutput in [[stage_in]],
+                                           FragmentFunctionOutput gbuffer,
+                                           constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                                     texturecube<float> environmentTexture [[texture(AAPLTextureIndexEnvironment)]])
+    {
+        constexpr sampler trilinearSampler(mag_filter::linear,
+                                           min_filter::linear,
+                                           mip_filter::linear,
+                                           s_address::repeat,
+                                           t_address::repeat);
+        
+        LightingFragmentFunctionOutput out;
+        
+        float3 albedo    = float3(gbuffer.albedo_metallic.rgb);
+        float  metallic  = float(gbuffer.albedo_metallic.a);
+        float3 normal    = float3(gbuffer.normal_roughness.xyz);
+        float  roughness = float(gbuffer.normal_roughness.w);
+        float  depth     = gbuffer.depth;
+        // float  occlusion = 1.0f;
+
+        // position of the fragment in the world
+        float4 position_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2] * depth;
+        position_world /= position_world.w;
+        float3 direction = in.near_world.xyz * position_world.w - position_world.xyz * in.near_world.w;
+
+        // position of the fragment in the light's coordinate system
+        float4 position_light = uniforms.light_viewprojection_transform * position_world;
+        position_light /= position_light.w;
+        float falloff = length_squared(position_light.xyz);
+        
+        
+        float3 radiance = environmentTexture.sample(trilinearSampler,
+                                                         //uniforms.ibl_transform * N,
+                                                         position_light.xyz,
+                                                         level(0)).rgb;
+        float3 radianceScatter = environmentTexture.sample(trilinearSampler,
+                                                    //uniforms.ibl_transform * N,
+                                                    position_light.xyz,
+                                                    level(4)).rgb;
+
+
+        
+        float3 V = normalize(direction);
+        float3 N = normal;
+        float3 L = normalize(uniforms.light_position.xyz - position_world.xyz);
+        float3 H = normalize(V + L);
+                
+        float3 F0 = 0.04f;
+        F0 = mix(F0, albedo, metallic);
+        
+        float HdotV = saturate(dot(H, V));
+        float NdotL = saturate(dot(N, L));
+        float NdotV = saturate(dot(N, V));
+        float NdotH = saturate(dot(N, H));
+        
+        // distribution factor
+        float alpha = roughness * roughness;
+        float alpha2 = alpha * alpha;
+        float D = distribution_Trowbridge_Reitz(NdotH, alpha2);
+        
+        // geometry factor
+        float G = geometry_Smith_point(NdotV, NdotL, roughness);
+        
+        // fresnel factor
+        float3 F = Fresnel_Schlick(HdotV, F0);
+        
+        float3 numerator = D * G * F;
+        float denominator = 4.0f * NdotV * NdotL + 0.0001f;
+        float3 specular = numerator / denominator;
+        
+        float3 kS = F;
+        float3 kD = (1.0f - kS) * (1.0 - metallic);
+        
+        float3 Lo = (kD * albedo * M_1_PI_F + specular) * NdotL * radiance / falloff;
+        
+        {
+            // Also need to compute scattering of the light source to give it a
+            // halo.  The geometrical part is
+            // distance along ray to surface
+            // distance along ray to closest point to light
+            // distance between ray and light
+            // this is then gonna be a Cauchy integral, atan
+            
+            // position_world
+            // position_light
+            // direction
+            float3 fragment_to_camera = V;
+            float3 fragment_to_light = (uniforms.light_position - position_world).xyz;
+            // Lo = 0.5 + 0.5 * cos(length(uniforms.light_position - position_world));
+            // Lo = 1.0 / (1.0 + length_squared(cross(normalize(fragment_to_light), fragment_to_camera)));
+            
+            float3 y = length(cross(V, fragment_to_light));
+            float3 x = dot(V, fragment_to_light);
+            
+            //Lo = x;
+            
+            // we want to integrate
+            //
+            // 1 / (x^2 + y^2) over x to camera (assumed far from point light)
+            
+            // atan(x/y) / y
+            
+            Lo += 0.1 * (M_PI_2_F + atan2(x, y)) / y * radianceScatter;
+            
+            
+            // we want to know the distance from the light to the line
+            // that is given by
+            // float strength = 0.01 / (0.01 + length_squared(cross(normalize(direction), fragment_to_light)));
+            
+            // And we want to know the distance along the line that we are
+            // integrating the scattering
+            
+            //float distance = dot(normalize(direction), fragment_to_light) / 0.1;
+            //Lo += strength * (1.0 + atan(distance)) * uniforms.radiance;
+            //Lo = (M_PI_2_F + atan(distance)) * strength;
+            // Lo = distance_to_ray_squared;
+        }
+        
+        
+        
+        
+        out.color.rgb = half3(Lo);
+        out.color.a = 1.0h;
+        out.color = clamp(out.color, 0.0f, HALF_MAX);
+        
+        return out;
+        
+    }
+    
+    
     // "decal"-like things
     //
     // simplest: screen-space overlay

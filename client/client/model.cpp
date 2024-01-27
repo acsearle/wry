@@ -39,7 +39,7 @@ namespace wry {
         p = simd_normalize(simd_make_float3(-2, -1, 3));
         //p = simd_normalize(simd_make_float3(-1, 0, 1)); // Factorio lol
         _uniforms.light_direction = p;
-        _uniforms.radiance = 2.0f;
+        _uniforms.radiance = simd_make_float3(2.0f, 0.5f, 0.5f);
 
         
         // we have a lot of freedom in our choice of the shadow map projection;

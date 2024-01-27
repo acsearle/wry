@@ -124,12 +124,16 @@ struct MeshUniforms {
 
     // light-specifc
     
-    vector_float3 light_direction;
     matrix_float4x4 light_viewprojection_transform;
     vector_float3 radiance;
-    matrix_float4x4 light_viewprojectiontexture_transform;
 
-    // IBL multiplier
+    // for the sun
+    vector_float3 light_direction;
+    matrix_float4x4 light_viewprojectiontexture_transform; // shadow
+    // for point lights
+    vector_float4 light_position;
+    
+    // for image-based lights
     vector_float4 ibl_scale;
     matrix_float3x3 ibl_transform;
     

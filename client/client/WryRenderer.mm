@@ -63,6 +63,7 @@
 
     id <MTLRenderPipelineState> _deferredLightImageBasedRenderPipelineState;
     id <MTLRenderPipelineState> _deferredLightDirectionalShadowcastingRenderPipelineState;
+    id <MTLRenderPipelineState> _deferredLightPointRenderPipelineState;
 
     id<MTLTexture> _deferredLightColorAttachmentTexture;
     id<MTLTexture> _deferredAlbedoMetallicColorAttachmentTexture;
@@ -502,6 +503,11 @@
             descriptor.fragmentFunction = [self newFunctionWithName:@"deferred::directional_lighting_fragment_function"];
             descriptor.label = @"Deferred shadowcasting directional light";
             _deferredLightDirectionalShadowcastingRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
+
+            descriptor.vertexFunction = [self newFunctionWithName:@"deferred::lighting_vertex_function"];
+            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred::point_lighting_fragment_function"];
+            descriptor.label = @"Deferred point light";
+            _deferredLightPointRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
 
         }
         
@@ -1553,13 +1559,39 @@
                             vertexStart:0
                             vertexCount:4];
 
+                
                 // Direction light (with shadow map)
                 
+                uniforms.radiance = simd_make_float3(1.0, 1.0, 1.0);
+                [encoder setFragmentBytes:&uniforms
+                                   length:sizeof(MeshUniforms)
+                                  atIndex:AAPLBufferIndexUniforms];
+
                 [encoder setRenderPipelineState:_deferredLightDirectionalShadowcastingRenderPipelineState];
                 [encoder setFragmentTexture:_shadowMapTarget atIndex:AAPLTextureIndexShadow];
                 [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                             vertexStart:0
                             vertexCount:4];
+                
+                // Point lights
+
+                [encoder setRenderPipelineState:_deferredLightPointRenderPipelineState];
+                uniforms.radiance = simd_make_float3(1.0, 1.0, 1.0);
+                uniforms.light_viewprojection_transform = simd_matrix_translate(simd_make_float3(M_PI*sin(_frame_count*0.016),
+                                                                                                 M_PI*sin(_frame_count*0.015),
+                                                                                                 -M_PI_2+sin(_frame_count*0.014)));
+                uniforms.light_position = inverse(uniforms.light_viewprojection_transform).columns[3];
+                uniforms.light_position /= uniforms.light_position.w;
+
+                [encoder setFragmentTexture:_deferredLightImageBasedTexture atIndex:AAPLTextureIndexEnvironment];
+                [encoder setFragmentBytes:&uniforms
+                                   length:sizeof(MeshUniforms)
+                                  atIndex:AAPLBufferIndexUniforms];
+                [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                            vertexStart:0
+                            vertexCount:4
+                            instanceCount:1];
+                 
             }
         }
         
@@ -1584,8 +1616,8 @@
                                sourceTexture:_deferredLightColorAttachmentTexture
                           destinationTexture:_blurredTexture];
 
-        _imageAdd.primaryScale = 15.0f/16.0f;
-        _imageAdd.secondaryScale = 1.0f/16.0f;
+        _imageAdd.primaryScale = 0.75f; // //15.0f/16.0f;
+        _imageAdd.secondaryScale = 0.25f; ////1.0f/16.0f;
 
         [_imageAdd encodeToCommandBuffer:command_buffer
         primaryTexture:_deferredLightColorAttachmentTexture
