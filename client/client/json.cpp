@@ -35,7 +35,7 @@ namespace wry {
         virtual double as_number() const  { unimplemented(); }
         virtual bool as_bool() const { unimplemented(); }
         virtual table<String, json> const& as_object() const { unimplemented(); }
-        virtual array<json> const& as_array() const { unimplemented(); }
+        virtual Array<json> const& as_array() const { unimplemented(); }
         virtual bool is_string() const { unimplemented(); }
         virtual bool is_number() const { unimplemented(); }
         virtual bool is_array() const { unimplemented(); }
@@ -67,7 +67,7 @@ namespace wry {
     string_view json::as_string() const { return _ptr->as_string(); }
     double json::as_number() const { return _ptr->as_number(); }
     table<String, json> const& json::as_object() const { return _ptr->as_object(); }
-    array<json> const& json::as_array() const { return _ptr->as_array(); }
+    Array<json> const& json::as_array() const { return _ptr->as_array(); }
     bool json::as_bool() const { return _ptr->as_bool(); }
 
     long json::as_long() const {
@@ -184,7 +184,7 @@ namespace wry {
     
     struct _json_array : _json_value {
         
-        array<json> _array;
+        Array<json> _array;
         
         virtual json const& at(size_t i) const override {
             return _array[i];
@@ -228,7 +228,7 @@ namespace wry {
             return p;
         }
         
-        const array<json> & as_array() const override {
+        const Array<json> & as_array() const override {
             return _array;
         }
         
@@ -637,7 +637,7 @@ namespace wry {
         }
     }
     
-    using uchars = array<uchar>;
+    using uchars = Array<uchar>;
     
     bool json_continue_string_escape_u(const uchar*& a, const uchar* b, uchars& s);
     bool json_continue_string_escape(const uchar*& a, const uchar* b, uchars& s);
@@ -797,7 +797,7 @@ namespace wry {
      
      */
     
-    void json_parse_whitespace(array_view<const char>& a) {
+    void json_parse_whitespace(ArrayView<const char>& a) {
         for (;;) {
             if (a.empty())
                 return;
@@ -827,7 +827,7 @@ namespace wry {
         return d[c];
     }
     
-    bool json_parse_string(array_view<const char>& a, array<char>& z) {
+    bool json_parse_string(ArrayView<const char>& a, Array<char>& z) {
         for(;;)  {
             if (a.empty())
                 return false;
@@ -899,9 +899,9 @@ namespace wry {
         }
     }
             
-    bool json_parse_element(array_view<const char>& a, json&);
+    bool json_parse_element(ArrayView<const char>& a, json&);
     
-    bool json_parse_array(array_view<const char>& a, array<json>& result) {
+    bool json_parse_array(ArrayView<const char>& a, Array<json>& result) {
         json value;
         char c = 0;
         
@@ -939,9 +939,9 @@ namespace wry {
         
     }
     
-    bool json_parse_object(array_view<const char>& a, table<string, json>& result) {
+    bool json_parse_object(ArrayView<const char>& a, table<string, json>& result) {
         
-        array<char> chars;
+        Array<char> chars;
         json value;
         char c;
         
@@ -994,7 +994,7 @@ namespace wry {
         }
     }
     
-    bool json_parse_false(array_view<const char>& a, json& value) {
+    bool json_parse_false(ArrayView<const char>& a, json& value) {
         const char* z = "false";
         for (;;) {
             if (!*z)
@@ -1009,7 +1009,7 @@ namespace wry {
         }
     }
 
-    bool json_parse_null(array_view<const char>& a, json& value) {
+    bool json_parse_null(ArrayView<const char>& a, json& value) {
         const char* z = "null";
         for (;;) {
             if (!*z)
@@ -1024,7 +1024,7 @@ namespace wry {
         }
     }
 
-    bool json_parse_true(array_view<const char>& a, json& value) {
+    bool json_parse_true(ArrayView<const char>& a, json& value) {
         const char* z = "true";
         for (;;) {
             if (!*z)
@@ -1039,7 +1039,7 @@ namespace wry {
         }
     }
 
-    bool json_parse_element(array_view<const char>& a, json& value) {
+    bool json_parse_element(ArrayView<const char>& a, json& value) {
 
         // expect element
         assert(!a.empty());
@@ -1047,7 +1047,7 @@ namespace wry {
         switch (c) {
             case '\"': {
                 a.pop_front();
-                array<char> z;
+                Array<char> z;
                 if (!json_parse_string(a, z))
                     return false;
                 a.pop_back();
@@ -1070,7 +1070,7 @@ namespace wry {
             }
             case '[': {
                 a.pop_front();
-                array<json> z;
+                Array<json> z;
                 if (!json_parse_array(a, z))
                     return false;
                 a.pop_back();
@@ -1096,7 +1096,7 @@ namespace wry {
         
     }
     
-    bool json_parse_json(array_view<const char>& a, json& value) {
+    bool json_parse_json(ArrayView<const char>& a, json& value) {
         json_parse_whitespace(a);
         if (!json_parse_element(a, value))
             return false;

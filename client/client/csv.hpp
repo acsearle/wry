@@ -20,7 +20,7 @@ namespace wry::csv::de {
     using rust::option::None;
     using rust::option::Some;
 
-    inline auto parse_field(array<char8_t>& x) {
+    inline auto parse_field(Array<char8_t>& x) {
         return [&x](auto& v) -> bool {
             auto u(v);
             if (u.empty())
@@ -111,7 +111,7 @@ namespace wry::csv::de {
     };
     
     struct FieldDeserializer {
-        array_view<const char8_t>& v;
+        ArrayView<const char8_t>& v;
         
         auto deserialize_string(auto&& visitor) {
             String x{};
@@ -136,7 +136,7 @@ namespace wry::csv::de {
     };
     
     struct RowDeserializer {
-        array_view<const char8_t>& v;
+        ArrayView<const char8_t>& v;
         auto deserialize_seq(auto&& visitor) {
             FieldDeserializer d{v};
             return std::forward<decltype(visitor)>(visitor).visit_seq(DelimiterSeparated(&d, match_character(u8',')));
@@ -144,7 +144,7 @@ namespace wry::csv::de {
     };
     
     struct Deserializer {
-        array_view<const char8_t> v;
+        ArrayView<const char8_t> v;
         auto deserialize_seq(auto&& visitor) {
             RowDeserializer d{v};
             return std::forward<decltype(visitor)>(visitor).visit_seq(DelimiterSeparated(&d, match_newline()));

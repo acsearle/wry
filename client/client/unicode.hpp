@@ -24,6 +24,11 @@ namespace wry {
     //     "s-char"          -> const char[N]
     //     'c-char sequence' ->       int
     //
+    // Wide literal encoding
+    //    L'c-char'          ->       wchar_t
+    //    L'c-char'          -> const wchar_t[N]
+    //    L'c-char sequence' ->       wchar_t
+    //
     // UTF-8
     //   u8'c-char'          ->       char8_t     (0x0-0x7F only)
     //   u8"s-char"          -> const char8_t[N]
@@ -36,18 +41,23 @@ namespace wry {
     //    U'c-char'          ->       char32_t
     //    U"s-char"          -> const char32_t[N]
     //
-    // Wide literal encoding
-    //    L'c-char'          ->       wchar_t
-    //    L'c-char'          -> const wchar_t[N]
-    //    L'c-char sequence' ->       wchar_t
     //
     // The array length N is always in code units, including a zero terminator
-    
-    // We use the char8_t to indicate not only that invalid UTF-8 bytes do not
-    // appear, but also that any contiguous sequence of char8_t constitutes
-    // valid UTF-8 sequence, and that any char8_t pointers point to USV
-    // boundaries in such a sequence.
-    
+    //
+    // `char` is a distinct type from both `signed char` and `unsigned char`,
+    // and its signedness is unspecified; typically signed on x86 and x64, and
+    // unsigned on ARM and PowerPC
+    //
+    // `wchar_t` is a distinct integer type of unspecfied with and signedness;
+    // typically 16 bits and UTF-16 on Windows, and 32 bits and UTF-32
+    // otherwise.
+    //
+    // `char8_t`, `char16_t` and `char32_t` are distict types with underlying
+    // types unsigned char, uint_least16_t and uint_least32_t.  They provide
+    // a type system marker for the encoding.  They should only be used for
+    // valid sequences of valid code units.  For example, untrusted input
+    // should be represented as unisgned char until validated.
+
     
     namespace utf32 {
         
@@ -627,263 +637,3 @@ namespace wry {
 } // namespace wry
 
 #endif /* unicode_hpp */
-
-#if 0
-
-
-// State machine decoder
-//
-// https://bjoern.hoehrmann.de/utf-8/decoder/dfa/
-
-// 07 7
-// 11 5:6
-// 16 4:6:6
-// 21 3:6:6:6
-
-// States (9)
-//
-// ERROR
-//      xxxxxxxx -> ERROR
-//
-// INITIAL
-//      0xxxxxxx -> INITIAL
-//      10xxxxxx -> ERROR
-//      1100000x -> ERROR
-//      110xxxxx -> 2OF2
-//      11100000 -> 2OF3OVERLONG
-//      11101101 -> 2OF3SURROGATE
-//      1110xxxx -> 2OF3
-//      11110000 -> 2OF4OVERLONG
-//      11110100 -> 2OF4OVERFLOW
-//      111100xx -> 2OF4
-//      111101xx -> ERROR
-//      11111xxx -> ERROR
-
-// 2OF2
-//      10xxxxxx -> INITIAL
-//      xxxxxxxx -> ERROR
-
-// 2OF3OVERLONG
-//      101xxxxx -> 2OF2     first bit of continuation must be set
-//      xxxxxxxx -> ERROR
-
-// 2OF3SURROGATE
-//      100xxxxxx -> 2OF2
-//      101xxxxxx -> ERROR ( 1101 1xxx xxxx xxxx surrogates )
-//      xxxxxxxxx -> ERROR
-
-// 2OF3
-//      10xxxxxx -> 2OF2
-//      xxxxxxxx -> ERROR
-
-// 2OF4OVERLONG
-//      1000xxxx -> ERROR
-//      10xxxxxx -> 2OF3
-
-// 2OF4OVERFLOW
-//      1000xxxx -> 2OF3
-//      10xxxxxx -> ERROR (> UTF+10FFFF)
-//      xxxxxxxx -> ERROR
-
-// 2OF4
-//      10xxxxxx -> 2OF3
-//      xxxxxxxx -> ERROR
-
-
-// groups of characters that lead to different transitions in at least
-// one state:
-
-// 0xxxxxxx    ASCII
-
-// 1000xxxx    4 byte overlong, not overflow
-// 100xxxxx    3 byte overlong, not surrogate
-// 101xxxxx    3 byte surrogate
-
-// 1100000x    2 byte overlong
-// 110xxxxx    2 byte
-// 11100000    3 byte possible overlong
-// 11101101    3 byte possible surrogate
-// 1110xxxx    3 byte
-// 11110000    4 byte possible overlong
-// 111100xx    4 byte
-// 11110100    4 byte possible overflow
-// 111111xx    Overflow
-// 11111xxx    Overflow
-
-// Allowed masks:
-
-// x1111111
-
-// 00xxxxx0 2overlong
-// 00x11111 2leading
-
-// 000xxxxx 3overlong
-// 000x11x1 3surrogate
-// 000x1111 3leading
-
-// 0000xxxx 4overlong
-// 0000x1xx
-// 0000x111 4leading
-
-// how far apart can we space these cases ?
-
-// 00000000
-// 0000
-// 00001111
-
-
-
-
-
-// allocate unique IDs to them that also work as AND masks
-// The known zeros are precious, we basically use them to tag the
-// group
-
-// 11111111  ASCII
-
-// 01001111  Continuation byte; 4overlong, 4overflow
-// 01011111  Continuation byte; surrogate, 3overlong
-// 01111111  Continutaion byte; surrogate,
-
-// 00000000  ERROR
-// 00111111  Leading of 2
-
-// 00010000  Leading of 3, possible overlong
-// 00011111  Leading of 3
-// 00011101  Leading of 3, possible surrogate
-
-// 00001000  Leading of 4, possible overlong
-// 00001111  Leading of 4
-// 00001100  Leading of 4, possible overflow
-
-
-
-// xxxxxxxx  2 byte overlong, always an error
-// 00x11111  Ordinary 2 byte
-
-// 000xxxxx  3 byte possible overlong
-// 000x1111   Ordinary 3 byte
-// 000x11x1  3 byte possible surrogate
-
-// 0000xxxx  4 byte possible overlong
-// 0000xx11  4 byte ordinary
-// 0000x1xx  4 byte possible overflow
-// xxxxxxxx  Always errors
-
-// take two, use as masks for next state
-//
-// 11111111
-// 00111111
-// 00011111
-// 00001111
-
-
-
-namespace {
-    
-    // Partition 256 into 12 character classes, the members of which
-    // behave identically.
-    
-    // We use our freedom of mapping to choose an identifier that also
-    // acts as the neccesary mask for the state
-    
-    enum : unsigned char {
-        
-        A = 0b11111111, // leading1
-        
-        B = 0b01001111, // continuation; overlong4, overflow4
-        C = 0b01011111, // continuation; overlong4, surrogate3
-        D = 0b01111111, // continuation; surrogate3
-        
-        E = 0b00000000, // invalid byte; overlong2, overflow4
-        F = 0b00111111, // leading2
-        
-        G = 0b00010000, // leading3; overlong3
-        H = 0b00011111, // leading3
-        I = 0b00011101, // leading3; surrogate3
-        
-        J = 0b00001000, // leading4; overlong4
-        K = 0b00001111, // leading4
-        L = 0b00001101, // leading4; overflow4
-        
-    };
-    
-    inline constexpr unsigned char masks[256] = {
-        
-        A,A,A,A, A,A,A,A, A,A,A,A, A,A,A,A,
-        A,A,A,A, A,A,A,A, A,A,A,A, A,A,A,A,
-        A,A,A,A, A,A,A,A, A,A,A,A, A,A,A,A,
-        A,A,A,A, A,A,A,A, A,A,A,A, A,A,A,A,
-        
-        A,A,A,A, A,A,A,A, A,A,A,A, A,A,A,A,
-        A,A,A,A, A,A,A,A, A,A,A,A, A,A,A,A,
-        A,A,A,A, A,A,A,A, A,A,A,A, A,A,A,A,
-        A,A,A,A, A,A,A,A, A,A,A,A, A,A,A,A,
-        
-        B,B,B,B, B,B,B,B, B,B,B,B, B,B,B,B,
-        C,C,C,C, C,C,C,C, C,C,C,C, C,C,C,C,
-        D,D,D,D, D,D,D,D, D,D,D,D, D,D,D,D,
-        D,D,D,D, D,D,D,D, D,D,D,D, D,D,D,D,
-        
-        E,E,F,F, F,F,F,F, F,F,F,F, F,F,F,F,
-        F,F,F,F, F,F,F,F, F,F,F,F, F,F,F,F,
-        G,H,H,H, H,H,H,H, H,H,H,H, H,I,H,H,
-        J,K,K,K, L,E,E,E, E,E,E,E, E,E,E,E,
-        
-    };
-    
-    void foo(uint8_t b, uint32_t& z) {
-        
-        unsigned char m = masks[b];
-        z = (z << 6) | (m & b);
-        
-        // A:A -> A
-        // A:F -> F, Z (2OF2)
-        // A:G -> G, 2OF3OVERLONG
-        // A:H -> H, Y (2OF3)
-        // A:I -> I, 2OF3SURROGATE
-        // A:J -> J, 2OF4OVERLONG
-        // A:K -> K, X (2OF4)
-        // A:L -> L, 2OF4OVERFLOW
-        
-        // first byte spreads out everywhere
-        // second byte of 2 and 3 decides solely on the basis of
-        // the top 2/6
-        
-        // F:B -> A
-        // F:C -> A
-        // F:D -> A
-        
-        // H:B -> F
-        // H:C -> F
-        // H:D -> F
-        
-        // K:B -> H
-        // K:C -> H
-        // K:D -> H
-        
-        // G:B -> E
-        // G:C -> E
-        // G:D -> F
-        
-        // I:B -> F
-        // I:C -> F
-        // I:D -> E
-        
-        // J:B -> E
-        // J:C -> H
-        // J:D -> H
-        
-        // K:B -> H
-        // K:C -> E
-        // K:D -> E
-        
-        
-    }
-    
-}
-
-
-
-
-#endif

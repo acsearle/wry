@@ -9,9 +9,9 @@
 #define test_hpp
 
 #include <vector>
-#include <type_traits>
 
 #include "assert.hpp"
+#include "preprocessor.hpp"
 
 namespace wry {
     
@@ -90,9 +90,6 @@ namespace wry {
     void run_tests();
     
 } // namespace wry
-
-#define WRY_CONCATENATE_TOKENS(A, B) WRY_CONCATENATE_TOKENS_AGAIN(A, B)
-#define WRY_CONCATENATE_TOKENS_AGAIN(A, B) A##B
 
 #define define_test(...) static ::wry::detail::test_t WRY_CONCATENATE_TOKENS(_wry_detail_test_, __LINE__) = ::wry::detail::test_metadata_t{__VA_ARGS__} % []()
 

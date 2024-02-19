@@ -27,7 +27,7 @@ namespace wry {
     
     template<typename Key, typename T>
     struct flat_map {
-        array<std::pair<Key, T>> base;
+        Array<std::pair<Key, T>> base;
         template<typename K>
         T& operator[](K&& k) {
             using std::begin;
@@ -47,7 +47,7 @@ namespace wry {
     // This odd behavior is intended to help stabilizing file parsing
     // It may be a bad idea
 
-    template<typename Key, typename T, typename A = array<std::pair<Key, T>>>
+    template<typename Key, typename T, typename A = Array<std::pair<Key, T>>>
     struct unsorted_map {
         
         A base;

@@ -109,7 +109,7 @@ namespace wry {
                 _shift = __builtin_clzll((capacity | 15) - 1);
                 _mask = ((std::uint64_t) -1) >> _shift;
                 _trigger = _mask ^ (_mask >> 3);
-                _begin = ::operator new(sizeof(Entry) * size());
+                _begin = (Entry*) ::operator new(sizeof(Entry) * size());
                 _count = 0;
                 std::uninitialized_value_construct_n(_begin, size());
             }
@@ -339,7 +339,7 @@ namespace wry {
     
     
     template<typename Key, typename T>
-    struct table {
+    struct Table {
         
         // in the general case, we can't steal states from Key or T to indicate
         // a slot is unoccupied, so we need a discriminant, and unless Key or T
@@ -461,6 +461,8 @@ namespace wry {
                 } while (!*_pointer);
             }
             
+            iterator() = default;
+            
             iterator(Entry* b, basic_table<Entry, Hasher>* c)
             : _pointer(b)
             , _context(c) {
@@ -574,11 +576,36 @@ namespace wry {
         
         basic_table<Entry, Hasher> _inner;
         
-        table() = default;
-        table(with_capacity_t, std::size_t count)
+        Table& swap(Table& other) {
+            _inner.swap(other._inner);
+            return other;
+        }
+        
+        Table() = default;
+        
+        Table(with_capacity_t, std::size_t count)
         : _inner(with_capacity, count) {
         }
         
+        Table(Table&&) = default;
+        
+        Table(const Table& other)
+        : _inner(with_capacity, other.size()) {
+            for (const auto& a : other) {
+                insert(a);
+            }
+        }
+        
+        ~Table() = default;
+        
+        Table& operator=(const Table& other) {
+            return Table(other).swap(*this);
+        }
+
+        Table& operator=(Table&& other) {
+            return Table(std::move(other)).swap(*this);
+        }
+
         iterator begin() {
             iterator it{_inner.begin(), &_inner};
             it._advance();
@@ -749,14 +776,6 @@ namespace wry {
             });
         }
     };
-    
-    
-    
-    template<typename T, typename Key>
-    using Table = table<T, Key>;
-    
-    
-    
     
     
     template<typename Key>

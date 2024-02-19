@@ -16,12 +16,63 @@ namespace wry::atom {
     
     // Not to be confused with atomic
     //
-    // Atoms construct a perfect hash of strings on the fly, up to 2^64 unique
-    // strings.  Converting to and from Atoms is relatively expensive, but
-    // using them as the keys of an AtomMap is cheap.  Typical usage would
-    // (de)serialize strings but work with atoms.
+    // Maps registered strings to 64 bit values suitable for direct use in hash
+    // tables; atom equality implies string equality, and strings can be looked
+    // up from atoms.  However, the strings must be registered; this is not
+    // a hash of their contents, and at most 2**64-1 strings can be registered
+    // (though memory is exhausted first).  A hash table built on atoms can
+    // regard them as implementing a perfect hash, with no need for collision
+    // resolution, and plenty of entropy.
     //
-    // The mapping varies between runs.
+    // The actual values of atoms will depend on the order in which strings are
+    // registered, and thus may be non-determinisic across runs
+    //
+    // Compare to a smart enum
+    //
+    // As the atom registry is never garbage collected, unbounded numbers of
+    // dynamically generated strings should not be registered.
+    //
+    // Compare weak dictionary
+    //
+    // An atom is a 64-bit value
+    // high entropy
+    // injective(?)
+    // perfect hash
+    // empty zero state
+    
+    // What do atoms save us?
+    //
+    // In a conventional hash table with a string key, we must:
+    //
+    // - (maybe) walk the string to hash it
+    // - load the slot for the hash
+    // - compare the found hash
+    //   - compare the found hash with zero, go to the next slot
+    // - walk both strings to compare them
+    
+    // which is three random accesses (the slot, two strings at least once each)
+    
+    // With an atom key
+    // - load slot
+    // - compare the found atom
+    //   - compare zero, go to next slot
+    // - match, done
+    
+    // which is one random access
+    
+    // If we can constexpr hash string literals, we do gain determinism
+    // If we can constexpr perfect hash string literals, we get the best of
+    // all worlds.  The first collision would be expected at about 2^32 strings,
+    // Hairy though
+    
+    
+    // The string pointer is itself a unique value, albeit one with unknown
+    // entropy.  We could use it in a hash table only if we defensively hash it
+    // for index generation, but it would be OK otherwise.  We could thus have
+    // a hash set of interned strings with zero overhead.
+    
+    // We could also do some kind of horrific scheme to intern the strings
+    // inside a fixed chunk of memory at high-entropy addresses
     
     struct Atom {
 
@@ -55,6 +106,9 @@ namespace wry::atom {
     
     // The AtomMap exploits the fact that Atoms are identity-hashed and that
     // zero is available as an empty slot marker
+    
+    // TODO: can we unify this with basic hash table?
+    // TODO: AtomSet
         
     template<typename T>
     struct AtomMap {
@@ -345,7 +399,7 @@ namespace wry::atom {
             _trigger = _mask ^ (_mask >> 3);
             _begin = (Slot*) operator new(n * sizeof(Slot));
             
-            // clear all the slots in the new array
+            // clear all the slots in the new Array
             for (Slot* first = _begin, * last = _begin + n; first != last; ++first)
                 first->first.clear();
 

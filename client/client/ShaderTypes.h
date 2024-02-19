@@ -64,6 +64,7 @@ enum AAPLTextureIndex {
     AAPLTextureIndexAlbedo,
     AAPLTextureIndexAlbedoMetallic,
     AAPLTextureIndexClearcoat,
+    AAPLTextureIndexClearcoatRoughness,
     AAPLTextureIndexColor,
     AAPLTextureIndexDepth,
     AAPLTextureIndexEmissive,
@@ -89,9 +90,11 @@ struct MeshVertex{
             simd_float4 normal;
             simd_float4 position;
         };
-        simd_float4x4 jacobian;
+        simd_float4x4 jacobian; // too cute?
     };
 };
+
+// clean up the confusion between cameras and light sources
 
 struct MeshUniforms {
     
@@ -143,6 +146,9 @@ struct MeshInstanced {
     matrix_float4x4 model_transform;
     matrix_float4x4 inverse_transpose_model_transform;
     simd_float4 albedo;
+    simd_float4 emissive;
+    float metallic;
+    float roughness;
 };
 
 

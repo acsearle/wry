@@ -42,7 +42,7 @@ namespace wry {
         String name;
         String type;
         String instance;
-        array<std::pair<String, int64_t>> values;
+        Array<std::pair<String, int64_t>> values;
     };
     
     auto enum_parse_declaration(enum_parse_result& x) {

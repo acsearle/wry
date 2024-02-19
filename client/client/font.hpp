@@ -21,7 +21,7 @@ namespace wry {
             float advance;
         };
         
-        table<uint, glyph> charmap;
+        Table<char32_t, glyph> charmap;
         
         float ascender;
         float descender;

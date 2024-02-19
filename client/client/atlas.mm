@@ -89,7 +89,7 @@ namespace wry {
             for (auto&& a : _packer._last_split) {
                 auto n = max(a.width(), a.height());
                 RGBA8Unorm_sRGB p(0.0f,0.0f,0.0f,0.25f);
-                array<RGBA8Unorm_sRGB> b;
+                Array<RGBA8Unorm_sRGB> b;
                 b.resize(n, p);
                 //DUMP(a.a.x);
                 //DUMP(a.a.y);

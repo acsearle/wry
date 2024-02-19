@@ -22,15 +22,17 @@
 
 namespace wry::Wavefront {
     
-    // Basics for each file
-    
     auto match_comment() {
         return match_and(match_character(u8'#'),
-                         match_until(match_not_empty(),
-                                     match_or(match_newline(),
-                                              match_empty())));
+                         match_line());
     }
     
+    auto match_ignore() {
+        return match_star(match_or(match_space(),
+                                   match_comment()));
+    }
+    
+    // match three numbers
     auto parse_xyz(auto xyz[]) {
         return [xyz](StringView& v) {
             return match_and(parse_number_relaxed(xyz[0]),
@@ -38,7 +40,16 @@ namespace wry::Wavefront {
                              parse_number_relaxed(xyz[2]))(v);
         };
     }
-    
+
+    auto parse_xyz(packed::float3& xyz) {
+        return [xyz=(float*)&xyz](StringView& v) {
+            return match_and(parse_number_relaxed(xyz[0]),
+                             parse_number_relaxed(xyz[1]),
+                             parse_number_relaxed(xyz[2]))(v);
+        };
+    }
+
+    // match one, two or three numbers
     auto parse_u_vw(auto u_vw[3]) {
         return [u_vw](StringView& sv) {
             return match_and(parse_number_relaxed(u_vw[0]),
@@ -47,6 +58,7 @@ namespace wry::Wavefront {
         };
     }
     
+    // match three or four numbers
     auto parse_xyz_w(auto xyz_w[4]) {
         return [xyz_w](StringView& v) {
             return match_and(parse_number_relaxed(xyz_w[0]),
@@ -55,19 +67,12 @@ namespace wry::Wavefront {
                              match_optional(parse_number_relaxed(xyz_w[3])))(v);
         };
     }
-        
-    auto parse_comment() {
-        return match_and(match_character('#'),
-                         match_until(match_or(match_print(),
-                                              match_hspace()),
-                                     match_newline()));
-    }
     
-    // Parses until newline or end of file, but excludes the termination from the
-    // view given to the effect
-    // special case of parse_until?
+    // parse up to newline or end of file, and consume the newline
     auto parse_line(auto&& effect) {
         return [effect=std::forward<decltype(effect)>(effect)](StringView& v) -> bool {
+            if (v.empty())
+                return false;
             for (auto u(v);;) {
                 auto w = u;
                 if (match_or(match_newline(), match_empty())(u)) {
@@ -80,246 +85,203 @@ namespace wry::Wavefront {
         };
     }
     
+    auto parse_posix_portable_filename(auto& x) {
+        return parse(match_posix_portable_filename(), 
+                     [&](auto v) {
+            x = v;
+        });
+    }
+
+    auto parse_posix_portable_path(auto& x) {
+        return parse(match_posix_portable_path(),
+                     [&](auto v) {
+            x = v;
+        });
+    }
+
     
-    struct MTLFile {
-        
-        // Wavefront .mtl format
-        
-        struct Material {
-                        
-            // Basic
-            
-            // ambient
-            packed::double3 Ka;
-            String map_Ka;
-            // diffuse
-            packed::double3 Kd;
-            String map_Kd;
-            // specular
-            packed::double3 Ks;
-            String map_Ks;
-            // index of refraction
-            double Ni;
-            // alpha
-            double d;
-            double illum;
-            double aniso;
-            double anisor;
-            
-            // Physically-Based
-            
-            // roughness
-            float Pr;
-            String map_Pr;
-            // metallic
-            float Pm;
-            String map_Pm;
-            // sheen
-            float Ps;
-            String map_Ps;
-            // clearcoat thickness
-            float Pc;
-            // clearcoat roughness
-            float Pcr;
-            // emissive
-            packed::double3 Ke;
-            String map_Ke;
-            // normal
-            String norm;
-            String map_Bump; // ??? Blender's export of normal map
-
-        };
-        
-        std::map<String, Material> named_materials;
-        
-        String current_name;
-        // string _current_key;
-        // std::map<string, string> _current_map;
-        Material current_material;
-        
-        void commit() {
-            // auto& a = _named_materials[_current_mtl];
-            //a._map.merge(std::move(_current_map));
-            named_materials[current_name] = current_material;
-            // leave current_material as the default for next material?
-            // or clear it?
-        }
-        
-        auto parse_newmtl() {
-            return match_and(match_string("newmtl"),
-                             match_spaces(),
-                             parse(match_posix_portable_filename(),
-                                   [this](StringView match) {
-                commit();
-                this->current_name = match;
-            }));
-        }
-        
-        /*
-        auto parse_key_value() {
-            return match_and(parse(match_graphs(),
-                                   [this](StringView match) {
-                this->_current_key = match;
-            }),
-         match_spaces(),
-                             parse(match_graphs(),
-                                   [this](StringView match) {
-                commit();
-                this->_current_map[this->_current_key] = match;
-            }));
-        }
-         */
-                
-#define PARSE_XYZ(X)\
-match_and(match_string(#X),\
-          match_plus(match_hspace()),\
-          parse_xyz((double*) &this->current_material. X ))
-
-#define PARSE_FILENAME(X)\
-match_and(match_string(#X),\
-          match_plus(match_hspace()),\
-          match_optional(match_and(match_string("-bm"),\
-                                   match_plus(match_hspace()),\
-                                   match_number(),\
-                                   match_plus(match_hspace()))),\
-          parse(match_posix_portable_filename(),\
-                [this](StringView match) {\
-    this->current_material. X  = match;\
-}))
-
-#define PARSE_NUMBER(X)\
-match_and(match_string(#X),\
-          match_plus(match_hspace()),\
-          parse_number_relaxed(this->current_material. X ))
-
-        
-        void parse_mtl(StringView& v) {
-            auto description = match_or(
-                                        parse_comment(),
-                                        parse_newmtl(),
-                                        PARSE_XYZ(Kd),
-                                        PARSE_XYZ(Ks),
-                                        PARSE_XYZ(Ke),
-                                        PARSE_NUMBER(Ni),
-                                        PARSE_NUMBER(d),
-                                        PARSE_NUMBER(illum),
-                                        PARSE_NUMBER(Pr),
-                                        PARSE_NUMBER(Pm),
-                                        PARSE_NUMBER(Ps),
-                                        PARSE_NUMBER(Pc),
-                                        PARSE_NUMBER(Pcr),
-                                        PARSE_NUMBER(aniso),
-                                        PARSE_NUMBER(anisor),
-                                        PARSE_FILENAME(map_Kd),
-                                        PARSE_FILENAME(map_Pr),
-                                        PARSE_FILENAME(map_Pm),
-                                        PARSE_FILENAME(map_Bump)
-                                        );
-            while (!v.empty()
-                   && match_spaces()(v)
-                   && description(v))
-                ;
-            commit();
-        }
-        
-        
-        void print() {
-            for (auto&& [k, v] : named_materials) {
-                printf("newmtl %.*s\n", (int) k.chars.size(), (const char*) k.data());
-#define PRINT_XYZ(X) printf(#X " %g %g %g\n", v.X.x, v.X.y, v.X.z)
-#define PRINT_NUMBER(X) printf(#X " %g\n", v.X)
-#define PRINT_STRING(X) printf(#X " %.*s\n", (int) v.X.chars.size(), (const char*) v.X.data())
-                PRINT_XYZ(Kd);
-                PRINT_XYZ(Ks);
-                PRINT_XYZ(Ke);
-                PRINT_NUMBER(Ni);
-                PRINT_NUMBER(d);
-                PRINT_NUMBER(illum);
-                PRINT_NUMBER(Ni);
-                PRINT_NUMBER(Pr);
-                PRINT_NUMBER(Pm);
-                PRINT_NUMBER(Ps);
-                PRINT_NUMBER(Pc);
-                PRINT_NUMBER(Pcr);
-                PRINT_NUMBER(aniso);
-                PRINT_NUMBER(anisor);
-                PRINT_STRING(map_Ka);
-                PRINT_STRING(map_Kd);
-                PRINT_STRING(map_Ke);
-                PRINT_STRING(map_Ks);
-                PRINT_STRING(map_Pm);
-                PRINT_STRING(map_Pr);
-                PRINT_STRING(map_Ps);
-                PRINT_STRING(map_Bump);
-
-                /*
-                for (auto&& [l, w] : v._map) {
-                    printf("%.*s\n %.*s\n", (int) l.chars.size(), (const char*) l.data(),
-                           (int) w.chars.size(), (const char*) w.data());
+    
+    
+    auto parse_Library(Library& x) {
+        return [&x](auto& v) {
+            for (;;) {
+                match_ignore()(v);
+                String s;
+                packed::float3 f;
+                float g;
+                if (match_and(match_string("newmtl"),
+                              match_hspace(),
+                              parse_posix_portable_path(s))(v)) {
+                    x.emplace_back();
+                    x.back().name = std::move(s);
+                    continue;
                 }
-                 */
+                if (x.empty())
+                    return true;
+                if (match_and(match_string("Kd"),
+                              match_hspace(),
+                              parse_xyz(f))(v)) {
+                    x.back().Kd.emplace<packed::float3>(f);
+                    continue;
+                }
+                if (match_and(match_string("map_Kd"),
+                              match_hspace(),
+                              parse_posix_portable_filename(s))(v)) {
+                    x.back().Kd.emplace<String>(std::move(s));
+                    continue;
+                }
+                if (match_and(match_string("Ks"),
+                              match_hspace(),
+                              parse_xyz(f))(v)) {
+                    x.back().Ks.emplace<packed::float3>(f);
+                    continue;
+                }
+                if (match_and(match_string("Ke"),
+                              match_hspace(),
+                              parse_xyz(f))(v)) {
+                    x.back().Ke.emplace<packed::float3>(f);
+                    continue;
+                }
+                if (match_and(match_string("map_Ke"),
+                              match_hspace(),
+                              parse_posix_portable_filename(s))(v)) {
+                    x.back().Ke.emplace<String>(std::move(s));
+                    continue;
+                }
+                if (match_and(match_string("Ni"),
+                              match_hspace(),
+                              parse_number(g))(v)) {
+                    x.back().Ni.emplace<float>(g);
+                    continue;
+                }
+                if (match_and(match_string("d"),
+                              match_hspace(),
+                              parse_number(g))(v)) {
+                    x.back().d.emplace<float>(g);
+                    continue;
+                }
+                if (match_and(match_string("illum"),
+                              match_hspace(),
+                              parse_number(g))(v)) {
+                    x.back().illum.emplace<float>(g);
+                    continue;
+                }
+
+                if (match_and(match_string("Pr"),
+                              match_hspace(),
+                              parse_number(g))(v)) {
+                    x.back().Pr.emplace<float>(g);
+                    continue;
+                }
+                if (match_and(match_string("map_Pr"),
+                              match_hspace(),
+                              parse_posix_portable_filename(s))(v)) {
+                    x.back().Pr.emplace<String>(std::move(s));
+                    continue;
+                }
+                if (match_and(match_string("Ps"),
+                              match_hspace(),
+                              parse_number(g))(v)) {
+                    x.back().Pr.emplace<float>(g);
+                    continue;
+                }
+                if (match_and(match_string("map_Ps"),
+                              match_hspace(),
+                              parse_posix_portable_filename(s))(v)) {
+                    x.back().Pr.emplace<String>(std::move(s));
+                    continue;
+                }
+
+                if (match_and(match_string("Pm"),
+                              match_hspace(),
+                              parse_number(g))(v)) {
+                    x.back().Pm.emplace<float>(g);
+                    continue;
+                }
+                if (match_and(match_string("map_Pm"),
+                              match_hspace(),
+                              parse_posix_portable_filename(s))(v)) {
+                    x.back().Pm.emplace<String>(std::move(s));
+                    continue;
+                }
+                if (match_and(match_string("Pc"),
+                              match_hspace(),
+                              parse_number(g))(v)) {
+                    x.back().Pm.emplace<float>(g);
+                    continue;
+                }
+                if (match_and(match_string("map_Pc"),
+                              match_hspace(),
+                              parse_posix_portable_filename(s))(v)) {
+                    x.back().Pm.emplace<String>(std::move(s));
+                    continue;
+                }
+                if (match_and(match_string("Pcr"),
+                              match_hspace(),
+                              parse_number(g))(v)) {
+                    x.back().Pm.emplace<float>(g);
+                    continue;
+                }
+                if (match_and(match_string("map_Pcr"),
+                              match_hspace(),
+                              parse_posix_portable_filename(s))(v)) {
+                    x.back().Pm.emplace<String>(std::move(s));
+                    continue;
+                }
+                if (match_and(match_string("aniso"),
+                              match_hspace(),
+                              parse_number(g))(v)) {
+                    x.back().aniso.emplace<float>(g);
+                    continue;
+                }
+                if (match_and(match_string("anisor"),
+                              match_hspace(),
+                              parse_number(g))(v)) {
+                    x.back().anisor.emplace<float>(g);
+                    continue;
+                }
+                if (match_and(match_string("map_Bump -bm"),
+                              match_hspace(),
+                              parse_number(g),
+                              match_hspace(),
+                              parse_posix_portable_filename(s))(v)) {
+                    x.back().map_Bump.emplace(g, std::move(s));
+                    continue;
+                }
+                
+                return true;
             }
-        }
-            
-    };
+        };
+    }
+
     
-    /*
-    struct OBJFile {
         
-        struct SmoothingGroup {
-            
-            String name;
-            Array<Index> triangles;
-            
-        };
-        
-        struct Group {
-            
-            String name;
-            String material;
-            Array<SmoothingGroup> smoothing_groups;
-            
-        };
-        
-        struct Object {
-            
-            String name;
-            Array<Group> groups;
-            
-        };
-        
-        Array<Object> objects;
-        
-    };
-     */
+    
+    
+    
     
     struct OBJFile {
         
         // Wavefront .obj format
         
         // Growing arrays of vertex fields
-        
-        // TODO: should these be float32?
-        
+                
         using Index = std::uint32_t;
         
-        Array<double4> positions;
-        Array<packed::double3> normals;
-        Array<packed::double3> coordinates;
-        Array<packed::double3> parameters;
+        Array<float4> positions;
+        Array<packed::float3> normals;
+        Array<packed::float3> coordinates;
+        Array<packed::float3> parameters;
         
-        // Material libraries
-        // TODO: load them
-        // TODO: vulnerability
-        Array<std::filesystem::path> mtllibs;
-        std::map<String, MTLFile::Material> materials;
+        // Running material library
+        Table<String, Material> materials;
         
         // Current face metadata
         String _current_smoothing_group;
         String _current_object_name;
         String _current_group_name;
-        MTLFile _current_materials;
-        MTLFile::Material _current_material;
+        Library _current_materials;
+        Material _current_material;
         
         // Current faces
         Array<Index> _current_faces;
@@ -331,7 +293,7 @@ match_and(match_string(#X),\
         struct Group {
             // TODO: What level is material changed at; is it always at a
             // group boundary?
-            MTLFile::Material usemtl;
+            Material usemtl;
             std::map<String, SmoothingGroup> smoothing_groups;
         };
         
@@ -355,9 +317,9 @@ match_and(match_string(#X),\
         
         auto parse_position() {
             return [this](StringView& v) {
-                simd_double4 position = {0, 0, 0, 1};
+                float4 position = {0, 0, 0, 1};
                 bool flag = match_and(match_character('v'),
-                                      parse_xyz_w((double*)&position))(v);
+                                      parse_xyz_w((float*)&position))(v);
                 if (flag) {
                     this->positions.push_back(position);
                 }
@@ -367,9 +329,9 @@ match_and(match_string(#X),\
         
         auto parse_coordinate() {
             return [this](StringView& v) {
-                packed::double3 coordinate = {0, 0, 0};
+                packed::float3 coordinate = {0, 0, 0};
                 return (match_and(match_string("vt"),
-                                  parse_u_vw((double*)&coordinate))(v)
+                                  parse_u_vw((float*)&coordinate))(v)
                         && ((void) this->coordinates.push_back(coordinate),
                             true));
             };
@@ -377,9 +339,9 @@ match_and(match_string(#X),\
         
         auto parse_normal() {
             return [this](StringView& v) {
-                packed::double3 normal = {0, 0, 0};
+                packed::float3 normal = {0, 0, 0};
                 return (match_and(match_string("vn"),
-                                  parse_xyz((double*)&normal))(v)
+                                  parse_xyz((float*)&normal))(v)
                         && ((void) this->normals.push_back(normal),
                             true));
             };
@@ -387,9 +349,9 @@ match_and(match_string(#X),\
         
         auto parse_parameters() {
             return [this](StringView& v) {
-                packed::double3 parameter = { 0, 0, 0};
+                packed::float3 parameter = { 0, 0, 0};
                 return (match_and(match_string("vp"),
-                                  parse_u_vw((double*)&parameter))(v)
+                                  parse_u_vw((float*)&parameter))(v)
                         && ((void) this->parameters.push_back(parameter),
                             true));
             };
@@ -421,7 +383,9 @@ match_and(match_string(#X),\
         }
         
         auto parse_face() {
-            // we could enforce triangles here and use a static sized index array
+            // TODO: static sized face array?
+            //       - require triangles?
+            //       - subdivide on load?
             Array<Index> indices;
             return [this, indices=std::move(indices)](StringView& v) mutable -> bool {
                 indices.clear();
@@ -460,9 +424,9 @@ match_and(match_string(#X),\
                                    [this](StringView match) {
                 std::filesystem::path name = wry::path_for_resource(match);
                 auto s = string_from_file(name);
-                printf("%.*s", (int) s.chars.size(), (const char*) s.data());
+                // printf("%.*s", (int) s.chars.size(), (const char*) s.data());
                 StringView v(s);
-                this->_current_materials.parse_mtl(v);
+                parse_Library(this->_current_materials)(v);
                 if (!v.empty()) {
                     if (v.chars.size() > 40) {
                         printf("ERROR: Parsed up to \"%.*s...\"\n", 40, (const char*) v.chars.data());
@@ -470,9 +434,7 @@ match_and(match_string(#X),\
                         printf("ERROR: Parsed up to \"%.*s\"\n", (int) v.chars.size(), (const char*) v.chars.data());
                     }
                     abort();
-                }
-                
-                // mtllibs.emplace_back(std::filesystem::path(match.begin(), match.end()));
+                }                
             }));
         }
         
@@ -480,14 +442,13 @@ match_and(match_string(#X),\
             return match_and(match_string("usemtl"),
                              match_plus(match_hspace()),
                              parse_line([this](StringView match) {
-                printf("parse_line \"%.*s\"\n", (int) match.chars.size(), (const char*) match.chars.data());
+                // printf("parse_line \"%.*s\"\n", (int) match.chars.size(), (const char*) match.chars.data());
                 commit();
-                auto it = _current_materials.named_materials.find(String(match));
-                if (it != _current_materials.named_materials.end()) {
-                    this->_current_material = it->second;
-                } else {
-                    // reset to default material
-                    this->_current_material = MTLFile::Material();
+                for (auto&& m : _current_materials) {
+                    if (m.name == match) {
+                        this->_current_material = m;
+                        return;
+                    }
                 }
             }));
         }
@@ -522,7 +483,7 @@ match_and(match_string(#X),\
                                         parse_group(),
                                         parse_usemtl(),
                                         parse_object(),
-                                        parse_comment(),
+                                        match_comment(),
                                         parse_mtllib()
                                         );
             while (!v.empty()
@@ -582,7 +543,7 @@ namespace wry {
         StringView u(s);
         Wavefront::OBJFile o;
         o.parse_obj(u);
-        o.print();
+        // o.print();
         if (!u.empty()) {
             if (u.chars.size() > 40) {
                 printf("ERROR: Parsed up to \"%.*s...\"\n", 40, (const char*) u.chars.data());

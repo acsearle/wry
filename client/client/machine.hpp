@@ -24,7 +24,7 @@ namespace wry::sim {
         } _phase = PHASE_WAITING_FOR_NEW;
         
         i64 _on_arrival = OPCODE_NOOP;
-        array<Value> _stack;
+        Array<Value> _stack;
         
         i64 _heading = 0;
         Coordinate _old_location = { 0, 0 };

@@ -24,18 +24,130 @@ namespace wry::sim {
     
     struct World {
         
+        // Current simulation time.  Waits are specfied against this clock.
         Time _tick = 0;
-        table<Coordinate, Tile> _tiles;
-        array<Entity*> _entities;
+        // Time increases by two each step so we can use the timestamp lsb to
+        // distinguish read and write states
         
+        // Sparse 2D grid of passive items in the world
+        Table<Coordinate, Tile> _tiles;
+        // TODO: Hash tables may move other items when insertion occurs, either
+        //       by rehashing or Robin Hood redistribution. This is a bit
+        //       awkward.
+        //     - Consider chunking to reduce overheads
+
+        // List of all entities in no particular order
+        Array<Entity*> _entities;
+        //     - For ownership
+        //     - For drawing
+        // TODO: Store for coordinate queries
+        
+        // A fair queue (per time) of entities to wake up at a given time
         std::multimap<Time, Entity*> _waiting_on_time;
+        // TODO: node-based container is slowish, consider
+        //       - priority_queue<pair<Time, InsertionOrder>, Entity*>
+        //       - StablePriorityQueue
         
-        // need this to respect insert ordering?
-        array<Entity*> _ready;
-        array<Entity*> _ready2;
+        
+        Table<Coordinate, Array<Entity*>> _waiting_on_coordinate;
+
+        // A fair queue of entities that are ready to execute immediately
+        Array<Entity*> _ready;
+        // They may originate from
+        // - awoken at the current time
+        // - awoken by a write to an observed tile
+        // - retrying after a conflicted operation
+                
+        // It seems clear that entities need to wait on many things, and maybe
+        // several parameters of the same thing
+        //
+        // Example: "TURN LEFT", but LEFT is obstructed
+        // - Wait for obstruction ahead to clear
+        // - Wait for instruction under entity to change
+        // - Wait for timeout to take alternative action
+        
+        // For robustness and simplicity, it seems good to allow spurious
+        // wakeups, and multiple appearances of entities in any queue, rather
+        // than enforcing uniqueness
+        
+        // Entities waiting on tiles to change are enqueued on those tiles,
+        // which is too much per-tile overhead.  This is a rather awkward
+        // many-to-many scenario.
+        
+        // We can store these instead in
+        // Table<Coordinate, Array<Entity*>>
+        // on the assumption that the number of entities is small and we don't
+        // need high performance removal of them entities
+
+        // As the simulation scales up the world becomes database like so it
+        // is fair to consider using some sort of DB, but the use of opcodes
+        // to drive complex behaviors including secondary lookups and writes
+        // seems ill-fitted to a SQL sort of workflow, unless we can break all
+        // possible ops into some sort of recipe of steps
+        
+        // Algorithm:
+        //
+        // Increase time
+        //
+        // Move all entities waiting on the new time into the ready queue
+        //
+        // For each entity in the ready queue, execute it.  The order of
+        // their execution is unspecified but deterministic and fair-ish.
+        //
+        // An entity will typically
+        // - read some things (self, tiles, other entities...)
+        // - decide on a course of action, posibly looping back to more reads
+        // - maybe write some things
+        // - maybe re-enqueue itself to wait on times or writes (or entities?)
+        //
+        // Transactional and regional restrictions are in place
+        // - Reads and writes can only be within some local neighbourhood
+        //   - This restricts the speed of light and makes parallelism possible
+        // - Entities read and write as-if in atomic transactions.
+        // - Entities cannot write to memory a committed transaction has read
+        //   from in this step.
+        // - Entities cannot read from memory a committed transaction has
+        //   written to this step.
+        //
+        // This means that of the ready Entities
+        // - All entities that write will operate as if they went first
+        // - All entities that retry will do so because they conflict with a
+        //   committed transaction
+        // - The set of entities that complete is
+        //   - maximal, in the sense that no further transaction can be done
+        //   - not optimal, meaning that there may exist a different subset
+        //     with more entities that could have comitted.  greedy?  can we
+        //     say anything about quality?
+        //   - not fair, in the sense that a transaction may fail because it
+        //     conflicts with a transaction further down the list
+        //   - deterministic, in that any client stepping the same system will
+        //     make the same choices - there is no platform defined behavior
+        //     at work.  There may be pseudorandomness from a seed in the state.
+        //     Note particularly that hash tables, pointer addresses, etc. do
+        //     expose platform implementation details so these must be avoided;
+        //     we must never rely on hash table iteration order, dor example.
+        
+        // For a single thread, we can just process the entities in order and
+        // be fair
+        
+        // For multiple threads, we can use locality to partition space.
+        // By column, for example, split into columns 0-15 and 16-31, then
+        // in two parallel jobs do the work for entities in 4-11 and 20-27
+        // (which will only read and write within a radius of 4 tiles).  When
+        // both have completed (via an atomic), launch the job for entities in
+        // 12-19.  This is anisotropic for "ribbon" bases so we may actually
+        // want a slightly more complicated 2d partitioning.  Care is needed
+        // to choose data structures that can allow writes in these dijoint
+        // regions without corrupting global state; naive hash tables notably
+        // can't do this
+        
+        
+        // Reused working array for step()
+        Array<Entity*> _step_ready;
                 
         void step() {
             
+            assert(!(_tick & 1));
             _tick += 2;
                         
             for (;;) {
@@ -49,12 +161,12 @@ namespace wry::sim {
                 _waiting_on_time.erase(p);
             }
             
-            assert(_ready2.empty());
+            assert(_step_ready.empty()); // empty but usually with some capacity to reuse
             using std::swap;
-            swap(_ready, _ready2);
-            while (!_ready2.empty()) {
-                Entity* p = _ready2.front();
-                _ready2.pop_front();
+            swap(_ready, _step_ready);
+            while (!_step_ready.empty()) {
+                Entity* p = _step_ready.front();
+                _step_ready.pop_front();
                 p->notify(*this);
             }
             

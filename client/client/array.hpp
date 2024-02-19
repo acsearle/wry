@@ -9,8 +9,6 @@
 #define array_hpp
 
 #include <iterator>
-#include <iostream>
-#include <optional>
 
 #include "algorithm.hpp"
 #include "array_view.hpp"
@@ -41,17 +39,14 @@ namespace wry {
     // Array currently assumes that the stored type is Relocatable
     
     template<typename> 
-    struct array;
+    struct Array;
     
     template<typename T>
-    using Array = array<T>;
-    
-    template<typename T>
-    struct rank<array<T>> 
+    struct rank<Array<T>> 
     : std::integral_constant<std::size_t, rank<T>::value + 1> {};
         
     template<typename T>
-    struct array {
+    struct Array {
                 
         using size_type = size_type;
         using difference_type = difference_type;
@@ -99,30 +94,30 @@ namespace wry {
             _allocation_end = _allocation_begin + count;
         }
         
-        array() noexcept
+        Array() noexcept
         : _allocation_begin(nullptr)
         , _begin(nullptr)
         , _end(nullptr)
         , _allocation_end(nullptr) {
         }
         
-        array(const array& other) 
-        : array(wry::with_capacity, other.size()) {
+        Array(const Array& other) 
+        : Array(wry::with_capacity, other.size()) {
             _end = std::uninitialized_copy(other.begin(), other.end(), _end);
         }
         
-        array(array&& other)
+        Array(Array&& other)
         : _allocation_begin(exchange(other._allocation_begin, nullptr))
         , _begin(exchange(other._begin, nullptr))
         , _end(exchange(other._end, nullptr))
         , _allocation_end(exchange(other._allocation_end, nullptr)) {
         }
         
-        ~array() {
+        ~Array() {
             _destroy();
         }
         
-        array& operator=(const array& other) {
+        Array& operator=(const Array& other) {
             if (other.size() <= size()) {
                 iterator last = std::copy(other.begin(), other.end(), _begin);
                 std::destroy(last, _end);
@@ -140,7 +135,7 @@ namespace wry {
             return *this;
         }
         
-        array& operator=(array&& other) {
+        Array& operator=(Array&& other) {
             _destroy();
             _allocation_begin = std::exchange(other._allocation_begin, nullptr);
             _begin = std::exchange(other._begin, nullptr);
@@ -150,25 +145,25 @@ namespace wry {
         }
 
         
-        explicit array(size_type count)
-        : array(wry::with_capacity_t{}, count) {
+        explicit Array(size_type count)
+        : Array(wry::with_capacity_t{}, count) {
             _end = std::uninitialized_value_construct_n(_begin, count);
         }
 
         template<typename U>
-        explicit array(std::initializer_list<U> x)
-        : array(x.begin(), x.end()) {
+        explicit Array(std::initializer_list<U> x)
+        : Array(x.begin(), x.end()) {
         }
 
-        explicit array(auto&& other) : array() {
+        explicit Array(auto&& other) : Array() {
             using std::begin;
             using std::end;
             assign(begin(other), end(other));
         }
         
         template<typename U>
-        explicit array(array<U>&& other)
-        : array(std::make_move_iterator(other.begin()),
+        explicit Array(Array<U>&& other)
+        : Array(std::make_move_iterator(other.begin()),
                 std::make_move_iterator(other.end())) {
         }
 
@@ -176,34 +171,34 @@ namespace wry {
         // representation-interconvertible types such as {byte, char, char8_t},
         // {intN_t and uintN_t}, {T*, intptr_t, uintptr_t, size_t, difference_t}
 
-        array(wry::with_capacity_t, size_type count)
+        Array(wry::with_capacity_t, size_type count)
         : _allocation_begin(_allocate_size(count))
         , _begin(_allocation_begin)
         , _end(_begin)
         , _allocation_end(_allocation_begin + count) {
         }
         
-        array(auto first, auto last, std::input_iterator_tag)
-        : array() {
+        Array(auto first, auto last, std::input_iterator_tag)
+        : Array() {
             std::copy(first, last, std::back_inserter(*this));
         }
         
-        array(auto first, auto last, std::random_access_iterator_tag)
-        : array(wry::with_capacity_t{}, std::distance(first, last)) {
+        Array(auto first, auto last, std::random_access_iterator_tag)
+        : Array(wry::with_capacity_t{}, std::distance(first, last)) {
             _end = std::uninitialized_copy(first, last, _end);
         }
         
-        array(auto first, decltype(first) last)
-        : array(first, last,
+        Array(auto first, decltype(first) last)
+        : Array(first, last,
                 typename std::iterator_traits<std::decay_t<decltype(first)>>::iterator_category{}) {
         }
 
-        array(size_type count, const value_type& value) noexcept
-        : array(wry::with_capacity, count) {
+        Array(size_type count, const value_type& value) noexcept
+        : Array(wry::with_capacity, count) {
             _end = std::uninitialized_fill_n(_begin, count, value);
         }
                                 
-        array(T* allocation_begin_,
+        Array(T* allocation_begin_,
               T* begin_,
               T* end_,
               T* allocation_end_) noexcept
@@ -214,7 +209,7 @@ namespace wry {
             assert(invariant());
         }
                 
-        array& operator=(auto&& other) {
+        Array& operator=(auto&& other) {
             if constexpr (wry::rank<std::decay_t<decltype(other)>>::value == 0) {
                 fill(std::forward<decltype(other)>(other));
             } else {
@@ -225,12 +220,12 @@ namespace wry {
             return *this;
         }
         
-        operator array_view<T>&() {
-            return reinterpret_cast<array_view<T>&>(_begin);
+        operator ArrayView<T>&() {
+            return reinterpret_cast<ArrayView<T>&>(_begin);
         }
 
-        operator const array_view<const T>&() const {
-            return reinterpret_cast<const array_view<const T>&>(_begin);
+        operator const ArrayView<const T>&() const {
+            return reinterpret_cast<const ArrayView<const T>&>(_begin);
         }
                 
         iterator& begin() { return _begin; }
@@ -251,7 +246,7 @@ namespace wry {
             return std::equal(begin(), end(), begin(other), end(other));
         }
         
-        void swap(array& other) {
+        void swap(Array& other) {
             using std::swap;
             swap(_allocation_begin, other._allocation_begin);
             swap(_begin, other._begin);
@@ -326,12 +321,12 @@ namespace wry {
             _begin = _end;
         }
         
-        array& assign(auto first, decltype(first) last) {
+        Array& assign(auto first, decltype(first) last) {
             return _assign(first, last,
                            typename std::iterator_traits<std::decay_t<decltype(first)>>::iterator_category());
         }
         
-        array& assign(size_type count, const value_type& value) {
+        Array& assign(size_type count, const value_type& value) {
             if (count <= size()) {
                 iterator pos = std::fill_n(begin(), count, value);
                 std::destroy(pos, _end);
@@ -347,7 +342,7 @@ namespace wry {
             return *this;
         }
         
-        array& fill(const value_type& value) {
+        Array& fill(const value_type& value) {
             std::fill(begin(), end(), value);
             return *this;
         }
@@ -485,7 +480,7 @@ namespace wry {
         }
                 
         void shrink_to_fit() const {
-            array(*this).swap(*this);
+            Array(*this).swap(*this);
         }
                         
         void resize(size_t count) {
@@ -510,16 +505,16 @@ namespace wry {
         
         // [[Rust]] std::collections::Vec
         
-        static array with_capacity(size_type count) {
+        static Array with_capacity(size_type count) {
             T* p = static_cast<T*>(::operator new(count * sizeof(T)));
-            return array(p, p, p, p + count);
+            return Array(p, p, p, p + count);
         }
         
-        static array from_raw_parts(T* allocation_begin_,
+        static Array from_raw_parts(T* allocation_begin_,
                                     T* begin_,
                                     T* end_,
                                     T* allocation_end_) {
-            return array(allocation_begin_, begin_, end_, allocation_end_);
+            return Array(allocation_begin_, begin_, end_, allocation_end_);
         }
         
         std::tuple<T*, T*, T*, T*> into_raw_parts() && {
@@ -589,7 +584,7 @@ namespace wry {
         // Implementation
             
         template<typename InputIt>
-        array& _assign(InputIt first, InputIt last, std::input_iterator_tag) {
+        Array& _assign(InputIt first, InputIt last, std::input_iterator_tag) {
             T* pos = _begin;
             for (;; ++pos, ++first) {
                 if (first == last) {
@@ -609,7 +604,7 @@ namespace wry {
         }
         
         template<typename InputIt>
-        array& _assign(InputIt first, InputIt last, std::random_access_iterator_tag) {
+        Array& _assign(InputIt first, InputIt last, std::random_access_iterator_tag) {
             size_type count = std::distance(first, last);
             if (count <= size()) {
                 iterator end2 = std::copy(first, last, begin());
@@ -848,7 +843,7 @@ namespace wry {
             append(std::begin(x), std::end(x));
         }
 
-        void append(array&& x) {
+        void append(Array&& x) {
             if (empty()) {
                 *this = std::move(x);
             } else if ((capacity_back() >= x.size())
@@ -866,7 +861,7 @@ namespace wry {
                 _begin = _end;
                 swap(x);
             } else {
-                array y(wry::with_capacity, size() + x.size());
+                Array y(wry::with_capacity, size() + x.size());
                 assert(y.capacity_back() >= size());
                 relocate(_begin, _end, y._end);
                 y._end += size();
@@ -881,95 +876,95 @@ namespace wry {
 
         //
         
-        array_view<T>& as_view() {
-            return reinterpret_cast<array_view<T>&>(_begin);
+        ArrayView<T>& as_view() {
+            return reinterpret_cast<ArrayView<T>&>(_begin);
         }
 
-        const array_view<const T>& as_view() const {
-            return reinterpret_cast<const array_view<const T>&>(_begin);
+        const ArrayView<const T>& as_view() const {
+            return reinterpret_cast<const ArrayView<const T>&>(_begin);
         }
 
-        array_view<const T>& as_const_view() {
-            return reinterpret_cast<array_view<const T>&>(_begin);
+        ArrayView<const T>& as_const_view() {
+            return reinterpret_cast<ArrayView<const T>&>(_begin);
         }
 
-        const array_view<const T>& as_const_view() const {
-            return reinterpret_cast<const array_view<const T>&>(_begin);
+        const ArrayView<const T>& as_const_view() const {
+            return reinterpret_cast<const ArrayView<const T>&>(_begin);
         }
 
-        array_view<const byte> as_bytes() {
-            return array_view<const byte>(reinterpret_cast<const byte*>(_begin),
+        ArrayView<const byte> as_bytes() {
+            return ArrayView<const byte>(reinterpret_cast<const byte*>(_begin),
                                                    reinterpret_cast<const byte*>(_end));
         }
 
-        array_view<T> sub(difference_type i, size_type n) {
+        ArrayView<T> sub(difference_type i, size_type n) {
             assert(0 <= i);
             assert(i + n <= size());
-            return array_view(_begin + i, n);
+            return ArrayView(_begin + i, n);
         }
 
-        array_view<const T> sub(difference_type i, size_type n) const {
+        ArrayView<const T> sub(difference_type i, size_type n) const {
             assert(0 <= i);
             assert(i + n <= size());
-            return array_view(_begin + i, n);
+            return ArrayView(_begin + i, n);
         }
 
-        array_view<const T> csub(difference_type i, size_type n) const {
+        ArrayView<const T> csub(difference_type i, size_type n) const {
             assert(0 <= i);
             assert(i + n <= size());
-            return array_view(_begin + i, n);
+            return ArrayView(_begin + i, n);
         }
 
         // Array structs for all T share a compatible layout of four pointers,
-        // so we can pun the entire array into an array of a different type,
+        // so we can pun the entire Array into an Array of a different type,
         // and even mutate it in that form.  This relies on common
         // implementation-defined behavior:
         //   - type punning
         //   - pointers are addresses
         //   - ?
-        // When mutating the reinterpreted array, we must leave it in a state
-        // that respects the size and alignment of the original array.
+        // When mutating the reinterpreted Array, we must leave it in a state
+        // that respects the size and alignment of the original Array.
         //
-        // Similarly, the three regions of the array (left, middle, and right)
+        // Similarly, the three regions of the Array (left, middle, and right)
         // can themselves be punned to mutable array_views.  A common use
         // case for this might be to supply the right region as a buffer
         // for bulk writes, with the writer moving up the view's _begin
-        // which aliases the array's _end, and thus directly leaving the array
+        // which aliases the array's _end, and thus directly leaving the Array
         // in the right state.
         //
         // Compare with Rust `Vec::spare_capacity_mut` and `set_len`.
         
         template<typename U>
-        array<U>& reinterpret_as() {
-            return reinterpret_cast<array<U>&>(*this);
+        Array<U>& reinterpret_as() {
+            return reinterpret_cast<Array<U>&>(*this);
         }
 
         template<typename U>
-        const array<U>& reinterpret_as() const {
-            return reinterpret_cast<const array<U>&>(*this);
+        const Array<U>& reinterpret_as() const {
+            return reinterpret_cast<const Array<U>&>(*this);
         }
 
-        array<byte>& bytes() {
-            return reinterpret_cast<array<byte>&>(*this);
+        Array<byte>& bytes() {
+            return reinterpret_cast<Array<byte>&>(*this);
         }
 
-        const array<byte>& bytes() const {
-            return reinterpret_cast<const array<byte>&>(*this);
+        const Array<byte>& bytes() const {
+            return reinterpret_cast<const Array<byte>&>(*this);
         }
                 
         template<typename U = Maybe<T>>
-        array_view<U>& reinterpret_left_as() {
-            return reinterpret_cast<array_view<U>&>(_allocation_begin);
+        ArrayView<U>& reinterpret_left_as() {
+            return reinterpret_cast<ArrayView<U>&>(_allocation_begin);
         }
         
         template<typename U = T>
-        array_view<U>& reinterpret_middle_as() {
-            return reinterpret_cast<array_view<U>&>(_begin);
+        ArrayView<U>& reinterpret_middle_as() {
+            return reinterpret_cast<ArrayView<U>&>(_begin);
         }
 
         template<typename U = Maybe<T>>
-        array_view<U>& reinterpret_right_as() {
-            return reinterpret_cast<array_view<U>&>(_end);
+        ArrayView<U>& reinterpret_right_as() {
+            return reinterpret_cast<ArrayView<U>&>(_end);
         }
         
         
@@ -1017,10 +1012,10 @@ namespace wry {
             return std::find_if(_begin, _end,  std::forward<decltype(predicate)>(predicate)) != _end;
         }
 
-    }; // struct array<T>
+    }; // struct Array<T>
     
     template<typename T>
-    void swap(array<T>& a, array<T>& b) {
+    void swap(Array<T>& a, Array<T>& b) {
         a.swap(b);
     }
     

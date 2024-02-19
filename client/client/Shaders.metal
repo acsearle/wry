@@ -109,7 +109,8 @@ float3 Fresnel_Schlick_roughness(float cosTheta, float3 F0, float roughness) {
 
 // "Split sum" approximation lookup table
 
-//TODO: make this a kernel operation
+// TODO: make this a kernel operation
+// TODO: just load it?
 [[vertex]] float4
 split_sum_vertex_function(ushort i [[vertex_id]],
                           const device float4* vertices [[buffer(AAPLBufferIndexVertices)]]) {
@@ -184,17 +185,39 @@ namespace deferred {
         float4 normal_world;
     };
     
+    // This is the g-buffer
+    //
+    // Note use of raster order groups
+    //
+    // Metal does not(?) allow reading back from depth buffer so we compute it
+    // in user space
+    
+    // TODO: occlusion, clearcoat, clearcoat roughness
+    //
+    // TODO: is g-buffer storage 'free' until we free up the imageblock?
+    //       perhaps we should just write out the world position
+    
     struct FragmentFunctionOutput {
-        half4 light [[color(AAPLColorIndexColor), 
-                      raster_order_group(AAPLRasterOrderGroupLighting)]];
-        half4 albedo_metallic [[color(AAPLColorIndexAlbedoMetallic), 
-                                raster_order_group(AAPLRasterOrderGroupGBuffer)]];
-        half4 normal_roughness [[color(AAPLColorIndexNormalRoughness), 
-                                 raster_order_group(AAPLRasterOrderGroupGBuffer)]];
-        float depth [[color(AAPLColorIndexDepth), 
-                      raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+
+        // emission is written here in first pass
+        // lighting is accumulated here by susbequent passes
+        half4 light              [[color(AAPLColorIndexColor),
+                                   raster_order_group(AAPLRasterOrderGroupLighting)]];
+
+        // these surface properties are immutable on later passes
+        half4 albedo_metallic    [[color(AAPLColorIndexAlbedoMetallic),
+                                   raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        
+        half4 normal_roughness    [[color(AAPLColorIndexNormalRoughness),
+                                    raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        
+        float depth               [[color(AAPLColorIndexDepth),
+                                    raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        
     };
     
+    // TODO: consider an object function and a mesh function
+    //       - expand tiles on the fly from their instance properties
     
     [[vertex]] VertexFunctionOutput
     vertex_function(uint vertex_id [[ vertex_id ]],
@@ -220,12 +243,9 @@ namespace deferred {
         return out;
     }
     
-    //TODO: replace with an object function and a mesh function?
-    // the object function will run once per instance
-    // the instance will contain the vertex range for the submesh
-    // the object function will spawn the appropriate number of mesh functions
-    // the mesh functions will emit triangles
-    
+    // TODO: Three.js shaders suggest there is a conventional structure for
+    //       texture packing like OcclusionRoughnessMetallic <=> RGB
+
     [[fragment]] FragmentFunctionOutput
     fragment_function(VertexFunctionOutput in [[stage_in]],
                                bool front_facing [[front_facing]], //:todo: for debugging
@@ -237,6 +257,7 @@ namespace deferred {
                                texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]])
     
     {
+        
         constexpr sampler trilinearSampler(mag_filter::linear,
                                            min_filter::linear,
                                            mip_filter::linear,
@@ -247,6 +268,8 @@ namespace deferred {
         
         half4 albedoSample = albedoTexture.sample(trilinearSampler, in.coordinate.xy);
         
+        // the g-buffer can't support transparency so we just discard on a
+        // threshold
         if (albedoSample.a < 0.5f)
             discard_fragment();
         
@@ -263,9 +286,9 @@ namespace deferred {
                 
         out.light = front_facing ? emissiveSample : half4(1.0h, 0.0h, 1.0h, 0.0h);
         out.albedo_metallic.rgb = front_facing ? albedoSample.rgb : 0.0h;
-        out.albedo_metallic.a = front_facing ? metallicSample.r : 0.0h;
+        out.albedo_metallic.a = front_facing ? metallicSample.b : 0.0h;
         out.normal_roughness.xyz = front_facing ? normal : 0.0h;
-        out.normal_roughness.w = front_facing ? roughnessSample.r : 1.0h;
+        out.normal_roughness.w = front_facing ? roughnessSample.g : 1.0h;
         
         // this choice of depth is the same as the hardware depth buffer
         // note we cannot read the hardware depth buffer in the same pass
@@ -274,13 +297,14 @@ namespace deferred {
         return out;
         
     }
-        
+    
+    
+    
     struct ShadowVertexFunctionOutput {
         float4 clipSpacePosition [[position]];
         float4 coordinate;
     };
-    
-    
+        
     [[vertex]] ShadowVertexFunctionOutput
     shadow_vertex_function(uint vertex_id [[ vertex_id ]],
                                     uint instance_id [[ instance_id ]],

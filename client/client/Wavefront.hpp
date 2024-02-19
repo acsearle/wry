@@ -8,8 +8,14 @@
 #ifndef Wavefront_hpp
 #define Wavefront_hpp
 
+#include <optional>
+
 #include "filesystem.hpp"
 #include "mesh.hpp"
+
+// TODO:
+// - tinyobj_loader_c
+// - cglTF ?
 
 namespace wry {
     
@@ -19,17 +25,28 @@ namespace wry {
 
 namespace wry::Wavefront {
     
-    // Wavefront .mtl files associated with different .obj files may use the
-    // same names for materials, so we can't have a global set of materials?
+    struct Material {
+        String name;
+        std::variant<std::monostate, packed::float3, String> Kd;
+        std::variant<std::monostate, packed::float3, String> Ks;
+        std::variant<std::monostate, packed::float3, String> Ke;
+        std::variant<std::monostate, float, String> Ni;
+        std::variant<std::monostate, float, String> d;
+        std::variant<std::monostate, float, String> illum;
+        std::variant<std::monostate, float, String> Pr;
+        std::variant<std::monostate, float, String> Pm;
+        std::variant<std::monostate, float, String> Pc;
+        std::variant<std::monostate, float, String> Pcr;
+        std::variant<std::monostate, float, String> aniso;
+        std::variant<std::monostate, float, String> anisor;
+        std::optional<std::pair<float, String>> map_Bump;
+    };
     
-    // Need to be able to compare paths well enough to only load textures once
+    using Library = Array<Material>;
     
-    // Need async texture loading?  Since we want to generate mip-maps on the
-    // GPU
-    
-    // Can we use coroutines for this without going crazy?  No scheduler, just
-    // called back by GPU on arbitrary thread
-   
+    struct Object {
+        
+    };
     
 } // wry::Wavefront
 

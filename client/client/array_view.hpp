@@ -15,30 +15,26 @@
 
 namespace wry {
 
-    // array_view into a contguous sequence
+    // ArrayView into a contguous sequence
     //
     // compare span, slice, range
     //
-    // array_view models a reference; assignment assigns to the elements, not
-    // the bounds.  array_view<const T>::operator= is an error.  use ::reset to
-    // change what the array_view points into
+    // ArrayView models a reference; assignment assigns to the elements, not
+    // the bounds.  ArrayView<const T>::operator= is an error.  use ::reset to
+    // change what the ArrayView points into
     
-    // array_view is always a contiguous true pointer; compare vector_view which
+    // ArrayView is always a contiguous true pointer; compare vector_view which
     // may not be (as when iterating over a stride_ptr)
         
     template<typename T>
-    struct array_view;
+    struct ArrayView;
     
     template<typename T>
-    using ArrayView = array_view<T>;
-    
-    
-    template<typename T>
-    struct rank<array_view<T>> 
+    struct rank<ArrayView<T>> 
     : std::integral_constant<std::size_t, rank<T>::value + 1> {};
     
     template<typename T>
-    struct array_view {
+    struct ArrayView {
         
         using size_type = size_t;
         using difference_type = ptrdiff_t;
@@ -62,30 +58,30 @@ namespace wry {
             return _begin <= _end;
         }
                                 
-        array_view() = default;
+        ArrayView() = default;
         
         // reference semantics: copy is a shallow
         
-        array_view(const array_view&) = default;
-        array_view(array_view&&) = default;
+        ArrayView(const ArrayView&) = default;
+        ArrayView(ArrayView&&) = default;
                 
-        ~array_view() = default;
+        ~ArrayView() = default;
         
         // reference semantics: assignment is deep
         
-        array_view& operator=(const array_view& other) {
+        ArrayView& operator=(const ArrayView& other) {
             copy(other._begin, other._end, _begin, _end);
             return *this;
         }
         
-        array_view& operator=(array_view&& other) {
+        ArrayView& operator=(ArrayView&& other) {
             copy(other._begin, other._end, _begin, _end);
             return *this;
         }
         
         // converting constructors
         
-        explicit array_view(auto&& other)
+        explicit ArrayView(auto&& other)
         : _begin(std::begin(other))
         , _end(std::end(other)) {
             assert(invariant());
@@ -93,18 +89,18 @@ namespace wry {
         
         // sequence constructors
         
-        array_view(iterator first, iterator last)
+        ArrayView(iterator first, iterator last)
         : _begin(first)
         , _end(last) {
             assert(invariant());
         }
         
-        array_view(pointer first, size_type count)
+        ArrayView(pointer first, size_type count)
         : _begin(first)
         , _end(first + count) {
         }
         
-        array_view& assign(auto&& first, auto&& last) const {
+        const ArrayView& assign(auto&& first, auto&& last) const {
             copy(std::forward<decltype(first)>(first),
                  std::forward<decltype(last)>(last),
                  _begin,
@@ -112,12 +108,12 @@ namespace wry {
             return *this;
         }
         
-        array_view& fill(const auto& value) const {
+        const ArrayView& fill(const auto& value) const {
             std::fill(_begin, _end, value);
             return *this;
         }
 
-        array_view& operator=(auto&& other) const {
+        const ArrayView& operator=(auto&& other) const {
             if constexpr (wry::rank<std::decay_t<decltype(other)>>::value == 0) {
                 fill(std::forward<decltype(other)>(other));
             } else {
@@ -203,20 +199,20 @@ namespace wry {
         
         // subviews
         
-        array_view subview(size_type i, size_type n) const {
+        ArrayView subview(size_type i, size_type n) const {
             precondition((i + n) <= size());
-            return array_view(_begin + i, n);
+            return ArrayView(_begin + i, n);
         }
 
-        // mutate the array_view itself
+        // mutate the ArrayView itself
         
-        array_view& reset() {
+        ArrayView& reset() {
             _begin = nullptr;
             _end = nullptr;
             return *this;
         }
         
-        array_view& reset(auto&& other) {
+        ArrayView& reset(auto&& other) {
             using std::begin;
             using std::end;
             _begin = begin(other);
@@ -224,13 +220,13 @@ namespace wry {
             return *this;
         }
         
-        array_view& reset(pointer first, size_type count) {
+        ArrayView& reset(pointer first, size_type count) {
             _begin = first;
             _end = first + count;
             return *this;
         }
         
-        array_view& reset(iterator first, iterator last) {
+        ArrayView& reset(iterator first, iterator last) {
             _begin = first;
             _end = last;
             return *this;
@@ -259,13 +255,13 @@ namespace wry {
         // unsafe alternative views
         
         template<typename U>
-        const array_view<U>& reinterpret_as() const {
-            return reinterpret_cast<const array_view<U>&>(*this);
+        const ArrayView<U>& reinterpret_as() const {
+            return reinterpret_cast<const ArrayView<U>&>(*this);
         }
         
         template<typename U>
-        array_view<U>& reinterpret_as() {
-            return reinterpret_cast<array_view<U>&>(*this);
+        ArrayView<U>& reinterpret_as() {
+            return reinterpret_cast<ArrayView<U>&>(*this);
         }
                 
         // bulk-copy interface
@@ -402,7 +398,7 @@ namespace wry {
         }
         
 #define X(Y) \
-        array_view& operator Y (auto&& other) {\
+        ArrayView& operator Y (auto&& other) {\
             if constexpr (wry::rank<std::decay_t<decltype(other)>>::value == 0) {\
                 iterator first = _begin;\
                 for (; first != _end; ++first)\
@@ -435,10 +431,10 @@ namespace wry {
 
 #undef X
         
-    }; // struct array_view<T>
+    }; // struct ArrayView<T>
     
     template<typename T>
-    void swap(const array_view<T>& x, const array_view<T>& y) {
+    void swap(const ArrayView<T>& x, const ArrayView<T>& y) {
         x.swap(y);
     }
         

@@ -28,22 +28,19 @@ namespace wry {
     WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_INTEGER_TYPES
     WRY_X_OF_T_FOR_T_IN_FIXED_WIDTH_FLOAT_TYPES
     X(String)
+    X(StringView)
 #undef X
 
     // Serialize sequences
     
     template<typename T, typename S> 
-    void serialize(const array_view<T>& x, S&& serializer) {
+    void serialize(const ArrayView<T>& x, S&& serializer) {
         auto seq = std::forward<S>(serializer).serialize_seq(Some(x.size()));
         for (const auto& e : x)
             seq.serialize_element(e);
         seq.end();
     }
- 
-    
-    
-   
-    
+     
 } // namespace wry
 
 #endif /* serialize_hpp */

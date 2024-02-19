@@ -110,8 +110,8 @@ namespace wry {
         };
         
         Result encode(State& self, 
-                      array_view<const byte>& source,
-                      array_view<char>& sink) {
+                      ArrayView<const byte>& source,
+                      ArrayView<char>& sink) {
             assert(self.invariant());
             if (self.padded)
                 return INVALID;
@@ -130,7 +130,7 @@ namespace wry {
             }
         }
         
-        Result encode_finalize(State& self, array_view<char>& sink) {
+        Result encode_finalize(State& self, ArrayView<char>& sink) {
             assert(self.invariant());
             while (self.count >= 6) {
                 if (sink.empty())
@@ -157,7 +157,7 @@ namespace wry {
             return OK;
         }
         
-        Result decode(State& self, array_view<const char>& source, array_view<byte>& sink) {
+        Result decode(State& self, ArrayView<const char>& source, ArrayView<byte>& sink) {
             assert(self.invariant());
             for (;;) {
                 if (self.count >= 8) {

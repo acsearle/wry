@@ -108,11 +108,11 @@ namespace wry {
     template<typename T>
     struct _deserialize_array_visitor {
         
-        using Value = array<T>;
+        using Value = Array<T>;
         
         template<typename A>
-        array<T> visit_seq(A&& access) {
-            array<T> x;
+        Array<T> visit_seq(A&& access) {
+            Array<T> x;
             for (;;) {
                 Option<T> y = access.template next_element<T>();
                 if (y.is_some())
@@ -124,7 +124,7 @@ namespace wry {
     };
     
     template<typename T, typename D>
-    array<T> deserialize(std::in_place_type_t<array<T>>, D&& deserializer) {
+    Array<T> deserialize(std::in_place_type_t<Array<T>>, D&& deserializer) {
         return std::forward<D>(deserializer).deserialize_seq(_deserialize_array_visitor<T>{});
     }
     

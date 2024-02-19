@@ -44,7 +44,7 @@ namespace wry {
         
         // debug state
         
-        array<String> _console;
+        Array<String> _console;
         std::multimap<std::chrono::steady_clock::time_point, String> _logs;
         
         bool _console_active = false;        

@@ -12,7 +12,7 @@ namespace wry {
     
     define_test("array") {
         
-        array<int> a;
+        Array<int> a;
         
         assert(a.is_empty());
         assert(a.size() == 0);

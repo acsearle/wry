@@ -94,6 +94,8 @@ namespace wry {
     // unlike libc++'s trivial std::hash implementation, suitable for direct
     // use in hash tables (in non-adversarial environments)
     //
+    // TODO: obsolete for hashing?
+    
     inline uint64_t hash(uint64_t x) {
         x = x * 3935559000370003845ull + 2691343689449507681ull;
         x ^= x >> 21; x ^= x << 37; x ^= x >> 4;
@@ -194,6 +196,80 @@ namespace wry {
     
     
     
-}
+    
+    
+    // constexpr FNV-1a hash for strings
+    // https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
+    
+    // constexpr hashing can't use memcpy or reinterpret_cast
+    
+    // primary virtue is simplicity.  the top byte will be unaffected
+    // (barring carry) by the last two bytes of the input; hash tables should
+    // use the lsbs, possibly ignoring the last one?  seems to not be a problem
+    // given widespread use in the past
+    
+    // we can compute the hash of a long string piecewise by chaining the hash
+    // state
+    
+    constexpr uint64_t FNV1A_OFFSET_BASIS = 0xcbf29ce484222325;
+    constexpr uint64_t FNV1A_PRIME = 0x00000100000001b3;
+    
+    constexpr uint64_t fnv1a(const char* str, uint64_t hash = FNV1A_OFFSET_BASIS) {
+        assert(str);
+        for (; *str; ++str) {
+            hash ^= (unsigned char) *str;
+            hash *= FNV1A_PRIME;
+        }
+        return hash;
+    }
+    
+    // Hashed strings give us a conventional hash of the string's contents that
+    // is independent of the string identity (requiring no lookup) but only
+    // fast for mismatch
+    
+    constexpr uint64_t UINT64_T_MSB = 0x8000000000000000;
+        
+    struct hashed_str {
+        
+        uint64_t _hash;
+        const char* _str;
+        
+        explicit constexpr hashed_str(const char* str)
+        : _hash(fnv1a(str) | UINT64_T_MSB)
+        , _str(str) {
+        }
+        
+        constexpr bool empty() const {
+            return !_hash;
+        }
+        
+        constexpr uint64_t hash() const {
+            return _hash;
+        }
+        
+        constexpr const char* str() const {
+            return _str;
+        }
+        
+        constexpr bool operator==(const hashed_str& other) const {
+            if (_hash != other._hash)
+                return false;
+            // Overwhelmingly likely to be a match, but strcmp will have to
+            // take two cache misses to load and iterate over both strings to
+            // prove it.  It seems worth comparing the pointers in the hope
+            // that they point to the same copy of the string.
+            if (_str == other._str)
+                return true;
+            // Unlike strcmp, __builtin_strcmp is constexpr
+            return __builtin_strcmp(_str, other._str);
+        }
+        
+    };
+    
+    constexpr hashed_str operator""_hashed(const char* str, std::size_t size) {
+        return hashed_str(str);
+    }
+        
+} // namespace wry
 
 #endif /* hash_hpp */

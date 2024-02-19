@@ -18,7 +18,7 @@ namespace wry {
     // Matchers look for a pattern at the start of their View argument,
     // and if found, advance the beginning of the view and return Truthy
     //
-    // string_views or array_view<char8_t> views are the canonical arguments;
+    // string_views or ArrayView<char8_t> views are the canonical arguments;
     // since many formats are specified in terms of ASCII characters the same
     // code can parse both, passing multibyte UTF-8 through unaltered.
     //
@@ -401,7 +401,7 @@ namespace wry {
     // match a float literal of the form (+|-)?[0-9]+(.[0-9]+)?((e|E)[0-9]+)?
     
     inline constexpr auto match_sign() {
-        return match_or(match_character('-'), match_character('+'));
+        return match_or(match_from("+-"));
     }
     
     inline constexpr auto match_digits() {
@@ -454,6 +454,20 @@ namespace wry {
                                    match_character(u8'/')));
     }
     
+    // match until '\n' (inclusive) or terminal
+    // note that "" does not match; match_star(match_line()) will terminate
+    inline constexpr auto match_line() {
+        return [](auto& v) {
+            if (v.empty())
+                return false;
+            for (;;) {
+                auto ch = v.front();
+                v.pop_front();
+                if (ch == '\n' || v.empty())
+                    return true;
+            }
+        };
+    }
     
 
     

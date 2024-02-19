@@ -12,6 +12,20 @@
 
 namespace wry {
     
+    // # strlt
+    //
+    // Two-way compares two null-terminated byte strings lexicographically.
+    //
+    // strcmp's three-way comparison is more informative but not directly
+    // compatible with STL conventions
+    
+    inline bool strlt(const char* s1, const char* s2) {
+        for (; *s1 && (*s1 == *s2); ++s1, ++s2)
+            ;
+        return ((unsigned char) *s1) < ((unsigned char) *s2);
+    }
+
+    
     // # memswap
     //
     // Swaps the bytes of two disjoint regions.  Compilers seem to do a decent

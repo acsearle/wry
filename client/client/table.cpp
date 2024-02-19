@@ -19,14 +19,14 @@ namespace wry {
     {
 
         {
-            table<int, int> t;
+            Table<int, int> t;
             assert(t.empty());
             assert(t.size() == 0);
             assert(t.begin() == t.end());
         }
         
         {
-            table<int, int> t;
+            Table<int, int> t;
 
             int N = 1000;
             
@@ -90,7 +90,7 @@ namespace wry {
         }
         
         {
-            table<int, int> t;
+            Table<int, int> t;
             int N = 1000;
             // two steps forward, one step back
             for (int j = 0; j != N; ++j) {
@@ -113,7 +113,7 @@ namespace wry {
         }
         
         {
-            table<int, int> t;
+            Table<int, int> t;
             int N = 1000;
             for (int j = 0; j != N; ++j) {
                 int k = j >> 1;
@@ -133,7 +133,7 @@ namespace wry {
         }
         
         {
-            table<int, int> t;
+            Table<int, int> t;
             int N = 1000;
             for (int j = 0; j != N; ++j) {
                 int k = j >> 1;

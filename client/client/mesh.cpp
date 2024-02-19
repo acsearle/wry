@@ -12,12 +12,12 @@ namespace wry {
     /*
     struct mesh {
         
-        array<simd_float3> _vertices;
-        array<int> _indices;
+        Array<simd_float3> _vertices;
+        Array<int> _indices;
         
         static mesh box(simd_float3 a, simd_float3 b) {
             
-            array<simd_float3> v({
+            Array<simd_float3> v({
                 simd::select(a, b, simd_make_int3(0, 0, 0)),
                 simd::select(a, b, simd_make_int3(0, 0, 1)),
                 simd::select(a, b, simd_make_int3(0, 1, 0)),
@@ -28,7 +28,7 @@ namespace wry {
                 simd::select(a, b, simd_make_int3(1, 1, 1)),
             });
             
-            array<int> u({
+            Array<int> u({
                 0, 1, 2, 2, 1, 3,
                 0, 5, 1, 1, 5, 4,
                 0, 6, 2, 2, 6, 4,

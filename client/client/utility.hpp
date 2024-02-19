@@ -58,7 +58,7 @@ namespace wry {
             F& _f;
             X _x;
             
-            _reduce_args_by_fold_helper(F& f, X&& x) : _f(f), _x(std::forward<X>(x)) {}
+            constexpr _reduce_args_by_fold_helper(F& f, X&& x) : _f(f), _x(std::forward<X>(x)) {}
             
             constexpr X _release() { return std::forward<X>(_x); }
             
@@ -171,6 +171,12 @@ namespace wry {
     template<class... Ts>
     overloaded(Ts...) -> overloaded<Ts...>;
 
+    
+    // # Allocate and deallocate
+    //
+    // Allocates rounding up to a power of two and returns the new size
+    //
+    // TODO: bytes vs items
     
     template<typename T, typename U>
     T* allocate(U& count) noexcept {

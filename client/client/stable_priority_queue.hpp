@@ -77,32 +77,42 @@ namespace wry {
     // https://cstheory.stackexchange.com/questions/593/is-there-a-stable-heap
     //
     // We allocate a contiguous array of 2^capacity slots, partitioned into
-    // subarrays [2^i, 2^{i+1}), and an array of [0, capacity) subarray
-    // occupancies.  Each subarray contains stable_sorted elements in
-    // [2^{i+1}-sizes[i], 2^{i+1}), i.e. ties are broken older-first.  All
-    // elements in subarray i+1 are older than subarray i.
+    // subarrays [2^i, 2^{i+1}), and a separate array of [0, capacity) storing
+    // the occupancy of the first's subarrays.  Each subarray contains
+    // stable_sorted elements in [2^{i+1}-sizes[i], 2^{i+1}), i.e. ties are
+    // broken older-first.  All elements in subarray i+1 are older than
+    // subarray i.
     //
     // To extract an element, we walk i = _capacity-1 .. 0 to find the least,
-    // oldest element, which will be the first element of some array, and the
+    // oldest element, which will be the first element of some Array, and the
     // highest i of equivalent elements.  O(log n)
     //
-    // To insert an element, if occupancy[i] == 0 we put it there.
-    // Otherwise, we walk up i counting the occupants until there are less than
-    // 2^i elements present.  Then we merge all arrays 0..i-1 into array i.
-    // If there is no such i, we double the allocation.
+    // To insert an element, if size[0] == 0 we put it there.  Otherwise, we
+    // walk up i counting the occupants until there are less than 2^i elements
+    // present.  Then we merge all arrays 0..i-1 into Array i.  If there is no
+    // such i, we double the allocation.
     //
     // For a string of insertions, half the time we insert into i=0, O(1), quarter
     // of the time we merge into empty i=1, O(2), eighth i=2 O(2+4).  So, we
     // have P(i) = 2^{-i-1} and cost(i) = 2^{i+1} thus amortized
-    // sum P(i) * cost(i) = sum 1 = _capacity = O(log2 N)
+    // sum P(i) * cost(i) = sum 1 = _capacity = O(log N)
     //
     // For a mixture of operations, we have reduced sizes so makes everything
-    // cheaper
+    // cheaper.
     //
-    // If we expand and contract, then does our O(log2 N) get pegged at the max
+    // If we expand and contract, then does our O(log N) get pegged at the max
     // rather than current size?
     //
-    // Compare with a btree, also log2 N, stable sort
+    // Alternatives are min heap on (time, insertion count) and multimap on
+    // time
+    //
+    // heap and multimap give us O(1) lookup of the first element, but it
+    // is O(log n) to erase it
+    //
+    // SPQ gives us O(log n) to find the first element but O(1) to erase it
+    //
+    // all of the pops require touching O(log n) pieces of memory, but
+    // at least SPQ only writes back to O(2) of those locations
 
     template<typename T, typename Compare = std::less<T>>
     struct StablePriorityQueue {
@@ -125,7 +135,7 @@ namespace wry {
         // ranges
 
         T* _insert_merge(T value, std::size_t i, T* elements, T* last2) {
-            // merge everything into the empty ith array
+            // merge everything into the empty ith Array
             std::size_t n = 1;
             T* first2 = last2 - n;
             std::construct_at(first2, std::move(value));
@@ -201,7 +211,7 @@ namespace wry {
         
         void insert(T value) {
             ++_size;
-            // seek the first empty array
+            // seek the first empty Array
             std::size_t i = 0;
             std::size_t j = 1;
             std::size_t n = 1;

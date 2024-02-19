@@ -101,7 +101,7 @@
     id<MTLTexture> _darkgray;
     id<MTLTexture> _orange;
 
-    wry::table<ulong, simd_float4> _opcode_to_coordinate;
+    wry::Table<ulong, simd_float4> _opcode_to_coordinate;
     
     WryMesh* _truck_mesh;
     WryMesh* _mine_mesh;
@@ -599,12 +599,12 @@
                     
         {
             
-            table<wry::String, i64> _name_to_opcode;
-            table<i64, wry::String> _opcode_to_name;
+            Table<wry::String, i64> _name_to_opcode;
+            Table<i64, wry::String> _opcode_to_name;
 
             /*
             try {
-                auto x = json::from_file<array<String>>("/Users/antony/Desktop/assets/opcodes.json");
+                auto x = json::from_file<Array<String>>("/Users/antony/Desktop/assets/opcodes.json");
                 ulong i = 0;
                 for (const String& y : x)
                     _name_to_opcode[y] = i++;
@@ -624,9 +624,9 @@
             
                 
             try {
-                auto x = json::from_file<array<array<String>>>("/Users/antony/Desktop/assets/assets.json");
+                auto x = json::from_file<Array<Array<String>>>("/Users/antony/Desktop/assets/assets.json");
                 ulong i = 0;
-                for (const array<String>& y : x) {
+                for (const Array<String>& y : x) {
                     ulong j = 0;
                     for (const String& z : y) {
                         printf("%.*s\n", (int) z.chars.size(), (const char*) z.chars.data());
@@ -705,11 +705,11 @@
                 int n = 64;
                 matrix<float> mm(n, n);
                 wry::sdf::render_arrow(mm);
-                for (auto&& a : mm) {
-                    for (auto&& b : a) {
+                //for (auto&& a : mm) {
+                    //for (auto&& b : a) {
                         //printf("%g\n", b);
-                    }
-                }
+                    //}
+                //}
                 
                 matrix<RGBA8Unorm_sRGB> nn(n, n);
                 nn = mm;
@@ -748,7 +748,7 @@
             {0.0f, -1.0f, 0.0f, 1.0f},
         }}, _controls._transform);
         
-        wry::array<wry::vertex> v;
+        wry::Array<wry::vertex> v;
         
         simd_float4 b = make<float4>(_model->_mouse, 0.0f, 1.0f);
         float2 mmm = project_screen_ray(uniforms.position_transform, b);
@@ -1014,27 +1014,27 @@
     [_cursor set];
 }
 
-// - (void)renderToMetalLayer:(nonnull CAMetalLayer*)metalLayer
 - (void)renderToMetalLayer:(nonnull CAMetalDisplayLinkUpdate*)update
 {
+
     using namespace ::simd;
     using namespace ::wry;
 
-    _model->_world.step();
+    // advance the simulation
     
+    _model->_world.step();
+
     id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
     
-
     // Construct camera transforms
     MeshUniforms uniforms = _model->_uniforms;
     
     // Construct ground plane transforms
-    MeshInstanced mesh_instanced_things = {};
-    
     auto lookat_transform =  matrix_identity_float4x4;
     lookat_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
     lookat_transform.columns[3].y -= _model->_looking_at.y / 1024.0f;
 
+    MeshInstanced mesh_instanced_things = {};
     {
         mesh_instanced_things.model_transform = lookat_transform;
         mesh_instanced_things.inverse_transpose_model_transform = simd_inverse(simd_transpose(mesh_instanced_things.model_transform));
@@ -1043,6 +1043,14 @@
     }
     
     // Project things onto ground plane
+    
+    // TODO: more generally
+    // - bound mesh
+    // - transform bounding volumes
+    // - bounding volume intersect frustum
+    // - transform to frustum planes
+    // - ray-intersect mesh
+
     rect<i32> grid_bounds;
     {
         simd_float4x4 A = simd_mul(uniforms.viewprojection_transform,
@@ -1064,6 +1072,10 @@
         }
         grid_bounds.a = simd_make_int2(floor(uv.a.x), floor(uv.a.y));
         grid_bounds.b = simd_make_int2(ceil(uv.b.x) + 1, ceil(uv.b.y) + 1);
+        
+        // TODO: the screen corners are only correct for geometry on the ground
+        // plane, geometry outside this region but *above* the plane may appear
+        // in the camera and/or shadow frustums
         
     }
     
@@ -1098,7 +1110,7 @@
         uint k = 0;
         for (auto q : entities) {
             
-            if (auto p = dynamic_cast<wry::sim::Machine*>(q)) {// ugh
+            if (auto p = dynamic_cast<wry::sim::Machine*>(q)) { // ugh
                 
                 auto h = p->_heading & 3;
                 auto x0 = make<float4>(p->_old_location.x, p->_old_location.y, 0.0, 1.0f);
@@ -1360,8 +1372,18 @@
         
         
     }
+    
+    // Our relatively flat scene permits several simplifications to the
+    // rendering engine.  We don't need to handle the horizon and large numbers
+    // of tiny objects being obstructed by foreground geometry; everything
+    // appears at a similar LOD, a similar distance, and doesn't overlap other
+    // geometry much (except the local ground plane)
 
-    // Render shadow map
+    // Render a shadow map for a directional light source at infinity
+    //
+    // We use the free parameters of the shadow map transform to make the
+    // shadow rays exact for the ground plane, which will be the main shadow
+    // receiver.
     
     {
         MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor new];
@@ -1370,19 +1392,24 @@
         descriptor.depthAttachment.clearDepth = 1.0;
         descriptor.depthAttachment.texture = _shadowMapTarget;
         id<MTLRenderCommandEncoder> render_command_encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
-        
-        // shadow map for a light source at infinity
-
-       
-        
-        
+                
         [render_command_encoder setRenderPipelineState:_shadowMapRenderPipelineState];
-        //[render_command_encoder setCullMode:MTLCullModeBack];
         [render_command_encoder setDepthStencilState:_enabledDepthStencilState];
-        
+
+        // Tweak the depth somewhat to prevent shadow acne, seems to work
+        // adequately
         [render_command_encoder setDepthBias:0.0f // +100.0f
                                   slopeScale:+1.0f // ?
                                        clamp:0.0f];
+        
+        // We don't render the ground plane here as it can't cast shadows; is
+        // there anything else in this category to discard?
+
+        // TODO: Think about draw order here to maximize fragment discard
+        // Are 2D entities mostly just above the ground plane and thus behind
+        // any 3D geometry?
+
+        // Draw the 2D entities
 
         [render_command_encoder setVertexBytes:&uniforms
                                         length:sizeof(MeshUniforms)
@@ -1401,11 +1428,20 @@
                                             indexType:MTLIndexTypeUInt32
                                           indexBuffer:indices
                                     indexBufferOffset:0];
-
+        
+        // Draw the 3D entities
 
         [_furnace_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
         [_mine_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
         [_truck_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
+        
+        // TODO: add an irradiance buffer from the light
+        //
+        // - clear to max irradience
+        //   - image projection if not from sun
+        // - disable z write but not test and draw order-independent
+        //   attenuation from smoke in front of solid receiver geometry
+        // - other?
 
         [render_command_encoder endEncoding];
         
@@ -1417,6 +1453,11 @@
         id <MTLRenderCommandEncoder> encoder = nil;
         
         {
+            
+            // Set up the g-buffer.  The textures used here (on Apple Silicon)
+            // are "memoryless" and use the local image block storage; we
+            // can only read back locally, which is excatly what we need for
+            // g-buffer
             
             MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor new];
             
@@ -1445,6 +1486,9 @@
             descriptor.depthAttachment.storeAction = MTLStoreActionDontCare;
             descriptor.depthAttachment.texture = _deferredDepthAttachmentTexture;
             
+            // TODO: Clearcoat and clearcoat roughness; we'll need these for
+            // wet materials?
+            
             encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
             
         }
@@ -1452,13 +1496,13 @@
         {
 
             {
+                // image-based lighting propeties can be used to rotate and
+                // blend environment maps, such as dawn-day-dusk-night
                 uniforms.ibl_scale = 1.0f;
                 uniforms.ibl_transform = matrix_identity_float3x3;
+                // TODO: resurrect blending
 
             }
-            
-            
-            
             
             // camera world location is...
             
@@ -1479,6 +1523,9 @@
                 if (show_wireframe) {
                     [encoder setTriangleFillMode:MTLTriangleFillModeLines];
                 }
+                
+                // TODO: resurrect Jacobian whiskers
+                // TODO: key through the various gbuffers
                 
                 /*
                 [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
@@ -1543,13 +1590,15 @@
                 }*/
 
                 // G-buffers are now initialized
+                //
+                // On non-Apple Silicon/tiled, do we have to write and rebind the
+                // textures, or something else?
                                 
                 [encoder setVertexBuffer:_screenTriangleStripVertexBuffer
                                   offset:0
                                  atIndex:AAPLBufferIndexVertices];
                 [encoder setDepthStencilState:_disabledDepthStencilState];
 
-                /*
                 // Image-based lights:
 
                 [encoder setRenderPipelineState:_deferredLightImageBasedRenderPipelineState];
@@ -1560,7 +1609,13 @@
                             vertexCount:4];
 
                 
-                // Direction light (with shadow map)
+                // Directional light (with shadow map):
+                //
+                // Though this is the main light source, we do it last to delay
+                // the need to read from the shadow map as long as possible,
+                // since unlike the G-buffer this is a nonlocalized dependency
+                // on an earlier render pass.  But, does this matter?  On which
+                // architectures?
                 
                 uniforms.radiance = simd_make_float3(1.0, 1.0, 1.0);
                 [encoder setFragmentBytes:&uniforms
@@ -1572,11 +1627,13 @@
                 [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                             vertexStart:0
                             vertexCount:4];
-                */
-                // Point lights
+                
+                /*
+                // Point lights:
 
                 [encoder setRenderPipelineState:_deferredLightPointRenderPipelineState];
                 uniforms.radiance = simd_make_float3(1.0, 1.0, 1.0);
+                // hack rotating light
                 auto A = simd_matrix_translate(simd_make_float3(M_PI*sin(_frame_count*0.016),
                                                            M_PI*sin(_frame_count*0.015),
                                                            -M_PI_2+sin(_frame_count*0.014)));
@@ -1593,6 +1650,7 @@
                             vertexStart:0
                             vertexCount:4
                             instanceCount:1];
+                 */
                  
             }
         }
@@ -1608,16 +1666,20 @@
         [encoder endEncoding];
             
     }
-    
-    // now blur
-    
+        
     {
+        // Screen-space bloom by simple Gaussian blur
         _gaussianBlur.edgeMode = MPSImageEdgeModeClamp;
         
         [_gaussianBlur encodeToCommandBuffer:command_buffer
                                sourceTexture:_deferredLightColorAttachmentTexture
                           destinationTexture:_blurredTexture];
 
+        // TODO: Different impulse reponses, like Unreal blur, convolution
+
+        // TODO: we may want to mix in proportion to a texture so we can
+        // increase blur under the HUD
+        
         _imageAdd.primaryScale = 0.75f; // //15.0f/16.0f;
         _imageAdd.secondaryScale = 0.25f; ////1.0f/16.0f;
 
@@ -1629,15 +1691,24 @@
         
     }
     
-   
-    
     @autoreleasepool {
+        
+        // TODO: autoreleasepool holds the currentDrawable as briefly as
+        // possible, does this matter though?
+        
+        // *** BLOCKING CALL ***
+        //
+        // This call will block if none of the triple? buffers are available;
+        // we should only be here because the display link expects it to be
+        // available
         id<CAMetalDrawable> currentDrawable = [update drawable];
+        
         id<MTLBlitCommandEncoder> encoder =  [command_buffer blitCommandEncoder];
         [encoder copyFromTexture:_addedTexture toTexture:currentDrawable.texture];
         [encoder endEncoding];
         [command_buffer presentDrawable:currentDrawable];
     }
+    
     [command_buffer commit];
     
     ++_frame_count;
@@ -1653,6 +1724,9 @@
     _model->_viewport_size.x = drawableSize.width;
     _model->_viewport_size.y = drawableSize.height;
     _model->_regenerate_uniforms();
+    
+    // TODO: The shadow map must be recreated at the new size PLUS some
+    // angle-dependent padding, power of two, etc.
         
     // The G-buffers must be recreated at the new size
 
@@ -1673,7 +1747,7 @@
     _deferredLightColorAttachmentTexture.label = @"Light G-buffer";
 
     descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
-    descriptor.storageMode = MTLStorageModeMemoryless;
+    descriptor.storageMode = MTLStorageModeMemoryless; // <--
     _deferredAlbedoMetallicColorAttachmentTexture = [_device newTextureWithDescriptor:descriptor];
     _deferredAlbedoMetallicColorAttachmentTexture.label = @"Albedo-metallic G-buffer";
     
@@ -1699,7 +1773,6 @@
     
     _addedTexture = [_device newTextureWithDescriptor:descriptor];
     _addedTexture.label = @"Addition target";
-
     
 }
 
@@ -1838,7 +1911,7 @@ Paste bin
  (unsigned long) _frameNum);
  
  // now we finally need some application state, a console, which is
- // going to be an array<string>, of which you can edit the last string
+ // going to be an Array<string>, of which you can edit the last string
  
  // blinking cursor
  draw_text(gl::rect<float>{0,0, 1024, 1024 }, (_frameNum & 0x40) ? "_" : " ");
@@ -2554,7 +2627,7 @@ fromConnection:(AVCaptureConnection *)connection {
             descriptor.usage = MTLTextureUsageShaderRead;
             descriptor.storageMode = MTLStorageModeShared;
             maskTexture = [_device newTextureWithDescriptor:descriptor];
-            wry::array<simd_float4> mask(240, make<float4>(0.0f, 0.0f, 0.0f, 0.0f));
+            wry::Array<simd_float4> mask(240, make<float4>(0.0f, 0.0f, 0.0f, 0.0f));
             for (int i = 0; i != 8; ++i) {
                 for (int j = 0; j != 8; ++j) {
                     mask[i * 16 + (240 - 166) + j] = make<float4>(1.0f, 1.0f, 1.0f, 1.0f);

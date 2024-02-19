@@ -38,7 +38,7 @@ namespace wry {
     //
     // [i, j] ==> 0 <= i < minor, 0 <= j < major
     //
-    // like wry::array, we support expansion along any dimension by
+    // like wry::Array, we support expansion along any dimension by
     // (ruinous) overallocation and amortization
     
     // The natural / consistent order of iteration for a matrix is

@@ -150,7 +150,7 @@ namespace wry {
         };
 
         struct face {
-            array<size_t> indices;
+            Array<size_t> indices;
             void flip() {
                 std::reverse(std::begin(indices), std::end(indices));
             }
@@ -158,24 +158,24 @@ namespace wry {
                 
         struct mesh {
             
-            array<vertex> vertices;
+            Array<vertex> vertices;
             
-            array<float4> positions;
-            array<float4> coordinates;
-            array<float4> tangents;
-            array<float4> bitangents;
-            array<float4> normals;
+            Array<float4> positions;
+            Array<float4> coordinates;
+            Array<float4> tangents;
+            Array<float4> bitangents;
+            Array<float4> normals;
 
-            array<edge> edges;
-            array<quad> quads;
+            Array<edge> edges;
+            Array<quad> quads;
 
-            array<face> faces;
-            array<triangle> triangles;
-            array<size_t> triangle_strip;
+            Array<face> faces;
+            Array<triangle> triangles;
+            Array<size_t> triangle_strip;
             
-            array<MeshVertex> hack_MeshVertex;
-            array<float4> hack_lines;
-            array<uint> hack_triangle_strip;
+            Array<MeshVertex> hack_MeshVertex;
+            Array<float4> hack_lines;
+            Array<uint> hack_triangle_strip;
             
             float distance(size_t i, size_t j) {
                 return simd::distance(vertices[i].position.xyz, vertices[j].position.xyz);
@@ -487,7 +487,7 @@ namespace wry {
             
             void erase_unindexed_vertices() {
                 size_t n = vertices.size();
-                array<size_t> a(n, 0);
+                Array<size_t> a(n, 0);
                 for_each_index([&](size_t& i) {
                     ++a[i];
                 });
@@ -511,9 +511,9 @@ namespace wry {
             
             // groups nearby vertices and returns mapping from indices to the
             // index of a representative vertex of each group
-            array<size_t> identify_colocated_vertices() {
+            Array<size_t> identify_colocated_vertices() {
                 size_t n = vertices.size();
-                array<size_t> a(n);
+                Array<size_t> a(n);
                 for (size_t i = 0; i != n; ++i)
                     a[i] = i;
                 // one dimensional sort against a pattern-defeating direction
@@ -527,7 +527,7 @@ namespace wry {
                 std::sort(a.begin(), a.end(), compare);
                 
                 // b unscrambles a
-                array<size_t> b(n);
+                Array<size_t> b(n);
                 for (size_t i = 0; i != n; ++i)
                     b[a[i]] = i;
                 
@@ -567,7 +567,7 @@ namespace wry {
             
             void colocate_similar_vertices() {
                 
-                array<size_t> a = identify_colocated_vertices();
+                Array<size_t> a = identify_colocated_vertices();
                 size_t n = vertices.size();
                 assert(a.size() == n);
                 size_t count = 0;
@@ -590,7 +590,7 @@ namespace wry {
                 // similar positions
                 
                 size_t n = vertices.size();
-                array<size_t> a(n);
+                Array<size_t> a(n);
                 for (size_t i = 0; i != n; ++i)
                     a[i] = i;
 
@@ -603,7 +603,7 @@ namespace wry {
                 
                 // a[i] now holds the sorted order of vertices
                 
-                array<size_t> b(n);
+                Array<size_t> b(n);
                 for (size_t i = 0; i != n; ++i) {
                     b[a[i]] = i;
                 }
@@ -696,7 +696,7 @@ namespace wry {
                         auto d = simd_normalize(b - a);
                         auto e = simd_normalize(c - a);
                         auto f = simd_cross(d, e);
-                        auto g = make<float4>(f, 0.0);
+                        // auto g = make<float4>(f, 0.0);
                         vertices[t.indices[0]].normal.xyz += f;
                         t.rotate_left();
                     }
@@ -719,7 +719,7 @@ namespace wry {
                 // In O(N) time, build a table to O(1) lookup triangles by
                 // directed edge; each directed edge should appear only once
                 // else the mesh is bad
-                table<edge, size_t> tbl;
+                Table<edge, size_t> tbl;
                 std::set<triangle> st;
                 size_t n = triangles.size();
                 for (size_t i = 0; i != n; ++i) {
@@ -871,7 +871,7 @@ namespace wry {
                 // vertex[triangle_strip[i]]
                 
                 // add a layer of indirection
-                array<size_t> a(n), b(n);
+                Array<size_t> a(n), b(n);
                 for (size_t i = 0; i != n; ++i) {
                     a[i] = i; // forward
                     b[i] = i; // backward
@@ -971,7 +971,7 @@ namespace wry {
                 // lenth, reasonable in a mesh with variation due to numerical
                 // error, we can do this by mapping indices to representatives
                 
-                array<size_t> r = identify_colocated_vertices();
+                Array<size_t> r = identify_colocated_vertices();
 
                 // The following conditions should now hold
                 //
@@ -989,7 +989,7 @@ namespace wry {
                 // The directed edges are still unique.
                              
                 std::set<triangle> st;
-                table<edge, triangle> tbl;
+                Table<edge, triangle> tbl;
                 size_t n = triangles.size();
                 for (size_t i = 0; i != n; ++i) {
                     triangle t = triangles[i];
@@ -1006,8 +1006,8 @@ namespace wry {
                 }
                 
                 
-                array<array<triangle>> groups;
-                array<size_t> perimeter;
+                Array<Array<triangle>> groups;
+                Array<size_t> perimeter;
                 while (!st.empty()) {
                     groups.emplace_back();
                     triangle t = *st.begin();
@@ -1035,7 +1035,7 @@ namespace wry {
         struct iquad { int indices[4]; };
 
         struct iface {
-            array<int> indices;
+            Array<int> indices;
         };
 
         struct mesh {
@@ -1049,19 +1049,19 @@ namespace wry {
             // (face_id, face_vertices_count)
             // (face_id, vertex_id, ith_vertex_in_face)
             
-            table<int, wry::packed::float3> positions;
-            table<int, wry::packed::float3> normals;
-            table<int, wry::packed::float3> coordinates;
+            Table<int, wry::packed::float3> positions;
+            Table<int, wry::packed::float3> normals;
+            Table<int, wry::packed::float3> coordinates;
 
-            array<iedge> edges;
-            array<itriangle> triangles;
-            array<iquad> quads;
-            array<iface> faces;
+            Array<iedge> edges;
+            Array<itriangle> triangles;
+            Array<iquad> quads;
+            Array<iface> faces;
             
-            table<std::pair<int, int>, int> vertices_to_edge;
-            table<int, int> edge_to_triangle;
-            table<int, int> edge_to_quad;
-            table<int, int> edge_to_face;
+            Table<std::pair<int, int>, int> vertices_to_edge;
+            Table<int, int> edge_to_triangle;
+            Table<int, int> edge_to_quad;
+            Table<int, int> edge_to_face;
 
         };
         
@@ -1589,8 +1589,8 @@ namespace wry {
 
 struct mesh {
     
-    static array<float4> clip_space_quad() {
-        array<float4> v = {
+    static Array<float4> clip_space_quad() {
+        Array<float4> v = {
             make<float4>(-1.0f, -1.0f, 0.0f, 1.0f),
             make<float4>(-1.0f, +1.0f, 0.0f, 1.0f),
             make<float4>(+1.0f, +1.0f, 0.0f, 1.0f),
@@ -1601,8 +1601,8 @@ struct mesh {
         return v;
     }
     
-    static array<MeshVertex> add_normals(simd_float3x3* first, simd_float3x3* last) {
-        array<MeshVertex> v;
+    static Array<MeshVertex> add_normals(simd_float3x3* first, simd_float3x3* last) {
+        Array<MeshVertex> v;
         
         for (; first != last; ++first) {
             auto& t = *first;
@@ -1649,7 +1649,7 @@ struct mesh {
         return v;
     }
     
-    static auto tesselate(array<simd_float3x3>& x) {
+    static auto tesselate(Array<simd_float3x3>& x) {
         auto n = x.size();
         while (n--) {
             simd_float3x3 a = x.front();
@@ -1692,7 +1692,7 @@ struct mesh {
         for (int i = 0; i != 12; ++i)
             v[i] = simd_make_float3(u[i].z, u[i].x, u[i].y);
         
-        array<simd_float3x3> w;
+        Array<simd_float3x3> w;
         for (int i = 0, j; i != 5; ++i) {
             j = i + 1;
             if (j == 5)
@@ -1729,7 +1729,7 @@ struct mesh {
         // make a prism:
         
         // vertices of bottom and top n-gon
-        array<simd_float3> a, b;
+        Array<simd_float3> a, b;
         
         for (double i = 0.5; i < n; i += 1.0) {
             double theta = 2 * M_PI * i / n;
@@ -1742,7 +1742,7 @@ struct mesh {
             b.push_back(simd_make_float3(c, s, 1.0f));
         }
         
-        array<simd_float3x3> c;
+        Array<simd_float3x3> c;
         for (int i = 1; i != n-1; ++i) {
             c.push_back(simd_matrix(a[0], a[i+1], a[i]));
             c.push_back(simd_matrix(b[0], b[i], b[i+1]));
@@ -1768,12 +1768,12 @@ struct mesh {
 /*
  struct mesh {
  
- array<simd_float3> _vertices;
- array<int> _indices;
+ Array<simd_float3> _vertices;
+ Array<int> _indices;
  
  static mesh box(simd_float3 a, simd_float3 b) {
  
- array<simd_float3> v({
+ Array<simd_float3> v({
  simd::select(a, b, simd_make_int3(0, 0, 0)),
  simd::select(a, b, simd_make_int3(0, 0, 1)),
  simd::select(a, b, simd_make_int3(0, 1, 0)),
@@ -1784,7 +1784,7 @@ struct mesh {
  simd::select(a, b, simd_make_int3(1, 1, 1)),
  });
  
- array<int> u({
+ Array<int> u({
  0, 1, 2, 2, 1, 3,
  0, 5, 1, 1, 5, 4,
  0, 6, 2, 2, 6, 4,
@@ -1815,7 +1815,7 @@ namespace mesh2 {
     
     using vertex = float4;
     
-    using face = array<vertex>;
+    using face = Array<vertex>;
     
     
     // flat-sided object in 3 dimensions
@@ -1825,11 +1825,11 @@ namespace mesh2 {
     
     struct triangulation {
         
-        array<vertex> vertices;
+        Array<vertex> vertices;
         
         
         static triangulation clip_space_quad() {
-            array<vertex> v = {
+            Array<vertex> v = {
                 make<float4>(-1.0f, -1.0f, 0.0f, 1.0f),
                 make<float4>(-1.0f, +1.0f, 0.0f, 1.0f),
                 make<float4>(+1.0f, +1.0f, 0.0f, 1.0f),
@@ -1875,7 +1875,7 @@ namespace mesh2 {
     
     struct polygon {
         
-        array<vertex> vertices;
+        Array<vertex> vertices;
         
         size_t size() const {
             return vertices.size();
@@ -1954,7 +1954,7 @@ namespace mesh2 {
         void stellate(float factor = 2.0f) {
             auto& v = *this;
             auto n = normal() * factor;
-            array<vertex> z;
+            Array<vertex> z;
             for (size_t i = 0; i != vertices.size(); ++i) {
                 simd_float3 a = v[i].xyz;
                 simd_float3 b = v[i + 1].xyz;
@@ -1967,7 +1967,7 @@ namespace mesh2 {
         
         void truncate(float factor = 1.0 / 3.0f) {
             auto& v = *this;
-            array<vertex> z;
+            Array<vertex> z;
             for (size_t i = 0; i != vertices.size(); ++i) {
                 auto a = v[i];
                 auto b = v[i + 1];
@@ -2025,7 +2025,7 @@ namespace mesh2 {
     
     struct polyhedron {
         
-        array<polygon> faces;
+        Array<polygon> faces;
         
         void _join_with_triangles(polygon& a,
                                   polygon& b) {
@@ -2232,7 +2232,7 @@ namespace mesh2 {
     
     struct mesh {
         
-        array<MeshVertex> vertices;
+        Array<MeshVertex> vertices;
         
         void position_from(triangulation& victim) {
             
@@ -2334,7 +2334,7 @@ namespace mesh2 {
             
             
             
-            array<int> family;
+            Array<int> family;
             table<int, char> done;
             for (int i = 0; i != vertices.size(); ++i) {
                 if (done.contains(i))
@@ -2371,8 +2371,8 @@ namespace mesh2 {
     
     struct indexed_mesh {
         
-        array<MeshVertex> vertices;
-        array<int> indices; // ints are supposed to be good for metal
+        Array<MeshVertex> vertices;
+        Array<int> indices; // ints are supposed to be good for metal
         
         void indices_from_iota() {
             indices.resize(vertices.size());

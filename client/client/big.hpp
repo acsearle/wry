@@ -334,7 +334,7 @@ namespace wry {
         
         struct UnsignedInteger {
             
-            array<u64> _limbs;
+            Array<u64> _limbs;
             
             bool _invariant() {
                 return _limbs.empty() || _limbs.back();

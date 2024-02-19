@@ -24,6 +24,13 @@ namespace wry {
         };
     }
     
+    auto action(auto&& matcher, auto&& effect) {
+        return [matcher=std::forward<decltype(matcher)>(matcher),
+                effect=std::forward<decltype(effect)>(effect)](StringView& v) mutable -> bool {
+            return matcher(v) && ((void) effect(), true);
+        };
+    };
+    
     inline constexpr auto parse_until(auto&& many, auto&& once, auto&& action) {
         return [many=std::forward<decltype(many)>(many),
                 once=std::forward<decltype(once)>(once),
@@ -53,7 +60,7 @@ namespace wry {
                 v.chars._begin += (result.ptr - first);
                 return true;
             },
-            [&x](array_view<const char8_t>& v) -> bool {
+            [&x](ArrayView<const char8_t>& v) -> bool {
                 auto first = reinterpret_cast<const char*>(v.begin());
                 auto last = reinterpret_cast<const char*>(v.end());
                 std::from_chars_result result = wry::from_chars(first, last, x);

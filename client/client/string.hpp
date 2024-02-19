@@ -14,21 +14,11 @@
 
 namespace wry {
     
-    // <cstring>
-    
-    // two-way compares two null-terminated byte strings lexicographically
-    
-    inline bool strlt(const char* s1, const char* s2) {
-        for (; *s1 && (*s1 == *s2); ++s1, ++s2)
-            ;
-        return ((unsigned char) *s1) < ((unsigned char) *s2);
-    }
-
     // <string>
     
     // A String presents a UTF-8 array<char8_t> as a sequence of UTF-32 scalars
     //
-    // String, StringView, array<char8_t> and array_view<char8_t> all maintain
+    // String, StringView, array<char8_t> and ArrayView<char8_t> all maintain
     // valid UTF-8 strings.
     //
     // std::string::c_str() is not worth the complication it induces; we make a
@@ -49,7 +39,7 @@ namespace wry {
     
     struct String {
                 
-        array<char8_t> chars;
+        Array<char8_t> chars;
         
         using const_iterator = utf8::iterator;
         using iterator = const_iterator;
@@ -76,12 +66,12 @@ namespace wry {
             chars.assign(a.base, b.base);
         }
         
-        explicit String(array<char8_t>&& bytes) 
+        explicit String(Array<char8_t>&& bytes) 
         : chars(std::move(bytes)) {
         }
         
-        operator array_view<const char8_t>() const {
-            return array_view<const char8_t>(chars.begin(), chars.end());
+        operator ArrayView<const char8_t>() const {
+            return ArrayView<const char8_t>(chars.begin(), chars.end());
         }
 
         operator StringView() const {
@@ -99,8 +89,8 @@ namespace wry {
             return chars.data();
         }
         
-        array_view<const byte> as_bytes() const {
-            return array_view<const byte>(reinterpret_cast<const byte*>(chars.begin()),
+        ArrayView<const byte> as_bytes() const {
+            return ArrayView<const byte>(reinterpret_cast<const byte*>(chars.begin()),
                                           reinterpret_cast<const byte*>(chars.end()));
         }
 
@@ -223,7 +213,7 @@ namespace wry {
             chars.append(v.chars.begin(), v.chars.end());
         }
         
-        void append(array_view<const char8_t> v) {
+        void append(ArrayView<const char8_t> v) {
             chars.append(v);
         }
         
@@ -351,8 +341,8 @@ namespace wry {
             return _body ? _body->_begin : nullptr;
         }
         
-        array_view<const byte> as_bytes() const {
-            return array_view<const byte>(_body ? reinterpret_cast<const byte*>(_body->_begin) : nullptr,
+        ArrayView<const byte> as_bytes() const {
+            return ArrayView<const byte>(_body ? reinterpret_cast<const byte*>(_body->_begin) : nullptr,
                                           _body ? reinterpret_cast<const byte*>(_body->_end + 1) : nullptr);
         }
         
@@ -365,6 +355,10 @@ namespace wry {
         }
                 
     };
+    
+    inline void print(StringView v) {
+        printf("%.*s", (int) v.chars.size(), (const char*) v.chars.data());
+    }
     
 } // namespace manic
 

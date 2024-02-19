@@ -10,869 +10,375 @@
 
 #include <cinttypes>
 
+#include "debug.hpp"
 #include "stdint.hpp"
-#include "utility.hpp"
+#include "stdfloat.hpp"
+
+#include "parse.hpp"
 #include "string.hpp"
 #include "table.hpp"
-#include "test.hpp"
-#include "debug.hpp"
 
-/*
- 
-namespace wry::value {
-    
-    // Values live 
-    //     in cells on the grid
-    //     in the stacks of machines
-    //     in the bins of non-machines
-    
-  
-    // Superset of JSON
-    
-    
-    // Small objects, such as bool, number, empty array, one-element array,
-    // empty object, can all be stored with a single 64-bit word and no
-    // heap allocations
-    
-    // Noting that JSON does not support NAN or INF, it is tempting to store
-    // numbers as float64 and use the bit patterns
-    //
-    // x1111111 1111xxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx
-    //
-    // to store the pointers for other kinds.  Many platforms provide user
-    // pointers of the form
-    //
-    // 00000000 00000000 0xxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxx0000
-    //
-    // addressing 128 TB of data with 16 byte alignment.  Even for wider buses,
-    // we may be able to request all our allocations within this subspace.
-    //
-    // With 2^53 states available outside the numbers, and only 2^43 distinct
-    // pointer values, we have 10 bits to further tag pointers, or to introduce
-    // additional types (such as small strings, 32 bit integers, etc.)
-    
-    // Less dramatically, we can use a dynamic-allocation-avoiding type erasing
-    // container like std::any to keep small objects inline
-    //
-    // Value holds a type-erased class derived from Base.  All the
-    // derived types must exactly 16 bytes in size and alignment.  The intent
-    // is that the first 8 bytes store the vtbl pointer.
-    
-    // 8 bytes: packed pointer
-    // 16 bytes: vtbl, word pair; can be fat pointer dyn trait-like
-    // 32 bytes: vtbl, word triple, supports Vec-like arrays and strings
-    
-    // ?
-    //
-    // std::variant<...>
-    
-    // Disderata:
-    // Open, like std::any
-    // Yields more interfaces
-    //
-    
-    // Value is a type-erasing container
-    //
-    // Compared to std::any
-    // - Common base class provides basic copy-assign semantics
-    // - Stored types must <= 16 bytes, i.e. (vtbl, userdata)
-    //   - Sometimes a pimpl but often a compact reprsentation such as an
-    //     unboxed int
-    //
-    // Compared to dyn Trait fat pointer
-    
-    using i64 = std::int64_t;
-    using u64 = std::uint64_t;
-    using f64 = double;
-    
-#define WRY_FOR_TYPES\
-    X(bool)\
-    X(i64)\
-    X(u64)\
-    X(f64)
-            
-    struct Base;
-
-    struct Array;
-    struct Null;
-    struct String;
-    template<typename> struct Scalar;
-
-    struct Value;
-    
-    struct Visitor;
-    
-    // double dispatcher
-    struct Visitor {
-        virtual void operator()(bool);
-        virtual void operator()(i64);
-        virtual void operator()(u64);
-        virtual void operator()(f64);
-    };
-
-    struct Base {
-        
-        virtual ~Base() = 0;
-        
-        virtual void uninitialized_copy_into(Value* destination) const = 0;
-        virtual void copy_from(const Value&);
-        virtual void move_from(Value&&);
-        
-        virtual void debug() const;
-        virtual void visit(Visitor&) const;
-
-        // provide all operators
-                
-        virtual Value postincrement();
-
-        virtual Value function_call(const Value&);
-        
-        virtual bool operator_bool() const = 0;
-        virtual int operator_int() const = 0;
-        virtual double operator_double() const = 0;
-
-        virtual Value subscript(const Value&) const;
-        virtual Value& subscript(const Value&);
-        
-        virtual Value& increment();
-        
-        virtual Value unary_plus() const;
-        
-        virtual Value binary_plus(const Value&) const;
-        
-        virtual Value& assigned_plus(const Value&);
-
-        
-        
-
-    };
-    
-    static_assert(sizeof(Base) <= 16);
-    
-    struct Null final : Base {
-        
-        virtual ~Null() override;
-        
-        virtual void uninitialized_copy_into(Value* destination) const override;
-        
-        virtual bool operator_bool() const override;
-        virtual int operator_int() const override;
-        virtual double operator_double() const override;
-        
-    };
-    
-    static_assert(sizeof(Null) <= 16);
-
-    template<typename T>
-    struct Scalar : Base {
-        
-        static_assert(sizeof(T) <= 8);
-        static_assert(std::is_scalar_v<T>);
-        
-        T data;
-        
-        explicit Scalar(T x) : data(x) {}
-        
-        virtual void uninitialized_copy_into(Value* destination) const override {
-            std::construct_at((Scalar*) destination, data);
-        }
-        
-        virtual bool operator_bool() const override {
-            return data;
-        }
-        
-        virtual int operator_int() const override {
-            return (int) data;
-        }
-        
-        virtual double operator_double() const override {
-            return (double) data;
-        }
-        
-    };
-    
-    static_assert(sizeof(Scalar<double>) == 16);
-        
-    struct Array : Base {
-        
-        wry::Array<Value>* pointer;
-        
-        explicit Array(wry::Array<Value>* p)
-        : pointer(p) {
-        }
-        
-        explicit Array(wry::Array<Value>&& x)
-        : Array(new wry::Array<Value>(std::move(x))) {
-        }
-        
-        virtual ~Array() {
-            delete pointer;
-        }
-        
-        virtual void uninitialized_copy_into(Value* destination) const override {
-            std::construct_at((Array*) destination, new wry::Array<Value>(*pointer));
-        }
-        
-        virtual bool operator_bool() const override {
-            return !pointer->empty();
-        }
-        
-        virtual int operator_int() const override {
-            return (int) pointer->size();
-        }
-        
-        virtual double operator_double() const override {
-            return (double) pointer->size();
-        }
-        
-        
-    };
-    
-    static_assert(sizeof(Array) == 16);
-
-    static_assert(sizeof(Base) <= 16);
-
-    struct Value final {
-        
-        alignas(16) unsigned char _buffer[16];
-        
-        void debug() const;
-        
-        Value();
-        Value(Value&&);
-        Value(const Value&);
-        ~Value();
-        Value& operator=(Value&&);
-        Value& operator=(const Value&);
-
-        explicit Value(bool);
-        explicit Value(int);
-        explicit Value(std::int64_t);
-        explicit Value(std::uint64_t);
-        explicit Value(double);
-        Value(auto first, auto last);
-        
-        Value& operator=(bool);
-        Value& operator=(int);
-        Value& operator=(std::int64_t);
-        Value& operator=(std::uint64_t);
-        Value& operator=(double);
-
-        explicit operator bool() const;
-        explicit operator int() const;
-        explicit operator double() const;
-        
-        template<typename T> T* as();
-        template<typename T> const T* as() const;
-
-    };
-    
-    static_assert(sizeof(Value) == 16);
-            
-    inline Base::~Base() = default;
-    
-    void Base::copy_from(const Value& source) {
-        std::destroy_at(this);
-        ((const Base&) source).uninitialized_copy_into((Value*) this);
-    }
-    
-    void Base::move_from(Value&& source) {
-        std::destroy_at(this);
-        std::memcpy((void*) this, (const void*) &source, 16);
-        std::construct_at((Null*) &source);
-    }
-    
-    void Base::debug() const {
-        auto v = (const std::uint64_t*) this;
-        printf("[ \"%s\", \"%0.16" PRIX64 "\" ]", typeid(*this).name(), v[1]);
-    }
-    
-    Value Base::postincrement() { assert(false); }
-    Value Base::function_call(const Value&) { assert(false); }
-    Value& Base::subscript(const Value&) { assert(false); }
-    Value& Base::increment() { assert(false); }
-    Value Base::unary_plus() const { assert(false); }
-    Value Base::binary_plus(const Value&) const { assert(false); }
-    Value& Base::assigned_plus(const Value&) { assert(false); }
-
-
-    inline Value::Value() {
-        std::construct_at((Null*) this);
-    }
-    
-    inline Value::Value(Value&& other) {
-        std::memcpy(this, &other, 16);
-        std::construct_at((Null*) &other);
-    }
-    
-    inline Value::Value(const Value& other) {
-        ((Base*) &other)->uninitialized_copy_into(this);
-    }
-    
-    inline Value::~Value() {
-        std::destroy_at((Base*) _buffer);
-    }
-    
-    inline Value& Value::operator=(Value&& other) {
-        ((Base*) _buffer)->move_from(std::move(other));
-        return *this;
-    }
-
-    inline Value& Value::operator=(const Value& other) {
-        ((Base*) _buffer)->copy_from(other);
-        return *this;
-    }
-    
-    inline Value& Value::operator=(bool x) {
-        std::destroy_at((Base*) this);
-        std::construct_at((Scalar<bool>*) this, x);
-        return *this;
-    }
-
-    inline Value& Value::operator=(int x) {
-        std::destroy_at((Base*) this);
-        std::construct_at((Scalar<std::int64_t>*) this, x);
-        return *this;
-    }
-
-    inline Value& Value::operator=(std::int64_t x) {
-        std::destroy_at((Base*) this);
-        std::construct_at((Scalar<std::int64_t>*) this, x);
-        return *this;
-    }
-
-    inline Value& Value::operator=(std::uint64_t x) {
-        std::destroy_at((Base*) this);
-        std::construct_at((Scalar<std::uint64_t>*) this, x);
-        return *this;
-    }
-    
-    inline Value& Value::operator=(double x) {
-        std::destroy_at((Base*) this);
-        std::construct_at((Scalar<double>*) this, x);
-        return *this;
-    }
-
-    inline void Value::debug() const {
-        ((Base*) _buffer)->debug();
-    }
-    
-    template<typename T>
-    T* Value::as() {
-        return dynamic_cast<T*>((Base*) this);
-    }
-
-    template<typename T>
-    const T* Value::as() const {
-        return dynamic_cast<const T*>((const Base*) this);
-    }
-
-    
-    inline Value::operator bool() const {
-        return ((Base*) _buffer)->operator_bool();
-    }
-
-    inline Value::operator int() const {
-        return ((Base*) _buffer)->operator_int();
-    }
-
-    inline Value::operator double() const {
-        return ((Base*) _buffer)->operator_double();
-    }
-
-    
-    inline Null::~Null() = default;
-    
-    inline void Null::uninitialized_copy_into(Value* destination) const {
-        std::construct_at((Null*) destination);
-    }
-    
-    inline bool Null::operator_bool() const {
-        return false;
-    }
-
-    inline int Null::operator_int() const {
-        return 0;
-    }
-    
-    inline double Null::operator_double() const {
-        return 0.0; // Could be NAN, but probably too troublesome
-    }
-
-    
-
-
-
-
-    Value::Value(bool x) {
-        std::construct_at((Scalar<bool>*) _buffer, x);
-    }
-
-    Value::Value(int x)
-    : Value::Value((std::int64_t) x) {
-    }
-
-    Value::Value(double x) {
-        std::construct_at((Scalar<double>*) _buffer, x);
-    }
-
-    Value::Value(std::uint64_t x) {
-        std::construct_at((Scalar<std::uint64_t>*) _buffer, x);
-    }
-
-    Value::Value(std::int64_t x) {
-        std::construct_at((Scalar<std::int64_t>*) _buffer, x);
-    }
-
-
-    
-    Value::Value(auto first, auto last) {
-        std::construct_at((Array*) _buffer, new wry::Array<Value>(first, last));
-    }
-    
-    
-    define_test("Value") {
-
-        Value a;
-        Value b(false);
-        Value c(true);
-        Value d(0.0);
-        Value e(1.0);
-        Value f(0);
-        Value g(1);
-        Value h(-1);
-        
-        int z[] = {1,2,3,4};
-        Value i(std::begin(z), std::end(z));
-        
-        a.debug(); printf("\n");
-        b.debug(); printf("\n");
-        c.debug(); printf("\n");
-        d.debug(); printf("\n");
-        e.debug(); printf("\n");
-        f.debug(); printf("\n");
-        g.debug(); printf("\n");
-        h.debug(); printf("\n");
-        i.debug(); printf("\n");
-
-        DUMP((bool) a);
-        DUMP((bool) b);
-        DUMP((bool) c);
-        DUMP((bool) d);
-        DUMP((bool) e);
-        DUMP((bool) f);
-        DUMP((bool) g);
-        DUMP((bool) h);
-        DUMP((bool) i);
-
-
-        DUMP((int) a);
-        DUMP((int) b);
-        DUMP((int) c);
-        DUMP((int) d);
-        DUMP((int) e);
-        DUMP((int) f);
-        DUMP((int) g);
-        DUMP((int) h);
-        DUMP((int) i);
-
-        DUMP((double) a);
-        DUMP((double) b);
-        DUMP((double) c);
-        DUMP((double) d);
-        DUMP((double) e);
-        DUMP((double) f);
-        DUMP((double) g);
-        DUMP((double) h);
-        DUMP((double) i);
-
-
-
-        a = c;
-        b = e;
-        d = i;
-        DUMP((bool) a);
-        DUMP((bool) b);
-        DUMP((int) d);
-        DUMP((int) i);
-
-        
-        
-        
-    };
-    
-    */
-    
-    /*
-        
-    struct Base;
-    struct Value;
-    
-    struct alignas(16) Base {
-        Value* as_value();
-        const Value* as_value() const;
-        virtual void destruct() const;
-        virtual void uninitialized_copy_into(Value& destination) const;
-        virtual void copy_into(Value& destination) const;
-        virtual void move_from(Value&& source);
-        virtual bool operator_bool() const = 0;
-    };
-    
-    struct Value {
-                
-        void* _vtbl;
-        void* _data;
-
-        Base* _as_base();
-        const Base* _as_base() const;
-        void _destruct() const;
-        void _uninitialized_copy_into(Value&) const;
-        void _copy_into(Value&) const;
-        void _move_from(Value&&);
-
-        Value& swap(Value& other) {
-            std::swap(_vtbl, other._vtbl);
-            std::swap(_data, other._data);
-            return other;
-        }
-        
-        Value()
-        : _vtbl(nullptr) {
-        }
-        
-        Value(const Value& other) {
-            other._uninitialized_copy_into(*this);
-        }
-
-        Value(Value&& other)
-        : _vtbl(std::exchange(other._vtbl, nullptr))
-        , _data(other._data) {
-        }
-        
-        ~Value() { _destruct(); }
-        
-        Value& operator=(const Value& other) {
-            other._copy_into(*this);
-            return *this;
-        }
-        
-        Value& operator=(Value&& other) {
-            _move_from(std::move(other));
-            return *this;
-        }
-        
-        explicit Value(bool);
-        
-        explicit Value(int);
-        explicit Value(std::int64_t);
-        explicit Value(std::uint64_t);
-        explicit Value(double);
-        
-        explicit Value(char);
-        explicit Value(char32_t);
-        explicit Value(const char*);
-        explicit Value(StringView);
-        explicit Value(String&&);
-
-        explicit Value(ArrayView<Value>);
-        explicit Value(Array<Value>&&);
-
-        explicit Value(Table<String, Value>&&);
-        
-        operator bool() const;
-                
-    };
-    
-    inline void swap(Value& a, Value& b) {
-        a.swap(b);
-    }
-    
-    inline Value* Base::as_value() {
-        return reinterpret_cast<Value*>(this);
-    }
-    
-    inline const Value* Base::as_value() const {
-        return reinterpret_cast<const Value*>(this);
-    }
-    
-    inline void Base::destruct() const {
-    }
-    
-    inline void Base::uninitialized_copy_into(Value &destination) const {
-        std::memcpy(&destination, (void*) this, 16);
-    }
-        
-    inline void Base::copy_into(Value& destination) const {
-        destination._destruct();
-        std::construct_at(&destination, *as_value());
-    }
-
-    inline void Base::move_from(Value&& source) {
-        destruct();
-        std::construct_at(as_value(), std::move(source));
-    }
-
-    Base* Value::_as_base() {
-        assert(_vtbl);
-        return reinterpret_cast<Base*>(this);
-    }
-    
-    const Base* Value::_as_base() const {
-        assert(_vtbl);
-        return reinterpret_cast<const Base*>(this);
-    }
-        
-    void Value::_destruct() const {
-        if (_vtbl)
-            _as_base()->destruct();
-    }
-        
-    void Value::_uninitialized_copy_into(Value& destination) const {
-        if (_vtbl)
-            _as_base()->uninitialized_copy_into(destination);
-        else
-            destination._vtbl = nullptr;
-    }
-    
-    void Value::_copy_into(Value& destination) const {
-        if (_vtbl)
-            _as_base()->copy_into(destination);
-        else if (destination._vtbl) {
-            destination._as_base()->destruct();
-            destination._vtbl = nullptr;
-        }
-    }
-    
-    void Value::_move_from(Value&& source) {
-        if (_vtbl) {
-            _as_base()->move_from(std::move(source));
-        } else {
-            _vtbl = std::exchange(source._vtbl, nullptr);
-            _data = source._data;
-        }
-    }
-        
-    inline Value::operator bool() const {
-        return _vtbl && _as_base()->operator_bool();
-    }
-    
-
-    
-    struct Boolean : Base {
-        
-        bool x;
-        
-        constexpr explicit Boolean(bool y)
-        : x(y) {
-        }
-        
-        virtual bool operator_bool() const override {
-            return x;
-        }
-        
-    };
-    
-    Value::Value(bool y) {
-        new (this) Boolean(y);
-    }
-        
-    struct Number : Base {
-        
-        double x;
-        
-        constexpr explicit Number(double y) 
-        : x(y) {
-        }
-        
-        virtual bool operator_bool() const override {
-            return x;
-        }
-        
-    };
-    
-    Value::Value(double y) {
-        new (this) Number(y);
-    }
-    
-    struct String : Base {
-        
-    };
-    
-    struct HeavyString : String {
-        wry::String* x;
-        virtual bool operator_bool() const override {
-            return x && !x->empty();
-        }
-    };
-    
-    struct ImmutableString : String {
-        wry::immutable_string::implementation* x;
-        virtual bool operator_bool() const override {
-            return x && (x->_end != x->_begin);
-        }
-    };
-    
-    struct CString : String {
-        const char* x;
-        virtual bool operator_bool() const override {
-            return x && *x;
-        }
-    };
-    
-    struct Array : Base {
-        
-    };
-    
-    struct HeavyArray : Array {
-        wry::Array<Value>* x;
-        virtual bool operator_bool() const override {
-            return x && *x;
-        }
-    };
-
-    */
-    
-    
-/*
-} // namespace wry::value
- 
- */
 
 namespace wry::value {
     
+    // a polymorphic value type
+    //
+    // two words in size, it uses the first word as a discriminant and the
+    // second to store basic types inline, or to store a pointer to a heap
+    // object that supplies virtual interfaces.  the intent is that a
+    // switch on the discriminant handles common cases, with an indirection
+    // to heavyweight objects
+    
     struct Value;
-    struct Base;
-        
-    using i64 = std::int64_t;
-    using u64 = std::uint64_t;
-    using f64 = std::uint64_t;
     
-    // flags
+    // the base class only supports lifetime operations
     
-    enum : u64 {
-        
-        IS_NOT_TRIVIAL = 1 << 1,
-
-        // IS_PHYSICAL
-
-        // IS_NUMERIC
-        // IS_INTEGRAL
-        // IS_SIGNED
-        // IS_OPCODE
-        
-    };
-        
-    enum : u64 {
-        
-        EMPTY = 0,
-        
-        
-    };
-    
-    struct Base {
-        virtual ~Base() = default;
-        virtual Base* clone() const = 0;
+    struct Clone {
+        virtual ~Clone() = default;
+        virtual Clone* clone() const = 0;
     };
     
     template<typename T>
-    struct Wrap final : Base {
+    struct Heap : Clone {
         
         T data;
-                
-        Wrap(std::in_place_t, auto&&... args)
+        
+        Heap(const Heap& other) = default;
+        
+        explicit Heap(std::in_place_t, auto&&... args)
         : data(std::forward<decltype(args)>(args)...) {
         }
         
-        Wrap(const Wrap&) = default;
+        virtual ~Heap() final override = default;
         
-        virtual ~Wrap() override final = default;
-        
-        virtual Wrap* clone() const override final {
-            return new Wrap(*this);
+        virtual Heap* clone() const final override {
+            return new Heap(*this);
         }
         
     };
-        
-    using Array = Wrap<wry::Array<Value>>;
-    using String = Wrap<wry::String>;
-    using Object = Wrap<wry::Table<const char*, Value>>;
     
-    // todo:
-    //
-    // presumably this object will be performance critical
-    //
-    // open questions in optimization
-    // - polymorphism via if-else or switch or virtual
-    //   - these correspond to the discriminant being flags, being enums, or
-    //     being vtbl pointers, or some blending of the first two
-    // - implicit copy vs move only vs explicit clone
+    template<typename T> Heap(T&&) -> Heap<std::decay_t<T>>;
     
-    struct alignas(16) Value {
-                
-        u64 d = EMPTY;
+    struct Value {
         
-        union {
+        enum discriminant_t {
             
-            // trivial types
-            u64 u;
-            i64 i;
-            f64 f;
+            // representation is
+            // - inline 64-bit signed integer, unsigned integer, or float
+            // - inline pointer
+            //   - heap type
             
-            // pointer to a zero-terminated unbounded-lifetime string
-            const char8_t* c;
-                        
-            // virtual interface to nontrivial types
-            Base   *p;
-            Array  *a;
-            String *s;
-            Object *o;
+            // we strive to allocate identifiers such that
+            // we can accomplish most tasks with either
+            //
+            //     if (d & FLAG)
+            //
+            // or
+            //
+            //     switch(d & MASK)
+            //
+            
+            // for example,
+            // - move-construct: bitwise copy and (conditionally?) write
+            //   back source.d = 0
+            // - copy-construct: check flag, fall back to virtual clone
+            // - destruct: check flag, fall back to virtual destruct
+            
+            // JSON requires us to maintain a logical type separate from
+            // the physical representation
+            // - JSON_NUMBER and JSON_STRING are both backed by HEAP_STRING
+            // - JSON_NULL and JSON_BOOLEAN are both backed by INLINE_I64
+            //
+            // More generally, classifications like NUMBER can have multiple
+            // representations
+            // - NUMBER can be INLINE_I64, INLINE_U64, INLINE_F64 or
+            //   HEAP_STRING
+            
+            // open optimization questions:
+            // - make move-construct's `source.d = 0` conditional on
+            //   `FLAG_IS_HEAP_NOT_INLINE`
+            // - devirtualize the destructor calls?
+            // - does `switch (d & MASK)` prefer `MASK` be low bits?
+            // - premature optimization?  quantify vs
+            //   - one pointer, everything on heap
+            //   - two words, d becomes a vtbl pointer, all calls virtual
+            //   - n words, Table metadata etc. inline
+            //   - single allocation, with Table header followed directly by Entries
+            //     - still two cache misses (except for unchecked array
+            //       access?)
+            
+            
+            DEFAULT = 0, // default is uninitialized int64_t
+            
+            FLAG_IS_UNSIGNED_NOT_SIGNED = 1 << 0,
+            FLAG_IS_FLOATING_POINT_NOT_INTEGER = 1 << 1,
+            FLAG_IS_HEAP_NOT_INLINE = 1 << 2,
+            FLAG_IS_COLLECTION_NOT_STRING = 1 << 1,
+            
+            REPRESENTATION_TYPE_MASK = 7 << 0,
+            
+            INLINE_I64 = 0 << 0,
+            INLINE_U64 = 1 << 0,
+            INLINE_F64 = 2 << 0,
+            // UNUSED  = 3 << 0,
+            HEAP_STRING = 4 << 0,
+            // UNUSED = 5 << 0,
+            HEAP_ARRAY_OF_VALUE = 6 << 0,
+            HEAP_TABLE_OF_STRING_TO_VALUE = 7 << 0,
+            
+            FLAG_IS_BOOLEAN = 1 << 3,
+            FLAG_IS_NUMBER = 1 << 4,
+            
+            JSON_NULL = DEFAULT,
+            JSON_BOOLEAN = DEFAULT | FLAG_IS_BOOLEAN,
+            JSON_NUMBER = HEAP_STRING | FLAG_IS_NUMBER,
+            JSON_STRING = HEAP_STRING,
+            JSON_ARRAY = HEAP_ARRAY_OF_VALUE,
+            JSON_OBJECT = HEAP_TABLE_OF_STRING_TO_VALUE
             
         };
         
-        Value() = default;
-                
-        Value(Value&& x)
-        : d(x.d)
-        , u(x.u) {
-            if (d & IS_NOT_TRIVIAL)
-                x.d = EMPTY;
+        discriminant_t d;
+        
+        bool is_heap() const {
+            return d & FLAG_IS_HEAP_NOT_INLINE;
         }
         
-        Value(const Value& x) {
-            if (x.d & IS_NOT_TRIVIAL)
-                p = x.p->clone();
-            d = x.d;
+        bool is_clone() const {
+            return is_heap();
+        }
+        
+        bool is_delete() const {
+            return is_heap();
+        }
+        
+        bool is_number() const {
+            return !is_heap() || (d & FLAG_IS_NUMBER);
+        }
+        
+        bool is_integer();
+        
+        union {
+            int64_t i;
+            uint64_t u;
+            float64_t f;
+            Clone* p;
+            Heap<Array<Value>>* array_of_value;
+            Heap<Table<String, Value>>* table_of_string_to_value;
+            
+        };
+        
+        void maybe_delete() const {
+            if (is_delete())
+                delete p;
+        }
+        
+        [[nodiscard]] Clone* maybe_clone() const {
+            return is_clone() ? p->clone() : p;
+        }
+        
+        void clear() {
+            maybe_delete();
+            d = DEFAULT;
+        }
+        
+        Value& swap(Value& other) {
+            std::swap(d, other.d);
+            std::swap(u, other.u);
+            return other;
+        }
+        
+        // Semantic operators
+        
+        Value()
+        : d(DEFAULT) {
+        }
+        
+        Value(const Value& other)
+        : d(DEFAULT)
+        , p(other.maybe_clone()) {
+            d = other.d;
+        }
+        
+        Value(Value&& other)
+        : d(std::exchange(other.d, DEFAULT))
+        , p(other.p) {
         }
         
         ~Value() {
-            if (d & IS_NOT_TRIVIAL) {
-                delete p;
+            maybe_delete();
+        }
+        
+        Value& operator=(const Value& other) {
+            return Value(other).swap(*this);
+        }
+        
+        Value& operator=(Value&& other) {
+            return Value(std::move(other)).swap(*this);
+        }
+        
+        // Custom constructors
+        
+        explicit Value(std::int8_t x)
+        : d(INLINE_I64)
+        , i(x) {
+        }
+        
+        explicit Value(std::int16_t x)
+        : d(INLINE_I64)
+        , i(x) {
+        }
+        
+        explicit Value(std::int32_t x)
+        : d(INLINE_I64)
+        , i(x) {
+        }
+        
+        explicit Value(std::int64_t x)
+        : d(INLINE_I64)
+        , i(x) {
+        }
+        
+        explicit Value(std::uint8_t x)
+        : d(INLINE_I64)
+        , i(x) {
+        }
+        
+        explicit Value(std::uint16_t x)
+        : d(INLINE_I64)
+        , i(x) {
+        }
+        
+        explicit Value(std::uint32_t x)
+        : d(INLINE_I64)
+        , i(x) {
+        }
+        
+        explicit Value(std::uint64_t x)
+        : d(INLINE_U64)
+        , u(x) {
+        }
+        
+        explicit Value(bool x)
+        : d(INLINE_I64)
+        , i(x) {
+        }
+        
+        explicit Value(float32_t x)
+        : d(INLINE_F64)
+        , f(x) {
+        }
+        
+        explicit Value(float64_t x)
+        : d(INLINE_F64)
+        , f(x) {
+        }
+                
+        explicit Value(String&& x)
+        : d(DEFAULT)
+        , p(new Heap<String>(std::in_place, std::move(x))) {
+            d = HEAP_STRING;
+        }
+        
+        explicit Value(StringView v)
+        : Value(String(v)) {
+        }
+        
+        explicit Value(const char* ntbs)
+        : Value(String(ntbs)) {
+        }
+        
+        explicit Value(const void*) = delete;
+
+        
+        explicit Value(Array<Value>&& x)
+        : d(DEFAULT)
+        , p(new Heap<Array<Value>>(std::in_place, std::move(x))) {
+            d = HEAP_ARRAY_OF_VALUE;
+        }
+        
+        explicit Value(Table<String, Value>&& x)
+        : d(DEFAULT)
+        , p(new Heap<Table<String, Value>>(std::in_place, std::move(x))) {
+            d = HEAP_TABLE_OF_STRING_TO_VALUE;
+        }
+        
+        template<typename T>
+        Value& operator=(T&& other) {
+            return Value(std::forward<T>(other)).swap(*this);
+        }
+        
+        template<typename T>
+        T as_scalar() const {
+            switch (d & REPRESENTATION_TYPE_MASK) {
+                case INLINE_I64:
+                    // TODO: gsl narrow cast?
+                    return (T) i;
+                case INLINE_U64:
+                    return (T) u;
+                case INLINE_F64:
+                    return (T) f;
+                case HEAP_STRING: {
+                    StringView u = as_string();
+                    T x;
+                    if (!parse_number(x)(u))
+                        abort();
+                    return x;
+                }
+                default:
+                    abort();
             }
         }
         
-        Value& swap(Value& x) {
-            u64 a = x.d;
-            u64 b = x.u;
-            x.d = d;
-            x.u = u;
-            d = a;
-            u = b;
-            return x;
+        int64_t as_int64_t() const {
+            return as_scalar<int64_t>();
         }
         
-        Value& operator=(Value&& x) {
-            return Value(std::move(x)).swap(*this);
+        uint64_t as_uint64_t() const {
+            return as_scalar<uint64_t>();
         }
         
-        Value& operator=(const Value& x) {
-            return Value(x).swap(*this);
+        float64_t as_float64_t() const {
+            return as_scalar<float64_t>();
+
         }
         
+        String& as_string() const {
+            assert((d & REPRESENTATION_TYPE_MASK) == HEAP_STRING);
+            return ((Heap<String>*) p)->data;
+        }
+        
+        Array<Value>& as_array() const {
+            assert(d == HEAP_ARRAY_OF_VALUE);
+            return ((Heap<Array<Value>>*) p)->data;
+        }
+        
+        Table<String, Value>& as_table() const {
+            assert(d & HEAP_TABLE_OF_STRING_TO_VALUE);
+            return ((Heap<Table<String, Value>>*) p)->data;
+        }
+        
+        Value& operator[](StringView v) {
+            assert((d & REPRESENTATION_TYPE_MASK) == HEAP_TABLE_OF_STRING_TO_VALUE);
+            return table_of_string_to_value->data[v];
+        }
+        
+        Value& operator[](size_type pos) {
+            return array_of_value->data[pos];
+        }
+        
+        Value& operator[](const Value& x) {
+            switch (d & REPRESENTATION_TYPE_MASK) {
+                case HEAP_ARRAY_OF_VALUE:
+                    return array_of_value->data[x.as_uint64_t()];
+                case HEAP_TABLE_OF_STRING_TO_VALUE:
+                    return table_of_string_to_value->data[x.as_string()];
+                default:
+                    abort();
+            }
+        }
         
     };
-    
 }
-
-
 
 #endif /* value_hpp */

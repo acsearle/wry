@@ -222,11 +222,11 @@ namespace wry {
         
     }; // struct vector_view<T>
     
-    
     template<typename T, typename I, typename C>
     void swap(vector_view<T, I, C>& a, auto&& b) {
         a.swap(std::forward<decltype(b)>(b));
     }
+
     
     template<typename T>
     struct stride_iterator;
@@ -235,37 +235,6 @@ namespace wry {
     using stride_view = vector_view<T, stride_iterator<T>, stride_iterator<std::add_const_t<T>>>;
 
     
-    
-
 } // namespace wry
 
 #endif /* vector_view_hpp */
-
-/*
- 
- 
- namespace wry {
- 
- // Views contiguous objects.  Reference semantics, so assignment copies
- // the viewed elements
-
- 
- // Undefined specialization prevents instantiation with const T
- template<typename T> struct const_vector_view<const T>;
- 
- template<typename T, typename U>
- auto dot(const_vector_view<T> a, const_vector_view<U> b) {
- return std::accumulate(a.begin(), a.end(), b.begin(), decltype(std::declval<T>() * std::declval<U>())(0));
- }
- 
- template<typename T>
- T sum(const_vector_view<T> a, T b = 0.0) {
- for (ptrdiff_t i = 0; i != a.size(); ++i)
- b += a(i);
- return b;
- }
-
- } // namespace manic
-
- 
- */

@@ -14,6 +14,8 @@
 #include "sRGB.hpp"
 
 namespace wry {
+    
+    // these are specific to the texture atlas, make their name less intrusive
         
     struct subvertex {
         simd_float4 position; // 16

@@ -8,6 +8,7 @@
 #include <mutex>
 #include <map>
 
+#include "cstring.hpp"
 #include "atom.hpp"
 #include "test.hpp"
 
@@ -16,6 +17,9 @@ namespace wry::atom {
     namespace {
          
         // lexicographical comparison of null terminated strings
+        //
+        // TODO: What about operator()(StringView a, StringView b) { return a < b; }
+        // it will double-walk the memory but does it matter?
         struct Compare {
             using is_transparent = void;
             bool operator()(const char* s1, const char* s2) const {
@@ -45,18 +49,86 @@ namespace wry::atom {
             }
         };
         
-        // generates full period pseudorandom sequence
-        std::uint64_t xorshift64(std::uint64_t x) {
+        // Basic 64-bit xorshift
+        
+        constexpr uint64_t xorshift64(uint64_t x) {
+            assert(x);
             x ^= x << 13;
             x ^= x >> 7;
             x ^= x << 17;
             return x;
         }
 
-        // TODO: _string_to_atom should be some sort of prefix tree
+        // Basic xorshift steps
+        
+        constexpr std::uint64_t lstep(std::uint64_t x, int n) {
+            return x ^ (x << n);
+        }
+
+        constexpr std::uint64_t rstep(std::uint64_t x, int n) {
+            return x ^ (x >> n);
+        }
+
+        // Inverted xorshift steps
+        //
+        // For
+        //
+        //     y = x ^ (x << n)
+        //
+        // the low n bits of y are just x.  A second application of the forward
+        // step recovers another n bits of x.
+        //
+        //     y ^ (y << n) = (x ^ (x << n)) ^ ((x ^ (x << n)) << n)
+        //                  = x ^ (x << n) ^ (x << n) ^ (x << 2n)
+        //                  = x ^ (x << 2n)
+        //
+        // We can thus apply n, 2n, 4n... until n >= 64 and we recover all the
+        // bits of x
+        
+        // todo: carryless multiply instructions?
+                
+        constexpr std::uint64_t ilstep(std::uint64_t x, int n) {
+            assert(x && (n > 0));
+            [[maybe_unused]] auto y = x;
+            [[maybe_unused]] auto m = n;
+            while (n & 63) {
+                x ^= x << n;
+                n <<= 1;
+            }
+            assert((x ^ (x << m)) == y);
+            return x;
+        }
+
+        // inverse of x ^= x >> n
+        constexpr std::uint64_t irstep(std::uint64_t x, int n) {
+            assert(x && (n > 0));
+            [[maybe_unused]] auto y = x;
+            [[maybe_unused]] auto m = n;
+            while (n & 63) {
+                x ^= x >> n;
+                n <<= 1;
+            }
+            assert((x ^ (x >> m)) == y);
+            return x;
+        }
+        
+        constexpr std::uint64_t ixorshift64(std::uint64_t x) {
+            [[maybe_unused]] std::uint64_t y = x;
+            x = ilstep(x, 17);
+            x = irstep(x, 7);
+            x = ilstep(x, 13);
+            assert(y == xorshift64(x));
+            return x;
+            
+        }
+
+        // TODO: _string_to_atom should be some sort of prefix tree or a
+        // conventional hash map
+        //
+        // in a binary tree we are doing doing O(M) comparisons O(log N) times
         
         std::mutex _string_to_atom_mutex;
-        Atom next = Atom{0xc864372cd8fb4734};
+        Atom next = Atom{0xc864372cd8fb4734};  // high entropy seed
         std::map<const char*, Atom, Compare> _string_to_atom;
         
         std::mutex _atom_to_string_mutex;
@@ -73,15 +145,19 @@ namespace wry::atom {
             return i;
         }
         
-    }
-    
+    }    
     // To get the atom for a string, we lock the table and look it up.  If it
     // exists, we are done.  If it does not exist, we use the next value from
     // a pseudorandom sequence, insert it into both the _string_to_atom and
-    // _atom_to_string maps, advance the pseudorandom sequence, and return
+    // _atom_to_string maps, advance the pseudorandom sequence, and return.
+    
+    // We use a pseudorandom sequence because we need the atom bits to be a
+    // good hash value with every bit unpredictable; for example, using a
+    // counter would result in all the top bits of the has code being zero
     
     // We expect these operations to be mostly used in, respectively,
-    // deserialization and serialization.
+    // deserialization and serialization.  When the app is running normally,
+    // it will just compare atoms directly without needing strings.
         
     Atom Atom::from_string(const char* s) {
         auto guard = std::unique_lock(_string_to_atom_mutex);

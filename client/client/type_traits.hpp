@@ -52,7 +52,7 @@ namespace wry {
     //
     // It is not permitted to specialize std::rank and std::extent so we make
     // local customization points for them, and customize them for our vector,
-    // array, image, matrix containers and views
+    // Array, image, matrix containers and views
         
     template<typename T>
     struct rank : std::rank<T> {};

@@ -56,7 +56,7 @@ namespace wry {
         std::size_t _size;
         packer<std::size_t> _packer;
         
-        array<vertex> _vertices;
+        Array<vertex> _vertices;
         
         id<MTLTexture> _texture;
         id<MTLBuffer> _buffers[4];
