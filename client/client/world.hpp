@@ -17,6 +17,8 @@
 #include "table.hpp"
 #include "tile.hpp"
 #include "utility.hpp"
+#include "machine.hpp"
+#include "queue.hpp"
 
 namespace wry::sim {
     
@@ -30,7 +32,7 @@ namespace wry::sim {
         // distinguish read and write states
         
         // Sparse 2D grid of passive items in the world
-        Table<Coordinate, Tile> _tiles;
+        HashMap<Coordinate, Tile> _tiles;
         // TODO: Hash tables may move other items when insertion occurs, either
         //       by rehashing or Robin Hood redistribution. This is a bit
         //       awkward.
@@ -41,18 +43,41 @@ namespace wry::sim {
         //     - For ownership
         //     - For drawing
         // TODO: Store for coordinate queries
+
+        // We have a recurring need for an unordered_multimap.  It seems that
+        // Table<K, Array<V>> might be OK for this.  The C++ versions are
+        // chained buckets which are worse?
+        
+        // We are dynamically flinging a lot of Array<Entity*> around
+        // - can we recycle them more efficiently than the allocator?
+        // - should we leave them live in the Table ready for reuse with a new
+        //   key?
+        // - if we are only push_back and draining, should we
+        //   use std::vector without the pop_front overhead?  Should we use
+        //   something even simpler?
+        // - should all these structures be intrusive linked lists into the
+        //   entities, that we splice around?  We have to load the entities
+        //   anyway to execute them.  This can only be efficient if we have
+        //   a fixed number of waits per arena, which seems like not the case.
         
         // A fair queue (per time) of entities to wake up at a given time
         std::multimap<Time, Entity*> _waiting_on_time;
-        // TODO: node-based container is slowish, consider
-        //       - priority_queue<pair<Time, InsertionOrder>, Entity*>
-        //       - StablePriorityQueue
+        // If we prevent installation to past times, then we only need to wake
+        // exactly one key every tick, and can use a Table<Time, Array<Entity*>>
         
+        // a fair queue (per coordinate) of entities to wake up on writes to a given coordinate
+        HashMap<Coordinate, QueueOfUnique<Entity*>> _waiting_on_coordinate;
         
-        Table<Coordinate, Array<Entity*>> _waiting_on_coordinate;
-
+        // a fair queue (per entity) of entities waiting on writes to a given entity
+        HashMap<Entity*, QueueOfUnique<Entity*>> _waiting_on_entity;
+        // not used at the moment but logically possible
+        // TODO: make Entities Transactional, i.e. they may wake up to find
+        // themselves already read or written this turn
+        
+        // TODO: can we unify the things waited on?  should we?
+        
         // A fair queue of entities that are ready to execute immediately
-        Array<Entity*> _ready;
+        QueueOfUnique<Entity*> _ready;
         // They may originate from
         // - awoken at the current time
         // - awoken by a write to an observed tile
@@ -142,8 +167,34 @@ namespace wry::sim {
         // can't do this
         
         
-        // Reused working array for step()
-        Array<Entity*> _step_ready;
+        // An entity should not notify waiters on something, and then wait on
+        // it itself, as this installs it at the front of the queue before
+        // the waiters have had a chance to reinstall themselves.  Instead,
+        // the entity should re-ready itself after notifying, and thus run
+        // again after everybody it just woke up
+        
+        // Does peeking a value and deciding to sleep until it changes count
+        // as a read? I don't think so, since it is not republishing the value.
+        // Note that if we ran after a write to this value, we would observe the
+        // write and schedule ourselves for a retry, which has the identical
+        // effect.  Likewise, if we ran after a read from this value.  So, our
+        // choice to wait/retry ends up identical under all cases and doesn't
+        // leak information.
+
+        // We want to not enqueue an entity multiple times into ready, since
+        // they can snowball and replicate themselves (!).  Duplication in
+        // the other lists is fine.  We can prevent this by having a "readied
+        // for time X" field we update on the first readying, and are blocked
+        // by on later attempts
+        
+        // Is the ready list any different from wake_on_time[next]?
+        
+        
+        
+        
+        // Reused working array for step(), though notably we are awash with
+        // Array<Entity*> coming and going so who cares?
+        QueueOfUnique<Entity*> _step_ready;
                 
         void step() {
             
@@ -157,7 +208,7 @@ namespace wry::sim {
                 assert(p->first >= _tick);
                 if (p->first != _tick)
                     break;
-                _ready.push_back(p->second);
+                _ready.push(p->second);
                 _waiting_on_time.erase(p);
             }
             
@@ -166,29 +217,74 @@ namespace wry::sim {
             swap(_ready, _step_ready);
             while (!_step_ready.empty()) {
                 Entity* p = _step_ready.front();
-                _step_ready.pop_front();
+                _step_ready.pop();
                 p->notify(*this);
             }
             
+            printf("--\n");
+            for (Entity* p : _entities) {
+                if (Machine* q = dynamic_cast<Machine*>(p)) {
+                    printf("machine @ %p\n", q);
+                    printf("    phase is %d\n", q->_phase);
+                    printf("    new_location is %d %d\n", q->_new_location.x, q->_new_location.y);
+                } else {
+                    printf("entity @ %p\n", p);
+                }
+                
+                // check that everything is waiting on something somewhere
+                int n = 0;
+                for (Entity* e : _ready) {
+                    if (p == e) {
+                        printf("    is _ready\n");
+                        ++n;
+                    }
+                }
+                
+                for (const auto& [t, e] : _waiting_on_time) {
+                    if (p == e) {
+                        printf("    is _waiting_on_time\n");
+                        ++n;
+                    }
+                }
+                
+                for (const auto& [k, v] : _waiting_on_coordinate) {
+                    for (auto e : v) {
+                        if (p == e) {
+                            printf("    is _waiting_on_coordinate %d %d\n", k.x, k.y);
+                            ++n;
+                        }
+                    }
+                }
+                
+                if (!n) {
+                    printf("    is_abandoned!\n");
+                }
+                
+            }
+
                         
         }
+                
+        void notify_by_coordinate(Coordinate xy) {
+            auto pos = _waiting_on_coordinate.find(xy);
+            if (pos != _waiting_on_coordinate.end()) {
+                _ready.push_range(std::move(pos->second));
+                _waiting_on_coordinate.erase(pos);
+            }
+        }
         
-    };
+        void wait_on_coordinate(Coordinate xy, Entity* e) {
+            _waiting_on_coordinate[xy].push(e);
+        }
+
+        
+    }; // World
     
     inline void Tile::notify_occupant(World &w) {
         if (_occupant) {
-            w._ready.push_back(_occupant);
+            w._ready.push(_occupant);
         }
     }
-    
-    inline void Tile::notify_observers(World &w) {
-        while (!_observers.empty()) {
-            w._ready.push_back(_observers.front());
-            _observers.pop_front();
-        }
-    }
-
-    
     
 } // namespace wry::sim
 

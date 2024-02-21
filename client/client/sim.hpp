@@ -255,6 +255,7 @@ X(OPCODE_FLOP_FLIP),\
         i32 y;
         
         bool operator==(const Coordinate&) const = default;
+        auto operator<=>(const Coordinate&) const = default;
         
     }; // struct Coordinate
     

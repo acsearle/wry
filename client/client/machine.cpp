@@ -32,12 +32,12 @@ namespace wry::sim {
                 assert(old_tile._occupant == this);
                 if (!old_tile._transaction.can_write(w._tick)) {
                     // congestion: retry
-                    w._ready.push_back(this);
+                    w._ready.push(this);
                     return;
                 }
                 old_tile._occupant = nullptr;
                 old_tile._transaction.did_write(w._tick);
-                old_tile.notify_observers(w);
+                w.notify_by_coordinate(_old_location);
                 _old_location = _new_location;
                 _old_time = w._tick;
                 _phase = PHASE_WAITING_FOR_NEW;
@@ -62,7 +62,7 @@ namespace wry::sim {
                     default:
                         // reads the tile
                         if (!new_tile._transaction.can_read(w._tick)) {
-                            w._ready.push_back(this);
+                            w._ready.push(this);
                             return;
                         }
                         wants_read_new_tile = true;
@@ -72,7 +72,7 @@ namespace wry::sim {
                     case OPCODE_EXCHANGE:
                         // writes the tile
                         if (!new_tile._transaction.can_write(w._tick)) {
-                            w._ready.push_back(this);
+                            w._ready.push(this);
                             return;
                         }
                         wants_write_new_tile = true;
@@ -116,7 +116,7 @@ namespace wry::sim {
                     case OPCODE_FLIP_FLOP:
                     case OPCODE_FLOP_FLIP:
                         if (!new_tile._transaction.can_write(w._tick)) {
-                            w._ready.push_back(this);
+                            w._ready.push(this);
                             return;
                         }
                         wants_write_new_tile = true;
@@ -196,13 +196,13 @@ namespace wry::sim {
                 auto& next_tile = w._tiles[next_location];                
                 if (!next_tile._transaction.can_write(w._tick)) {
                     // conflict; retry
-                    w._ready.push_back(this);
+                    w._ready.push(this);
                     return;
                 }
                 if (next_tile._occupant) {
                     assert(next_tile._occupant != this);
                     // occupied; wait
-                    next_tile._observers.push_back(this);
+                    w.wait_on_coordinate(next_location, this);
                     // we choose to interpret this as a failed transaction
                     // which may speed up the release of the other tile
                     return;
@@ -212,7 +212,7 @@ namespace wry::sim {
                 
                 next_tile._occupant = this;
                 next_tile._transaction.did_write(w._tick);
-                next_tile.notify_observers(w);
+                w.notify_by_coordinate(next_location);
                 
                 // we need to reload new_tile in case accessing next_tile
                 // invalidated the reference
@@ -222,7 +222,7 @@ namespace wry::sim {
                 assert(new_tile2._occupant == this);
                 if (wants_write_new_tile) {
                     new_tile2._transaction.did_write(w._tick);
-                    new_tile2.notify_observers(w);
+                    w.notify_by_coordinate(_new_location);
                 } else if (wants_read_new_tile) {
                     new_tile2._transaction.did_read(w._tick);
                 }

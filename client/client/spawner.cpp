@@ -15,34 +15,34 @@ namespace wry::sim {
         auto& our_tile = w._tiles[_location];
         if (our_tile._occupant || our_tile._value.discriminant) {
             // wait until state changes
-            our_tile._observers.push_back(this);
+            w.wait_on_coordinate(_location, this);
             return;
         }
         if (!our_tile._transaction.can_write(w._tick)) {
-            w._ready.push_back(this);
+            w._ready.push(this);
             return;
         }
         our_tile._value = _of_this;
         our_tile._transaction.did_write(w._tick);
-        our_tile.notify_observers(w);
-        our_tile._observers.push_back(this);
+        w.notify_by_coordinate(_location);
+        w.wait_on_coordinate(_location, this);
     }
     
     void Sink::notify(World& w) {
         auto& our_tile = w._tiles[_location];
         if (our_tile._occupant || !our_tile._value.discriminant) {
             // wait until state changes
-            our_tile._observers.push_back(this);
+            w.wait_on_coordinate(_location, this);
             return;
         }
         if (!our_tile._transaction.can_write(w._tick)) {
-            w._ready.push_back(this);
+            w._ready.push(this);
             return;
         }
         our_tile._value = Value{DISCRIMINANT_NONE, 0};
         our_tile._transaction.did_write(w._tick);
-        our_tile.notify_observers(w);
-        our_tile._observers.push_back(this);
+        w.notify_by_coordinate(_location);
+        w.wait_on_coordinate(_location, this);
     }
     
     void Spawner::notify(World& w) {
@@ -56,17 +56,17 @@ namespace wry::sim {
                 q->_heading = HEADING_NORTH;
                 w._entities.push_back(q);
                 our_tile._occupant = q;
-                our_tile.notify_observers(w);
-                our_tile._observers.push_back(this);
+                w.notify_by_coordinate(_location);
                 our_tile._transaction.did_write(w._tick);
-                w._ready.push_back(q);
+                w._ready.push(q);
             } else {
-                // conflict: retry
-                w._ready.push_back(this);
+                // conflict
             }
+            // either way, we want to try again next turn
+            w._ready.push(this);
         } else {
             // blocked; wait
-            our_tile._observers.push_back(this);
+            w.wait_on_coordinate(_location, this);
         }
     }
     

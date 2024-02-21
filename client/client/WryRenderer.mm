@@ -805,11 +805,11 @@
                 // we clicked outside the palette
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
-                auto& the_tile = _model->_world._tiles[Coordinate{i, j}];
+                Coordinate xy{i, j};
+                auto& the_tile = _model->_world._tiles[xy];
                 the_tile._value = _model->_holding_value;
                 the_tile.notify_occupant(_model->_world);
-                the_tile.notify_observers(_model->_world);
-
+                _model->_world.notify_by_coordinate(xy);
                 printf(" Clicked world (%d, %d)\n", i, j);
             }
             _model->_outstanding_click = false;
@@ -822,11 +822,11 @@
                 int64_t k = wry::base36::from_base36_table[ch];
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
-                auto& the_tile = _model->_world._tiles[Coordinate{i, j}];
+                Coordinate xy{i, j};
+                auto& the_tile = _model->_world._tiles[xy];
                 the_tile._value = { DISCRIMINANT_NUMBER, k };
                 the_tile.notify_occupant(_model->_world);
-                the_tile.notify_observers(_model->_world);
-
+                _model->_world.notify_by_coordinate(xy);
             }
         }
         

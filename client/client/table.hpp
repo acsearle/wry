@@ -50,6 +50,15 @@ namespace wry {
     // elements are sensible.  this is a danger point for desynchronization of
     // the game state.  for serialization we should move into a sorted container
     // first?
+
+    // Just like we moved keymatching up to a predicate, can we replace the
+    // Hasher object with an argument to calls that need it, or bake it into
+    // a function passed to those?
+    
+    
+    // Mask is OK, but shift is specific to a particular choice of index
+    // generation which is not great.  Pointers, for example, might want to
+    // be rotr64(x, 4) & _mask
         
     template<typename Entry, typename Hasher>
     struct basic_table {
@@ -141,6 +150,8 @@ namespace wry {
                                         
         std::uint64_t _get_index(std::uint64_t h) const {
             // we index by the top bits so resize has a linear access pattern
+            // TODO: but, this means we rely on the hash having good high bits
+            // Make this a choice by the Hasher?
             return h >> _shift;
         }
         
@@ -161,6 +172,7 @@ namespace wry {
                 if (!_begin[i])
                     return nullptr; // found vacancy
                 std::uint64_t g = _hasher.get_hash(_begin[i]);
+                assert(g);
                 if ((g == h) && predicate(_begin[i]))
                     return _begin + i; // found exact match
                 std::uint64_t ig = _get_index(g);
@@ -718,7 +730,8 @@ namespace wry {
         
         
         std::size_t erase(iterator pos) {
-            _inner._relocate_backward_from(pos._pointer - _inner._begin);
+            assert(pos._pointer->_hash);
+            _inner._relocate_forward_into(pos._pointer - _inner._begin);
             return 1;
         }
         
@@ -777,11 +790,9 @@ namespace wry {
         }
     };
     
-    
     template<typename Key>
     struct hash_set {
-        
-       
+               
         struct Entry {
             
             std::uint64_t _hash;
@@ -1105,10 +1116,10 @@ namespace wry {
         
         // range erase makes no sense for unordered map
         
-        std::size_t erase(const auto& keylike) {
-            return _inner.erase(_inner._hasher.get_hash(keylike),
+        std::size_t erase(const Key& key) {
+            return _inner.erase(_inner._hasher.get_hash(key),
                                 [&](const Entry& e) {
-                return e._kv.first == keylike;
+                return e._key == key;
             });
         }
         
@@ -1116,7 +1127,7 @@ namespace wry {
         const Key& operator[](auto&& key) {
             std::uint64_t h = _inner._hasher.get_hash(key);
             std::uint64_t i = _inner._insert_uninitialized(h, [&key](const Entry& e) {
-                return e._kv.first == key;
+                return e._key == key;
             });
             Entry* p = _inner._begin + i;
             if (!(p->_hash)) {
@@ -1126,13 +1137,13 @@ namespace wry {
                                   std::forward_as_tuple(std::forward<decltype(key)>(key)),
                                   std::tuple<>());
             }
-            return p->_kv.second;
+            return p->key;
         }
         
         const Key& at(auto&& key) const {
             Entry* p = _inner.find(_inner._hasher.get_hash(key),
                                    [&key](const Entry& e) {
-                return e._kv.first == key;
+                return e._key == key;
             });
             assert(p);
             return p->_kv.second;
@@ -1159,8 +1170,10 @@ namespace wry {
         }
     };
     
-    
-    
+
+    template<typename K, typename V> using HashMap = Table<K, V>;
+    template<typename K> using HashSet = hash_set<K>;
+
     
     
 } // namespace wry

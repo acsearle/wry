@@ -114,6 +114,10 @@ namespace wry {
         x ^= x <<  9; x ^= x >> 17; x ^= x << 6;
         return x;
     }
+    
+    inline uint64_t hash(void* p) {
+        return hash((uintptr_t) p);
+    }
         
     // Interleave bits to achieve a 1D indexing of 2D space with decent
     // locality properties.  Good for spatial hashing
