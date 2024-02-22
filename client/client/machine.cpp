@@ -28,12 +28,14 @@ namespace wry::sim {
             case PHASE_WAITING_FOR_OLD: {
                 assert(_old_location != _new_location);
                 Tile& old_tile = world->_tiles[_old_location];
-                assert(old_tile._occupant == this);
+                Entity* occupant = peek_world_coordinate_occupant(world, _old_location);
+                assert(occupant == this);
                 if (!can_write_world_coordinate(world, _old_location)) {
                     entity_ready_on_world(this, world);
                     return;
                 }
-                old_tile._occupant = nullptr;
+                // old_tile._occupant = nullptr;
+                clear_world_coordinate_occupant(world, _old_location);
                 did_write_world_coordinate(world, _old_location);
                 _old_location = _new_location;
                 _old_time = world_time(world);
@@ -43,8 +45,9 @@ namespace wry::sim {
             case PHASE_WAITING_FOR_NEW: {
                 
                 Tile& new_tile = world->_tiles[_new_location];
-                assert(new_tile._occupant == this);
-                                
+                Entity* occupant = peek_world_coordinate_occupant(world, _new_location);
+                assert(occupant == this);
+
                 // check required access to the tile
                 
                 bool wants_read_new_tile = false;
@@ -200,8 +203,9 @@ namespace wry::sim {
                     entity_ready_on_world(this, world);
                     return;
                 }
-                if (next_tile._occupant) {
-                    assert(next_tile._occupant != this);
+                occupant = peek_world_coordinate_occupant(world, next_location);
+                if (occupant) {
+                    assert(occupant != this);
                     // occupied; wait
                     entity_wait_on_world_coordinate(this, world, next_location);
                     // we choose to interpret this as a failed transaction
@@ -211,7 +215,8 @@ namespace wry::sim {
                 
                 // the transaction will now succeed
                 
-                next_tile._occupant = this;
+                set_world_coordinate_occupant(world, next_location, this);
+                // next_tile._occupant = this;
                 // next_tile._transaction.did_write(world_time(world));
                 did_write_world_coordinate(world, next_location);
                 
@@ -219,8 +224,8 @@ namespace wry::sim {
                 // invalidated the reference
                 
                 auto& new_tile2 = world->_tiles[_new_location];
-                
-                assert(new_tile2._occupant == this);
+                occupant = peek_world_coordinate_occupant(world, _new_location);
+                assert(occupant == this);
                 if (wants_write_new_tile) {
                     // new_tile2._transaction.did_write(world_time(world));
                     did_write_world_coordinate(world, _new_location);
@@ -489,7 +494,7 @@ namespace wry::sim {
                 _heading = new_heading;
                 _new_location = next_location;
                 _old_time = world_time(world);
-                _new_time = world_time(world) + 128;
+                _new_time = world_time(world) + 64;
                 _phase = PHASE_TRAVELLING;
                 entity_wait_on_world_time(this, world, _new_time);
                 return;

@@ -13,25 +13,25 @@ namespace wry::sim {
     
     void Source::notify(World* world) {
         auto& our_tile = world->_tiles[_location];
-        if (our_tile._occupant || our_tile._value.discriminant) {
+        Entity* occupant = peek_world_coordinate_occupant(world, _location);
+        if (occupant || our_tile._value.discriminant) {
             // wait until state changes
             entity_wait_on_world_coordinate(this, world, _location);
             return;
         }
-        // if (!our_tile._transaction.can_write(world_time(world))) {
         if (!can_write_world_coordinate(world, _location)) {
             entity_ready_on_world(this, world);
             return;
         }
         our_tile._value = _of_this;
-        // our_tile._transaction.did_write(world_time(world));
         did_write_world_coordinate(world, _location);
         entity_ready_on_world(this, world);
     }
     
     void Sink::notify(World* world) {
         auto& our_tile = world->_tiles[_location];
-        if (our_tile._occupant || !our_tile._value.discriminant) {
+        Entity* occupant = peek_world_coordinate_occupant(world, _location);
+        if (occupant || !our_tile._value.discriminant) {
             // wait until state changes
             entity_wait_on_world_coordinate(this, world, _location);
             return;
@@ -42,7 +42,6 @@ namespace wry::sim {
             return;
         }
         our_tile._value = Value{DISCRIMINANT_NONE, 0};
-        // our_tile._transaction.did_write(world_time(world));
         did_write_world_coordinate(world, _location);
         entity_ready_on_world(this, world);
     }
@@ -50,8 +49,10 @@ namespace wry::sim {
     void Spawner::notify(World* world) {
         
         auto& our_tile = world->_tiles[_location];
-        if (our_tile._occupant) {
-            return (void) entity_wait_on_world_coordinate(this, world, _location);
+        Entity* occupant = peek_world_coordinate_occupant(world, _location);
+        if (occupant) {
+            entity_wait_on_world_coordinate(this, world, _location);
+            return;
         }
         // if (our_tile._transaction.can_write(world_time(world))) {
         if (can_write_world_coordinate(world, _location)) {
@@ -60,7 +61,7 @@ namespace wry::sim {
             q->_new_location = _location;
             q->_heading = HEADING_NORTH;
             world->_entities.push_back(q);
-            our_tile._occupant = q;
+            set_world_coordinate_occupant(world, _location, q);
             did_write_world_coordinate(world, _location);
             entity_ready_on_world(q, world);
         } else {

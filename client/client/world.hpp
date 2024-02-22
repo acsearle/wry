@@ -48,7 +48,12 @@ namespace wry::sim {
     bool can_write_world_entity(World* world, Entity* who);
     void did_write_world_entity(World* world, Entity* who);
 
-        
+    Value* peek_world_coordinate_value(World* world, Coordinate where);
+    void set_world_coordinate_value(World* world, Coordinate where, Value what);
+
+    Entity* peek_world_coordinate_occupant(World* world, Coordinate where);
+    void set_world_coordinate_occupant(World* world, Coordinate where, Entity* who);
+
     struct World {
         
         // State
@@ -57,7 +62,7 @@ namespace wry::sim {
         HashMap<Coordinate, Tile> _tiles;
         Array<Entity*> _entities;
         
-        HashMap<Coordinate, Entity*> _occupants;
+        HashMap<Coordinate, Entity*> _occupancy;
 
         // Conditions
         
@@ -69,13 +74,12 @@ namespace wry::sim {
         
         // Transactions
 
-        HashMap<Coordinate, TransactionState> _transaction_for_coordinate;
-        HashMap<Entity*,    TransactionState> _transaction_for_entity;
+        HashMap<Coordinate, TRANSACTION_STATE> _transaction_for_coordinate;
+        HashMap<Entity*,    TRANSACTION_STATE> _transaction_for_entity;
 
         void step() {
             
-            assert(!(_tick & 1));
-            _tick += 2;
+            ++_tick;
             notify_by_world_time(this, _tick);
 
             QueueOfUnique<Entity*> working{std::move(_ready)};
@@ -125,10 +129,16 @@ namespace wry::sim {
     }
 
     inline void notify_by_world_coordinate(World* world, Coordinate xy) {
-        auto pos = world->_waiting_on_coordinate.find(xy);
-        if (pos != world->_waiting_on_coordinate.end()) {
+        if (auto pos = world->_waiting_on_coordinate.find(xy);
+            pos != world->_waiting_on_coordinate.end()) 
+        {
             world->_ready.push_range(std::move(pos->second));
             world->_waiting_on_coordinate.erase(pos);
+        }
+        if (auto pos = world->_occupancy.find(xy);
+            pos != world->_occupancy.end())
+        {
+            entity_ready_on_world(pos->second, world);
         }
     }
 
@@ -142,15 +152,15 @@ namespace wry::sim {
     
     inline bool can_read_world_coordinate(World* world, Coordinate where) {
         auto pos = world->_transaction_for_coordinate.find(where);
-        return (pos == world->_transaction_for_coordinate.end()) || (pos->second == TX_READ);
+        return (pos == world->_transaction_for_coordinate.end()) || (pos->second == TRANSACTION_STATE_READ);
     }
     
     inline void did_read_world_coordinate(World* world, Coordinate where) {
         auto pos = world->_transaction_for_coordinate.find(where);
         if (pos == world->_transaction_for_coordinate.end())
-            world->_transaction_for_coordinate.emplace(where, TX_READ);
+            world->_transaction_for_coordinate.emplace(where, TRANSACTION_STATE_READ);
         else
-            assert(pos->second == TX_READ);
+            assert(pos->second == TRANSACTION_STATE_READ);
     }
 
     inline bool can_write_world_coordinate(World* world, Coordinate where) {
@@ -158,18 +168,28 @@ namespace wry::sim {
     }
 
     inline void did_write_world_coordinate(World* world, Coordinate where) {
-        auto [pos, did_emplace] = world->_transaction_for_coordinate.emplace(where, TX_WRITE);
+        auto [pos, did_emplace] = world->_transaction_for_coordinate.emplace(where, TRANSACTION_STATE_WRITE);
         assert(did_emplace);
         notify_by_world_coordinate(world, where);
     }
-
-        
-        
     
-    inline void Tile::notify_occupant(World* world) {
-        if (_occupant) {
-            entity_ready_on_world(_occupant, world);
+    inline Entity* peek_world_coordinate_occupant(World* world, Coordinate where) {
+        Entity* who = nullptr;
+        if (auto pos = world->_occupancy.find(where);
+            pos != world->_occupancy.end()) 
+        {
+            who = pos->second;
+            assert(who);
         }
+        return who;
+    }
+
+    inline void set_world_coordinate_occupant(World* world, Coordinate where, Entity* who) {
+        world->_occupancy.emplace(where, who);
+    }
+
+    inline void clear_world_coordinate_occupant(World* world, Coordinate where) {
+        world->_occupancy.erase(where);
     }
 
     

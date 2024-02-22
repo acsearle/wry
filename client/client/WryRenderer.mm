@@ -812,7 +812,7 @@
                 // these notifications happen logically between steps and are
                 // excused from transactions (hopefully)
                 
-                the_tile.notify_occupant(&_model->_world);
+                // the_tile.notify_occupant(&_model->_world);
                 notify_by_world_coordinate(&_model->_world, xy);
                 printf(" Clicked world (%d, %d)\n", i, j);
             }
@@ -829,7 +829,7 @@
                 Coordinate xy{i, j};
                 auto& the_tile = _model->_world._tiles[xy];
                 the_tile._value = { DISCRIMINANT_NUMBER, k };
-                the_tile.notify_occupant(&_model->_world);
+                // the_tile.notify_occupant(&_model->_world);
                 notify_by_world_coordinate(&_model->_world, xy);
             }
         }

@@ -44,9 +44,9 @@ namespace wry::sim {
 
         // Transactor _transaction;
         Value _value;
-        Entity* _occupant;
+        // Entity* _occupant;
         
-        void notify_occupant(World* world);
+        // void notify_occupant(World* world);
         
     };
     

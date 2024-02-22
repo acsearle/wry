@@ -215,49 +215,6 @@ X(OPCODE_FLOP_FLIP),\
 
     using Time = i64;
     
-    enum TransactionState {
-        TX_NONE = 0,
-        TX_READ = 1,
-        TX_WRITE = 2,
-        TX_FORBIDDEN = 3,
-    };
-
-    /*
-    struct Transactor {
-        
-        Time _stamp;
-        
-        // _stamp < now   : old
-        // _stamp = now   : was read this step
-        // _stamp = now+1 : was written this step
-        // _stamp > now+1 : disallowed (wrap/error)
-        
-        bool can_read(Time now) {
-            precondition(!(now & 1));
-            assert(_stamp <= now + 1);
-            return _stamp <= now;
-        }
-        
-        bool can_write(Time now) {
-            precondition(!(now & 1));
-            assert(_stamp <= now + 1);
-            return _stamp < now;
-        }
-        
-        void did_read(Time now) {
-            assert(can_read(now));
-            if (_stamp != now)
-                _stamp = now;
-        }
-        
-        void did_write(Time now) {
-            assert(can_write(now));
-            _stamp = now | 1;
-        }
-        
-    };
-     */
-    
     struct Coordinate {
         
         i32 x;
@@ -289,6 +246,13 @@ X(OPCODE_FLOP_FLIP),\
         
         
     }; // struct Value
+    
+    enum TRANSACTION_STATE {
+        TRANSACTION_STATE_NONE = 0,
+        TRANSACTION_STATE_READ = 1,
+        TRANSACTION_STATE_WRITE = 2,
+        TRANSACTION_STATE_FORBIDDEN = 3,
+    };
     
     struct World;
     struct Entity;
