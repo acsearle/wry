@@ -42,7 +42,7 @@ namespace wry::sim {
     
     struct Tile {
 
-        Transactor _transaction;
+        // Transactor _transaction;
         Value _value;
         Entity* _occupant;
         

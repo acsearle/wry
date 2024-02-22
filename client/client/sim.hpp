@@ -221,7 +221,8 @@ X(OPCODE_FLOP_FLIP),\
         TX_WRITE = 2,
         TX_FORBIDDEN = 3,
     };
-    
+
+    /*
     struct Transactor {
         
         Time _stamp;
@@ -255,6 +256,7 @@ X(OPCODE_FLOP_FLIP),\
         }
         
     };
+     */
     
     struct Coordinate {
         

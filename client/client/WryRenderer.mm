@@ -808,6 +808,10 @@
                 Coordinate xy{i, j};
                 auto& the_tile = _model->_world._tiles[xy];
                 the_tile._value = _model->_holding_value;
+                
+                // these notifications happen logically between steps and are
+                // excused from transactions (hopefully)
+                
                 the_tile.notify_occupant(&_model->_world);
                 notify_by_world_coordinate(&_model->_world, xy);
                 printf(" Clicked world (%d, %d)\n", i, j);
@@ -1092,7 +1096,7 @@
     _truck_mesh.instanceCount = 0;
     // raid model for data
     {
-        auto tnow = _model->_world._tick;
+        auto tnow = world_time(&_model->_world);
         const auto& entities = _model->_world._entities;
         
         NSUInteger quad_count = entities.size() * 4 + 1000 + 2;

@@ -25,16 +25,8 @@ namespace wry::sim {
     // somewhat abstracted interface
     
     Time world_time(World* world);
-        
-    bool can_read_world_coordinate(World* world, Coordinate where);
-    void did_read_world_coordinate(World* world, Coordinate where);
-    bool can_write_world_coordinate(World* world, Coordinate where);
-    void did_write_world_coordinate(World* world, Coordinate where);
-    bool can_read_world_entity(World* world, Entity* who);
-    void did_read_world_entity(World* world, Entity* who);
-    bool can_write_world_entity(World* world, Entity* who);
-    void did_write_world_entity(World* world, Entity* who);
 
+    // entity scheduling
     void entity_add_to_world(Entity* entity, World* world);
     void entity_ready_on_world(Entity* entity, World* world);
     
@@ -45,6 +37,17 @@ namespace wry::sim {
     void notify_by_world_time(World* world, Time t);
     void notify_by_world_coordinate(World* world, Coordinate xy);
     void notify_by_world_entity(World* world, Entity* f);
+    
+    // cooperative transactional memory
+    bool can_read_world_coordinate(World* world, Coordinate where);
+    void did_read_world_coordinate(World* world, Coordinate where);
+    bool can_write_world_coordinate(World* world, Coordinate where);
+    void did_write_world_coordinate(World* world, Coordinate where);
+    bool can_read_world_entity(World* world, Entity* who);
+    void did_read_world_entity(World* world, Entity* who);
+    bool can_write_world_entity(World* world, Entity* who);
+    void did_write_world_entity(World* world, Entity* who);
+
         
     struct World {
         
@@ -53,6 +56,8 @@ namespace wry::sim {
         Time _tick = 0;
         HashMap<Coordinate, Tile> _tiles;
         Array<Entity*> _entities;
+        
+        HashMap<Coordinate, Entity*> _occupants;
 
         // Conditions
         
@@ -60,7 +65,7 @@ namespace wry::sim {
         HashMap<Coordinate, QueueOfUnique<Entity*>> _waiting_on_coordinate;
         HashMap<Entity*,    QueueOfUnique<Entity*>> _waiting_on_entity;
                             
-        QueueOfUnique<Entity*>  _waiting_on_step;
+        QueueOfUnique<Entity*>  _ready;
         
         // Transactions
 
@@ -71,21 +76,21 @@ namespace wry::sim {
             
             assert(!(_tick & 1));
             _tick += 2;
-            
+            notify_by_world_time(this, _tick);
+
+            QueueOfUnique<Entity*> working{std::move(_ready)};
+
+            assert(_ready.empty());
+            assert(_transaction_for_entity.empty());
+            assert(_transaction_for_coordinate.empty());
+
+            for (Entity* entity : working)
+                entity->notify(this);
+
+            working.clear();
             _transaction_for_coordinate.clear();
             _transaction_for_entity.clear();
-            
-            if (auto pos = _waiting_on_time.find(_tick);
-                pos != _waiting_on_time.end()) {
-                _waiting_on_step.push_range(std::move(pos->second));
-                _waiting_on_time.erase(pos);
-            }
-            
-            QueueOfUnique<Entity*> ready{std::move(_waiting_on_step)};
-            for (Entity* p : ready)
-                p->notify(this);
-            ready.clear();
-                        
+
         }
                                 
     }; // World
@@ -108,13 +113,13 @@ namespace wry::sim {
     }
 
     inline void entity_ready_on_world(Entity* e, World* world) {
-        world->_waiting_on_step.push(e);
+        world->_ready.push(e);
     }
     
     inline void notify_by_world_time(World* world, Time t) {
         auto pos = world->_waiting_on_time.find(t);
         if (pos != world->_waiting_on_time.end()) {
-            world->_waiting_on_step.push_range(std::move(pos->second));
+            world->_ready.push_range(std::move(pos->second));
             world->_waiting_on_time.erase(pos);
         }
     }
@@ -122,7 +127,7 @@ namespace wry::sim {
     inline void notify_by_world_coordinate(World* world, Coordinate xy) {
         auto pos = world->_waiting_on_coordinate.find(xy);
         if (pos != world->_waiting_on_coordinate.end()) {
-            world->_waiting_on_step.push_range(std::move(pos->second));
+            world->_ready.push_range(std::move(pos->second));
             world->_waiting_on_coordinate.erase(pos);
         }
     }
@@ -130,17 +135,17 @@ namespace wry::sim {
     inline void notify_by_world_entity(World* world, Entity* entity) {
         auto pos = world->_waiting_on_entity.find(entity);
         if (pos != world->_waiting_on_entity.end()) {
-            world->_waiting_on_step.push_range(std::move(pos->second));
+            world->_ready.push_range(std::move(pos->second));
             world->_waiting_on_entity.erase(pos);
         }
     }
     
-    inline bool can_read_coordinate(World* world, Coordinate where) {
+    inline bool can_read_world_coordinate(World* world, Coordinate where) {
         auto pos = world->_transaction_for_coordinate.find(where);
-        return (pos != world->_transaction_for_coordinate.end()) || (pos->second == TX_READ);
+        return (pos == world->_transaction_for_coordinate.end()) || (pos->second == TX_READ);
     }
     
-    inline void did_read_coordinate(World* world, Coordinate where) {
+    inline void did_read_world_coordinate(World* world, Coordinate where) {
         auto pos = world->_transaction_for_coordinate.find(where);
         if (pos == world->_transaction_for_coordinate.end())
             world->_transaction_for_coordinate.emplace(where, TX_READ);
@@ -148,13 +153,14 @@ namespace wry::sim {
             assert(pos->second == TX_READ);
     }
 
-    inline bool can_write_coordinate(World* world, Coordinate where) {
+    inline bool can_write_world_coordinate(World* world, Coordinate where) {
         return !world->_transaction_for_coordinate.contains(where);
     }
 
-    inline void did_write_coordinate(World* world, Coordinate where) {
+    inline void did_write_world_coordinate(World* world, Coordinate where) {
         auto [pos, did_emplace] = world->_transaction_for_coordinate.emplace(where, TX_WRITE);
         assert(did_emplace);
+        notify_by_world_coordinate(world, where);
     }
 
         

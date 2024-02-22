@@ -18,13 +18,14 @@ namespace wry::sim {
             entity_wait_on_world_coordinate(this, world, _location);
             return;
         }
-        if (!our_tile._transaction.can_write(world_time(world))) {
+        // if (!our_tile._transaction.can_write(world_time(world))) {
+        if (!can_write_world_coordinate(world, _location)) {
             entity_ready_on_world(this, world);
             return;
         }
         our_tile._value = _of_this;
-        our_tile._transaction.did_write(world_time(world));
-        notify_by_world_coordinate(world, _location);
+        // our_tile._transaction.did_write(world_time(world));
+        did_write_world_coordinate(world, _location);
         entity_ready_on_world(this, world);
     }
     
@@ -35,13 +36,14 @@ namespace wry::sim {
             entity_wait_on_world_coordinate(this, world, _location);
             return;
         }
-        if (!our_tile._transaction.can_write(world_time(world))) {
+        // if (!our_tile._transaction.can_write(world_time(world))) {
+        if (!can_write_world_coordinate(world, _location)) {
             entity_ready_on_world(this, world);
             return;
         }
         our_tile._value = Value{DISCRIMINANT_NONE, 0};
-        our_tile._transaction.did_write(world_time(world));
-        notify_by_world_coordinate(world, _location);
+        // our_tile._transaction.did_write(world_time(world));
+        did_write_world_coordinate(world, _location);
         entity_ready_on_world(this, world);
     }
     
@@ -51,15 +53,15 @@ namespace wry::sim {
         if (our_tile._occupant) {
             return (void) entity_wait_on_world_coordinate(this, world, _location);
         }
-        if (our_tile._transaction.can_write(world_time(world))) {
+        // if (our_tile._transaction.can_write(world_time(world))) {
+        if (can_write_world_coordinate(world, _location)) {
             Machine* q = new Machine;
             q->_old_location = _location;
             q->_new_location = _location;
             q->_heading = HEADING_NORTH;
             world->_entities.push_back(q);
             our_tile._occupant = q;
-            notify_by_world_coordinate(world, _location);
-            our_tile._transaction.did_write(world_time(world));
+            did_write_world_coordinate(world, _location);
             entity_ready_on_world(q, world);
         } else {
             // conflict
