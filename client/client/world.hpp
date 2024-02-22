@@ -22,271 +22,203 @@
 
 namespace wry::sim {
     
-   
+    // somewhat abstracted interface
     
+    Time world_time(World* world);
+        
+    bool can_read_world_coordinate(World* world, Coordinate where);
+    void did_read_world_coordinate(World* world, Coordinate where);
+    bool can_write_world_coordinate(World* world, Coordinate where);
+    void did_write_world_coordinate(World* world, Coordinate where);
+    bool can_read_world_entity(World* world, Entity* who);
+    void did_read_world_entity(World* world, Entity* who);
+    bool can_write_world_entity(World* world, Entity* who);
+    void did_write_world_entity(World* world, Entity* who);
+
+    void entity_add_to_world(Entity* entity, World* world);
+    void entity_ready_on_world(Entity* entity, World* world);
+    
+    void entity_wait_on_world_time(Entity* entity, World* world, Time when);
+    void entity_wait_on_world_coordinate(Entity* entity, World* world, Coordinate where);
+    void entity_wait_on_world_entity(Entity* entity, World* world, Entity* who);
+
+    void notify_by_world_time(World* world, Time t);
+    void notify_by_world_coordinate(World* world, Coordinate xy);
+    void notify_by_world_entity(World* world, Entity* f);
+        
     struct World {
         
-        // Current simulation time.  Waits are specfied against this clock.
+        // State
+        
         Time _tick = 0;
-        // Time increases by two each step so we can use the timestamp lsb to
-        // distinguish read and write states
-        
-        // Sparse 2D grid of passive items in the world
         HashMap<Coordinate, Tile> _tiles;
-        // TODO: Hash tables may move other items when insertion occurs, either
-        //       by rehashing or Robin Hood redistribution. This is a bit
-        //       awkward.
-        //     - Consider chunking to reduce overheads
-
-        // List of all entities in no particular order
         Array<Entity*> _entities;
-        //     - For ownership
-        //     - For drawing
-        // TODO: Store for coordinate queries
 
-        // We have a recurring need for an unordered_multimap.  It seems that
-        // Table<K, Array<V>> might be OK for this.  The C++ versions are
-        // chained buckets which are worse?
+        // Conditions
         
-        // We are dynamically flinging a lot of Array<Entity*> around
-        // - can we recycle them more efficiently than the allocator?
-        // - should we leave them live in the Table ready for reuse with a new
-        //   key?
-        // - if we are only push_back and draining, should we
-        //   use std::vector without the pop_front overhead?  Should we use
-        //   something even simpler?
-        // - should all these structures be intrusive linked lists into the
-        //   entities, that we splice around?  We have to load the entities
-        //   anyway to execute them.  This can only be efficient if we have
-        //   a fixed number of waits per arena, which seems like not the case.
-        
-        // A fair queue (per time) of entities to wake up at a given time
-        std::multimap<Time, Entity*> _waiting_on_time;
-        // If we prevent installation to past times, then we only need to wake
-        // exactly one key every tick, and can use a Table<Time, Array<Entity*>>
-        
-        // a fair queue (per coordinate) of entities to wake up on writes to a given coordinate
+        HashMap<Time,       QueueOfUnique<Entity*>> _waiting_on_time;
         HashMap<Coordinate, QueueOfUnique<Entity*>> _waiting_on_coordinate;
+        HashMap<Entity*,    QueueOfUnique<Entity*>> _waiting_on_entity;
+                            
+        QueueOfUnique<Entity*>  _waiting_on_step;
         
-        // a fair queue (per entity) of entities waiting on writes to a given entity
-        HashMap<Entity*, QueueOfUnique<Entity*>> _waiting_on_entity;
-        // not used at the moment but logically possible
-        // TODO: make Entities Transactional, i.e. they may wake up to find
-        // themselves already read or written this turn
-        
-        // TODO: can we unify the things waited on?  should we?
-        
-        // A fair queue of entities that are ready to execute immediately
-        QueueOfUnique<Entity*> _ready;
-        // They may originate from
-        // - awoken at the current time
-        // - awoken by a write to an observed tile
-        // - retrying after a conflicted operation
-                
-        // It seems clear that entities need to wait on many things, and maybe
-        // several parameters of the same thing
-        //
-        // Example: "TURN LEFT", but LEFT is obstructed
-        // - Wait for obstruction ahead to clear
-        // - Wait for instruction under entity to change
-        // - Wait for timeout to take alternative action
-        
-        // For robustness and simplicity, it seems good to allow spurious
-        // wakeups, and multiple appearances of entities in any queue, rather
-        // than enforcing uniqueness
-        
-        // Entities waiting on tiles to change are enqueued on those tiles,
-        // which is too much per-tile overhead.  This is a rather awkward
-        // many-to-many scenario.
-        
-        // We can store these instead in
-        // Table<Coordinate, Array<Entity*>>
-        // on the assumption that the number of entities is small and we don't
-        // need high performance removal of them entities
+        // Transactions
 
-        // As the simulation scales up the world becomes database like so it
-        // is fair to consider using some sort of DB, but the use of opcodes
-        // to drive complex behaviors including secondary lookups and writes
-        // seems ill-fitted to a SQL sort of workflow, unless we can break all
-        // possible ops into some sort of recipe of steps
-        
-        // Algorithm:
-        //
-        // Increase time
-        //
-        // Move all entities waiting on the new time into the ready queue
-        //
-        // For each entity in the ready queue, execute it.  The order of
-        // their execution is unspecified but deterministic and fair-ish.
-        //
-        // An entity will typically
-        // - read some things (self, tiles, other entities...)
-        // - decide on a course of action, posibly looping back to more reads
-        // - maybe write some things
-        // - maybe re-enqueue itself to wait on times or writes (or entities?)
-        //
-        // Transactional and regional restrictions are in place
-        // - Reads and writes can only be within some local neighbourhood
-        //   - This restricts the speed of light and makes parallelism possible
-        // - Entities read and write as-if in atomic transactions.
-        // - Entities cannot write to memory a committed transaction has read
-        //   from in this step.
-        // - Entities cannot read from memory a committed transaction has
-        //   written to this step.
-        //
-        // This means that of the ready Entities
-        // - All entities that write will operate as if they went first
-        // - All entities that retry will do so because they conflict with a
-        //   committed transaction
-        // - The set of entities that complete is
-        //   - maximal, in the sense that no further transaction can be done
-        //   - not optimal, meaning that there may exist a different subset
-        //     with more entities that could have comitted.  greedy?  can we
-        //     say anything about quality?
-        //   - not fair, in the sense that a transaction may fail because it
-        //     conflicts with a transaction further down the list
-        //   - deterministic, in that any client stepping the same system will
-        //     make the same choices - there is no platform defined behavior
-        //     at work.  There may be pseudorandomness from a seed in the state.
-        //     Note particularly that hash tables, pointer addresses, etc. do
-        //     expose platform implementation details so these must be avoided;
-        //     we must never rely on hash table iteration order, dor example.
-        
-        // For a single thread, we can just process the entities in order and
-        // be fair
-        
-        // For multiple threads, we can use locality to partition space.
-        // By column, for example, split into columns 0-15 and 16-31, then
-        // in two parallel jobs do the work for entities in 4-11 and 20-27
-        // (which will only read and write within a radius of 4 tiles).  When
-        // both have completed (via an atomic), launch the job for entities in
-        // 12-19.  This is anisotropic for "ribbon" bases so we may actually
-        // want a slightly more complicated 2d partitioning.  Care is needed
-        // to choose data structures that can allow writes in these dijoint
-        // regions without corrupting global state; naive hash tables notably
-        // can't do this
-        
-        
-        // An entity should not notify waiters on something, and then wait on
-        // it itself, as this installs it at the front of the queue before
-        // the waiters have had a chance to reinstall themselves.  Instead,
-        // the entity should re-ready itself after notifying, and thus run
-        // again after everybody it just woke up
-        
-        // Does peeking a value and deciding to sleep until it changes count
-        // as a read? I don't think so, since it is not republishing the value.
-        // Note that if we ran after a write to this value, we would observe the
-        // write and schedule ourselves for a retry, which has the identical
-        // effect.  Likewise, if we ran after a read from this value.  So, our
-        // choice to wait/retry ends up identical under all cases and doesn't
-        // leak information.
+        HashMap<Coordinate, TransactionState> _transaction_for_coordinate;
+        HashMap<Entity*,    TransactionState> _transaction_for_entity;
 
-        // We want to not enqueue an entity multiple times into ready, since
-        // they can snowball and replicate themselves (!).  Duplication in
-        // the other lists is fine.  We can prevent this by having a "readied
-        // for time X" field we update on the first readying, and are blocked
-        // by on later attempts
-        
-        // Is the ready list any different from wake_on_time[next]?
-        
-        
-        
-        
-        // Reused working array for step(), though notably we are awash with
-        // Array<Entity*> coming and going so who cares?
-        QueueOfUnique<Entity*> _step_ready;
-                
         void step() {
             
             assert(!(_tick & 1));
             _tick += 2;
-                        
-            for (;;) {
-                if (_waiting_on_time.empty())
-                    break;
-                auto p = _waiting_on_time.begin();
-                assert(p->first >= _tick);
-                if (p->first != _tick)
-                    break;
-                _ready.push(p->second);
-                _waiting_on_time.erase(p);
+            
+            _transaction_for_coordinate.clear();
+            _transaction_for_entity.clear();
+            
+            if (auto pos = _waiting_on_time.find(_tick);
+                pos != _waiting_on_time.end()) {
+                _waiting_on_step.push_range(std::move(pos->second));
+                _waiting_on_time.erase(pos);
             }
             
-            assert(_step_ready.empty()); // empty but usually with some capacity to reuse
-            using std::swap;
-            swap(_ready, _step_ready);
-            while (!_step_ready.empty()) {
-                Entity* p = _step_ready.front();
-                _step_ready.pop();
-                p->notify(*this);
-            }
-            
-            printf("--\n");
-            for (Entity* p : _entities) {
-                if (Machine* q = dynamic_cast<Machine*>(p)) {
-                    printf("machine @ %p\n", q);
-                    printf("    phase is %d\n", q->_phase);
-                    printf("    new_location is %d %d\n", q->_new_location.x, q->_new_location.y);
-                } else {
-                    printf("entity @ %p\n", p);
-                }
-                
-                // check that everything is waiting on something somewhere
-                int n = 0;
-                for (Entity* e : _ready) {
-                    if (p == e) {
-                        printf("    is _ready\n");
-                        ++n;
-                    }
-                }
-                
-                for (const auto& [t, e] : _waiting_on_time) {
-                    if (p == e) {
-                        printf("    is _waiting_on_time\n");
-                        ++n;
-                    }
-                }
-                
-                for (const auto& [k, v] : _waiting_on_coordinate) {
-                    for (auto e : v) {
-                        if (p == e) {
-                            printf("    is _waiting_on_coordinate %d %d\n", k.x, k.y);
-                            ++n;
-                        }
-                    }
-                }
-                
-                if (!n) {
-                    printf("    is_abandoned!\n");
-                }
-                
-            }
-
+            QueueOfUnique<Entity*> ready{std::move(_waiting_on_step)};
+            for (Entity* p : ready)
+                p->notify(this);
+            ready.clear();
                         
         }
-                
-        void notify_by_coordinate(Coordinate xy) {
-            auto pos = _waiting_on_coordinate.find(xy);
-            if (pos != _waiting_on_coordinate.end()) {
-                _ready.push_range(std::move(pos->second));
-                _waiting_on_coordinate.erase(pos);
-            }
-        }
-        
-        void wait_on_coordinate(Coordinate xy, Entity* e) {
-            _waiting_on_coordinate[xy].push(e);
-        }
-
-        
+                                
     }; // World
+        
+    inline Time world_time(World* world) {
+        return world->_tick;
+    }
     
-    inline void Tile::notify_occupant(World &w) {
-        if (_occupant) {
-            w._ready.push(_occupant);
+    inline void entity_wait_on_world_time(Entity* e, World* world, Time t) {
+        assert(t - world->_tick > 0);
+        world->_waiting_on_time[t].push(e);
+    }
+    
+    inline void entity_wait_on_world_coordinate(Entity* e, World* world, Coordinate xy) {
+        world->_waiting_on_coordinate[xy].push(e);
+    }
+    
+    inline void entity_wait_on_world_entity(Entity* e, World* world, Entity* f) {
+        world->_waiting_on_entity[f].push(e);
+    }
+
+    inline void entity_ready_on_world(Entity* e, World* world) {
+        world->_waiting_on_step.push(e);
+    }
+    
+    inline void notify_by_world_time(World* world, Time t) {
+        auto pos = world->_waiting_on_time.find(t);
+        if (pos != world->_waiting_on_time.end()) {
+            world->_waiting_on_step.push_range(std::move(pos->second));
+            world->_waiting_on_time.erase(pos);
+        }
+    }
+
+    inline void notify_by_world_coordinate(World* world, Coordinate xy) {
+        auto pos = world->_waiting_on_coordinate.find(xy);
+        if (pos != world->_waiting_on_coordinate.end()) {
+            world->_waiting_on_step.push_range(std::move(pos->second));
+            world->_waiting_on_coordinate.erase(pos);
+        }
+    }
+
+    inline void notify_by_world_entity(World* world, Entity* entity) {
+        auto pos = world->_waiting_on_entity.find(entity);
+        if (pos != world->_waiting_on_entity.end()) {
+            world->_waiting_on_step.push_range(std::move(pos->second));
+            world->_waiting_on_entity.erase(pos);
         }
     }
     
+    inline bool can_read_coordinate(World* world, Coordinate where) {
+        auto pos = world->_transaction_for_coordinate.find(where);
+        return (pos != world->_transaction_for_coordinate.end()) || (pos->second == TX_READ);
+    }
+    
+    inline void did_read_coordinate(World* world, Coordinate where) {
+        auto pos = world->_transaction_for_coordinate.find(where);
+        if (pos == world->_transaction_for_coordinate.end())
+            world->_transaction_for_coordinate.emplace(where, TX_READ);
+        else
+            assert(pos->second == TX_READ);
+    }
+
+    inline bool can_write_coordinate(World* world, Coordinate where) {
+        return !world->_transaction_for_coordinate.contains(where);
+    }
+
+    inline void did_write_coordinate(World* world, Coordinate where) {
+        auto [pos, did_emplace] = world->_transaction_for_coordinate.emplace(where, TX_WRITE);
+        assert(did_emplace);
+    }
+
+        
+        
+    
+    inline void Tile::notify_occupant(World* world) {
+        if (_occupant) {
+            entity_ready_on_world(_occupant, world);
+        }
+    }
+
+    
 } // namespace wry::sim
+
+
+/*
+ printf("--\n");
+ for (Entity* p : _entities) {
+ if (Machine* q = dynamic_cast<Machine*>(p)) {
+ printf("machine @ %p\n", q);
+ printf("    phase is %d\n", q->_phase);
+ printf("    new_location is %d %d\n", q->_new_location.x, q->_new_location.y);
+ } else {
+ printf("entity @ %p\n", p);
+ }
+ 
+ // check that everything is waiting on something somewhere
+ int n = 0;
+ for (Entity* e : _waiting_on_step) {
+ if (p == e) {
+ printf("    is _ready\n");
+ ++n;
+ }
+ }
+ 
+ for (const auto& [k, v] : _waiting_on_time)
+ for (Entity* e : v)
+ if (p == e) {
+ printf("    is _waiting_on_time %lld\n", k);
+ ++n;
+ }
+ 
+ for (const auto& [k, v] : _waiting_on_coordinate) {
+ for (Entity* e : v) {
+ if (p == e) {
+ printf("    is _waiting_on_coordinate %d %d\n", k.x, k.y);
+ ++n;
+ }
+ }
+ }
+ 
+ for (const auto& [k, v] : _waiting_on_entity) {
+ for (Entity* e : v) {
+ if (p == e) {
+ printf("    is _waiting_on_entity %p\n", k);
+ ++n;
+ }
+ }
+ }
+ 
+ if (!n) {
+ printf("    is_abandoned!\n");
+ }
+ */
 
 /*
  
@@ -418,7 +350,7 @@ namespace wry {
     
 }
  
- inline void Tile::unlock(World& w, Entity* p, Coordinate self) {
+ inline void Tile::unlock(World* world, Entity* p, Coordinate self) {
  
  // we are executing, so we should be the first lock in the queue
  
@@ -445,7 +377,7 @@ namespace wry {
  w._location_locked.emplace_back(self, p);
  }
  
- inline void Tile::notify_all(World& w, Coordinate self) {
+ inline void Tile::notify_all(World* world, Coordinate self) {
  while (!_wait_queue.empty()) {
  Entity* p = _wait_queue.front();
  _wait_queue.pop_front();
@@ -456,4 +388,167 @@ namespace wry {
  */
 
 
+// Current simulation time.  Waits are specfied against this clock.
+// Time increases by two each step so we can use the timestamp lsb to
+// distinguish read and write states
+
+// Sparse 2D grid of passive items in the world
+// TODO: Hash tables may move other items when insertion occurs, either
+//       by rehashing or Robin Hood redistribution. This is a bit
+//       awkward.
+//     - Consider chunking to reduce overheads
+
+// List of all entities in no particular order
+
+//     - For ownership
+//     - For drawing
+// TODO: Store for coordinate queries
+
+// We have a recurring need for an unordered_multimap.  It seems that
+// Table<K, Array<V>> might be OK for this.  The C++ versions are
+// chained buckets which are worse?
+
+// We are dynamically flinging a lot of Array<Entity*> around
+// - can we recycle them more efficiently than the allocator?
+// - should we leave them live in the Table ready for reuse with a new
+//   key?
+// - if we are only push_back and draining, should we
+//   use std::vector without the pop_front overhead?  Should we use
+//   something even simpler?
+// - should all these structures be intrusive linked lists into the
+//   entities, that we splice around?  We have to load the entities
+//   anyway to execute them.  This can only be efficient if we have
+//   a fixed number of waits per arena, which seems like not the case.
+
+// Queues of entities to wake up under various conditions
+
+// A queue of entities that are ready to execute immediately
+// If we prevent installation to past times, then we only need to wake
+// exactly one key every tick, and can use a Table<Time, Array<Entity*>>
+
+// a fair queue (per coordinate) of entities to wake up on writes to a given coordinate
+
+// a fair queue (per entity) of entities waiting on writes to a given entity
+// not used at the moment but logically possible
+// TODO: make Entities Transactional, i.e. they may wake up to find
+// themselves already read or written this turn
+
+// TODO: can we unify the things waited on?  should we?
+
+// They may originate from
+// - awoken at the current time
+// - awoken by a write to an observed tile
+// - retrying after a conflicted operation
+
+// It seems clear that entities need to wait on many things, and maybe
+// several parameters of the same thing
+//
+// Example: "TURN LEFT", but LEFT is obstructed
+// - Wait for obstruction ahead to clear
+// - Wait for instruction under entity to change
+// - Wait for timeout to take alternative action
+
+// For robustness and simplicity, it seems good to allow spurious
+// wakeups, and multiple appearances of entities in any queue, rather
+// than enforcing uniqueness
+
+// Entities waiting on tiles to change are enqueued on those tiles,
+// which is too much per-tile overhead.  This is a rather awkward
+// many-to-many scenario.
+
+// We can store these instead in
+// Table<Coordinate, Array<Entity*>>
+// on the assumption that the number of entities is small and we don't
+// need high performance removal of them entities
+
+// As the simulation scales up the world becomes database like so it
+// is fair to consider using some sort of DB, but the use of opcodes
+// to drive complex behaviors including secondary lookups and writes
+// seems ill-fitted to a SQL sort of workflow, unless we can break all
+// possible ops into some sort of recipe of steps
+
+// Algorithm:
+//
+// Increase time
+//
+// Move all entities waiting on the new time into the ready queue
+//
+// For each entity in the ready queue, execute it.  The order of
+// their execution is unspecified but deterministic and fair-ish.
+//
+// An entity will typically
+// - read some things (self, tiles, other entities...)
+// - decide on a course of action, posibly looping back to more reads
+// - maybe write some things
+// - maybe re-enqueue itself to wait on times or writes (or entities?)
+//
+// Transactional and regional restrictions are in place
+// - Reads and writes can only be within some local neighbourhood
+//   - This restricts the speed of light and makes parallelism possible
+// - Entities read and write as-if in atomic transactions.
+// - Entities cannot write to memory a committed transaction has read
+//   from in this step.
+// - Entities cannot read from memory a committed transaction has
+//   written to this step.
+//
+// This means that of the ready Entities
+// - All entities that write will operate as if they went first
+// - All entities that retry will do so because they conflict with a
+//   committed transaction
+// - The set of entities that complete is
+//   - maximal, in the sense that no further transaction can be done
+//   - not optimal, meaning that there may exist a different subset
+//     with more entities that could have comitted.  greedy?  can we
+//     say anything about quality?
+//   - not fair, in the sense that a transaction may fail because it
+//     conflicts with a transaction further down the list
+//   - deterministic, in that any client stepping the same system will
+//     make the same choices - there is no platform defined behavior
+//     at work.  There may be pseudorandomness from a seed in the state.
+//     Note particularly that hash tables, pointer addresses, etc. do
+//     expose platform implementation details so these must be avoided;
+//     we must never rely on hash table iteration order, dor example.
+
+// For a single thread, we can just process the entities in order and
+// be fair
+
+// For multiple threads, we can use locality to partition space.
+// By column, for example, split into columns 0-15 and 16-31, then
+// in two parallel jobs do the work for entities in 4-11 and 20-27
+// (which will only read and write within a radius of 4 tiles).  When
+// both have completed (via an atomic), launch the job for entities in
+// 12-19.  This is anisotropic for "ribbon" bases so we may actually
+// want a slightly more complicated 2d partitioning.  Care is needed
+// to choose data structures that can allow writes in these dijoint
+// regions without corrupting global state; naive hash tables notably
+// can't do this
+
+
+// An entity should not notify waiters on something, and then wait on
+// it itself, as this installs it at the front of the queue before
+// the waiters have had a chance to reinstall themselves.  Instead,
+// the entity should re-ready itself after notifying, and thus run
+// again after everybody it just woke up
+
+// Does peeking a value and deciding to sleep until it changes count
+// as a read? I don't think so, since it is not republishing the value.
+// Note that if we ran after a write to this value, we would observe the
+// write and schedule ourselves for a retry, which has the identical
+// effect.  Likewise, if we ran after a read from this value.  So, our
+// choice to wait/retry ends up identical under all cases and doesn't
+// leak information.
+
+// We want to not enqueue an entity multiple times into ready, since
+// they can snowball and replicate themselves (!).  Duplication in
+// the other lists is fine.  We can prevent this by having a "readied
+// for time X" field we update on the first readying, and are blocked
+// by on later attempts
+
+// Is the ready list any different from wake_on_time[next]?
+
+
+
+
+// Reused working array for step(), though notably we are awash with
+// Array<Entity*> coming and going so who cares?
 #endif /* world_hpp */

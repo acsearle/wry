@@ -82,9 +82,9 @@ namespace wry::sim {
             }
         }
         
-        virtual void notify(World&);
+        virtual void notify(World*);
         
-        void _schedule_arrival(World& w);
+        void _schedule_arrival(World* world);
                 
     };
     

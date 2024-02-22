@@ -11,7 +11,7 @@
 
 namespace wry::sim {
     
-    void Machine::notify(World& w) {
+    void Machine::notify(World* world) {
         
         Value a = {};
         Value b = {};
@@ -19,33 +19,32 @@ namespace wry::sim {
         switch (_phase) {
                 
             case PHASE_TRAVELLING: {
-                if (w._tick < _new_time) {
-                    // TODO: assert that we are registered at _new_time
+                if (world_time(world) < _new_time)
+                    // spurious wakeup
                     return;
-                }
                 _phase = PHASE_WAITING_FOR_OLD;
             } [[fallthrough]];
                 
             case PHASE_WAITING_FOR_OLD: {
                 assert(_old_location != _new_location);
-                Tile& old_tile = w._tiles[_old_location];
+                Tile& old_tile = world->_tiles[_old_location];
                 assert(old_tile._occupant == this);
-                if (!old_tile._transaction.can_write(w._tick)) {
+                if (!old_tile._transaction.can_write(world_time(world))) {
                     // congestion: retry
-                    w._ready.push(this);
+                    entity_ready_on_world(this, world);
                     return;
                 }
                 old_tile._occupant = nullptr;
-                old_tile._transaction.did_write(w._tick);
-                w.notify_by_coordinate(_old_location);
+                old_tile._transaction.did_write(world_time(world));
+                notify_by_world_coordinate(world, _old_location);
                 _old_location = _new_location;
-                _old_time = w._tick;
+                _old_time = world_time(world);
                 _phase = PHASE_WAITING_FOR_NEW;
             } [[fallthrough]];
                 
             case PHASE_WAITING_FOR_NEW: {
                 
-                Tile& new_tile = w._tiles[_new_location];
+                Tile& new_tile = world->_tiles[_new_location];
                 assert(new_tile._occupant == this);
                                 
                 // check required access to the tile
@@ -61,8 +60,8 @@ namespace wry::sim {
                         
                     default:
                         // reads the tile
-                        if (!new_tile._transaction.can_read(w._tick)) {
-                            w._ready.push(this);
+                        if (!new_tile._transaction.can_read(world_time(world))) {
+                            entity_ready_on_world(this, world);
                             return;
                         }
                         wants_read_new_tile = true;
@@ -71,8 +70,8 @@ namespace wry::sim {
                     case OPCODE_STORE:
                     case OPCODE_EXCHANGE:
                         // writes the tile
-                        if (!new_tile._transaction.can_write(w._tick)) {
-                            w._ready.push(this);
+                        if (!new_tile._transaction.can_write(world_time(world))) {
+                            entity_ready_on_world(this, world);
                             return;
                         }
                         wants_write_new_tile = true;
@@ -104,7 +103,7 @@ namespace wry::sim {
                     // we don't need to do any further processing
                     assert(wants_read_new_tile);
                     assert(!wants_write_new_tile);
-                    new_tile._transaction.did_read(w._tick);
+                    new_tile._transaction.did_read(world_time(world));
                     _on_arrival = OPCODE_NOOP;
                     // don't wait on anything (except, implicitly, this cell)
                     return;
@@ -115,8 +114,8 @@ namespace wry::sim {
                 switch (next_action) {
                     case OPCODE_FLIP_FLOP:
                     case OPCODE_FLOP_FLIP:
-                        if (!new_tile._transaction.can_write(w._tick)) {
-                            w._ready.push(this);
+                        if (!new_tile._transaction.can_write(world_time(world))) {
+                            entity_ready_on_world(this, world);
                             return;
                         }
                         wants_write_new_tile = true;
@@ -193,16 +192,16 @@ namespace wry::sim {
                 
                 // try to claim it
                 
-                auto& next_tile = w._tiles[next_location];                
-                if (!next_tile._transaction.can_write(w._tick)) {
+                auto& next_tile = world->_tiles[next_location];                
+                if (!next_tile._transaction.can_write(world_time(world))) {
                     // conflict; retry
-                    w._ready.push(this);
+                    entity_ready_on_world(this, world);
                     return;
                 }
                 if (next_tile._occupant) {
                     assert(next_tile._occupant != this);
                     // occupied; wait
-                    w.wait_on_coordinate(next_location, this);
+                    entity_wait_on_world_coordinate(this, world, next_location);
                     // we choose to interpret this as a failed transaction
                     // which may speed up the release of the other tile
                     return;
@@ -211,20 +210,20 @@ namespace wry::sim {
                 // the transaction will now succeed
                 
                 next_tile._occupant = this;
-                next_tile._transaction.did_write(w._tick);
-                w.notify_by_coordinate(next_location);
+                next_tile._transaction.did_write(world_time(world));
+                notify_by_world_coordinate(world, next_location);
                 
                 // we need to reload new_tile in case accessing next_tile
                 // invalidated the reference
                 
-                auto& new_tile2 = w._tiles[_new_location];
+                auto& new_tile2 = world->_tiles[_new_location];
                 
                 assert(new_tile2._occupant == this);
                 if (wants_write_new_tile) {
-                    new_tile2._transaction.did_write(w._tick);
-                    w.notify_by_coordinate(_new_location);
+                    new_tile2._transaction.did_write(world_time(world));
+                    notify_by_world_coordinate(world, _new_location);
                 } else if (wants_read_new_tile) {
-                    new_tile2._transaction.did_read(w._tick);
+                    new_tile2._transaction.did_read(world_time(world));
                 }
 
                 switch (_on_arrival) {
@@ -486,10 +485,10 @@ namespace wry::sim {
                 _on_arrival = next_action;
                 _heading = new_heading;
                 _new_location = next_location;
-                _old_time = w._tick;
-                _new_time = w._tick + 128;
+                _old_time = world_time(world);
+                _new_time = world_time(world) + 128;
                 _phase = PHASE_TRAVELLING;
-                w._waiting_on_time.emplace(_new_time, this);
+                entity_wait_on_world_time(this, world, _new_time);
                 return;
             }
                 

@@ -20,7 +20,7 @@ namespace wry::sim {
     
     struct Spawner : LocalizedEntity {
                 
-        virtual void notify(World&);
+        virtual void notify(World*);
         
     };
 
@@ -28,13 +28,13 @@ namespace wry::sim {
         
         Value _of_this;
         
-        virtual void notify(World&);
+        virtual void notify(World*);
 
     };
 
     struct Sink : LocalizedEntity {
                 
-        virtual void notify(World&);
+        virtual void notify(World*);
 
     };
 

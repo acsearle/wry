@@ -46,10 +46,7 @@ namespace wry::sim {
         Value _value;
         Entity* _occupant;
         
-        // Array<Entity*> _observers;
-        
-        void notify_occupant(World& w);
-        // void notify_observers(World& w);
+        void notify_occupant(World* world);
         
     };
     

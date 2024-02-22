@@ -215,6 +215,13 @@ X(OPCODE_FLOP_FLIP),\
 
     using Time = i64;
     
+    enum TransactionState {
+        TX_NONE = 0,
+        TX_READ = 1,
+        TX_WRITE = 2,
+        TX_FORBIDDEN = 3,
+    };
+    
     struct Transactor {
         
         Time _stamp;

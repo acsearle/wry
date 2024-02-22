@@ -21,7 +21,7 @@ namespace wry::sim {
                         
         virtual ~Entity() = default;
         
-        virtual void notify(World&) = 0;
+        virtual void notify(World*) = 0;
 
     }; // struct Entity
   
