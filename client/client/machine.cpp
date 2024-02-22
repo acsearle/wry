@@ -19,22 +19,25 @@ namespace wry::sim {
         switch (_phase) {
                 
             case PHASE_TRAVELLING: {
-                if (world_time(world) < _new_time)
-                    // spurious wakeup
+                assert(_old_location != _new_location);
+                if ((world_time(world) - _new_time) < 0)
+                    // this was a spurious wakeup; for example, the cells under
+                    // changed, or somebody mutated our payload, but we don't
+                    // care until we arrive
+                    // TODO: we could assert here that we are still going to
+                    // be awakened at _new_time
                     return;
                 _phase = PHASE_WAITING_FOR_OLD;
             } [[fallthrough]];
                 
             case PHASE_WAITING_FOR_OLD: {
                 assert(_old_location != _new_location);
-                Tile& old_tile = world->_tiles[_old_location];
                 Entity* occupant = peek_world_coordinate_occupant(world, _old_location);
                 assert(occupant == this);
                 if (!can_write_world_coordinate(world, _old_location)) {
                     entity_ready_on_world(this, world);
                     return;
                 }
-                // old_tile._occupant = nullptr;
                 clear_world_coordinate_occupant(world, _old_location);
                 did_write_world_coordinate(world, _old_location);
                 _old_location = _new_location;
@@ -44,7 +47,12 @@ namespace wry::sim {
                 
             case PHASE_WAITING_FOR_NEW: {
                 
-                Tile& new_tile = world->_tiles[_new_location];
+                assert(_old_location == _new_location);
+                
+                // TODO: at the moment we have _on_arrivial and next action to
+                // coordinate stuff.  Can we instead use the top of the stack
+                // itself as the instruction slot and current machine state?
+                
                 Entity* occupant = peek_world_coordinate_occupant(world, _new_location);
                 assert(occupant == this);
 
@@ -61,7 +69,6 @@ namespace wry::sim {
                         
                     default:
                         // reads the tile
-                        // if (!new_tile._transaction.can_read(world_time(world))) {
                         if (!can_read_world_coordinate(world, _new_location)) {
                             entity_ready_on_world(this, world);
                             return;
@@ -88,27 +95,36 @@ namespace wry::sim {
                 i64 next_action = OPCODE_NOOP;
                 switch (_on_arrival) {
                     case OPCODE_SKIP:
-                    case OPCODE_LOAD:
+                        // we ignore the current value entirely
+                        break;
                     case OPCODE_STORE:
+                        // ignore the current value, but STORE should eventually
+                        // check that we can actually ovewrite the value (it's
+                        // not "matter", or read only, or whatever)
+                        break;
+                    case OPCODE_LOAD:
                     case OPCODE_EXCHANGE:
+                        // we load [_new_location] but don't execute it
+                        new_value = peek_world_coordinate_value(world, _new_location);
                         break;
                     default:
-                        new_value = new_tile._value;
-                        if (new_value.discriminant == DISCRIMINANT_OPCODE) {
+                        // we load [_new_location] and may execute it
+                        new_value = peek_world_coordinate_value(world, _new_location);
+                        if (new_value.discriminant == DISCRIMINANT_OPCODE)
                             next_action = new_value.value;
-                        }
+                        break;
                 }
-
+            
                 // bail out for the trivial case of halt
                 
                 if (next_action == OPCODE_HALT) {
                     // we don't need to do any further processing
                     assert(wants_read_new_tile);
                     assert(!wants_write_new_tile);
-                    // new_tile._transaction.did_read(world_time(world));
                     did_read_world_coordinate(world, _new_location);
                     _on_arrival = OPCODE_NOOP;
-                    // don't wait on anything (except, implicitly, this cell)
+                    // don't wait on anything (except, implicitly, for the value
+                    // of the tile under us to change)
                     return;
                 }
                 
@@ -117,7 +133,6 @@ namespace wry::sim {
                 switch (next_action) {
                     case OPCODE_FLIP_FLOP:
                     case OPCODE_FLOP_FLIP:
-                        // if (!new_tile._transaction.can_write(world_time(world))) {
                         if (!can_write_world_coordinate(world, _new_location)) {
                             entity_ready_on_world(this, world);
                             return;
@@ -129,7 +144,7 @@ namespace wry::sim {
                 }
                 
                 // work out where we will go next
-                
+                                
                 i64 new_heading = _heading;
                 switch (next_action) {
 
@@ -196,10 +211,7 @@ namespace wry::sim {
                 
                 // try to claim it
                 
-                auto& next_tile = world->_tiles[next_location];                
-                // if (!next_tile._transaction.can_write(world_time(world))) {
                 if (!can_write_world_coordinate(world, next_location)) {
-                    // conflict; retry
                     entity_ready_on_world(this, world);
                     return;
                 }
@@ -216,21 +228,14 @@ namespace wry::sim {
                 // the transaction will now succeed
                 
                 set_world_coordinate_occupant(world, next_location, this);
-                // next_tile._occupant = this;
-                // next_tile._transaction.did_write(world_time(world));
                 did_write_world_coordinate(world, next_location);
                 
                 // we need to reload new_tile in case accessing next_tile
                 // invalidated the reference
                 
-                auto& new_tile2 = world->_tiles[_new_location];
-                occupant = peek_world_coordinate_occupant(world, _new_location);
-                assert(occupant == this);
                 if (wants_write_new_tile) {
-                    // new_tile2._transaction.did_write(world_time(world));
                     did_write_world_coordinate(world, _new_location);
                 } else if (wants_read_new_tile) {
-                    // new_tile2._transaction.did_read(world_time(world));
                     did_read_world_coordinate(world, _new_location);
                 }
 
@@ -238,19 +243,25 @@ namespace wry::sim {
                     case OPCODE_SKIP:
                         break;
                     case OPCODE_LOAD:
-                        push(new_tile2._value);
+                        push(new_value);
                         break;
                     case OPCODE_STORE:
-                        new_tile._value = pop();
+                        assert(wants_write_new_tile);
+                        set_world_coordinate_value(world, _new_location, pop());
                         break;
                     case OPCODE_EXCHANGE:
                         a = pop();
-                        if (new_tile2._value.discriminant)
-                            push(new_tile2._value);
-                        new_tile2._value = a;
+                        // TODO: should push(...) itself discard nothings, always?
+                        push(new_value);
+                        assert(wants_write_new_tile);
+                        set_world_coordinate_value(world, _new_location, a);
                         break;
                     default:
-                        new_value = new_tile2._value;
+                        // To avoid explicit loads everywhere, when we run over
+                        // something that
+                        // - is not an opcode
+                        // - is copyable, aka immaterial, sybmbolic, numeric?
+                        // we pick it up.  Good idea?
                         if (new_value.discriminant == DISCRIMINANT_NUMBER) {
                             push(new_value);
                         }
@@ -266,6 +277,9 @@ namespace wry::sim {
                     case OPCODE_HALT:
                         // we should have early-out before here
                         abort();
+                        
+                        // all of these opcodes just manipulate the entity
+                        // state
                         
                     case OPCODE_BRANCH_LEFT:
                     case OPCODE_BRANCH_RIGHT:
@@ -481,11 +495,16 @@ namespace wry::sim {
                         }
                         break;
                         
+                        // these are unusal self-modifying opcodes
                     case OPCODE_FLIP_FLOP:
-                        new_tile2._value = { DISCRIMINANT_OPCODE, OPCODE_FLOP_FLIP };
+                        assert(wants_write_new_tile);
+                        set_world_coordinate_value(world, _new_location, {
+                            DISCRIMINANT_OPCODE, OPCODE_FLOP_FLIP });
                         break;
                     case OPCODE_FLOP_FLIP:
-                        new_tile2._value = { DISCRIMINANT_OPCODE, OPCODE_FLIP_FLOP };
+                        assert(wants_write_new_tile);
+                        set_world_coordinate_value(world, _new_location, {
+                            DISCRIMINANT_OPCODE, OPCODE_FLIP_FLOP });
                         break;
                                                 
                 } // switch (next_action)

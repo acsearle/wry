@@ -39,6 +39,7 @@ namespace wry::sim {
     // observers are rare
     
     
+    /*
     
     struct Tile {
 
@@ -49,6 +50,11 @@ namespace wry::sim {
         // void notify_occupant(World* world);
         
     };
+     */
+    
+    // We've simplified Tiles down to just Values
+    //
+    // we may later reuse the name for underlying terrain 
     
     
 } // namespace wry::sim

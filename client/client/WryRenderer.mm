@@ -806,8 +806,8 @@
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
                 Coordinate xy{i, j};
-                auto& the_tile = _model->_world._tiles[xy];
-                the_tile._value = _model->_holding_value;
+                auto& the_tile = _model->_world._value_for_coordinate[xy];
+                the_tile = _model->_holding_value;
                 
                 // these notifications happen logically between steps and are
                 // excused from transactions (hopefully)
@@ -827,8 +827,8 @@
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
                 Coordinate xy{i, j};
-                auto& the_tile = _model->_world._tiles[xy];
-                the_tile._value = { DISCRIMINANT_NUMBER, k };
+                auto& the_tile = _model->_world._value_for_coordinate[xy];
+                the_tile = { DISCRIMINANT_NUMBER, k };
                 // the_tile.notify_occupant(&_model->_world);
                 notify_by_world_coordinate(&_model->_world, xy);
             }
@@ -1265,7 +1265,7 @@
                 simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
-                    wry::sim::Value q = _model->_world._tiles[wry::sim::Coordinate{i, j}]._value;
+                    wry::sim::Value q = _model->_world._value_for_coordinate[wry::sim::Coordinate{i, j}];
                     using namespace wry::sim;
                     switch (q.discriminant) {
                         case DISCRIMINANT_NUMBER: {
