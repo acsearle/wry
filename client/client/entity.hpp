@@ -8,10 +8,7 @@
 #ifndef entity_hpp
 #define entity_hpp
 
-#include "array.hpp"
 #include "sim.hpp"
-#include "utility.hpp"
-#include "string.hpp"
 
 namespace wry::sim {
     

@@ -13,9 +13,23 @@ namespace wry::sim {
     
     void Machine::notify(World* world) {
         
+        // if somebody else has acted on our state this turn, we can't actually
+        // do anything and must retry
+        
+        if (!can_write_world_entity(world, this)) {
+            entity_ready_on_world(this, world);
+        }
+        
+        // as we fall through the switch statement we can execute several
+        // different combinations of transactions, and must runtime track
+        // our responsibilities
+        
+        // bool did_read_entity = false;
+        bool did_write_entity = false;
+        
         Value a = {};
         Value b = {};
-        
+                
         switch (_phase) {
                 
             case PHASE_TRAVELLING: {
@@ -28,6 +42,7 @@ namespace wry::sim {
                     // be awakened at _new_time
                     return;
                 _phase = PHASE_WAITING_FOR_OLD;
+                did_write_entity = true;
             } [[fallthrough]];
                 
             case PHASE_WAITING_FOR_OLD: {
@@ -35,14 +50,19 @@ namespace wry::sim {
                 Entity* occupant = peek_world_coordinate_occupant(world, _old_location);
                 assert(occupant == this);
                 if (!can_write_world_coordinate(world, _old_location)) {
+                    if (did_write_entity) {
+                        did_write_world_entity(world, this);
+                    }
                     entity_ready_on_world(this, world);
                     return;
                 }
                 clear_world_coordinate_occupant(world, _old_location);
                 did_write_world_coordinate(world, _old_location);
+                _old_time = _new_time;
                 _old_location = _new_location;
-                _old_time = world_time(world);
+                _old_heading = _new_heading;
                 _phase = PHASE_WAITING_FOR_NEW;
+                did_write_entity = true;
             } [[fallthrough]];
                 
             case PHASE_WAITING_FOR_NEW: {
@@ -70,6 +90,9 @@ namespace wry::sim {
                     default:
                         // reads the tile
                         if (!can_read_world_coordinate(world, _new_location)) {
+                            if (did_write_entity) {
+                                did_write_world_entity(world, this);
+                            }
                             entity_ready_on_world(this, world);
                             return;
                         }
@@ -80,6 +103,9 @@ namespace wry::sim {
                     case OPCODE_EXCHANGE:
                         // writes the tile
                         if (!can_write_world_coordinate(world, _new_location)) {
+                            if (did_write_entity) {
+                                did_write_world_entity(world, this);
+                            }
                             entity_ready_on_world(this, world);
                             return;
                         }
@@ -123,6 +149,7 @@ namespace wry::sim {
                     assert(!wants_write_new_tile);
                     did_read_world_coordinate(world, _new_location);
                     _on_arrival = OPCODE_NOOP;
+                    did_write_world_entity(world, this);
                     // don't wait on anything (except, implicitly, for the value
                     // of the tile under us to change)
                     return;
@@ -134,6 +161,9 @@ namespace wry::sim {
                     case OPCODE_FLIP_FLOP:
                     case OPCODE_FLOP_FLIP:
                         if (!can_write_world_coordinate(world, _new_location)) {
+                            if (did_write_entity) {
+                                did_write_world_entity(world, this);
+                            }
                             entity_ready_on_world(this, world);
                             return;
                         }
@@ -145,7 +175,7 @@ namespace wry::sim {
                 
                 // work out where we will go next
                                 
-                i64 new_heading = _heading;
+                i64 next_heading = _new_heading;
                 switch (next_action) {
 
                     default:
@@ -154,47 +184,47 @@ namespace wry::sim {
                         
                         // other opcodes may change the direction
                     case OPCODE_TURN_NORTH:
-                        new_heading = 0;
+                        next_heading = 0;
                         break;
                     case OPCODE_TURN_EAST:
-                        new_heading = 1;
+                        next_heading = 1;
                         break;
                     case OPCODE_TURN_SOUTH:
-                        new_heading = 2;
+                        next_heading = 2;
                         break;
                     case OPCODE_TURN_WEST:
-                        new_heading = 3;
+                        next_heading = 3;
                         break;
                     case OPCODE_TURN_LEFT:
                     case OPCODE_FLOP_FLIP:
-                        --new_heading;
+                        --next_heading;
                         break;
                     case OPCODE_TURN_RIGHT:
                     case OPCODE_FLIP_FLOP:
-                        ++new_heading;
+                        ++next_heading;
                         break;
                     case OPCODE_TURN_BACK:
-                        new_heading += 2;
+                        next_heading += 2;
                         break;
                     case OPCODE_BRANCH_LEFT:
                         a = peek();
                         if (a.discriminant == DISCRIMINANT_NUMBER)
-                            new_heading -= a.value;
+                            next_heading -= a.value;
                         break;
                     case OPCODE_BRANCH_RIGHT:
                         a = peek();
                         if (a.discriminant == DISCRIMINANT_NUMBER)
-                            new_heading += a.value;
+                            next_heading += a.value;
                         break;
                     case OPCODE_HEADING_LOAD:
                         a = peek();
                         if (a.discriminant == DISCRIMINANT_NUMBER)
-                            new_heading = a.value;
+                            next_heading = a.value;
                         break;
                 }
                 
                 Coordinate next_location = _new_location;
-                switch (new_heading & 3) {
+                switch (next_heading & 3) {
                     case 0:
                         ++next_location.y;
                         break;
@@ -212,6 +242,9 @@ namespace wry::sim {
                 // try to claim it
                 
                 if (!can_write_world_coordinate(world, next_location)) {
+                    if (did_write_entity) {
+                        did_write_world_entity(world, this);
+                    }
                     entity_ready_on_world(this, world);
                     return;
                 }
@@ -219,6 +252,9 @@ namespace wry::sim {
                 if (occupant) {
                     assert(occupant != this);
                     // occupied; wait
+                    if (did_write_entity) {
+                        did_write_world_entity(world, this);
+                    }
                     entity_wait_on_world_coordinate(this, world, next_location);
                     // we choose to interpret this as a failed transaction
                     // which may speed up the release of the other tile
@@ -229,7 +265,8 @@ namespace wry::sim {
                 
                 set_world_coordinate_occupant(world, next_location, this);
                 did_write_world_coordinate(world, next_location);
-                
+                did_write_world_entity(world, this);
+
                 // we need to reload new_tile in case accessing next_tile
                 // invalidated the reference
                 
@@ -289,7 +326,7 @@ namespace wry::sim {
                         break;
                         
                     case OPCODE_HEADING_LOAD:
-                        push({DISCRIMINANT_NUMBER, _heading});
+                        push({DISCRIMINANT_NUMBER, _new_heading});
                         break;
                         
                     case OPCODE_DROP:
@@ -510,7 +547,7 @@ namespace wry::sim {
                 } // switch (next_action)
                 
                 _on_arrival = next_action;
-                _heading = new_heading;
+                _new_heading = next_heading;
                 _new_location = next_location;
                 _old_time = world_time(world);
                 _new_time = world_time(world) + 64;

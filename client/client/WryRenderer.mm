@@ -1116,22 +1116,63 @@
             
             if (auto p = dynamic_cast<wry::sim::Machine*>(q)) { // ugh
                 
-                auto h = p->_heading & 3;
-                auto x0 = make<float4>(p->_old_location.x, p->_old_location.y, 0.0, 1.0f);
-                auto x1 = make<float4>(p->_new_location.x, p->_new_location.y, 0.0, 1.0f);
-                
-                simd_float4 location;
-                if (tnow >= p->_new_time) {
-                    location = x1;
-                } else {
-                    location = simd_mix(x0, x1, float(tnow - p->_old_time) / float(p->_new_time - p->_old_time));
+                auto h0 = (p->_old_heading & 3) * M_PI_2;
+                auto h1 = (p->_new_heading & 3) * M_PI_2;
+                auto x0 = make<float2>(p->_old_location.x, p->_old_location.y);
+                auto x1 = make<float2>(p->_new_location.x, p->_new_location.y);
+                auto dx0 = make<float2>(sin(h0), cos(h0));
+                auto dx1 = make<float2>(sin(h1), cos(h1));
+                                
+                float t = 1.0;
+                if (tnow < p->_new_time) {
+                    assert(tnow >= p->_old_time);
+                    t = (tnow - p->_old_time) / (float) (p->_new_time - p->_old_time);
                 }
+                assert(0.0f <= t);
+                assert(t <= 1.0f);
+                //printf("%lld %lld %lld %g\n", p->_old_time, p->_new_time, tnow, t);
+                
+                /*interpolate_wheeled_vehicle(x0, make<float2>(dx0.y, -dx0.x),
+                                            x1, make<float2>(dx1.y, -dx1.x));*/
+
+                
+                // now we do some crappy interpolation
+                {
+                    
+                    
+                    auto a = x0 + dx0 * t;
+                    auto b = x1 + dx1 * (t - 1.0f);
+
+                    auto s = smoothstep5(t);
+                    auto ds = dsmoothstep5(t);
+                    auto c = simd_mix(a, b, make<float2>(s, s));
+                    auto dc = simd_mix(dx0, dx1, s) + (b - a) * ds;
+                    x1 = c;
+                    dx1 = dc;                    
+                }
+                
+                {
+                    /*
+                    // now we do some different crappy interpolation
+                    simd_float4 xdx = interpolate_wheeled_vehicle(x0,
+                                                                  make<float2>(dx0.y, -dx0.x),
+                                                                  x1,
+                                                                  make<float2>(dx1.y, -dx1.x),
+                                                                  t);
+                    
+                    x1 = xdx.xy;
+                    dx1 = xdx.zw;
+                     */
+
+                }
+
+                simd_float4 location = make<float4>(0.0, 0.0, 0.0, 1.0f);
+                location.xy = x1;
+                
                 
                 auto A = simd_matrix_translate(location) * lookat_transform;
                 
-                while (h--) {
-                    A = A * simd_matrix_rotate(M_PI_2, make<float3>(0.0, 0.0, -1.0));
-                }
+                A = A * simd_matrix_rotate(atan2(dx1.x, dx1.y), make<float3>(0.0, 0.0, -1.0));
                 
                 {
                     // now make the instance

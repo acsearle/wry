@@ -25,18 +25,17 @@ namespace wry::sim {
         
         i64 _on_arrival = OPCODE_NOOP;
         Array<Value> _stack;
+
+        // The _old_* and _new_* states represent the beginning and end states
+        // of travelling.  They are used by the visualization as a lerp
         
-        // TODO: _old_heading, _new_heading
-        i64 _heading = 0;
+        i64 _old_heading = HEADING_NORTH;
+        i64 _new_heading = HEADING_NORTH;
         Coordinate _old_location = { 0, 0 };
         Coordinate _new_location = { 0, 0 };
         Time _old_time = 0;
         Time _new_time = 0;
         
-        // These values are also used to generate a lerp for the visualization
-        // We occupy _old_location and _new_location, they differ only when
-        // travelling
-
         void push(Value x) {
             if (x.discriminant)
                 _stack.push_back(x);

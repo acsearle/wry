@@ -9,35 +9,34 @@
 #define simd_hpp
 
 #include <simd/simd.h>
+#include <cstdio>
 
 #include "assert.hpp"
 #include "stddef.hpp"
 #include "stdfloat.hpp"
 #include "stdint.hpp"
 
-inline constexpr simd_float4x4 matrix_ndc_to_tc_float4x4 = {{
+constexpr simd_float4x4 matrix_ndc_to_tc_float4x4 = {{
     {  0.5f,  0.0f,  0.0f,  0.0f },
     {  0.0f, -0.5f,  0.0f,  0.0f },
     {  0.0f,  0.0f,  1.0f,  0.0f },
     {  0.5f,  0.5f,  0.0f,  1.0f },
 }};
 
-inline constexpr simd_float4x4 matrix_tc_to_ndc_float4x4 = {{
+constexpr simd_float4x4 matrix_tc_to_ndc_float4x4 = {{
     {  2.0f,  0.0f,  0.0f,  0.0f },
     {  0.0f, -2.0f,  0.0f,  0.0f },
     {  0.0f,  0.0f,  1.0f,  0.0f },
     { -1.0f,  1.0f,  0.0f,  1.0f },
 }};
 
-inline constexpr simd_float4x4 matrix_perspective_float4x4 = {{
+constexpr simd_float4x4 matrix_perspective_float4x4 = {{
     {  1.0f,  0.0f,  0.0f,  0.0f,  },
     {  0.0f,  1.0f,  0.0f,  0.0f,  },
     {  0.0f,  0.0f,  1.0f,  1.0f,  },
     {  0.0f,  0.0f, -1.0f,  0.0f,  },
 }};
 
-
-// fixme
 inline simd_float4x4 matrix_perspective_right_hand(float fovyRadians, float aspect, float nearZ, float farZ) {
     float ys = 1 / tanf(fovyRadians * 0.5);
     float xs = ys / aspect;
@@ -47,13 +46,6 @@ inline simd_float4x4 matrix_perspective_right_hand(float fovyRadians, float aspe
                                  simd_make_float4(0,  0, zs, -nearZ * zs),
                                  simd_make_float4(0,  0,  1,           0 ));
 }
-
-
-
-
-
-
-
 
 inline simd_float4x4 simd_matrix_rotate(float theta, simd_float3 u) {
     assert(simd_all(u == simd_normalize(u)));
@@ -110,11 +102,17 @@ inline simd_float4x4 simd_matrix_scale(float x, float y, float z = 1, float w = 
                        simd_make_float4(0, 0, 0, w));
 }
 
-typedef struct {
+struct simd_float4x4x4 {
+    
+    simd_float4x4 slices[4];
+    
+};
+
+struct simd_double4x4x4 {
     
     simd_double4x4 slices[4];
     
-} simd_double4x4x4;
+};
 
 namespace wry {
     
@@ -224,6 +222,28 @@ namespace wry {
         simd_float4 c = b;
         return project_screen_ray(A, c);
     }
+    
+    inline float saturate(float x) {
+        if (x < 0.0f)
+            return 0.0f;
+        if (x > 1.0f)
+            return 1.0f;
+        return x;
+    }
+    
+    inline float smoothstep5(float x) {
+        x = saturate(x);
+        return ((6.0f * x - 15.0f) * x + 10.0f) * x * x * x;
+    }
+    
+    inline float dsmoothstep5(float x) {
+        x = saturate(x);
+        return ((30.0f * x - 60.0f) * x + 30.0f) * x * x;
+    }
+    
+    simd_float4 interpolate_wheeled_vehicle(simd_float2 x0, simd_float2 y0,
+                                            simd_float2 x1, simd_float2 y1,
+                                            float t);
     
 } // namespace wry
 

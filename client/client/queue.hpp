@@ -101,7 +101,14 @@ namespace wry {
     
     
     // This QueueOfUnique is scalable, with amortized O(1) push, but has
-    // significant overhead when the queue is small.
+    // significant overhead
+    //
+    // It maintains both an Array and a HashSet of the elements, the former
+    // encoding order and the latter encoding memebership.  As the first
+    // use case is for pointer type and pointer equality, we store them
+    // directly in each set.  Other uses may prefer one of the containers to
+    // refer into the elements of the other (array index, if erasure is
+    // prohibited)
     //
     // The best queue for our applications may switch strategy from find
     // to hash set membership

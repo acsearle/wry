@@ -1173,9 +1173,7 @@ namespace wry {
 
     template<typename K, typename V> using HashMap = Table<K, V>;
     template<typename K> using HashSet = hash_set<K>;
-
-    
-    
+        
 } // namespace wry
 
 #endif /* table_hpp */

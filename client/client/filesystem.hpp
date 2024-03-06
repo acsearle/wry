@@ -14,9 +14,6 @@
 
 namespace wry {
     
-    // std::filesystem::path is internally native platform string
-    // on Windows, fopen vs _wfopen?
-    
     String string_from_file(const std::filesystem::path&);
     
 };

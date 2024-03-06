@@ -245,3 +245,60 @@ Loosely coupled work like audio, IO and the actual simulation on other threads
  
 
 
+## Transactional memory
+
+Thousands of entities communicate by reading and writing shared memory.
+Outcomes must be deterministic.
+There must be locality and a speed of light.
+Evaluation must be parallelizable.
+
+A step begins.
+
+A list of entities are ready to run this step.  We will execute a maximal (but 
+not optimal) subset of them that can run without implying an ordering.
+
+We maintain an initially empty list of locations that have been read, and
+locations that have been written.
+
+An entity takes its turn thus:
+- Reads some values, including itself
+- Performs some computations
+- Checks that the read values can be read and that values to be written can be
+  written
+- Decides to commit
+- Marks the read values as read
+- Writes some values, perhaps including itself
+- Markes the written values as written
+
+In the world step, any given value will 
+- start un-read
+- transition from un-read to read, and remain such
+- xor, transition from un-read to written, and remain such
+
+One entity cannot read from a value that another entity has written to, and
+cannot write to a value that another entity has read from
+
+Reads only need to be acknowledged if they in some way influence the writing of
+a value.  This is a bit nebulous, and the safe default is to acknowledge.  But,
+if an entity wakes up, finds a value is unsatisfactory, and goes back to sleep,
+marking it as read would only obstruct another entity from writing it.  Both
+interleavings produce the same result; read then write means we sleep
+on the value, and are then retry next turn; or write then read means we
+observe that the value is in flux, and must retry next turn.
+
+Every entity that 'commits' will produce the values it would if it went first.
+Which entities commit will depend on the order in which we run them.  This must
+be deterministic.  We can still parallelize the caluclation by striping the
+world with a width greater than the local reach of any entity; running all odd 
+stripes in parallel, then all even stripes.   
+
+Factorio-style belts are non-local; one end blocking or unblocking immediately
+affects the whole belt.  Nor are they acyclic.  Entities (or systems of
+entities) like this can't be localized.  They could be prohibited, or they could
+run in their own stage of the simulation step, with disjoint groups having been
+predetermined.  Localization is just one way of establishing uncoupled groups
+for parallel calculation.
+
+
+-- Can we do stack machines as a reverse Polish notation stack, where they are
+"thinking" their last opcode on top of the stack?   

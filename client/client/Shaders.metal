@@ -584,6 +584,7 @@ namespace deferred {
          */
         //position_light.xyz = normalize(position_light.xyz);
         
+        // spotlight?
         float3 radiance = 10 * smoothstep(-0.5, 0.0, -length_squared(position_light.xz) / (position_light.y * position_light.y));
         float3 radianceScatter = 0.01;
 

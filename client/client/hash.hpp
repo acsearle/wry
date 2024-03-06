@@ -273,6 +273,13 @@ namespace wry {
     constexpr hashed_str operator""_hashed(const char* str, std::size_t size) {
         return hashed_str(str);
     }
+    
+    // TODO: reversible hash
+    // - For hash tables whose members are (nonnull) pointers, we could
+    //   - store only the pointers and hash on demand
+    //   - store only a reversible hash of the pointers and reverse on demand
+    //   - work entirely with the hash as an ID with high entropy, only reversing
+    //     it when we need to load through the pointer
         
 } // namespace wry
 

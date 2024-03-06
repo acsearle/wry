@@ -71,8 +71,6 @@ namespace wry {
         };
     }
     
-    
-    
 } // namespace wry
 
 #endif /* enum_hpp */
