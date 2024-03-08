@@ -8,6 +8,8 @@
 #ifndef Result_hpp
 #define Result_hpp
 
+#include <cstdio>
+
 #include "type_traits.hpp"
 #include "utility.hpp"
 

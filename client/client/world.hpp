@@ -24,6 +24,9 @@ namespace wry::sim {
     
     // somewhat abstracted interface
     
+    struct World;
+    struct Entity;
+    
     Time world_time(World* world);
 
     // entity scheduling
@@ -83,11 +86,6 @@ namespace wry::sim {
                             
         QueueOfUnique<Entity*>  _ready;
         
-        // Transactions
-
-        HashMap<Coordinate, TRANSACTION_STATE> _transaction_state_for_coordinate;
-        HashMap<Entity*,    TRANSACTION_STATE> _transaction_state_for_entity;
-
         // Spatial hashing
         // TODO: we may variously need
         // - entities at a Coordinate, for specific lookup
@@ -113,6 +111,11 @@ namespace wry::sim {
         //   - Don't keep transactions and occupants in the same structure
         //     as the more common values
         
+        
+        // Transactions
+        
+        HashMap<Coordinate, TRANSACTION_STATE> _transaction_state_for_coordinate;
+        HashMap<Entity*,    TRANSACTION_STATE> _transaction_state_for_entity;
                 
         void step() {
             
@@ -129,6 +132,8 @@ namespace wry::sim {
                 entity->notify(this);
 
             working.clear();
+
+            // TODO: clearing a hash set is O(capacity) not O(size)
             _transaction_state_for_coordinate.clear();
             _transaction_state_for_entity.clear();
 

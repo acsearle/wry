@@ -379,6 +379,8 @@ namespace wry::value {
         }
         
     };
-}
+    
+} // namespace wry::value
+
 
 #endif /* value_hpp */

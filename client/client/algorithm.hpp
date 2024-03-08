@@ -53,7 +53,7 @@ namespace wry {
         }        
     }
     
-    // Extend standard algorithms to allow checking for second range
+    // Extend standard algorithms to allow checking for second range exhaustion
     
     auto copy(auto first, auto last, auto d_first, auto d_last) -> decltype(d_first) {
         for (; first != last; ++first, ++d_first) {
