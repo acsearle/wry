@@ -136,8 +136,8 @@ namespace wry::sim {
                     default:
                         // we load [_new_location] and may execute it
                         new_value = peek_world_coordinate_value(world, _new_location);
-                        if (new_value.discriminant == DISCRIMINANT_OPCODE)
-                            next_action = new_value.value;
+                        if (new_value.d == Value::OPCODE)
+                            next_action = new_value.x;
                         break;
                 }
             
@@ -208,18 +208,18 @@ namespace wry::sim {
                         break;
                     case OPCODE_BRANCH_LEFT:
                         a = peek();
-                        if (a.discriminant == DISCRIMINANT_NUMBER)
-                            next_heading -= a.value;
+                        if (a.d == Value::INT64_T)
+                            next_heading -= a.x;
                         break;
                     case OPCODE_BRANCH_RIGHT:
                         a = peek();
-                        if (a.discriminant == DISCRIMINANT_NUMBER)
-                            next_heading += a.value;
+                        if (a.d == Value::INT64_T)
+                            next_heading += a.x;
                         break;
                     case OPCODE_HEADING_LOAD:
                         a = peek();
-                        if (a.discriminant == DISCRIMINANT_NUMBER)
-                            next_heading = a.value;
+                        if (a.d == Value::INT64_T)
+                            next_heading = a.x;
                         break;
                 }
                 
@@ -299,7 +299,7 @@ namespace wry::sim {
                         // - is not an opcode
                         // - is copyable, aka immaterial, sybmbolic, numeric?
                         // we pick it up.  Good idea?
-                        if (new_value.discriminant == DISCRIMINANT_NUMBER) {
+                        if (new_value.d == Value::INT64_T) {
                             push(new_value);
                         }
                         break;
@@ -321,12 +321,12 @@ namespace wry::sim {
                     case OPCODE_BRANCH_LEFT:
                     case OPCODE_BRANCH_RIGHT:
                     case OPCODE_HEADING_STORE:
-                        if (peek().discriminant == DISCRIMINANT_NUMBER)
+                        if (peek().d == Value::INT64_T)
                             pop();
                         break;
                         
                     case OPCODE_HEADING_LOAD:
-                        push({DISCRIMINANT_NUMBER, _new_heading});
+                        push(Value(_new_heading));
                         break;
                         
                     case OPCODE_DROP:
@@ -350,76 +350,76 @@ namespace wry::sim {
                         
                     case OPCODE_IS_NOT_ZERO:
                         a = peek();
-                        if (a.discriminant == DISCRIMINANT_NUMBER) {
-                            a.value = a.value != 0;
+                        if (a.d == Value::INT64_T) {
+                            a.x = a.x != 0;
                             pop(); push(a);
                         }
                         break;
                         
                     case OPCODE_LOGICAL_NOT:
                         a = peek();
-                        if (a.discriminant == DISCRIMINANT_NUMBER) {
-                            a.value = !a.value;
+                        if (a.d == Value::INT64_T) {
+                            a.x = !a.x;
                             pop(); push(a);
                         }
                         break;
                     case OPCODE_LOGICAL_AND:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = a.value && b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = a.x && b.x;
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_LOGICAL_OR:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = a.value || b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = a.x || b.x;
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_LOGICAL_XOR:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = !a.value != !b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = !a.x != !b.x;
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_BITWISE_NOT:
                         a = peek();
-                        if (a.discriminant == DISCRIMINANT_NUMBER) {
-                            a.value = ~a.value;
+                        if (a.d == Value::INT64_T) {
+                            a.x = ~a.x;
                             pop(); push(a);
                         }
                         break;
                     case OPCODE_BITWISE_AND:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = a.value & b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = a.x & b.x;
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_BITWISE_OR:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = a.value | b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = a.x | b.x;
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_BITWISE_XOR:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = a.value ^ b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = a.x ^ b.x;
                             pop2push1(a);
                         }
                         break;
                         
                     case OPCODE_BITWISE_SPLIT:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            u64 x = a.value & b.value;
-                            u64 y = a.value ^ b.value;
-                            a.value = x;
-                            b.value = y;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            u64 x = a.x & b.x;
+                            u64 y = a.x ^ b.x;
+                            a.x = x;
+                            b.x = y;
                             pop();
                             pop();
                             push(a);
@@ -429,87 +429,87 @@ namespace wry::sim {
                         
                     case OPCODE_SHIFT_RIGHT:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = a.value >> b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = a.x >> b.x;
                             pop2push1(a);
                         }
                         break;
                         
                     case OPCODE_POPCOUNT:
                         a = peek();
-                        if (a.discriminant == DISCRIMINANT_NUMBER) {
-                            a.value = __builtin_popcountll(a.value);
+                        if (a.d == Value::INT64_T) {
+                            a.x = __builtin_popcountll(a.x);
                             pop(); push(a);
                         }
                         break;
                         
                     case OPCODE_NEGATE:
                         a = peek();
-                        if (a.discriminant == DISCRIMINANT_NUMBER) {
-                            a.value = - a.value;
+                        if (a.d == Value::INT64_T) {
+                            a.x = - a.x;
                             pop(); push(a);
                         }
                         break;
                     case OPCODE_ABS:
                         a = peek();
-                        if (a.discriminant == DISCRIMINANT_NUMBER) {
-                            a.value = abs((i64) a.value);
+                        if (a.d == Value::INT64_T) {
+                            a.x = abs((i64) a.x);
                             pop(); push(a);
                         }
                         break;
                     case OPCODE_SIGN:
                         a = peek();
-                        if (a.discriminant == DISCRIMINANT_NUMBER) {
-                            a.value = (0 < (i64) a.value) - ((i64) a.value < 0);
+                        if (a.d == Value::INT64_T) {
+                            a.x = (0 < (i64) a.x) - ((i64) a.x < 0);
                             pop(); push(a);
                         }
                         break;
                     case OPCODE_EQUAL:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = a.value == b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = a.x == b.x;
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_NOT_EQUAL:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = a.value != b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = a.x != b.x;
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_LESS_THAN:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = (i64) a.value < (i64) b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = (i64) a.x < (i64) b.x;
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_GREATER_THAN:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = (i64) a.value > (i64) b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = (i64) a.x > (i64) b.x;
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_LESS_THAN_OR_EQUAL_TO:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = (i64) a.value <= (i64) b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = (i64) a.x <= (i64) b.x;
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_GREATER_THAN_OR_EQUAL_TO:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = (i64) a.value >= (i64) b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = (i64) a.x >= (i64) b.x;
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_COMPARE:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.value = ((i64) a.value < (i64) b.value) - ((i64) b.value < (i64) a.value);
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.x = ((i64) a.x < (i64) b.x) - ((i64) b.x < (i64) a.x);
                             pop2push1(a);
                         }
                         break;
@@ -517,17 +517,17 @@ namespace wry::sim {
                         
                     case OPCODE_ADD:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.discriminant |= b.discriminant;
-                            a.value += b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.d |= b.d;
+                            a.x += b.x;
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_SUBTRACT:
                         std::tie(a, b) = peek2();
-                        if ((a.discriminant | b.discriminant) == DISCRIMINANT_NUMBER) {
-                            a.discriminant |= b.discriminant;
-                            a.value -= b.value;
+                        if ((a.d | b.d) == Value::INT64_T) {
+                            a.d |= b.d;
+                            a.x -= b.x;
                             pop2push1(a);
                         }
                         break;
@@ -536,12 +536,12 @@ namespace wry::sim {
                     case OPCODE_FLIP_FLOP:
                         assert(wants_write_new_tile);
                         set_world_coordinate_value(world, _new_location, {
-                            DISCRIMINANT_OPCODE, OPCODE_FLOP_FLIP });
+                            Value::OPCODE, OPCODE_FLOP_FLIP });
                         break;
                     case OPCODE_FLOP_FLIP:
                         assert(wants_write_new_tile);
                         set_world_coordinate_value(world, _new_location, {
-                            DISCRIMINANT_OPCODE, OPCODE_FLIP_FLOP });
+                            Value::OPCODE, OPCODE_FLIP_FLOP });
                         break;
                                                 
                 } // switch (next_action)

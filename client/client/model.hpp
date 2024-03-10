@@ -92,7 +92,7 @@ namespace wry {
                 // value source
                 Source* q = new Source;
                 q->_location = Coordinate{2, 2};
-                q->_of_this = Value{DISCRIMINANT_NUMBER, 1};
+                q->_of_this = Value(1);
                 _world._entities.push_back(q);
                 entity_ready_on_world(q, &_world);
             }

@@ -180,6 +180,10 @@ namespace wry {
                 
     }; // struct StringView
     
+    inline void print(StringView v) {
+        printf("%.*s", (int) v.chars.size(), (const char*) v.chars.data());
+    }
+
     inline std::ostream& operator<<(std::ostream& a, StringView b) {
         a.write(reinterpret_cast<const char*>(b.chars.begin()),
                 b.chars.size());

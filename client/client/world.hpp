@@ -241,13 +241,13 @@ namespace wry::sim {
         if (pos != world->_value_for_coordinate.end())
             return pos->second;
         else
-            return { DISCRIMINANT_NONE, 0 };
+            return Value();
     }
     
     inline void set_world_coordinate_value(World* world, Coordinate where, Value what) {
         assert(world);
-        assert(what.discriminant);
-        world->_value_for_coordinate[where] = what;
+        assert(what.d);
+        world->_value_for_coordinate[where] = std::move(what);
     }
     
     inline void clear_world_coordinate_value(World* world, Coordinate where) {

@@ -13,7 +13,7 @@ namespace wry::sim {
     
     void Source::notify(World* world) {
         if (peek_world_coordinate_occupant(world, _location)
-            || peek_world_coordinate_value(world, _location).discriminant)
+            || peek_world_coordinate_value(world, _location).d)
         {
             // wait until unoccupied and empty
             entity_wait_on_world_coordinate(this, world, _location);
@@ -31,7 +31,7 @@ namespace wry::sim {
     
     void Sink::notify(World* world) {
         if (peek_world_coordinate_occupant(world, _location)
-            || !peek_world_coordinate_value(world, _location).discriminant)
+            || !peek_world_coordinate_value(world, _location).d)
         {
             entity_wait_on_world_coordinate(this, world, _location);
             return;

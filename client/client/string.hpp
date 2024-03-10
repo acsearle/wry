@@ -8,6 +8,8 @@
 #ifndef string_hpp
 #define string_hpp
 
+#include <atomic>
+
 #include "array.hpp"
 #include "hash.hpp"
 #include "string_view.hpp"
@@ -241,109 +243,98 @@ namespace wry {
         return a;
     }
         
-    struct immutable_string {
+    
+    // a note on reference counting
+    //
+    // interned strings are stored in a weak hash set; they may be destroyed
+    // when there are no strong references to them.  only the set needs to be
+    // weak, so we don't need to maintain an explicit weak count (unlike
+    // shared_ptr and Arc).
+    //
+    // When the last strong reference is dropped, the string remains valid
+    // and in the hash set, but is eligible for destruction.  Methods on the
+    // hash set may free, resurrect, or reuse the allocation of such strings
+    // as they discover them.
+    
+    struct InternedString {
         
-        // When a String is used as a hash table key, it is important to
-        // keep the inline size small.  It will only be accessed for strcmp
-        // to check hash collisions, and never mutated.  We can dispense
-        // with _data and _capacity, place _end at the beginning of the
-        // allocation, place the String after it, and infer _begin from
-        // the allocation.
-        
-        // This is the simplest of several ways we can lay out the data, allowing
-        // increasing mutability.  The downside is that accessing the iterators
-        // requires pointer chasing, making use cases where we access the metadata
-        // but not the data slower.
-        
-        // We don't store the hash since the hash table will usually do this
-        
-        //:todo: But on the other hand, the hash will be cheap to store here?
-        
-        // We could reference count the implementation
-        // We could intern the strings of this sort
-        
-        struct implementation {
-            
-            char8_t* _end;
+        struct Implementation {
+            std::atomic<intptr_t> _count;
+            uint64_t _hash;
+            size_type _size; // in bytes
             char8_t _begin[];
-            
-            static implementation* make(StringView v) {
-                size_type n = v.chars.size();
-                implementation* p = (implementation*) operator new(sizeof(implementation) + n + 1);
-                p->_end = p->_begin + n;
-                memcpy(p->_begin, v.chars.begin(), n);
-                *p->_end = 0;
-                return p;
-            }
-            
-            static implementation* make(implementation* q) {
-                auto n = q->_end - q->_begin;
-                implementation* p = (implementation*) operator new(sizeof(implementation) + n + 1);
-                p->_end = p->_begin + n;
-                memcpy(p->_begin, q->_begin, n + 1);
-                return p;
-            }
-            
         };
         
-        implementation* _body;
+        Implementation* _pointer;
         
-        immutable_string() : _body(nullptr) {}
+        static Implementation* _oracle(StringView);
         
-        immutable_string(const immutable_string&) = delete;
+        InternedString() = delete;
         
-        immutable_string(immutable_string&& s)
-        : _body(std::exchange(s._body, nullptr)) {}
-        
-        ~immutable_string() {
-            free(_body);
+        InternedString(const InternedString& other)
+        : _pointer(other._pointer) {
+            (void) other._pointer->_count.fetch_add(1, std::memory_order_relaxed);
         }
         
-        immutable_string& operator=(const immutable_string& other) = delete;
-            
-        void swap(immutable_string& other) {
+        InternedString(InternedString&& other)
+        : _pointer(exchange(other._pointer, nullptr)) {
+        }
+                
+        ~InternedString() {
+            intptr_t n = _pointer->_count.fetch_sub(1, std::memory_order_release);
+            assert(n != 0);
+        }
+        
+        InternedString(StringView v)
+        : _pointer(_oracle(v)) {
+        }
+        
+        void swap(InternedString& other) {
             using std::swap;
-            swap(_body, other._body);
+            swap(_pointer, other._pointer);
         }
-            
-        immutable_string& operator=(immutable_string&& other) {
-            immutable_string(std::move(other)).swap(*this);
+
+        void swap(InternedString&& other) {
+            swap(other);
+        }
+
+        InternedString& operator=(const InternedString& other) {
+            swap(InternedString(other));
+            return *this;
+        }
+
+        InternedString& operator=(InternedString&& other) {
+            swap(InternedString(std::move(other)));
             return *this;
         }
         
-        immutable_string clone() const {
-            immutable_string r;
-            if (_body)
-                r._body = implementation::make(_body);
-            return r;
+        InternedString& operator=(auto&& other) {
+            swap(InternedString(std::forward<decltype(other)>(other)));
+            return *this;
         }
-        
-        explicit immutable_string(StringView v)
-        : _body(implementation::make(v)) {
-        }
-        
+
         using const_iterator = utf8::iterator;
         using iterator = utf8::iterator;
         
         const_iterator begin() const {
-            return iterator{_body ? _body->_begin : nullptr};
+            return iterator{_pointer->_begin};
         }
         
         const_iterator end() const {
-            return iterator{_body ? _body->_end : nullptr};
+            return iterator{_pointer->_begin + _pointer->_size};
         }
         
         const char* c_str() const {
-            return _body ? reinterpret_cast<char const*>(_body->_begin) : nullptr;
+            return (const char*) (_pointer->_begin);
         }
         
         const char8_t* data() const {
-            return _body ? _body->_begin : nullptr;
+            return _pointer->_begin;
         }
         
         ArrayView<const byte> as_bytes() const {
-            return ArrayView<const byte>(_body ? reinterpret_cast<const byte*>(_body->_begin) : nullptr,
-                                          _body ? reinterpret_cast<const byte*>(_body->_end + 1) : nullptr);
+            return ArrayView<const byte>((const byte*) _pointer->_begin,
+                                         _pointer->_size + 1);
         }
         
         operator StringView() const {
@@ -351,14 +342,10 @@ namespace wry {
         }
         
         bool empty() const {
-            return !(_body && (_body->_end - _body->_begin));
+            return !_pointer->_size;
         }
                 
     };
-    
-    inline void print(StringView v) {
-        printf("%.*s", (int) v.chars.size(), (const char*) v.chars.data());
-    }
     
 } // namespace manic
 

@@ -685,7 +685,7 @@
             for (i64 i = 0; i != _name_to_opcode.size(); ++i) {
                 if (_opcode_to_coordinate.contains(i)) {
                     
-                    _controls._payload[j % nn, j / nn] = wry::sim::Value{wry::sim::DISCRIMINANT_OPCODE, i};
+                    _controls._payload[j % nn, j / nn] = wry::sim::Value{wry::sim::Value::OPCODE, i};
                     ++j;
                                         
                 } else {
@@ -769,7 +769,7 @@
                 // replace cursor
                 {
                     
-                    auto coordinate = _opcode_to_coordinate[_model->_holding_value.value];
+                    auto coordinate = _opcode_to_coordinate[_model->_holding_value.x];
                     matrix<RGBA8Unorm_sRGB> tile(64, 64);
                     
                     MTLRegion region = MTLRegionMake2D(coordinate.x * _symbols.width, coordinate.y * _symbols.height, 64, 64);
@@ -828,7 +828,7 @@
                 int j = round(_model->_mouse4.y);
                 Coordinate xy{i, j};
                 auto& the_tile = _model->_world._value_for_coordinate[xy];
-                the_tile = { DISCRIMINANT_NUMBER, k };
+                the_tile = k;
                 // the_tile.notify_occupant(&_model->_world);
                 notify_by_world_coordinate(&_model->_world, xy);
             }
@@ -838,7 +838,7 @@
         for (difference_type j = 0; j != m.major(); ++j) {
             for (difference_type i = 0; i != m.minor(); ++i) {
                 Value a = m[i, j];
-                if (a.discriminant == DISCRIMINANT_OPCODE) {
+                if (a.d == Value::OPCODE) {
 
                     vertex c;
 
@@ -881,7 +881,7 @@
                     c.v.texCoord = simd_make_float2(0, 1) / 32.0f + texCoord;
                     v.push_back(c);
                     
-                    texCoord = _opcode_to_coordinate[a.value].xy;
+                    texCoord = _opcode_to_coordinate[a.x].xy;
                     c.color = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f);
 
                     c.v.position = make<float4>(0, 0, 0, 0) + position;
@@ -1189,13 +1189,12 @@
                     location.z += 0.5;
                     wry::sim::Value value = p->_stack[i];
                     simd_float4 coordinate;
-                    switch (value.discriminant) {
-                        case wry::sim::DISCRIMINANT_OPCODE:
-                            coordinate = _opcode_to_coordinate[value.value];
+                    switch (value.d) {
+                        case wry::sim::Value::OPCODE:
+                            coordinate = _opcode_to_coordinate[value.x];
                             break;
-                        case wry::sim::DISCRIMINANT_NUMBER:
                         default:
-                            coordinate = make<float4>((value.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                            coordinate = make<float4>((value.x & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                             break;
                     }
                     v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
@@ -1267,7 +1266,7 @@
                 
                 if (auto r = dynamic_cast<sim::Source*>(q)) {
                     
-                    simd_float4 coordinate = make<float4>((r->_of_this.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                    simd_float4 coordinate = make<float4>((r->_of_this.x & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                     
                     v.position = make<float4>(-0.5f, -0.1f, -0.5f, 0.0f) + location;
                     v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f) + coordinate;
@@ -1308,12 +1307,12 @@
                 {
                     wry::sim::Value q = _model->_world._value_for_coordinate[wry::sim::Coordinate{i, j}];
                     using namespace wry::sim;
-                    switch (q.discriminant) {
-                        case DISCRIMINANT_NUMBER: {
-                            coordinate = make<float4>((q.value & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                    switch (q.d) {
+                        case Value::INT64_T: {
+                            coordinate = make<float4>((q.x & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                         } break;
-                        case DISCRIMINANT_OPCODE: {
-                            auto p = _opcode_to_coordinate.find(q.value);
+                        case Value::OPCODE: {
+                            auto p = _opcode_to_coordinate.find(q.x);
                             if (p != _opcode_to_coordinate.end()) {
                                 coordinate = p->second;
                             }

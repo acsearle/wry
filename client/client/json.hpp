@@ -291,8 +291,7 @@ namespace wry::json {
         return [&x](auto& v) {
             if (!match_json_null()(v))
                 return false;
-            x.clear();
-            assert(x.d == Value::JSON_NULL);
+            x = nullptr;
         };
     }
     
@@ -302,7 +301,6 @@ namespace wry::json {
             if (!parse_json_boolean(y)(v))
                 return false;
             x = y;
-            x.d = Value::JSON_BOOLEAN;
             return true;
         };
     }
@@ -312,7 +310,6 @@ namespace wry::json {
             String s;
             if (parse_json_string(s)(v)) {
                 x = std::move(s);
-                assert(x.d == Value::JSON_STRING);
                 return true;
             }
             return false;
@@ -324,7 +321,6 @@ namespace wry::json {
             String s;
             if (parse_json_number(s)(v)) {
                 x = std::move(s);
-                x.d = Value::JSON_NUMBER;
                 return true;
             }
             return false;
@@ -351,7 +347,6 @@ namespace wry::json {
         success:
             v = u;
             x = std::move(a);
-            assert(x.d == Value::JSON_ARRAY);
             return true;
         };
     }
@@ -384,7 +379,6 @@ namespace wry::json {
         success:
             v = u;
             x = std::move(o);
-            assert(x.d == Value::JSON_OBJECT);
             return true;
         };
     }
@@ -439,17 +433,17 @@ namespace wry::json {
         
         template<typename E>
         Value visit_int8_t(int8_t x) {
-            return Value(x);
+            return Value((int64_t) x);
         }
         
         template<typename E>
         Value visit_int16_t(int16_t x) {
-            return Value(x);
+            return Value((int64_t) x);
         }
         
         template<typename E>
         Value visit_int32_t(int32_t x) {
-            return Value(x);
+            return Value((int64_t) x);
         }
         
         template<typename E>
@@ -459,17 +453,17 @@ namespace wry::json {
         
         template<typename E>
         Value visit_uint8_t(uint8_t x) {
-            return Value(x);
+            return Value((int64_t) x);
         }
         
         template<typename E>
         Value visit_uint16_t(uint16_t x) {
-            return Value(x);
+            return Value((int64_t) x);
         }
         
         template<typename E>
-        Value visit_uint32_t(u_int32_t x) {
-            return Value(x);
+        Value visit_uint32_t(uint32_t x) {
+            return Value((int64_t) x);
         }
         
         template<typename E>
@@ -479,7 +473,7 @@ namespace wry::json {
         
         template<typename E>
         Value visit_float32_t(float32_t x) {
-            return Value(x);
+            return Value((double) x);
         }
         
         template<typename E>
