@@ -838,7 +838,7 @@
         for (difference_type j = 0; j != m.major(); ++j) {
             for (difference_type i = 0; i != m.minor(); ++i) {
                 Value a = m[i, j];
-                if (a.d == Value::OPCODE) {
+                if (a.is_opcode()) {
 
                     vertex c;
 
@@ -1189,13 +1189,11 @@
                     location.z += 0.5;
                     wry::sim::Value value = p->_stack[i];
                     simd_float4 coordinate;
-                    switch (value.d) {
-                        case wry::sim::Value::OPCODE:
-                            coordinate = _opcode_to_coordinate[value.x];
-                            break;
-                        default:
-                            coordinate = make<float4>((value.x & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
-                            break;
+                    if (value.is_opcode()) {
+                        coordinate = _opcode_to_coordinate[value.as_opcode()];
+                    } else {
+                        // number, as hex
+                        coordinate = make<float4>((value.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                     }
                     v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
                     v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
@@ -1266,7 +1264,7 @@
                 
                 if (auto r = dynamic_cast<sim::Source*>(q)) {
                     
-                    simd_float4 coordinate = make<float4>((r->_of_this.x & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                    simd_float4 coordinate = make<float4>((r->_of_this.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                     
                     v.position = make<float4>(-0.5f, -0.1f, -0.5f, 0.0f) + location;
                     v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f) + coordinate;
@@ -1307,21 +1305,16 @@
                 {
                     wry::sim::Value q = _model->_world._value_for_coordinate[wry::sim::Coordinate{i, j}];
                     using namespace wry::sim;
-                    switch (q.d) {
-                        case Value::INT64_T: {
-                            coordinate = make<float4>((q.x & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
-                        } break;
-                        case Value::OPCODE: {
-                            auto p = _opcode_to_coordinate.find(q.x);
-                            if (p != _opcode_to_coordinate.end()) {
-                                coordinate = p->second;
-                            }
-                        } break;
-                        default: {
-                            coordinate = make<float4>(0.0 / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
+                    if (q.is_integer()) {
+                        coordinate = make<float4>((q.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                    } else if (q.is_opcode()) {
+                        auto p = _opcode_to_coordinate.find(q.as_opcode());
+                        if (p != _opcode_to_coordinate.end()) {
+                            coordinate = p->second;
                         }
+                    } else {
+                        coordinate = make<float4>(0.0 / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
                     }
-                    
                 }
                 
                 v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;

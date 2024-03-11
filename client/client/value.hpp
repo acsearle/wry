@@ -42,10 +42,7 @@ namespace wry::value {
         
         Value();
 
-        Value(int64_t discriminant, auto&& value)
-        : d(discriminant)
-        , x(std::bit_cast<int64_t>(value)) {            
-        }
+        Value(int64_t discriminant, auto&& value);
         
         explicit Value(bool);
         explicit Value(int);
@@ -63,15 +60,32 @@ namespace wry::value {
         Value& operator=(const Value&);
         Value& operator=(Value&&);
         Value& operator=(auto&&);
+        
+        bool is_empty() const;
+        bool is_boolean() const;
+        bool is_integer() const;
+        bool is_opcode() const;
+
+        bool as_bool() const;
+        int64_t as_int64_t() const;
+        int64_t as_opcode() const;
 
     };
     
     void swap(Value&, Value&);
     void swap(Value&, Value&&);
     void swap(Value&&, Value&);
+    
+    
+    
         
     inline Value::Value() {
         d = EMPTY;
+    }
+    
+    inline Value::Value(int64_t discriminant, auto&& value)
+    : d(discriminant)
+    , x(std::bit_cast<int64_t>(value)) {
     }
     
     inline Value::Value(const Value& other) {
@@ -220,6 +234,39 @@ namespace wry::value {
         swap(*this, Value(std::forward<decltype(value)>(value)));
         return *this;
     }
+    
+    
+    inline bool Value::is_empty() const {
+        return !d;
+    }
+    
+    inline bool Value::is_boolean() const {
+        return d == BOOLEAN;
+    }
+    
+    inline bool Value::is_integer() const {
+        return d == INT64_T;
+    }
+    
+    inline bool Value::is_opcode() const {
+        return d == OPCODE;
+    }
+
+    inline bool Value::as_bool() const {
+        assert(is_boolean());
+        return x;
+    }
+    
+    inline int64_t Value::as_int64_t() const {
+        assert(is_integer());
+        return x;
+    }
+
+    inline int64_t Value::as_opcode() const {
+        assert(is_opcode());
+        return x;
+    }
+
     
 } // namespace wry::value
 

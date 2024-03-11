@@ -136,8 +136,8 @@ namespace wry::sim {
                     default:
                         // we load [_new_location] and may execute it
                         new_value = peek_world_coordinate_value(world, _new_location);
-                        if (new_value.d == Value::OPCODE)
-                            next_action = new_value.x;
+                        if (new_value.is_opcode())
+                            next_action = new_value.as_opcode();
                         break;
                 }
             
@@ -208,18 +208,18 @@ namespace wry::sim {
                         break;
                     case OPCODE_BRANCH_LEFT:
                         a = peek();
-                        if (a.d == Value::INT64_T)
-                            next_heading -= a.x;
+                        if (a.is_integer())
+                            next_heading -= a.as_int64_t();
                         break;
                     case OPCODE_BRANCH_RIGHT:
                         a = peek();
-                        if (a.d == Value::INT64_T)
-                            next_heading += a.x;
+                        if (a.is_integer())
+                            next_heading += a.as_int64_t();
                         break;
                     case OPCODE_HEADING_LOAD:
                         a = peek();
-                        if (a.d == Value::INT64_T)
-                            next_heading = a.x;
+                        if (a.is_integer())
+                            next_heading = a.as_int64_t();
                         break;
                 }
                 
@@ -299,7 +299,7 @@ namespace wry::sim {
                         // - is not an opcode
                         // - is copyable, aka immaterial, sybmbolic, numeric?
                         // we pick it up.  Good idea?
-                        if (new_value.d == Value::INT64_T) {
+                        if (new_value.is_integer()) {
                             push(new_value);
                         }
                         break;
@@ -321,7 +321,7 @@ namespace wry::sim {
                     case OPCODE_BRANCH_LEFT:
                     case OPCODE_BRANCH_RIGHT:
                     case OPCODE_HEADING_STORE:
-                        if (peek().d == Value::INT64_T)
+                        if (peek().is_integer())
                             pop();
                         break;
                         
@@ -350,76 +350,76 @@ namespace wry::sim {
                         
                     case OPCODE_IS_NOT_ZERO:
                         a = peek();
-                        if (a.d == Value::INT64_T) {
-                            a.x = a.x != 0;
+                        if (a.is_integer()) {
+                            a = a.as_int64_t() != 0;
                             pop(); push(a);
                         }
                         break;
                         
                     case OPCODE_LOGICAL_NOT:
                         a = peek();
-                        if (a.d == Value::INT64_T) {
-                            a.x = !a.x;
+                        if (a.is_integer()) {
+                            a = !a.as_int64_t();
                             pop(); push(a);
                         }
                         break;
                     case OPCODE_LOGICAL_AND:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = a.x && b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() && b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_LOGICAL_OR:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = a.x || b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() || b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_LOGICAL_XOR:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = !a.x != !b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = !a.as_int64_t() != !b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_BITWISE_NOT:
                         a = peek();
-                        if (a.d == Value::INT64_T) {
-                            a.x = ~a.x;
+                        if (a.is_integer()) {
+                            a = ~a.as_int64_t();
                             pop(); push(a);
                         }
                         break;
                     case OPCODE_BITWISE_AND:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = a.x & b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() & b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_BITWISE_OR:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = a.x | b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() | b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_BITWISE_XOR:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = a.x ^ b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() ^ b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                         
                     case OPCODE_BITWISE_SPLIT:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            u64 x = a.x & b.x;
-                            u64 y = a.x ^ b.x;
-                            a.x = x;
-                            b.x = y;
+                        if (a.is_integer() && b.is_integer()) {
+                            i64 x = a.as_int64_t() & b.as_int64_t();
+                            i64 y = a.as_int64_t() ^ b.as_int64_t();
+                            a = x;
+                            b = y;
                             pop();
                             pop();
                             push(a);
@@ -429,105 +429,101 @@ namespace wry::sim {
                         
                     case OPCODE_SHIFT_RIGHT:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = a.x >> b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() >> b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                         
                     case OPCODE_POPCOUNT:
                         a = peek();
-                        if (a.d == Value::INT64_T) {
-                            a.x = __builtin_popcountll(a.x);
+                        if (a.is_integer()) {
+                            a = __builtin_popcountll(a.as_int64_t());
                             pop(); push(a);
                         }
                         break;
                         
                     case OPCODE_NEGATE:
                         a = peek();
-                        if (a.d == Value::INT64_T) {
-                            a.x = - a.x;
+                        if (a.is_integer()) {
+                            a = -a.as_int64_t();
                             pop(); push(a);
                         }
                         break;
                     case OPCODE_ABS:
                         a = peek();
-                        if (a.d == Value::INT64_T) {
-                            a.x = abs((i64) a.x);
+                        if (a.is_integer()) {
+                            a = abs(a.as_int64_t());
                             pop(); push(a);
                         }
                         break;
                     case OPCODE_SIGN:
                         a = peek();
-                        if (a.d == Value::INT64_T) {
-                            a.x = (0 < (i64) a.x) - ((i64) a.x < 0);
+                        if (a.is_integer()) {
+                            a = (0 < a.as_int64_t()) - (a.as_int64_t() < 0);
                             pop(); push(a);
                         }
                         break;
                     case OPCODE_EQUAL:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = a.x == b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() == b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_NOT_EQUAL:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = a.x != b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() != b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_LESS_THAN:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = (i64) a.x < (i64) b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() < b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_GREATER_THAN:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = (i64) a.x > (i64) b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() > b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_LESS_THAN_OR_EQUAL_TO:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = (i64) a.x <= (i64) b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() <= b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_GREATER_THAN_OR_EQUAL_TO:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = (i64) a.x >= (i64) b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() >= b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_COMPARE:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.x = ((i64) a.x < (i64) b.x) - ((i64) b.x < (i64) a.x);
+                        if (a.is_integer() && b.is_integer()) {
+                            a = (a.as_int64_t() < b.as_int64_t()) - (b.as_int64_t() < (i64) a.as_int64_t());
                             pop2push1(a);
                         }
                         break;
-                        
-                        
                     case OPCODE_ADD:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.d |= b.d;
-                            a.x += b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() + b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
                     case OPCODE_SUBTRACT:
                         std::tie(a, b) = peek2();
-                        if ((a.d | b.d) == Value::INT64_T) {
-                            a.d |= b.d;
-                            a.x -= b.x;
+                        if (a.is_integer() && b.is_integer()) {
+                            a = a.as_int64_t() - b.as_int64_t();
                             pop2push1(a);
                         }
                         break;
