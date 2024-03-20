@@ -240,11 +240,13 @@ namespace wry {
         const_iterator& cend() { return _end; }
         const const_iterator& cend() const { return _end; }
 
+        /*
         bool operator==(const auto& other) const {
             using std::begin;
             using std::end;
             return std::equal(begin(), end(), begin(other), end(other));
         }
+        */
         
         void swap(Array& other) {
             using std::swap;
@@ -264,12 +266,14 @@ namespace wry {
 
         bool empty() const { return _begin == _end; }
         
+        /*
         auto operator<=>(const auto& other) const {
             using std::begin;
             using std::end;
-            return lexicographical_compare_three_way(begin(), end(),
+            return wry::lexicographical_compare_three_way(this->begin(), this->end(),
                                                      begin(other), end(other));
         }
+         */
                 
         template<typename... Args>
         iterator emplace(const_iterator pos, Args&&... args) {

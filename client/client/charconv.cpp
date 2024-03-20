@@ -19,9 +19,11 @@ namespace wry {
         return p;
     } ();
     
+    // Extra digits are ignored
+    
     std::from_chars_result _from_chars_double(const char* first, const char* last, double& value) {
         
-        uint64_t mantissa = 0;
+        uint64_t mantissa = 0, target;
         int exponent2 = 0;
         int exponent5 = 0;
         int exponent10 = 0;
@@ -48,8 +50,12 @@ namespace wry {
             goto resolve;
         ch = *first;
         if (isdigit(ch)) {
-            mantissa *= 10;
-            mantissa += ch - '0';
+            if (!__builtin_mul_overflow(mantissa, 10, &target) &&
+                !__builtin_add_overflow(target, ch - '0', &target)) {
+                mantissa = target;
+            } else {
+                goto too_many_mantissa_digits;
+            }
             ++first;
             goto expect_mantissa_digit;
         }
@@ -63,14 +69,39 @@ namespace wry {
         }
         goto resolve;
         
+    too_many_mantissa_digits:
+        
+        ++exponent2;
+        ++exponent5;
+        ++first;
+        if (first == last)
+            goto resolve;
+        ch = *first;
+        if (isdigit(ch)) {
+            goto too_many_mantissa_digits;
+        }
+        if (ch == '.') {
+            ++first;
+            goto too_many_mantissa_fractional_digits;
+        }
+        if (ch == 'e') {
+            ++first;
+            goto expect_exponent_sign;
+        }
+        goto resolve;
+        
     expect_mantissa_fractional_digit:
         
         if (first == last)
             goto resolve;
         ch = *first;
         if (isdigit(ch)) {
-            mantissa *= 10;
-            mantissa += ch - '0';
+            if (!__builtin_mul_overflow(mantissa, 10, &target) &&
+                !__builtin_add_overflow(target, ch - '0', &target)) {
+                mantissa = target;
+            } else {
+                goto too_many_mantissa_fractional_digits;
+            }
             --exponent2;
             --exponent5;
             ++first;
@@ -81,6 +112,19 @@ namespace wry {
             goto expect_exponent_sign;
         }
         goto resolve;
+        
+    too_many_mantissa_fractional_digits:
+        
+        ++first;
+        if (first == last)
+            goto resolve;
+        ch = *first;
+        if (isdigit(ch))
+            goto too_many_mantissa_fractional_digits;
+        if (ch == 'e') {
+            ++first;
+            goto expect_exponent_sign;
+        }
         
     expect_exponent_sign:
         

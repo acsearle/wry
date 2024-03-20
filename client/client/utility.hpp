@@ -170,6 +170,18 @@ namespace wry {
     struct overloaded : Ts... { using Ts::operator()...; };
     template<class... Ts>
     overloaded(Ts...) -> overloaded<Ts...>;
+    
+    // # Curry
+    //
+    // Compare std::bind ?
+    
+    auto curry = [](auto&& f, auto&& x) mutable -> decltype(auto) {
+        return [f = std::forward<decltype(f)>(f),
+                x = std::forward<decltype(x)>(x)] (auto&&... y) mutable -> decltype(auto) {
+            return std::forward<decltype(f)>(f)(std::forward<decltype(x)>(x),
+                                                std::forward<decltype(y)>(y)...);
+        };
+    };
 
     
     // # Allocate and deallocate
@@ -192,7 +204,6 @@ namespace wry {
         operator delete(ptr);
     }
    
-    
 } // namespace wry
 
 #endif /* utility_hpp */

@@ -1305,7 +1305,7 @@
                 {
                     wry::sim::Value q = _model->_world._value_for_coordinate[wry::sim::Coordinate{i, j}];
                     using namespace wry::sim;
-                    if (q.is_integer()) {
+                    if (q.is_int64_t()) {
                         coordinate = make<float4>((q.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                     } else if (q.is_opcode()) {
                         auto p = _opcode_to_coordinate.find(q.as_opcode());
