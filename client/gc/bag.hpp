@@ -11,6 +11,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <utility>
 
 namespace gc {
@@ -20,6 +21,14 @@ namespace gc {
     //
     // True O(1) push to log new pointers
     // True O(1) splice to combine logs
+    
+    // TODO: if we splice the other way around we are actually a LIFO
+    // stack
+    // TODO: if we add some more pointers we are actually a deque
+    //
+    // Compared with gch::deque we need to have each Slab maintain its own
+    // begin and end, maybe wrapping?
+
     
     template<typename T> 
     struct Bag;
@@ -128,6 +137,7 @@ namespace gc {
         }
 
         void push(T* __nonnull x) {
+            printf("pushing %p\n", x);
             ++count;
             assert(!head == !tail);
             if (!head || head->full()) {
@@ -141,13 +151,18 @@ namespace gc {
         
 
         [[nodiscard]] T* __nullable pop() {
-            if (!count)
+            if (!count) {
+                printf("popped %p\n", nullptr);
                 return nullptr;
+            }
             --count;
             for (;;) {
                 assert(head);
-                if (head->count)
-                    return head->elements[--head->count];
+                if (head->count) {
+                    T* p = head->elements[--head->count];
+                    printf("popped %p\n", p);
+                    return p;
+                }
                 delete std::exchange(head, head->next);
             }
         }
@@ -171,6 +186,9 @@ namespace gc {
         bool empty() const {
             return !count;
         }
+        
+        
+        
         
         
         
@@ -200,6 +218,121 @@ namespace gc {
         };
 
     }; // struct Bag<T*>
+    
+    
+    
+    template<typename T>
+    struct Deque {
+        struct alignas(4096) Slab {
+            static constexpr std::size_t CAPACITY = 4064 / sizeof(T);
+            T* __nonnull _begin;
+            T* __nonnull _end;
+            Slab* __nullable _prev;
+            Slab* __nullable _next;
+            T _elements[CAPACITY];
+            
+            void assert_invariant() {
+                assert(_elements <= _begin);
+                assert(_begin <= _end);
+                assert(_end <= _elements + CAPACITY);
+            }
+            
+            explicit Slab(T value, Slab* __nullable prev, Slab* __nullable next)
+            : _begin(_elements)
+            , _end(_elements + 1)
+            , _prev(prev)
+            , _next(next){
+                _elements[0] = value;
+            }
+            
+            bool can_push_back() const {
+                return _end != _elements + CAPACITY;
+            }
+            
+            bool can_push_front() const {
+                return _elements != _begin;
+            }
+            
+            bool can_pop() const {
+                return _begin != _end;
+            }
+            
+            void push_back(T x) {
+                *_end++ = x;
+            }
+            
+            void push_front(T x) {
+                *--_begin = x;
+            }
+            
+            void pop_front() {
+                ++_begin;
+            }
+            
+            void pop_back() {
+                --_end;
+            }
+            
+            T& front() {
+                return *_begin;
+            }
+            
+            T& back() {
+                return *(_end - 1);
+            }
+            
+        };
+        
+        static_assert(sizeof(Slab) == 4096);
+        
+        Slab* __nullable _head;
+        Slab* __nullable _tail;
+        std::size_t _count;
+        
+        void assert_invariant() {
+            assert(!_head == !_tail);
+            if (_head)
+                for (Slab* a = _head; a != _tail; a = a->_next)
+                    a->assert_invariant();
+        }
+        
+        void push_back(T value) {
+            ++_count;
+            assert(!_head == !_tail);
+            if (!_tail || _tail->can_push_back()) {
+                _tail = new Slab(std::move(value), _tail, nullptr);
+                if (!_head)
+                    _head = _tail;
+            } else {
+                _tail->push_back(value);
+            }
+        }
+        
+        void push_front(T value) {
+            ++_count;
+            assert(!_head == !_tail);
+            if (!_head || _head->can_push_front()) {
+                _tail = new Slab(std::move(value), _tail, nullptr);
+                if (!_head)
+                    _head = _tail;
+            } else {
+                _tail->push_back(value);
+            }
+        }
+        
+    };
+    
+    
+    
+    
+    
+    // We can make a concurrent deque by:
+    
+    // Two trieber stacks for front and back
+    // Reversed copies of each that are incrementally constructed so as to
+    // be ready when needed to be grabbed by the other side
+    //
+    // 
     
 } // namespace gc
 

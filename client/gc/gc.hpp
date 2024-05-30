@@ -12,8 +12,10 @@
 #include <cstdint>
 
 #include <atomic>
-#include <concepts>
+#include <condition_variable>
 #include <deque>
+#include <mutex>
+#include <vector>
 
 #include "bag.hpp"
 
@@ -37,19 +39,12 @@ namespace gc {
     // Usage note: Though there is some difference between American and British
     // English, we will use *collectible* as a noun and *collectable* as an
     // adjective
-   
-    // Per-thread states
-   
-    struct Mutator;
-    struct Collector;
-    
+       
     // Basic objects
 
     struct Participant;
     struct Colored;
-    
-    using Color = std::intptr_t;
-    
+        
     // Adaptors implementing behaviors
     
     template<typename Adaptee> struct Leaf;
@@ -58,11 +53,15 @@ namespace gc {
     // Smart pointer implementing write barrier
     
     template<typename T> struct Pointer;
-        
+   
     
-    // Interface with no-op implementation, useful for static lifetime things
-    // such as literal strings
     
+    // Interface with no-op implementation
+    // Useful for static lifetime things such as literal strings?
+   
+    struct Mutator;
+    struct Collector;
+
     struct Participant {
         explicit Participant(Mutator&);
         virtual ~Participant();
@@ -72,10 +71,12 @@ namespace gc {
         virtual void _gc_trace(Collector&) const;
     };
     
-    // Object traced via an explicit color
+    // Object traced via an explicit color per the tri-color abstraction
+        
+    using Color = std::intptr_t;
         
     struct Colored : Participant {
-        mutable std::atomic<std::intptr_t> _gc_color;
+        mutable std::atomic<Color> _gc_color;
         explicit Colored(Mutator&);
         virtual ~Colored() override;
         virtual void _gc_shade(Mutator&) const override;
@@ -119,94 +120,94 @@ namespace gc {
     
     
     
-    namespace detail {
+    
+    
+    
+    
+    
+    
+    
+    
+    template<typename T>
+    struct TaggedPtr {
         
-        struct BlackImposter {
-        
-            Color _white;
-            
-            operator Color() const {
-                return _white ^ 1;
-            }
-            
-            BlackImposter& operator=(Color value) {
-                _white = value ^ 1;
-                return *this;
-            }
-            
-        }; // struct BlackImposter
-        
-        template<typename T>
-        struct TaggedPointer {
-            
-            enum : std::intptr_t {
-                TAG_MASK = 7,
-                PTR_MASK = -8,
-            };
-            
-            struct TagImposter {
-                std::intptr_t _value;
-                operator std::intptr_t() const {
-                    return _value & TAG_MASK;
-                }
-                TagImposter& operator=(std::intptr_t t) {
-                    assert(!(t & PTR_MASK));
-                    _value = (_value & PTR_MASK) | t;
-                    return *this;
-                }
-            };
-            
-            struct PtrImposter {
-                std::intptr_t _value;
-                operator T*() const {
-                    return reinterpret_cast<T*>(_value & PTR_MASK);
-                }
-                PtrImposter& operator=(T* p) {
-                    std::intptr_t q = reinterpret_cast<std::intptr_t>(p);
-                    assert(!(q & TAG_MASK));
-                    _value = (_value & TAG_MASK) | q;
-                }
-            };
-                        
-            union {
-                std::intptr_t _value;
-                TagImposter tag;
-                PtrImposter ptr;
-            };
-            
-            TaggedPointer() = default;
-            
-            explicit TaggedPointer(T* p) {
-                std::intptr_t q = reinterpret_cast<std::intptr_t>(p);
-                assert(!(q & TAG_MASK));
-                _value = q;
-            }
-            
-            explicit TaggedPointer(std::intptr_t pt)
-            : _value(pt) {
-            }
-            
-            TaggedPointer(const TaggedPointer&) = default;
-            
-            TaggedPointer(T* p, std::intptr_t t) {
-                std::intptr_t q = reinterpret_cast<std::intptr_t>(p);
-                assert(!(q & TAG_MASK) && !(t & PTR_MASK));
-                _value = q | t;
-            }
-            
-            T* operator->() const {
-                return ptr.operator T*();
-            }
-            
+        enum : std::intptr_t {
+            TAG_MASK = 7,
+            PTR_MASK = -8,
         };
         
-    } // namespace detail
+        struct TagImposter {
+            std::intptr_t _value;
+            operator std::intptr_t() const {
+                return _value & TAG_MASK;
+            }
+            TagImposter& operator=(std::intptr_t t) {
+                assert(!(t & PTR_MASK));
+                _value = (_value & PTR_MASK) | t;
+                return *this;
+            }
+        };
+        
+        struct PtrImposter {
+            std::intptr_t _value;
+            operator T*() const {
+                return reinterpret_cast<T*>(_value & PTR_MASK);
+            }
+            PtrImposter& operator=(T* p) {
+                std::intptr_t q = reinterpret_cast<std::intptr_t>(p);
+                assert(!(q & TAG_MASK));
+                _value = (_value & TAG_MASK) | q;
+            }
+        };
+        
+        union {
+            std::intptr_t _value;
+            TagImposter tag;
+            PtrImposter ptr;
+        };
+        
+        TaggedPtr() = default;
+        
+        explicit TaggedPtr(T* p) {
+            std::intptr_t q = reinterpret_cast<std::intptr_t>(p);
+            assert(!(q & TAG_MASK));
+            _value = q;
+        }
+        
+        explicit TaggedPtr(std::intptr_t pt)
+        : _value(pt) {
+        }
+        
+        TaggedPtr(const TaggedPtr&) = default;
+        
+        TaggedPtr(T* p, std::intptr_t t) {
+            std::intptr_t q = reinterpret_cast<std::intptr_t>(p);
+            assert(!(q & TAG_MASK) && !(t & PTR_MASK));
+            _value = q | t;
+        }
+        
+        T* operator->() const {
+            return ptr.operator T*();
+        }
+        
+        T& operator*() const {
+            return ptr.operator T*();
+        }
+        
+    };
     
     
     struct Palette {
-        union {
+        struct BlackImposter {
             Color white;
-            detail::BlackImposter black;
+            operator Color() const { return white ^ 1; }
+            //BlackImposter& operator=(Color value) { white = value ^ 1; return *this; }
+        };
+        union {
+            struct {
+                Color white;
+            };
+            BlackImposter black;
         };
         Color alloc;
         enum : Color {
@@ -214,7 +215,7 @@ namespace gc {
             red = 3,
         };
     };
-    
+
     struct Log {
         
         bool dirty;
@@ -253,9 +254,40 @@ namespace gc {
         }
         
     };
-        
+    
+    struct LogNode : Log {
+        LogNode* log_stack_next;
+    };
+    
    
+    struct Channel {
+        
+        // A Channel is shared by one Mutator and one Collector.  They must
+        // both release it before it is deleted.
+        std::atomic<std::intptr_t> reference_count_minus_one = 1;
+        Channel* entrant_stack_next = nullptr;
+        enum Tag : std::intptr_t {
+            COLLECTOR_DID_REQUEST_NOTHING, // -> HANDSHAKE, LEAVE
+            COLLECTOR_DID_REQUEST_HANDSHAKE, // -> WAKEUP, LOGS, LEAVE
+            COLLECTOR_DID_REQUEST_WAKEUP, // -> LOGS, LEAVE
+            MUTATOR_DID_PUBLISH_LOGS, // -> NOTHING, LEAVE
+            MUTATOR_DID_LEAVE, // -> .
+        };
 
+        Palette palette;
+        std::atomic<TaggedPtr<LogNode>> log_stack_head;
+        
+        void release() {
+            if (!reference_count_minus_one.fetch_sub(1, std::memory_order_release)) {
+                (void) reference_count_minus_one.load(std::memory_order_acquire);
+                delete this;
+            }
+        }
+        
+
+        
+        
+    };
     
     // garbage collector state for one mutator thread
     
@@ -273,8 +305,8 @@ namespace gc {
         Palette palette; // colors received from Collector
         Log     log    ; // activity to publish to Collector
 
-        void _white_to_gray(std::atomic<std::intptr_t>& color);
-        bool _white_to_black(std::atomic<std::intptr_t>& color) const;
+        void _white_to_gray(std::atomic<Color>& color);
+        bool _white_to_black(std::atomic<Color>& color) const;
         void shade(const Participant*);
         template<typename T> T* write(std::atomic<T*>& target, std::type_identity_t<T>* desired);
         template<typename T> T* write(std::atomic<T*>& target, std::nullptr_t);
@@ -284,42 +316,45 @@ namespace gc {
         void* _allocate(std::size_t bytes);
         
         // Mutator endures for the whole thread lifetime
-        // Channel is per-resumption.
+        // Channel is per enter-leave pairing
+        // Channel must outlive not just leave, but the shutdown of the thread
         
-        struct Channel {
-            enum : std::intptr_t {
-                MUTATOR_DID_ENTER,
-                MUTATOR_DID_PUBLISH,
-                MUTATOR_DID_LEAVE,
-                COLLECTOR_DID_QUERY,
-                COLLECTOR_DID_WAIT,
-            };
-            std::atomic<detail::TaggedPointer<Channel>> next;
-            Palette palette; // Collector to Mutator
-            Log log;         // Mutator to Collector
-        };
+        
         
         Channel* _channel = nullptr;
+        
+        void _publish_with_tag(Channel::Tag tag);
         
         void enter();
         void handshake();
         void leave();
         
     };
-
     
     // garbage collector state for the unique collector thread, which is
     // also a mutator
     
     struct Collector : Mutator {
         
-        // mutator activity
-        std::atomic<detail::TaggedPointer<Channel>> channel_list_head;
+        void visit(const Participant* particpiant);
+        template<typename T> void visit(const std::atomic<T*>& participant);
+        template<typename T> void visit(const Pointer<T>& participant);
+        
+        // Safety:
+        // _scan_stack is only resized by the Collector thread, which is not
+        // real time bounded
+        std::vector<const Colored*> _scan_stack;
+
+        // These details can be done by a private class
+        
+        // lockfree channel
+        // std::atomic<TaggedPtr<Channel>> channel_list_head;
+        std::atomic<Channel*> entrant_stack_head;
         std::atomic<Palette> _atomic_palette;
         
+        std::vector<Channel*> _active_channels;
         
-        // scanning activity
-        std::deque<const Colored*> _scan_stack;
+        Log _collector_log;
         
         void _process_scan_stack() {
             while (!this->_scan_stack.empty()) {
@@ -330,11 +365,20 @@ namespace gc {
             }
         }
         
-        void visit(const Participant* particpiant);
-        template<typename T> void visit(const std::atomic<T*>& participant);
-        template<typename T> void visit(const Pointer<T>& participant);
-
         void collect();
+        
+        void _set_alloc_to_black();
+        void _swap_white_and_black();
+        
+        void _publish_palette_and_accept_entrants();
+
+        void _initiate_handshakes();
+        void _consume_logs(LogNode* logs);
+        void _finalize_handshakes();
+        void _synchronize();
+        
+        
+
         
     };
     
@@ -433,6 +477,7 @@ namespace gc {
     inline void* Mutator::_allocate(std::size_t bytes) {
         void* __nonnull pointer = malloc(bytes);
         assert(pointer);
+        log.allocations.push((Colored*) pointer);
         this->log.total += bytes;
         return pointer;
     }
@@ -527,6 +572,9 @@ namespace gc {
     void Leaf<Adaptee>::_gc_trace(Collector& context) const {
         context._white_to_black(this->_gc_color);
     }
+    
+    
+    
 
     
 } // namespace gc
