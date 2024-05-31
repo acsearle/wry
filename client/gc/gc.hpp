@@ -12,77 +12,169 @@
 #include <cstdint>
 
 #include <atomic>
-#include <condition_variable>
 #include <deque>
-#include <mutex>
 #include <vector>
 
 #include "bag.hpp"
+#include "utility.hpp"
 
 namespace gc {
-    
-    // Garbage collector interface
-    
-    // TODO: There should be some way to make the list of active mutators
-    // lock-free and efficiently-waitable-upon but it's defeated me so far.
-    // When marking a node for destruction, the mutator races to wake up the
-    // collector, with an already awake collector destroying the waited-upon
-    // atomic.  Likewise, a leaving mutator races to republish its log while the
-    // collector reads it.
-    //
-    // A locking solution means the mutator has to wait on a per-thread lock
-    // contested only by the collector, and held by both parties only for O(1)
-    // time, per handshake, which is pretty benign.
-    
-    
-    
-    // Usage note: Though there is some difference between American and British
-    // English, we will use *collectible* as a noun and *collectable* as an
-    // adjective
-       
-    // Basic objects
-
-    struct Participant;
-    struct Colored;
-        
-    // Adaptors implementing behaviors
-    
-    template<typename Adaptee> struct Leaf;
-    template<typename T, typename Adaptee> struct Array;
-    
-    // Smart pointer implementing write barrier
-    
-    template<typename T> struct Pointer;
-   
-    
-    
-    // Interface with no-op implementation
-    // Useful for static lifetime things such as literal strings?
-   
-    struct Mutator;
-    struct Collector;
-
-    struct Participant {
-        explicit Participant(Mutator&);
-        virtual ~Participant();
-        virtual std::size_t gc_bytes() const;
-        virtual void gc_enumerate(Collector&) const;
-        virtual void _gc_shade(Mutator&) const;
-        virtual void _gc_trace(Collector&) const;
-    };
-    
-    // Object traced via an explicit color per the tri-color abstraction
         
     using Color = std::intptr_t;
+    struct Object;
+    
+    struct Mutator;
+    struct Collector;
+    
+    
+    // TODO:
+    //
+    // Almost all the mutator and collector state can be hidden.  We need to
+    // narrowly define the interfaces we absolutely need to be public to
+    // support
+    // - basic use
+    // - inlining critical functions
+    // - templates
+    //
+    // since TLS lookup is potentially expensive, we want to provide interfaces
+    // that make it easy to pass in an explict context.
+    
+    
+    struct MutatorContext {
         
-    struct Colored : Participant {
-        mutable std::atomic<Color> _gc_color;
-        explicit Colored(Mutator&);
-        virtual ~Colored() override;
-        virtual void _gc_shade(Mutator&) const override;
-        virtual void _gc_trace(Collector&) const override;
+        // needs these interface functions:
+        
+        [[nodiscard]] std::pair<void*, Color> allocate(std::size_t bytes);
+        
+        void shade(Object*);
+        
+        
         
     };
+    
+    struct CollectorContext {
+        // needs these interface functions:
+        
+    };
+    
+    // to mark roots we want to be able to shade
+    // 
+    //     shade(const Object*)
+    //
+    // which will call
+    //
+    //
+    
+    struct ShadeContext;
+    struct AllocContext;
+    
+    
+    // color_white_to_gray(context, object)
+    // color_white_to_black(context, object)
+    
+    //
+
+    
+    struct Object {
+        
+        static void* operator new(std::size_t count);
+        static void* operator new[](std::size_t count) = delete;
+        
+        Object();
+        virtual ~Object();
+
+        explicit Object(Mutator&);
+        
+        virtual std::size_t gc_hash() const;
+        // return a hash value, by default derived from the object's address
+
+        virtual std::size_t gc_bytes() const;
+        // return size in bytes of the backing allocation, which may vary due
+        // to flexible array member idiom
+                
+        virtual void gc_enumerate(Collector&) const;
+        // invoke the argument function object on each member object to trace
+        // the graph.  invoked only on collector thread
+        
+        mutable std::atomic<Color> _gc_color;
+        // explicitly store the tricolor abstraction color of the object
+        
+        virtual void _gc_shade(Mutator&) const;
+        // shade the object using the mutator palette, from white to gray or
+        // black depending is the node has any children
+        
+        virtual void _gc_trace(Collector&) const;
+        // (TODO: name) customize if/how we store ourself in the worklist
+        
+    }; // struct Object
+    
+    
+    
+    
+    
+    
+
+    
+    
+    template<typename T>
+    struct Pointer {
+        
+        std::atomic<T*> _ptr;
+        
+        Pointer() = default;
+        Pointer(const Pointer& other);
+        ~Pointer() = default;
+        Pointer& operator=(const Pointer& other);
+        
+        explicit Pointer(T* other);
+        explicit Pointer(std::nullptr_t);
+        Pointer& operator=(T* other);
+        Pointer& operator=(std::nullptr_t);
+        
+        T* operator->() const;
+        bool operator!() const;
+        explicit operator bool() const;
+        operator T*() const;
+        T& operator*() const;
+        
+        bool operator==(const Pointer<T>& other);
+        auto operator<=>(const Pointer<T>& other);
+        
+        T* get() const;
+        
+    };
+    
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+
+    template<typename Adaptee>
+    struct Leaf;
+    
+    template<typename T, typename Adaptee>
+    struct Array;
+        
+
+    
+    
+    
+   
+
+    
+    
+    
+    
+    
+    
+    
+
     
     // Provides default behavior for objects with no fields to trace
     
@@ -128,74 +220,6 @@ namespace gc {
     
     
     
-    template<typename T>
-    struct TaggedPtr {
-        
-        enum : std::intptr_t {
-            TAG_MASK = 7,
-            PTR_MASK = -8,
-        };
-        
-        struct TagImposter {
-            std::intptr_t _value;
-            operator std::intptr_t() const {
-                return _value & TAG_MASK;
-            }
-            TagImposter& operator=(std::intptr_t t) {
-                assert(!(t & PTR_MASK));
-                _value = (_value & PTR_MASK) | t;
-                return *this;
-            }
-        };
-        
-        struct PtrImposter {
-            std::intptr_t _value;
-            operator T*() const {
-                return reinterpret_cast<T*>(_value & PTR_MASK);
-            }
-            PtrImposter& operator=(T* p) {
-                std::intptr_t q = reinterpret_cast<std::intptr_t>(p);
-                assert(!(q & TAG_MASK));
-                _value = (_value & TAG_MASK) | q;
-            }
-        };
-        
-        union {
-            std::intptr_t _value;
-            TagImposter tag;
-            PtrImposter ptr;
-        };
-        
-        TaggedPtr() = default;
-        
-        explicit TaggedPtr(T* p) {
-            std::intptr_t q = reinterpret_cast<std::intptr_t>(p);
-            assert(!(q & TAG_MASK));
-            _value = q;
-        }
-        
-        explicit TaggedPtr(std::intptr_t pt)
-        : _value(pt) {
-        }
-        
-        TaggedPtr(const TaggedPtr&) = default;
-        
-        TaggedPtr(T* p, std::intptr_t t) {
-            std::intptr_t q = reinterpret_cast<std::intptr_t>(p);
-            assert(!(q & TAG_MASK) && !(t & PTR_MASK));
-            _value = q | t;
-        }
-        
-        T* operator->() const {
-            return ptr.operator T*();
-        }
-        
-        T& operator*() const {
-            return ptr.operator T*();
-        }
-        
-    };
-    
     
     struct Palette {
         struct BlackImposter {
@@ -219,7 +243,7 @@ namespace gc {
     struct Log {
         
         bool dirty;
-        Bag<const Colored*> allocations;
+        Bag<const Object*> allocations;
         std::intptr_t total;
         
         Log()
@@ -307,7 +331,7 @@ namespace gc {
 
         void _white_to_gray(std::atomic<Color>& color);
         bool _white_to_black(std::atomic<Color>& color) const;
-        void shade(const Participant*);
+        void shade(const Object*);
         template<typename T> T* write(std::atomic<T*>& target, std::type_identity_t<T>* desired);
         template<typename T> T* write(std::atomic<T*>& target, std::nullptr_t);
 
@@ -336,14 +360,14 @@ namespace gc {
     
     struct Collector : Mutator {
         
-        void visit(const Participant* particpiant);
-        template<typename T> void visit(const std::atomic<T*>& participant);
-        template<typename T> void visit(const Pointer<T>& participant);
+        void visit(const Object* object);
+        template<typename T> void visit(const std::atomic<T*>& object);
+        template<typename T> void visit(const Pointer<T>& object);
         
         // Safety:
         // _scan_stack is only resized by the Collector thread, which is not
         // real time bounded
-        std::vector<const Colored*> _scan_stack;
+        std::vector<const Object*> _scan_stack;
 
         // These details can be done by a private class
         
@@ -358,10 +382,10 @@ namespace gc {
         
         void _process_scan_stack() {
             while (!this->_scan_stack.empty()) {
-                const Colored* collectible = this->_scan_stack.back();
+                const Object* object = this->_scan_stack.back();
                 this->_scan_stack.pop_back();
-                assert(collectible);
-                collectible->gc_enumerate(*this);
+                assert(object);
+                object->gc_enumerate(*this);
             }
         }
         
@@ -386,9 +410,9 @@ namespace gc {
     
     
     
-    inline void Mutator::shade(const Participant* participant) {
-        if (participant) {
-            participant->_gc_shade(*this);
+    inline void Mutator::shade(const Object* object) {
+        if (object) {
+            object->_gc_shade(*this);
         }
     }
     
@@ -410,76 +434,14 @@ namespace gc {
     // StrongPtr is a convenience wrapper that implements the write barrier for
     // a strong reference.
     
-    template<typename T>
-    struct Pointer {
-        
-        std::atomic<T*> _ptr;
-        
-        explicit Pointer(T* other)
-        : _ptr(other) {
-        }
-
-        T* load() const {
-            return _ptr.load(std::memory_order_relaxed);
-        }
-        
-        T* _load_acquire() const {
-            return _ptr.load(std::memory_order_acquire);
-        }
-                
-        Pointer() = default;
-        
-        explicit Pointer(std::nullptr_t)
-        : _ptr(nullptr) {
-        }
-        
-        Pointer(const Pointer& other)
-        : Pointer(other.get()) {
-        }
-        
-        Pointer& operator=(std::nullptr_t) {
-            Mutator::get().write(*this, nullptr);
-            return *this;
-        }
-                    
-        Pointer& operator=(T* other) {
-            Mutator::get().write(_ptr, other);
-            return *this;
-        }
-
-        Pointer& operator=(const Pointer& other) {
-            return *this = other.get();
-        }
-        
-        T* operator->() const {
-            return load();
-        }
-
-        explicit operator bool() const {
-            return static_cast<bool>(load());
-        }
-        
-        bool operator!() const {
-            return !static_cast<bool>(*this);
-        }
-
-        operator T*() const {
-            return load();
-        }
-
-        T& operator&() const { 
-            return *load();
-        }
-        
-    };
-
 
     inline void* Mutator::_allocate(std::size_t bytes) {
-        void* __nonnull pointer = malloc(bytes);
-        assert(pointer);
-        log.allocations.push((Colored*) pointer);
+        Object* object = (Object*) malloc(bytes);
+        // Safety: we don't use or publish these pointers until we handshake
+        // by which time the objects are fully constructed
+        this->log.allocations.push(object);
         this->log.total += bytes;
-        return pointer;
+        return object;
     }
     
     inline void Mutator::_white_to_gray(std::atomic<std::intptr_t>& color) {
@@ -501,9 +463,9 @@ namespace gc {
     }
     
 
-    void Collector::visit(const Participant* participant) {
-        if (participant)
-            participant->_gc_trace(*this);
+    inline void Collector::visit(const Object* object) {
+        if (object)
+            object->_gc_trace(*this);
     }
     
     template<typename T>
@@ -516,41 +478,25 @@ namespace gc {
         this->visit(p._load_acquire());
     }
 
-    inline Participant::Participant(Mutator&) {
+    
+    inline void* Object::operator new(std::size_t count) {
+        return Mutator::get()._allocate(count);
     }
     
-    inline Participant::~Participant() {
+    inline Object::Object()
+    : _gc_color(Mutator::get().palette.alloc) {
     }
-    
-    inline std::size_t Participant::gc_bytes() const {
-        return sizeof(Participant);
+   
+    inline Object::Object(Mutator& context)
+    : _gc_color(context.palette.alloc) {
+        printf("context.palette.alloc = %zd\n", context.palette.alloc);
     }
 
-    inline void Participant::gc_enumerate(Collector&) const {
-    }
-
-    inline void Participant::_gc_shade(Mutator&) const {
+    inline Object::~Object() {
     }
     
-    inline void Participant::_gc_trace(Collector &) const {
-    }
-
-    inline Colored::Colored(Mutator& context)
-    : Participant(context), _gc_color(context.palette.alloc) {
-    }
-
-    inline Colored::~Colored() {
-    }
-        
-    
-    inline void Colored::_gc_shade(Mutator& context) const {
-        context._white_to_gray(this->_gc_color);
-    }
-    
-    inline void Colored::_gc_trace(Collector& context) const {
-        if (context._white_to_black(this->_gc_color)) {
-            context._scan_stack.push_back(this);
-        }
+    inline std::size_t Object::gc_hash() const {
+        return std::hash<const void*>()(this);
     }
 
     template<typename Adaptee> template<typename... Args>
@@ -561,11 +507,10 @@ namespace gc {
     template<typename Adaptee>
     Leaf<Adaptee>::~Leaf() {
     }
-    
-    
+        
     template<typename Adaptee>
     void Leaf<Adaptee>::_gc_shade(Mutator& context) const {
-        return context._white_to_black(this->_gc_color);
+        context._white_to_black(this->_gc_color);
     }
 
     template<typename Adaptee>
@@ -576,6 +521,88 @@ namespace gc {
     
     
 
+    
+    
+    template<typename T>
+    Pointer<T>::Pointer(const Pointer& other)
+    : Pointer(other.get()) {
+    }
+    
+    template<typename T>
+    Pointer<T>& Pointer<T>::operator=(const Pointer& other) {
+        return operator=(other.get());
+    }
+    
+    template<typename T>
+    Pointer<T>::Pointer(T* other)
+    : _ptr(other) {
+    }
+    
+    template<typename T>
+    Pointer<T>::Pointer(std::nullptr_t)
+    : _ptr(nullptr) {
+    }
+    
+    template<typename T>
+    Pointer<T>& Pointer<T>::operator=(T* other) {
+        Mutator::get().write(_ptr, other);
+        return *this;
+    }
+    
+    template<typename T>
+    Pointer<T>& Pointer<T>::operator=(std::nullptr_t) {
+        Mutator::get().write(_ptr, nullptr);
+        return *this;
+    }
+    
+    template<typename T>
+    T* Pointer<T>::operator->() const {
+        return _ptr.load(std::memory_order_relaxed);
+    }
+    
+    template<typename T>
+    bool Pointer<T>::operator!() const {
+        return !get();
+    }
+    
+    template<typename T>
+    Pointer<T>::operator bool() const {
+        return get();
+    }
+    
+    template<typename T>
+    Pointer<T>::operator T*() const {
+        return get();
+    }
+    
+    template<typename T>
+    T& Pointer<T>::operator*() const {
+        return get();
+    }
+    
+    template<typename T>
+    bool Pointer<T>::operator==(const Pointer<T>& other) {
+        return get() == other.get();
+    }
+    
+    template<typename T>
+    auto Pointer<T>::operator<=>(const Pointer<T>& other) {
+        return get() <=> other.get();
+    }
+    
+    template<typename T>
+    T* Pointer<T>::get() const {
+        return _ptr.load(std::memory_order_relaxed);
+    }
+    
+    
+    inline void shade(const Object* object) {
+        if (object) {
+            Mutator::get().shade(object);
+        }
+    }
+
+    
     
 } // namespace gc
 

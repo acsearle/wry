@@ -40,11 +40,11 @@ namespace gc {
             
             constexpr static std::size_t CAPACITY = (4096 - 16) / sizeof(T*);
             
-            Slab* __nullable next;
+            Slab* next;
             std::size_t count;
-            T* __nonnull elements[CAPACITY];
+            T* elements[CAPACITY];
             
-            Slab(Slab* __nullable next, T* __nonnull item) {
+            Slab(Slab* next, T* item) {
                 this->next = next;
                 count = 1;
                 elements[0] = item;
@@ -54,12 +54,12 @@ namespace gc {
             bool empty() const { return !count; }
             bool full() const { return count == CAPACITY; }
             
-            T* __nonnull const& top() const {
+            T* const& top() const {
                 assert(!empty());
                 return elements[count - 1];
             }
 
-            T* __nonnull& top() {
+            T* & top() {
                 assert(!empty());
                 return elements[count - 1];
             }
@@ -70,7 +70,7 @@ namespace gc {
                 // no dtor
             }
             
-            void push(T* __nonnull x) {
+            void push(T* x) {
                 assert(!full());
                 elements[count++] = std::move(x);
             }
@@ -79,8 +79,8 @@ namespace gc {
         
         static_assert(sizeof(Slab) == 4096);
 
-        Slab* __nullable head;
-        Slab* __nullable tail;
+        Slab* head;
+        Slab* tail;
         std::size_t count;
         
         Bag()
@@ -115,7 +115,7 @@ namespace gc {
         Bag& operator=(const Bag&) = delete;
         Bag& operator=(Bag&&) = delete;
         
-        T* const __nonnull& top() const {
+        T* const& top() const {
             assert(count);
             Slab* a = head;
             for (;;) {
@@ -126,7 +126,7 @@ namespace gc {
             }
         }
         
-        T* __nonnull& top() {
+        T*& top() {
             assert(count);
             for (;;) {
                 assert(head);
@@ -136,7 +136,7 @@ namespace gc {
             }
         }
 
-        void push(T* __nonnull x) {
+        void push(T* x) {
             printf("pushing %p\n", x);
             ++count;
             assert(!head == !tail);
@@ -150,7 +150,7 @@ namespace gc {
         }
         
 
-        [[nodiscard]] T* __nullable pop() {
+        [[nodiscard]] T* pop() {
             if (!count) {
                 printf("popped %p\n", nullptr);
                 return nullptr;
@@ -187,16 +187,19 @@ namespace gc {
             return !count;
         }
         
+        std::size_t size() const {
+            return count;
+        }
         
         
         
         
-        
+        /*
         // do we ever iterate or do we just pop everything?
         
         struct iterator {
             
-            Slab* __nullable slab;
+            Slab* slab;
             std::intptr_t index;
             
             iterator& operator++() {
@@ -210,12 +213,13 @@ namespace gc {
                 }
             }
             
-            T* __nonnull& operator*() const {
+            T*& operator*() const {
                 assert(slab && index != slab->count);
                 return slab->elements[index];
             }
             
         };
+         */
 
     }; // struct Bag<T*>
     
@@ -225,10 +229,10 @@ namespace gc {
     struct Deque {
         struct alignas(4096) Slab {
             static constexpr std::size_t CAPACITY = 4064 / sizeof(T);
-            T* __nonnull _begin;
-            T* __nonnull _end;
-            Slab* __nullable _prev;
-            Slab* __nullable _next;
+            T* _begin;
+            T* _end;
+            Slab* _prev;
+            Slab* _next;
             T _elements[CAPACITY];
             
             void assert_invariant() {
@@ -237,7 +241,7 @@ namespace gc {
                 assert(_end <= _elements + CAPACITY);
             }
             
-            explicit Slab(T value, Slab* __nullable prev, Slab* __nullable next)
+            explicit Slab(T value, Slab* prev, Slab* next)
             : _begin(_elements)
             , _end(_elements + 1)
             , _prev(prev)
@@ -285,8 +289,8 @@ namespace gc {
         
         static_assert(sizeof(Slab) == 4096);
         
-        Slab* __nullable _head;
-        Slab* __nullable _tail;
+        Slab* _head;
+        Slab* _tail;
         std::size_t _count;
         
         void assert_invariant() {

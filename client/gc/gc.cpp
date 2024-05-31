@@ -8,14 +8,37 @@
 #include <thread>
 
 #include "gc.hpp"
+#include "value.hpp"
 
 #include "test.hpp"
 
 namespace gc {
     
-     thread_local Mutator* Mutator::_thread_local_context_pointer;
-
+    // Object virtual methods
     
+    std::size_t Object::gc_bytes() const {
+        return sizeof(Object);
+    }
+    
+    void Object::gc_enumerate(Collector&) const {
+    }
+    
+    void Object::_gc_shade(Mutator& context) const {
+        context._white_to_gray(this->_gc_color);
+    }
+    
+    void Object::_gc_trace(Collector& context) const {
+        if (context._white_to_black(this->_gc_color)) {
+            context._scan_stack.push_back(this);
+        }
+    }
+    
+    thread_local Mutator* Mutator::_thread_local_context_pointer;
+    
+    Mutator& Mutator::get() {
+        return *_thread_local_context_pointer;
+    }
+
     Mutator* Mutator::_exchange(Mutator* desired) {
         return std::exchange(_thread_local_context_pointer, desired);
     }
@@ -222,9 +245,9 @@ namespace gc {
         
         Mutator::enter();
         
-        Bag<const Colored*> object_bag;
-        Bag<const Colored*> black_bag;
-        Bag<const Colored*> white_bag;
+        Bag<const Object*> object_bag;
+        Bag<const Object*> black_bag;
+        Bag<const Object*> white_bag;
         
         for (;;) {
             
@@ -255,7 +278,7 @@ namespace gc {
             for (;;) {
                 
                 for (;;) {
-                    const Colored* object = object_bag.pop();
+                    const Object* object = object_bag.pop();
                     if (!object)
                         break;
                     // load the color and set it to black if it was gray
@@ -302,7 +325,7 @@ namespace gc {
             
             {
                 for (;;) {
-                    const Colored* object = object_bag.pop();
+                    const Object* object = object_bag.pop();
                     if (!object)
                         break;
                     delete object;
@@ -311,6 +334,7 @@ namespace gc {
             }
             
             object_bag.swap(black_bag);
+            printf("Survivors %zd\n", object_bag.size());
             
             // All mutators are allocating BLACK
             // There are no WHITE or GRAY objects
@@ -353,9 +377,14 @@ namespace gc {
                 m->enter();
                 for (;;) {
                     printf("Mutator A\n");
+                    // auto p = new(m->_allocate(sizeof(Object))) Object(*m);
+                    auto p = new Object;
+                    
+                    foo();
+                    
                     m->handshake();
-                    (void) new(m->_allocate(sizeof(Colored))) Colored(*m);
-                    std::this_thread::sleep_for(std::chrono::milliseconds{200});
+                    p->_gc_shade(*m);
+                    std::this_thread::sleep_for(std::chrono::milliseconds{10});
                 }
                 m->leave();
             }).detach();
