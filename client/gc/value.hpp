@@ -108,14 +108,19 @@ namespace gc {
         
         // reflection
         
-        virtual const HeapInt64* as_ObjectInt64() const;
-        virtual const HeapString* as_ObjectString() const;
-        virtual const HeapArray* as_ObjectArray() const;
+        virtual const HeapInt64* as_HeapInt64() const;
+        virtual const HeapString* as_HeapString() const;
+        virtual const HeapArray* as_HeapArray() const;
+
+        // comparison
+        
+        virtual std::partial_ordering three_way_comparison(Value) const;
+        virtual bool equality(Value) const;
+        virtual bool logical_not() const;
 
         // pure unary
         virtual Value unary_plus() const;
         virtual Value unary_minus() const;
-        virtual bool logical_not() const;
         virtual Value bitwise_not() const;
         
         // mutating unary
@@ -132,14 +137,15 @@ namespace gc {
         virtual Value subtraction(Value) const;
         virtual Value left_shift(Value) const;
         virtual Value right_shift(Value) const;
-        virtual Value three_way_comparison(Value) const;
-        virtual bool equality(Value) const;
         virtual Value bitwise_and(Value) const;
         virtual Value bitwise_xor(Value) const;
         virtual Value bitwise_or(Value) const;
         
         // mutating binary
         
+        // since numbers on the heap are immutable, there seems to be no
+        // meaningful customization possible here; they will just have tp
+        // do the basic operation and replace their handle with it
         virtual void assigned_multiplication(Value&, Value) const;
         virtual void assigned_division(Value&, Value) const;
         virtual void assigned_remainder(Value&, Value) const ;
@@ -155,6 +161,7 @@ namespace gc {
         virtual Value function_call() const;
         virtual Value subscript_const(Value other) const;
         virtual DeferredElementAccess subscript_mutable(Value& self, Value other);
+        
         // built-in functions
         virtual String str() const;
         
@@ -376,103 +383,6 @@ namespace gc {
             return result;
         }
         
-        // some trial operators
-        
-        Value& operator++() {
-            switch (_get_tag()) {
-                case OBJECT: {
-                    const HeapValue* a = _as_object();
-                    a->prefix_increment(*this);
-                    break;
-                }
-                case INTEGER: {
-                    // get 32 bit integer and upsize it
-                    int64_t b = _as_integer();
-                    // this will never overflow, but it may be too big to
-                    // represent as int32
-                    ++b;
-                    *this = from_int64(b);
-                    break;
-                }
-                default:
-                    assert(false);
-                    break;
-            }
-            return *this;
-        }
-
-        Value operator++(int) {
-            Value old = *this;
-            switch (_get_tag()) {
-                case OBJECT: {
-                    _as_object()->postfix_increment(*this);
-                    break;
-                }
-                case INTEGER: {
-                    // get 32 bit integer and upsize it
-                    int64_t b = _as_integer();
-                    // this will never overflow, but it may be too big to
-                    // represent as int32
-                    b++;
-                    *this = from_int64(b);
-                    break;
-                }
-                default: {
-                    Value old = *this;
-                    *this = Value::make_error();
-                    break;
-                }
-            }
-            return old;
-        }
-        
-        Value& operator+=(Value other) {
-            switch (_get_tag()) {
-                case OBJECT: {
-                    _as_object()->assigned_addition(*this, other);
-                    break;
-                }
-                case INTEGER: {
-                    if (other._get_tag() == INTEGER) {
-                        *this = Value::from_int64((std::int64_t)_as_integer()
-                                                  + (std::int64_t)other._as_integer());
-                    } else {
-                        // int32 + ??? -> need more functions
-                        abort();
-                    }
-                    break;
-                }
-                default: {
-                    *this = Value::make_error();
-                    break;
-                }
-            }
-            return *this;
-        }
-        
-        Value operator+(Value other) const {
-            switch (_get_tag()) {
-                case OBJECT: {
-                    return _as_object()->addition(other);
-                }
-                case INTEGER: {
-                    if (other._get_tag() == INTEGER) {
-                        return Value::from_int64((std::int64_t)_as_integer()
-                                                 + (std::int64_t)other._as_integer());
-                    } else {
-                        // int32 + ??? -> need more functions
-                        abort();
-                    }
-                }
-                default: {
-                    return Value::make_error();
-                }
-            }
-        }
-
-
-        
-        
         static Value make_error() {
             __builtin_trap();
             std::uint64_t a = ERROR;
@@ -480,6 +390,50 @@ namespace gc {
             std::memcpy(&result, &a, 8);
             return result;
         }
+
+
+        Value operator++(int);
+        Value operator--(int);
+        Value operator()() const;
+        Value operator[](Value) const;
+        Value& operator[](Value);
+
+        Value& operator++();
+        Value& operator--();
+        Value operator+() const;
+        Value operator-() const;
+        bool operator!() const;
+        Value operator~() const;
+        explicit operator bool() const;
+        
+        Value operator*(Value) const;
+        Value operator/(Value) const;
+        Value operator%(Value) const;
+
+        Value operator+(Value) const;
+        Value operator-(Value) const;
+
+        Value operator<<(Value) const;
+        Value operator>>(Value) const;
+        
+        std::partial_ordering operator<=>(Value) const;
+        
+        bool operator==(Value) const;
+        
+        Value operator&(Value) const;
+        Value operator^(Value) const;
+        Value operator|(Value) const;
+
+        Value& operator+=(Value);
+        Value& operator-=(Value);
+        Value& operator*=(Value);
+        Value& operator/=(Value);
+        Value& operator%=(Value);
+        Value& operator<<=(Value);
+        Value& operator>>=(Value);
+        Value& operator&=(Value);
+        Value& operator^=(Value);
+        Value& operator|=(Value);
 
     };
     
@@ -666,6 +620,7 @@ namespace gc {
     
     struct Array {
         
+        // not a Value because there is only one representation possible (so far)
         HeapArray* _array;
         
         std::size_t size() const {
@@ -685,6 +640,11 @@ namespace gc {
 
     
     
+    
+    struct DeferredElementAccess {
+        Value& self;
+        Value pos;
+    };
     
     
     
@@ -777,91 +737,120 @@ namespace gc {
 
 
     }
+   
+   
     
-    inline Value HeapValue::postfix_increment(Value& self) const {
-        Value old = self;
-        self._as_object()->prefix_increment(self);
+
+    
+
+    
+    
+    
+    inline Value& Value::operator++() {
+        switch (_get_tag()) {
+            case OBJECT: {
+                _as_object()->prefix_increment(*this);
+                break;
+            }
+            case INTEGER: {
+                int64_t b = _as_integer();
+                *this = from_int64(_as_integer() + 1);
+                break;
+            }
+            default:
+                *this = make_error();
+                break;
+        }
+        return *this;
+    }
+    
+    inline Value Value::operator++(int) {
+        Value old = *this;
+        switch (_get_tag()) {
+            case OBJECT: {
+                _as_object()->postfix_increment(*this);
+                break;
+            }
+            case INTEGER: {
+                *this = from_int64(_as_integer() + 1);
+                break;
+            }
+            default: {
+                *this = Value::make_error();
+                break;
+            }
+        }
         return old;
     }
     
-    inline void HeapValue::prefix_increment(Value& self) const {
-        self += Value::from_int64(1);
+    inline Value& Value::operator+=(Value other) {
+        switch (_get_tag()) {
+            case OBJECT: {
+                _as_object()->assigned_addition(*this, other);
+                break;
+            }
+            case INTEGER: {
+                if (other._get_tag() == INTEGER) {
+                    *this = Value::from_int64((std::int64_t)_as_integer()
+                                              + (std::int64_t)other._as_integer());
+                } else {
+                    // int32 + ??? -> need more functions
+                    abort();
+                }
+                break;
+            }
+            default: {
+                *this = Value::make_error();
+                break;
+            }
+        }
+        return *this;
     }
     
-    inline Value HeapValue::addition(Value) const {
-        return Value::make_error();
+    inline Value Value::operator+(Value other) const {
+        switch (_get_tag()) {
+            case OBJECT: {
+                return _as_object()->addition(other);
+            }
+            case INTEGER: {
+                if (other._get_tag() == INTEGER) {
+                    return Value::from_int64((std::int64_t)_as_integer()
+                                             + (std::int64_t)other._as_integer());
+                } else {
+                    // int32 + ??? -> need more functions
+                    abort();
+                }
+            }
+            default: {
+                return Value::make_error();
+            }
+        }
     }
     
-    inline void HeapValue::assigned_addition(Value& self, Value other) const {
-        self = self + other;
-    }
+    inline Value Value::operator*(Value) const { abort(); }
+    inline Value Value::operator/(Value) const { abort(); }
+    inline Value Value::operator%(Value) const { abort(); }
+    inline Value Value::operator-(Value) const { abort(); }
+    inline Value Value::operator<<(Value) const { abort(); }
+    inline Value Value::operator>>(Value) const { abort(); }
+    inline Value Value::operator&(Value) const { abort(); }
+    inline Value Value::operator^(Value) const { abort(); }
+    inline Value Value::operator|(Value) const { abort(); }
+
+    inline Value& Value::operator*=(Value) { abort(); }
+    inline Value& Value::operator/=(Value) { abort(); }
+    inline Value& Value::operator%=(Value) { abort(); }
+    inline Value& Value::operator-=(Value) { abort(); }
+    inline Value& Value::operator&=(Value) { abort(); }
+    inline Value& Value::operator^=(Value) { abort(); }
+    inline Value& Value::operator|=(Value) { abort(); }
+    inline Value& Value::operator<<=(Value) { abort(); }
+    inline Value& Value::operator>>=(Value) { abort(); }
     
-    
-    inline Value HeapValue::bitwise_or(Value) const {
-        return Value::make_error();
-    }
-
-    inline Value HeapValue::bitwise_and(Value) const {
-        return Value::make_error();
-    }
-
-    inline Value HeapValue::bitwise_xor(Value) const {
-        return Value::make_error();
-    }
-
-    inline Value HeapValue::function_call() const {
-        return Value::make_error();
-    }
-
-    inline Value HeapValue::subscript_const(Value) const {
-        return Value::make_error();
-    }
-    
-    struct DeferredElementAccess {
-        Value& self;
-        Value pos;
-    };
-
-    inline DeferredElementAccess HeapValue::subscript_mutable(Value& self, Value pos) {
-        return {self, pos};
-    }
-    
-    inline Value HeapValue::left_shift(Value) const {
-        return Value::make_error();
-    }
-
-    inline Value HeapValue::right_shift(Value) const {
-        return Value::make_error();
-    }
-
-    inline Value HeapValue::unary_plus() const {
-        return Value::make_error();
-    }
-
-    inline Value HeapValue::unary_minus() const {
-        return Value::make_error();
-    }
-
-    inline Value HeapValue::bitwise_not() const {
-        return Value::make_error();
-    }
-
-    inline bool HeapValue::logical_not() const {
-        abort();
-    }
-    
-    inline Value HeapValue::subtraction(Value) const {
-        return Value::make_error();
-    }
+    inline Value& Value::operator--() { abort(); }
+    inline Value Value::operator--(int) { abort(); }
 
     
-    
-
-    
-
-    
-    
-
     
     
 } // namespace gc
