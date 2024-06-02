@@ -14,20 +14,294 @@
 
 namespace gc {
     
+    
+    
+    struct Palette {
+        struct BlackImposter {
+            Color white;
+            operator Color() const { return white ^ 1; }
+            //BlackImposter& operator=(Color value) { white = value ^ 1; return *this; }
+        };
+        union {
+            struct {
+                Color white;
+            };
+            BlackImposter black;
+        };
+        Color alloc;
+        enum : Color {
+            gray = 2,
+            red = 3,
+        };
+    };
+    
+    struct Log {
+        
+        bool dirty;
+        Bag<const Object*> allocations;
+        std::intptr_t total;
+        
+        Log()
+        : dirty(false)
+        , allocations()
+        , total(0) {}
+        
+        Log(const Log&) = delete;
+        
+        Log(Log&& other)
+        : dirty(std::exchange(other.dirty, false))
+        , allocations(std::move(other.allocations))
+        , total(std::exchange(other.total, 0)) {
+            assert(other.allocations.empty());
+        }
+        
+        ~Log() {
+            assert(!dirty);
+            assert(allocations.empty());
+            assert(total == 0);
+        }
+        
+        Log& operator=(const Log&) = delete;
+        
+        Log& operator=(Log&&) = delete;
+        
+        Log& splice(Log&& other) {
+            dirty = std::exchange(other.dirty, false) || dirty;
+            allocations.splice(std::move(other.allocations));
+            total += std::exchange(other.total, 0);
+            return *this;
+        }
+        
+    };
+    
+    struct LogNode : Log {
+        LogNode* log_stack_next;
+    };
+    
+    
+    struct Channel {
+        
+        // A Channel is shared by one Mutator and one Collector.  They must
+        // both release it before it is deleted.
+        std::atomic<std::intptr_t> reference_count_minus_one = 1;
+        Channel* entrant_stack_next = nullptr;
+        enum Tag : std::intptr_t {
+            COLLECTOR_DID_REQUEST_NOTHING, // -> HANDSHAKE, LEAVE
+            COLLECTOR_DID_REQUEST_HANDSHAKE, // -> WAKEUP, LOGS, LEAVE
+            COLLECTOR_DID_REQUEST_WAKEUP, // -> LOGS, LEAVE
+            MUTATOR_DID_PUBLISH_LOGS, // -> NOTHING, LEAVE
+            MUTATOR_DID_LEAVE, // -> .
+        };
+        
+        Palette palette;
+        std::atomic<TaggedPtr<LogNode>> log_stack_head;
+        
+        void release() {
+            if (!reference_count_minus_one.fetch_sub(1, std::memory_order_release)) {
+                (void) reference_count_minus_one.load(std::memory_order_acquire);
+                delete this;
+            }
+        }
+        
+        
+        
+        
+    };
+    
+    // garbage collector state for one mutator thread
+    
+    struct Mutator {
+        
+        // Thread-local state access point
+        
+        static thread_local Mutator* _thread_local_context_pointer;
+        
+        static Mutator& get();
+        [[nodiscard]] static Mutator* _exchange(Mutator*);
+        
+        // Thread local state
+        
+        Palette palette; // colors received from Collector
+        Log     log    ; // activity to publish to Collector
+        
+        void _white_to_gray(Atomic<Color>& color);
+        bool _white_to_black(Atomic<Color>& color) const;
+        void shade(const Object*);
+        template<typename T> T* write(std::atomic<T*>& target, std::type_identity_t<T>* desired);
+        template<typename T> T* write(std::atomic<T*>& target, std::nullptr_t);
+        
+        
+        
+        void* _allocate(std::size_t bytes);
+        
+        // Mutator endures for the whole thread lifetime
+        // Channel is per enter-leave pairing
+        // Channel must outlive not just leave, but the shutdown of the thread
+        
+        
+        
+        Channel* _channel = nullptr;
+        
+        void _publish_with_tag(Channel::Tag tag);
+        
+        void enter();
+        void handshake();
+        void leave();
+        
+    };
+    
+    // garbage collector state for the unique collector thread, which is
+    // also a mutator
+    
+    struct Collector : Mutator {
+        
+        void visit(const Object* object);
+        template<typename T> void visit(const std::atomic<T*>& object);
+        template<typename T> void visit(const Pointer<T>& object);
+        
+        // Safety:
+        // _scan_stack is only resized by the Collector thread, which is not
+        // real time bounded
+        std::vector<const Object*> _scan_stack;
+        
+        // These details can be done by a private class
+        
+        // lockfree channel
+        // std::atomic<TaggedPtr<Channel>> channel_list_head;
+        std::atomic<Channel*> entrant_stack_head;
+        std::atomic<Palette> _atomic_palette;
+        
+        std::vector<Channel*> _active_channels;
+        
+        Log _collector_log;
+        
+        void _process_scan_stack() {
+            while (!this->_scan_stack.empty()) {
+                const Object* object = this->_scan_stack.back();
+                this->_scan_stack.pop_back();
+                assert(object);
+                object->gc_enumerate();
+            }
+        }
+        
+        void collect();
+        
+        void _set_alloc_to_black();
+        void _swap_white_and_black();
+        
+        void _publish_palette_and_accept_entrants();
+        
+        void _initiate_handshakes();
+        void _consume_logs(LogNode* logs);
+        void _finalize_handshakes();
+        void _synchronize();
+        
+        
+        
+        
+    };
+    
+    inline Collector* global_collector = nullptr;
+    
+    
+    
+    inline void Mutator::shade(const Object* object) {
+        if (object) {
+            object->_gc_shade();
+        }
+    }
+    
+    // write barrier (non-trivial)
+    template<typename T>
+    T* Mutator::write(std::atomic<T*>& target, std::type_identity_t<T>* desired) {
+        T* discovered = target.exchange(desired, std::memory_order_release);
+        this->shade(desired);
+        this->shade(discovered);
+        return discovered;
+    }
+    
+    template<typename T>
+    T* Mutator::write(std::atomic<T*>& target, std::nullptr_t) {
+        T* discovered = target.exchange(nullptr, std::memory_order_release);
+        this->shade(discovered);
+    }
+    
+    
+    // StrongPtr is a convenience wrapper that implements the write barrier for
+    // a strong reference.
+    
+    
+    inline void* Mutator::_allocate(std::size_t bytes) {
+        Object* object = (Object*) malloc(bytes);
+        // Safety: we don't use or publish these pointers until we handshake
+        // by which time the objects are fully constructed
+        this->log.allocations.push(object);
+        this->log.total += bytes;
+        return object;
+    }
+    
+    inline void Mutator::_white_to_gray(Atomic<Color>& color) {
+        Color expected = this->palette.white;
+        if (color.compare_exchange_strong(expected,
+                                          this->palette.gray)) {
+            this->log.dirty = true;
+        }
+    }
+    
+    inline bool Mutator::_white_to_black(Atomic<Color>& color) const {
+        std::intptr_t expected = this->palette.white;
+        return color.compare_exchange_strong(expected,
+                                             this->palette.black);
+    }
+    
+    
+    inline void Collector::visit(const Object* object) {
+        if (object)
+            object->_gc_trace();
+    }
+    
+    template<typename T>
+    void Collector::visit(const std::atomic<T*>& participant) {
+        this->visit(participant.load(std::memory_order_acquire));
+    }
+    
+    template<typename T>
+    void Collector::visit(const Pointer<T>& p) {
+        this->visit(p._ptr.load(std::memory_order_acquire));
+    }
+    
+    
+    inline void* Object::operator new(std::size_t count) {
+        return Mutator::get()._allocate(count);
+    }
+    
+    inline Object::Object()
+    : _gc_color(Mutator::get().palette.alloc) {
+    }
+    
+    inline Object::~Object() {
+        printf("%#" PRIxPTR " del Object\n", (std::uintptr_t) this);
+    }
+    
+    inline std::size_t Object::gc_hash() const {
+        return std::hash<const void*>()(this);
+    }
+    
     // Object virtual methods
     
     std::size_t Object::gc_bytes() const {
         return sizeof(Object);
     }
     
-    void Object::gc_enumerate(Collector&) const {
+    void Object::gc_enumerate() const {
     }
     
-    void Object::_gc_shade(Mutator& context) const {
-        context._white_to_gray(this->_gc_color);
+    void Object::_gc_shade() const {
+        Mutator::get()._white_to_gray(this->_gc_color);
     }
     
-    void Object::_gc_trace(Collector& context) const {
+    void Object::_gc_trace() const {
+        Collector& context = *global_collector;
         if (context._white_to_black(this->_gc_color)) {
             context._scan_stack.push_back(this);
         }
@@ -287,12 +561,9 @@ namespace gc {
                     // collector thread immediately restores it
                     Color expected = this->palette.gray;
                     Color desired = this->palette.black;
-                    if (object->_gc_color.compare_exchange_strong(expected,
-                                                                  desired,
-                                                                  std::memory_order_relaxed,
-                                                                  std::memory_order_relaxed)) {
+                    if (object->_gc_color.compare_exchange_strong(expected, desired)) {
                         expected = desired;
-                        object->gc_enumerate(*this);
+                        object->gc_enumerate();
                     }
                     if (expected == this->palette.black) {
                         black_bag.push(object);
@@ -383,7 +654,7 @@ namespace gc {
                     foo();
                     
                     m->handshake();
-                    p->_gc_shade(*m);
+                    p->_gc_shade();
                     std::this_thread::sleep_for(std::chrono::milliseconds{10});
                 }
                 m->leave();
@@ -394,5 +665,46 @@ namespace gc {
         }).detach();
     };
     
+    
+    
+    
+    
+    void shade(const Object* object) {
+        if (object) {
+            Mutator::get().shade(object);
+        }
+    }
+    
+    void _gc_shade_for_leaf(Atomic<Color>* target) {
+        auto& m = Mutator::get();
+        Color expected = m.palette.white;
+        Color desired = m.palette.black;
+        target->compare_exchange_strong(expected,
+                                        desired);
+    }
+    
+    void trace(const Object* object) {
+        if (object) {
+            object->_gc_trace();
+        }
+    }
+    
+    void* allocate(std::size_t count) {
+        return Mutator::get()._allocate(count);
+    }
+
+    
+    Atomic<Color>::Atomic(Color color) : _color(color) {}
+    
+    Color Atomic<Color>::load() const {
+        return _color.load(std::memory_order_relaxed);
+    }
+    
+    bool Atomic<Color>::compare_exchange_strong(Color& expected, Color desired) {
+        return _color.compare_exchange_strong(expected,
+                                              desired,
+                                              std::memory_order_relaxed,
+                                              std::memory_order_relaxed);
+    }
     
 } // namespace gc

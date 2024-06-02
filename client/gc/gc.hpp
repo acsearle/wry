@@ -9,6 +9,7 @@
 #define gc_hpp
 
 #include <cassert>
+#include <cinttypes>
 #include <cstdint>
 
 #include <atomic>
@@ -19,508 +20,173 @@
 #include "utility.hpp"
 
 namespace gc {
-        
-    using Color = std::intptr_t;
-    struct Object;
     
-    struct Mutator;
-    struct Collector;
-    
-    
-    // TODO:
+    // Garbage Collector interface
     //
-    // Almost all the mutator and collector state can be hidden.  We need to
-    // narrowly define the interfaces we absolutely need to be public to
-    // support
-    // - basic use
-    // - inlining critical functions
-    // - templates
+    // - Mutators are required to
+    //   - execute a write barrier
+    //   - log new allocations
+    //   - periodically handshake with the mutator to
+    //     - get new color scheme
+    //     - report if there was at least one WHITE -> GRAY write barrier
+    //     - report new allocations
+    //   - mark any roots
+    // - All these mutator actions are lock-free
+    //   - the mutator will never wait for the collector
+    //   - no GC pause, no stop the world, no stop the mutators in turn
+    //   - the mutators can in theory outrun the collector and exhaust memory
+    // - Where lock-free data structures are required, a very simple MPSC
+    //   stack design is sufficient, implemented inline with minor variations
     //
-    // since TLS lookup is potentially expensive, we want to provide interfaces
-    // that make it easy to pass in an explict context.
+    // - The system incurs significant overhead:
+    //   - Barrier and allocator need access to thread-local state
+    //     - Expensive to lookup on some architectures
+    //     - Or, annoying to pass everywhere
+    //   - All mutable pointers must be
+    //     - atomic so the collector can read them
+    //     - store-release so the collector can read through them
+    //     - write-barrier so reachability is conservative
+    //   - The write barrier adds two relaxed compare_exchanges to the object
+    //     headers
+    //   - Each object must store its color explicitly
+    //   - Each object's address is explicitly stored either by a mutator in
+    //     its list of recent allocations, or by the collector in its working
+    //     list.  Together with color, this is 16 bytes per object of pure
+    //     overhead.
+    //   - All data structures must be quasi-concurrent so that they can be
+    //     traced by the collector well enough to, in combination with the
+    //     write barrier, produce a conservative reachability graph.
+    //     - For example, for a fixed capacity allocation, we can't atomically
+    //       consider both the size and the "back" element it implies; we have
+    //       to rely on the immutable capacity, scan slot, and require the
+    //       erase operation to leave unused elements in a traceable (preferably
+    //       zeroed) state.
+    //   - Unreachable objects will survive several rounds of handshakes due to
+    //     the conservative nature of the collector; in particular they will
+    //     survive the collection they were rendered unreachable during.
+    
+    // The collector is not lock-free.  It initiates rounds of "handshakes" with
+    // the mutators and cannot progress until they have all responded at their
+    // leisure.  In particular, it must wait for all mutators to report no GRAY
+    // activity before tracing can terminate.   It maintains a list of
+    // surviving objects and recent allocations to scan and sweep whenever
+    // not waiting on handshakes.
+    
+    // An important optimization is to mark leaf objects -- objects with no
+    // outgoing pointers to other GC objects -- directly to BLACK, skipping
+    // the GRAY stage that indicates the collector must scan them.
+    
+    // Another important optimization is that, when the collector is scanning
+    // its worklist of objects for GRAY objects that must be traced, it places
+    // those child objects directly in a stack and then immediately traces
+    // those, resulting in a depth-first traversal.  Without this optimization,
+    // the collector would mark children GRAY and then scan to rediscover them;
+    // a singly linked list appearing in reverse order in the worklist would
+    // require O(N) scans, i.e. O(NM) operations to fully trace.
     
     
-    struct MutatorContext {
-        
-        // needs these interface functions:
-        
-        [[nodiscard]] std::pair<void*, Color> allocate(std::size_t bytes);
-        
-        void shade(Object*);
-        
-        
-        
-    };
-    
-    struct CollectorContext {
-        // needs these interface functions:
-        
-    };
-    
-    // to mark roots we want to be able to shade
-    // 
-    //     shade(const Object*)
-    //
-    // which will call
-    //
-    //
-    
-    struct ShadeContext;
-    struct AllocContext;
-    
-    
-    // color_white_to_gray(context, object)
-    // color_white_to_black(context, object)
-    
-    //
 
     
-    struct Object {
-        
+    // TODO: Extend interfaces to accept a context to avoids TLS lookup
+
+    using Color = std::intptr_t;
+
+    template<>
+    struct Atomic<Color> {
+        std::atomic<std::intptr_t> _color;
+        explicit Atomic(Color color);
+        Color load() const;
+        bool compare_exchange_strong(Color& expected, Color desired);
+    };
+    
+    // Fundamental garbage collected thing
+    //
+    // TODO: Combine Color with something else to avoid overhead
+
+    struct alignas(16) Object {
+
+        Object();
+        Object(const Object&);
+        virtual ~Object();
+        virtual std::size_t gc_bytes() const;
+        virtual void gc_enumerate() const;
+
+        // Hash is arguably nothing to do with GC, and should be in HeapValue?
+        virtual std::size_t gc_hash() const;
+
         static void* operator new(std::size_t count);
         static void* operator new[](std::size_t count) = delete;
-        
-        Object();
-        virtual ~Object();
-
-        explicit Object(Mutator&);
-        
-        virtual std::size_t gc_hash() const;
-        // return a hash value, by default derived from the object's address
-
-        virtual std::size_t gc_bytes() const;
-        // return size in bytes of the backing allocation, which may vary due
-        // to flexible array member idiom
-                
-        virtual void gc_enumerate(Collector&) const;
-        // invoke the argument function object on each member object to trace
-        // the graph.  invoked only on collector thread
-        
-        mutable std::atomic<Color> _gc_color;
-        // explicitly store the tricolor abstraction color of the object
-        
-        virtual void _gc_shade(Mutator&) const;
-        // shade the object using the mutator palette, from white to gray or
-        // black depending is the node has any children
-        
-        virtual void _gc_trace(Collector&) const;
-        // (TODO: name) customize if/how we store ourself in the worklist
+        mutable Atomic<Color> _gc_color;
+        virtual void _gc_shade() const;
+        virtual void _gc_trace() const;
         
     }; // struct Object
-    
-    
-    
-    
-    
-    
 
+    // Services
     
+    void shade(const Object*);
+    void* allocate(std::size_t count);
+    void trace(const Object*);
+    void _gc_shade_for_leaf(Atomic<Color>* target);
     
     template<typename T>
     struct Pointer {
-        
-        std::atomic<T*> _ptr;
-        
         Pointer() = default;
         Pointer(const Pointer& other);
         ~Pointer() = default;
         Pointer& operator=(const Pointer& other);
-        
         explicit Pointer(T* other);
         explicit Pointer(std::nullptr_t);
         Pointer& operator=(T* other);
         Pointer& operator=(std::nullptr_t);
-        
         T* operator->() const;
         bool operator!() const;
         explicit operator bool() const;
         operator T*() const;
         T& operator*() const;
-        
         bool operator==(const Pointer<T>& other);
         auto operator<=>(const Pointer<T>& other);
-        
         T* get() const;
-        
+        std::atomic<T*> _ptr;
     };
     
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-
-    template<typename Adaptee>
-    struct Leaf;
-    
-    template<typename T, typename Adaptee>
-    struct Array;
-        
-
-    
-    
-    
-   
-
-    
-    
-    
-    
-    
-    
-    
-
-    
-    // Provides default behavior for objects with no fields to trace
-    
-    template<typename Adaptee>
-    struct Leaf : Adaptee {
-        
-        template<typename... Args>
-        explicit Leaf(Args&&... args);
-
-        virtual ~Leaf() override;
-                
-        virtual void _gc_shade(Mutator&) const override final;
-        virtual void _gc_trace(Collector&) const override;
-
-
-    };
-    
-    // Provides default implementation for inline arrays
-
-    template<typename T, typename Adaptee>
-    struct Array : Adaptee {
-        
-        std::size_t _size;
-        T _elements[0]; // flexible array member
-        
-        template<typename... Args>
-        explicit Array(std::size_t n, Args&&... args);
-
-        virtual ~Array() override;
-        
-        virtual std::size_t gc_bytes() const override final;
-        virtual void gc_scan(Collector&) const override;
-        
-    };
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    struct Palette {
-        struct BlackImposter {
-            Color white;
-            operator Color() const { return white ^ 1; }
-            //BlackImposter& operator=(Color value) { white = value ^ 1; return *this; }
-        };
-        union {
-            struct {
-                Color white;
-            };
-            BlackImposter black;
-        };
-        Color alloc;
-        enum : Color {
-            gray = 2,
-            red = 3,
-        };
-    };
-
-    struct Log {
-        
-        bool dirty;
-        Bag<const Object*> allocations;
-        std::intptr_t total;
-        
-        Log()
-        : dirty(false)
-        , allocations()
-        , total(0) {}
-        
-        Log(const Log&) = delete;
-        
-        Log(Log&& other)
-        : dirty(std::exchange(other.dirty, false))
-        , allocations(std::move(other.allocations))
-        , total(std::exchange(other.total, 0)) {
-            assert(other.allocations.empty());
-        }
-        
-        ~Log() {
-            assert(!dirty);
-            assert(allocations.empty());
-            assert(total == 0);
-        }
-        
-        Log& operator=(const Log&) = delete;
-        
-        Log& operator=(Log&&) = delete;
-                
-        Log& splice(Log&& other) {
-            dirty = std::exchange(other.dirty, false) || dirty;
-            allocations.splice(std::move(other.allocations));
-            total += std::exchange(other.total, 0);
-            return *this;
-        }
-        
-    };
-    
-    struct LogNode : Log {
-        LogNode* log_stack_next;
-    };
-    
-   
-    struct Channel {
-        
-        // A Channel is shared by one Mutator and one Collector.  They must
-        // both release it before it is deleted.
-        std::atomic<std::intptr_t> reference_count_minus_one = 1;
-        Channel* entrant_stack_next = nullptr;
-        enum Tag : std::intptr_t {
-            COLLECTOR_DID_REQUEST_NOTHING, // -> HANDSHAKE, LEAVE
-            COLLECTOR_DID_REQUEST_HANDSHAKE, // -> WAKEUP, LOGS, LEAVE
-            COLLECTOR_DID_REQUEST_WAKEUP, // -> LOGS, LEAVE
-            MUTATOR_DID_PUBLISH_LOGS, // -> NOTHING, LEAVE
-            MUTATOR_DID_LEAVE, // -> .
-        };
-
-        Palette palette;
-        std::atomic<TaggedPtr<LogNode>> log_stack_head;
-        
-        void release() {
-            if (!reference_count_minus_one.fetch_sub(1, std::memory_order_release)) {
-                (void) reference_count_minus_one.load(std::memory_order_acquire);
-                delete this;
-            }
-        }
-        
-
-        
-        
-    };
-    
-    // garbage collector state for one mutator thread
-    
-    struct Mutator {
-
-        // Thread-local state access point
-
-        static thread_local Mutator* _thread_local_context_pointer;
-
-        static Mutator& get();
-        [[nodiscard]] static Mutator* _exchange(Mutator*);
-
-        // Thread local state
-
-        Palette palette; // colors received from Collector
-        Log     log    ; // activity to publish to Collector
-
-        void _white_to_gray(std::atomic<Color>& color);
-        bool _white_to_black(std::atomic<Color>& color) const;
-        void shade(const Object*);
-        template<typename T> T* write(std::atomic<T*>& target, std::type_identity_t<T>* desired);
-        template<typename T> T* write(std::atomic<T*>& target, std::nullptr_t);
-
-        
-        
-        void* _allocate(std::size_t bytes);
-        
-        // Mutator endures for the whole thread lifetime
-        // Channel is per enter-leave pairing
-        // Channel must outlive not just leave, but the shutdown of the thread
-        
-        
-        
-        Channel* _channel = nullptr;
-        
-        void _publish_with_tag(Channel::Tag tag);
-        
-        void enter();
-        void handshake();
-        void leave();
-        
-    };
-    
-    // garbage collector state for the unique collector thread, which is
-    // also a mutator
-    
-    struct Collector : Mutator {
-        
-        void visit(const Object* object);
-        template<typename T> void visit(const std::atomic<T*>& object);
-        template<typename T> void visit(const Pointer<T>& object);
-        
-        // Safety:
-        // _scan_stack is only resized by the Collector thread, which is not
-        // real time bounded
-        std::vector<const Object*> _scan_stack;
-
-        // These details can be done by a private class
-        
-        // lockfree channel
-        // std::atomic<TaggedPtr<Channel>> channel_list_head;
-        std::atomic<Channel*> entrant_stack_head;
-        std::atomic<Palette> _atomic_palette;
-        
-        std::vector<Channel*> _active_channels;
-        
-        Log _collector_log;
-        
-        void _process_scan_stack() {
-            while (!this->_scan_stack.empty()) {
-                const Object* object = this->_scan_stack.back();
-                this->_scan_stack.pop_back();
-                assert(object);
-                object->gc_enumerate(*this);
-            }
-        }
-        
-        void collect();
-        
-        void _set_alloc_to_black();
-        void _swap_white_and_black();
-        
-        void _publish_palette_and_accept_entrants();
-
-        void _initiate_handshakes();
-        void _consume_logs(LogNode* logs);
-        void _finalize_handshakes();
-        void _synchronize();
-        
-        
-
-        
-    };
-    
-    inline Collector* global_collector = nullptr;
-    
-    
-    
-    inline void Mutator::shade(const Object* object) {
-        if (object) {
-            object->_gc_shade(*this);
-        }
-    }
-    
-    // write barrier (non-trivial)
     template<typename T>
-    T* Mutator::write(std::atomic<T*>& target, std::type_identity_t<T>* desired) {
-        T* discovered = target.exchange(desired, std::memory_order_release);
-        this->shade(desired);
-        this->shade(discovered);
-    }
-
+    struct Atomic<Pointer<T>> {
+        std::atomic<T*> _ptr;
+        // ...
+    };
+    
+    
+    
+    
+    
+    
+    
+    
+    
     template<typename T>
-    T* Mutator::write(std::atomic<T*>& target, std::nullptr_t) {
-        T* discovered = target.exchange(nullptr, std::memory_order_release);
-        this->shade(discovered);
-    }
-
-    
-    // StrongPtr is a convenience wrapper that implements the write barrier for
-    // a strong reference.
-    
-
-    inline void* Mutator::_allocate(std::size_t bytes) {
-        Object* object = (Object*) malloc(bytes);
-        // Safety: we don't use or publish these pointers until we handshake
-        // by which time the objects are fully constructed
-        this->log.allocations.push(object);
-        this->log.total += bytes;
-        return object;
-    }
-    
-    inline void Mutator::_white_to_gray(std::atomic<std::intptr_t>& color) {
-        std::intptr_t expected = this->palette.white;
-        if (color.compare_exchange_strong(expected,
-                                          this->palette.gray,
-                                          std::memory_order_relaxed,
-                                          std::memory_order_relaxed)) {
-            this->log.dirty = true;
-        }
-    }
-    
-    inline bool Mutator::_white_to_black(std::atomic<std::intptr_t>& color) const {
-        std::intptr_t expected = this->palette.white;
-        return color.compare_exchange_strong(expected,
-                                             this->palette.black,
-                                             std::memory_order_relaxed,
-                                             std::memory_order_relaxed);
-    }
-    
-
-    inline void Collector::visit(const Object* object) {
-        if (object)
-            object->_gc_trace(*this);
+    [[nodiscard]] T* read_barrier(const std::atomic<T*>* target) {
+        return target->load(std::memory_order_relaxed);
     }
     
     template<typename T>
-    void Collector::visit(const std::atomic<T*>& participant) {
-        this->visit(participant.load(std::memory_order_acquire));
+    void write_barrier(std::atomic<T*>* target, T* desired) {
+        T* discovered = target->exchange(desired, std::memory_order_release);
+        using gc::shade;
+        shade(desired);
+        shade(discovered);
     }
-    
+
     template<typename T>
-    void Collector::visit(const Pointer<T>& p) {
-        this->visit(p._load_acquire());
+    void write_barrier(std::atomic<T*>* target, std::nullptr_t) {
+        T* discovered = target->exchange(nullptr, std::memory_order_release);
+        using gc::shade;
+        shade(discovered);
     }
 
     
-    inline void* Object::operator new(std::size_t count) {
-        return Mutator::get()._allocate(count);
-    }
-    
-    inline Object::Object()
-    : _gc_color(Mutator::get().palette.alloc) {
-    }
-   
-    inline Object::Object(Mutator& context)
-    : _gc_color(context.palette.alloc) {
-        printf("context.palette.alloc = %zd\n", context.palette.alloc);
-    }
-
-    inline Object::~Object() {
-    }
-    
-    inline std::size_t Object::gc_hash() const {
-        return std::hash<const void*>()(this);
-    }
-
-    template<typename Adaptee> template<typename... Args>
-    Leaf<Adaptee>::Leaf(Args&&... args) :
-    Adaptee(std::forward<Args>(args)...) {
-    }
-    
-    template<typename Adaptee>
-    Leaf<Adaptee>::~Leaf() {
-    }
-        
-    template<typename Adaptee>
-    void Leaf<Adaptee>::_gc_shade(Mutator& context) const {
-        context._white_to_black(this->_gc_color);
-    }
-
-    template<typename Adaptee>
-    void Leaf<Adaptee>::_gc_trace(Collector& context) const {
-        context._white_to_black(this->_gc_color);
-    }
     
     
-    
-
     
     
     template<typename T>
@@ -545,13 +211,13 @@ namespace gc {
     
     template<typename T>
     Pointer<T>& Pointer<T>::operator=(T* other) {
-        Mutator::get().write(_ptr, other);
+        write_barrier(&_ptr, other);
         return *this;
     }
     
     template<typename T>
     Pointer<T>& Pointer<T>::operator=(std::nullptr_t) {
-        Mutator::get().write(_ptr, nullptr);
+        write_barrier(&_ptr, nullptr);
         return *this;
     }
     
@@ -577,7 +243,7 @@ namespace gc {
     
     template<typename T>
     T& Pointer<T>::operator*() const {
-        return get();
+        return *get();
     }
     
     template<typename T>
@@ -596,12 +262,7 @@ namespace gc {
     }
     
     
-    inline void shade(const Object* object) {
-        if (object) {
-            Mutator::get().shade(object);
-        }
-    }
-
+    
     
     
 } // namespace gc

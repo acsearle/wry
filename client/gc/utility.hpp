@@ -12,6 +12,9 @@
 #include <cstdint>
 
 namespace gc {
+    
+    template<typename T>
+    struct Atomic;
         
     template<typename T>
     struct TaggedPtr {
