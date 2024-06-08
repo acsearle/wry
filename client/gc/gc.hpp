@@ -129,29 +129,31 @@ namespace gc {
     void trace(const Object*);
     void _gc_shade_for_leaf(Atomic<Color>* target);
     
+    template<typename T> struct Traced;
+    
     template<typename T>
-    struct Pointer {
-        Pointer() = default;
-        Pointer(const Pointer& other);
-        ~Pointer() = default;
-        Pointer& operator=(const Pointer& other);
-        explicit Pointer(T* other);
-        explicit Pointer(std::nullptr_t);
-        Pointer& operator=(T* other);
-        Pointer& operator=(std::nullptr_t);
+    struct Traced<T*> {
+        Traced() = default;
+        Traced(const Traced& other);
+        ~Traced() = default;
+        Traced& operator=(const Traced& other);
+        explicit Traced(T* other);
+        explicit Traced(std::nullptr_t);
+        Traced& operator=(T* other);
+        Traced& operator=(std::nullptr_t);
         T* operator->() const;
         bool operator!() const;
         explicit operator bool() const;
         operator T*() const;
         T& operator*() const;
-        bool operator==(const Pointer<T>& other);
-        auto operator<=>(const Pointer<T>& other);
+        bool operator==(const Traced& other) const;
+        auto operator<=>(const Traced& other) const;
         T* get() const;
         std::atomic<T*> _ptr;
     };
     
     template<typename T>
-    struct Atomic<Pointer<T>> {
+    struct Atomic<Traced<T>> {
         std::atomic<T*> _ptr;
         // ...
     };
@@ -190,76 +192,81 @@ namespace gc {
     
     
     template<typename T>
-    Pointer<T>::Pointer(const Pointer& other)
-    : Pointer(other.get()) {
+    Traced<T*>::Traced(const Traced& other)
+    : Traced(other.get()) {
     }
     
     template<typename T>
-    Pointer<T>& Pointer<T>::operator=(const Pointer& other) {
+    Traced<T*>& Traced<T*>::operator=(const Traced& other) {
         return operator=(other.get());
     }
     
     template<typename T>
-    Pointer<T>::Pointer(T* other)
+    Traced<T*>::Traced(T* other)
     : _ptr(other) {
     }
     
     template<typename T>
-    Pointer<T>::Pointer(std::nullptr_t)
+    Traced<T*>::Traced(std::nullptr_t)
     : _ptr(nullptr) {
     }
     
     template<typename T>
-    Pointer<T>& Pointer<T>::operator=(T* other) {
+    Traced<T*>& Traced<T*>::operator=(T* other) {
         write_barrier(&_ptr, other);
         return *this;
     }
     
     template<typename T>
-    Pointer<T>& Pointer<T>::operator=(std::nullptr_t) {
+    Traced<T*>& Traced<T*>::operator=(std::nullptr_t) {
         write_barrier(&_ptr, nullptr);
         return *this;
     }
     
     template<typename T>
-    T* Pointer<T>::operator->() const {
+    T* Traced<T*>::operator->() const {
         return _ptr.load(std::memory_order_relaxed);
     }
     
     template<typename T>
-    bool Pointer<T>::operator!() const {
+    bool Traced<T*>::operator!() const {
         return !get();
     }
     
     template<typename T>
-    Pointer<T>::operator bool() const {
+    Traced<T*>::operator bool() const {
         return get();
     }
     
     template<typename T>
-    Pointer<T>::operator T*() const {
+    Traced<T*>::operator T*() const {
         return get();
     }
     
     template<typename T>
-    T& Pointer<T>::operator*() const {
+    T& Traced<T*>::operator*() const {
         return *get();
     }
     
     template<typename T>
-    bool Pointer<T>::operator==(const Pointer<T>& other) {
+    bool Traced<T*>::operator==(const Traced& other) const {
         return get() == other.get();
     }
     
     template<typename T>
-    auto Pointer<T>::operator<=>(const Pointer<T>& other) {
+    auto Traced<T*>::operator<=>(const Traced& other) const {
         return get() <=> other.get();
     }
     
     template<typename T>
-    T* Pointer<T>::get() const {
+    T* Traced<T*>::get() const {
         return _ptr.load(std::memory_order_relaxed);
     }
+    
+    
+    
+    
+    
     
     
     

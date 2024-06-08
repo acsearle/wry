@@ -157,7 +157,7 @@ namespace gc {
         
         void visit(const Object* object);
         template<typename T> void visit(const std::atomic<T*>& object);
-        template<typename T> void visit(const Pointer<T>& object);
+        template<typename T> void visit(const Traced<T>& object);
         
         // Safety:
         // _scan_stack is only resized by the Collector thread, which is not
@@ -266,7 +266,7 @@ namespace gc {
     }
     
     template<typename T>
-    void Collector::visit(const Pointer<T>& p) {
+    void Collector::visit(const Traced<T>& p) {
         this->visit(p._ptr.load(std::memory_order_acquire));
     }
     
