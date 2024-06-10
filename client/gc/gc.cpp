@@ -280,7 +280,7 @@ namespace gc {
     }
     
     inline Object::~Object() {
-        printf("%#" PRIxPTR " del Object\n", (std::uintptr_t) this);
+        // printf("%#" PRIxPTR " del Object\n", (std::uintptr_t) this);
     }
     
     inline std::size_t Object::gc_hash() const {
@@ -470,7 +470,6 @@ namespace gc {
                                                                         std::memory_order_relaxed,
                                                                         std::memory_order_acquire)) {
                         survivors.push_back(channel);
-                        printf("Collector is happy\n");
                         break;
                     } else {
                         goto beta;
@@ -547,7 +546,7 @@ namespace gc {
             
             assert(black_bag.empty());
             
-            printf("object_bag initial size is %zd\n", object_bag.count);
+            // printf("object_bag initial size is %zd\n", object_bag.count);
             
             for (;;) {
                 
@@ -600,12 +599,12 @@ namespace gc {
                     if (!object)
                         break;
                     delete object;
-                    printf("Collector deletes something\n");
+                    // printf("Collector deletes something\n");
                 }
             }
             
             object_bag.swap(black_bag);
-            printf("Survivors %zd\n", object_bag.size());
+            // printf("Survivors %zd\n", object_bag.size());
             
             // All mutators are allocating BLACK
             // There are no WHITE or GRAY objects

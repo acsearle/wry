@@ -137,7 +137,6 @@ namespace gc {
         }
 
         void push(T* x) {
-            printf("pushing %p\n", x);
             ++count;
             assert(!head == !tail);
             if (!head || head->full()) {
@@ -152,7 +151,6 @@ namespace gc {
 
         [[nodiscard]] T* pop() {
             if (!count) {
-                printf("popped %p\n", nullptr);
                 return nullptr;
             }
             --count;
@@ -160,7 +158,6 @@ namespace gc {
                 assert(head);
                 if (head->count) {
                     T* p = head->elements[--head->count];
-                    printf("popped %p\n", p);
                     return p;
                 }
                 delete std::exchange(head, head->next);
