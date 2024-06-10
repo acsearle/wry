@@ -27,11 +27,12 @@ namespace gc {
     struct HeapValue;
 
     struct HeapArray;
-    struct HeapIndirection;
     struct HeapInt64;
     struct HeapNumber;
     struct HeapString;
     struct HeapTable;
+    
+    struct _deferred_subscript_t;
     
     struct alignas(8) Value {
         
@@ -118,7 +119,7 @@ namespace gc {
         // them all into a single tag?
         // true, false, error, tombstone, UTF-32 character
         
-        Value() = default;
+        constexpr Value() = default;
         
         // implicit copy and move constructors
         
@@ -168,9 +169,9 @@ namespace gc {
         static Value from_bool(bool flag);
 
         // monostates
-        static Value make_error();
-        static Value make_null() { Value result; result._enumeration = 0; return result; }
-        static Value make_tombstone() { Value result; result._enumeration = TOMBSTONE; return result; }
+        constexpr static Value make_error();
+        constexpr static Value make_null();
+        constexpr static Value make_tombstone();
                         
         // common interface functions
         std::size_t hash() const;
@@ -188,18 +189,25 @@ namespace gc {
         Value operator[](Value) const;
         explicit operator bool() const;
         
-        auto operator[](Value);
+        _deferred_subscript_t operator[](Value);
 
     }; // Value
     
+    struct _deferred_subscript_t {
+        Value& container;
+        Value key;
+        operator Value() &&;
+        _deferred_subscript_t&& operator=(Value desired) &&;
+        _deferred_subscript_t&& operator=(_deferred_subscript_t&& desired) &&;
+    };
+
     
     
     
     
     
         
-    void trace(Value a);
-    
+
     template<>
     struct Traced<Value> {
         
@@ -223,6 +231,7 @@ namespace gc {
         operator Value() const { return reinterpret_cast<const Value&>(*this); };
         std::size_t size() const;
         Value operator[](std::size_t pos) const;
+        Traced<Value>& operator[](std::size_t pos);
     };
     
     struct String {
@@ -231,9 +240,9 @@ namespace gc {
             const HeapString* _pointer;
             Value::_short_string_t _string;
         };
-        int _masked_tag() const { return _tag & 15; }
-        bool _is_pointer() const { return _masked_tag() == Value::POINTER; }
-        bool _is_short_string() const { return _masked_tag() == Value::SHORT_STRING; }
+        int _discriminant() const { return _tag & Value::MASK; }
+        bool _is_pointer() const { return _discriminant() == Value::POINTER; }
+        bool _is_short_string() const { return _discriminant() == Value::SHORT_STRING; }
         const HeapString* _as_pointer() const {
             assert(_is_pointer());
             return _pointer;
@@ -248,16 +257,15 @@ namespace gc {
     
     struct Table {
         const HeapTable* _pointer;
-        void _invariant() { assert(_pointer); }
-        // Even empty Tables have identity;
-        // to be a table one must be backed by a HeapTable
         Table();
         operator Value() const { return reinterpret_cast<const Value&>(*this); };
+        Value operator[](Value key) const;
+        Traced<Value>& operator[](Value key);
         bool contains(Value key) const;
-        Value erase(Value key);
-        Value find(Value key) const;
-        Value insert_or_assign(Value key, Value value);
         std::size_t size() const;
+        Value find(Value key) const;
+        Value erase(Value key);
+        Value insert_or_assign(Value key, Value value);
     };
     
     
@@ -267,8 +275,8 @@ namespace gc {
     
     
     
-    
-    
+    void trace(Value a);
+
     
     
     
@@ -280,7 +288,6 @@ namespace gc {
     
     
 
-    // TODO: operator[]() is quite a pig
 
     // will hold a container ref and a key, and resolve to something depending
     // on how it is used (as a get, a set, or a read-modity-write)
@@ -363,6 +370,7 @@ namespace gc {
         // built-in functions
         virtual String str() const;
                 
+        // common interface
         virtual std::size_t size() const;
         virtual bool contains(Value) const;
         virtual Value find(Value) const;
@@ -372,7 +380,7 @@ namespace gc {
     };
     
     
-    struct LeafHeapValue : HeapValue {
+    struct HeapLeaf : HeapValue {
         void _gc_shade() const override final {
             _gc_shade_for_leaf(&this->_gc_color);
         }
@@ -403,7 +411,7 @@ namespace gc {
     
     
     // TODO: upgrade to array of limbs of arbitrary precision integer
-    struct HeapInt64 : LeafHeapValue {
+    struct HeapInt64 : HeapLeaf {
         
         std::int64_t _integer;
         
@@ -417,7 +425,7 @@ namespace gc {
         
         explicit HeapInt64(std::int64_t z)
         : _integer(z) {
-            printf("%p new %" PRId64 "\n", this, _integer);
+            // printf("%p new %" PRId64 "\n", this, _integer);
         }
         
         std::int64_t as_int64_t() const {
@@ -425,12 +433,12 @@ namespace gc {
         }
         
         virtual ~HeapInt64() {
-            printf("%p del %" PRId64 "\n", this, _integer);
+            // printf("%p del %" PRId64 "\n", this, _integer);
         }
         
     };
     
-    struct HeapString : LeafHeapValue {
+    struct HeapString : HeapLeaf {
         
         std::size_t _hash;
         std::size_t _size;
@@ -446,10 +454,10 @@ namespace gc {
             p->_hash = hash;
             p->_size = v.size();
             std::memcpy(p->_bytes, v.data(), v.size());
-            printf("%p new \"%.*s\"%s\n",
-                   p,
-                   std::min((int)p->_size, 48), p->_bytes,
-                   ((p->_size > 48) ? "..." : ""));
+//            printf("%p new \"%.*s\"%s\n",
+//                   p,
+//                   std::min((int)p->_size, 48), p->_bytes,
+//                   ((p->_size > 48) ? "..." : ""));
             return p;
         }
         
@@ -470,7 +478,7 @@ namespace gc {
         }
         
         virtual ~HeapString() {
-            printf("%p del \"%.*s\"\n", this, (int)_size, _bytes);
+            // printf("%p del \"%.*s\"\n", this, (int)_size, _bytes);
         }
         
     }; // struct ObjectString
@@ -649,31 +657,8 @@ namespace gc {
     
     String operator""_v(const char* s, std::size_t n);
     
-    
-    inline auto Value::operator[](Value key) {
-        struct DeferredSubscript {
-            Value& container;
-            Value key;
-            operator Value() const {
-                return container._pointer->find(key);
-            }
-            void operator=(Value desired) {
-                container._pointer->insert_or_assign(key, desired);
-            }
-            void operator=(DeferredSubscript&& desired) {
-                operator=((Value)desired);
-            }
-        };
-        return DeferredSubscript{*this, key};
-    }
-
-    
-    inline void shade(Value value) {
-        if (value._is_pointer()) {
-            shade(value._as_pointer());
-        }
-    }
-   
+    void shade(Value value);
+       
 } // namespace gc
 
 #endif /* value_hpp */

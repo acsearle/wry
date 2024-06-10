@@ -5,6 +5,8 @@
 //  Created by Antony Searle on 26/5/2024.
 //
 
+#include <os/os_sync_wait_on_address.h>
+
 #include <thread>
 
 #include "gc.hpp"
@@ -97,7 +99,7 @@ namespace gc {
         std::atomic<TaggedPtr<LogNode>> log_stack_head;
         
         void release() {
-            if (!reference_count_minus_one.fetch_sub(1, std::memory_order_release)) {
+            if (reference_count_minus_one.fetch_sub(1, std::memory_order_release) == 0) {
                 (void) reference_count_minus_one.load(std::memory_order_acquire);
                 delete this;
             }
@@ -201,11 +203,11 @@ namespace gc {
         
     };
     
-    inline Collector* global_collector = nullptr;
+    Collector* global_collector = nullptr;
     
     
     
-    inline void Mutator::shade(const Object* object) {
+    void Mutator::shade(const Object* object) {
         if (object) {
             object->_gc_shade();
         }
@@ -231,7 +233,7 @@ namespace gc {
     // a strong reference.
     
     
-    inline void* Mutator::_allocate(std::size_t bytes) {
+    void* Mutator::_allocate(std::size_t bytes) {
         Object* object = (Object*) malloc(bytes);
         // Safety: we don't use or publish these pointers until we handshake
         // by which time the objects are fully constructed
@@ -240,7 +242,7 @@ namespace gc {
         return object;
     }
     
-    inline void Mutator::_white_to_gray(Atomic<Color>& color) {
+    void Mutator::_white_to_gray(Atomic<Color>& color) {
         Color expected = this->palette.white;
         if (color.compare_exchange_strong(expected,
                                           this->palette.gray)) {
@@ -248,14 +250,14 @@ namespace gc {
         }
     }
     
-    inline bool Mutator::_white_to_black(Atomic<Color>& color) const {
+    bool Mutator::_white_to_black(Atomic<Color>& color) const {
         std::intptr_t expected = this->palette.white;
         return color.compare_exchange_strong(expected,
                                              this->palette.black);
     }
     
     
-    inline void Collector::visit(const Object* object) {
+    void Collector::visit(const Object* object) {
         if (object)
             object->_gc_trace();
     }
@@ -271,19 +273,19 @@ namespace gc {
     }
     
     
-    inline void* Object::operator new(std::size_t count) {
+    void* Object::operator new(std::size_t count) {
         return Mutator::get()._allocate(count);
     }
     
-    inline Object::Object()
+    Object::Object()
     : _gc_color(Mutator::get().palette.alloc) {
     }
     
-    inline Object::~Object() {
+    Object::~Object() {
         // printf("%#" PRIxPTR " del Object\n", (std::uintptr_t) this);
     }
     
-    inline std::size_t Object::gc_hash() const {
+    std::size_t Object::gc_hash() const {
         return std::hash<const void*>()(this);
     }
     
@@ -347,8 +349,12 @@ namespace gc {
                                                                  std::memory_order_acquire))
                 break;
         }
-        if (expected.tag == Channel::COLLECTOR_DID_REQUEST_WAKEUP)
-            _channel->log_stack_head.notify_one();
+        if (expected.tag == Channel::COLLECTOR_DID_REQUEST_WAKEUP) {
+            // _channel->log_stack_head.notify_one();
+            os_sync_wake_by_address_any(&(_channel->log_stack_head),
+                                        8,
+                                        OS_SYNC_WAKE_BY_ADDRESS_NONE);
+        }
     }
 
     void Mutator::handshake() {
@@ -459,7 +465,12 @@ namespace gc {
                 }
                 case Channel::COLLECTOR_DID_REQUEST_WAKEUP:
                     // We are trying to sleep
-                    channel->log_stack_head.wait(expected, std::memory_order_relaxed);
+                    // channel->log_stack_head.wait(expected, std::memory_order_relaxed);
+                    // __ulock_wait();
+                    os_sync_wait_on_address(&(channel->log_stack_head),
+                                            expected._value,
+                                            8,
+                                            OS_SYNC_WAIT_ON_ADDRESS_NONE);
                     goto alpha;
                 case Channel::MUTATOR_DID_PUBLISH_LOGS: {
                     // Mutator handshaked us
@@ -478,7 +489,6 @@ namespace gc {
                 case Channel::MUTATOR_DID_LEAVE: {
                     this->_consume_logs(expected.ptr);
                     channel->release();
-                    std::exchange(channel, nullptr)->release();
                     break;
                 }
                 default:
@@ -524,7 +534,7 @@ namespace gc {
         
         for (;;) {
             
-            printf("Collector A\n");
+            // printf("Collector A\n");
 
             
             // All mutators are allocating WHITE
@@ -630,42 +640,6 @@ namespace gc {
     
     
     
-    define_test("gc") {
-        std::thread([](){
-            global_collector = new Collector;
-            Palette p;
-            p.white = 0;
-            p.alloc = 0;
-            global_collector->_atomic_palette.store(p, std::memory_order_release);
-            auto old = Mutator::_exchange(global_collector);
-            assert(!old);
-
-            std::thread([](){
-                auto m = new Mutator;
-                auto old = Mutator::_exchange(m);
-                assert(!old);
-                m->enter();
-                for (;;) {
-                    printf("Mutator A\n");
-                    // auto p = new(m->_allocate(sizeof(Object))) Object(*m);
-                    auto p = new Object;
-                    
-                    foo();
-                    
-                    m->handshake();
-                    p->_gc_shade();
-                    std::this_thread::sleep_for(std::chrono::milliseconds{10});
-                }
-                m->leave();
-            }).detach();
-            
-            global_collector->collect();
-            
-        }).detach();
-    };
-    
-    
-    
     
     
     void shade(const Object* object) {
@@ -704,6 +678,48 @@ namespace gc {
                                               desired,
                                               std::memory_order_relaxed,
                                               std::memory_order_relaxed);
+    }
+    
+    
+    
+    void initialize_collector() {
+        global_collector = new gc::Collector;
+        gc::Palette p;
+        p.white = 0;
+        p.alloc = 0;
+        global_collector->_atomic_palette.store(p, std::memory_order_release);
+        auto old = gc::Mutator::_exchange(global_collector);
+        assert(!old);
+        std::thread([](){
+            global_collector->collect();
+        }).detach();
+    }
+    
+    define_test("gc") {
+        std::thread([](){
+            auto m = new Mutator;
+            auto old = Mutator::_exchange(m);
+            assert(!old);
+            m->enter();
+            for (int i = 0; i != -1; ++i) {
+                // printf("Mutator A\n");
+                // auto p = new(m->_allocate(sizeof(Object))) Object(*m);
+                auto p = new Object;
+                
+                foo();
+                
+                m->handshake();
+                p->_gc_shade();
+                // std::this_thread::sleep_for(std::chrono::milliseconds{10});
+            }
+            m->leave();
+        }).detach();
+    };
+    
+    void shade(const Object* p, const Object* q) {
+        // TODO: share TLS lookup
+        shade(p);
+        shade(q);
     }
     
 } // namespace gc

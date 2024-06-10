@@ -102,32 +102,31 @@ namespace gc {
     // Fundamental garbage collected thing
     //
     // TODO: Combine Color with something else to avoid overhead
+    // TODO: is gc::Object distinct from HeapValue
+    // TODO: how can we have static lifetime participants?
 
     struct alignas(16) Object {
+        
+        static void* operator new(std::size_t count);
+        static void* operator new[](std::size_t count) = delete;
+
+        mutable Atomic<Color> _gc_color;
 
         Object();
         Object(const Object&);
+        Object(Object&&);
         virtual ~Object();
+        Object& operator=(const Object&) = delete;
+        Object& operator=(Object&&) = delete;
+
         virtual std::size_t gc_bytes() const;
         virtual void gc_enumerate() const;
-
-        // Hash is arguably nothing to do with GC, and should be in HeapValue?
         virtual std::size_t gc_hash() const;
 
-        static void* operator new(std::size_t count);
-        static void* operator new[](std::size_t count) = delete;
-        mutable Atomic<Color> _gc_color;
         virtual void _gc_shade() const;
         virtual void _gc_trace() const;
         
     }; // struct Object
-
-    // Services
-    
-    void shade(const Object*);
-    void* allocate(std::size_t count);
-    void trace(const Object*);
-    void _gc_shade_for_leaf(Atomic<Color>* target);
     
     template<typename T> struct Traced;
     
@@ -153,11 +152,25 @@ namespace gc {
     };
     
     template<typename T>
-    struct Atomic<Traced<T>> {
+    struct Traced<Atomic<T*>> {
         std::atomic<T*> _ptr;
-        // ...
+        T* load(std::memory_order order) const;
+        void store(T* desired, std::memory_order order);
+        T* exchange(T* desired, std::memory_order order);
+        bool compare_exchange_weak(T*& expected, T* desired, std::memory_order success, std::memory_order failure);
+        bool compare_exchange_strong(T*& expected, T* desired, std::memory_order success, std::memory_order failure);
     };
     
+    
+    
+    // Services
+    
+    void shade(const Object*);
+    void shade(const Object*, const Object*);
+    void* allocate(std::size_t count);
+    void trace(const Object*);
+    void _gc_shade_for_leaf(Atomic<Color>* target);
+
     
     
     
@@ -175,8 +188,7 @@ namespace gc {
     void write_barrier(std::atomic<T*>* target, T* desired) {
         T* discovered = target->exchange(desired, std::memory_order_release);
         using gc::shade;
-        shade(desired);
-        shade(discovered);
+        shade(discovered, desired);
     }
 
     template<typename T>
@@ -184,6 +196,14 @@ namespace gc {
         T* discovered = target->exchange(nullptr, std::memory_order_release);
         using gc::shade;
         shade(discovered);
+    }
+    
+    template<typename T>
+    T* read_write_barrier(std::atomic<T*>* target, T* desired) {
+        T* discovered = target->exchange(desired, std::memory_order_release);
+        using gc::shade;
+        shade(discovered, desired);
+        return discovered;
     }
 
     
@@ -265,9 +285,37 @@ namespace gc {
     
     
     
+    template<typename T>
+    T* Traced<Atomic<T*>>::load(std::memory_order order) const {
+        return _ptr.load(order);
+    }
+        
+    template<typename T>
+    void Traced<Atomic<T*>>::store(T* desired, std::memory_order order) {
+        (void) exchange(desired, order);
+    }
+
+    template<typename T>
+    [[nodiscard]] T* Traced<Atomic<T*>>::exchange(T* desired, std::memory_order order) {
+        T* discovered = _ptr.exchange(desired, order);
+        shade(discovered, desired);
+        return discovered;
+    }
     
+    template<typename T>
+    bool Traced<Atomic<T*>>::compare_exchange_weak(T*& expected, T* desired, std::memory_order success, std::memory_order failure) {
+        return (_ptr.compare_exchange_weak(expected, desired, success, failure)
+                && (shade(expected, desired), true));
+    }
+
+    template<typename T>
+    bool Traced<Atomic<T*>>::compare_exchange_strong(T*& expected, T* desired, std::memory_order success, std::memory_order failure) {
+        return (_ptr.compare_exchange_strong(expected, desired, success, failure)
+                && (shade(expected, desired), true));
+    }
+
     
-    
+
     
     
     

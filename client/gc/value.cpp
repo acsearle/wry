@@ -53,7 +53,7 @@ namespace gc {
     
     
     std::string_view String::as_string_view() const {
-        switch (_masked_tag()) {
+        switch (_discriminant()) {
             case Value::POINTER: {
                 return _pointer->as_string_view();
             }
@@ -234,14 +234,7 @@ namespace gc {
         assert(result.is_boolean());
         return result;
     }
-    
-    Value Value::make_error() {
-        __builtin_trap();
-        Value result;
-        result._tag = ERROR;
-        return result;
-    }
-    
+        
     
     
     
@@ -438,12 +431,12 @@ namespace gc {
         explicit IndirectFixedCapacityValueArray(std::size_t count)
         : _capacity(count)
         , _storage((Traced<Value>*) calloc(count, sizeof(Traced<Value>))) {
-            printf("%p new IndirectFixedCapacityValueArray[%zd]\n", this, _capacity);
+            // printf("%p new IndirectFixedCapacityValueArray[%zd]\n", this, _capacity);
         }
         
         virtual ~IndirectFixedCapacityValueArray() override {
             free(_storage);
-            printf("%p del IndirectFixedCapacityValueArray[%zd]\n", this, _capacity);
+            // printf("%p del IndirectFixedCapacityValueArray[%zd]\n", this, _capacity);
         }
         
         virtual std::size_t gc_bytes() const override {
@@ -473,11 +466,11 @@ namespace gc {
         , _capacity(0)
         , _storage(0)
         , _storage_manager(nullptr) {
-            printf("%p new Value[]\n", this);
+            // printf("%p new Value[]\n", this);
         }
         
         virtual ~HeapArray() override {
-            printf("%p del Value[%zd]\n", this, _size);
+            // printf("%p del Value[%zd]\n", this, _size);
         }
         
         virtual std::size_t gc_bytes() const override {
@@ -607,10 +600,10 @@ namespace gc {
             Traced<Value> value;
             
             [[nodiscard]] Value entomb() {
-                key = Value::make_tombstone();
+                this->key = Value::make_tombstone();
                 // TODO: exchange
-                Value old = value;
-                value = Value::make_null();
+                Value old = this->value;
+                this->value = Value::make_null();
                 return old;
             }
             
@@ -649,6 +642,11 @@ namespace gc {
             }
             
             void clear_n_tombstones_before_i(std::size_t n, std::size_t i) {
+                {
+                    Entry* pe = _storage + i;
+                    [[maybe_unused]] Value ki = pe->key;
+                    assert(ki.is_null());
+                }
                 while (n--) {
                     i = prev(i);
                     Entry* pe = _storage + i;
@@ -763,6 +761,40 @@ namespace gc {
                 }
             }
             
+            void _invariant() {
+                if (!_storage)
+                    return;
+                // scan the whole thing
+                std::size_t keys = 0;
+                std::size_t nulls = 0;
+                std::size_t tombstones = 0;
+                for (std::size_t i = 0; i != _mask + 1; ++i) {
+                    Entry* pe = _storage + i;
+                    Value ki = pe->key;
+                    Value vi = pe->value;
+                    assert(!vi._is_tombstone());
+                    if (ki.is_null()) {
+                        ++nulls;
+                        assert(vi.is_null());
+                    } else if (ki._is_tombstone()) {
+                        ++tombstones;
+                        assert(vi.is_null());
+                    } else {
+                        ++keys;
+                        assert(!vi.is_null());
+                    }
+                }
+                assert(keys + nulls + tombstones == _mask + 1);
+                if (keys != _count) {
+                    for (std::size_t i = 0; i != _mask + 1; ++i) {
+                        Entry* pe = _storage + i;
+                        Value ki = pe->key;
+                        printf("[%zd] = { %llx, ...}\n", i, ki._enumeration);
+                    }
+                }
+                assert(keys == _count);
+            }
+            
         };
         
         mutable InnerTable _alpha;
@@ -771,7 +803,7 @@ namespace gc {
         
         
         virtual ~HeapTable() override {
-            printf("%p del HeapTable[%zd]\n", this, _alpha._count + _beta._count);
+            // printf("%p del HeapTable[%zd]\n", this, _alpha._count + _beta._count);
         }
         
         virtual std::size_t gc_bytes() const override {
@@ -787,7 +819,28 @@ namespace gc {
         
         
         void _invariant() const {
-            assert(_beta._grace >= 2 * _alpha._count);
+            _alpha._invariant();
+            _beta._invariant();
+            /*
+            if (_beta._storage) {
+                for (int i = 0; i != _alpha._mask + 1; ++i) {
+                    Entry* pe = _alpha._storage + i;
+                    Value ki = pe->key;
+                    if (ki.is_null() || ki._is_tombstone())
+                        continue;
+                    Value vj = _beta.find(ki.hash(), ki);
+                    assert(vj.is_null());
+                }
+                for (int i = 0; i != _beta._mask + 1; ++i) {
+                    Entry* pe = _beta._storage + i;
+                    Value ki = pe->key;
+                    if (ki.is_null() || ki._is_tombstone())
+                        continue;
+                    Value vj = _alpha.find(ki.hash(), ki);
+                    assert(vj.is_null());
+                }
+            }
+             */
         }
         
         
@@ -808,6 +861,7 @@ namespace gc {
         }
         
         Value erase(Value key) const override {
+            //_invariant();
             std::size_t h = key.hash();
             if (_alpha._count) {
                 Value v = _alpha.erase(h, key);
@@ -826,6 +880,7 @@ namespace gc {
         }
         
         Value insert_or_assign(Value key, Value value) const override {
+            // _invariant();
             // printf("insert_or_assign (%lld, %lld)\n", key._integer >> 4, value._integer >> 4);
             std::size_t h = key.hash();
             // printf("with hash %zd\n", h);
@@ -833,12 +888,26 @@ namespace gc {
             // printf("with alpha %zd/%zd, beta %zd/%zd\n", _alpha._count, _alpha._grace, _beta._count, _beta._grace);
             
             if (_alpha._grace) {
-                return _alpha.insert_or_assign(h, key, value);
+                _partition = 0;
+                Value x = _alpha.insert_or_assign(h, key, value);
+                // _invariant();
+                return x;
             }
             // _alpha is terminal
+            
+            {
+                for (std::size_t i = 0; i != _partition; ++i) {
+                    Entry* pe = _alpha._storage + i;
+                    Value ki = pe->key;
+                    assert(ki.is_null() || ki._is_tombstone());
+                }
+            }
+            
+            
             if (_alpha._count) {
                 // _alpha is not yet empty
                 Value u = _alpha.try_assign(h, key, value);
+                // _invariant();
                 if (!u.is_null())
                     return u;
                 // we have proved that key is not in alpha
@@ -876,16 +945,21 @@ namespace gc {
                 _beta._grace = new_grace;
                 _beta._mask = new_capacity - 1;
             }
+            // _invariant();
             Value ultimate = _beta.insert_or_assign(h, key, value);
+            // _invariant();
             while (_alpha._count) {
                 Entry* pe = _alpha._storage + (_partition++);
                 Value ki = pe->key;
                 if (ki.is_null() || ki._is_tombstone())
                     continue;
+                // _invariant();
                 Value vi = pe->entomb();
                 _alpha._count--;
+                // _invariant();
                 assert(_beta._grace);
                 _beta.must_insert(ki.hash(), ki, vi);
+                // _invariant();
                 // printf("Evacuated (%lld, %lld)\n", ki._integer >> 4, vi._integer >> 4);
                 break;
             }
@@ -1009,7 +1083,9 @@ namespace gc {
             assert(s.size() == i);
             assert(!s.contains(v[i]));
             assert(s[v[i]] == Value::make_null());
+            // t._pointer->_invariant();
             s[v[i]] = v[i];
+            // t._pointer->_invariant();
             assert(t.size() == i + 1);
             assert(t.contains(v[i]));
             assert(s[v[i]] == v[i]);
@@ -1086,10 +1162,16 @@ namespace gc {
     Traced<Value>::Traced(const Traced<Value>& value)
     : Traced(value.get()) {
     }
+    
+    void shade(Value a, Value b) {
+        shade(a);
+        shade(b);
+    }
+    
 
     Traced<Value>& Traced<Value>::operator=(const Value& desired) {
-        shade(desired);
-        shade(this->_value.exchange(desired, std::memory_order_release));
+        Value discovered = this->_value.exchange(desired, std::memory_order_release);
+        shade(desired, discovered);
         return *this;
     }
 
@@ -1139,7 +1221,7 @@ namespace gc {
     
     
     std::size_t String::size() const {
-        switch (_masked_tag()) {
+        switch (_discriminant()) {
             case Value::POINTER:
                 assert(_pointer);
                 return _pointer->size();
@@ -1193,6 +1275,38 @@ namespace gc {
                 return false;
         }
     }
+    
+    
+    _deferred_subscript_t Value::operator[](Value key) {
+        return {*this, key};
+    }
+    
+    
+    void shade(Value value) {
+        if (value._is_pointer()) {
+            shade(value._as_pointer());
+        }
+    }
+    
+    
+    
+    _deferred_subscript_t::operator Value() && {
+        return container._pointer->find(key);
+    }
+    
+    _deferred_subscript_t&& _deferred_subscript_t::operator=(Value desired) && {
+        container._pointer->insert_or_assign(key, desired);
+        return std::move(*this);
+    }
+    
+    _deferred_subscript_t&& _deferred_subscript_t::operator=(_deferred_subscript_t&& desired) && {
+        return std::move(*this).operator=((Value)std::move(desired));
+    }
+
+    
+    constexpr Value Value::make_error() { Value result; result._enumeration = ERROR; return result; }
+    constexpr Value Value::make_null() { Value result; result._enumeration = 0; return result; }
+    constexpr Value Value::make_tombstone() { Value result; result._enumeration = TOMBSTONE; return result; }
 
     
 } // namespace gc
