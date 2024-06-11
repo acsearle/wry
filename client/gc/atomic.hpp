@@ -21,11 +21,6 @@
 
 namespace gc {
     
-    // Mostly-compatible with std::atomic
-    //
-    // - all clang builtins
-    // - shorter order
-    
 
     enum class Order {
         RELAXED = __ATOMIC_RELAXED,
@@ -37,9 +32,17 @@ namespace gc {
     template<typename T>
     struct Atomic {
         
+        static_assert(sizeof(T) <= 8);
+        
+        // alignas(sizeof(T))?
         T value;
         
-        T load(Order order) {
+        constexpr Atomic() : value() {}
+        explicit constexpr Atomic(T desired) : value(desired) {}
+        Atomic(const Atomic&) = delete;
+        Atomic& operator=(const Atomic&) = delete;
+        
+        T load(Order order) const {
             T discovered;
             __atomic_load(&value, &discovered, (int)order);
             return discovered;
@@ -100,11 +103,13 @@ return __atomic_##Y##_fetch (&value, operand, (int)order);\
 #if defined(__APPLE__)
         
         [[nodiscard]] T wait(T expected, Order order) {
+            uint64_t buffer;
+            __builtin_memcpy(&buffer, &expected, sizeof(T));
             for (;;) {
                 T discovered = load(order);
-                if (__builtin_memcmp(&expected, &discovered, sizeof(T)))
+                if (__builtin_memcmp(&buffer, &discovered, sizeof(T)))
                     return discovered;
-                int result = os_sync_wait_on_address(&value, expected, sizeof(T), OS_SYNC_WAIT_ON_ADDRESS_NONE);
+                int result = os_sync_wait_on_address(&value, buffer, sizeof(T), OS_SYNC_WAIT_ON_ADDRESS_NONE);
                 if ((result < 0) && !((errno == EINTR) || (errno == EFAULT))) {
                     perror(__PRETTY_FUNCTION__);
                     abort();

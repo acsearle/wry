@@ -16,6 +16,7 @@
 #include <deque>
 #include <vector>
 
+#include "atomic.hpp"
 #include "bag.hpp"
 #include "utility.hpp"
 #include "../client/utility.hpp"
@@ -91,14 +92,6 @@ namespace gc {
     // TODO: Extend interfaces to accept a context to avoids TLS lookup
 
     using Color = std::intptr_t;
-
-    template<>
-    struct Atomic<Color> {
-        std::atomic<std::intptr_t> _color;
-        explicit Atomic(Color color);
-        Color load() const;
-        bool compare_exchange_strong(Color& expected, Color desired);
-    };
     
     // Fundamental garbage collected thing
     //
@@ -149,17 +142,17 @@ namespace gc {
         bool operator==(const Traced& other) const;
         auto operator<=>(const Traced& other) const;
         T* get() const;
-        std::atomic<T*> _ptr;
+        Atomic<T*> _ptr;
     };
     
     template<typename T>
     struct Traced<Atomic<T*>> {
-        std::atomic<T*> _ptr;
-        T* load(std::memory_order order) const;
-        void store(T* desired, std::memory_order order);
-        T* exchange(T* desired, std::memory_order order);
-        bool compare_exchange_weak(T*& expected, T* desired, std::memory_order success, std::memory_order failure);
-        bool compare_exchange_strong(T*& expected, T* desired, std::memory_order success, std::memory_order failure);
+        Atomic<T*> _ptr;
+        T* load(Order order) const;
+        void store(T* desired, Order order);
+        T* exchange(T* desired, Order order);
+        bool compare_exchange_weak(T*& expected, T* desired, Order success, Order failure);
+        bool compare_exchange_strong(T*& expected, T* desired, Order success, Order failure);
     };
     
     
@@ -180,32 +173,34 @@ namespace gc {
     
     
     
+    /*
     template<typename T>
-    [[nodiscard]] T* read_barrier(const std::atomic<T*>* target) {
-        return target->load(std::memory_order_relaxed);
+    [[nodiscard]] T* read_barrier(const Atomic<T*>* target) {
+        return target->load(Order::RELAXED);
     }
-    
+     
     template<typename T>
-    void write_barrier(std::atomic<T*>* target, T* desired) {
-        T* discovered = target->exchange(desired, std::memory_order_release);
+    void write_barrier(Atomic<T*>* target, T* desired) {
+        T* discovered = target->exchange(desired, Order::RELEASE);
         using gc::shade;
         shade(discovered, desired);
     }
 
     template<typename T>
-    void write_barrier(std::atomic<T*>* target, std::nullptr_t) {
-        T* discovered = target->exchange(nullptr, std::memory_order_release);
+    void write_barrier(Atomic<T*>* target, std::nullptr_t) {
+        T* discovered = target->exchange(nullptr, Order::RELEASE);
         using gc::shade;
         shade(discovered);
     }
     
     template<typename T>
-    T* read_write_barrier(std::atomic<T*>* target, T* desired) {
-        T* discovered = target->exchange(desired, std::memory_order_release);
+    T* read_write_barrier(Atomic<T*>* target, T* desired) {
+        T* discovered = target->exchange(desired, Order::RELEASE);
         using gc::shade;
         shade(discovered, desired);
         return discovered;
     }
+     */
 
     
     
@@ -237,26 +232,25 @@ namespace gc {
         // Safety:
         //     An atomic::exchange is not used here because this_thread is
         // the only writer.
-        T* discovered = _ptr.load(std::memory_order_acquire);
-        _ptr.store(other, std::memory_order_release);
+        T* discovered = _ptr.load(Order::ACQUIRE);
+        _ptr.store(other, Order::RELEASE);
         shade(discovered, other);
         return *this;
     }
     
     template<typename T>
     Traced<T*>& Traced<T*>::operator=(std::nullptr_t) {
-        write_barrier(&_ptr, nullptr);
-        // Safety: 
+        // Safety:
         //     See above.
-        T* discovered = _ptr.load(std::memory_order_relaxed);
-        _ptr.store(nullptr, std::memory_order_relaxed);
+        T* discovered = _ptr.load(Order::RELAXED);
+        _ptr.store(nullptr, Order::RELAXED);
         shade(discovered);
         return *this;
     }
     
     template<typename T>
     T* Traced<T*>::operator->() const {
-        return _ptr.load(std::memory_order_relaxed);
+        return _ptr.load(Order::RELAXED);
     }
     
     template<typename T>
@@ -291,36 +285,36 @@ namespace gc {
     
     template<typename T>
     T* Traced<T*>::get() const {
-        return _ptr.load(std::memory_order_relaxed);
+        return _ptr.load(Order::RELAXED);
     }
     
     
     
     template<typename T>
-    T* Traced<Atomic<T*>>::load(std::memory_order order) const {
+    T* Traced<Atomic<T*>>::load(Order order) const {
         return _ptr.load(order);
     }
         
     template<typename T>
-    void Traced<Atomic<T*>>::store(T* desired, std::memory_order order) {
+    void Traced<Atomic<T*>>::store(T* desired, Order order) {
         (void) exchange(desired, order);
     }
 
     template<typename T> [[nodiscard]]
-    T* Traced<Atomic<T*>>::exchange(T* desired, std::memory_order order) {
+    T* Traced<Atomic<T*>>::exchange(T* desired, Order order) {
         T* discovered = _ptr.exchange(desired, order);
         shade(discovered, desired);
         return discovered;
     }
     
     template<typename T>
-    bool Traced<Atomic<T*>>::compare_exchange_weak(T*& expected, T* desired, std::memory_order success, std::memory_order failure) {
+    bool Traced<Atomic<T*>>::compare_exchange_weak(T*& expected, T* desired, Order success, Order failure) {
         return (_ptr.compare_exchange_weak(expected, desired, success, failure)
                 && (shade(expected, desired), true));
     }
 
     template<typename T>
-    bool Traced<Atomic<T*>>::compare_exchange_strong(T*& expected, T* desired, std::memory_order success, std::memory_order failure) {
+    bool Traced<Atomic<T*>>::compare_exchange_strong(T*& expected, T* desired, Order success, Order failure) {
         return (_ptr.compare_exchange_strong(expected, desired, success, failure)
                 && (shade(expected, desired), true));
     }

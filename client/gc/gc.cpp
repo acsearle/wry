@@ -83,7 +83,7 @@ namespace gc {
         
         // A Channel is shared by one Mutator and one Collector.  They must
         // both release it before it is deleted.
-        std::atomic<std::intptr_t> reference_count_minus_one = 1;
+        Atomic<std::intptr_t> reference_count_minus_one{1};
         Channel* entrant_stack_next = nullptr;
         enum Tag : std::intptr_t {
             COLLECTOR_DID_REQUEST_NOTHING, // -> HANDSHAKE, LEAVE
@@ -94,11 +94,12 @@ namespace gc {
         };
         
         Palette palette;
-        std::atomic<TaggedPtr<LogNode>> log_stack_head;
+        // std::atomic<TaggedPtr<LogNode>> log_stack_head;
+        Atomic<TaggedPtr<LogNode>> log_stack_head;
         
         void release() {
-            if (reference_count_minus_one.fetch_sub(1, std::memory_order_release) == 0) {
-                (void) reference_count_minus_one.load(std::memory_order_acquire);
+            if (reference_count_minus_one.fetch_sub(1, Order::RELEASE) == 0) {
+                (void) reference_count_minus_one.load(Order::ACQUIRE);
                 delete this;
             }
         }
@@ -127,8 +128,8 @@ namespace gc {
         void _white_to_gray(Atomic<Color>& color);
         bool _white_to_black(Atomic<Color>& color) const;
         void shade(const Object*);
-        template<typename T> T* write(std::atomic<T*>& target, std::type_identity_t<T>* desired);
-        template<typename T> T* write(std::atomic<T*>& target, std::nullptr_t);
+        // template<typename T> T* write(std::atomic<T*>& target, std::type_identity_t<T>* desired);
+        // template<typename T> T* write(std::atomic<T*>& target, std::nullptr_t);
         
         
         
@@ -156,7 +157,7 @@ namespace gc {
     struct Collector : Mutator {
         
         void visit(const Object* object);
-        template<typename T> void visit(const std::atomic<T*>& object);
+        template<typename T> void visit(const Atomic<T*>& object);
         template<typename T> void visit(const Traced<T>& object);
         
         // Safety:
@@ -168,8 +169,10 @@ namespace gc {
         
         // lockfree channel
         // std::atomic<TaggedPtr<Channel>> channel_list_head;
-        std::atomic<Channel*> entrant_stack_head;
-        std::atomic<Palette> _atomic_palette;
+        Atomic<Channel*> entrant_stack_head;
+        // Atomic<Palette> _atomic_palette;
+        Atomic<Color> _atomic_white;
+        Atomic<Color> _atomic_alloc;
         
         std::vector<Channel*> _active_channels;
         
@@ -212,9 +215,10 @@ namespace gc {
     }
     
     // write barrier (non-trivial)
+    /*
     template<typename T>
     T* Mutator::write(std::atomic<T*>& target, std::type_identity_t<T>* desired) {
-        T* discovered = target.exchange(desired, std::memory_order_release);
+        T* discovered = target.exchange(desired, Order::RELEASE);
         this->shade(desired);
         this->shade(discovered);
         return discovered;
@@ -222,9 +226,10 @@ namespace gc {
     
     template<typename T>
     T* Mutator::write(std::atomic<T*>& target, std::nullptr_t) {
-        T* discovered = target.exchange(nullptr, std::memory_order_release);
+        T* discovered = target.exchange(nullptr, Order::RELEASE);
         this->shade(discovered);
     }
+     */
     
     
     // StrongPtr is a convenience wrapper that implements the write barrier for
@@ -243,7 +248,9 @@ namespace gc {
     void Mutator::_white_to_gray(Atomic<Color>& color) {
         Color expected = this->palette.white;
         if (color.compare_exchange_strong(expected,
-                                          this->palette.gray)) {
+                                          this->palette.gray,
+                                          Order::RELAXED,
+                                          Order::RELAXED)) {
             this->log.dirty = true;
         }
     }
@@ -251,7 +258,9 @@ namespace gc {
     bool Mutator::_white_to_black(Atomic<Color>& color) const {
         std::intptr_t expected = this->palette.white;
         return color.compare_exchange_strong(expected,
-                                             this->palette.black);
+                                             this->palette.black,
+                                             Order::RELAXED,
+                                             Order::RELAXED);
     }
     
     
@@ -261,13 +270,13 @@ namespace gc {
     }
     
     template<typename T>
-    void Collector::visit(const std::atomic<T*>& participant) {
-        this->visit(participant.load(std::memory_order_acquire));
+    void Collector::visit(const Atomic<T*>& participant) {
+        this->visit(participant.load(Order::ACQUIRE));
     }
     
     template<typename T>
     void Collector::visit(const Traced<T>& p) {
-        this->visit(p._ptr.load(std::memory_order_acquire));
+        this->visit(p._ptr.load(Order::ACQUIRE));
     }
     
     
@@ -322,15 +331,16 @@ namespace gc {
         _channel = new Channel;
         auto& target = global_collector->entrant_stack_head;
         auto& expected = _channel->entrant_stack_next;
-        expected = target.load(std::memory_order_acquire);
+        expected = target.load(Order::ACQUIRE);
         for (;;) {
             if (target.compare_exchange_strong(expected,
                                                _channel,
-                                               std::memory_order_release,
-                                               std::memory_order_acquire))
+                                               Order::RELEASE,
+                                               Order::ACQUIRE))
                 break;
         }
-        this->palette = global_collector->_atomic_palette.load(std::memory_order_relaxed);
+        this->palette.white = global_collector->_atomic_white.load(Order::RELAXED);
+        this->palette.alloc = global_collector->_atomic_alloc.load(Order::RELAXED);
     }
     
     void Mutator::_publish_with_tag(Channel::Tag tag) {
@@ -338,25 +348,27 @@ namespace gc {
         LogNode* node = new LogNode;
         node->splice(std::move(this->log));
         TaggedPtr<LogNode> desired(node, tag);
-        TaggedPtr<LogNode> expected(_channel->log_stack_head.load(std::memory_order_acquire));
+        TaggedPtr<LogNode> expected(_channel->log_stack_head.load(Order::ACQUIRE));
         for (;;) {
             node->log_stack_next = expected.ptr;
             if (_channel->log_stack_head.compare_exchange_strong(expected,
                                                                  desired,
-                                                                 std::memory_order_release,
-                                                                 std::memory_order_acquire))
+                                                                 Order::RELEASE,
+                                                                 Order::ACQUIRE))
                 break;
         }
         if (expected.tag == Channel::COLLECTOR_DID_REQUEST_WAKEUP) {
-            // _channel->log_stack_head.notify_one();
+            _channel->log_stack_head.notify_one();
+            /*
             os_sync_wake_by_address_any(&(_channel->log_stack_head),
                                         8,
                                         OS_SYNC_WAKE_BY_ADDRESS_NONE);
+             */
         }
     }
 
     void Mutator::handshake() {
-        TaggedPtr<LogNode> expected(_channel->log_stack_head.load(std::memory_order_acquire));
+        TaggedPtr<LogNode> expected(_channel->log_stack_head.load(Order::ACQUIRE));
         switch (expected.tag) {
             case Channel::COLLECTOR_DID_REQUEST_NOTHING:
                 return;
@@ -382,15 +394,19 @@ namespace gc {
     
     
     void Collector::_set_alloc_to_black() {
-        Palette x = this->_atomic_palette.load(std::memory_order_relaxed);
-        x.alloc = x.black;
-        this->_atomic_palette.store(x, std::memory_order_relaxed);
+        //Palette x = this->_atomic_palette.load(Order::RELAXED);
+        //x.alloc = x.black;
+        //this->_atomic_palette.store(x, Order::RELAXED);
+        Color white = _atomic_white.load(Order::RELAXED);
+        Color black = white ^ 1;
+        _atomic_alloc.store(black, Order::RELAXED);
+        
     }
     
     void Collector::_swap_white_and_black() {
-        Palette x = this->_atomic_palette.load(std::memory_order_relaxed);
-        x.white ^= 1;;
-        this->_atomic_palette.store(x, std::memory_order_relaxed);
+        Color white = _atomic_white.load(Order::RELAXED);
+        Color black = white ^ 1;
+        _atomic_white.store(black, Order::RELAXED);
     }
 
     
@@ -404,9 +420,10 @@ namespace gc {
             Channel* channel = _active_channels.back();
             assert(channel);
             _active_channels.pop_back();
-            channel->palette = this->_atomic_palette.load(std::memory_order_relaxed);
+            channel->palette.white = this->_atomic_white.load(Order::RELAXED);
+            channel->palette.alloc = this->_atomic_white.load(Order::RELAXED);
             TaggedPtr<LogNode> desired = TaggedPtr<LogNode>(nullptr, Channel::COLLECTOR_DID_REQUEST_HANDSHAKE);
-            TaggedPtr<LogNode> old = channel->log_stack_head.exchange(desired, std::memory_order_acq_rel);
+            TaggedPtr<LogNode> old = channel->log_stack_head.exchange(desired, Order::ACQ_REL);
             switch (old.tag) {
                 case Channel::COLLECTOR_DID_REQUEST_NOTHING: {
                     survivors.push_back(channel);
@@ -445,7 +462,7 @@ namespace gc {
             _active_channels.pop_back();
             TaggedPtr<LogNode> expected;
         alpha:
-            expected = channel->log_stack_head.load(std::memory_order_acquire);
+            expected = channel->log_stack_head.load(Order::ACQUIRE);
         beta:
             switch (expected.tag) {
                 case Channel::COLLECTOR_DID_REQUEST_HANDSHAKE: {
@@ -454,8 +471,8 @@ namespace gc {
                     auto desired = TaggedPtr<LogNode>(nullptr, Channel::COLLECTOR_DID_REQUEST_WAKEUP);
                     if (channel->log_stack_head.compare_exchange_strong(expected,
                                                                         desired,
-                                                                        std::memory_order_relaxed,
-                                                                        std::memory_order_acquire)) {
+                                                                        Order::RELAXED,
+                                                                        Order::ACQUIRE)) {
                         expected = desired;
                     }
                     // Start over with the new state
@@ -463,21 +480,24 @@ namespace gc {
                 }
                 case Channel::COLLECTOR_DID_REQUEST_WAKEUP:
                     // We are trying to sleep
-                    // channel->log_stack_head.wait(expected, std::memory_order_relaxed);
+                    // channel->log_stack_head.wait(expected, Order::RELAXED);
                     // __ulock_wait();
+                    /*
                     os_sync_wait_on_address(&(channel->log_stack_head),
                                             expected._value,
                                             8,
                                             OS_SYNC_WAIT_ON_ADDRESS_NONE);
                     goto alpha;
+                     */
+                    expected = channel->log_stack_head.wait(expected, Order::ACQUIRE);
                 case Channel::MUTATOR_DID_PUBLISH_LOGS: {
                     // Mutator handshaked us
                     this->_consume_logs(expected.ptr);
                     auto desired = TaggedPtr<LogNode>(nullptr, Channel::COLLECTOR_DID_REQUEST_NOTHING);
                     if (channel->log_stack_head.compare_exchange_strong(expected,
                                                                         desired,
-                                                                        std::memory_order_relaxed,
-                                                                        std::memory_order_acquire)) {
+                                                                        Order::RELAXED,
+                                                                        Order::ACQUIRE)) {
                         survivors.push_back(channel);
                         break;
                     } else {
@@ -499,7 +519,7 @@ namespace gc {
     void Collector::_synchronize() {
         
         // Publish the atomic palette
-        Channel* head = entrant_stack_head.exchange(nullptr, std::memory_order_acq_rel);
+        Channel* head = entrant_stack_head.exchange(nullptr, Order::ACQ_REL);
         
         // All entrants after this point will use the published palette
         while (head) {
@@ -568,7 +588,7 @@ namespace gc {
                     // collector thread immediately restores it
                     Color expected = this->palette.gray;
                     Color desired = this->palette.black;
-                    if (object->_gc_color.compare_exchange_strong(expected, desired)) {
+                    if (object->_gc_color.compare_exchange_strong(expected, desired, Order::RELAXED, Order::RELAXED)) {
                         expected = desired;
                         object->gc_enumerate();
                     }
@@ -651,7 +671,9 @@ namespace gc {
         Color expected = m.palette.white;
         Color desired = m.palette.black;
         target->compare_exchange_strong(expected,
-                                        desired);
+                                        desired,
+                                        Order::RELAXED,
+                                        Order::RELAXED);
     }
     
     void trace(const Object* object) {
@@ -665,18 +687,7 @@ namespace gc {
     }
 
     
-    Atomic<Color>::Atomic(Color color) : _color(color) {}
-    
-    Color Atomic<Color>::load() const {
-        return _color.load(std::memory_order_relaxed);
-    }
-    
-    bool Atomic<Color>::compare_exchange_strong(Color& expected, Color desired) {
-        return _color.compare_exchange_strong(expected,
-                                              desired,
-                                              std::memory_order_relaxed,
-                                              std::memory_order_relaxed);
-    }
+
     
     
     
@@ -685,7 +696,9 @@ namespace gc {
         gc::Palette p;
         p.white = 0;
         p.alloc = 0;
-        global_collector->_atomic_palette.store(p, std::memory_order_release);
+        // global_collector->_atomic_palette.store(p, Order::RELEASE);
+        //global_collector->_atomic_white.store( = 0;
+        //global_collector->_atomic_alloc = 0;
         auto old = gc::Mutator::_exchange(global_collector);
         assert(!old);
         std::thread([](){

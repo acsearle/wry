@@ -1183,7 +1183,7 @@ namespace gc {
     
     
     Value Traced<Value>::get() const {
-        return _value.load(std::memory_order_relaxed);
+        return _value.load(Order::RELAXED);
     }
         
     Traced<Value>::Traced(const Value& value) 
@@ -1201,7 +1201,7 @@ namespace gc {
     
 
     Traced<Value>& Traced<Value>::operator=(const Value& desired) {
-        Value discovered = this->_value.exchange(desired, std::memory_order_release);
+        Value discovered = this->_value.exchange(desired, Order::RELEASE);
         shade(desired, discovered);
         return *this;
     }

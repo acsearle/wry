@@ -211,7 +211,7 @@ namespace gc {
     template<>
     struct Traced<Value> {
         
-        std::atomic<Value> _value;
+        Atomic<Value> _value;
 
         Traced() = default;
         Traced(const Traced& other);
@@ -642,7 +642,7 @@ namespace gc {
     
     
     inline void trace(const Traced<Value>& x) {
-        trace(x._value.load(std::memory_order_acquire));
+        trace(x._value.load(Order::ACQUIRE));
     }
 
     
