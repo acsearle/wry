@@ -226,6 +226,11 @@ namespace gc {
         Value get() const;
     };
     
+    template<>
+    struct Traced<Atomic<Value>> {
+        // ...
+    };
+    
     struct Array {
         HeapArray* _array;
         operator Value() const { return reinterpret_cast<const Value&>(*this); };

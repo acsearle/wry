@@ -36,15 +36,15 @@ namespace gc {
     template<typename T>
     struct Bag<T*> {
         
-        struct Slab {
+        struct Page {
             
             constexpr static std::size_t CAPACITY = (4096 - 16) / sizeof(T*);
             
-            Slab* next;
+            Page* next;
             std::size_t count;
             T* elements[CAPACITY];
             
-            Slab(Slab* next, T* item) {
+            Page(Page* next, T* item) {
                 this->next = next;
                 count = 1;
                 elements[0] = item;
@@ -77,10 +77,10 @@ namespace gc {
             
         };
         
-        static_assert(sizeof(Slab) == 4096);
+        static_assert(sizeof(Page) == 4096);
 
-        Slab* head;
-        Slab* tail;
+        Page* head;
+        Page* tail; // <-- tail permits splicing
         std::size_t count;
         
         Bag()
@@ -117,12 +117,12 @@ namespace gc {
         
         T* const& top() const {
             assert(count);
-            Slab* a = head;
+            Page* page = head;
             for (;;) {
-                assert(a);
-                if (a->count)
-                    return a->elements[a->count - 1];
-                a = a->next;
+                assert(page);
+                if (!page->empty())
+                    return page->top();
+                page = page->next;
             }
         }
         
@@ -140,7 +140,7 @@ namespace gc {
             ++count;
             assert(!head == !tail);
             if (!head || head->full()) {
-                head = new Slab(head, std::move(x));
+                head = new Page(head, std::move(x));
                 if (!tail)
                     tail = head;
                 return;
@@ -224,12 +224,12 @@ namespace gc {
     
     template<typename T>
     struct Deque {
-        struct alignas(4096) Slab {
+        struct alignas(4096) Page {
             static constexpr std::size_t CAPACITY = 4064 / sizeof(T);
             T* _begin;
             T* _end;
-            Slab* _prev;
-            Slab* _next;
+            Page* _prev;
+            Page* _next;
             T _elements[CAPACITY];
             
             void assert_invariant() {
@@ -238,7 +238,7 @@ namespace gc {
                 assert(_end <= _elements + CAPACITY);
             }
             
-            explicit Slab(T value, Slab* prev, Slab* next)
+            explicit Page(T value, Page* prev, Page* next)
             : _begin(_elements)
             , _end(_elements + 1)
             , _prev(prev)
@@ -284,16 +284,16 @@ namespace gc {
             
         };
         
-        static_assert(sizeof(Slab) == 4096);
+        static_assert(sizeof(Page) == 4096);
         
-        Slab* _head;
-        Slab* _tail;
+        Page* _head;
+        Page* _tail;
         std::size_t _count;
         
         void assert_invariant() {
             assert(!_head == !_tail);
             if (_head)
-                for (Slab* a = _head; a != _tail; a = a->_next)
+                for (Page* a = _head; a != _tail; a = a->_next)
                     a->assert_invariant();
         }
         
@@ -301,7 +301,7 @@ namespace gc {
             ++_count;
             assert(!_head == !_tail);
             if (!_tail || _tail->can_push_back()) {
-                _tail = new Slab(std::move(value), _tail, nullptr);
+                _tail = new Page(std::move(value), _tail, nullptr);
                 if (!_head)
                     _head = _tail;
             } else {
@@ -313,7 +313,7 @@ namespace gc {
             ++_count;
             assert(!_head == !_tail);
             if (!_head || _head->can_push_front()) {
-                _tail = new Slab(std::move(value), _tail, nullptr);
+                _tail = new Page(std::move(value), _tail, nullptr);
                 if (!_head)
                     _head = _tail;
             } else {

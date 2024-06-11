@@ -11,11 +11,10 @@
 #include <cassert>
 #include <cstdint>
 
+#include "atomic.hpp"
+
 namespace gc {
-    
-    template<typename T>
-    struct Atomic;
-        
+            
     template<typename T>
     struct TaggedPtr {
         

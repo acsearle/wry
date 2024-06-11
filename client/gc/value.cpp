@@ -10,6 +10,7 @@
 #include <numeric>
 #include <random>
 
+#include "../client/hash.hpp"
 #include "debug.hpp"
 #include "value.hpp"
 
@@ -49,9 +50,7 @@
 
 
 namespace gc {
-    
-    
-    
+            
     std::string_view String::as_string_view() const {
         switch (_discriminant()) {
             case Value::POINTER: {
@@ -181,7 +180,8 @@ namespace gc {
             case SMALL_INTEGER: {
                 std::int64_t a = _as_small_integer();
                 // std::hash<std::int64_t> is trivial (on libc++)
-                return std::hash<std::int64_t>()(a);
+                // return std::hash<std::int64_t>()(a);
+                return wry::hash(a);
             }
             case SHORT_STRING: {
                 return std::hash<std::string_view>()(_as_short_string());
@@ -617,6 +617,15 @@ namespace gc {
             std::size_t _count = 0;
             std::size_t _grace = 0;
             
+            void clear() {
+                _manager = nullptr;
+                _storage = nullptr;
+                _mask = -1;
+                _count = 0;
+                _grace = 0;
+            }
+
+            
             std::size_t next(std::size_t i) {
                 return (i + 1) & _mask;
             }
@@ -624,24 +633,37 @@ namespace gc {
             std::size_t prev(std::size_t i) {
                 return (i - 1) & _mask;
             }
-
-            Value find(std::size_t h, Value k) {
+            
+            Entry* pfind(std::size_t h, Value k) {
                 std::size_t i = h & _mask;
                 for (;; i = next(i)) {
-                    Entry* pe = _storage + i;
-                    Value ki = pe->key;
+                    Entry* p = _storage + i;
+                    Value ki = p->key;
+
+                    if (ki.is_null())
+                        // Does not exist
+                        return nullptr;
+
                     // TODO: equals-with-one-known-hash
-                    if (ki.is_null()) {
-                        return Value::make_null();
-                    }
-                    if (ki == k) {
-                        return pe->value;
-                    }
-                    // a different key, or a tombstone
+                    if (ki == k)
+                        // Found
+                        return p;
+
+                    // Another entry, or a tombstone
+                    
                 }
+            }
+
+            Value find(std::size_t h, Value k) {
+                Entry* p = pfind(h, k);
+                return p ? p->value : Value::make_null();
+
             }
             
             void clear_n_tombstones_before_i(std::size_t n, std::size_t i) {
+                // grace sticks to zero
+                if (!_grace)
+                    return;
                 {
                     Entry* pe = _storage + i;
                     [[maybe_unused]] Value ki = pe->key;
@@ -794,7 +816,7 @@ namespace gc {
                 }
                 assert(keys == _count);
             }
-            
+                        
         };
         
         mutable InnerTable _alpha;
@@ -888,7 +910,7 @@ namespace gc {
             // printf("with alpha %zd/%zd, beta %zd/%zd\n", _alpha._count, _alpha._grace, _beta._count, _beta._grace);
             
             if (_alpha._grace) {
-                _partition = 0;
+                // _partition = 0;
                 Value x = _alpha.insert_or_assign(h, key, value);
                 // _invariant();
                 return x;
@@ -974,29 +996,28 @@ namespace gc {
             return !find(key).is_null();
         }
         
+        Traced<Value>& find_or_insert_null(Value key) const {
+            std::size_t h = key.hash();
+            if (_alpha._count) {
+                Entry* p = _alpha.pfind(h, key);
+                if (p)
+                    return p->value;
+            }
+            if (_alpha._grace) {
+                
+            }
+            abort();
+        }
+        
+        void clear() {
+            _alpha.clear();
+            _beta.clear();
+            _partition = 0;
+        }
         
     };
     
-    
-    /*
-    struct Table {
-        
-        const HeapTable* _pointer;
-        
-        operator Value() const {
-            Value result;
-            result._enumeration = (std::uint64_t)_pointer;
-            return result;
-        };
-        
-        std::size_t size() const;
-        bool contains() const;
-        Value find(Value key) const;
-        Value erase(Value key);
-        Value insert_or_assign(Value key, Value value);
-        
-    };
-     */
+   
     
     std::size_t Table::size() const {
         return _pointer->size();
@@ -1016,6 +1037,16 @@ namespace gc {
     
     Value Table::insert_or_assign(Value key, Value value) {
         return _pointer->insert_or_assign(key, value);
+    }
+
+    
+    Value Table::operator[](Value key) const {
+        return _pointer->find(key);
+    }
+    
+    Traced<Value>& Table::operator[](Value key) {
+        return _pointer->find_or_insert_null(key);
+        
     }
 
 

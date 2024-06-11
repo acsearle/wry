@@ -5,8 +5,6 @@
 //  Created by Antony Searle on 26/5/2024.
 //
 
-#include <os/os_sync_wait_on_address.h>
-
 #include <thread>
 
 #include "gc.hpp"

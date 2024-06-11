@@ -18,6 +18,7 @@
 
 #include "bag.hpp"
 #include "utility.hpp"
+#include "../client/utility.hpp"
 
 namespace gc {
     
@@ -233,13 +234,23 @@ namespace gc {
     
     template<typename T>
     Traced<T*>& Traced<T*>::operator=(T* other) {
-        write_barrier(&_ptr, other);
+        // Safety:
+        //     An atomic::exchange is not used here because this_thread is
+        // the only writer.
+        T* discovered = _ptr.load(std::memory_order_acquire);
+        _ptr.store(other, std::memory_order_release);
+        shade(discovered, other);
         return *this;
     }
     
     template<typename T>
     Traced<T*>& Traced<T*>::operator=(std::nullptr_t) {
         write_barrier(&_ptr, nullptr);
+        // Safety: 
+        //     See above.
+        T* discovered = _ptr.load(std::memory_order_relaxed);
+        _ptr.store(nullptr, std::memory_order_relaxed);
+        shade(discovered);
         return *this;
     }
     
@@ -295,8 +306,8 @@ namespace gc {
         (void) exchange(desired, order);
     }
 
-    template<typename T>
-    [[nodiscard]] T* Traced<Atomic<T*>>::exchange(T* desired, std::memory_order order) {
+    template<typename T> [[nodiscard]]
+    T* Traced<Atomic<T*>>::exchange(T* desired, std::memory_order order) {
         T* discovered = _ptr.exchange(desired, order);
         shade(discovered, desired);
         return discovered;
