@@ -751,8 +751,8 @@ namespace gc {
     }
 
     bool HeapValue::contains(Value key) const {
-        switch (_gc_tag) {
-            case GCTag::HEAP_TABLE:
+        switch (_class) {
+            case CLASS_HEAP_TABLE:
                 return ((const HeapTable*) this)->contains(key);
             default:
                 return false;
@@ -760,8 +760,8 @@ namespace gc {
     }
 
     Value HeapValue::find(Value key) const {
-        switch (_gc_tag) {
-            case GCTag::HEAP_TABLE:
+        switch (_class) {
+            case CLASS_HEAP_TABLE:
                 return ((const HeapTable*) this)->find(key);
             default:
                 return Value::make_error();
@@ -769,8 +769,8 @@ namespace gc {
     }
 
     Value HeapValue::insert_or_assign(Value key, Value value) const {
-        switch (_gc_tag) {
-            case GCTag::HEAP_TABLE:
+        switch (_class) {
+            case CLASS_HEAP_TABLE:
                 return ((const HeapTable*) this)->insert_or_assign(key, value);
             default:
                 return Value::make_error();
@@ -778,8 +778,8 @@ namespace gc {
     }
 
     Value HeapValue::erase(Value key) const {
-        switch (_gc_tag) {
-            case GCTag::HEAP_TABLE:
+        switch (_class) {
+            case CLASS_HEAP_TABLE:
                 return ((const HeapTable*) this)->erase(key);
             default:
                 return Value::make_error();
@@ -788,15 +788,17 @@ namespace gc {
     }
 
     std::size_t HeapValue::size() const {
-        switch (_gc_tag) {
-            case GCTag::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
+        switch (_class) {
+            case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
                 return ((const IndirectFixedCapacityValueArray*) this)->_capacity;
-            case GCTag::HEAP_TABLE:
+            case CLASS_HEAP_TABLE:
                 return ((const HeapTable*) this)->size();
-            case GCTag::HEAP_STRING:
+            case CLASS_HEAP_STRING:
                 return ((const HeapString*) this)->size();
-            case GCTag::HEAP_INT64:
+            case CLASS_HEAP_INT64:
                 return 0;
+            default:
+                abort();
         }
     }
 
@@ -912,7 +914,7 @@ namespace gc {
      */
     
     HeapInt64::HeapInt64(std::int64_t z)
-    : HeapValue(GCTag::HEAP_INT64)
+    : HeapValue(CLASS_HEAP_INT64)
     , _integer(z) {
         // printf("%p new %" PRId64 "\n", this, _integer);
     }
@@ -927,7 +929,7 @@ namespace gc {
     
     
     HeapString::HeapString() 
-    : HeapValue(GCTag::HEAP_STRING) {        
+    : HeapValue(CLASS_HEAP_STRING) {        
     }
     
 } // namespace gc

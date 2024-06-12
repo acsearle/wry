@@ -23,39 +23,30 @@
 
 namespace gc {
     
-    
-
-    
-    // TODO: Extend interfaces to accept a context to avoids TLS lookup
-
-    enum class Color {
-        GRAY = 2,
-        RED = 3,
-    };
-    
-    // Fundamental garbage collected thing
-    //
-    // TODO: Combine Color with something else to avoid overhead
-    // TODO: is gc::Object distinct from HeapValue
-    // TODO: how can we have static lifetime participants?
-    
-    enum class GCTag : uint64_t {
-        INDIRECT_FIXED_CAPACITY_VALUE_ARRAY,
-        HEAP_TABLE,
-        HEAP_STRING,
-        HEAP_INT64
+    enum Class {
+        CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY,
+        CLASS_HEAP_TABLE,
+        CLASS_HEAP_STRING,
+        CLASS_HEAP_INT64
     };
 
-    struct alignas(16) Object {
+    enum Color {
+        COLOR_WHITE = 0,
+        COLOR_BLACK = 1,
+        COLOR_GRAY = 2,
+        COLOR_RED = 3,
+    };
+        
+    struct Object {
         
         static void* operator new(std::size_t count);
         static void* operator new[](std::size_t count) = delete;
 
-        GCTag _gc_tag;
+        Class _class;
         mutable Atomic<Color> _gc_color;
 
         Object() = delete;
-        explicit Object(GCTag t);
+        explicit Object(Class class_);
         Object(const Object&);
         Object(Object&&);
         ~Object();
@@ -64,7 +55,17 @@ namespace gc {
         
     }; // struct Object
     
-    template<typename T> struct Traced;
+    Color invert(Color);
+    void shade(const Object*);
+    void shade(const Object*, const Object*);
+    
+    void* allocate(std::size_t count);
+    
+    std::size_t gc_hash(const Object*);
+
+    
+    template<typename T> 
+    struct Traced;
     
     template<typename T>
     struct Traced<T*> {
@@ -99,15 +100,6 @@ namespace gc {
     
     
     
-    // Services
-    
-    void shade(const Object*);
-    void shade(const Object*, const Object*);
-
-    void* allocate(std::size_t count);
-
-    std::size_t gc_hash(const Object*);
-
     
     
     

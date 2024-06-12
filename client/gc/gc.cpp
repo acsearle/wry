@@ -27,7 +27,7 @@ namespace gc {
     struct Palette {
         struct BlackImposter {
             Color white;
-            operator Color() const { return Color{(int)white ^ 1}; }
+            operator Color() const { return (Color)(white ^ 1); }
             //BlackImposter& operator=(Color value) { white = value ^ 1; return *this; }
         };
         union {
@@ -37,8 +37,8 @@ namespace gc {
             BlackImposter black;
         };
         Color alloc;
-        static constexpr Color gray = Color::GRAY;
-        static constexpr Color red = Color::RED;
+        static constexpr Color gray = COLOR_GRAY;
+        static constexpr Color red = COLOR_RED;
     };
     
     struct Log {
@@ -290,8 +290,8 @@ namespace gc {
         return Mutator::get()._allocate(count);
     }
     
-    Object::Object(GCTag t)
-    : _gc_tag(t)
+    Object::Object(Class class_)
+    : _class(class_)
     , _gc_color(Mutator::get().palette.alloc) {
     }
     
@@ -386,14 +386,14 @@ namespace gc {
         //x.alloc = x.black;
         //this->_atomic_palette.store(x, Order::RELAXED);
         Color white = _atomic_white.load(Order::RELAXED);
-        Color black = Color{(int)white ^ 1};
+        Color black = (Color)(white ^ 1);
         _atomic_alloc.store(black, Order::RELAXED);
         
     }
     
     void Collector::_swap_white_and_black() {
         Color white = _atomic_white.load(Order::RELAXED);
-        Color black = Color{(int)white ^ 1};
+        Color black = (Color)(white ^ 1);
         _atomic_white.store(black, Order::RELAXED);
     }
 
@@ -682,8 +682,8 @@ namespace gc {
     void initialize_collector() {
         global_collector = new gc::Collector;
         gc::Palette p;
-        p.white = Color{0};
-        p.alloc = Color{0};
+        p.white = COLOR_WHITE;
+        p.alloc = COLOR_WHITE;
         // global_collector->_atomic_palette.store(p, Order::RELEASE);
         //global_collector->_atomic_white.store( = 0;
         //global_collector->_atomic_alloc = 0;
@@ -731,21 +731,21 @@ namespace gc {
     
     
     void _gc_delete(const Object* object) {
-        switch (object->_gc_tag) {
-            case GCTag::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
+        switch (object->_class) {
+            case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
                 const IndirectFixedCapacityValueArray* p = (const IndirectFixedCapacityValueArray*)object;
                 free(p->_storage);
                 delete p;
             } break;
-            case GCTag::HEAP_TABLE: {
+            case CLASS_HEAP_TABLE: {
                 const HeapTable* p = (const HeapTable*)object;
                 delete p;
             } break;
-            case GCTag::HEAP_STRING: {
+            case CLASS_HEAP_STRING: {
                 const HeapString* p = (const HeapString*)object;
                 delete p;
             } break;
-            case GCTag::HEAP_INT64: {
+            case CLASS_HEAP_INT64: {
                 const HeapInt64* p = (const HeapInt64*)object;
                 delete p;
             } break;
@@ -753,46 +753,52 @@ namespace gc {
     }
     
     std::size_t gc_bytes(const Object* object) {
-        switch (object->_gc_tag) {
-            case GCTag::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
+        switch (object->_class) {
+            case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
                 const IndirectFixedCapacityValueArray* p = (const IndirectFixedCapacityValueArray*)object;
                 return sizeof(IndirectFixedCapacityValueArray) + p->_capacity * sizeof(Traced<Value>);
             }
-            case GCTag::HEAP_TABLE: {
+            case CLASS_HEAP_TABLE: {
                 return sizeof(HeapTable);
             }
-            case GCTag::HEAP_STRING: {
+            case CLASS_HEAP_STRING: {
                 const HeapString* p = (const HeapString*)object;
                 return sizeof(HeapString) + p->_size;
             }
-            case GCTag::HEAP_INT64: {
+            case CLASS_HEAP_INT64: {
                 return sizeof(HeapInt64);
+            }
+            default: {
+                abort();
             }
         }
     }
     
     
     std::size_t gc_hash(const Object* object) {
-        switch (object->_gc_tag) {
-            case GCTag::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-            case GCTag::HEAP_TABLE: {
+        switch (object->_class) {
+            case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
+            case CLASS_HEAP_TABLE: {
                 return std::hash<const void*>()(object);
             }
-            case GCTag::HEAP_STRING: {
+            case CLASS_HEAP_STRING: {
                 const HeapString* p = (const HeapString*)object;
                 return p->_hash;
             } break;
-            case GCTag::HEAP_INT64: {
+            case CLASS_HEAP_INT64: {
                 const HeapInt64* p = (const HeapInt64*)object;
                 return std::hash<std::int64_t>()(p->_integer);
+            }
+            default: {
+                abort();
             }
         }
     }
     
     
     void gc_enumerate(const Object* object) {
-        switch (object->_gc_tag) {
-            case GCTag::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
+        switch (object->_class) {
+            case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
                 const IndirectFixedCapacityValueArray* p = (const IndirectFixedCapacityValueArray*)object;
                 auto first = p->_storage;
                 auto last = first + p->_capacity;
@@ -800,13 +806,13 @@ namespace gc {
                     trace(*first);
                 }
             } break;
-            case GCTag::HEAP_TABLE: {
+            case CLASS_HEAP_TABLE: {
                 const HeapTable* p = (const HeapTable*)object;
                 trace(p->_alpha._manager);
                 trace(p->_beta._manager);
             } break;
-            case GCTag::HEAP_STRING:
-            case GCTag::HEAP_INT64:
+            case CLASS_HEAP_STRING:
+            case CLASS_HEAP_INT64:
                 break;
         }
         
@@ -816,13 +822,13 @@ namespace gc {
     }
     
     void _gc_shade(const Object* object){
-        switch (object->_gc_tag) {
-            case GCTag::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-            case GCTag::HEAP_TABLE:
+        switch (object->_class) {
+            case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
+            case CLASS_HEAP_TABLE:
                 Mutator::get()._white_to_gray(object->_gc_color);
                 break;
-            case GCTag::HEAP_STRING:
-            case GCTag::HEAP_INT64:
+            case CLASS_HEAP_STRING:
+            case CLASS_HEAP_INT64:
                 _gc_shade_for_leaf(&object->_gc_color);
                 break;
         }
@@ -832,15 +838,15 @@ namespace gc {
     
     void _gc_trace(const Object* object) {
         Collector& context = *global_collector;
-        switch (object->_gc_tag) {
-            case GCTag::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-            case GCTag::HEAP_TABLE:
+        switch (object->_class) {
+            case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
+            case CLASS_HEAP_TABLE:
                 if (context._white_to_black(object->_gc_color)) {
                     context._scan_stack.push_back(object);
                 }
                 break;
-            case GCTag::HEAP_STRING:
-            case GCTag::HEAP_INT64:
+            case CLASS_HEAP_STRING:
+            case CLASS_HEAP_INT64:
                 abort();
         }
     }
@@ -943,6 +949,17 @@ namespace gc {
      */
     
     
+    /*
+     
+     // Fundamental garbage collected thing
+     //
+     // TODO: Combine Color with something else to avoid overhead
+     // TODO: is gc::Object distinct from HeapValue
+     // TODO: how can we have static lifetime participants?
+
+     */
     
+    // TODO: Extend interfaces to accept a context to avoids TLS lookup
+
     
 } // namespace gc

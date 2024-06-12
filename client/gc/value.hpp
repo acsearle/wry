@@ -20,21 +20,8 @@ namespace gc {
     
     struct Value;
 
-    struct Array;
-    struct Boolean;
-    struct Character;
-    struct Enumeration;
-    struct Number;
-    struct String;
-    struct Table;
 
     struct HeapValue;
-
-    struct HeapArray;
-    struct HeapInt64;
-    struct HeapNumber;
-    struct HeapString;
-    struct HeapTable;
     
     struct _deferred_subscript_t;
     
@@ -235,6 +222,25 @@ namespace gc {
         // ...
     };
     
+    
+    
+    
+    
+    struct Array;
+    struct Boolean;
+    struct Character;
+    struct Enumeration;
+    struct Number;
+    struct String;
+    struct Table;
+    
+    struct HeapArray;
+    struct HeapInt64;
+    struct HeapNumber;
+    struct HeapString;
+    struct HeapTable;
+
+    
     struct Array {
         HeapArray* _array;
         operator Value() const { return reinterpret_cast<const Value&>(*this); };
@@ -386,7 +392,7 @@ namespace gc {
         Value erase(Value) const;
         Value insert_or_assign(Value, Value) const;
         
-        explicit HeapValue(GCTag t) : Object(t) {}
+        explicit HeapValue(Class class_) : Object(class_) {}
 
     };
     
@@ -614,7 +620,7 @@ namespace gc {
         Traced<Value>* _storage; // TODO: type?
         
         explicit IndirectFixedCapacityValueArray(std::size_t count)
-        : Object(GCTag::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY)
+        : Object(CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY)
         , _capacity(count)
         , _storage((Traced<Value>*) calloc(count, sizeof(Traced<Value>))) {
             // printf("%p new IndirectFixedCapacityValueArray[%zd]\n", this, _capacity);
@@ -1119,7 +1125,7 @@ namespace gc {
             _partition = 0;
         }
         
-        HeapTable() : HeapValue(GCTag::HEAP_TABLE) {}
+        HeapTable() : HeapValue(CLASS_HEAP_TABLE) {}
         
     }; // struct HeapTable
     
