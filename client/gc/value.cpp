@@ -1340,4 +1340,75 @@ namespace gc {
     constexpr Value Value::make_tombstone() { Value result; result._enumeration = TOMBSTONE; return result; }
 
     
+    
+    
+    void HeapLeaf::_gc_shade() const {
+        _gc_shade_for_leaf(&this->_gc_color);
+    }
+    void HeapLeaf::gc_enumerate() const {
+        // no children
+    }
+
+    
+    
+    void* HeapString::operator new(std::size_t count, std::size_t extra) {
+        return allocate(count + extra);
+    }
+    
+    HeapString* HeapString::make(std::string_view v,
+                            std::size_t hash) {
+        HeapString* p = new(v.size()) HeapString;
+        p->_hash = hash;
+        p->_size = v.size();
+        std::memcpy(p->_bytes, v.data(), v.size());
+        //            printf("%p new \"%.*s\"%s\n",
+        //                   p,
+        //                   std::min((int)p->_size, 48), p->_bytes,
+        //                   ((p->_size > 48) ? "..." : ""));
+        return p;
+    }
+    
+    HeapString* HeapString::make(std::string_view v) {
+        return make(v, std::hash<std::string_view>()(v));
+    }
+    
+    HeapString::~HeapString() {
+        // printf("%p del \"%.*s\"\n", this, (int)_size, _bytes);
+    }
+
+    std::size_t HeapString::gc_bytes() const {
+        return sizeof(HeapString) + _size;
+    }
+    
+    std::size_t HeapString::gc_hash() const  {
+        return _hash;
+    }
+    
+    std::string_view HeapString::as_string_view() const {
+        return std::string_view(_bytes, _size);
+    }
+    
+    
+    
+    
+    HeapInt64::~HeapInt64() {
+        // printf("%p del %" PRId64 "\n", this, _integer);
+    }
+    
+    HeapInt64::HeapInt64(std::int64_t z)
+    : _integer(z) {
+        // printf("%p new %" PRId64 "\n", this, _integer);
+    }
+
+    std::size_t HeapInt64::gc_hash() const {
+        return std::hash<std::int64_t>()(_integer);
+    }
+    std::size_t HeapInt64::gc_bytes() const {
+        return sizeof(HeapInt64);
+    }
+    
+    std::int64_t HeapInt64::as_int64_t() const {
+        return _integer;
+    }
+        
 } // namespace gc

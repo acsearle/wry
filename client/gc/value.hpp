@@ -386,12 +386,8 @@ namespace gc {
     
     
     struct HeapLeaf : HeapValue {
-        void _gc_shade() const override final {
-            _gc_shade_for_leaf(&this->_gc_color);
-        }
-        void gc_enumerate() const override final {
-            // leaf has no traceable children
-        }
+        void _gc_shade() const override final;
+        void gc_enumerate() const override final;
     };
     
     
@@ -417,76 +413,26 @@ namespace gc {
     
     // TODO: upgrade to array of limbs of arbitrary precision integer
     struct HeapInt64 : HeapLeaf {
-        
         std::int64_t _integer;
-        
-        std::size_t gc_hash() const {
-            return std::hash<std::int64_t>()(_integer);
-        }
-        
-        std::size_t gc_bytes() const {
-            return sizeof(HeapInt64);
-        }
-        
-        explicit HeapInt64(std::int64_t z)
-        : _integer(z) {
-            // printf("%p new %" PRId64 "\n", this, _integer);
-        }
-        
-        std::int64_t as_int64_t() const {
-            return _integer;
-        }
-        
-        virtual ~HeapInt64() {
-            // printf("%p del %" PRId64 "\n", this, _integer);
-        }
-        
+        virtual std::size_t gc_hash() const override;
+        virtual std::size_t gc_bytes() const override;
+        explicit HeapInt64(std::int64_t z);
+        std::int64_t as_int64_t() const;
+        virtual ~HeapInt64();        
     };
     
     struct HeapString : HeapLeaf {
-        
         std::size_t _hash;
         std::size_t _size;
         char _bytes[0];
-
-        static void* operator new(std::size_t count, std::size_t extra) {
-            return allocate(count + extra);
-        }
-        
-        static HeapString* make(std::string_view v,
-                                std::size_t hash) {
-            HeapString* p = new(v.size()) HeapString;
-            p->_hash = hash;
-            p->_size = v.size();
-            std::memcpy(p->_bytes, v.data(), v.size());
-//            printf("%p new \"%.*s\"%s\n",
-//                   p,
-//                   std::min((int)p->_size, 48), p->_bytes,
-//                   ((p->_size > 48) ? "..." : ""));
-            return p;
-        }
-        
-        static HeapString* make(std::string_view v) {
-            return make(v, std::hash<std::string_view>()(v));
-        }
-        
-        std::size_t gc_bytes() const override final {
-            return sizeof(HeapString) + _size;
-        }
-        
-        std::size_t gc_hash() const override final {
-            return _hash;
-        }
-
-        std::string_view as_string_view() const {
-            return std::string_view(_bytes, _size);
-        }
-        
-        virtual ~HeapString() {
-            // printf("%p del \"%.*s\"\n", this, (int)_size, _bytes);
-        }
-        
-    }; // struct ObjectString
+        static void* operator new(std::size_t count, std::size_t extra);
+        static HeapString* make(std::string_view v, std::size_t hash);
+        static HeapString* make(std::string_view v);
+        std::size_t gc_bytes() const override final;
+        std::size_t gc_hash() const override final;
+        std::string_view as_string_view() const;
+        virtual ~HeapString();
+    }; // struct HeapString
         
     
     
