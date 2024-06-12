@@ -14,7 +14,7 @@ namespace gc {
         Atomic<int> b;
         b.add_fetch(8, Order::RELAXED);
         b.min_fetch(4, Order::RELAXED);
-        int x = b.wait(99, Order::RELAXED);
+        //int x = b.wait(99, Order::RELAXED);
         b.notify_one();
     }
     

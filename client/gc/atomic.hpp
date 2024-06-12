@@ -107,8 +107,9 @@ return __atomic_##Y##_fetch (&value, operand, (int)order);\
             __builtin_memcpy(&buffer, &expected, sizeof(T));
             for (;;) {
                 T discovered = load(order);
-                if (__builtin_memcmp(&buffer, &discovered, sizeof(T)))
+                if (__builtin_memcmp(&buffer, &discovered, sizeof(T))) {
                     return discovered;
+                }
                 int result = os_sync_wait_on_address(&value, buffer, sizeof(T), OS_SYNC_WAIT_ON_ADDRESS_NONE);
                 if ((result < 0) && !((errno == EINTR) || (errno == EFAULT))) {
                     perror(__PRETTY_FUNCTION__);

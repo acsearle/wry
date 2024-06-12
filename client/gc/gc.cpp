@@ -15,7 +15,6 @@
 namespace gc {
     
     void trace(const Object*);
-    void _gc_shade_for_leaf(Atomic<Color>* target);
     std::size_t gc_bytes(const Object*);
     void gc_enumerate(const Object*);
     void _gc_shade(const Object*);
@@ -243,6 +242,7 @@ namespace gc {
     
     
     void* Mutator::_allocate(std::size_t bytes) {
+        // Safety: nonvirtual base
         Object* object = (Object*) malloc(bytes);
         // Safety: we don't use or publish these pointers until we handshake
         // by which time the objects are fully constructed
@@ -254,17 +254,18 @@ namespace gc {
     void Mutator::_white_to_gray(Atomic<Color>& color) {
         Color expected = this->palette.white;
         if (color.compare_exchange_strong(expected,
-                                          this->palette.gray,
+                                          COLOR_GRAY,
                                           Order::RELAXED,
                                           Order::RELAXED)) {
-            this->log.dirty = true;
+            if (!std::exchange(this->log.dirty, true))
+                printf("Mutator became dirty\n");
         }
     }
     
     bool Mutator::_white_to_black(Atomic<Color>& color) const {
         Color expected = this->palette.white;
         return color.compare_exchange_strong(expected,
-                                             this->palette.black,
+                                             Color_invert(expected),
                                              Order::RELAXED,
                                              Order::RELAXED);
     }
@@ -286,18 +287,19 @@ namespace gc {
     }
     
     
+    
+    
+    
+    
     void* Object::operator new(std::size_t count) {
         return Mutator::get()._allocate(count);
     }
     
     Object::Object(Class class_)
     : _class(class_)
-    , _gc_color(Mutator::get().palette.alloc) {
+    , _color(Mutator::get().palette.alloc) {
     }
     
-    Object::~Object() {
-        // printf("%#" PRIxPTR " del Object\n", (std::uintptr_t) this);
-    }
     
     
     // Object virtual methods
@@ -334,7 +336,11 @@ namespace gc {
     void Mutator::_publish_with_tag(Channel::Tag tag) {
         assert(_channel);
         LogNode* node = new LogNode;
+        if (this->log.dirty) {
+            printf("Mutator becomes clean\n");
+        }
         node->splice(std::move(this->log));
+        assert(this->log.dirty == false);
         TaggedPtr<LogNode> desired(node, tag);
         TaggedPtr<LogNode> expected(_channel->log_stack_head.load(Order::ACQUIRE));
         for (;;) {
@@ -409,7 +415,7 @@ namespace gc {
             assert(channel);
             _active_channels.pop_back();
             channel->palette.white = this->_atomic_white.load(Order::RELAXED);
-            channel->palette.alloc = this->_atomic_white.load(Order::RELAXED);
+            channel->palette.alloc = this->_atomic_alloc.load(Order::RELAXED);
             TaggedPtr<LogNode> desired = TaggedPtr<LogNode>(nullptr, Channel::COLLECTOR_DID_REQUEST_HANDSHAKE);
             TaggedPtr<LogNode> old = channel->log_stack_head.exchange(desired, Order::ACQ_REL);
             switch (old.tag) {
@@ -478,6 +484,7 @@ namespace gc {
                     goto alpha;
                      */
                     expected = channel->log_stack_head.wait(expected, Order::ACQUIRE);
+                    goto beta;
                 case Channel::MUTATOR_DID_PUBLISH_LOGS: {
                     // Mutator handshaked us
                     this->_consume_logs(expected.ptr);
@@ -540,7 +547,7 @@ namespace gc {
         
         for (;;) {
             
-            // printf("Collector A\n");
+            printf("Collector A\n");
 
             
             // All mutators are allocating WHITE
@@ -576,7 +583,7 @@ namespace gc {
                     // collector thread immediately restores it
                     Color expected = this->palette.gray;
                     Color desired = this->palette.black;
-                    if (object->_gc_color.compare_exchange_strong(expected, desired, Order::RELAXED, Order::RELAXED)) {
+                    if (object->_color.compare_exchange_strong(expected, desired, Order::RELAXED, Order::RELAXED)) {
                         expected = desired;
                         gc_enumerate(object);
                     }
@@ -650,19 +657,11 @@ namespace gc {
     
     void shade(const Object* object) {
         if (object) {
-            Mutator::get().shade(object);
+            _gc_shade(object);
         }
     }
     
-    void _gc_shade_for_leaf(Atomic<Color>* target) {
-        auto& m = Mutator::get();
-        Color expected = m.palette.white;
-        Color desired = m.palette.black;
-        target->compare_exchange_strong(expected,
-                                        desired,
-                                        Order::RELAXED,
-                                        Order::RELAXED);
-    }
+
     
     void trace(const Object* object) {
         if (object) {
@@ -701,7 +700,7 @@ namespace gc {
             assert(!old);
             m->enter();
             for (int i = 0; i != -1; ++i) {
-                // printf("Mutator A\n");
+                printf("Mutator A\n");
                 // auto p = new(m->_allocate(sizeof(Object))) Object(*m);
                 auto p = new HeapInt64(787);
                 
@@ -731,6 +730,7 @@ namespace gc {
     
     
     void _gc_delete(const Object* object) {
+        printf("%p del\n", object);
         switch (object->_class) {
             case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
                 const IndirectFixedCapacityValueArray* p = (const IndirectFixedCapacityValueArray*)object;
@@ -825,11 +825,11 @@ namespace gc {
         switch (object->_class) {
             case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
             case CLASS_HEAP_TABLE:
-                Mutator::get()._white_to_gray(object->_gc_color);
+                Mutator::get()._white_to_gray(object->_color);
                 break;
             case CLASS_HEAP_STRING:
             case CLASS_HEAP_INT64:
-                _gc_shade_for_leaf(&object->_gc_color);
+                Mutator::get()._white_to_black(object->_color);
                 break;
         }
         
@@ -841,7 +841,7 @@ namespace gc {
         switch (object->_class) {
             case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
             case CLASS_HEAP_TABLE:
-                if (context._white_to_black(object->_gc_color)) {
+                if (context._white_to_black(object->_color)) {
                     context._scan_stack.push_back(object);
                 }
                 break;
@@ -851,6 +851,9 @@ namespace gc {
         }
     }
 
+    Color Color_invert(Color x) {
+        return (Color)(x ^ 1);
+    }
     
     
     

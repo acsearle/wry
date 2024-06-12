@@ -29,54 +29,51 @@ namespace gc {
         CLASS_HEAP_STRING,
         CLASS_HEAP_INT64
     };
+    
 
     enum Color {
         COLOR_WHITE = 0,
         COLOR_BLACK = 1,
         COLOR_GRAY = 2,
         COLOR_RED = 3,
-    };
-        
+    }; // enum Color
+    
+    Color Color_invert(Color);
+
+    
     struct Object {
         
         static void* operator new(std::size_t count);
         static void* operator new[](std::size_t count) = delete;
-
+        
         Class _class;
-        mutable Atomic<Color> _gc_color;
-
-        Object() = delete;
+        mutable Atomic<Color> _color;
+        
         explicit Object(Class class_);
-        Object(const Object&);
-        Object(Object&&);
-        ~Object();
-        Object& operator=(const Object&) = delete;
-        Object& operator=(Object&&) = delete;
         
     }; // struct Object
     
-    Color invert(Color);
     void shade(const Object*);
     void shade(const Object*, const Object*);
-    
-    void* allocate(std::size_t count);
-    
-    std::size_t gc_hash(const Object*);
 
     
-    template<typename T> 
+    template<typename T>
     struct Traced;
     
     template<typename T>
     struct Traced<T*> {
+
+        Atomic<T*> _ptr;
+
         Traced() = default;
         Traced(const Traced& other);
-        ~Traced() = default;
-        Traced& operator=(const Traced& other);
         explicit Traced(T* other);
         explicit Traced(std::nullptr_t);
+        ~Traced() = default;
+        Traced& operator=(const Traced& other);
         Traced& operator=(T* other);
         Traced& operator=(std::nullptr_t);
+        
         T* operator->() const;
         bool operator!() const;
         explicit operator bool() const;
@@ -84,22 +81,28 @@ namespace gc {
         T& operator*() const;
         bool operator==(const Traced& other) const;
         auto operator<=>(const Traced& other) const;
+        
         T* get() const;
-        Atomic<T*> _ptr;
+        
     };
     
     template<typename T>
     struct Traced<Atomic<T*>> {
+        
         Atomic<T*> _ptr;
+        
         T* load(Order order) const;
         void store(T* desired, Order order);
         T* exchange(T* desired, Order order);
         bool compare_exchange_weak(T*& expected, T* desired, Order success, Order failure);
         bool compare_exchange_strong(T*& expected, T* desired, Order success, Order failure);
+        
     };
+        
+    void* allocate(std::size_t count);
     
-    
-    
+    std::size_t gc_hash(const Object*);
+
     
     
     
