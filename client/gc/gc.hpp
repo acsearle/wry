@@ -23,102 +23,44 @@
 
 namespace gc {
     
-    // Garbage Collector interface
-    //
-    // - Mutators are required to
-    //   - execute a write barrier
-    //   - log new allocations
-    //   - periodically handshake with the mutator to
-    //     - get new color scheme
-    //     - report if there was at least one WHITE -> GRAY write barrier
-    //     - report new allocations
-    //   - mark any roots
-    // - All these mutator actions are lock-free
-    //   - the mutator will never wait for the collector
-    //   - no GC pause, no stop the world, no stop the mutators in turn
-    //   - the mutators can in theory outrun the collector and exhaust memory
-    // - Where lock-free data structures are required, a very simple MPSC
-    //   stack design is sufficient, implemented inline with minor variations
-    //
-    // - The system incurs significant overhead:
-    //   - Barrier and allocator need access to thread-local state
-    //     - Expensive to lookup on some architectures
-    //     - Or, annoying to pass everywhere
-    //   - All mutable pointers must be
-    //     - atomic so the collector can read them
-    //     - store-release so the collector can read through them
-    //     - write-barrier so reachability is conservative
-    //   - The write barrier adds two relaxed compare_exchanges to the object
-    //     headers
-    //   - Each object must store its color explicitly
-    //   - Each object's address is explicitly stored either by a mutator in
-    //     its list of recent allocations, or by the collector in its working
-    //     list.  Together with color, this is 16 bytes per object of pure
-    //     overhead.
-    //   - All data structures must be quasi-concurrent so that they can be
-    //     traced by the collector well enough to, in combination with the
-    //     write barrier, produce a conservative reachability graph.
-    //     - For example, for a fixed capacity allocation, we can't atomically
-    //       consider both the size and the "back" element it implies; we have
-    //       to rely on the immutable capacity, scan slot, and require the
-    //       erase operation to leave unused elements in a traceable (preferably
-    //       zeroed) state.
-    //   - Unreachable objects will survive several rounds of handshakes due to
-    //     the conservative nature of the collector; in particular they will
-    //     survive the collection they were rendered unreachable during.
-    
-    // The collector is not lock-free.  It initiates rounds of "handshakes" with
-    // the mutators and cannot progress until they have all responded at their
-    // leisure.  In particular, it must wait for all mutators to report no GRAY
-    // activity before tracing can terminate.   It maintains a list of
-    // surviving objects and recent allocations to scan and sweep whenever
-    // not waiting on handshakes.
-    
-    // An important optimization is to mark leaf objects -- objects with no
-    // outgoing pointers to other GC objects -- directly to BLACK, skipping
-    // the GRAY stage that indicates the collector must scan them.
-    
-    // Another important optimization is that, when the collector is scanning
-    // its worklist of objects for GRAY objects that must be traced, it places
-    // those child objects directly in a stack and then immediately traces
-    // those, resulting in a depth-first traversal.  Without this optimization,
-    // the collector would mark children GRAY and then scan to rediscover them;
-    // a singly linked list appearing in reverse order in the worklist would
-    // require O(N) scans, i.e. O(NM) operations to fully trace.
-    
     
 
     
     // TODO: Extend interfaces to accept a context to avoids TLS lookup
 
-    using Color = std::intptr_t;
+    enum class Color {
+        GRAY = 2,
+        RED = 3,
+    };
     
     // Fundamental garbage collected thing
     //
     // TODO: Combine Color with something else to avoid overhead
     // TODO: is gc::Object distinct from HeapValue
     // TODO: how can we have static lifetime participants?
+    
+    enum class GCTag : uint64_t {
+        INDIRECT_FIXED_CAPACITY_VALUE_ARRAY,
+        HEAP_TABLE,
+        HEAP_STRING,
+        HEAP_INT64
+    };
 
     struct alignas(16) Object {
         
         static void* operator new(std::size_t count);
         static void* operator new[](std::size_t count) = delete;
 
+        GCTag _gc_tag;
         mutable Atomic<Color> _gc_color;
 
-        Object();
+        Object() = delete;
+        explicit Object(GCTag t);
         Object(const Object&);
         Object(Object&&);
-        virtual ~Object();
+        ~Object();
         Object& operator=(const Object&) = delete;
         Object& operator=(Object&&) = delete;
-
-        virtual std::size_t gc_bytes() const;
-        virtual void gc_enumerate() const;
-        virtual std::size_t gc_hash() const;
-
-        virtual void _gc_shade() const;
-        virtual void _gc_trace() const;
         
     }; // struct Object
     
@@ -161,47 +103,16 @@ namespace gc {
     
     void shade(const Object*);
     void shade(const Object*, const Object*);
+
     void* allocate(std::size_t count);
-    void trace(const Object*);
-    void _gc_shade_for_leaf(Atomic<Color>* target);
+
+    std::size_t gc_hash(const Object*);
 
     
     
     
     
     
-    
-    
-    
-    /*
-    template<typename T>
-    [[nodiscard]] T* read_barrier(const Atomic<T*>* target) {
-        return target->load(Order::RELAXED);
-    }
-     
-    template<typename T>
-    void write_barrier(Atomic<T*>* target, T* desired) {
-        T* discovered = target->exchange(desired, Order::RELEASE);
-        using gc::shade;
-        shade(discovered, desired);
-    }
-
-    template<typename T>
-    void write_barrier(Atomic<T*>* target, std::nullptr_t) {
-        T* discovered = target->exchange(nullptr, Order::RELEASE);
-        using gc::shade;
-        shade(discovered);
-    }
-    
-    template<typename T>
-    T* read_write_barrier(Atomic<T*>* target, T* desired) {
-        T* discovered = target->exchange(desired, Order::RELEASE);
-        using gc::shade;
-        shade(discovered, desired);
-        return discovered;
-    }
-     */
-
     
     
     

@@ -6,11 +6,9 @@
 //
 
 #include <algorithm>
-#include <bit>
 #include <numeric>
 #include <random>
 
-#include "../client/hash.hpp"
 #include "debug.hpp"
 #include "value.hpp"
 
@@ -175,7 +173,7 @@ namespace gc {
         switch (_discriminant()) {
             case POINTER: {
                 const HeapValue* a = _as_pointer();
-                return a ? a->gc_hash() : 0;
+                return a ? gc_hash(a) : 0;
             }
             case SMALL_INTEGER: {
                 std::int64_t a = _as_small_integer();
@@ -423,37 +421,9 @@ namespace gc {
     // pointers, which do not need to be scanned at all and are just held and
     // managed directly perhaps in a std::vector, or small arrays of fixed
     // size, which can use the fma pattern
-    struct IndirectFixedCapacityValueArray : Object {
-        
-        std::size_t _capacity;
-        Traced<Value>* _storage; // TODO: type?
-        
-        explicit IndirectFixedCapacityValueArray(std::size_t count)
-        : _capacity(count)
-        , _storage((Traced<Value>*) calloc(count, sizeof(Traced<Value>))) {
-            // printf("%p new IndirectFixedCapacityValueArray[%zd]\n", this, _capacity);
-        }
-        
-        virtual ~IndirectFixedCapacityValueArray() override {
-            free(_storage);
-            // printf("%p del IndirectFixedCapacityValueArray[%zd]\n", this, _capacity);
-        }
-        
-        virtual std::size_t gc_bytes() const override {
-            return sizeof(IndirectFixedCapacityValueArray) + _capacity * sizeof(Traced<Value>);
-        }
-        
-        virtual void gc_enumerate() const override {
-            auto first = _storage;
-            auto last = first + _capacity;
-            for (; first != last; ++first) {
-                trace(*first);
-            }
-        }
-        
-    }; // struct IndirectFixedCapacityValueArray
+
     
-    
+    /*
     struct HeapArray : HeapValue {
         
         mutable std::size_t _size;
@@ -527,495 +497,10 @@ namespace gc {
         
     };
     
-    
+    */
 
 
     
-    
-    
-    
-    struct HeapTable : HeapValue {
-        
-        // Based on a basic open-adressing linear-probing hash table
-        //
-        // Because of GC, the storage must be GC in its own right, and the
-        // entries themselves must be atomic
-        //
-        // Because of real-time, we perform the resizes incrementally,
-        // having an old and a new table, and moving one element over as
-        // a tax on each insertion, until the old table is empty, and we
-        // release it.
-        //
-        //
-        // When the alpha table reaches its load limit, we allocate a new
-        // beta table.  This will have enough capacity to hold twice the
-        // elements in the alpha table; in erase-heavy workloads this may
-        // actually be the same capacity or even smaller, since the old table
-        // may be full of tombstones.  More precisely, the new table has to
-        // have initial grace that is at least twice that of the old table
-        // count.
-        //
-        // The old table has been drained up to some index.
-        //
-        // To insert_or_assign, we look for the entry in the old table.  If it
-        // exists, we can replace it without disturbing any metrics.  The
-        // drain level may mean we don't need to look.
-        //
-        // If it does not exist, we look for it in the new table.  If it exists,
-        // we can replace it without disturbing any metrics.
-        //
-        // If it does not exist, we can insert into the new table.  If it
-        // overwrites a tombstone, again, we have not made the situation worse.
-        // and can terminate.
-        //
-        // If we have to consume a new element and reduce the grace of the new
-        // table, we have to copy over any element of the old table to
-        // preserve the invariant of beta_grace >= 2 * alpha_count
-        
-        // "Grace" is an integer.  For a new table, it is the load limit
-        // times the capacity.  Grace is decreased whenever an empty slot is
-        // consumed; note that erasure produces tombstones, so empty slots are
-        // never recovered.  Thus, insertion may decrease grace, and other
-        // operations do not affect it.  It is equivalent to tracking the
-        // number of empty slots and comparing it to load limit.
-        
-        // The old table is, by definition, almost full, so it is not hard to
-        // find an element to move over.  Since we write back tombstones as
-        // part of a conventional erase, the edge case where the index loops
-        // back to the beginning is handled.
-        //
-        // Interestingly, this strategy allocates new storage on the basis of
-        // the current size, not the current capacity, so the table will
-        // eventually forget occupancy spikes and right-size itself.  However:
-        // When a table has a small count, relative to capacity, and zero grace,
-        // a small new table will be allocated, and evacuation will have to
-        // scan many elements to find an occupied one.  This is a pain point.
-        // Evacuation should instead scan a fixed number of slots, and the
-        // new table should be big enough to guarantee completion of that scan
-        // before the next resize is needed.  This in turn places a limit on
-        // how rapidly the table can shrink.
-
-        struct Entry {
-            Traced<Value> key;
-            Traced<Value> value;
-            
-            [[nodiscard]] Value entomb() {
-                this->key = Value::make_tombstone();
-                // TODO: exchange
-                Value old = this->value;
-                this->value = Value::make_null();
-                return old;
-            }
-            
-        };
-        
-        struct InnerTable {
-            
-            Traced<const IndirectFixedCapacityValueArray*> _manager;
-            Entry* _storage = nullptr;
-            std::size_t _mask = 0;
-            std::size_t _count = 0;
-            std::size_t _grace = 0;
-            
-            void clear() {
-                _manager = nullptr;
-                _storage = nullptr;
-                _mask = -1;
-                _count = 0;
-                _grace = 0;
-            }
-
-            
-            std::size_t next(std::size_t i) {
-                return (i + 1) & _mask;
-            }
-            
-            std::size_t prev(std::size_t i) {
-                return (i - 1) & _mask;
-            }
-            
-            Entry* pfind(std::size_t h, Value k) {
-                std::size_t i = h & _mask;
-                for (;; i = next(i)) {
-                    Entry* p = _storage + i;
-                    Value ki = p->key;
-
-                    if (ki.is_null())
-                        // Does not exist
-                        return nullptr;
-
-                    // TODO: equals-with-one-known-hash
-                    if (ki == k)
-                        // Found
-                        return p;
-
-                    // Another entry, or a tombstone
-                    
-                }
-            }
-
-            Value find(std::size_t h, Value k) {
-                Entry* p = pfind(h, k);
-                return p ? p->value : Value::make_null();
-
-            }
-            
-            void clear_n_tombstones_before_i(std::size_t n, std::size_t i) {
-                // grace sticks to zero
-                if (!_grace)
-                    return;
-                {
-                    Entry* pe = _storage + i;
-                    [[maybe_unused]] Value ki = pe->key;
-                    assert(ki.is_null());
-                }
-                while (n--) {
-                    i = prev(i);
-                    Entry* pe = _storage + i;
-                    [[maybe_unused]] Value ki = pe->key;
-                    assert(ki._is_tombstone());
-                    pe->key = Value::make_null();
-                    ++_grace;
-                    // printf("disinterred one\n");
-                }
-            }
-                        
-            Value erase_from(std::size_t h, Value k, std::size_t i) {
-                std::size_t tombstones = 0;
-                for (;; i = next(i)) {
-                    Entry* pe = _storage + i;
-                    Value ki = pe->key;
-                    if (ki.is_null()) {
-                        clear_n_tombstones_before_i(tombstones, i);
-                        return Value::make_null();
-                    }
-                    if (ki == k) {
-                        --_count;
-                        return pe->entomb();
-                    }
-                    if (ki._is_tombstone()) {
-                        ++tombstones;
-                    } else {
-                        tombstones = 0;
-                    }
-                    // a different key, or a tombstone
-                }
-            }
-            
-            Value erase(std::size_t h, Value k) {
-                std::size_t i = h & _mask;
-                return erase_from(h, k, i);
-            }
-            
-            Value insert_or_assign(std::size_t h, Value k, Value v) {
-                assert(_grace);
-                std::size_t i = h & _mask;
-                for (;; i = next(i)) {
-                    Entry* pe = _storage + i;
-                    Value ki = pe->key;
-                    if (ki.is_null()) {
-                        pe->key = k;
-                        pe->value = v;
-                        ++_count;
-                        --_grace;
-                        return Value::make_null();
-                    }
-                    if (ki._is_tombstone()) {
-                        pe->key = k;
-                        pe->value = v;
-                        ++_count;
-                        // we have installed the new key as early as possible
-                        // but we must continue scanning and delete the old
-                        // one if it exists
-                        return erase_from(h, k, next(i));
-                    }
-                    if (ki == k) {
-                        Value u = pe->value;
-                        pe->value = v;
-                        return u;
-                    }
-                    // a different key, or a tombstone
-                }
-            }
-            
-            Value try_assign(std::size_t h, Value k, Value v) {
-                std::size_t i = h & _mask;
-                for (;; i = ((i + 1) & _mask)) {
-                    Entry* pe = _storage + i;
-                    Value ki = pe->key;
-                    if (ki.is_null()) {
-                        return Value::make_null();
-                    }
-                    if (ki == k) {
-                        Value u = pe->value;
-                        pe->value = v;
-                        return u;
-                    }
-                    // a different key, or a tombstone
-                }
-            }
-            
-            void must_insert(std::size_t h, Value k, Value v) {
-                std::size_t i = h & _mask;
-                for (;; i = ((i + 1) & _mask)) {
-                    Entry* pe = _storage + i;
-                    Value ki = pe->key;
-                    if (ki.is_null()) {
-                        pe->key = k;
-                        pe->value = v;
-                        ++_count;
-                        --_grace;
-                        return;
-                    }
-                    if (ki._is_tombstone()) {
-                        pe->key = k;
-                        pe->value = v;
-                        ++_count;
-                        // Check for the violation of the precondition, that the
-                        // key is not later in the table
-                        assert(erase_from(h, k, next(i)).is_null());
-                        return;
-                    }
-                    // Check for the violation of the precondition, that the
-                    // key was not already in the InnerTable
-                    assert(ki != k);
-                    // a different key was found, continue
-                }
-            }
-            
-            void _invariant() {
-                if (!_storage)
-                    return;
-                // scan the whole thing
-                std::size_t keys = 0;
-                std::size_t nulls = 0;
-                std::size_t tombstones = 0;
-                for (std::size_t i = 0; i != _mask + 1; ++i) {
-                    Entry* pe = _storage + i;
-                    Value ki = pe->key;
-                    Value vi = pe->value;
-                    assert(!vi._is_tombstone());
-                    if (ki.is_null()) {
-                        ++nulls;
-                        assert(vi.is_null());
-                    } else if (ki._is_tombstone()) {
-                        ++tombstones;
-                        assert(vi.is_null());
-                    } else {
-                        ++keys;
-                        assert(!vi.is_null());
-                    }
-                }
-                assert(keys + nulls + tombstones == _mask + 1);
-                if (keys != _count) {
-                    for (std::size_t i = 0; i != _mask + 1; ++i) {
-                        Entry* pe = _storage + i;
-                        Value ki = pe->key;
-                        printf("[%zd] = { %llx, ...}\n", i, ki._enumeration);
-                    }
-                }
-                assert(keys == _count);
-            }
-                        
-        };
-        
-        mutable InnerTable _alpha;
-        mutable InnerTable _beta;
-        mutable std::size_t _partition = 0;
-        
-        
-        virtual ~HeapTable() override {
-            // printf("%p del HeapTable[%zd]\n", this, _alpha._count + _beta._count);
-        }
-        
-        virtual std::size_t gc_bytes() const override {
-            return sizeof(HeapTable);
-        }
-        
-        virtual void gc_enumerate() const override {
-            trace(_alpha._manager);
-            trace(_beta._manager);
-        }
-
-        
-        
-        
-        void _invariant() const {
-            _alpha._invariant();
-            _beta._invariant();
-            /*
-            if (_beta._storage) {
-                for (int i = 0; i != _alpha._mask + 1; ++i) {
-                    Entry* pe = _alpha._storage + i;
-                    Value ki = pe->key;
-                    if (ki.is_null() || ki._is_tombstone())
-                        continue;
-                    Value vj = _beta.find(ki.hash(), ki);
-                    assert(vj.is_null());
-                }
-                for (int i = 0; i != _beta._mask + 1; ++i) {
-                    Entry* pe = _beta._storage + i;
-                    Value ki = pe->key;
-                    if (ki.is_null() || ki._is_tombstone())
-                        continue;
-                    Value vj = _alpha.find(ki.hash(), ki);
-                    assert(vj.is_null());
-                }
-            }
-             */
-        }
-        
-        
-        
-        Value find(Value key) const override {
-            std::size_t h = key.hash();
-            if (_alpha._count) {
-                Value v = _alpha.find(h, key);
-                if (!v.is_null())
-                    return v;
-            }
-            if (_beta._count) {
-                Value v = _beta.find(h, key);
-                if (!v.is_null())
-                    return v;
-            }
-            return Value::make_null();
-        }
-        
-        Value erase(Value key) const override {
-            //_invariant();
-            std::size_t h = key.hash();
-            if (_alpha._count) {
-                Value v = _alpha.erase(h, key);
-                if (!v.is_null()) {
-                    return v;
-                }
-            }
-            if (_beta._count) {
-                Value v = _beta.erase(h, key);
-                if (!v.is_null()) {
-                    return v;
-                }
-            }
-            return Value::make_null();
-            
-        }
-        
-        Value insert_or_assign(Value key, Value value) const override {
-            // _invariant();
-            // printf("insert_or_assign (%lld, %lld)\n", key._integer >> 4, value._integer >> 4);
-            std::size_t h = key.hash();
-            // printf("with hash %zd\n", h);
-            
-            // printf("with alpha %zd/%zd, beta %zd/%zd\n", _alpha._count, _alpha._grace, _beta._count, _beta._grace);
-            
-            if (_alpha._grace) {
-                // _partition = 0;
-                Value x = _alpha.insert_or_assign(h, key, value);
-                // _invariant();
-                return x;
-            }
-            // _alpha is terminal
-            
-            {
-                for (std::size_t i = 0; i != _partition; ++i) {
-                    Entry* pe = _alpha._storage + i;
-                    Value ki = pe->key;
-                    assert(ki.is_null() || ki._is_tombstone());
-                }
-            }
-            
-            
-            if (_alpha._count) {
-                // _alpha is not yet empty
-                Value u = _alpha.try_assign(h, key, value);
-                // _invariant();
-                if (!u.is_null())
-                    return u;
-                // we have proved that key is not in alpha
-            } else {
-                // _alpha is terminal and empty, discard it
-                if (_beta._storage) {
-                    // swap in _beta
-                    _alpha = _beta;
-                    _beta._manager = nullptr;
-                    _beta._storage = nullptr;
-                    _beta._count = 0;
-                    _beta._grace = 0;
-                    _beta._mask = 0;
-                    _partition = 0;
-                } else {
-                    assert(_alpha._storage == nullptr);
-                    _alpha._manager = new IndirectFixedCapacityValueArray(8);
-                    _alpha._storage = (Entry*) _alpha._manager->_storage;
-                    _alpha._mask = 3;
-                    _alpha._grace = 3;
-                    _alpha._count = 0;
-                    _partition = 0;
-                }
-                return insert_or_assign(key, value);
-            }
-            if (!_beta._grace) {
-                assert(_beta._storage == nullptr);
-                using wry::type_name;
-                std::size_t new_capacity = std::bit_ceil((_alpha._count * 8 + 2) / 3);
-                std::size_t new_grace = new_capacity * 3 / 4;
-                // printf("New table of capacity %zd when old was %zd\n", new_capacity, _alpha._mask + 1);
-                _beta._manager = new IndirectFixedCapacityValueArray(new_capacity * 2);
-                _beta._storage = (Entry*) _beta._manager->_storage;
-                _beta._count = 0;
-                _beta._grace = new_grace;
-                _beta._mask = new_capacity - 1;
-            }
-            // _invariant();
-            Value ultimate = _beta.insert_or_assign(h, key, value);
-            // _invariant();
-            while (_alpha._count) {
-                Entry* pe = _alpha._storage + (_partition++);
-                Value ki = pe->key;
-                if (ki.is_null() || ki._is_tombstone())
-                    continue;
-                // _invariant();
-                Value vi = pe->entomb();
-                _alpha._count--;
-                // _invariant();
-                assert(_beta._grace);
-                _beta.must_insert(ki.hash(), ki, vi);
-                // _invariant();
-                // printf("Evacuated (%lld, %lld)\n", ki._integer >> 4, vi._integer >> 4);
-                break;
-            }
-            return ultimate;
-        }
-        
-        std::size_t size() const override {
-            return _alpha._count + _beta._count;
-        }
-        
-        bool contains(Value key) const override {
-            return !find(key).is_null();
-        }
-        
-        Traced<Value>& find_or_insert_null(Value key) const {
-            std::size_t h = key.hash();
-            if (_alpha._count) {
-                Entry* p = _alpha.pfind(h, key);
-                if (p)
-                    return p->value;
-            }
-            if (_alpha._grace) {
-                
-            }
-            abort();
-        }
-        
-        void clear() {
-            _alpha.clear();
-            _beta.clear();
-            _partition = 0;
-        }
-        
-    };
     
    
     
@@ -1239,6 +724,7 @@ namespace gc {
     }
     
     
+    /*
     std::size_t Array::size() const {
         return _array->_size;
     }
@@ -1247,6 +733,7 @@ namespace gc {
         assert(pos < _array->_size);
         return _array->_storage[pos].get();
     }
+     */
 
     
     
@@ -1263,28 +750,58 @@ namespace gc {
         }
     }
 
-    bool HeapValue::contains(Value) const {
-        return false;
+    bool HeapValue::contains(Value key) const {
+        switch (_gc_tag) {
+            case GCTag::HEAP_TABLE:
+                return ((const HeapTable*) this)->contains(key);
+            default:
+                return false;
+        }
     }
 
-    Value HeapValue::find(Value) const {
-        return Value::make_error();
+    Value HeapValue::find(Value key) const {
+        switch (_gc_tag) {
+            case GCTag::HEAP_TABLE:
+                return ((const HeapTable*) this)->find(key);
+            default:
+                return Value::make_error();
+        }
     }
 
-    Value HeapValue::insert_or_assign(Value, Value) const {
-        return Value::make_error();
+    Value HeapValue::insert_or_assign(Value key, Value value) const {
+        switch (_gc_tag) {
+            case GCTag::HEAP_TABLE:
+                return ((const HeapTable*) this)->insert_or_assign(key, value);
+            default:
+                return Value::make_error();
+        }
     }
 
-    Value HeapValue::erase(Value) const {
-        return Value::make_error();
+    Value HeapValue::erase(Value key) const {
+        switch (_gc_tag) {
+            case GCTag::HEAP_TABLE:
+                return ((const HeapTable*) this)->erase(key);
+            default:
+                return Value::make_error();
+        }
+
     }
 
     std::size_t HeapValue::size() const {
-        return 0;
+        switch (_gc_tag) {
+            case GCTag::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
+                return ((const IndirectFixedCapacityValueArray*) this)->_capacity;
+            case GCTag::HEAP_TABLE:
+                return ((const HeapTable*) this)->size();
+            case GCTag::HEAP_STRING:
+                return ((const HeapString*) this)->size();
+            case GCTag::HEAP_INT64:
+                return 0;
+        }
     }
 
     
-    Table::Table() : _pointer(new HeapTable) {}
+    Table::Table() : _pointer(new HeapTable()) {}
 
     
     std::size_t Value::size() const {
@@ -1335,19 +852,21 @@ namespace gc {
     }
 
     
-    constexpr Value Value::make_error() { Value result; result._enumeration = ERROR; return result; }
-    constexpr Value Value::make_null() { Value result; result._enumeration = 0; return result; }
-    constexpr Value Value::make_tombstone() { Value result; result._enumeration = TOMBSTONE; return result; }
+    Value Value::make_error() { Value result; result._enumeration = ERROR; return result; }
+    Value Value::make_null() { Value result; result._enumeration = 0; return result; }
+    Value Value::make_tombstone() { Value result; result._enumeration = TOMBSTONE; return result; }
 
     
     
     
+    /*
     void HeapLeaf::_gc_shade() const {
         _gc_shade_for_leaf(&this->_gc_color);
     }
     void HeapLeaf::gc_enumerate() const {
         // no children
     }
+     */
 
     
     
@@ -1372,17 +891,12 @@ namespace gc {
         return make(v, std::hash<std::string_view>()(v));
     }
     
+    /*
     HeapString::~HeapString() {
         // printf("%p del \"%.*s\"\n", this, (int)_size, _bytes);
     }
+     */
 
-    std::size_t HeapString::gc_bytes() const {
-        return sizeof(HeapString) + _size;
-    }
-    
-    std::size_t HeapString::gc_hash() const  {
-        return _hash;
-    }
     
     std::string_view HeapString::as_string_view() const {
         return std::string_view(_bytes, _size);
@@ -1391,24 +905,29 @@ namespace gc {
     
     
     
+    /*
     HeapInt64::~HeapInt64() {
         // printf("%p del %" PRId64 "\n", this, _integer);
     }
+     */
     
     HeapInt64::HeapInt64(std::int64_t z)
-    : _integer(z) {
+    : HeapValue(GCTag::HEAP_INT64)
+    , _integer(z) {
         // printf("%p new %" PRId64 "\n", this, _integer);
     }
 
-    std::size_t HeapInt64::gc_hash() const {
-        return std::hash<std::int64_t>()(_integer);
-    }
-    std::size_t HeapInt64::gc_bytes() const {
-        return sizeof(HeapInt64);
-    }
+    
+
     
     std::int64_t HeapInt64::as_int64_t() const {
         return _integer;
     }
         
+    
+    
+    HeapString::HeapString() 
+    : HeapValue(GCTag::HEAP_STRING) {        
+    }
+    
 } // namespace gc
