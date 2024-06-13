@@ -12,49 +12,15 @@
 #include "debug.hpp"
 #include "value.hpp"
 
-// To support basic math operators we need
-// + -> arbitrary precision
-// - -> signed
-// / -> rational
-//
-// a more conventional solution is to use floating point, but this is
-// problematic for getting consistent results across clients, and generally
-// a can of worms
-//
-// other choices:
-// hard limit at some human-friendly decimal value like 1k, 1M?
-// expose hardware modulo 2^n?
-// expose intger division?
-// fixed point?
-//
-// I don't really want to expose arbitrary math on approximate real numbers,
-// like sqrt, sin etc.
-
-
-// Pointer to a garbage-collected heap representation, or an inline integer
-// representation.  Uses invalid (misaligned) pointer values to distinguish
-// multiple cases; we can tag 15 kinds of not-pointer with the 4 lsbs, with
-// 0b...0000 being a valid aligned address.
-//
-// Some kinds of Value are exclusively represented on the heap (mutable
-// containers) or exclusively on the stack (bool, enumerations), and
-// others may switch (immutable containers such as strings and arbitrary
-// precision integers keep small, and presumed common, values inline)
-
-// TODO: Is this a Value... or a Variable?
-// "strings are immutable", but V*** can change which immutable string they
-// reference.  And indeed, the gc::String object can change what it points
-// to.  Call these things Variables instead?
-
 
 namespace gc {
             
     std::string_view String::as_string_view() const {
         switch (_discriminant()) {
-            case Value::POINTER: {
+            case TAG_POINTER: {
                 return _pointer->as_string_view();
             }
-            case Value::SHORT_STRING: {
+            case TAG_SHORT_STRING: {
                 return _string.as_string_view();
             }
             default:
@@ -64,106 +30,49 @@ namespace gc {
     
 
     Value& operator++(Value& self) {
-        switch (self._discriminant()) {
-            case Value::POINTER: {
-                self._as_pointer()->prefix_increment(self);
-                break;
-            }
-            case Value::SMALL_INTEGER: {
-                self = Value::from_int64(self._as_small_integer() + 1);
-                break;
-            }
-            default:
-                self = Value::make_error();
-                break;
-        }
+        self += 1;
         return self;
     }
-    
+
+    Value& operator--(Value& self) {
+        self -= 1;
+        return self;
+    }
+
     Value operator++(Value& self, int) {
         Value old = self;
-        switch (self._discriminant()) {
-            case Value::POINTER: {
-                self._as_pointer()->postfix_increment(self);
-                break;
-            }
-            case Value::SMALL_INTEGER: {
-                self = Value::from_int64(self._as_small_integer() + 1);
-                break;
-            }
-            default: {
-                self = Value::make_error();
-                break;
-            }
-        }
+        ++self;
         return old;
     }
-    
-    Value& operator+=(Value& self, const Value& other) {
-        switch (self._discriminant()) {
-            case Value::POINTER: {
-                self._as_pointer()->assigned_addition(self, other);
-                break;
-            }
-            case Value::SMALL_INTEGER: {
-                if (other._discriminant() == Value::SMALL_INTEGER) {
-                    self = Value::from_int64(self._as_small_integer() + other._as_small_integer());
-                } else {
-                    // int32 + ??? -> need more functions
-                    abort();
-                }
-                break;
-            }
-            default: {
-                self = Value::make_error();
-                break;
-            }
-        }
-        return self;
+
+    Value operator--(Value& self, int) {
+        Value old = self;
+        ++self;
+        return old;
+    }
+
+#define X(Y)\
+    Value operator Y (const Value& self, const Value& other) {\
+        return Value::make_error();\
+    }\
+    \
+    Value& operator Y##=(Value& self, const Value& other) {\
+        return self = self Y other;\
     }
     
-    Value operator+(const Value& self, const Value& other) {
-        switch (self._discriminant()) {
-            case Value::POINTER: {
-                return self._as_pointer()->addition(other);
-            }
-            case Value::SMALL_INTEGER: {
-                if (other._discriminant() == Value::SMALL_INTEGER) {
-                    return Value::from_int64(self._as_small_integer()
-                                             + other._as_small_integer());
-                } else {
-                    // int32 + ??? -> need more functions
-                    abort();
-                }
-            }
-            default: {
-                return Value::make_error();
-            }
-        }
-    }
+    X(*)
+    X(/)
+    X(%)
+    X(-)
+    X(+)
+    X(&)
+    X(^)
+    X(|)
+    X(<<)
+    X(>>)
     
-    Value operator*(const Value&, const Value&) { abort(); }
-    Value operator/(const Value&, const Value&) { abort(); }
-    Value operator%(const Value&, const Value&) { abort(); }
-    Value operator-(const Value&, const Value&) { abort(); }
-    Value operator<<(const Value&, const Value&) { abort(); }
-    Value operator>>(const Value&, const Value&) { abort(); }
-    Value operator&(const Value&, const Value&) { abort(); }
-    Value operator^(const Value&, const Value&) { abort(); }
-    Value operator|(const Value&, const Value&) { abort(); }
+#undef X
     
-    Value& operator*=(Value&, const Value&) { abort(); }
-    Value& operator/=(Value&, const Value&) { abort(); }
-    Value& operator%=( Value&, const Value&) { abort(); }
-    Value& operator-=( Value&, const Value&) { abort(); }
-    Value& operator&=( Value&, const Value&) { abort(); }
-    Value& operator^=( Value&, const Value&) { abort(); }
-    Value& operator|=( Value&, const Value&) { abort(); }
-    Value& operator<<=( Value&, const Value&) { abort(); }
-    Value& operator>>=( Value&, const Value&) { abort(); }
-    
-    Value& operator--(Value&) { abort(); }
-    Value operator--(Value&,int) { abort(); }
     
     
     
@@ -171,20 +80,20 @@ namespace gc {
     
     std::size_t Value::hash() const {
         switch (_discriminant()) {
-            case POINTER: {
-                const HeapValue* a = _as_pointer();
+            case TAG_POINTER: {
+                const Object* a = _as_pointer();
                 return a ? gc_hash(a) : 0;
             }
-            case SMALL_INTEGER: {
+            case TAG_SMALL_INTEGER: {
                 std::int64_t a = _as_small_integer();
                 // std::hash<std::int64_t> is trivial (on libc++)
                 // return std::hash<std::int64_t>()(a);
                 return wry::hash(a);
             }
-            case SHORT_STRING: {
+            case TAG_SHORT_STRING: {
                 return std::hash<std::string_view>()(_as_short_string());
             }
-            case BOOLEAN: {
+            case TAG_BOOLEAN: {
                 return std::hash<bool>()(as_boolean());
             }
             default:
@@ -196,7 +105,7 @@ namespace gc {
         Value result;
         std::int64_t y = z << 4;
         if ((y >> 4) == z) {
-            result._integer = y | SMALL_INTEGER;
+            result._integer = y | TAG_SMALL_INTEGER;
         } else {
             HeapInt64* a = new HeapInt64(z);
             result._pointer = a;
@@ -208,7 +117,7 @@ namespace gc {
         Value result;
         std::size_t n = std::strlen(ntbs);
         if (n < 8) {
-            result._enumeration = (n << 4) | SHORT_STRING;
+            result._enumeration = (n << 4) | TAG_SHORT_STRING;
             std::memcpy(result._short_string._chars, ntbs, n);
             assert(result._is_short_string());
         } else {
@@ -218,7 +127,7 @@ namespace gc {
         return result;
     }
     
-    Value Value::_from_object(const HeapValue* object) {
+    Value Value::_from_object(const Object* object) {
         Value result;
         result._pointer = object;
         assert(result._is_pointer());
@@ -227,7 +136,7 @@ namespace gc {
     
     Value Value::from_bool(bool flag) {
         Value result;
-        result._tag = BOOLEAN;
+        result._tag = TAG_BOOLEAN;
         result._boolean.boolean = flag;
         assert(result.is_boolean());
         return result;
@@ -240,165 +149,17 @@ namespace gc {
     
     
     
-    bool HeapValue::logical_not() const {
-        abort();
-    }
-    
-    std::partial_ordering HeapValue::three_way_comparison(Value other) const {
-        abort();
-    }
-    
-    bool HeapValue::equality(Value) const {
-        abort();
-    }
-    
-    
-    Value HeapValue::multiplication(Value) const {
-        return Value::make_error();
-    }
-
-    Value HeapValue::division(Value) const {
-        return Value::make_error();
-    }
-
-    Value HeapValue::remainder(Value) const {
-        return Value::make_error();
-    }
-    
-    Value HeapValue::addition(Value) const {
-        return Value::make_error();
-    }
-
-    Value HeapValue::subtraction(Value) const {
-        return Value::make_error();
-    }
-
-    Value HeapValue::bitwise_and(Value) const {
-        return Value::make_error();
-    }
-    
-    Value HeapValue::bitwise_or(Value) const {
-        return Value::make_error();
-    }
-    
-    Value HeapValue::bitwise_xor(Value) const {
-        return Value::make_error();
-    }
-    
-    Value HeapValue::function_call() const {
-        return Value::make_error();
-    }
-    
-    Value HeapValue::left_shift(Value) const {
-        return Value::make_error();
-    }
-    
-    Value HeapValue::right_shift(Value) const {
-        return Value::make_error();
-    }
-    
-    Value HeapValue::unary_plus() const {
-        return Value::make_error();
-    }
-    
-    Value HeapValue::unary_minus() const {
-        return Value::make_error();
-    }
-    
-    Value HeapValue::bitwise_not() const {
-        return Value::make_error();
-    }
-    
-    
-    
-    
-    
-    void HeapValue::prefix_increment(Value& self) const {
-        self += Value::from_int64(1);
-    }
-
-    void HeapValue::prefix_decrement(Value& self) const {
-        self -= Value::from_int64(1);
-    }
-
-    Value HeapValue::postfix_increment(Value& self) const {
-        Value old;
-        ++self;
-        return old;
-    }
-    
-    Value HeapValue::postfix_decrement(Value& self) const {
-        Value old;
-        --self;
-        return old;
-    }
-    
-    
-    
-    void HeapValue::assigned_addition(Value& self, Value other) const {
-        self = self + other;
-    }
-
-    void HeapValue::assigned_subtraction(Value& self, Value other) const {
-        self = self - other;
-    }
-
-    void HeapValue::assigned_multiplication(Value& self, Value other) const {
-        self = self * other;
-    }
-
-    void HeapValue::assigned_division(Value& self, Value other) const {
-        self = self / other;
-    }
-    
-    void HeapValue::assigned_remainder(Value& self, Value other) const {
-        self = self % other;
-    }
-    
-    void HeapValue::assigned_bitwise_and(Value& self, Value other) const {
-        self = self & other;
-    }
-    
-    void HeapValue::assigned_bitwise_xor(Value& self, Value other) const {
-        self = self ^ other;
-    }
-    
-    void HeapValue::assigned_bitwise_or(Value& self, Value other) const {
-        self = self | other;
-    }
-    
-    void HeapValue::assigned_left_shift(Value& self, Value other) const {
-        self = self << other;
-    }
-
-    void HeapValue::assigned_right_shift(Value& self, Value other) const {
-        self = self >> other;
-    }
-
-    const HeapArray* HeapValue::as_HeapArray() const {
-        return nullptr;
-    }
-    
-    const HeapInt64* HeapValue::as_HeapInt64() const {
-        return nullptr;
-    }
-    
-    const HeapString* HeapValue::as_HeapString() const {
-        return nullptr;
-    }
-    
-    const HeapTable* HeapValue::as_HeapTable() const {
-        return nullptr;
-    }
 
     
     
-    String HeapValue::str() const {
+    /*
+    String Object::str() const {
         Value a = Value::from_ntbs("HeapValue");
         String b;
         b._string = a._short_string;
         return b;
     };
+     */
     
     
     
@@ -740,62 +501,62 @@ namespace gc {
     
     std::size_t String::size() const {
         switch (_discriminant()) {
-            case Value::POINTER:
+            case TAG_POINTER:
                 assert(_pointer);
-                return _pointer->size();
-            case Value::SHORT_STRING:
+                return _pointer->_size;
+            case TAG_SHORT_STRING:
                 return (_tag >> 4) & 15;
             default:
                 abort();
         }
     }
 
-    bool HeapValue::contains(Value key) const {
-        switch (_class) {
-            case CLASS_HEAP_TABLE:
-                return ((const HeapTable*) this)->contains(key);
+    bool contains(const Object* self, Value key) {
+        switch (self->_class) {
+            case CLASS_TABLE:
+                return ((const HeapTable*) self)->contains(key);
             default:
                 return false;
         }
     }
 
-    Value HeapValue::find(Value key) const {
-        switch (_class) {
-            case CLASS_HEAP_TABLE:
-                return ((const HeapTable*) this)->find(key);
+    Value find(const Object* self, Value key) {
+        switch (self->_class) {
+            case CLASS_TABLE:
+                return ((const HeapTable*) self)->find(key);
             default:
                 return Value::make_error();
         }
     }
 
-    Value HeapValue::insert_or_assign(Value key, Value value) const {
-        switch (_class) {
-            case CLASS_HEAP_TABLE:
-                return ((const HeapTable*) this)->insert_or_assign(key, value);
+    Value insert_or_assign(const Object* self, Value key, Value value) {
+        switch (self->_class) {
+            case CLASS_TABLE:
+                return ((const HeapTable*) self)->insert_or_assign(key, value);
             default:
                 return Value::make_error();
         }
     }
 
-    Value HeapValue::erase(Value key) const {
-        switch (_class) {
-            case CLASS_HEAP_TABLE:
-                return ((const HeapTable*) this)->erase(key);
+    Value erase(const Object* self, Value key) {
+        switch (self->_class) {
+            case CLASS_TABLE:
+                return ((const HeapTable*) self)->erase(key);
             default:
                 return Value::make_error();
         }
 
     }
 
-    std::size_t HeapValue::size() const {
-        switch (_class) {
+    std::size_t size(const Object* self) {
+        switch (self->_class) {
             case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-                return ((const IndirectFixedCapacityValueArray*) this)->_capacity;
-            case CLASS_HEAP_TABLE:
-                return ((const HeapTable*) this)->size();
-            case CLASS_HEAP_STRING:
-                return ((const HeapString*) this)->size();
-            case CLASS_HEAP_INT64:
+                return ((const IndirectFixedCapacityValueArray*) self)->_capacity;
+            case CLASS_TABLE:
+                return ((const HeapTable*) self)->size();
+            case CLASS_STRING:
+                return ((const HeapString*) self)->_size;
+            case CLASS_INT64:
                 return 0;
             default:
                 abort();
@@ -807,10 +568,11 @@ namespace gc {
 
     
     std::size_t Value::size() const {
+        using gc::size;
         switch (_discriminant()) {
-            case POINTER:
-                return _pointer ? _pointer->size() : 0;
-            case SHORT_STRING:
+            case TAG_POINTER:
+                return _pointer ? size(_pointer) : 0;
+            case TAG_SHORT_STRING:
                 return _short_string.size();
             default:
                 return 0;
@@ -818,9 +580,10 @@ namespace gc {
     }
     
     bool Value::contains(Value key) const {
+        using gc::contains;
         switch (_discriminant()) {
-            case POINTER:
-                return _pointer && _pointer->contains(key);
+            case TAG_POINTER:
+                return _pointer && contains(_pointer, key);
             default:
                 return false;
         }
@@ -834,18 +597,18 @@ namespace gc {
     
     void shade(Value value) {
         if (value._is_pointer()) {
-            shade(value._as_pointer());
+            object_shade(value._as_pointer());
         }
     }
     
     
     
     _deferred_subscript_t::operator Value() && {
-        return container._pointer->find(key);
+        return find(container._pointer, key);
     }
     
     _deferred_subscript_t&& _deferred_subscript_t::operator=(Value desired) && {
-        container._pointer->insert_or_assign(key, desired);
+        insert_or_assign(container._pointer, key, desired);
         return std::move(*this);
     }
     
@@ -854,21 +617,12 @@ namespace gc {
     }
 
     
-    Value Value::make_error() { Value result; result._enumeration = ERROR; return result; }
+    Value Value::make_error() { Value result; result._enumeration = TAG_ERROR; return result; }
     Value Value::make_null() { Value result; result._enumeration = 0; return result; }
-    Value Value::make_tombstone() { Value result; result._enumeration = TOMBSTONE; return result; }
+    Value Value::make_tombstone() { Value result; result._enumeration = TAG_TOMBSTONE; return result; }
 
     
-    
-    
-    /*
-    void HeapLeaf::_gc_shade() const {
-        _gc_shade_for_leaf(&this->_gc_color);
-    }
-    void HeapLeaf::gc_enumerate() const {
-        // no children
-    }
-     */
+   
 
     
     
@@ -893,13 +647,6 @@ namespace gc {
         return make(v, std::hash<std::string_view>()(v));
     }
     
-    /*
-    HeapString::~HeapString() {
-        // printf("%p del \"%.*s\"\n", this, (int)_size, _bytes);
-    }
-     */
-
-    
     std::string_view HeapString::as_string_view() const {
         return std::string_view(_bytes, _size);
     }
@@ -907,29 +654,56 @@ namespace gc {
     
     
     
-    /*
-    HeapInt64::~HeapInt64() {
-        // printf("%p del %" PRId64 "\n", this, _integer);
-    }
-     */
-    
     HeapInt64::HeapInt64(std::int64_t z)
-    : HeapValue(CLASS_HEAP_INT64)
+    : Object(CLASS_INT64)
     , _integer(z) {
-        // printf("%p new %" PRId64 "\n", this, _integer);
     }
 
-    
-
-    
     std::int64_t HeapInt64::as_int64_t() const {
         return _integer;
     }
         
-    
-    
-    HeapString::HeapString() 
-    : HeapValue(CLASS_HEAP_STRING) {        
+    HeapString::HeapString()
+    : Object(CLASS_STRING) {
     }
     
 } // namespace gc
+
+
+
+
+
+
+// To support basic math operators we need
+// + -> arbitrary precision
+// - -> signed
+// / -> rational
+//
+// a more conventional solution is to use floating point, but this is
+// problematic for getting consistent results across clients, and generally
+// a can of worms
+//
+// other choices:
+// hard limit at some human-friendly decimal value like 1k, 1M?
+// expose hardware modulo 2^n?
+// expose intger division?
+// fixed point?
+//
+// I don't really want to expose arbitrary math on approximate real numbers,
+// like sqrt, sin etc.
+
+
+// Pointer to a garbage-collected heap representation, or an inline integer
+// representation.  Uses invalid (misaligned) pointer values to distinguish
+// multiple cases; we can tag 15 kinds of not-pointer with the 4 lsbs, with
+// 0b...0000 being a valid aligned address.
+//
+// Some kinds of Value are exclusively represented on the heap (mutable
+// containers) or exclusively on the stack (bool, enumerations), and
+// others may switch (immutable containers such as strings and arbitrary
+// precision integers keep small, and presumed common, values inline)
+
+// TODO: Is this a Value... or a Variable?
+// "strings are immutable", but V*** can change which immutable string they
+// reference.  And indeed, the gc::String object can change what it points
+// to.  Call these things Variables instead?

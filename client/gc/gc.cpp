@@ -17,28 +17,9 @@ namespace gc {
     void trace(const Object*);
     std::size_t gc_bytes(const Object*);
     void gc_enumerate(const Object*);
-    void _gc_shade(const Object*);
     void _gc_trace(const Object*);
     void _gc_delete(const Object*);
 
-    
-    
-    struct Palette {
-        struct BlackImposter {
-            Color white;
-            operator Color() const { return (Color)(white ^ 1); }
-            //BlackImposter& operator=(Color value) { white = value ^ 1; return *this; }
-        };
-        union {
-            struct {
-                Color white;
-            };
-            BlackImposter black;
-        };
-        Color alloc;
-        static constexpr Color gray = COLOR_GRAY;
-        static constexpr Color red = COLOR_RED;
-    };
     
     struct Log {
         
@@ -98,7 +79,7 @@ namespace gc {
             MUTATOR_DID_LEAVE, // -> .
         };
         
-        Palette palette;
+        // Palette palette;
         // std::atomic<TaggedPtr<LogNode>> log_stack_head;
         Atomic<TaggedPtr<LogNode>> log_stack_head;
         
@@ -127,12 +108,11 @@ namespace gc {
         
         // Thread local state
         
-        Palette palette; // colors received from Collector
+        // Palette palette; // colors received from Collector
         Log     log    ; // activity to publish to Collector
         
         void _white_to_gray(Atomic<Color>& color);
         bool _white_to_black(Atomic<Color>& color) const;
-        void shade(const Object*);
         // template<typename T> T* write(std::atomic<T*>& target, std::type_identity_t<T>* desired);
         // template<typename T> T* write(std::atomic<T*>& target, std::nullptr_t);
         
@@ -211,30 +191,8 @@ namespace gc {
     
     Collector* global_collector = nullptr;
     
-    
-    
-    void Mutator::shade(const Object* object) {
-        if (object) {
-            _gc_shade(object);
-        }
-    }
-    
-    // write barrier (non-trivial)
-    /*
-    template<typename T>
-    T* Mutator::write(std::atomic<T*>& target, std::type_identity_t<T>* desired) {
-        T* discovered = target.exchange(desired, Order::RELEASE);
-        this->shade(desired);
-        this->shade(discovered);
-        return discovered;
-    }
-    
-    template<typename T>
-    T* Mutator::write(std::atomic<T*>& target, std::nullptr_t) {
-        T* discovered = target.exchange(nullptr, Order::RELEASE);
-        this->shade(discovered);
-    }
-     */
+
+   
     
     
     // StrongPtr is a convenience wrapper that implements the write barrier for
@@ -252,20 +210,20 @@ namespace gc {
     }
     
     void Mutator::_white_to_gray(Atomic<Color>& color) {
-        Color expected = this->palette.white;
+        Color expected = global_collector->_atomic_white.load(Order::RELAXED);
         if (color.compare_exchange_strong(expected,
                                           COLOR_GRAY,
                                           Order::RELAXED,
                                           Order::RELAXED)) {
-            if (!std::exchange(this->log.dirty, true))
-                printf("Mutator became dirty\n");
+            //if (!std::exchange(this->log.dirty, true))
+              //  printf("Mutator became dirty\n");
         }
     }
     
     bool Mutator::_white_to_black(Atomic<Color>& color) const {
-        Color expected = this->palette.white;
+        Color expected = global_collector->_atomic_white.load(Order::RELAXED);
         return color.compare_exchange_strong(expected,
-                                             Color_invert(expected),
+                                             color_invert(expected),
                                              Order::RELAXED,
                                              Order::RELAXED);
     }
@@ -297,7 +255,7 @@ namespace gc {
     
     Object::Object(Class class_)
     : _class(class_)
-    , _color(Mutator::get().palette.alloc) {
+    , _color(global_collector->_atomic_alloc.load(Order::RELAXED)) {
     }
     
     
@@ -329,16 +287,16 @@ namespace gc {
                                                Order::ACQUIRE))
                 break;
         }
-        this->palette.white = global_collector->_atomic_white.load(Order::RELAXED);
-        this->palette.alloc = global_collector->_atomic_alloc.load(Order::RELAXED);
+        //this->palette.white = global_collector->_atomic_white.load(Order::RELAXED);
+        //this->palette.alloc = global_collector->_atomic_alloc.load(Order::RELAXED);
     }
     
     void Mutator::_publish_with_tag(Channel::Tag tag) {
         assert(_channel);
         LogNode* node = new LogNode;
-        if (this->log.dirty) {
-            printf("Mutator becomes clean\n");
-        }
+        //if (this->log.dirty) {
+        //    printf("Mutator becomes clean\n");
+        //}
         node->splice(std::move(this->log));
         assert(this->log.dirty == false);
         TaggedPtr<LogNode> desired(node, tag);
@@ -376,7 +334,7 @@ namespace gc {
                 abort();
         }
         // we need to handshake
-        this->palette = _channel->palette;
+        //this->palette = _channel->palette;
         this->_publish_with_tag(Channel::MUTATOR_DID_PUBLISH_LOGS);
     }
 
@@ -388,9 +346,6 @@ namespace gc {
     
     
     void Collector::_set_alloc_to_black() {
-        //Palette x = this->_atomic_palette.load(Order::RELAXED);
-        //x.alloc = x.black;
-        //this->_atomic_palette.store(x, Order::RELAXED);
         Color white = _atomic_white.load(Order::RELAXED);
         Color black = (Color)(white ^ 1);
         _atomic_alloc.store(black, Order::RELAXED);
@@ -414,8 +369,6 @@ namespace gc {
             Channel* channel = _active_channels.back();
             assert(channel);
             _active_channels.pop_back();
-            channel->palette.white = this->_atomic_white.load(Order::RELAXED);
-            channel->palette.alloc = this->_atomic_alloc.load(Order::RELAXED);
             TaggedPtr<LogNode> desired = TaggedPtr<LogNode>(nullptr, Channel::COLLECTOR_DID_REQUEST_HANDSHAKE);
             TaggedPtr<LogNode> old = channel->log_stack_head.exchange(desired, Order::ACQ_REL);
             switch (old.tag) {
@@ -473,16 +426,6 @@ namespace gc {
                     goto beta;
                 }
                 case Channel::COLLECTOR_DID_REQUEST_WAKEUP:
-                    // We are trying to sleep
-                    // channel->log_stack_head.wait(expected, Order::RELAXED);
-                    // __ulock_wait();
-                    /*
-                    os_sync_wait_on_address(&(channel->log_stack_head),
-                                            expected._value,
-                                            8,
-                                            OS_SYNC_WAIT_ON_ADDRESS_NONE);
-                    goto alpha;
-                     */
                     expected = channel->log_stack_head.wait(expected, Order::ACQUIRE);
                     goto beta;
                 case Channel::MUTATOR_DID_PUBLISH_LOGS: {
@@ -547,7 +490,7 @@ namespace gc {
         
         for (;;) {
             
-            printf("Collector A\n");
+            // printf("Collector A\n");
 
             
             // All mutators are allocating WHITE
@@ -556,6 +499,8 @@ namespace gc {
             // Change alloc color from WHITE to BLACK
                         
             _set_alloc_to_black();
+            Color white = global_collector->_atomic_white.load(Order::RELAXED);
+            Color black = color_invert(white);
             _synchronize();
             object_bag.splice(std::move(_collector_log.allocations));
             _collector_log.dirty = false;
@@ -581,15 +526,15 @@ namespace gc {
                     // this briefly violates the tricolor invariant but the
                     // mutator threads are blind to shades of nonwhite and this
                     // collector thread immediately restores it
-                    Color expected = this->palette.gray;
-                    Color desired = this->palette.black;
+                    Color expected = COLOR_GRAY;
+                    Color desired = black;
                     if (object->_color.compare_exchange_strong(expected, desired, Order::RELAXED, Order::RELAXED)) {
                         expected = desired;
                         gc_enumerate(object);
                     }
-                    if (expected == this->palette.black) {
+                    if (expected == black) {
                         black_bag.push(object);
-                    } else if (expected == this->palette.white) {
+                    } else if (expected == white) {
                         white_bag.push(object);
                     } else  {
                         abort();
@@ -655,11 +600,6 @@ namespace gc {
     
     
     
-    void shade(const Object* object) {
-        if (object) {
-            _gc_shade(object);
-        }
-    }
     
 
     
@@ -680,12 +620,6 @@ namespace gc {
     
     void initialize_collector() {
         global_collector = new gc::Collector;
-        gc::Palette p;
-        p.white = COLOR_WHITE;
-        p.alloc = COLOR_WHITE;
-        // global_collector->_atomic_palette.store(p, Order::RELEASE);
-        //global_collector->_atomic_white.store( = 0;
-        //global_collector->_atomic_alloc = 0;
         auto old = gc::Mutator::_exchange(global_collector);
         assert(!old);
         std::thread([](){
@@ -700,25 +634,20 @@ namespace gc {
             assert(!old);
             m->enter();
             for (int i = 0; i != -1; ++i) {
-                printf("Mutator A\n");
+                // printf("Mutator A\n");
                 // auto p = new(m->_allocate(sizeof(Object))) Object(*m);
                 auto p = new HeapInt64(787);
                 
                 foo();
                 
                 m->handshake();
-                _gc_shade(p);
+                object_shade(p);
                 // std::this_thread::sleep_for(std::chrono::milliseconds{10});
             }
             m->leave();
         }).detach();
     };
     
-    void shade(const Object* p, const Object* q) {
-        // TODO: share TLS lookup
-        shade(p);
-        shade(q);
-    }
     
     
     
@@ -730,23 +659,27 @@ namespace gc {
     
     
     void _gc_delete(const Object* object) {
-        printf("%p del\n", object);
         switch (object->_class) {
             case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
                 const IndirectFixedCapacityValueArray* p = (const IndirectFixedCapacityValueArray*)object;
+                // printf("%p del Traced<Value>[%zd]\n", p, p->_capacity);
                 free(p->_storage);
+                // printf("%p del IndirectFixedCapacityValueArray\n", p);
                 delete p;
             } break;
-            case CLASS_HEAP_TABLE: {
+            case CLASS_TABLE: {
                 const HeapTable* p = (const HeapTable*)object;
+                // printf("%p del HeapTable[%zd]\n", p, p->size());
                 delete p;
             } break;
-            case CLASS_HEAP_STRING: {
+            case CLASS_STRING: {
                 const HeapString* p = (const HeapString*)object;
+                // printf("%p del HeapString"..."\n", p, p->size());
                 delete p;
             } break;
-            case CLASS_HEAP_INT64: {
+            case CLASS_INT64: {
                 const HeapInt64* p = (const HeapInt64*)object;
+                // printf("%p del HeapInt64"..."\n", p, p->size());
                 delete p;
             } break;
         }
@@ -758,14 +691,14 @@ namespace gc {
                 const IndirectFixedCapacityValueArray* p = (const IndirectFixedCapacityValueArray*)object;
                 return sizeof(IndirectFixedCapacityValueArray) + p->_capacity * sizeof(Traced<Value>);
             }
-            case CLASS_HEAP_TABLE: {
+            case CLASS_TABLE: {
                 return sizeof(HeapTable);
             }
-            case CLASS_HEAP_STRING: {
+            case CLASS_STRING: {
                 const HeapString* p = (const HeapString*)object;
                 return sizeof(HeapString) + p->_size;
             }
-            case CLASS_HEAP_INT64: {
+            case CLASS_INT64: {
                 return sizeof(HeapInt64);
             }
             default: {
@@ -778,14 +711,14 @@ namespace gc {
     std::size_t gc_hash(const Object* object) {
         switch (object->_class) {
             case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-            case CLASS_HEAP_TABLE: {
+            case CLASS_TABLE: {
                 return std::hash<const void*>()(object);
             }
-            case CLASS_HEAP_STRING: {
+            case CLASS_STRING: {
                 const HeapString* p = (const HeapString*)object;
                 return p->_hash;
             } break;
-            case CLASS_HEAP_INT64: {
+            case CLASS_INT64: {
                 const HeapInt64* p = (const HeapInt64*)object;
                 return std::hash<std::int64_t>()(p->_integer);
             }
@@ -806,13 +739,13 @@ namespace gc {
                     trace(*first);
                 }
             } break;
-            case CLASS_HEAP_TABLE: {
+            case CLASS_TABLE: {
                 const HeapTable* p = (const HeapTable*)object;
                 trace(p->_alpha._manager);
                 trace(p->_beta._manager);
             } break;
-            case CLASS_HEAP_STRING:
-            case CLASS_HEAP_INT64:
+            case CLASS_STRING:
+            case CLASS_INT64:
                 break;
         }
         
@@ -821,14 +754,14 @@ namespace gc {
         
     }
     
-    void _gc_shade(const Object* object){
-        switch (object->_class) {
+    void object_shade(const Object* object){
+        if (object) switch (object->_class) {
             case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-            case CLASS_HEAP_TABLE:
+            case CLASS_TABLE:
                 Mutator::get()._white_to_gray(object->_color);
                 break;
-            case CLASS_HEAP_STRING:
-            case CLASS_HEAP_INT64:
+            case CLASS_STRING:
+            case CLASS_INT64:
                 Mutator::get()._white_to_black(object->_color);
                 break;
         }
@@ -840,18 +773,18 @@ namespace gc {
         Collector& context = *global_collector;
         switch (object->_class) {
             case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-            case CLASS_HEAP_TABLE:
+            case CLASS_TABLE:
                 if (context._white_to_black(object->_color)) {
                     context._scan_stack.push_back(object);
                 }
                 break;
-            case CLASS_HEAP_STRING:
-            case CLASS_HEAP_INT64:
+            case CLASS_STRING:
+            case CLASS_INT64:
                 abort();
         }
     }
 
-    Color Color_invert(Color x) {
+    Color color_invert(Color x) {
         return (Color)(x ^ 1);
     }
     
@@ -919,50 +852,5 @@ namespace gc {
     // the collector would mark children GRAY and then scan to rediscover them;
     // a singly linked list appearing in reverse order in the worklist would
     // require O(N) scans, i.e. O(NM) operations to fully trace.
-    
-    
-    
-    /*
-     template<typename T>
-     [[nodiscard]] T* read_barrier(const Atomic<T*>* target) {
-     return target->load(Order::RELAXED);
-     }
-     
-     template<typename T>
-     void write_barrier(Atomic<T*>* target, T* desired) {
-     T* discovered = target->exchange(desired, Order::RELEASE);
-     using gc::shade;
-     shade(discovered, desired);
-     }
-     
-     template<typename T>
-     void write_barrier(Atomic<T*>* target, std::nullptr_t) {
-     T* discovered = target->exchange(nullptr, Order::RELEASE);
-     using gc::shade;
-     shade(discovered);
-     }
-     
-     template<typename T>
-     T* read_write_barrier(Atomic<T*>* target, T* desired) {
-     T* discovered = target->exchange(desired, Order::RELEASE);
-     using gc::shade;
-     shade(discovered, desired);
-     return discovered;
-     }
-     */
-    
-    
-    /*
-     
-     // Fundamental garbage collected thing
-     //
-     // TODO: Combine Color with something else to avoid overhead
-     // TODO: is gc::Object distinct from HeapValue
-     // TODO: how can we have static lifetime participants?
-
-     */
-    
-    // TODO: Extend interfaces to accept a context to avoids TLS lookup
-
     
 } // namespace gc

@@ -12,7 +12,6 @@
 #include <cinttypes>
 #include <cstdint>
 
-#include <atomic>
 #include <deque>
 #include <vector>
 
@@ -23,11 +22,15 @@
 
 namespace gc {
     
+    struct Object;
+    template<typename T> struct Traced;
+
+    
     enum Class {
         CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY,
-        CLASS_HEAP_TABLE,
-        CLASS_HEAP_STRING,
-        CLASS_HEAP_INT64
+        CLASS_TABLE,
+        CLASS_STRING,
+        CLASS_INT64
     };
     
 
@@ -38,7 +41,7 @@ namespace gc {
         COLOR_RED = 3,
     }; // enum Color
     
-    Color Color_invert(Color);
+    Color color_invert(Color);
 
     
     struct Object {
@@ -49,21 +52,28 @@ namespace gc {
         Class _class;
         mutable Atomic<Color> _color;
         
+        Object() = delete;
+        Object(const Object&);
+        Object(Object&&);
+        ~Object() = default;
+        Object& operator=(const Object&);
+        Object& operator=(Object&&);
+
         explicit Object(Class class_);
         
+        std::strong_ordering operator<=>(const Object&) const;
+        bool operator==(const Object&) const;
+
     }; // struct Object
     
-    void shade(const Object*);
-    void shade(const Object*, const Object*);
-
+    void object_shade(const Object*);
+        
     
-    template<typename T>
-    struct Traced;
     
     template<typename T>
     struct Traced<T*> {
 
-        Atomic<T*> _ptr;
+        Atomic<T*> _atomic_pointer;
 
         Traced() = default;
         Traced(const Traced& other);
@@ -84,12 +94,12 @@ namespace gc {
         
         T* get() const;
         
-    };
+    }; // struct Traced<T*>
     
     template<typename T>
     struct Traced<Atomic<T*>> {
         
-        Atomic<T*> _ptr;
+        Atomic<T*> _atomic_pointer;
         
         T* load(Order order) const;
         void store(T* desired, Order order);
@@ -97,7 +107,7 @@ namespace gc {
         bool compare_exchange_weak(T*& expected, T* desired, Order success, Order failure);
         bool compare_exchange_strong(T*& expected, T* desired, Order success, Order failure);
         
-    };
+    }; // struct Traced<Atomic<T*>>
         
     void* allocate(std::size_t count);
     
@@ -125,12 +135,12 @@ namespace gc {
     
     template<typename T>
     Traced<T*>::Traced(T* other)
-    : _ptr(other) {
+    : _atomic_pointer(other) {
     }
     
     template<typename T>
     Traced<T*>::Traced(std::nullptr_t)
-    : _ptr(nullptr) {
+    : _atomic_pointer(nullptr) {
     }
     
     template<typename T>
@@ -138,9 +148,10 @@ namespace gc {
         // Safety:
         //     An atomic::exchange is not used here because this_thread is
         // the only writer.
-        T* discovered = _ptr.load(Order::ACQUIRE);
-        _ptr.store(other, Order::RELEASE);
-        shade(discovered, other);
+        T* discovered = get();
+        _atomic_pointer.store(other, Order::RELEASE);
+        object_shade(discovered);
+        object_shade(other);
         return *this;
     }
     
@@ -148,15 +159,15 @@ namespace gc {
     Traced<T*>& Traced<T*>::operator=(std::nullptr_t) {
         // Safety:
         //     See above.
-        T* discovered = _ptr.load(Order::RELAXED);
-        _ptr.store(nullptr, Order::RELAXED);
-        shade(discovered);
+        T* discovered = get();
+        _atomic_pointer.store(nullptr, Order::RELAXED);
+        object_shade(discovered);
         return *this;
     }
     
     template<typename T>
     T* Traced<T*>::operator->() const {
-        return _ptr.load(Order::RELAXED);
+        return _atomic_pointer.load(Order::RELAXED);
     }
     
     template<typename T>
@@ -191,14 +202,14 @@ namespace gc {
     
     template<typename T>
     T* Traced<T*>::get() const {
-        return _ptr.load(Order::RELAXED);
+        return _atomic_pointer.load(Order::RELAXED);
     }
     
     
     
     template<typename T>
     T* Traced<Atomic<T*>>::load(Order order) const {
-        return _ptr.load(order);
+        return _atomic_pointer.load(order);
     }
         
     template<typename T>
@@ -206,23 +217,32 @@ namespace gc {
         (void) exchange(desired, order);
     }
 
-    template<typename T> [[nodiscard]]
+    template<typename T>
     T* Traced<Atomic<T*>>::exchange(T* desired, Order order) {
-        T* discovered = _ptr.exchange(desired, order);
-        shade(discovered, desired);
+        T* discovered = _atomic_pointer.exchange(desired, order);
+        object_shade(discovered);
+        object_shade(desired);
         return discovered;
     }
     
     template<typename T>
     bool Traced<Atomic<T*>>::compare_exchange_weak(T*& expected, T* desired, Order success, Order failure) {
-        return (_ptr.compare_exchange_weak(expected, desired, success, failure)
-                && (shade(expected, desired), true));
+        bool result = _atomic_pointer.compare_exchange_weak(expected, desired, success, failure);
+        if (result) {
+            object_shade(expected);
+            object_shade(desired);
+        }
+        return result;
     }
 
     template<typename T>
     bool Traced<Atomic<T*>>::compare_exchange_strong(T*& expected, T* desired, Order success, Order failure) {
-        return (_ptr.compare_exchange_strong(expected, desired, success, failure)
-                && (shade(expected, desired), true));
+        bool result = _atomic_pointer.compare_exchange_strong(expected, desired, success, failure);
+        if (result) {
+            object_shade(expected);
+            object_shade(desired);
+        }
+        return result;
     }
 
     
