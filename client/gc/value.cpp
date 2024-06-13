@@ -14,7 +14,10 @@
 
 
 namespace gc {
-            
+    
+   
+
+            /*
     std::string_view String::as_string_view() const {
         switch (_discriminant()) {
             case TAG_POINTER: {
@@ -27,7 +30,50 @@ namespace gc {
                 abort();
         }
     }
+    */
     
+    
+    int Value::_discriminant() const { return _data & VALUE_MASK; }
+    bool Value::_is_small_integer() const { return _discriminant() == TAG_SMALL_INTEGER; }
+    bool Value::_is_pointer() const { return _discriminant() == TAG_POINTER; }
+    bool Value::_is_short_string() const { return _discriminant() == TAG_SHORT_STRING; }
+    bool Value::_is_tombstone() const { return _discriminant() == TAG_TOMBSTONE; }
+    
+    // these logical types are always stored inline
+    bool Value::is_enumeration() const { return _discriminant() == TAG_ENUMERATION; }
+    bool Value::is_null() const { return !_data; }
+    bool Value::is_error() const { return _discriminant() == TAG_ERROR; }
+    bool Value::is_boolean() const { return _discriminant() == TAG_BOOLEAN; }
+    bool Value::is_character() const { return _discriminant() == TAG_CHARACTER; }
+    
+    const Object* Value::_as_pointer() const {
+        assert(_is_pointer());
+        return (Object*)_data;
+    }
+    
+    const Object* Value::_as_pointer_or_nullptr() const {
+        return _is_pointer() ? _as_pointer() : nullptr;
+    }
+    
+    int64_t Value::_as_small_integer() const {
+        assert(_is_small_integer());
+        return (int64_t)_data >> VALUE_SHIFT;
+    }
+    
+    std::string_view Value::_as_short_string() const {
+        assert(_is_short_string());
+        return ((const _short_string_t&)_data).as_string_view();
+    }
+    
+    bool Value::as_boolean() const {
+        assert(is_boolean());
+        return ((const _boolean_t&)_data).boolean;
+    }
+    
+    int64_t Value::as_enumeration() const {
+        assert(is_enumeration());
+        return (int64_t)_data >> 4;
+    }
 
     Value& operator++(Value& self) {
         self += 1;
@@ -105,10 +151,9 @@ namespace gc {
         Value result;
         std::int64_t y = z << 4;
         if ((y >> 4) == z) {
-            result._integer = y | TAG_SMALL_INTEGER;
+            result._data = y | TAG_SMALL_INTEGER;
         } else {
-            HeapInt64* a = new HeapInt64(z);
-            result._pointer = a;
+            result._data = (uint64_t)new HeapInt64(z);
         }
         return result;
     }
@@ -117,11 +162,13 @@ namespace gc {
         Value result;
         std::size_t n = std::strlen(ntbs);
         if (n < 8) {
-            result._enumeration = (n << 4) | TAG_SHORT_STRING;
-            std::memcpy(result._short_string._chars, ntbs, n);
+            _short_string_t s = {};
+            s._tag_and_len = (n << 4) | TAG_SHORT_STRING;
+            __builtin_memcpy(s._chars, ntbs, n);
+            __builtin_memcpy(&result, &s, 8);
             assert(result._is_short_string());
         } else {
-            result._pointer = HeapString::make(std::string_view(ntbs, n));
+            result._data = (uint64_t)HeapString::make(std::string_view(ntbs, n));
             assert(result._is_pointer());
         }
         return result;
@@ -129,15 +176,17 @@ namespace gc {
     
     Value Value::_from_object(const Object* object) {
         Value result;
-        result._pointer = object;
+        result._data = (uint64_t)object;
         assert(result._is_pointer());
         return result;
     }
     
     Value Value::from_bool(bool flag) {
         Value result;
-        result._tag = TAG_BOOLEAN;
-        result._boolean.boolean = flag;
+        _boolean_t b;
+        b._tag = TAG_BOOLEAN;
+        b.boolean = flag;
+        __builtin_memcpy(&result, &b, 8);
         assert(result.is_boolean());
         return result;
     }
@@ -264,7 +313,7 @@ namespace gc {
     
     
    
-    
+    /*
     std::size_t Table::size() const {
         return _pointer->size();
     }
@@ -294,13 +343,16 @@ namespace gc {
         return _pointer->find_or_insert_null(key);
         
     }
+*/
 
-
+    
+  
     
       
     void foo() {
         
-        Table t;
+        Value t;
+        t._data = (uint64_t)new HeapTable;
         
         assert(t.size() == 0);
         assert(!t.contains("a"));
@@ -473,7 +525,7 @@ namespace gc {
         // BOOLEAN: nonzero
         // ERROR: always false
         // TOMBSTONE: always false
-        return _enumeration >> 4;
+        return _data >> 4;
     }
     
     bool operator==(const Value& a, const Value& b) {
@@ -481,7 +533,7 @@ namespace gc {
         //    - Containers are by identity
         //    - Identity of empty containers?
         // INLINE: requires that we make padding bits consistent
-        return a._enumeration == b._enumeration;
+        return a._data == b._data;
     }
     
     
@@ -498,7 +550,7 @@ namespace gc {
 
     
     
-    
+    /*
     std::size_t String::size() const {
         switch (_discriminant()) {
             case TAG_POINTER:
@@ -510,6 +562,7 @@ namespace gc {
                 abort();
         }
     }
+     */
 
     bool contains(const Object* self, Value key) {
         switch (self->_class) {
@@ -564,16 +617,16 @@ namespace gc {
     }
 
     
-    Table::Table() : _pointer(new HeapTable()) {}
+    //Table::Table() : _pointer(new HeapTable()) {}
 
     
     std::size_t Value::size() const {
         using gc::size;
         switch (_discriminant()) {
             case TAG_POINTER:
-                return _pointer ? size(_pointer) : 0;
+                return _data ? size(_as_pointer()) : 0;
             case TAG_SHORT_STRING:
-                return _short_string.size();
+                return (_data >> 4) & 7;
             default:
                 return 0;
         }
@@ -583,7 +636,7 @@ namespace gc {
         using gc::contains;
         switch (_discriminant()) {
             case TAG_POINTER:
-                return _pointer && contains(_pointer, key);
+                return _data && contains(_as_pointer(), key);
             default:
                 return false;
         }
@@ -604,11 +657,11 @@ namespace gc {
     
     
     _deferred_subscript_t::operator Value() && {
-        return find(container._pointer, key);
+        return find(container._as_pointer(), key);
     }
     
     _deferred_subscript_t&& _deferred_subscript_t::operator=(Value desired) && {
-        insert_or_assign(container._pointer, key, desired);
+        insert_or_assign(container._as_pointer(), key, desired);
         return std::move(*this);
     }
     
@@ -617,9 +670,9 @@ namespace gc {
     }
 
     
-    Value Value::make_error() { Value result; result._enumeration = TAG_ERROR; return result; }
-    Value Value::make_null() { Value result; result._enumeration = 0; return result; }
-    Value Value::make_tombstone() { Value result; result._enumeration = TAG_TOMBSTONE; return result; }
+    Value Value::make_error() { Value result; result._data = TAG_ERROR; return result; }
+    Value Value::make_null() { Value result; result._data = 0; return result; }
+    Value Value::make_tombstone() { Value result; result._data = TAG_TOMBSTONE; return result; }
 
     
    
@@ -667,6 +720,23 @@ namespace gc {
     : Object(CLASS_STRING) {
     }
     
+    Value Value::insert_or_assign(Value key, Value value) {
+        using gc::insert_or_assign;
+        return insert_or_assign(_as_pointer(), key, value);
+    }
+
+    
+    Value Value::find(Value key) const {
+        using gc::find;
+        return find(_as_pointer(), key);
+    }
+    
+    Value Value::erase(Value key) {
+        using gc::erase;
+        return erase(_as_pointer(), key);
+    }
+
+    
 } // namespace gc
 
 
@@ -707,3 +777,18 @@ namespace gc {
 // "strings are immutable", but V*** can change which immutable string they
 // reference.  And indeed, the gc::String object can change what it points
 // to.  Call these things Variables instead?
+
+/*
+ 
+ 
+ union {
+ int _tag;
+ const Object* _pointer;
+ std::int64_t _integer;
+ _short_string_t _short_string;
+ _boolean_t _boolean;
+ std::int64_t _enumeration;
+ std::uint64_t _raw;
+ };
+ 
+ */

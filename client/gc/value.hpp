@@ -22,92 +22,22 @@ namespace gc {
     
     struct _deferred_subscript_t;
     
-    enum _tag_t {
-        TAG_POINTER = 0,
-        TAG_SMALL_INTEGER = 1,
-        TAG_SHORT_STRING = 3,
-        TAG_BOOLEAN = 4,
-        TAG_ENUMERATION = 5,
-        TAG_ERROR = 6,
-        TAG_CHARACTER = 7,
-        TAG_TOMBSTONE = 15,
-    };
-    
-    enum {
-        VALUE_SHIFT = 4,
-        VALUE_MASK = 15,
-    };
-    
-    struct _boolean_t {
-        int _tag;
-        bool boolean;
-    };
-    
-    struct _character_t {
-        int _tag;
-        int32_t _character; // UTF-32
-    };
-    
-    struct _short_string_t {
-        char _tag_and_len;
-        char _chars[7];
-        char* data() { return _chars; }
-        constexpr std::size_t size() const {
-            assert((_tag_and_len & VALUE_MASK) == TAG_SHORT_STRING);
-            return _tag_and_len >> VALUE_SHIFT;
-        }
-        constexpr std::string_view as_string_view() const {
-            return std::string_view(_chars, size());
-        }
-        std::size_t hash() const {
-            return std::hash<std::string_view>()(as_string_view());
-        }
-    };
-        
     struct Value {
         
-        // these are storage types, not logical types;
-        // e.g. a short string that is inlined is tag STRING,
-        // but a long string that lives on the heap is tag POINTER -> HeapString
+        uint64_t _data;
         
-        
-
-       
-        
-        enum : std::uint64_t {
-            VALUE_NULL = 0,
-            VALUE_ZERO = TAG_SMALL_INTEGER,
-            VALUE_EMPTY_STRING = TAG_SHORT_STRING,
-            VALUE_FALSE = TAG_BOOLEAN,
-            VALUE_TRUE = TAG_BOOLEAN | (1l << 32),
-            VALUE_ERROR = TAG_ERROR,
-            VALUE_TOMBSTONE = TAG_TOMBSTONE,
-        };
-             
-        
-        
-        union {
-            int _tag;
-            const Object* _pointer;
-            std::int64_t _integer;
-            _short_string_t _short_string;
-            _boolean_t _boolean;
-            std::int64_t _enumeration;
-            std::uint64_t _raw;
-        };
-        
-        int _discriminant() const { return _tag & VALUE_MASK; }
-        bool _is_small_integer() const { return _discriminant() == TAG_SMALL_INTEGER; }
-        bool _is_pointer() const { return _discriminant() == TAG_POINTER; }
-        bool _is_short_string() const { return _discriminant() == TAG_SHORT_STRING; }
-        bool _is_tombstone() const { return _discriminant() == TAG_TOMBSTONE; }
+        int _discriminant() const;
+        bool _is_small_integer() const;
+        bool _is_pointer() const;
+        bool _is_short_string() const;
+        bool _is_tombstone() const;
 
         // these logical types are always stored inline
-        bool is_enumeration() const { return _discriminant() == TAG_ENUMERATION; }
-        bool is_null() const { return !_pointer; }
-        bool is_error() const { return _discriminant() == TAG_ERROR; }
-        bool is_boolean() const { return _discriminant() == TAG_BOOLEAN; }
-        bool is_character() const { return _discriminant() == TAG_CHARACTER; }
+        bool is_enumeration() const;
+        bool is_null() const;
+        bool is_error() const;
+        bool is_boolean() const;
+        bool is_character() const;
         
         // Several types have only a small number of values, we can pack
         // them all into a single tag?
@@ -117,45 +47,26 @@ namespace gc {
         
         // implicit copy and move constructors
         
-        constexpr Value(std::nullptr_t) : _raw(0) {}
-        constexpr Value(bool flag) : _integer(TAG_BOOLEAN) { _boolean.boolean = flag; }
-        Value(const char* ntbs) { *this = Value::from_ntbs(ntbs); }
-        template<std::size_t N, typename = std::enable_if_t<(N > 0)>> constexpr Value(const char (&ntbs)[N]);
-        Value(int i) : _integer(((std::int64_t)i << VALUE_SHIFT) | TAG_SMALL_INTEGER) {}
+        constexpr Value(std::nullptr_t);
+        constexpr Value(bool flag);
+        Value(const char* ntbs);
+        template<std::size_t N, typename = std::enable_if_t<(N > 0)>>
+        constexpr Value(const char (&ntbs)[N]);
+        constexpr Value(int i);
         
         // implicit destructor
 
         // implicit copy and move assignment operators
         
-        const Object* _as_pointer() const {
-            assert(_is_pointer());
-            return _pointer;
-        }
+        const Object* _as_pointer() const;
         
-        const Object* _as_pointer_or_nullptr() {
-            return _is_pointer() ? _pointer : nullptr;
-        }
+        const Object* _as_pointer_or_nullptr() const;
+        int64_t _as_small_integer() const;
         
-        std::int64_t _as_small_integer() const {
-            assert(_is_small_integer());
-            return _integer >> VALUE_SHIFT;
-        }
+        std::string_view _as_short_string() const;
         
-        std::string_view _as_short_string() const {
-            assert(_is_short_string());
-            return _short_string.as_string_view();
-        }
-        
-        bool as_boolean() const {
-            assert(is_boolean());
-            return _boolean.boolean;
-        }
-        
-        std::int64_t as_enumeration() const {
-            assert(is_enumeration());
-            return _enumeration >> 4;
-        }
-        
+        bool as_boolean() const;
+        int64_t as_enumeration() const;
         
         static Value _from_object(const Object* object);
         static Value from_int64(std::int64_t z);
@@ -228,6 +139,7 @@ namespace gc {
     
     
     
+    /*
     
     struct Array;
     struct Boolean;
@@ -236,14 +148,19 @@ namespace gc {
     struct Number;
     struct String;
     struct Table;
+     
+     */
     
+    /*
     struct HeapArray;
     struct HeapInt64;
     struct HeapNumber;
     struct HeapString;
     struct HeapTable;
+     */
 
     
+    /*
     struct Array {
         HeapArray* _array;
         operator Value() const { return reinterpret_cast<const Value&>(*this); };
@@ -286,7 +203,7 @@ namespace gc {
         Value insert_or_assign(Value key, Value value);
     };
     
-    
+    */
     
     
     
@@ -595,22 +512,11 @@ namespace gc {
     }
 
     
-    template<std::size_t N, typename>
-    constexpr Value::Value(const char (&ntbs)[N]) {
-        const std::size_t M = N - 1;
-        assert(ntbs[M] == '\0');
-        if (M < 8) {
-            _short_string._tag_and_len = (M << 4) | TAG_SHORT_STRING;
-            // builtin for constexpr
-            __builtin_memcpy(_short_string._chars, ntbs, M);
-        } else {
-            _pointer = HeapString::make(ntbs);
-        }
-    }
+   
     
     // user defined literals
     
-    String operator""_v(const char* s, std::size_t n);
+    // String operator""_v(const char* s, std::size_t n);
     
     void shade(Value value);
     
@@ -916,7 +822,7 @@ namespace gc {
                     for (std::size_t i = 0; i != _mask + 1; ++i) {
                         Entry* pe = _storage + i;
                         Value ki = pe->key;
-                        printf("[%zd] = { %llx, ...}\n", i, ki._enumeration);
+                        printf("[%zd] = { %llx, ...}\n", i, ki._data);
                     }
                 }
                 assert(keys == _count);
@@ -1112,7 +1018,93 @@ namespace gc {
         
     }; // struct HeapTable
     
+    
+    
+    
+    enum _tag_t {
+        TAG_POINTER = 0,
+        TAG_SMALL_INTEGER = 1,
+        TAG_SHORT_STRING = 3,
+        TAG_BOOLEAN = 4,
+        TAG_ENUMERATION = 5,
+        TAG_ERROR = 6,
+        TAG_CHARACTER = 7,
+        TAG_TOMBSTONE = 15,
+    };
+    
+    enum {
+        VALUE_SHIFT = 4,
+        VALUE_MASK = 15,
+    };
+    
+    
+    
+    struct _boolean_t {
+        int _tag;
+        bool boolean;
+    };
+    
+    struct _character_t {
+        int _tag;
+        int32_t _character; // UTF-32
+    };
+    
+    struct _short_string_t {
+        char _tag_and_len;
+        char _chars[7];
+        char* data() { return _chars; }
+        constexpr std::size_t size() const {
+            assert((_tag_and_len & VALUE_MASK) == TAG_SHORT_STRING);
+            return _tag_and_len >> VALUE_SHIFT;
+        }
+        constexpr std::string_view as_string_view() const {
+            return std::string_view(_chars, size());
+        }
+        std::size_t hash() const {
+            return std::hash<std::string_view>()(as_string_view());
+        }
+    };
+    
+    enum : uint64_t {
+        VALUE_NULL = 0,
+        VALUE_ZERO = TAG_SMALL_INTEGER,
+        VALUE_EMPTY_STRING = TAG_SHORT_STRING,
+        VALUE_FALSE = TAG_BOOLEAN,
+        VALUE_TRUE = TAG_BOOLEAN | (1l << 32),
+        VALUE_ERROR = TAG_ERROR,
+        VALUE_TOMBSTONE = TAG_TOMBSTONE,
+    };
+    
+    
+    constexpr Value::Value(std::nullptr_t) : _data(0) {}
+    constexpr Value::Value(bool flag) : _data(((uint64_t)flag << 32) | TAG_BOOLEAN) {}
+    inline Value::Value(const char* ntbs) { *this = Value::from_ntbs(ntbs); }
+    constexpr Value::Value(int i) : _data(((int64_t)i << VALUE_SHIFT) | TAG_SMALL_INTEGER) {}
+
+    
        
+    
+    
+    
+    
+    
+    template<std::size_t N, typename>
+    constexpr Value::Value(const char (&ntbs)[N]) {
+        const std::size_t M = N - 1;
+        assert(ntbs[M] == '\0');
+        if (M < 8) {
+            _short_string_t s;
+            s._tag_and_len = (M << VALUE_SHIFT) | TAG_SHORT_STRING;
+            // builtin for constexpr
+            __builtin_memcpy(s._chars, ntbs, M);
+            __builtin_memcpy(&_data, &s, 8);
+        } else {
+            _data = (uint64_t)HeapString::make(ntbs);
+        }
+    }
+    
+    
+    
 } // namespace gc
 
 #endif /* value_hpp */
