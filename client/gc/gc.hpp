@@ -28,9 +28,9 @@ namespace gc {
     
     enum Class {
         CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY,
-        CLASS_TABLE,
+        CLASS_INT64,
         CLASS_STRING,
-        CLASS_INT64
+        CLASS_TABLE,
     };
     
 
@@ -67,13 +67,16 @@ namespace gc {
     }; // struct Object
     
     void object_shade(const Object*);
-        
-    
+    void object_trace(const Object*);
+    void* object_allocate(size_t count);
+    size_t object_hash(const Object*);
+
+
     
     template<typename T>
     struct Traced<T*> {
 
-        Atomic<T*> _atomic_pointer;
+        Atomic<T*> _atomic_object;
 
         Traced() = default;
         Traced(const Traced& other);
@@ -96,10 +99,16 @@ namespace gc {
         
     }; // struct Traced<T*>
     
+    template<typename T> void object_trace(const Traced<T*>&);
+
+    
+    
+    
+    
     template<typename T>
     struct Traced<Atomic<T*>> {
         
-        Atomic<T*> _atomic_pointer;
+        Atomic<T*> _atomic_object;
         
         T* load(Order order) const;
         void store(T* desired, Order order);
@@ -109,12 +118,10 @@ namespace gc {
         
     }; // struct Traced<Atomic<T*>>
         
-    void* allocate(std::size_t count);
-    
-    std::size_t gc_hash(const Object*);
+    template<typename T> void object_trace(const Traced<Atomic<T*>>&);
 
     
-    
+
     
     
     
@@ -135,12 +142,12 @@ namespace gc {
     
     template<typename T>
     Traced<T*>::Traced(T* other)
-    : _atomic_pointer(other) {
+    : _atomic_object(other) {
     }
     
     template<typename T>
     Traced<T*>::Traced(std::nullptr_t)
-    : _atomic_pointer(nullptr) {
+    : _atomic_object(nullptr) {
     }
     
     template<typename T>
@@ -149,7 +156,7 @@ namespace gc {
         //     An atomic::exchange is not used here because this_thread is
         // the only writer.
         T* discovered = get();
-        _atomic_pointer.store(other, Order::RELEASE);
+        _atomic_object.store(other, Order::RELEASE);
         object_shade(discovered);
         object_shade(other);
         return *this;
@@ -160,14 +167,14 @@ namespace gc {
         // Safety:
         //     See above.
         T* discovered = get();
-        _atomic_pointer.store(nullptr, Order::RELAXED);
+        _atomic_object.store(nullptr, Order::RELAXED);
         object_shade(discovered);
         return *this;
     }
     
     template<typename T>
     T* Traced<T*>::operator->() const {
-        return _atomic_pointer.load(Order::RELAXED);
+        return _atomic_object.load(Order::RELAXED);
     }
     
     template<typename T>
@@ -202,14 +209,19 @@ namespace gc {
     
     template<typename T>
     T* Traced<T*>::get() const {
-        return _atomic_pointer.load(Order::RELAXED);
+        return _atomic_object.load(Order::RELAXED);
     }
     
+    template<typename T>
+    void object_trace(const Traced<T*>& object) {
+        object_trace(object._atomic_object.load(Order::ACQUIRE));
+    }
+
     
     
     template<typename T>
     T* Traced<Atomic<T*>>::load(Order order) const {
-        return _atomic_pointer.load(order);
+        return _atomic_object.load(order);
     }
         
     template<typename T>
@@ -219,7 +231,7 @@ namespace gc {
 
     template<typename T>
     T* Traced<Atomic<T*>>::exchange(T* desired, Order order) {
-        T* discovered = _atomic_pointer.exchange(desired, order);
+        T* discovered = _atomic_object.exchange(desired, order);
         object_shade(discovered);
         object_shade(desired);
         return discovered;
@@ -227,7 +239,7 @@ namespace gc {
     
     template<typename T>
     bool Traced<Atomic<T*>>::compare_exchange_weak(T*& expected, T* desired, Order success, Order failure) {
-        bool result = _atomic_pointer.compare_exchange_weak(expected, desired, success, failure);
+        bool result = _atomic_object.compare_exchange_weak(expected, desired, success, failure);
         if (result) {
             object_shade(expected);
             object_shade(desired);
@@ -237,12 +249,18 @@ namespace gc {
 
     template<typename T>
     bool Traced<Atomic<T*>>::compare_exchange_strong(T*& expected, T* desired, Order success, Order failure) {
-        bool result = _atomic_pointer.compare_exchange_strong(expected, desired, success, failure);
+        bool result = _atomic_object.compare_exchange_strong(expected, desired, success, failure);
         if (result) {
             object_shade(expected);
             object_shade(desired);
         }
         return result;
+    }
+
+    
+    template<typename T>
+    void object_trace(const Traced<Atomic<T*>>& object) {
+        object_trace(object.load(Order::ACQUIRE));
     }
 
     

@@ -17,455 +17,72 @@
 #include "gc.hpp"
 
 namespace gc {
-    
-    struct Value;
-    
-    struct _deferred_subscript_t;
+        
+    struct _value_subscript_result_t;
     
     struct Value {
         
         uint64_t _data;
-        
-        int _discriminant() const;
-        bool _is_small_integer() const;
-        bool _is_pointer() const;
-        bool _is_short_string() const;
-        bool _is_tombstone() const;
-
-        // these logical types are always stored inline
-        bool is_enumeration() const;
-        bool is_null() const;
-        bool is_error() const;
-        bool is_boolean() const;
-        bool is_character() const;
-        
-        // Several types have only a small number of values, we can pack
-        // them all into a single tag?
-        // true, false, error, tombstone, UTF-32 character
-        
-        constexpr Value() = default;
-        
-        // implicit copy and move constructors
-        
-        constexpr Value(std::nullptr_t);
-        constexpr Value(bool flag);
-        Value(const char* ntbs);
-        template<std::size_t N, typename = std::enable_if_t<(N > 0)>>
-        constexpr Value(const char (&ntbs)[N]);
-        constexpr Value(int i);
-        
-        // implicit destructor
-
-        // implicit copy and move assignment operators
-        
-        const Object* _as_pointer() const;
-        
-        const Object* _as_pointer_or_nullptr() const;
-        int64_t _as_small_integer() const;
-        
-        std::string_view _as_short_string() const;
-        
-        bool as_boolean() const;
-        int64_t as_enumeration() const;
-        
-        static Value _from_object(const Object* object);
-        static Value from_int64(std::int64_t z);
-        static Value from_ntbs(const char* ntbs);
-        static Value from_bool(bool flag);
-
-        // monostates
-        static Value make_error();
-        static Value make_null();
-        static Value make_tombstone();
                         
-        // common interface functions
-        std::size_t hash() const;
-        
-        std::size_t size() const;
-        bool contains(Value key) const;
-        Value find(Value key) const;
-        
-        void resize(Value);
-        Value insert_or_assign(Value key, Value value);
-        Value erase(Value key);
-
-        // these operators must be defined inline
+        constexpr Value() = default;
+        constexpr Value(std::nullptr_t);
+        constexpr Value(bool);
+        constexpr Value(int i);
+        constexpr Value(const char*);
+        template<std::size_t N, typename = std::enable_if_t<(N > 0)>> constexpr Value(const char (&ntbs)[N]);
+                
+        // member operator overloads
         Value operator()() const;
         Value operator[](Value) const;
         explicit operator bool() const;
         
-        _deferred_subscript_t operator[](Value);
+        _value_subscript_result_t operator[](Value);
 
     }; // Value
-    
-    struct _deferred_subscript_t {
-        Value& container;
-        Value key;
-        operator Value() &&;
-        _deferred_subscript_t&& operator=(Value desired) &&;
-        _deferred_subscript_t&& operator=(_deferred_subscript_t&& desired) &&;
-    };
 
-    
-    
-    
-    
-    
+    Value value_make_boolean_with(bool flag);
+    Value value_make_character_with(int utf32);
+    Value value_make_enumeration_with(int64_t);
+    Value value_make_error();
+    Value value_make_error_with(const char*);
+    Value value_make_false();
+    Value value_make_integer_with(int64_t z);
+    Value value_make_null();
+    Value value_make_string_with(const char* ntbs);
+    Value value_make_table();
+    Value value_make_tombstone();
+    Value value_make_true();
+    Value value_make_zero();
+    Value value_make_one();
+
+    Value value_make_deep_copy(const Value&);
+
+    bool value_is_boolean(const Value& self);
+    bool value_is_character(const Value& self);
+    bool value_is_enumeration(const Value& self);
+    bool value_is_error(const Value& self);
+    bool value_is_null(const Value& self);
         
+    bool value_as_boolean(const Value& self);
+    bool value_as_boolean_else(const Value& self, bool);
+    int  value_as_character(const Value& self);
+    int  value_as_character_else(const Value& self, int);
+    int64_t value_as_enumeration(const Value& self);
+    int64_t value_as_enumeration_else(const Value& self, int64_t);
+    int64_t value_as_int64_t(const Value& self);
+    int64_t value_as_int64_t_else(const Value& self, int64_t);
+    std::string_view value_as_string_view(const Value& self);
+    std::string_view value_as_string_view_else(const Value& self, std::string_view);
 
-    template<>
-    struct Traced<Value> {
-        
-        Atomic<Value> _value;
-
-        Traced() = default;
-        Traced(const Traced& other);
-        ~Traced() = default;
-        Traced& operator=(const Traced& other);
-        explicit Traced(const Value& other);
-        Traced& operator=(const Value& other);
-        explicit operator bool() const;
-        operator Value() const;
-        bool operator==(const Traced& other) const;
-        auto operator<=>(const Traced& other) const;
-        Value get() const;
-    };
-    
-    template<>
-    struct Traced<Atomic<Value>> {
-        // ...
-    };
-    
-    
-    
-    
-    /*
-    
-    struct Array;
-    struct Boolean;
-    struct Character;
-    struct Enumeration;
-    struct Number;
-    struct String;
-    struct Table;
-     
-     */
-    
-    /*
-    struct HeapArray;
-    struct HeapInt64;
-    struct HeapNumber;
-    struct HeapString;
-    struct HeapTable;
-     */
-
-    
-    /*
-    struct Array {
-        HeapArray* _array;
-        operator Value() const { return reinterpret_cast<const Value&>(*this); };
-        std::size_t size() const;
-        Value operator[](std::size_t pos) const;
-        Traced<Value>& operator[](std::size_t pos);
-    };
-    
-    struct String {
-        union {
-            int _tag;
-            const HeapString* _pointer;
-            _short_string_t _string;
-        };
-        int _discriminant() const { return _tag & VALUE_MASK; }
-        bool _is_pointer() const { return _discriminant() == TAG_POINTER; }
-        bool _is_short_string() const { return _discriminant() == TAG_SHORT_STRING; }
-        const HeapString* _as_pointer() const {
-            assert(_is_pointer());
-            return _pointer;
-        }
-        const HeapString* _as_pointer_else_nullptr() {
-            return _is_pointer() ? _pointer : nullptr;
-        }
-        operator Value() const { return reinterpret_cast<const Value&>(*this); }
-        std::string_view as_string_view() const;
-        std::size_t size() const;
-    };
-    
-    struct Table {
-        const HeapTable* _pointer;
-        Table();
-        operator Value() const { return reinterpret_cast<const Value&>(*this); };
-        Value operator[](Value key) const;
-        Traced<Value>& operator[](Value key);
-        bool contains(Value key) const;
-        std::size_t size() const;
-        Value find(Value key) const;
-        Value erase(Value key);
-        Value insert_or_assign(Value key, Value value);
-    };
-    
-    */
-    
-    
-    
-    
-    
-    
-    void trace(Value a);
-
-    
-    
-    
-    
-    
-   
-
-    
-    
-    
-
-
-    // will hold a container ref and a key, and resolve to something depending
-    // on how it is used (as a get, a set, or a read-modity-write)
-    
-    // TODO: for binary operators, we have the multiple dispatch problem
-    // - elegant solution?
-    // - symmetric implementation?
-    
-    // We expose all C++ operators on Values, for convenience and familiarity,
-    // though some are problematic with the GC syntax.  Note that there is
-    // no particular requirement that "the game" or "the mod scripting
-    // language" follow these same semantics.
-    
-    /*
-    
-    struct HeapValue : Object {
-        
-        // to reach this point the (lhs or unary) participaing Value must be
-        // a heap-allocated object, but when the operation is mutating it need
-        // not remain so; for example, LongInteger *= 0 will replace the Value
-        // with an inline 0.
-        
-        // reflection
-        
-        const HeapInt64* as_HeapInt64() const;
-        const HeapString* as_HeapString() const;
-        const HeapArray* as_HeapArray() const;
-        const HeapTable* as_HeapTable() const;
-
-        // comparison
-        
-        std::partial_ordering three_way_comparison(Value) const;
-        bool equality(Value) const;
-        bool logical_not() const;
-
-        // pure unary
-        Value unary_plus() const;
-        Value unary_minus() const;
-        Value bitwise_not() const;
-        
-        // mutating unary
-        Value postfix_increment(Value& self) const;
-        Value postfix_decrement(Value& self) const;
-        void prefix_increment(Value& self) const;
-        void prefix_decrement(Value& self) const;
-        
-        // pure binary
-        Value multiplication(Value) const;
-        Value division(Value) const;
-        Value remainder(Value) const;
-        Value addition(Value) const;
-        Value subtraction(Value) const;
-        Value left_shift(Value) const;
-        Value right_shift(Value) const;
-        Value bitwise_and(Value) const;
-        Value bitwise_xor(Value) const;
-        Value bitwise_or(Value) const;
-        
-        // mutating binary
-        
-        // since numbers on the heap are immutable, there seems to be no
-        // meaningful customization possible here; they will just have tp
-        // do the basic operation and replace their handle with it
-        void assigned_multiplication(Value&, Value) const;
-        void assigned_division(Value&, Value) const;
-        void assigned_remainder(Value&, Value) const ;
-        void assigned_addition(Value&, Value) const;
-        void assigned_subtraction(Value&, Value) const;
-        void assigned_left_shift(Value&, Value) const;
-        void assigned_right_shift(Value&, Value) const;
-        void assigned_bitwise_and(Value&, Value) const;
-        void assigned_bitwise_xor(Value&, Value) const;
-        void assigned_bitwise_or(Value&, Value) const;
-
-        // odd cases
-        Value function_call() const;
-        // Value subscript_const(Value other) const;
-        // DeferredElementAccess subscript_mutable(Value& self, Value other);
-        //virtual
-        
-        // built-in functions
-        String str() const;
-                
-        // common interface
-        std::size_t size() const;
-        bool contains(Value) const;
-        Value find(Value) const;
-        Value erase(Value) const;
-        Value insert_or_assign(Value, Value) const;
-        
-        explicit HeapValue(Class class_) : Object(class_) {}
-
-    };
-    
-   */
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    // TODO: upgrade to array of limbs of arbitrary precision integer
-    struct HeapInt64 : Object {
-        std::int64_t _integer;
-        explicit HeapInt64(std::int64_t z);
-        std::int64_t as_int64_t() const;
-    };
-    
-    struct HeapString : Object {
-        std::size_t _hash;
-        std::size_t _size;
-        char _bytes[0];
-        static void* operator new(std::size_t count, std::size_t extra);
-        static HeapString* make(std::string_view v, std::size_t hash);
-        static HeapString* make(std::string_view v);
-        std::string_view as_string_view() const;
-        HeapString();
-    }; // struct HeapString
-        
-    
-    
-    
-    
-        
-   
-        
-    
-    
-    // This is a std::vector-like object that is garbage collected
-    // It is only "concurrent enough" for GC; it does not support access by
-    // multiple mutators.
-    //
-    // Notably it is only amortized O(1), and has a worst case O(N).  As such
-    // it is unsuitable for general use in soft real time contexts, but is
-    // still useful for things that have some kind of moderate bounded size,
-    // and as a stepping stone to more advanced data structures.
-    
-
-    
-    
-    
-    struct DeferredElementAccess {
-        Value& self;
-        Value pos;
-    };
-    
-    
-    
-    /*
-    
-    template<typename F>
-    auto visit(Value value, F&& f) {
-        switch (value._tag & Value::MASK) {
-            case Value::POINTER: {
-                const HeapValue* a = value._as_pointer();
-                const HeapInt64* b = dynamic_cast<const HeapInt64*>(a);
-                if (b) {
-                    return f(b->_integer);
-                }
-                const HeapString* c = dynamic_cast<const HeapString*>(a);
-                if (c) {
-                    return f(c->as_string_view());
-                }
-                abort();
-            }
-            case Value::SMALL_INTEGER: {
-                return f(value._as_small_integer());
-            }
-            case Value::SHORT_STRING: {
-                return f(value._as_short_string());
-            }
-            case Value::BOOLEAN: {
-                return f(value.as_boolean());
-            }
-            default:
-                abort();
-        }
-    }
-    
-    */
-    
-    
-    
-    void foo();
-   
-    
-
-    
-
-    
-    
-    /*
-     
-     // There's no need for this type until we support non-int64 numbers
-     
-     struct Number {
-     
-     Value _value_that_is_a_number;
-     
-     operator Value() const { // upcast
-     return _value_that_is_a_number;
-     }
-     
-     std::int64_t as_int64_t() const {
-     switch (_value_that_is_a_number._get_tag()) {
-     case Value::POINTER: {
-     const Object* a = _value_that_is_a_number._as_object();
-     assert(dynamic_cast<const HeapInt64*>(a));
-     const HeapInt64* b = static_cast<const HeapInt64*>(a);
-     return b->as_int64_t();
-     }
-     case Value::INTEGER: {
-     return _value_that_is_a_number._as_integer();
-     }
-     default:
-     abort();
-     }
-     }
-     
-     };
-     */
-    
-    
-    
-    
-    
-    inline void trace(Value a) {
-        if (a._is_pointer())
-            trace(a._as_pointer());
-    }
-
+    size_t value_hash(const Value&);
+    size_t value_size(const Value&);
+    bool   value_contains(const Value& self, Value key);
+    Value  value_find(const Value& self, Value key);
+    Value  value_insert_or_assign(Value& self, Value key, Value value);
+    Value  value_erase(Value& self, Value key);
+    void   value_resize(Value& self, Value count);
+    
+    // nonmember operator overloads
     
     Value operator++(Value&, int);
     Value operator--(Value&, int);
@@ -507,18 +124,142 @@ namespace gc {
     
     
     
-    inline void trace(const Traced<Value>& x) {
-        trace(x._value.load(Order::ACQUIRE));
-    }
+    template<>
+    struct Traced<Value> {
+        
+        Atomic<Value> _atomic_value;
+
+        Traced() = default;
+        Traced(const Traced& other);
+        ~Traced() = default;
+        Traced& operator=(const Traced& other);
+        explicit Traced(const Value& other);
+        Traced& operator=(const Value& other);
+        explicit operator bool() const;
+        operator Value() const;
+        bool operator==(const Traced& other) const;
+        auto operator<=>(const Traced& other) const;
+        Value get() const;
+    };
+    
+    template<>
+    struct Traced<Atomic<Value>> {
+        
+        Atomic<Value> _atomic_value;
+        
+        constexpr Traced() = default;
+        constexpr explicit Traced(Value);
+        Traced(const Traced&) = delete;
+        Traced& operator=(const Traced&) = delete;
+        
+        Value load(Order) const;
+        void store(Value, Order);
+        Value exchange(Value, Order);
+        bool compare_exchange_weak(Value&, Value, Order, Order);
+        bool compare_exchange_strong(Value&, Value, Order, Order);
+
+    };
+    
+    
+    
+    
+    void value_trace(Value);
 
     
+    
+    
+    
+    
+   
+
+    
+    
+    
+    
+    
+    
+    
+    int _value_tag(const Value& self);
+    bool _value_is_small_integer(const Value& self);
+    bool _value_is_object(const Value& self);
+    bool _value_is_short_string(const Value& self);
+    bool _value_is_tombstone(const Value& self);
+    
+    const Object* _value_as_object(const Value& self);
+    const Object* _value_as_object_else(const Value& self, const Object*);
+    int64_t _value_as_small_integer(const Value& self);
+    int64_t _value_as_small_integer_else(const Value& self, int64_t);
+    std::string_view _value_as_short_string(const Value& self);
+    std::string_view _value_as_short_string_else(const Value& self);
+    Value _value_from_object(const Object* object);
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    // TODO: upgrade to array of limbs of arbitrary precision integer
+    struct HeapInt64 : Object {
+        std::int64_t _integer;
+        explicit HeapInt64(std::int64_t z);
+        std::int64_t as_int64_t() const;
+    };
+    
+    struct HeapString : Object {
+        std::size_t _hash;
+        std::size_t _size;
+        char _bytes[0];
+        static void* operator new(std::size_t count, std::size_t extra);
+        static HeapString* make(std::string_view v, std::size_t hash);
+        static HeapString* make(std::string_view v);
+        std::string_view as_string_view() const;
+        HeapString();
+    }; // struct HeapString
+        
+    
+    
+    
+    
+        
+   
+    
+    
+    
+    void foo();
+   
+    
+
+    
+
+    
+    
+    
+    
+    inline void value_trace(Value a) {
+        if (_value_is_object(a))
+            object_trace(_value_as_object(a));
+    }
+
+    inline void value_trace(const Traced<Value>& self) {
+        value_trace(self._atomic_value.load(Order::ACQUIRE));
+    }
+
+    inline void value_trace(const Traced<Atomic<Value>>& self) {
+        value_trace(self._atomic_value.load(Order::ACQUIRE));
+    }
+
    
     
     // user defined literals
     
     // String operator""_v(const char* s, std::size_t n);
     
-    void shade(Value value);
+    void value_shade(Value value);
     
     
     
@@ -611,10 +352,10 @@ namespace gc {
             Traced<Value> value;
             
             [[nodiscard]] Value entomb() {
-                this->key = Value::make_tombstone();
+                this->key = value_make_tombstone();
                 // TODO: exchange
                 Value old = this->value;
-                this->value = Value::make_null();
+                this->value = value_make_null();
                 return old;
             }
             
@@ -651,7 +392,7 @@ namespace gc {
                     Entry* p = _storage + i;
                     Value ki = p->key;
                     
-                    if (ki.is_null())
+                    if (value_is_null(ki))
                         // Does not exist
                         return nullptr;
                     
@@ -667,7 +408,7 @@ namespace gc {
             
             Value find(std::size_t h, Value k) {
                 Entry* p = pfind(h, k);
-                return p ? p->value : Value::make_null();
+                return p ? p->value : value_make_null();
                 
             }
             
@@ -678,14 +419,14 @@ namespace gc {
                 {
                     Entry* pe = _storage + i;
                     [[maybe_unused]] Value ki = pe->key;
-                    assert(ki.is_null());
+                    assert(value_is_null(ki));
                 }
                 while (n--) {
                     i = prev(i);
                     Entry* pe = _storage + i;
                     [[maybe_unused]] Value ki = pe->key;
-                    assert(ki._is_tombstone());
-                    pe->key = Value::make_null();
+                    assert(_value_is_tombstone(ki));
+                    pe->key = value_make_null();
                     ++_grace;
                     // printf("disinterred one\n");
                 }
@@ -696,15 +437,15 @@ namespace gc {
                 for (;; i = next(i)) {
                     Entry* pe = _storage + i;
                     Value ki = pe->key;
-                    if (ki.is_null()) {
+                    if (value_is_null(ki)) {
                         clear_n_tombstones_before_i(tombstones, i);
-                        return Value::make_null();
+                        return value_make_null();
                     }
                     if (ki == k) {
                         --_count;
                         return pe->entomb();
                     }
-                    if (ki._is_tombstone()) {
+                    if (_value_is_tombstone(ki)) {
                         ++tombstones;
                     } else {
                         tombstones = 0;
@@ -724,14 +465,14 @@ namespace gc {
                 for (;; i = next(i)) {
                     Entry* pe = _storage + i;
                     Value ki = pe->key;
-                    if (ki.is_null()) {
+                    if (value_is_null(ki)) {
                         pe->key = k;
                         pe->value = v;
                         ++_count;
                         --_grace;
-                        return Value::make_null();
+                        return value_make_null();
                     }
-                    if (ki._is_tombstone()) {
+                    if (_value_is_tombstone(ki)) {
                         pe->key = k;
                         pe->value = v;
                         ++_count;
@@ -754,8 +495,8 @@ namespace gc {
                 for (;; i = ((i + 1) & _mask)) {
                     Entry* pe = _storage + i;
                     Value ki = pe->key;
-                    if (ki.is_null()) {
-                        return Value::make_null();
+                    if (value_is_null(ki)) {
+                        return value_make_null();
                     }
                     if (ki == k) {
                         Value u = pe->value;
@@ -771,20 +512,20 @@ namespace gc {
                 for (;; i = ((i + 1) & _mask)) {
                     Entry* pe = _storage + i;
                     Value ki = pe->key;
-                    if (ki.is_null()) {
+                    if (value_is_null(ki)) {
                         pe->key = k;
                         pe->value = v;
                         ++_count;
                         --_grace;
                         return;
                     }
-                    if (ki._is_tombstone()) {
+                    if (_value_is_tombstone(ki)) {
                         pe->key = k;
                         pe->value = v;
                         ++_count;
                         // Check for the violation of the precondition, that the
                         // key is not later in the table
-                        assert(erase_from(h, k, next(i)).is_null());
+                        assert(value_is_null(erase_from(h, k, next(i))));
                         return;
                     }
                     // Check for the violation of the precondition, that the
@@ -805,16 +546,16 @@ namespace gc {
                     Entry* pe = _storage + i;
                     Value ki = pe->key;
                     Value vi = pe->value;
-                    assert(!vi._is_tombstone());
-                    if (ki.is_null()) {
+                    assert(!_value_is_tombstone(vi));
+                    if (value_is_null(ki)) {
                         ++nulls;
-                        assert(vi.is_null());
-                    } else if (ki._is_tombstone()) {
+                        assert(value_is_null(vi));
+                    } else if (_value_is_tombstone(ki)) {
                         ++tombstones;
-                        assert(vi.is_null());
+                        assert(value_is_null(vi));
                     } else {
                         ++keys;
-                        assert(!vi.is_null());
+                        assert(!value_is_null(vi));
                     }
                 }
                 assert(keys + nulls + tombstones == _mask + 1);
@@ -847,17 +588,17 @@ namespace gc {
              for (int i = 0; i != _alpha._mask + 1; ++i) {
              Entry* pe = _alpha._storage + i;
              Value ki = pe->key;
-             if (ki.is_null() || ki._is_tombstone())
+             if (is_null(ki) || ki._is_tombstone())
              continue;
-             Value vj = _beta.find(ki.hash(), ki);
+             Value vj = _beta.find(value_hash(ki), ki);
              assert(vj.is_null());
              }
              for (int i = 0; i != _beta._mask + 1; ++i) {
              Entry* pe = _beta._storage + i;
              Value ki = pe->key;
-             if (ki.is_null() || ki._is_tombstone())
+             if (is_null(ki) || ki._is_tombstone())
              continue;
-             Value vj = _alpha.find(ki.hash(), ki);
+             Value vj = _alpha.find(value_hash(ki), ki);
              assert(vj.is_null());
              }
              }
@@ -867,43 +608,43 @@ namespace gc {
         
         
         Value find(Value key) const {
-            std::size_t h = key.hash();
+            std::size_t h = value_hash(key);
             if (_alpha._count) {
                 Value v = _alpha.find(h, key);
-                if (!v.is_null())
+                if (!value_is_null(v))
                     return v;
             }
             if (_beta._count) {
                 Value v = _beta.find(h, key);
-                if (!v.is_null())
+                if (!value_is_null(v))
                     return v;
             }
-            return Value::make_null();
+            return value_make_null();
         }
         
         Value erase(Value key) const {
             //_invariant();
-            std::size_t h = key.hash();
+            std::size_t h = value_hash(key);
             if (_alpha._count) {
                 Value v = _alpha.erase(h, key);
-                if (!v.is_null()) {
+                if (!value_is_null(v)) {
                     return v;
                 }
             }
             if (_beta._count) {
                 Value v = _beta.erase(h, key);
-                if (!v.is_null()) {
+                if (!value_is_null(v)) {
                     return v;
                 }
             }
-            return Value::make_null();
+            return value_make_null();
             
         }
         
         Value insert_or_assign(Value key, Value value) const {
             // _invariant();
             // printf("insert_or_assign (%lld, %lld)\n", key._integer >> 4, value._integer >> 4);
-            std::size_t h = key.hash();
+            std::size_t h = value_hash(key);
             // printf("with hash %zd\n", h);
             
             // printf("with alpha %zd/%zd, beta %zd/%zd\n", _alpha._count, _alpha._grace, _beta._count, _beta._grace);
@@ -920,7 +661,7 @@ namespace gc {
                 for (std::size_t i = 0; i != _partition; ++i) {
                     Entry* pe = _alpha._storage + i;
                     Value ki = pe->key;
-                    assert(ki.is_null() || ki._is_tombstone());
+                    assert(value_is_null(ki) || _value_is_tombstone(ki));
                 }
             }
             
@@ -929,7 +670,7 @@ namespace gc {
                 // _alpha is not yet empty
                 Value u = _alpha.try_assign(h, key, value);
                 // _invariant();
-                if (!u.is_null())
+                if (!value_is_null(u))
                     return u;
                 // we have proved that key is not in alpha
             } else {
@@ -972,14 +713,14 @@ namespace gc {
             while (_alpha._count) {
                 Entry* pe = _alpha._storage + (_partition++);
                 Value ki = pe->key;
-                if (ki.is_null() || ki._is_tombstone())
+                if (value_is_null(ki) || _value_is_tombstone(ki))
                     continue;
                 // _invariant();
                 Value vi = pe->entomb();
                 _alpha._count--;
                 // _invariant();
                 assert(_beta._grace);
-                _beta.must_insert(ki.hash(), ki, vi);
+                _beta.must_insert(value_hash(ki), ki, vi);
                 // _invariant();
                 // printf("Evacuated (%lld, %lld)\n", ki._integer >> 4, vi._integer >> 4);
                 break;
@@ -992,11 +733,11 @@ namespace gc {
         }
         
         bool contains(Value key) const {
-            return !find(key).is_null();
+            return !value_is_null(find(key));
         }
         
         Traced<Value>& find_or_insert_null(Value key) const {
-            std::size_t h = key.hash();
+            std::size_t h = value_hash(key);
             if (_alpha._count) {
                 Entry* p = _alpha.pfind(h, key);
                 if (p)
@@ -1021,28 +762,26 @@ namespace gc {
     
     
     
-    enum _tag_t {
-        TAG_POINTER = 0,
-        TAG_SMALL_INTEGER = 1,
-        TAG_SHORT_STRING = 3,
-        TAG_BOOLEAN = 4,
-        TAG_ENUMERATION = 5,
-        TAG_ERROR = 6,
-        TAG_CHARACTER = 7,
-        TAG_TOMBSTONE = 15,
+    enum _value_tag_e {
+        VALUE_TAG_POINTER = 0,
+        VALUE_TAG_SMALL_INTEGER = 1,
+        VALUE_TAG_SHORT_STRING = 3,
+        VALUE_TAG_BOOLEAN = 4,
+        VALUE_TAG_ENUMERATION = 5,
+        VALUE_TAG_ERROR = 6,
+        VALUE_TAG_CHARACTER = 7,
+        VALUE_TAG_TOMBSTONE = 15,
     };
     
     enum {
         VALUE_SHIFT = 4,
-        VALUE_MASK = 15,
     };
-    
-    
-    
-    struct _boolean_t {
-        int _tag;
-        bool boolean;
+
+    enum : uint64_t {
+        VALUE_MASK = 0x000000000000000F,
+        VALUE_POINTER_MASK = 0x00007FFFFFFFFFF0,
     };
+
     
     struct _character_t {
         int _tag;
@@ -1054,7 +793,7 @@ namespace gc {
         char _chars[7];
         char* data() { return _chars; }
         constexpr std::size_t size() const {
-            assert((_tag_and_len & VALUE_MASK) == TAG_SHORT_STRING);
+            assert((_tag_and_len & VALUE_MASK) == VALUE_TAG_SHORT_STRING);
             return _tag_and_len >> VALUE_SHIFT;
         }
         constexpr std::string_view as_string_view() const {
@@ -1066,20 +805,20 @@ namespace gc {
     };
     
     enum : uint64_t {
-        VALUE_NULL = 0,
-        VALUE_ZERO = TAG_SMALL_INTEGER,
-        VALUE_EMPTY_STRING = TAG_SHORT_STRING,
-        VALUE_FALSE = TAG_BOOLEAN,
-        VALUE_TRUE = TAG_BOOLEAN | (1l << 32),
-        VALUE_ERROR = TAG_ERROR,
-        VALUE_TOMBSTONE = TAG_TOMBSTONE,
+        VALUE_DATA_NULL = 0,
+        VALUE_DATA_ZERO = VALUE_TAG_SMALL_INTEGER,
+        VALUE_DATA_EMPTY_STRING = VALUE_TAG_SHORT_STRING,
+        VALUE_DATA_FALSE = VALUE_TAG_BOOLEAN,
+        VALUE_DATA_TRUE = VALUE_TAG_BOOLEAN | ((uint64_t)1 << VALUE_SHIFT),
+        VALUE_DATA_ERROR = VALUE_TAG_ERROR,
+        VALUE_DATA_TOMBSTONE = VALUE_TAG_TOMBSTONE,
     };
     
     
     constexpr Value::Value(std::nullptr_t) : _data(0) {}
-    constexpr Value::Value(bool flag) : _data(((uint64_t)flag << 32) | TAG_BOOLEAN) {}
-    inline Value::Value(const char* ntbs) { *this = Value::from_ntbs(ntbs); }
-    constexpr Value::Value(int i) : _data(((int64_t)i << VALUE_SHIFT) | TAG_SMALL_INTEGER) {}
+    constexpr Value::Value(bool flag) : _data(((uint64_t)flag << VALUE_SHIFT) | VALUE_TAG_BOOLEAN) {}
+    constexpr Value::Value(const char* ntbs) { *this = value_make_string_with(ntbs); }
+    constexpr Value::Value(int i) : _data(((int64_t)i << VALUE_SHIFT) | VALUE_TAG_SMALL_INTEGER) {}
 
     
        
@@ -1094,7 +833,7 @@ namespace gc {
         assert(ntbs[M] == '\0');
         if (M < 8) {
             _short_string_t s;
-            s._tag_and_len = (M << VALUE_SHIFT) | TAG_SHORT_STRING;
+            s._tag_and_len = (M << VALUE_SHIFT) | VALUE_TAG_SHORT_STRING;
             // builtin for constexpr
             __builtin_memcpy(s._chars, ntbs, M);
             __builtin_memcpy(&_data, &s, 8);
@@ -1104,6 +843,15 @@ namespace gc {
     }
     
     
+    
+    struct _value_subscript_result_t {
+        Value& container;
+        Value key;
+        operator Value() &&;
+        _value_subscript_result_t&& operator=(Value desired) &&;
+        _value_subscript_result_t&& operator=(_value_subscript_result_t&& desired) &&;
+    };
+
     
 } // namespace gc
 

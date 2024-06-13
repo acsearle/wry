@@ -42,7 +42,7 @@ namespace gc {
         
         T value;
         
-        constexpr Atomic() : value() {}
+        constexpr Atomic() : value{} {}
         explicit constexpr Atomic(T desired) : value(desired) {}
         Atomic(const Atomic&) = delete;
         Atomic& operator=(const Atomic&) = delete;

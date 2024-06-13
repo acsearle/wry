@@ -14,11 +14,8 @@
 
 namespace gc {
     
-    void trace(const Object*);
-    std::size_t gc_bytes(const Object*);
-    void gc_enumerate(const Object*);
-    void _gc_trace(const Object*);
-    void _gc_delete(const Object*);
+    void object_scan(const Object*);
+    void object_delete(const Object*);
 
     
     struct Log {
@@ -98,18 +95,9 @@ namespace gc {
     // garbage collector state for one mutator thread
     
     struct Mutator {
-        
-        // Thread-local state access point
-        
-        static thread_local Mutator* _thread_local_context_pointer;
-        
-        static Mutator& get();
-        [[nodiscard]] static Mutator* _exchange(Mutator*);
-        
-        // Thread local state
-        
-        // Palette palette; // colors received from Collector
-        Log     log    ; // activity to publish to Collector
+                
+        Channel* _channel = nullptr;
+        Log log; // activity to publish to Collector
         
         void _white_to_gray(Atomic<Color>& color);
         bool _white_to_black(Atomic<Color>& color) const;
@@ -126,7 +114,6 @@ namespace gc {
         
         
         
-        Channel* _channel = nullptr;
         
         void _publish_with_tag(Channel::Tag tag);
         
@@ -136,15 +123,13 @@ namespace gc {
         
     };
     
+    thread_local Mutator* thread_local_mutator = nullptr;
+    
     // garbage collector state for the unique collector thread, which is
     // also a mutator
     
     struct Collector : Mutator {
-        
-        void visit(const Object* object);
-        template<typename T> void visit(const Atomic<T*>& object);
-        template<typename T> void visit(const Traced<T>& object);
-        
+                
         // Safety:
         // _scan_stack is only resized by the Collector thread, which is not
         // real time bounded
@@ -168,7 +153,7 @@ namespace gc {
                 const Object* object = this->_scan_stack.back();
                 this->_scan_stack.pop_back();
                 assert(object);
-                gc_enumerate(object);
+                object_scan(object);
             }
         }
         
@@ -191,12 +176,9 @@ namespace gc {
     
     Collector* global_collector = nullptr;
     
-
    
     
     
-    // StrongPtr is a convenience wrapper that implements the write barrier for
-    // a strong reference.
     
     
     void* Mutator::_allocate(std::size_t bytes) {
@@ -229,28 +211,8 @@ namespace gc {
     }
     
     
-    void Collector::visit(const Object* object) {
-        if (object)
-            _gc_trace(object);
-    }
-    
-    template<typename T>
-    void Collector::visit(const Atomic<T*>& participant) {
-        this->visit(participant.load(Order::ACQUIRE));
-    }
-    
-    template<typename T>
-    void Collector::visit(const Traced<T>& p) {
-        this->visit(p._ptr.load(Order::ACQUIRE));
-    }
-    
-    
-    
-    
-    
-    
     void* Object::operator new(std::size_t count) {
-        return Mutator::get()._allocate(count);
+        return thread_local_mutator->_allocate(count);
     }
     
     Object::Object(Class class_)
@@ -258,21 +220,7 @@ namespace gc {
     , _color(global_collector->_atomic_alloc.load(Order::RELAXED)) {
     }
     
-    
-    
-    // Object virtual methods
-    
-
-    
-    thread_local Mutator* Mutator::_thread_local_context_pointer;
-    
-    Mutator& Mutator::get() {
-        return *_thread_local_context_pointer;
-    }
-
-    Mutator* Mutator::_exchange(Mutator* desired) {
-        return std::exchange(_thread_local_context_pointer, desired);
-    }
+        
     
     void Mutator::enter() {
         assert(_channel == nullptr);
@@ -530,7 +478,7 @@ namespace gc {
                     Color desired = black;
                     if (object->_color.compare_exchange_strong(expected, desired, Order::RELAXED, Order::RELAXED)) {
                         expected = desired;
-                        gc_enumerate(object);
+                        object_scan(object);
                     }
                     if (expected == black) {
                         black_bag.push(object);
@@ -566,7 +514,7 @@ namespace gc {
                     const Object* object = object_bag.pop();
                     if (!object)
                         break;
-                    _gc_delete(object);
+                    object_delete(object);
                     // printf("Collector deletes something\n");
                 }
             }
@@ -603,14 +551,9 @@ namespace gc {
     
 
     
-    void trace(const Object* object) {
-        if (object) {
-            _gc_trace(object);
-        }
-    }
     
-    void* allocate(std::size_t count) {
-        return Mutator::get()._allocate(count);
+    void* object_allocate(std::size_t count) {
+        return thread_local_mutator->_allocate(count);
     }
 
     
@@ -620,31 +563,27 @@ namespace gc {
     
     void initialize_collector() {
         global_collector = new gc::Collector;
-        auto old = gc::Mutator::_exchange(global_collector);
-        assert(!old);
         std::thread([](){
+            assert(!thread_local_mutator);
+            thread_local_mutator = global_collector;
             global_collector->collect();
         }).detach();
     }
     
     define_test("gc") {
         std::thread([](){
-            auto m = new Mutator;
-            auto old = Mutator::_exchange(m);
-            assert(!old);
-            m->enter();
+            assert(!thread_local_mutator);
+            thread_local_mutator = new Mutator;
+            thread_local_mutator->enter();
             for (int i = 0; i != -1; ++i) {
-                // printf("Mutator A\n");
-                // auto p = new(m->_allocate(sizeof(Object))) Object(*m);
                 auto p = new HeapInt64(787);
                 
                 foo();
                 
-                m->handshake();
+                thread_local_mutator->handshake();
                 object_shade(p);
-                // std::this_thread::sleep_for(std::chrono::milliseconds{10});
             }
-            m->leave();
+            thread_local_mutator->leave();
         }).detach();
     };
     
@@ -658,7 +597,7 @@ namespace gc {
 
     
     
-    void _gc_delete(const Object* object) {
+    void object_delete(const Object* object) {
         switch (object->_class) {
             case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
                 const IndirectFixedCapacityValueArray* p = (const IndirectFixedCapacityValueArray*)object;
@@ -684,31 +623,9 @@ namespace gc {
             } break;
         }
     }
+  
     
-    std::size_t gc_bytes(const Object* object) {
-        switch (object->_class) {
-            case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
-                const IndirectFixedCapacityValueArray* p = (const IndirectFixedCapacityValueArray*)object;
-                return sizeof(IndirectFixedCapacityValueArray) + p->_capacity * sizeof(Traced<Value>);
-            }
-            case CLASS_TABLE: {
-                return sizeof(HeapTable);
-            }
-            case CLASS_STRING: {
-                const HeapString* p = (const HeapString*)object;
-                return sizeof(HeapString) + p->_size;
-            }
-            case CLASS_INT64: {
-                return sizeof(HeapInt64);
-            }
-            default: {
-                abort();
-            }
-        }
-    }
-    
-    
-    std::size_t gc_hash(const Object* object) {
+    std::size_t object_hash(const Object* object) {
         switch (object->_class) {
             case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
             case CLASS_TABLE: {
@@ -729,20 +646,20 @@ namespace gc {
     }
     
     
-    void gc_enumerate(const Object* object) {
+    void object_scan(const Object* object) {
         switch (object->_class) {
             case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
                 const IndirectFixedCapacityValueArray* p = (const IndirectFixedCapacityValueArray*)object;
                 auto first = p->_storage;
                 auto last = first + p->_capacity;
                 for (; first != last; ++first) {
-                    trace(*first);
+                    value_trace(*first);
                 }
             } break;
             case CLASS_TABLE: {
                 const HeapTable* p = (const HeapTable*)object;
-                trace(p->_alpha._manager);
-                trace(p->_beta._manager);
+                object_trace(p->_alpha._manager);
+                object_trace(p->_beta._manager);
             } break;
             case CLASS_STRING:
             case CLASS_INT64:
@@ -758,29 +675,30 @@ namespace gc {
         if (object) switch (object->_class) {
             case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
             case CLASS_TABLE:
-                Mutator::get()._white_to_gray(object->_color);
+                thread_local_mutator->_white_to_gray(object->_color);
                 break;
             case CLASS_STRING:
             case CLASS_INT64:
-                Mutator::get()._white_to_black(object->_color);
+                thread_local_mutator->_white_to_black(object->_color);
                 break;
         }
         
 
     }
     
-    void _gc_trace(const Object* object) {
-        Collector& context = *global_collector;
-        switch (object->_class) {
-            case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-            case CLASS_TABLE:
-                if (context._white_to_black(object->_color)) {
-                    context._scan_stack.push_back(object);
-                }
-                break;
-            case CLASS_STRING:
-            case CLASS_INT64:
-                abort();
+    void object_trace(const Object* object) {
+        if (object) {
+            switch (object->_class) {
+                case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
+                case CLASS_TABLE:
+                    if (global_collector->_white_to_black(object->_color)) {
+                        global_collector->_scan_stack.push_back(object);
+                    }
+                    break;
+                case CLASS_STRING:
+                case CLASS_INT64:
+                    abort();
+            }
         }
     }
 
@@ -852,5 +770,32 @@ namespace gc {
     // the collector would mark children GRAY and then scan to rediscover them;
     // a singly linked list appearing in reverse order in the worklist would
     // require O(N) scans, i.e. O(NM) operations to fully trace.
+
     
+    /*
+     std::size_t gc_bytes(const Object* object) {
+     switch (object->_class) {
+     case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
+     const IndirectFixedCapacityValueArray* p = (const IndirectFixedCapacityValueArray*)object;
+     return sizeof(IndirectFixedCapacityValueArray) + p->_capacity * sizeof(Traced<Value>);
+     }
+     case CLASS_TABLE: {
+     return sizeof(HeapTable);
+     }
+     case CLASS_STRING: {
+     const HeapString* p = (const HeapString*)object;
+     return sizeof(HeapString) + p->_size;
+     }
+     case CLASS_INT64: {
+     return sizeof(HeapInt64);
+     }
+     default: {
+     abort();
+     }
+     }
+     }
+     */
 } // namespace gc
+
+
+
