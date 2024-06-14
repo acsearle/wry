@@ -28,10 +28,10 @@ namespace gc {
 
     
     
-    Ctrie::Branch* Ctrie::Branch::resurrect() {
-        switch (this->_class) {
+    Object* Ctrie::object_resurrect(Object* self) {
+        switch (self->_class) {
             case CLASS_CTRIE_INODE: {
-                INode* in = (INode*)this;
+                INode* in = (INode*)self;
                 MainNode* mn = READ(in->main);
                 switch (mn->_class) {
                     case CLASS_CTRIE_TNODE: {
@@ -39,21 +39,25 @@ namespace gc {
                         return tn->sn;
                     }
                     default: {
-                        return in;
+                        return self;
                     }
                 }
             }
+            case CLASS_STRING: {
+                return self;
+            }
             default: {
-                return this;
+                abort();
             }
         }
     }
     
+    /*
     Ctrie::SNode::SNode(Value k, Value v)
     : Branch(CLASS_CTRIE_SNODE)
     , key(k)
     , value(v) {
-    }
+    }*/
     
     
     Ctrie::MainNode* Ctrie::CNode::toContracted(int level) {
@@ -62,11 +66,19 @@ namespace gc {
         int num = __builtin_popcountll(this->bmp);
         if (num != 1)
             return this;
-        Branch* bn = this->array[0];
-        if (bn->_class != CLASS_CTRIE_SNODE)
-            return this;
-        SNode* sn = (SNode*)bn;
-        return sn->entomb();
+        Object* bn = this->array[0];
+        switch (bn->_class) {
+            case CLASS_CTRIE_INODE: {
+                return this;
+            }
+            case CLASS_STRING: {
+                HeapString* hs = (HeapString*)bn;
+                return new TNode(hs);
+            }
+            default: {
+                abort();
+            }
+        }
     }
     
     Ctrie::MainNode* Ctrie::CNode::toCompressed(int level) {
@@ -92,7 +104,7 @@ namespace gc {
                 auto [flag, pos] = flagpos(hc, lev, cn->bmp);
                 if (!(flag & cn->bmp))
                     return;
-                Branch* sub = cn->array[pos];
+                Object* sub = cn->array[pos];
                 if (sub != i)
                     return;
                 if (m->_class == CLASS_CTRIE_TNODE) {
@@ -114,7 +126,7 @@ namespace gc {
         CNode* ncn = new(num) CNode;
         ncn->bmp = this->bmp;
         for (int i = 0; i != num; ++i) {
-            Branch* bn = this->array[i]->resurrect();
+            Object* bn = object_resurrect(this->array[i]);
             object_shade(bn);
             ncn->array[i] = bn;
         }
@@ -122,36 +134,33 @@ namespace gc {
     }
     
     void* Ctrie::CNode::operator new(size_t fixed, size_t variable) {
-        return object_allocate(fixed + variable * sizeof(Branch*));
+        return object_allocate(fixed + variable * sizeof(Object*));
     }
     
     Ctrie::CNode::CNode()
     : MainNode(CLASS_CTRIE_CNODE) {
     }
     
-    Ctrie::CNode* Ctrie::CNode::updated(int pos, Branch *bn) {
+    Ctrie::CNode* Ctrie::CNode::updated(int pos, Object *bn) {
         int num = __builtin_popcountll(this->bmp);
         CNode* ncn = new(num) CNode;
         ncn->bmp = this->bmp;
         for (int i = 0; i != num; ++i) {
-            Branch* sub = (i == pos) ? bn : this->array[i];
+            Object* sub = (i == pos) ? bn : this->array[i];
             object_shade(sub);
             ncn->array[i] = sub;
         }
         return ncn;
     }
-    
-    Ctrie::TNode* Ctrie::SNode::entomb() {
-        return new TNode(this);
-    }
-    
-    Ctrie::TNode::TNode(SNode* sn) 
+        
+    Ctrie::TNode::TNode(HeapString* sn)
     : MainNode(CLASS_CTRIE_TNODE)
     , sn(sn) {
     }
         
 
     
+    /*
     Value Ctrie::lookup(Value key) {
         for (;;) {
             INode* r = this->root;
@@ -160,15 +169,27 @@ namespace gc {
                 return result;
         }
     }
+     */
     
+    /*
     void Ctrie::insert(Value k, Value v) {
         for (;;) {
             INode* r = this->root;
             if (r->insert(k, v, 0, nullptr))
                 return;
         }
+    }*/
+
+    HeapString* Ctrie::find_or_emplace(std::string_view sv, size_t hc) {
+        for (;;) {
+            INode* r = this->root;
+            HeapString* result = r->find_or_emplace(sv, hc, 0, nullptr);
+            if (result)
+                return result;
+        }
     }
 
+    /*
     Value Ctrie::remove(Value k) {
         for (;;) {
             INode* r = this->root;
@@ -176,14 +197,22 @@ namespace gc {
             if (!value_is_RESTART(res))
                 return res;
         }
-        
+    } */
+    
+    void Ctrie::erase(HeapString* hs) {
+        for (;;) {
+            INode* r = this->root;
+            bool flag = r->erase(hs, 0, nullptr);
+            if (flag)
+                return;
+        }
     }
     
     
     
     
     
-    
+    /*
     Value Ctrie::INode::lookup(Value k, int lev, INode* parent) {
         INode* i = this;
         MainNode* mn = READ(i->main);
@@ -222,13 +251,13 @@ namespace gc {
                 abort();
         } // switch (mn->_class)
     }
+    */
     
     
     
     
     
-    
-    
+    /*
     bool Ctrie::INode::insert(Value k, Value v, int lev, INode* parent) {
         INode* i = this;
         MainNode* mn = READ(i->main);
@@ -278,10 +307,107 @@ namespace gc {
         }
         return CAS(i->main, mn, nmn);
     }
+     */
     
+    HeapString* Ctrie::INode::find_or_emplace(std::string_view sv, std::size_t hc, int lev, INode* parent) {
+        INode* i = this;
+        MainNode* mn = READ(i->main);
+        MainNode* nmn;
+        HeapString* nhs;
+        switch (mn->_class) {
+            case CLASS_CTRIE_CNODE: {
+                CNode* cn = (CNode*)mn;
+                auto [flag, pos] = flagpos(hc, lev, cn->bmp);
+                printf("{%llx, %d}\n", flag, pos);
+                if (!(cn->bmp & flag)) {
+                    printf("Allocating a new string for \"%.*s\"\n", (int)sv.size(), sv.data());
+                    // nmn = cn->inserted(pos, flag, new SNode(k, v));
+                    // We have found a CNode with no entry for the hash
+                    // The string is not in the table
+                    // We must insert it
+                    size_t count = sv.size();
+                    assert(count > 7);
+                    nhs = new(count) HeapString;
+                    nhs->_hash = hc;
+                    nhs->_size = count;
+                    std::memcpy(nhs->_bytes, sv.data(), count);
+                    nmn = cn->inserted(pos, flag, nhs);
+                    break;
+                }
+                Object* bn = cn->array[pos];
+                switch (bn->_class) {
+                    case CLASS_CTRIE_INODE: {
+                        INode* sin = (INode*)bn;
+                        // return sin->insert(k, v, lev + W, i);
+                        return sin->find_or_emplace(sv, hc, lev + W, i);
+                    }
+                        /*
+                    case CLASS_CTRIE_SNODE: {
+                        SNode* sn = (SNode*)bn;
+                        SNode* nsn = new SNode(k, v);
+                        Branch* nbn = nsn;
+                        if (sn->key != k)
+                            nbn = new INode(CNode::make(sn, nsn, lev + W));
+                        nmn = cn->updated(pos, nbn);
+                        break;
+                    }
+                         */
+                    case CLASS_STRING: {
+                        // We have hashed to the same bucket as an existing
+                        // string
+                        
+                        // Some of the hash bits match
+                        HeapString* hs = (HeapString*)bn;
+                        if (hs->_hash == hc) {
+                            // All the hash bits match
+                            if (hs->_size == sv.size()) {
+                                // The sizes match
+                                if (!__builtin_memcmp(hs->_bytes, sv.data(), sv.size())) {
+                                    // The strings match
+                                    printf("Found an existing string for \"%.*s\"\n", (int)sv.size(), sv.data());
+                                    return hs;
+                                    // TODO: weakness
+                                }
+                            }
+                        }
+                        // We have to expand the HAMT one level
+                        {
+                            printf("Expanding with a new string for \"%.*s\"\n", (int)sv.size(), sv.data());
+                            size_t count = sv.size();
+                            assert(count > 7);
+                            nhs = new(count) HeapString;
+                            nhs->_hash = hc;
+                            nhs->_size = count;
+                            std::memcpy(nhs->_bytes, sv.data(), count);
+                            INode* nbn = new INode(CNode::make(hs, nhs, lev + W));
+                            nmn = cn->updated(pos, nbn);
+                        }
+                    }
+                    default: {
+                        abort();
+                    }
+                }
+                break;
+            }
+            case CLASS_CTRIE_TNODE: {
+                parent->clean(lev - W);
+                return nullptr;
+            }
+            case CLASS_CTRIE_LNODE: {
+                LNode* ln = (LNode*)mn;
+                abort();
+                // TODO: ln->find_or_emplace
+                // nmn = ln->inserted(k, v);
+                break;
+            }
+            default: {
+                abort();
+            }
+        }
+        return CAS(i->main, mn, nmn) ? nhs : nullptr;
+    }
     
-    
-    
+    /*
     Value Ctrie::INode::remove(Value k, int lev, INode* parent) {
         INode* i = this;
         MainNode* mn = i->main.load(Order::ACQUIRE);
@@ -346,22 +472,23 @@ namespace gc {
                 abort();
         } // switch (mn->_class)
     }
+     */
     
+    bool Ctrie::INode::erase(HeapString*, int lev, INode* parent) {
+        abort();
+    }
     
-    Ctrie::CNode* Ctrie::CNode::make(SNode* sn1, SNode* sn2, int lev) {
+    Ctrie::CNode* Ctrie::CNode::make(HeapString* hs1, HeapString* hs2, int lev) {
         
         //TODO: LNode
         assert(lev < 60);
         
-        uint64_t hc1 = value_hash(sn1->key);
-        uint64_t hc2 = value_hash(sn2->key);
-        if (hc2 < hc1) {
-            std::swap(sn1, sn2);
-            std::swap(hc1, hc2);
+        if (hs2->_hash < hs1->_hash) {
+            std::swap(hs1, hs2);
         }
             
-        uint64_t pos1 = (hc1 >> lev) & 63;
-        uint64_t pos2 = (hc2 >> lev) & 63;
+        uint64_t pos1 = (hs1->_hash >> lev) & 63;
+        uint64_t pos2 = (hs2->_hash >> lev) & 63;
         uint64_t flag1 = (uint64_t)1 << pos1;
         uint64_t flag2 = (uint64_t)1 << pos2;
         uint64_t bmp = flag1 | flag2;
@@ -371,12 +498,12 @@ namespace gc {
         ncn->bmp = bmp;
         switch (num) {
             case 1: {
-                ncn->array[0] = new INode(CNode::make(sn1, sn2, lev + W));
+                ncn->array[0] = new INode(CNode::make(hs1, hs2, lev + W));
                 return ncn;
             }
             case 2: {
-                ncn->array[0] = sn1;
-                ncn->array[1] = sn2;
+                ncn->array[0] = hs1;
+                ncn->array[1] = hs2;
                 return ncn;
             }
             default:
@@ -390,7 +517,7 @@ namespace gc {
         int num = __builtin_popcountll(bmp);
         CNode* ncn = new (num-1) CNode;
         ncn->bmp = bmp ^ flag;
-        Branch** dest = ncn->array;
+        Object** dest = ncn->array;
         for (int i = 0; i != num; ++i) {
             if (i != pos) {
                 object_shade(array[i]);
@@ -401,12 +528,12 @@ namespace gc {
         return ncn;
     }
     
-    Ctrie::CNode* Ctrie::CNode::inserted(int pos, uint64_t flag, Branch* bn) {
+    Ctrie::CNode* Ctrie::CNode::inserted(int pos, uint64_t flag, Object* bn) {
         assert(!(bmp & flag));
         int num = __builtin_popcountll(bmp);
         CNode* ncn = new (num+1) CNode;
         ncn->bmp = bmp ^ flag;
-        Branch** src = array;
+        Object** src = array;
         for (int i = 0; i != num+1; ++i) {
             if (i != pos) {
                 ncn->array[i] = *src++;
@@ -420,7 +547,7 @@ namespace gc {
     }
     
     Ctrie::INode::INode(MainNode* mn)
-    : Branch(CLASS_CTRIE_INODE)
+    : Object(CLASS_CTRIE_INODE)
     , main(mn) {     
         
     }

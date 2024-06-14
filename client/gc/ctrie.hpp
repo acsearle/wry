@@ -22,13 +22,13 @@ namespace gc {
 
     struct Ctrie : Object {
         
-        struct Branch;
+        // struct Branch;
         struct MainNode;
 
         struct CNode;
         struct INode;
         struct LNode;
-        struct SNode;
+        // struct SNode;
         struct TNode;
 
         enum {
@@ -36,11 +36,12 @@ namespace gc {
         };
         
 
-        struct Branch : Object {
-            explicit Branch(Class class_) : Object(class_) {}
-            Branch* resurrect();
-        };
-        
+        // struct Branch : Object {
+        //    explicit Branch(Class class_) : Object(class_) {}
+        //    Branch* resurrect();
+        // };
+        static Object* object_resurrect(Object* self);
+
 
         struct MainNode : Object {
             explicit MainNode(Class class_) : Object(class_) {}
@@ -50,12 +51,12 @@ namespace gc {
         struct CNode : MainNode {
             static void* operator new(std::size_t fixed, std::size_t variable);
             static CNode* make(int num);
-            static CNode* make(SNode* sn, SNode* nsn, int lev);
+            static CNode* make(HeapString* sn1, HeapString* sn2, int lev);
             CNode();
             uint64_t bmp;
-            Branch* array[0];
-            CNode* inserted(int pos, uint64_t flag, Branch* bn);
-            CNode* updated(int pos, Branch* bn);
+            Object* array[0];
+            CNode* inserted(int pos, uint64_t flag, Object* bn);
+            CNode* updated(int pos, Object* bn);
             CNode* removed(int pos, uint64_t flag);
             CNode* resurrected();
             MainNode* toCompressed(int level);
@@ -63,33 +64,40 @@ namespace gc {
 
         };
         
-        struct INode : Branch {
+        struct INode : Object {
             Traced<Atomic<MainNode*>> main;
             explicit INode(MainNode*);
-            Value lookup(Value key, int level, INode* parent);
+            // Value lookup(Value key, int level, INode* parent);
             bool insert(Value key, Value value, int lev, INode* parent);
             Value remove(Value key, int level, INode* parent);
             void clean(int lev);
+            
+            HeapString* find_or_emplace(std::string_view sv, std::size_t hc, int lev, INode* parent);
+            bool erase(HeapString* hs, int level, INode* parent);
+
+            
         };
         
         struct LNode : MainNode {
-            SNode* sn;
+            HeapString* sn;
             LNode* next;
             Value lookup(Value);
             LNode* inserted(Value k, Value v);
             LNode* removed(Value k);
         };
         
+        /*
         struct SNode : Branch {
             Value key;
             Value value;
             SNode(Value k, Value v);
             TNode* entomb();
         };
+         */
         
         struct TNode : MainNode {
-            SNode* sn;
-            explicit TNode(SNode* sn);
+            HeapString* sn;
+            explicit TNode(HeapString* sn);
         };
                 
 
@@ -107,9 +115,10 @@ namespace gc {
 
         
         
-        Value lookup(Value key);
-        void insert(Value k, Value v);
-        Value remove(Value key);
+        // Value lookup(Value key);
+        // void insert(Value k, Value v);
+        HeapString* find_or_emplace(std::string_view sv, size_t hc);
+        void erase(HeapString* key);
         
         
         

@@ -742,12 +742,13 @@ namespace gc {
                     object_trace(ln->next);
                     break;
                 }
+                    /*
                 case CLASS_CTRIE_SNODE: {
                     const Ctrie::SNode* sn = (const Ctrie::SNode*)object;
                     value_trace(sn->key);
                     value_trace(sn->value);
                     break;
-                }
+                }*/
                 case CLASS_CTRIE_TNODE: {
                     const Ctrie::TNode* tn = (const Ctrie::TNode*)object;
                     object_trace(tn);
@@ -778,7 +779,8 @@ namespace gc {
                 }
                 case CLASS_STRING:
                 case CLASS_INT64: {
-                    abort();
+                    (void) global_collector->_white_to_black(object->_color);
+                    break;
                 }
             }
         }
@@ -807,8 +809,10 @@ namespace gc {
                     return delete (const Ctrie::INode*)object;
                 case CLASS_CTRIE_LNODE:
                     return delete (const Ctrie::LNode*)object;
+                    /*
                 case CLASS_CTRIE_SNODE:
                     return delete (const Ctrie::SNode*)object;
+                     */
                 case CLASS_CTRIE_TNODE:
                     return delete (const Ctrie::TNode*)object;
                 default:
@@ -868,6 +872,7 @@ namespace gc {
     
     HeapString* HeapString::make(std::string_view v,
                                  std::size_t hash) {
+        /*
         HeapString* p = new(v.size()) HeapString;
         p->_hash = hash;
         p->_size = v.size();
@@ -880,7 +885,8 @@ namespace gc {
         
         Value k = _value_make_with(p);
         global_collector->_string_ctrie->insert(k, k);
-        return p;
+         */
+        return global_collector->_string_ctrie->find_or_emplace(v, hash);
     }
 
     
