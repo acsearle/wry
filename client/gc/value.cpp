@@ -11,41 +11,57 @@
 
 #include "debug.hpp"
 #include "value.hpp"
+#include "table.hpp"
 
 
 namespace gc {
     
-   
-
-            /*
-    std::string_view String::as_string_view() const {
-        switch (_discriminant()) {
-            case VALUE_TAG_POINTER: {
-                return _pointer->as_string_view();
-            }
-            case VALUE_TAG_SHORT_STRING: {
-                return _string.as_string_view();
-            }
-            default:
-                abort();
-        }
-    }
-    */
     
     
     int _value_tag(const Value& self) { return self._data & VALUE_MASK; }
     bool _value_is_small_integer(const Value& self) { return _value_tag(self) == VALUE_TAG_SMALL_INTEGER; }
-    bool _value_is_object(const Value& self) { return _value_tag(self) == VALUE_TAG_POINTER; }
+    bool _value_is_object(const Value& self) { return _value_tag(self) == VALUE_TAG_OBJECT; }
     bool _value_is_short_string(const Value& self) { return _value_tag(self) == VALUE_TAG_SHORT_STRING; }
     bool _value_is_tombstone(const Value& self) { return _value_tag(self) == VALUE_TAG_TOMBSTONE; }
     
-    // these logical types are always stored inline
     bool value_is_enumeration(const Value& self) { return _value_tag(self) == VALUE_TAG_ENUMERATION; }
     bool value_is_null(const Value& self) { return !self._data; }
     bool value_is_error(const Value& self) { return _value_tag(self) == VALUE_TAG_ERROR; }
     bool value_is_boolean(const Value& self) { return _value_tag(self) == VALUE_TAG_BOOLEAN; }
     bool value_is_char(const Value& self) { return _value_tag(self) == VALUE_TAG_CHARACTER; }
     
+    
+    
+    bool value_is_RESTART(const Value& self) {
+        return _value_tag(self) == VALUE_TAG_RESTART;
+    }
+    
+    Value value_make_RESTART() {
+        Value result;
+        result._data = VALUE_TAG_RESTART;
+        return result;
+    }
+    
+    bool value_is_OK(const Value& self) {
+        return _value_tag(self) == VALUE_TAG_OK;
+    }
+    
+    Value value_make_OK() {
+        Value result;
+        result._data = VALUE_TAG_OK;
+        return result;
+    }
+    
+    bool value_is_NOTFOUND(const Value& self) {
+        return _value_tag(self) == VALUE_TAG_NOTFOUND;
+    }
+    
+    Value value_make_NOTFOUND() {
+        Value result;
+        result._data = VALUE_TAG_NOTFOUND;
+        return result;
+    }
+
     const Object* _value_as_object(const Value& self) {
         assert(_value_is_object(self));
         return (Object*)self._data;
@@ -75,6 +91,11 @@ namespace gc {
         return (int64_t)self._data >> VALUE_SHIFT;
     }
 
+    int value_as_character(const Value& self) {
+        assert(value_is_enumeration(self));
+        return (int)((int64_t)self._data >> VALUE_SHIFT);
+    }
+
     Value& operator++(Value& self) {
         self += 1;
         return self;
@@ -98,10 +119,6 @@ namespace gc {
     }
 
 #define X(Y)\
-    Value operator Y (const Value& self, const Value& other) {\
-        return value_make_error();\
-    }\
-    \
     Value& operator Y##=(Value& self, const Value& other) {\
         return self = self Y other;\
     }
@@ -119,14 +136,63 @@ namespace gc {
     
 #undef X
     
+#define X(Y)\
+    Value operator Y (int64_t left, const Value& right) {\
+        switch (_value_tag(right)) {\
+            case VALUE_TAG_OBJECT: {\
+                const Object* object = _value_as_object(right);\
+                if (object) switch (object->_class) {\
+                    case CLASS_INT64:\
+                        return value_make_integer_with(left Y ((HeapInt64*)object)->_integer);\
+                    default:\
+                        break;\
+                }\
+            } break;\
+            case VALUE_TAG_SMALL_INTEGER:\
+                return value_make_integer_with(left Y _value_as_small_integer(right));\
+            default:\
+                break;\
+        }\
+        return value_make_error();\
+    }\
+    \
+    Value operator Y (const Value& left, const Value& right) {\
+        switch (_value_tag(left)) {\
+            case VALUE_TAG_OBJECT: {\
+                const Object* object = _value_as_object(left);\
+                if (object) switch (object->_class) {\
+                    case CLASS_INT64:\
+                        return ((HeapInt64*)object)->_integer Y right;\
+                    default:\
+                        break;\
+                }\
+            } break;\
+            case VALUE_TAG_SMALL_INTEGER:\
+                return _value_as_small_integer(left) Y right;\
+            default:\
+                break;\
+        }\
+        return value_make_error();\
+    }
+        
+    X(*)
+    X(/)
+    X(%)
+    X(-)
+    X(+)
+    X(&)
+    X(^)
+    X(|)
+    X(<<)
+    X(>>)
     
-    
+#undef X
     
     
     
     size_t value_hash(const Value& self) {
         switch (_value_tag(self)) {
-            case VALUE_TAG_POINTER: {
+            case VALUE_TAG_OBJECT: {
                 const Object* object = _value_as_object(self);
                 return object ? object_hash(object) : 0;
             }
@@ -145,7 +211,7 @@ namespace gc {
         }
     }
     
-    Value value_make_integer(std::int64_t z) {
+    Value value_make_integer_with(std::int64_t z) {
         Value result;
         std::int64_t y = z << 4;
         if ((y >> 4) == z) {
@@ -364,6 +430,35 @@ namespace gc {
         assert(value_size(t) == 0);
         assert(!value_contains(t, "a"));
         assert(value_find(t, "a") == value_make_null());
+        
+        {
+            Value k = "very long key";
+            Value v = "very long value";
+            Value k2 = "another very long key";
+            assert(!value_contains(t, k));
+            assert(value_find(t, k) == value_make_null());
+            assert(value_insert_or_assign(t, k, v) == value_make_null());
+            assert(value_contains(t, k));
+            assert(value_find(t, k) == v);
+            assert(value_erase(t, k));
+        }
+        
+        {
+            Value a;
+            a = 1;
+            assert(a == 1);
+            Value b;
+            b = 2;
+            assert(b == 2);
+            Value c;
+            c = a + b;
+            assert(c == 3);
+            /*
+            value_debug(a);
+            value_debug(b);
+            value_debug(c);
+             */
+        }
         
         
         std::vector<int> v(100);
@@ -609,7 +704,7 @@ namespace gc {
     
     std::size_t value_size(const Value& self) {
         switch (_value_tag(self)) {
-            case VALUE_TAG_POINTER:
+            case VALUE_TAG_OBJECT:
                 return self._data ? size(_value_as_object(self)) : 0;
             case VALUE_TAG_SHORT_STRING:
                 return (self._data >> 4) & 7;
@@ -620,7 +715,7 @@ namespace gc {
     
     bool value_contains(const Value& self, Value key) {
         switch (_value_tag(self)) {
-            case VALUE_TAG_POINTER:
+            case VALUE_TAG_OBJECT:
                 return self._data && contains(_value_as_object(self), key);
             default:
                 return false;
@@ -657,7 +752,7 @@ namespace gc {
     
     Value value_make_error() { Value result; result._data = VALUE_TAG_ERROR; return result; }
     Value value_make_null() { Value result; result._data = 0; return result; }
-    Value value_make_tombstone() { Value result; result._data = VALUE_TAG_TOMBSTONE; return result; }
+    Value _value_make_tombstone() { Value result; result._data = VALUE_TAG_TOMBSTONE; return result; }
 
     
    
@@ -667,20 +762,7 @@ namespace gc {
     void* HeapString::operator new(std::size_t count, std::size_t extra) {
         return object_allocate(count + extra);
     }
-    
-    HeapString* HeapString::make(std::string_view v,
-                            std::size_t hash) {
-        HeapString* p = new(v.size()) HeapString;
-        p->_hash = hash;
-        p->_size = v.size();
-        std::memcpy(p->_bytes, v.data(), v.size());
-        //            printf("%p new \"%.*s\"%s\n",
-        //                   p,
-        //                   std::min((int)p->_size, 48), p->_bytes,
-        //                   ((p->_size > 48) ? "..." : ""));
-        return p;
-    }
-    
+        
     HeapString* HeapString::make(std::string_view v) {
         return make(v, std::hash<std::string_view>()(v));
     }
@@ -716,6 +798,39 @@ namespace gc {
     
     Value value_erase(Value& self, Value key) {
         return erase(_value_as_object(self), key);
+    }
+
+    
+    void value_debug(const Value& self) {
+        switch (_value_tag(self)) {
+            case VALUE_TAG_BOOLEAN:
+                return (void)printf("%s\n", value_as_boolean(self) ? "True" : "False");
+            case VALUE_TAG_CHARACTER:
+                return (void)printf("\'%lc\'\n", value_as_character(self));
+            case VALUE_TAG_ERROR:
+                return (void)printf("Error\n");
+            case VALUE_TAG_OBJECT:
+                return object_debug(_value_as_object(self));
+            case VALUE_TAG_TOMBSTONE:
+                return (void)printf("Tombstone\n");
+            case VALUE_TAG_ENUMERATION:
+                return (void)printf("enum{%lld}\n", value_as_enumeration(self));
+            case VALUE_TAG_SHORT_STRING: {
+                auto v = _value_as_short_string(self);
+                return (void)printf("\"%.*s\"\n", (int)v.size(), v.data());
+            }
+            case VALUE_TAG_SMALL_INTEGER:
+                return (void)printf("%lld\n", _value_as_small_integer(self));
+            default:
+                return (void)printf("Value{._data=%0.16llx}\n", self._data);
+        }
+    }
+    
+    
+    Value _value_make_with(const Object* p) {
+        Value result;
+        result._data = (uint64_t)p;
+        return result;
     }
 
     
@@ -1041,6 +1156,24 @@ namespace gc {
  }
  
  };
+ */
+
+
+
+
+/*
+ std::string_view String::as_string_view() const {
+ switch (_discriminant()) {
+ case VALUE_TAG_POINTER: {
+ return _pointer->as_string_view();
+ }
+ case VALUE_TAG_SHORT_STRING: {
+ return _string.as_string_view();
+ }
+ default:
+ abort();
+ }
+ }
  */
 
 

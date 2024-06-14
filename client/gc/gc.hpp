@@ -27,10 +27,19 @@ namespace gc {
 
     
     enum Class {
+        
         CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY,
         CLASS_INT64,
         CLASS_STRING,
         CLASS_TABLE,
+        
+        CLASS_CTRIE,
+        CLASS_CTRIE_CNODE,
+        CLASS_CTRIE_INODE,
+        CLASS_CTRIE_LNODE,
+        CLASS_CTRIE_SNODE,
+        CLASS_CTRIE_TNODE,
+
     };
     
 
@@ -40,9 +49,6 @@ namespace gc {
         COLOR_GRAY = 2,
         COLOR_RED = 3,
     }; // enum Color
-    
-    Color color_invert(Color);
-
     
     struct Object {
         
@@ -70,6 +76,7 @@ namespace gc {
     void object_trace(const Object*);
     void* object_allocate(size_t count);
     size_t object_hash(const Object*);
+    void object_debug(const Object*);
 
 
     
@@ -109,6 +116,12 @@ namespace gc {
     struct Traced<Atomic<T*>> {
         
         Atomic<T*> _atomic_object;
+        
+        Traced() = default;
+        Traced(const Traced&) = delete;
+        explicit Traced(T* object);
+        explicit Traced(std::nullptr_t);
+        Traced& operator=(const Traced&) = delete;
         
         T* load(Order order) const;
         void store(T* desired, Order order);
@@ -219,6 +232,11 @@ namespace gc {
 
     
     
+    
+    template<typename T>
+    Traced<Atomic<T*>>::Traced(T* object)
+    : _atomic_object(object) {
+    }
     template<typename T>
     T* Traced<Atomic<T*>>::load(Order order) const {
         return _atomic_object.load(order);
