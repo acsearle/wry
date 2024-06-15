@@ -276,144 +276,17 @@ namespace gc {
     
     
     
-    // This strange object exists so that we can have buffers of a power of two
-    // number of pointers that use a power of two allocation, without having
-    // their first words taken by headers, or the headers making the allocation
-    // slightly more than a power of two (!)
-    //
-    // The size and identity of the buffer are immutable, but the buffer's
-    // contents are mutable, atomic and should be subject to the write barrier
-    //
-    // The buffer is full of Values, but we only care if they can be
-    // interpreted as Object*.
-    
-    //
-    // This object is not needed for resizable arrays of not-potential-gc-
-    // pointers, which do not need to be scanned at all and are just held and
-    // managed directly perhaps in a std::vector, or small arrays of fixed
-    // size, which can use the fma pattern
-
-    
-    /*
-    struct HeapArray : HeapValue {
-        
-        mutable std::size_t _size;
-        mutable std::size_t _capacity;
-        mutable Traced<Value>* _storage; // TODO: type?
-        mutable Traced<const IndirectFixedCapacityValueArray*> _storage_manager;
-        
-        HeapArray()
-        : _size(0)
-        , _capacity(0)
-        , _storage(0)
-        , _storage_manager(nullptr) {
-            // printf("%p new Value[]\n", this);
-        }
-        
-        virtual ~HeapArray() override {
-            // printf("%p del Value[%zd]\n", this, _size);
-        }
-        
-        virtual std::size_t gc_bytes() const override {
-            return sizeof(HeapArray);
-        }
-        
-        virtual void gc_enumerate() const override {
-            trace(_storage_manager);
-        }
-        
-        void push_back(Value value) const {
-            if (_size == _capacity) {
-                auto a = std::max<std::size_t>(16, _capacity * 2);
-                auto b = new IndirectFixedCapacityValueArray(a);
-                auto c = b->_storage;
-                std::memcpy(c, _storage, _size * 8);
-                _capacity = a;
-                _storage = b->_storage;
-                _storage_manager = b;
-            }
-            _storage[_size++] = value;
-        }
-        
-        bool empty() const {
-            return !_size;
-        }
-        
-        void pop_back() const {
-            assert(_size);
-            _storage[--_size] = value_make_null();
-        }
-        
-        std::size_t size() const override {
-            return _size;
-        }
-        
-        virtual bool contains(Value key) const override {
-            if (key._is_small_integer()) {
-                auto pos = key._as_small_integer();
-                if (0 <= pos && pos < _size)
-                    return true;
-            }
-            return false;
-        }
-        
-        virtual Value find(Value key) const override {
-            if (key._is_small_integer()) {
-                auto pos = key._as_small_integer();
-                if (0 <= pos && pos < _size)
-                    return _storage[pos];
-            }
-            return value_make_null();
-        }
-        
-    };
-    
-    */
-
-
-    
-    
-   
-    /*
-    std::size_t Table::size() const {
-        return _pointer->size();
-    }
-    
-    bool Table::contains(Value key) const {
-        return _pointer->contains(key);
-    }
-    
-    Value Table::find(Value key) const {
-        return _pointer->find(key);
-    }
-    
-    Value Table::erase(Value key) {
-        return _pointer->erase(key);
-    }
-    
-    Value Table::insert_or_assign(Value key, Value value) {
-        return _pointer->insert_or_assign(key, value);
-    }
-
-    
-    Value Table::operator[](Value key) const {
-        return _pointer->find(key);
-    }
-    
-    Traced<Value>& Table::operator[](Value key) {
-        return _pointer->find_or_insert_null(key);
-        
-    }
-*/
-
     
   
     
       
     void foo() {
         
-        Value t;
-        t._data = (uint64_t)new HeapTable;
+        Value t = value_make_table();
+        
+        if (!(rand() % 100)) {
+            Value trap = "trapped string should weak rot";
+        }
         
         assert(value_size(t) == 0);
         assert(!value_contains(t, "a"));
@@ -510,60 +383,6 @@ namespace gc {
             assert(s[v[i]] == v[i]);
         }
 
-
-
-        /*
-        
-        // the heap-allocated objects will live until the next handshake so
-        // they will live beyond the end of this function even without being
-        // marked-as-roots anywhere
-        
-        Value a = Value::from_ntbs("hello"); // short string
-        Value b = Value::from_ntbs("long kiss goodbye"); // long string
-        
-        assert(a._is_string()); // packed into value
-        assert(b._is_pointer()); // on the heap
-        
-        // hack type interrogation
-        String c; c._string = a._string;
-        String d; d._string = b._string;
-        
-        auto e = c.as_string_view();
-        printf("%.*s\n", (int)e.size(), e.data());
-        auto f = d.as_string_view();
-        printf("%.*s\n", (int)f.size(), f.data());
-        
-        Value z = Value::from_int64(-7);
-        Value y = Value::from_int64(-777777777777777);
-        
-        //Number x; x._value_that_is_a_number = z;
-        //Number w; w._value_that_is_a_number = y;
-        
-        //printf("%" PRId64 "\n", x.as_int64_t());
-        //printf("%" PRId64 "\n", w.as_int64_t());
-        
-        auto m = [](auto x) {
-            printf("visited with %s\n", __PRETTY_FUNCTION__);
-        };
-        
-        visit(a, m);
-        visit(b, m);
-        visit(z, m);
-        visit(y, m);
-        
-        auto v = new HeapArray();
-        v->push_back(a);
-        v->push_back(b);
-        v->push_back(c);
-        v->push_back(d);
-        v->push_back(z);
-        v->push_back(y);
-        //v->push_back(w);
-        //v->push_back(x);
-        
-         */
-        
-        
     }
      
     
@@ -804,15 +623,15 @@ namespace gc {
     void value_debug(const Value& self) {
         switch (_value_tag(self)) {
             case VALUE_TAG_BOOLEAN:
-                return (void)printf("%s\n", value_as_boolean(self) ? "True" : "False");
+                return (void)printf("%s\n", value_as_boolean(self) ? "TRUE" : "FALSE");
             case VALUE_TAG_CHARACTER:
                 return (void)printf("\'%lc\'\n", value_as_character(self));
             case VALUE_TAG_ERROR:
-                return (void)printf("Error\n");
+                return (void)printf("ERROR\n");
             case VALUE_TAG_OBJECT:
                 return object_debug(_value_as_object(self));
             case VALUE_TAG_TOMBSTONE:
-                return (void)printf("Tombstone\n");
+                return (void)printf("TOMBSTONE\n");
             case VALUE_TAG_ENUMERATION:
                 return (void)printf("enum{%lld}\n", value_as_enumeration(self));
             case VALUE_TAG_SHORT_STRING: {
@@ -822,7 +641,7 @@ namespace gc {
             case VALUE_TAG_SMALL_INTEGER:
                 return (void)printf("%lld\n", _value_as_small_integer(self));
             default:
-                return (void)printf("Value{._data=%0.16llx}\n", self._data);
+                return (void)printf("Value{%#0." PRIx64 "}\n", self._data);
         }
     }
     
@@ -833,6 +652,23 @@ namespace gc {
         return result;
     }
 
+    IndirectFixedCapacityValueArray::IndirectFixedCapacityValueArray(std::size_t count)
+    : Object(CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY)
+    , _capacity(count)
+    , _storage((Traced<Value>*) calloc(count, sizeof(Traced<Value>))) {
+    }
+    
+    IndirectFixedCapacityValueArray::~IndirectFixedCapacityValueArray() {
+        // Safety:
+        //    Storage is a conventionally managed C++ buffer
+        free(_storage);
+    }
+    
+    Value value_make_table() {
+        Value result;
+        result._data = (uint64_t)(new HeapTable);
+        return result;
+    }
     
 } // namespace gc
 

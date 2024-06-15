@@ -154,7 +154,6 @@ namespace gc {
                     assert(_value_is_tombstone(ki));
                     pe->key = value_make_null();
                     ++_grace;
-                    // printf("disinterred one\n");
                 }
             }
             
@@ -289,7 +288,6 @@ namespace gc {
                     for (std::size_t i = 0; i != _mask + 1; ++i) {
                         Entry* pe = _storage + i;
                         Value ki = pe->key;
-                        printf("[%zd] = { %llx, ...}\n", i, ki._data);
                     }
                 }
                 assert(keys == _count);
@@ -369,19 +367,12 @@ namespace gc {
         
         Value insert_or_assign(Value key, Value value) const {
             // _invariant();
-            // printf("insert_or_assign (%lld, %lld)\n", key._integer >> 4, value._integer >> 4);
             std::size_t h = value_hash(key);
-            // printf("with hash %zd\n", h);
-            
-            // printf("with alpha %zd/%zd, beta %zd/%zd\n", _alpha._count, _alpha._grace, _beta._count, _beta._grace);
             
             if (_alpha._grace) {
-                // _partition = 0;
                 Value x = _alpha.insert_or_assign(h, key, value);
-                // _invariant();
                 return x;
             }
-            // _alpha is terminal
             
             {
                 for (std::size_t i = 0; i != _partition; ++i) {
@@ -426,29 +417,22 @@ namespace gc {
                 using wry::type_name;
                 std::size_t new_capacity = std::bit_ceil((_alpha._count * 8 + 2) / 3);
                 std::size_t new_grace = new_capacity * 3 / 4;
-                // printf("New table of capacity %zd when old was %zd\n", new_capacity, _alpha._mask + 1);
                 _beta._manager = new IndirectFixedCapacityValueArray(new_capacity * 2);
                 _beta._storage = (Entry*) _beta._manager->_storage;
                 _beta._count = 0;
                 _beta._grace = new_grace;
                 _beta._mask = new_capacity - 1;
             }
-            // _invariant();
             Value ultimate = _beta.insert_or_assign(h, key, value);
-            // _invariant();
             while (_alpha._count) {
                 Entry* pe = _alpha._storage + (_partition++);
                 Value ki = pe->key;
                 if (value_is_null(ki) || _value_is_tombstone(ki))
                     continue;
-                // _invariant();
                 Value vi = pe->entomb();
                 _alpha._count--;
-                // _invariant();
                 assert(_beta._grace);
                 _beta.must_insert(value_hash(ki), ki, vi);
-                // _invariant();
-                // printf("Evacuated (%lld, %lld)\n", ki._integer >> 4, vi._integer >> 4);
                 break;
             }
             return ultimate;

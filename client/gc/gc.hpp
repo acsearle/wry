@@ -32,20 +32,16 @@ namespace gc {
         CLASS_INT64,
         CLASS_STRING,
         CLASS_TABLE,
-        
         CLASS_CTRIE,
         CLASS_CTRIE_CNODE,
         CLASS_CTRIE_INODE,
         CLASS_CTRIE_LNODE,
-        CLASS_CTRIE_SNODE,
         CLASS_CTRIE_TNODE,
 
     };
     
 
     enum Color {
-        COLOR_WHITE = 0,
-        COLOR_BLACK = 1,
         COLOR_GRAY = 2,
         COLOR_RED = 3,
     }; // enum Color
@@ -71,15 +67,7 @@ namespace gc {
         bool operator==(const Object&) const;
 
     }; // struct Object
-    
-    void object_shade(const Object*);
-    void object_trace(const Object*);
-    void* object_allocate(size_t count);
-    size_t object_hash(const Object*);
-    void object_debug(const Object*);
-
-
-    
+        
     template<typename T>
     struct Traced<T*> {
 
@@ -106,12 +94,6 @@ namespace gc {
         
     }; // struct Traced<T*>
     
-    template<typename T> void object_trace(const Traced<T*>&);
-
-    
-    
-    
-    
     template<typename T>
     struct Traced<Atomic<T*>> {
         
@@ -130,19 +112,20 @@ namespace gc {
         bool compare_exchange_strong(T*& expected, T* desired, Order success, Order failure);
         
     }; // struct Traced<Atomic<T*>>
-        
+            
+    
+    void object_debug(const Object*);
+
+    void* object_allocate(size_t count);
+    void object_shade(const Object*);
+    void object_trace(const Object*);
+    void object_trace_weak(const Object* object);
+    template<typename T> void object_trace(const Traced<T*>&);
     template<typename T> void object_trace(const Traced<Atomic<T*>>&);
 
-    
+    size_t object_hash(const Object*);
 
-    
-    
-    
-    
-    
-    
-    
-    
+
     template<typename T>
     Traced<T*>::Traced(const Traced& other)
     : Traced(other.get()) {
@@ -197,7 +180,7 @@ namespace gc {
     
     template<typename T>
     Traced<T*>::operator bool() const {
-        return get();
+        return (bool)get();
     }
     
     template<typename T>
@@ -225,10 +208,7 @@ namespace gc {
         return _atomic_object.load(Order::RELAXED);
     }
     
-    template<typename T>
-    void object_trace(const Traced<T*>& object) {
-        object_trace(object._atomic_object.load(Order::ACQUIRE));
-    }
+    
 
     
     
@@ -277,15 +257,18 @@ namespace gc {
 
     
     template<typename T>
+    void object_trace(const Traced<T*>& object) {
+        object_trace(object._atomic_object.load(Order::ACQUIRE));
+    }
+    
+    template<typename T>
     void object_trace(const Traced<Atomic<T*>>& object) {
         object_trace(object.load(Order::ACQUIRE));
     }
 
-    
-
-    
-    
-    
+    bool color_compare_exchange_white_black(Atomic<Color>&);
+    Color _color_white_to_black_color_was(Atomic<Color>&);
+        
     
 } // namespace gc
 

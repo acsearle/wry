@@ -8,6 +8,8 @@
 #include "ctrie.hpp"
 
 namespace gc {
+            
+    constexpr int W = 6;
     
     std::pair<uint64_t, int> Ctrie::flagpos(uint64_t h, int lev, uint64_t bmp) {
         uint64_t a = (h >> lev) & 63;
@@ -26,8 +28,6 @@ namespace gc {
         return main.compare_exchange_strong(expected, desired, Order::RELEASE, Order::RELAXED);
     }
 
-    
-    
     Object* Ctrie::object_resurrect(Object* self) {
         switch (self->_class) {
             case CLASS_CTRIE_INODE: {
@@ -51,14 +51,6 @@ namespace gc {
             }
         }
     }
-    
-    /*
-    Ctrie::SNode::SNode(Value k, Value v)
-    : Branch(CLASS_CTRIE_SNODE)
-    , key(k)
-    , value(v) {
-    }*/
-    
     
     Ctrie::MainNode* Ctrie::CNode::toContracted(int level) {
         if (level == 0)
@@ -84,8 +76,7 @@ namespace gc {
     Ctrie::MainNode* Ctrie::CNode::toCompressed(int level) {
         return resurrected()->toContracted(level);
     }
-    
-    
+        
     void Ctrie::INode::clean(int level) {
         MainNode* mn = READ(this->main);
         if (mn->_class == CLASS_CTRIE_CNODE) {
@@ -94,31 +85,24 @@ namespace gc {
         }
     }
     
-    
     void Ctrie::cleanParent(INode* p, INode* i, size_t hc, int lev) {
         MainNode* m = READ(i->main);
         MainNode* pm = READ(p->main);
-        switch (pm->_class) {
-            case CLASS_CTRIE_CNODE: {
-                CNode* cn = (CNode*)pm;
-                auto [flag, pos] = flagpos(hc, lev, cn->bmp);
-                if (!(flag & cn->bmp))
-                    return;
-                Object* sub = cn->array[pos];
-                if (sub != i)
-                    return;
-                if (m->_class == CLASS_CTRIE_TNODE) {
-                    TNode* tn = (TNode*)m;
-                    CNode* ncn = cn->updated(pos, tn->sn);
-                    if (!CAS(p->main, pm, ncn->toContracted(lev)))
-                        [[clang::musttail]] return cleanParent(p, i, hc, lev);
-                }
-                return;
-            }
-            default: {
-                return;
-            }
-        }
+        if (pm->_class != CLASS_CTRIE_CNODE)
+            return;
+        CNode* cn = (CNode*)pm;
+        auto [flag, pos] = flagpos(hc, lev, cn->bmp);
+        if (!(flag & cn->bmp))
+            return;
+        Object* sub = cn->array[pos];
+        if (sub != i)
+            return;
+        if (m->_class != CLASS_CTRIE_TNODE)
+            return;
+        TNode* tn = (TNode*)m;
+        CNode* ncn = cn->updated(pos, tn->sn);
+        if (!CAS(p->main, pm, ncn->toContracted(lev)))
+            [[clang::musttail]] return cleanParent(p, i, hc, lev);
     }
     
     Ctrie::CNode* Ctrie::CNode::resurrected() {
@@ -202,8 +186,8 @@ namespace gc {
     void Ctrie::erase(HeapString* hs) {
         for (;;) {
             INode* r = this->root;
-            bool flag = r->erase(hs, 0, nullptr);
-            if (flag)
+            Value flag = r->erase(hs, 0, nullptr);
+            if (flag != value_make_RESTART())
                 return;
         }
     }
@@ -266,7 +250,6 @@ namespace gc {
             case CLASS_CTRIE_CNODE: {
                 CNode* cn = (CNode*)mn;
                 auto [flag, pos] = flagpos(value_hash(k), lev, cn->bmp);
-                printf("{%llx, %d}\n", flag, pos);
                 if (!(cn->bmp & flag)) {
                     nmn = cn->inserted(pos, flag, new SNode(k, v));
                     break;
@@ -318,9 +301,7 @@ namespace gc {
             case CLASS_CTRIE_CNODE: {
                 CNode* cn = (CNode*)mn;
                 auto [flag, pos] = flagpos(hc, lev, cn->bmp);
-                printf("{%llx, %d}\n", flag, pos);
                 if (!(cn->bmp & flag)) {
-                    printf("Allocating a new string for \"%.*s\"\n", (int)sv.size(), sv.data());
                     // nmn = cn->inserted(pos, flag, new SNode(k, v));
                     // We have found a CNode with no entry for the hash
                     // The string is not in the table
@@ -338,20 +319,8 @@ namespace gc {
                 switch (bn->_class) {
                     case CLASS_CTRIE_INODE: {
                         INode* sin = (INode*)bn;
-                        // return sin->insert(k, v, lev + W, i);
                         return sin->find_or_emplace(sv, hc, lev + W, i);
                     }
-                        /*
-                    case CLASS_CTRIE_SNODE: {
-                        SNode* sn = (SNode*)bn;
-                        SNode* nsn = new SNode(k, v);
-                        Branch* nbn = nsn;
-                        if (sn->key != k)
-                            nbn = new INode(CNode::make(sn, nsn, lev + W));
-                        nmn = cn->updated(pos, nbn);
-                        break;
-                    }
-                         */
                     case CLASS_STRING: {
                         // We have hashed to the same bucket as an existing
                         // string
@@ -364,15 +333,39 @@ namespace gc {
                                 // The sizes match
                                 if (!__builtin_memcmp(hs->_bytes, sv.data(), sv.size())) {
                                     // The strings match
-                                    printf("Found an existing string for \"%.*s\"\n", (int)sv.size(), sv.data());
-                                    return hs;
-                                    // TODO: weakness
+                                    Color was = _color_white_to_black_color_was(hs->_color);
+                                    switch (was) {
+                                        case COLOR_GRAY: {
+                                            // leafs are never GRAY
+                                            object_debug(hs);
+                                            abort();
+                                        }
+                                        case COLOR_RED:
+                                            // we lost the race and have to
+                                            // compete to replace it
+                                            // don't interfere with the corpse
+                                            hs = nullptr;
+                                            break;
+                                        default:
+                                            // was white and became black, or was already black
+                                            return hs;
+                                    }
+                                    
+                                    // now we have to replace the thing:
+                                    size_t count = sv.size();
+                                    assert(count > 7);
+                                    nhs = new(count) HeapString;
+                                    nhs->_hash = hc;
+                                    nhs->_size = count;
+                                    std::memcpy(nhs->_bytes, sv.data(), count);
+                                    nmn = cn->updated(pos, nhs);
+
+
                                 }
                             }
                         }
                         // We have to expand the HAMT one level
                         {
-                            printf("Expanding with a new string for \"%.*s\"\n", (int)sv.size(), sv.data());
                             size_t count = sv.size();
                             assert(count > 7);
                             nhs = new(count) HeapString;
@@ -474,8 +467,73 @@ namespace gc {
     }
      */
     
-    bool Ctrie::INode::erase(HeapString*, int lev, INode* parent) {
-        abort();
+    Value Ctrie::INode::erase(HeapString* hs, int lev, INode* parent) {
+        INode* i = this;
+        MainNode* mn = i->main.load(Order::ACQUIRE);
+        switch (mn->_class) {
+            case CLASS_CTRIE_CNODE: {
+                CNode* cn = (CNode*)mn;
+                auto [flag, pos] = flagpos(hs->_hash, lev, cn->bmp);
+                if (!(flag & cn->bmp))
+                    return true;
+                Value res;
+                Object* bn = cn->array[pos];
+                switch (bn->_class) {
+                    case CLASS_CTRIE_INODE: {
+                        INode* sin = (INode*)bn;
+                        res = sin->erase(hs, lev + W, i);
+                        break;
+                    }
+                    case CLASS_STRING: {
+                        HeapString* dhs = (HeapString*)bn;
+                        if (dhs != hs) {
+                            res = value_make_NOTFOUND();
+                        } else {
+                            CNode* ncn = cn->removed(pos, flag);
+                            MainNode* cntr = ncn->toContracted(lev);
+                            if (CAS(i->main, mn, cntr)) {
+                                res = value_make_OK();
+                            } else {
+                                res = value_make_RESTART();
+                            }
+                        }
+                        break;
+                    }
+                    default: {
+                        abort();
+                    }
+                }
+                if (value_is_NOTFOUND(res) || value_is_RESTART(res))
+                    return res;
+                mn = READ(i->main);
+                if (mn->_class == CLASS_CTRIE_TNODE)
+                    cleanParent(parent, i, hs->_hash, lev - W);
+                return res;
+            }
+            case CLASS_CTRIE_TNODE: {
+                parent->clean(lev - W);
+                return value_make_RESTART();
+            }
+            case CLASS_CTRIE_LNODE: {
+                LNode* ln = (LNode*)mn;
+                abort();
+                // TODO: collision
+                /*
+                LNode* nln = ln->removed(k);
+                MainNode* nmn = nln;
+                if (nln->next == nullptr) {
+                    nmn = nln->sn->entomb();
+                }
+                if (CAS(i->main, mn, nmn)) {
+                    return ln->lookup(k);
+                } else {
+                    return value_make_RESTART();
+                }
+                 */
+            }
+            default:
+                abort();
+        } // switch (mn->_class)   
     }
     
     Ctrie::CNode* Ctrie::CNode::make(HeapString* hs1, HeapString* hs2, int lev) {
@@ -512,7 +570,6 @@ namespace gc {
     }
     
     Ctrie::CNode* Ctrie::CNode::removed(int pos, uint64_t flag) {
-        assert((flag >> pos) == 1);
         assert(bmp & flag);
         int num = __builtin_popcountll(bmp);
         CNode* ncn = new (num-1) CNode;
@@ -552,6 +609,7 @@ namespace gc {
         
     }
     
+    /*
     Value Ctrie::LNode::lookup(Value key) {
         abort();
     }
@@ -563,6 +621,7 @@ namespace gc {
     Ctrie::LNode* Ctrie::LNode::removed(Value key) {
         abort();
     }
+     */
     
     
     Ctrie::Ctrie()
@@ -571,7 +630,56 @@ namespace gc {
         ncn->bmp = 0;
         root = new INode(ncn);
     }
+    
+    
+    Ctrie::LNode::LNode()
+    : MainNode(CLASS_CTRIE_LNODE) {
+    }
 
+    Object* Ctrie::LNode::find_or_emplace(string_view sv, size_t hc) {
+
+        abort();
+
+        LNode* a = this;
+        for (;;) {
+            assert(a->sn->_hash == hc);
+            if (a->sn->_size == sv.size()) {
+                if (!__builtin_memcmp(a->sn->_bytes, sv.data(), sv.size())) {
+                    // found, but we have to upgrade it
+
+                }
+            }
+        }
+    }
+    
+    
+    Ctrie::LNode* Ctrie::LNode::erase(HeapString* hs) {
+        LNode* a = this;
+        for (;;) {
+            if (a->sn == hs)
+                break;
+            if (!a->next)
+                return nullptr;
+            a = a->next;
+        }
+        // a->sn == hs
+        LNode* b = this;
+        LNode* c = a->next;
+        for (;;) {
+            if (b == a)
+                return c;
+            
+            // what about delete LNode to single?  to empty?
+            
+            LNode* d = new LNode;
+            d->sn = b->sn;
+            d->next = c;
+            object_shade(d->sn);
+            object_shade(d->next);
+            b = b->next;
+            c = d;
+        }
+    }
     
 } // namespace gc
 

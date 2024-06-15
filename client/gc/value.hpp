@@ -42,6 +42,8 @@ namespace gc {
 
     }; // Value
 
+    // gc methods
+    
     void value_debug(const Value&);
     void value_shade(Value value);
     void value_trace(Value);
@@ -63,7 +65,6 @@ namespace gc {
 
     Value value_make_deep_copy(const Value&);
     
-
     bool value_is_boolean(const Value& self);
     bool value_is_character(const Value& self);
     bool value_is_enumeration(const Value& self);
@@ -215,18 +216,8 @@ namespace gc {
         
         std::size_t _capacity;
         Traced<Value>* _storage; // TODO: type?
-        
-        explicit IndirectFixedCapacityValueArray(std::size_t count)
-        : Object(CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY)
-        , _capacity(count)
-        , _storage((Traced<Value>*) calloc(count, sizeof(Traced<Value>))) {
-            // printf("%p new IndirectFixedCapacityValueArray[%zd]\n", this, _capacity);
-        }
-        
-        ~IndirectFixedCapacityValueArray() {
-            free(_storage);
-        }
-        
+        explicit IndirectFixedCapacityValueArray(std::size_t count);
+        ~IndirectFixedCapacityValueArray()      ;
     }; // struct IndirectFixedCapacityValueArray
 
     

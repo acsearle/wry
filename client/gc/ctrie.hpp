@@ -31,15 +31,6 @@ namespace gc {
         // struct SNode;
         struct TNode;
 
-        enum {
-            W = 6
-        };
-        
-
-        // struct Branch : Object {
-        //    explicit Branch(Class class_) : Object(class_) {}
-        //    Branch* resurrect();
-        // };
         static Object* object_resurrect(Object* self);
 
 
@@ -68,12 +59,12 @@ namespace gc {
             Traced<Atomic<MainNode*>> main;
             explicit INode(MainNode*);
             // Value lookup(Value key, int level, INode* parent);
-            bool insert(Value key, Value value, int lev, INode* parent);
-            Value remove(Value key, int level, INode* parent);
+            //bool insert(Value key, Value value, int lev, INode* parent);
+            //Value remove(Value key, int level, INode* parent);
             void clean(int lev);
             
             HeapString* find_or_emplace(std::string_view sv, std::size_t hc, int lev, INode* parent);
-            bool erase(HeapString* hs, int level, INode* parent);
+            Value erase(HeapString* hs, int level, INode* parent);
 
             
         };
@@ -81,9 +72,13 @@ namespace gc {
         struct LNode : MainNode {
             HeapString* sn;
             LNode* next;
-            Value lookup(Value);
-            LNode* inserted(Value k, Value v);
-            LNode* removed(Value k);
+            //Value lookup(Value);
+            //LNode* inserted(Value k, Value v);
+            //LNode* removed(Value k);
+            Object* find_or_emplace(string_view, size_t hc);
+            LNode* erase(HeapString* hs);
+            LNode();
+            
         };
         
         /*
