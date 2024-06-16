@@ -5,15 +5,19 @@
 //  Created by Antony Searle on 31/5/2024.
 //
 
+#include <cinttypes>
 #include <cstdlib>
 
 #include <algorithm>
 #include <numeric>
 #include <random>
 
-#include "debug.hpp"
-#include "value.hpp"
+#include "hash.hpp"
 #include "table.hpp"
+#include "utility.hpp"
+#include "value.hpp"
+
+#include "debug.hpp"
 
 
 namespace wry::gc {
@@ -142,7 +146,7 @@ namespace wry::gc {
             case VALUE_TAG_OBJECT: {\
                 const Object* object = _value_as_object(right);\
                 if (object) switch (object->_class) {\
-                    case CLASS_INT64:\
+                    case Class::INT64:\
                         return value_make_integer_with(left Y ((HeapInt64*)object)->_integer);\
                     default:\
                         break;\
@@ -161,7 +165,7 @@ namespace wry::gc {
             case VALUE_TAG_OBJECT: {\
                 const Object* object = _value_as_object(left);\
                 if (object) switch (object->_class) {\
-                    case CLASS_INT64:\
+                    case Class::INT64:\
                         return ((HeapInt64*)object)->_integer Y right;\
                     default:\
                         break;\
@@ -471,7 +475,7 @@ namespace wry::gc {
 
     bool contains(const Object* self, Value key) {
         switch (self->_class) {
-            case CLASS_TABLE:
+            case Class::TABLE:
                 return ((const HeapTable*) self)->contains(key);
             default:
                 return false;
@@ -480,7 +484,7 @@ namespace wry::gc {
 
     Value find(const Object* self, Value key) {
         switch (self->_class) {
-            case CLASS_TABLE:
+            case Class::TABLE:
                 return ((const HeapTable*) self)->find(key);
             default:
                 return value_make_error();
@@ -489,7 +493,7 @@ namespace wry::gc {
 
     Value insert_or_assign(const Object* self, Value key, Value value) {
         switch (self->_class) {
-            case CLASS_TABLE:
+            case Class::TABLE:
                 return ((const HeapTable*) self)->insert_or_assign(key, value);
             default:
                 return value_make_error();
@@ -498,7 +502,7 @@ namespace wry::gc {
 
     Value erase(const Object* self, Value key) {
         switch (self->_class) {
-            case CLASS_TABLE:
+            case Class::TABLE:
                 return ((const HeapTable*) self)->erase(key);
             default:
                 return value_make_error();
@@ -508,13 +512,13 @@ namespace wry::gc {
 
     std::size_t size(const Object* self) {
         switch (self->_class) {
-            case CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
+            case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
                 return ((const IndirectFixedCapacityValueArray*) self)->_capacity;
-            case CLASS_TABLE:
+            case Class::TABLE:
                 return ((const HeapTable*) self)->size();
-            case CLASS_STRING:
+            case Class::STRING:
                 return ((const HeapString*) self)->_size;
-            case CLASS_INT64:
+            case Class::INT64:
                 return 0;
             default:
                 abort();
@@ -594,7 +598,7 @@ namespace wry::gc {
     
     
     HeapInt64::HeapInt64(std::int64_t z)
-    : Object(CLASS_INT64)
+    : Object(Class::INT64)
     , _integer(z) {
     }
 
@@ -603,7 +607,7 @@ namespace wry::gc {
     }
         
     HeapString::HeapString()
-    : Object(CLASS_STRING) {
+    : Object(Class::STRING) {
     }
     
     Value value_insert_or_assign(Value& self, Value key, Value value) {
@@ -653,7 +657,7 @@ namespace wry::gc {
     }
 
     IndirectFixedCapacityValueArray::IndirectFixedCapacityValueArray(std::size_t count)
-    : Object(CLASS_INDIRECT_FIXED_CAPACITY_VALUE_ARRAY)
+    : Object(Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY)
     , _capacity(count)
     , _storage((Traced<Value>*) calloc(count, sizeof(Traced<Value>))) {
     }
@@ -904,7 +908,7 @@ namespace wry::gc {
  Value erase(Value) const;
  Value insert_or_assign(Value, Value) const;
  
- explicit HeapValue(Class class_) : Object(class_) {}
+ explicit HeapValue(Class Class::) : Object(Class::) {}
  
  };
  

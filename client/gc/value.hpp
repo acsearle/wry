@@ -8,13 +8,11 @@
 #ifndef value_hpp
 #define value_hpp
 
-#include <cinttypes>
+#include <string_view>
 
-#include <bit>
-
-#include "../client/hash.hpp"
-#include "debug.hpp"
-#include "gc.hpp"
+#include "atomic.hpp"
+#include "object.hpp"
+#include "traced.hpp"
 
 namespace wry::gc {
     

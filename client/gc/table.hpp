@@ -8,6 +8,12 @@
 #ifndef table_hpp
 #define table_hpp
 
+#include <cassert>
+
+#include <bit>
+
+#include "debug.hpp"
+#include "object.hpp"
 #include "value.hpp"
 
 namespace wry::gc {
@@ -459,7 +465,7 @@ namespace wry::gc {
             _partition = 0;
         }
         
-        HeapTable() : Object(CLASS_TABLE) {}
+        HeapTable() : Object(Class::TABLE) {}
         
     }; // struct HeapTable
     

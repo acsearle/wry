@@ -5,6 +5,7 @@
 //  Created by Antony Searle on 14/6/2024.
 //
 
+#include "utility.hpp"
 #include "ctrie.hpp"
 
 namespace wry::gc {
@@ -48,11 +49,11 @@ namespace wry::gc {
 
     Object* Ctrie::object_resurrect(Object* self) {
         switch (self->_class) {
-            case CLASS_CTRIE_INODE: {
+            case Class::CTRIE_INODE: {
                 INode* in = (INode*)self;
                 MainNode* mn = READ(in->main);
                 switch (mn->_class) {
-                    case CLASS_CTRIE_TNODE: {
+                    case Class::CTRIE_TNODE: {
                         TNode* tn = (TNode*)mn;
                         return tn->sn;
                     }
@@ -61,7 +62,7 @@ namespace wry::gc {
                     }
                 }
             }
-            case CLASS_STRING: {
+            case Class::STRING: {
                 return self;
             }
             default: {
@@ -78,10 +79,10 @@ namespace wry::gc {
             return this;
         Object* bn = this->array[0];
         switch (bn->_class) {
-            case CLASS_CTRIE_INODE: {
+            case Class::CTRIE_INODE: {
                 return this;
             }
-            case CLASS_STRING: {
+            case Class::STRING: {
                 HeapString* hs = (HeapString*)bn;
                 return new TNode(hs);
             }
@@ -97,7 +98,7 @@ namespace wry::gc {
         
     void Ctrie::INode::clean(int level) {
         MainNode* mn = READ(this->main);
-        if (mn->_class == CLASS_CTRIE_CNODE) {
+        if (mn->_class == Class::CTRIE_CNODE) {
             CNode* cn = (CNode*)mn;
             CAS(this->main, mn, cn->toCompressed(level));
         }
@@ -106,7 +107,7 @@ namespace wry::gc {
     void Ctrie::cleanParent(INode* p, INode* i, size_t hc, int lev) {
         MainNode* m = READ(i->main);
         MainNode* pm = READ(p->main);
-        if (pm->_class != CLASS_CTRIE_CNODE)
+        if (pm->_class != Class::CTRIE_CNODE)
             return;
         CNode* cn = (CNode*)pm;
         auto [flag, pos] = flagpos(hc, lev, cn->bmp);
@@ -115,7 +116,7 @@ namespace wry::gc {
         Object* sub = cn->array[pos];
         if (sub != i)
             return;
-        if (m->_class != CLASS_CTRIE_TNODE)
+        if (m->_class != Class::CTRIE_TNODE)
             return;
         TNode* tn = (TNode*)m;
         CNode* ncn = cn->updated(pos, tn->sn);
@@ -140,7 +141,7 @@ namespace wry::gc {
     }
     
     Ctrie::CNode::CNode()
-    : MainNode(CLASS_CTRIE_CNODE) {
+    : MainNode(Class::CTRIE_CNODE) {
     }
     
     Ctrie::CNode* Ctrie::CNode::updated(int pos, Object *bn) {
@@ -156,7 +157,7 @@ namespace wry::gc {
     }
         
     Ctrie::TNode::TNode(HeapString* sn)
-    : MainNode(CLASS_CTRIE_TNODE)
+    : MainNode(Class::CTRIE_TNODE)
     , sn(sn) {
     }
         
@@ -219,18 +220,18 @@ namespace wry::gc {
         INode* i = this;
         MainNode* mn = READ(i->main);
         switch (mn->_class) {
-            case CLASS_CTRIE_CNODE: {
+            case Class::CTRIE_CNODE: {
                 CNode* cn = (CNode*)mn;
                 auto [flag, pos] = flagpos(value_hash(k), lev, cn->bmp);
                 if (!(flag & cn->bmp))
                     return value_make_NOTFOUND();
                 Branch* bn = cn->array[pos];
                 switch (bn->_class) {
-                    case CLASS_CTRIE_INODE: {
+                    case Class::CTRIE_INODE: {
                         INode* sin = (INode*)bn;
                         return sin->lookup(k, lev + W, i);
                     }
-                    case CLASS_CTRIE_SNODE: {
+                    case Class::CTRIE_SNODE: {
                         SNode* sn = (SNode*)bn;
                         if (sn->key == k)
                             return sn->value;
@@ -241,11 +242,11 @@ namespace wry::gc {
                         abort();
                 }
             }
-            case CLASS_CTRIE_TNODE: {
+            case Class::CTRIE_TNODE: {
                 parent->clean(lev - W);
                 return value_make_RESTART();
             }
-            case CLASS_CTRIE_LNODE: {
+            case Class::CTRIE_LNODE: {
                 LNode* ln = (LNode*)mn;
                 return ln->lookup(k);
             }
@@ -265,7 +266,7 @@ namespace wry::gc {
         MainNode* mn = READ(i->main);
         MainNode* nmn;
         switch (mn->_class) {
-            case CLASS_CTRIE_CNODE: {
+            case Class::CTRIE_CNODE: {
                 CNode* cn = (CNode*)mn;
                 auto [flag, pos] = flagpos(value_hash(k), lev, cn->bmp);
                 if (!(cn->bmp & flag)) {
@@ -274,11 +275,11 @@ namespace wry::gc {
                 }
                 Branch* bn = cn->array[pos];
                 switch (bn->_class) {
-                    case CLASS_CTRIE_INODE: {
+                    case Class::CTRIE_INODE: {
                         INode* sin = (INode*)bn;
                         return sin->insert(k, v, lev + W, i);
                     }
-                    case CLASS_CTRIE_SNODE: {
+                    case Class::CTRIE_SNODE: {
                         SNode* sn = (SNode*)bn;
                         SNode* nsn = new SNode(k, v);
                         Branch* nbn = nsn;
@@ -293,11 +294,11 @@ namespace wry::gc {
                 }
                 break;
             }
-            case CLASS_CTRIE_TNODE: {
+            case Class::CTRIE_TNODE: {
                 parent->clean(lev - W);
                 return false;
             }
-            case CLASS_CTRIE_LNODE: {
+            case Class::CTRIE_LNODE: {
                 LNode* ln = (LNode*)mn;
                 nmn = ln->inserted(k, v);
                 break;
@@ -316,7 +317,7 @@ namespace wry::gc {
         MainNode* nmn;
         HeapString* nhs;
         switch (mn->_class) {
-            case CLASS_CTRIE_CNODE: {
+            case Class::CTRIE_CNODE: {
                 CNode* cn = (CNode*)mn;
                 auto [flag, pos] = flagpos(query.hash, lev, cn->bmp);
                 if (!(cn->bmp & flag)) {
@@ -326,11 +327,11 @@ namespace wry::gc {
                 }
                 Object* bn = cn->array[pos];
                 switch (bn->_class) {
-                    case CLASS_CTRIE_INODE: {
+                    case Class::CTRIE_INODE: {
                         INode* sin = (INode*)bn;
                         return sin->find_or_emplace(query, lev + W, i);
                     }
-                    case CLASS_STRING: {
+                    case Class::STRING: {
                         // We have hashed to the same bucket as an existing
                         // string
                         
@@ -342,22 +343,24 @@ namespace wry::gc {
                                 // The sizes match
                                 if (!__builtin_memcmp(hs->_bytes, query.view.data(), query.view.size())) {
                                     // The strings match
-                                    Color was = _color_white_to_black_color_was(hs->_color);
-                                    switch (was) {
-                                        case COLOR_GRAY: {
-                                            // leafs are never GRAY
+                                    Color expected = Color::WHITE;
+                                    hs->_color.compare_exchange(expected, Color::BLACK);
+                                    switch (expected) {
+                                        case Color::WHITE:
+                                        case Color::BLACK: {
+                                            // We have a strong ref
+                                            return hs;
+                                        }
+                                        case Color::RED: {
+                                            // Already condemned, we have to replace it
+                                            break;
+                                        }
+                                        case Color::GRAY:
+                                        default: {
+                                            // Impossible
                                             object_debug(hs);
                                             abort();
                                         }
-                                        case COLOR_RED:
-                                            // we lost the race and have to
-                                            // compete to replace it
-                                            // don't interfere with the corpse
-                                            hs = nullptr;
-                                            break;
-                                        default:
-                                            // was white and became black, or was already black
-                                            return hs;
                                     }
                                     
                                     // now we have to replace the thing:
@@ -381,12 +384,12 @@ namespace wry::gc {
                 }
                 break;
             }
-            case CLASS_CTRIE_TNODE: {
+            case Class::CTRIE_TNODE: {
                 if (parent)
                     parent->clean(lev - W);
                 return nullptr;
             }
-            case CLASS_CTRIE_LNODE: {
+            case Class::CTRIE_LNODE: {
                 LNode* ln = (LNode*)mn;
                 abort();
                 // TODO: ln->find_or_emplace
@@ -405,7 +408,7 @@ namespace wry::gc {
         INode* i = this;
         MainNode* mn = i->main.load(Order::ACQUIRE);
         switch (mn->_class) {
-            case CLASS_CTRIE_CNODE: {
+            case Class::CTRIE_CNODE: {
                 CNode* cn = (CNode*)mn;
                 auto [flag, pos] = flagpos(value_hash(k), lev, cn->bmp);
                 if (!(flag & cn->bmp))
@@ -413,12 +416,12 @@ namespace wry::gc {
                 Value res;
                 Branch* bn = cn->array[pos];
                 switch (bn->_class) {
-                    case CLASS_CTRIE_INODE: {
+                    case Class::CTRIE_INODE: {
                         INode* sin = (INode*)bn;
                         res = sin->remove(k, lev + W, i);
                         break;
                     }
-                    case CLASS_CTRIE_SNODE: {
+                    case Class::CTRIE_SNODE: {
                         SNode* sn = (SNode*)bn;
                         if (sn->key != k) {
                             res = value_make_NOTFOUND();
@@ -440,15 +443,15 @@ namespace wry::gc {
                 if (value_is_NOTFOUND(res) || value_is_RESTART(res))
                     return res;
                 mn = READ(i->main);
-                if (mn->_class == CLASS_CTRIE_TNODE)
+                if (mn->_class == Class::CTRIE_TNODE)
                     cleanParent(parent, i, value_hash(k), lev - W);
                 return res;
             }
-            case CLASS_CTRIE_TNODE: {
+            case Class::CTRIE_TNODE: {
                 parent->clean(lev - W);
                 return value_make_RESTART();
             }
-            case CLASS_CTRIE_LNODE: {
+            case Class::CTRIE_LNODE: {
                 LNode* ln = (LNode*)mn;
                 LNode* nln = ln->removed(k);
                 MainNode* nmn = nln;
@@ -471,7 +474,7 @@ namespace wry::gc {
         INode* i = this;
         MainNode* mn = i->main.load(Ordering::ACQUIRE);
         switch (mn->_class) {
-            case CLASS_CTRIE_CNODE: {
+            case Class::CTRIE_CNODE: {
                 CNode* cn = (CNode*)mn;
                 auto [flag, pos] = flagpos(key->_hash, lev, cn->bmp);
                 if (!(flag & cn->bmp))
@@ -480,12 +483,12 @@ namespace wry::gc {
                 Value res;
                 Object* bn = cn->array[pos];
                 switch (bn->_class) {
-                    case CLASS_CTRIE_INODE: {
+                    case Class::CTRIE_INODE: {
                         INode* sin = (INode*)bn;
                         res = sin->erase(key, lev + W, i);
                         break;
                     }
-                    case CLASS_STRING: {
+                    case Class::STRING: {
                         HeapString* dhs = (HeapString*)bn;
                         if (dhs != key) {
                             res = value_make_NOTFOUND();
@@ -510,17 +513,17 @@ namespace wry::gc {
                 // levels that mean we may need to contract this level.
                 if (parent) {
                     mn = READ(i->main);
-                    if (mn->_class == CLASS_CTRIE_TNODE)
+                    if (mn->_class == Class::CTRIE_TNODE)
                         cleanParent(parent, i, key->_hash, lev - W);
                 }
                 return res;
             }
-            case CLASS_CTRIE_TNODE: {
+            case Class::CTRIE_TNODE: {
                 if (parent)
                     parent->clean(lev - W);
                 return value_make_RESTART();
             }
-            case CLASS_CTRIE_LNODE: {
+            case Class::CTRIE_LNODE: {
                 LNode* ln = (LNode*)mn;
                 LNode* nln = ln->erase(key);
                 assert(nln); // <-- any published LNode list should have had at least two nodes
@@ -614,7 +617,7 @@ namespace wry::gc {
     }
     
     Ctrie::INode::INode(MainNode* mn)
-    : Object(CLASS_CTRIE_INODE)
+    : Object(Class::CTRIE_INODE)
     , main(mn) {     
         
     }
@@ -635,7 +638,7 @@ namespace wry::gc {
     
     
     Ctrie::Ctrie()
-    : Object(CLASS_CTRIE) {
+    : Object(Class::CTRIE) {
         CNode* ncn = new(0) CNode;
         ncn->bmp = 0;
         root = new INode(ncn);
@@ -643,7 +646,7 @@ namespace wry::gc {
     
     
     Ctrie::LNode::LNode()
-    : MainNode(CLASS_CTRIE_LNODE) {
+    : MainNode(Class::CTRIE_LNODE) {
     }
     
     
@@ -665,8 +668,8 @@ namespace wry::gc {
 
     Object* Ctrie::LNode::find_or_emplace(Query query) {
         
-        // This function will either find the CLASS_STRING key and return it,
-        // or emplace it in, and return, a new CLASS_CTRIE_LNODE list
+        // This function will either find the Class::STRING key and return it,
+        // or emplace it in, and return, a new Class::CTRIE_LNODE list
         
         HeapString* key = nullptr;
         LNode* head = this;
@@ -679,24 +682,35 @@ namespace wry::gc {
             
             // We found the key, but we must obtain a strong reference to it
             // before we can return it
-            Color was = _color_white_to_black_color_was(key->_color);
-            switch (was) {
-                case COLOR_GRAY: {
-                    // leafs are never GRAY
-                    object_debug(current->sn);
+            
+            Color expected = Color::WHITE;
+            object_color_compare_exchange(key, expected, Color::BLACK);
+            switch (expected) {
+                case Color::WHITE:
+                case Color::BLACK: {
+                    // We have a strong ref
+                    return key;
+                }
+                case Color::RED: {
+                    // Already condemned, we have to replace it
+                    key = nullptr;
+                    break;
+                }
+                case Color::GRAY:
+                default: {
+                    // Impossible
+                    object_debug(key);
                     abort();
                 }
-                case COLOR_RED:
-                    // we lost the race and have to
-                    // compete to replace it
-                    // don't interfere with the corpse
-                    break;
-                default:
-                    // was white and became black, or was already black
-                    return key;
             }
+                        
             // The collector has condemned, and will soon erase, the key.
-            // We must race to install a new one
+            // We must race to install a new one.
+            
+            // Point head at a version of the list with the current node
+            // removed
+            head = this->removed(current);
+            
             break;
         }
         
@@ -704,6 +718,9 @@ namespace wry::gc {
         //
         // Either way, "head" is now a list that does not contain the key
         // We must prepend a new key
+        //
+        // ("this", as the first node of the old version, will not be in the new
+        // version, having been either copied or excluded)
         
         // Make the new HeapString
         key = make_HeapString_from_Query(query);
@@ -722,13 +739,13 @@ namespace wry::gc {
     
     
     Ctrie::LNode* Ctrie::LNode::erase(HeapString* key) {
+        // this should only be called by the garbage collector
         for (LNode* current = this; current; current = current->next) {
             if (current->sn != key)
                 continue;
             // Found it
-            
             // We should only be erasing nodes whose keys we have marked RED
-            assert(key->_color.load(Ordering::RELAXED) == COLOR_RED);
+            assert(object_color_load(key) == Color::RED);
             return this->removed(current);
         }
         // Not present in the list

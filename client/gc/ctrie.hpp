@@ -8,6 +8,7 @@
 #ifndef ctrie_hpp
 #define ctrie_hpp
 
+#include "object.hpp"
 #include "value.hpp"
 
 namespace wry::gc {
