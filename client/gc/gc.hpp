@@ -16,15 +16,14 @@
 #include <vector>
 
 #include "atomic.hpp"
-#include "bag.hpp"
+#include "color.hpp"
+#include "traced.hpp"
 #include "utility.hpp"
 #include "../client/utility.hpp"
 
-namespace gc {
-    
+namespace wry::gc {
+        
     struct Object;
-    template<typename T> struct Traced;
-
     
     enum Class {
         
@@ -39,12 +38,6 @@ namespace gc {
         CLASS_CTRIE_TNODE,
 
     };
-    
-
-    enum Color {
-        COLOR_GRAY = 2,
-        COLOR_RED = 3,
-    }; // enum Color
     
     struct Object {
         
@@ -105,11 +98,11 @@ namespace gc {
         explicit Traced(std::nullptr_t);
         Traced& operator=(const Traced&) = delete;
         
-        T* load(Order order) const;
-        void store(T* desired, Order order);
-        T* exchange(T* desired, Order order);
-        bool compare_exchange_weak(T*& expected, T* desired, Order success, Order failure);
-        bool compare_exchange_strong(T*& expected, T* desired, Order success, Order failure);
+        T* load(Ordering order) const;
+        void store(T* desired, Ordering order);
+        T* exchange(T* desired, Ordering order);
+        bool compare_exchange_weak(T*& expected, T* desired, Ordering success, Ordering failure);
+        bool compare_exchange_strong(T*& expected, T* desired, Ordering success, Ordering failure);
         
     }; // struct Traced<Atomic<T*>>
             
@@ -152,7 +145,7 @@ namespace gc {
         //     An atomic::exchange is not used here because this_thread is
         // the only writer.
         T* discovered = get();
-        _atomic_object.store(other, Order::RELEASE);
+        _atomic_object.store(other, Ordering::RELEASE);
         object_shade(discovered);
         object_shade(other);
         return *this;
@@ -163,14 +156,14 @@ namespace gc {
         // Safety:
         //     See above.
         T* discovered = get();
-        _atomic_object.store(nullptr, Order::RELAXED);
+        _atomic_object.store(nullptr, Ordering::RELAXED);
         object_shade(discovered);
         return *this;
     }
     
     template<typename T>
     T* Traced<T*>::operator->() const {
-        return _atomic_object.load(Order::RELAXED);
+        return _atomic_object.load(Ordering::RELAXED);
     }
     
     template<typename T>
@@ -205,7 +198,7 @@ namespace gc {
     
     template<typename T>
     T* Traced<T*>::get() const {
-        return _atomic_object.load(Order::RELAXED);
+        return _atomic_object.load(Ordering::RELAXED);
     }
     
     
@@ -218,17 +211,17 @@ namespace gc {
     : _atomic_object(object) {
     }
     template<typename T>
-    T* Traced<Atomic<T*>>::load(Order order) const {
+    T* Traced<Atomic<T*>>::load(Ordering order) const {
         return _atomic_object.load(order);
     }
         
     template<typename T>
-    void Traced<Atomic<T*>>::store(T* desired, Order order) {
+    void Traced<Atomic<T*>>::store(T* desired, Ordering order) {
         (void) exchange(desired, order);
     }
 
     template<typename T>
-    T* Traced<Atomic<T*>>::exchange(T* desired, Order order) {
+    T* Traced<Atomic<T*>>::exchange(T* desired, Ordering order) {
         T* discovered = _atomic_object.exchange(desired, order);
         object_shade(discovered);
         object_shade(desired);
@@ -236,7 +229,7 @@ namespace gc {
     }
     
     template<typename T>
-    bool Traced<Atomic<T*>>::compare_exchange_weak(T*& expected, T* desired, Order success, Order failure) {
+    bool Traced<Atomic<T*>>::compare_exchange_weak(T*& expected, T* desired, Ordering success, Ordering failure) {
         bool result = _atomic_object.compare_exchange_weak(expected, desired, success, failure);
         if (result) {
             object_shade(expected);
@@ -246,7 +239,7 @@ namespace gc {
     }
 
     template<typename T>
-    bool Traced<Atomic<T*>>::compare_exchange_strong(T*& expected, T* desired, Order success, Order failure) {
+    bool Traced<Atomic<T*>>::compare_exchange_strong(T*& expected, T* desired, Ordering success, Ordering failure) {
         bool result = _atomic_object.compare_exchange_strong(expected, desired, success, failure);
         if (result) {
             object_shade(expected);
@@ -258,16 +251,15 @@ namespace gc {
     
     template<typename T>
     void object_trace(const Traced<T*>& object) {
-        object_trace(object._atomic_object.load(Order::ACQUIRE));
+        object_trace(object._atomic_object.load(Ordering::ACQUIRE));
     }
     
     template<typename T>
     void object_trace(const Traced<Atomic<T*>>& object) {
-        object_trace(object.load(Order::ACQUIRE));
+        object_trace(object.load(Ordering::ACQUIRE));
     }
 
-    bool color_compare_exchange_white_black(Atomic<Color>&);
-    Color _color_white_to_black_color_was(Atomic<Color>&);
+   
         
     
 } // namespace gc

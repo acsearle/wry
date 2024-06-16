@@ -143,7 +143,7 @@ namespace rust::result {
         
         template<typename U>
         Ok(U&& other)
-        : value(std::move(other)) {
+        : value(std::forward<U>(other)) {
         }
         
         const T& unwrap() const& { return value; }
@@ -503,7 +503,7 @@ namespace rust::result {
                 case OK:
                     return std::forward<F>(f)(std::move(_ok.value));
                 default:
-                    return std::move(fallback);
+                    return std::forward<U>(fallback);
             }
         }
         

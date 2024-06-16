@@ -1,19 +1,19 @@
 //
-//  utility.hpp
+//  tagged_ptr.hpp
 //  client
 //
 //  Created by Antony Searle on 30/5/2024.
 //
 
-#ifndef utility_hpp
-#define utility_hpp
+#ifndef tagged_ptr_hpp
+#define tagged_ptr_hpp
 
 #include <cassert>
 #include <cstdint>
 
 #include "atomic.hpp"
 
-namespace gc {
+namespace wry {
             
     template<typename T>
     struct TaggedPtr {
@@ -83,6 +83,6 @@ namespace gc {
         
     }; // TaggedPtr<T>
     
-} // namespace gc
+} // namespace wry
 
-#endif /* utility_hpp */
+#endif /* tagged_ptr_hpp */

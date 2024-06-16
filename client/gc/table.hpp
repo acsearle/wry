@@ -10,7 +10,7 @@
 
 #include "value.hpp"
 
-namespace gc {
+namespace wry::gc {
     
     struct HeapTable : Object {
         
@@ -284,12 +284,6 @@ namespace gc {
                     }
                 }
                 assert(keys + nulls + tombstones == _mask + 1);
-                if (keys != _count) {
-                    for (std::size_t i = 0; i != _mask + 1; ++i) {
-                        Entry* pe = _storage + i;
-                        Value ki = pe->key;
-                    }
-                }
                 assert(keys == _count);
             }
             

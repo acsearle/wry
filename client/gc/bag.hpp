@@ -8,40 +8,30 @@
 #ifndef bag_hpp
 #define bag_hpp
 
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
-#include <utility>
+#include "utility.hpp"
 
-namespace gc {
+namespace wry::gc {
     
     // Bag is unordered storage optimized to make the mutator's common
     // operations cheap
     //
-    // True O(1) push to log new pointers
+    // True O(1) push to append to log
     // True O(1) splice to combine logs
     
-    // TODO: if we splice the other way around we are actually a LIFO
-    // stack
-    // TODO: if we add some more pointers we are actually a deque
-    //
-    // Compared with gch::deque we need to have each Slab maintain its own
-    // begin and end, maybe wrapping?
-
     
-    template<typename T> 
+    template<typename T>
     struct Bag;
+    
     
     template<typename T>
     struct Bag<T*> {
         
         struct Page {
             
-            constexpr static std::size_t CAPACITY = (4096 - 16) / sizeof(T*);
+            constexpr static size_t CAPACITY = (4096 - 16) / sizeof(T*);
             
             Page* next;
-            std::size_t count;
+            size_t count;
             T* elements[CAPACITY];
             
             Page(Page* next, T* item) {
@@ -50,7 +40,7 @@ namespace gc {
                 elements[0] = item;
             }
             
-            std::size_t size() const { return count; }
+            size_t size() const { return count; }
             bool empty() const { return !count; }
             bool full() const { return count == CAPACITY; }
             
@@ -67,7 +57,6 @@ namespace gc {
             void pop() {
                 assert(!empty());
                 --count;
-                // no dtor
             }
             
             void push(T* x) {
@@ -80,8 +69,8 @@ namespace gc {
         static_assert(sizeof(Page) == 4096);
 
         Page* head;
-        Page* tail; // <-- tail permits splicing
-        std::size_t count;
+        Page* tail;
+        size_t count;
         
         Bag()
         : head(nullptr)
@@ -160,181 +149,35 @@ namespace gc {
                     T* p = head->elements[--head->count];
                     return p;
                 }
-                delete std::exchange(head, head->next);
+                delete exchange(head, head->next);
             }
         }
                 
-        // O(1) splice
         void splice(Bag&& other) {
             if (!other.head)
                 return;
             if (!head) {
-                head = std::exchange(other.head, nullptr);
-                tail = std::exchange(other.tail, nullptr);
-                count = std::exchange(other.count, 0);
+                head = exchange(other.head, nullptr);
+                tail = exchange(other.tail, nullptr);
+                count = exchange(other.count, 0);
                 return;
             }
             assert(tail->next == nullptr);
             tail->next = std::exchange(other.head, nullptr);
-            tail = std::exchange(other.tail, nullptr);
-            count += std::exchange(other.count, 0);
+            tail = exchange(other.tail, nullptr);
+            count += exchange(other.count, 0);
         }
         
         bool empty() const {
             return !count;
         }
         
-        std::size_t size() const {
+        size_t size() const {
             return count;
         }
-        
-        
-        
-        
-        /*
-        // do we ever iterate or do we just pop everything?
-        
-        struct iterator {
-            
-            Slab* slab;
-            std::intptr_t index;
-            
-            iterator& operator++() {
-                assert(slab);
-                ++index;
-                for (;;) {
-                    if ((index != slab->count) || (!slab->next))
-                        return *this;
-                    slab = slab->next;
-                    index = 0;
-                }
-            }
-            
-            T*& operator*() const {
-                assert(slab && index != slab->count);
-                return slab->elements[index];
-            }
-            
-        };
-         */
 
     }; // struct Bag<T*>
     
-    
-    
-    template<typename T>
-    struct Deque {
-        struct alignas(4096) Page {
-            static constexpr std::size_t CAPACITY = 4064 / sizeof(T);
-            T* _begin;
-            T* _end;
-            Page* _prev;
-            Page* _next;
-            T _elements[CAPACITY];
-            
-            void assert_invariant() {
-                assert(_elements <= _begin);
-                assert(_begin <= _end);
-                assert(_end <= _elements + CAPACITY);
-            }
-            
-            explicit Page(T value, Page* prev, Page* next)
-            : _begin(_elements)
-            , _end(_elements + 1)
-            , _prev(prev)
-            , _next(next){
-                _elements[0] = value;
-            }
-            
-            bool can_push_back() const {
-                return _end != _elements + CAPACITY;
-            }
-            
-            bool can_push_front() const {
-                return _elements != _begin;
-            }
-            
-            bool can_pop() const {
-                return _begin != _end;
-            }
-            
-            void push_back(T x) {
-                *_end++ = x;
-            }
-            
-            void push_front(T x) {
-                *--_begin = x;
-            }
-            
-            void pop_front() {
-                ++_begin;
-            }
-            
-            void pop_back() {
-                --_end;
-            }
-            
-            T& front() {
-                return *_begin;
-            }
-            
-            T& back() {
-                return *(_end - 1);
-            }
-            
-        };
-        
-        static_assert(sizeof(Page) == 4096);
-        
-        Page* _head;
-        Page* _tail;
-        std::size_t _count;
-        
-        void assert_invariant() {
-            assert(!_head == !_tail);
-            if (_head)
-                for (Page* a = _head; a != _tail; a = a->_next)
-                    a->assert_invariant();
-        }
-        
-        void push_back(T value) {
-            ++_count;
-            assert(!_head == !_tail);
-            if (!_tail || _tail->can_push_back()) {
-                _tail = new Page(std::move(value), _tail, nullptr);
-                if (!_head)
-                    _head = _tail;
-            } else {
-                _tail->push_back(value);
-            }
-        }
-        
-        void push_front(T value) {
-            ++_count;
-            assert(!_head == !_tail);
-            if (!_head || _head->can_push_front()) {
-                _tail = new Page(std::move(value), _tail, nullptr);
-                if (!_head)
-                    _head = _tail;
-            } else {
-                _tail->push_back(value);
-            }
-        }
-        
-    };
-    
-    
-    
-    
-    
-    // We can make a concurrent deque by:
-    
-    // Two trieber stacks for front and back
-    // Reversed copies of each that are incrementally constructed so as to
-    // be ready when needed to be grabbed by the other side
-    //
-    // 
-    
-} // namespace gc
+} // namespace wry::gc
 
 #endif /* bag_hpp */

@@ -122,7 +122,7 @@ namespace wry {
     template<typename A, typename... B>
     void shift_args_left(A& a, B&&... b) {
         (void) reduce_args_left([](auto& a, auto&& b) -> decltype(auto) {
-            a = std::move(b);
+            a = std::forward<decltype(b)>(b);
             return b;
         }, a, std::forward<B>(b)...);
     }
@@ -130,7 +130,7 @@ namespace wry {
     template<typename A, typename... B>
     void shift_args_right(A&& a, B&... b) {
         (void) reduce_args_right([](auto&& a, auto& b) -> auto& {
-            b = std::move(a);
+            b = std::forward<decltype(a)>(a);
             return a;
         }, std::forward<A>(a), b...);
     }

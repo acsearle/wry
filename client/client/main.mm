@@ -14,7 +14,7 @@
 #include "model.hpp"
 #include "test.hpp"
 
-namespace gc {
+namespace wry::gc {
     void collector_start();
     namespace this_thread {
         void mutator_enter();
@@ -25,7 +25,7 @@ namespace gc {
 int main(int argc, const char** argv) {
     
     // initialize garbage collection and spawn collector thread
-    gc::collector_start();
+    wry::gc::collector_start();
     // it is now safe to call mutator_enter on any thread; the collector global
     // state is set up even though the spawned collector thread may not have
     // actually been scheduled yet

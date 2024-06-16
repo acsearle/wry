@@ -5,6 +5,8 @@
 //  Created by Antony Searle on 31/5/2024.
 //
 
+#include <cstdlib>
+
 #include <algorithm>
 #include <numeric>
 #include <random>
@@ -14,9 +16,7 @@
 #include "table.hpp"
 
 
-namespace gc {
-    
-    
+namespace wry::gc {
     
     int _value_tag(const Value& self) { return self._data & VALUE_MASK; }
     bool _value_is_small_integer(const Value& self) { return _value_tag(self) == VALUE_TAG_SMALL_INTEGER; }
@@ -284,7 +284,7 @@ namespace gc {
         
         Value t = value_make_table();
         
-        if (!(rand() % 100)) {
+        if (!(::rand() % 100)) {
             Value trap = "trapped string should weak rot";
         }
         
@@ -390,7 +390,7 @@ namespace gc {
     
     
     Value Traced<Value>::get() const {
-        return _atomic_value.load(Order::RELAXED);
+        return _atomic_value.load(Ordering::RELAXED);
     }
         
     Traced<Value>::Traced(const Value& value) 
@@ -403,7 +403,7 @@ namespace gc {
         
 
     Traced<Value>& Traced<Value>::operator=(const Value& desired) {
-        Value discovered = this->_atomic_value.exchange(desired, Order::RELEASE);
+        Value discovered = this->_atomic_value.exchange(desired, Ordering::RELEASE);
         value_shade(desired);
         value_shade(discovered);
         return *this;
@@ -582,8 +582,8 @@ namespace gc {
         return object_allocate(count + extra);
     }
         
-    HeapString* HeapString::make(std::string_view v) {
-        return make(v, std::hash<std::string_view>()(v));
+    HeapString* HeapString::make(std::string_view view) {
+        return make(std::hash<std::string_view>()(view), view);
     }
     
     std::string_view HeapString::as_string_view() const {
@@ -670,7 +670,7 @@ namespace gc {
         return result;
     }
     
-} // namespace gc
+} // namespace wry::gc
 
 
 

@@ -10,7 +10,7 @@
 
 #include "value.hpp"
 
-namespace gc {
+namespace wry::gc {
     
     bool value_is_RESTART(const Value& self);
     bool value_is_NOTFOUND(const Value& self);
@@ -21,6 +21,11 @@ namespace gc {
     Value value_make_OK();
 
     struct Ctrie : Object {
+        
+        struct Query {
+            size_t hash;
+            string_view view;
+        };
         
         // struct Branch;
         struct MainNode;
@@ -63,8 +68,8 @@ namespace gc {
             //Value remove(Value key, int level, INode* parent);
             void clean(int lev);
             
-            HeapString* find_or_emplace(std::string_view sv, std::size_t hc, int lev, INode* parent);
-            Value erase(HeapString* hs, int level, INode* parent);
+            HeapString* find_or_emplace(Query query, int lev, INode* parent);
+            Value erase(HeapString* key, int level, INode* parent);
 
             
         };
@@ -75,9 +80,11 @@ namespace gc {
             //Value lookup(Value);
             //LNode* inserted(Value k, Value v);
             //LNode* removed(Value k);
-            Object* find_or_emplace(string_view, size_t hc);
-            LNode* erase(HeapString* hs);
+            Object* find_or_emplace(Query query);
+            LNode* erase(HeapString* key);
             LNode();
+            
+            LNode* removed(LNode* victim);
             
         };
         
@@ -112,7 +119,7 @@ namespace gc {
         
         // Value lookup(Value key);
         // void insert(Value k, Value v);
-        HeapString* find_or_emplace(std::string_view sv, size_t hc);
+        HeapString* find_or_emplace(Query query);
         void erase(HeapString* key);
         
         

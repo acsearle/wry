@@ -7,14 +7,16 @@
 
 #include <thread>
 
-#include "gc.hpp"
-#include "value.hpp"
-#include "table.hpp"
+#include "bag.hpp"
 #include "ctrie.hpp"
+#include "gc.hpp"
+#include "table.hpp"
+#include "tagged_ptr.hpp"
+#include "value.hpp"
 
 #include "test.hpp"
 
-namespace gc {
+namespace wry::gc {
     
     namespace {
         
@@ -86,8 +88,8 @@ namespace gc {
             Atomic<TaggedPtr<LogNode>> log_stack_head;
             
             void release() {
-                if (reference_count_minus_one.fetch_sub(1, Order::RELEASE) == 0) {
-                    (void) reference_count_minus_one.load(Order::ACQUIRE);
+                if (reference_count_minus_one.fetch_sub(1, Ordering::RELEASE) == 0) {
+                    (void) reference_count_minus_one.load(Ordering::ACQUIRE);
                     delete this;
                 }
             }
@@ -202,11 +204,11 @@ namespace gc {
         }
         
         void Mutator::_white_to_gray(Atomic<Color>& color) {
-            Color expected = global_collector->_atomic_white.load(Order::RELAXED);
+            Color expected = global_collector->_atomic_white.load(Ordering::RELAXED);
             if (color.compare_exchange_strong(expected,
                                               COLOR_GRAY,
-                                              Order::RELAXED,
-                                              Order::RELAXED)) {
+                                              Ordering::RELAXED,
+                                              Ordering::RELAXED)) {
                 this->log.dirty = true;
             }
         }
@@ -216,12 +218,12 @@ namespace gc {
             _channel = new Channel;
             auto& target = global_collector->entrant_stack_head;
             auto& expected = _channel->entrant_stack_next;
-            expected = target.load(Order::ACQUIRE);
+            expected = target.load(Ordering::ACQUIRE);
             for (;;) {
                 if (target.compare_exchange_strong(expected,
                                                    _channel,
-                                                   Order::RELEASE,
-                                                   Order::ACQUIRE))
+                                                   Ordering::RELEASE,
+                                                   Ordering::ACQUIRE))
                     break;
             }
         }
@@ -232,13 +234,13 @@ namespace gc {
             node->splice(std::move(this->log));
             assert(this->log.dirty == false);
             TaggedPtr<LogNode> desired(node, tag);
-            TaggedPtr<LogNode> expected(_channel->log_stack_head.load(Order::ACQUIRE));
+            TaggedPtr<LogNode> expected(_channel->log_stack_head.load(Ordering::ACQUIRE));
             for (;;) {
                 node->log_stack_next = expected.ptr;
                 if (_channel->log_stack_head.compare_exchange_strong(expected,
                                                                      desired,
-                                                                     Order::RELEASE,
-                                                                     Order::ACQUIRE))
+                                                                     Ordering::RELEASE,
+                                                                     Ordering::ACQUIRE))
                     break;
             }
             if (expected.tag == Channel::COLLECTOR_DID_REQUEST_WAKEUP) {
@@ -247,7 +249,7 @@ namespace gc {
         }
         
         void Mutator::handshake() {
-            TaggedPtr<LogNode> expected(_channel->log_stack_head.load(Order::ACQUIRE));
+            TaggedPtr<LogNode> expected(_channel->log_stack_head.load(Ordering::ACQUIRE));
             switch (expected.tag) {
                 case Channel::COLLECTOR_DID_REQUEST_NOTHING:
                     return;
@@ -273,16 +275,16 @@ namespace gc {
         
         
         void Collector::_set_alloc_to_black() {
-            Color white = _atomic_white.load(Order::RELAXED);
+            Color white = _atomic_white.load(Ordering::RELAXED);
             Color black = (Color)(white ^ 1);
-            _atomic_alloc.store(black, Order::RELAXED);
+            _atomic_alloc.store(black, Ordering::RELAXED);
             
         }
         
         void Collector::_swap_white_and_black() {
-            Color white = _atomic_white.load(Order::RELAXED);
+            Color white = _atomic_white.load(Ordering::RELAXED);
             Color black = (Color)(white ^ 1);
-            _atomic_white.store(black, Order::RELAXED);
+            _atomic_white.store(black, Ordering::RELAXED);
         }
         
         
@@ -297,7 +299,7 @@ namespace gc {
                 assert(channel);
                 _active_channels.pop_back();
                 TaggedPtr<LogNode> desired = TaggedPtr<LogNode>(nullptr, Channel::COLLECTOR_DID_REQUEST_HANDSHAKE);
-                TaggedPtr<LogNode> old = channel->log_stack_head.exchange(desired, Order::ACQ_REL);
+                TaggedPtr<LogNode> old = channel->log_stack_head.exchange(desired, Ordering::ACQ_REL);
                 switch (old.tag) {
                     case Channel::COLLECTOR_DID_REQUEST_NOTHING: {
                         survivors.push_back(channel);
@@ -336,7 +338,7 @@ namespace gc {
                 _active_channels.pop_back();
                 TaggedPtr<LogNode> expected;
             alpha:
-                expected = channel->log_stack_head.load(Order::ACQUIRE);
+                expected = channel->log_stack_head.load(Ordering::ACQUIRE);
             beta:
                 switch (expected.tag) {
                     case Channel::COLLECTOR_DID_REQUEST_HANDSHAKE: {
@@ -345,15 +347,15 @@ namespace gc {
                         auto desired = TaggedPtr<LogNode>(nullptr, Channel::COLLECTOR_DID_REQUEST_WAKEUP);
                         if (channel->log_stack_head.compare_exchange_strong(expected,
                                                                             desired,
-                                                                            Order::RELAXED,
-                                                                            Order::ACQUIRE)) {
+                                                                            Ordering::RELAXED,
+                                                                            Ordering::ACQUIRE)) {
                             expected = desired;
                         }
                         // Start over with the new state
                         goto beta;
                     }
                     case Channel::COLLECTOR_DID_REQUEST_WAKEUP:
-                        expected = channel->log_stack_head.wait(expected, Order::ACQUIRE);
+                        expected = channel->log_stack_head.wait(expected, Ordering::ACQUIRE);
                         goto beta;
                     case Channel::MUTATOR_DID_PUBLISH_LOGS: {
                         // Mutator handshaked us
@@ -361,8 +363,8 @@ namespace gc {
                         auto desired = TaggedPtr<LogNode>(nullptr, Channel::COLLECTOR_DID_REQUEST_NOTHING);
                         if (channel->log_stack_head.compare_exchange_strong(expected,
                                                                             desired,
-                                                                            Order::RELAXED,
-                                                                            Order::ACQUIRE)) {
+                                                                            Ordering::RELAXED,
+                                                                            Ordering::ACQUIRE)) {
                             survivors.push_back(channel);
                             break;
                         } else {
@@ -384,7 +386,7 @@ namespace gc {
         void Collector::_synchronize() {
             
             // Publish the atomic palette
-            Channel* head = entrant_stack_head.exchange(nullptr, Order::ACQ_REL);
+            Channel* head = entrant_stack_head.exchange(nullptr, Ordering::ACQ_REL);
             
             // All entrants after this point will use the published palette
             while (head) {
@@ -427,7 +429,7 @@ namespace gc {
                 // Change alloc color from WHITE to BLACK
                 
                 _set_alloc_to_black();
-                Color white = global_collector->_atomic_white.load(Order::RELAXED);
+                Color white = global_collector->_atomic_white.load(Ordering::RELAXED);
                 Color black = color_invert(white);
                 _synchronize();
                 object_bag.splice(std::move(_collector_log.allocations));
@@ -454,7 +456,7 @@ namespace gc {
                         // collector thread immediately restores it
                         Color expected = COLOR_GRAY;
                         Color desired = black;
-                        if (object->_color.compare_exchange_strong(expected, desired, Order::RELAXED, Order::RELAXED)) {
+                        if (object->_color.compare_exchange_strong(expected, desired, Ordering::RELAXED, Ordering::RELAXED)) {
                             expected = desired;
                             object_scan(object);
                         }
@@ -509,8 +511,8 @@ namespace gc {
                                 Color expected = white;
                                 heap_string->_color.compare_exchange_strong(expected,
                                                                             COLOR_RED,
-                                                                            Order::RELAXED,
-                                                                            Order::RELAXED);
+                                                                            Ordering::RELAXED,
+                                                                            Ordering::RELAXED);
                                 if (expected == white) {
                                     _string_ctrie->erase(heap_string);
                                     red_bag.push(object);
@@ -523,7 +525,7 @@ namespace gc {
                                 break;
                             }
                             default: {
-                                Color discovered = object->_color.load(Order::RELAXED);
+                                Color discovered = object->_color.load(Ordering::RELAXED);
                                 if (discovered == white) {
                                     object_delete(object);
                                 } else if (discovered == black) {
@@ -592,7 +594,7 @@ namespace gc {
     
     Object::Object(Class class_)
     : _class(class_)
-    , _color(global_collector->_atomic_alloc.load(Order::RELAXED)) {
+    , _color(global_collector->_atomic_alloc.load(Ordering::RELAXED)) {
     }
     
     
@@ -890,30 +892,29 @@ namespace gc {
     
     
     bool color_compare_exchange_white_black(Atomic<Color>& color) {
-        Color expected = global_collector->_atomic_white.load(Order::RELAXED);
+        Color expected = global_collector->_atomic_white.load(Ordering::RELAXED);
         Color desired = color_invert(expected);
         return color.compare_exchange_strong(expected,
                                              desired,
-                                             Order::RELAXED,
-                                             Order::RELAXED);
+                                             Ordering::RELAXED,
+                                             Ordering::RELAXED);
     }
     
     Color _color_white_to_black_color_was(Atomic<Color>& color) {
-        Color expected = global_collector->_atomic_white.load(Order::RELAXED);
+        Color expected = global_collector->_atomic_white.load(Ordering::RELAXED);
         Color desired = color_invert(expected);
         color.compare_exchange_strong(expected,
                                       desired,
-                                      Order::RELAXED,
-                                      Order::RELAXED);
+                                      Ordering::RELAXED,
+                                      Ordering::RELAXED);
         return expected;
     }
 
 
     
     
-    HeapString* HeapString::make(std::string_view v,
-                                 std::size_t hash) {        
-        return global_collector->_string_ctrie->find_or_emplace(v, hash);
+    HeapString* HeapString::make(size_t hash, string_view view) {
+        return global_collector->_string_ctrie->find_or_emplace(Ctrie::Query{hash, view});
     }
 
     

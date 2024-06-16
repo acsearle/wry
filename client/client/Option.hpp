@@ -61,7 +61,7 @@ namespace rust::option {
         
         template<typename U>
         Some& operator=(U&& other) {
-            value = std::move(other);
+            value = std::forward<U>(other);
             return *this;
         }
         

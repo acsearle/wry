@@ -16,7 +16,7 @@
 #include "debug.hpp"
 #include "gc.hpp"
 
-namespace gc {
+namespace wry::gc {
     
     using std::string_view;
         
@@ -162,11 +162,11 @@ namespace gc {
         Traced(const Traced&) = delete;
         Traced& operator=(const Traced&) = delete;
         
-        Value load(Order) const;
-        void store(Value, Order);
-        Value exchange(Value, Order);
-        bool compare_exchange_weak(Value&, Value, Order, Order);
-        bool compare_exchange_strong(Value&, Value, Order, Order);
+        Value load(Ordering) const;
+        void store(Value, Ordering);
+        Value exchange(Value, Ordering);
+        bool compare_exchange_weak(Value&, Value, Ordering, Ordering);
+        bool compare_exchange_strong(Value&, Value, Ordering, Ordering);
 
     };
     
@@ -234,8 +234,8 @@ namespace gc {
         std::size_t _size;
         char _bytes[0];
         static void* operator new(std::size_t count, std::size_t extra);
-        static HeapString* make(std::string_view v, std::size_t hash);
-        static HeapString* make(std::string_view v);
+        static HeapString* make(std::size_t hash, std::string_view view);
+        static HeapString* make(std::string_view view);
         std::string_view as_string_view() const;
         HeapString();
     }; // struct HeapString
@@ -271,11 +271,11 @@ namespace gc {
     }
 
     inline void value_trace(const Traced<Value>& self) {
-        value_trace(self._atomic_value.load(Order::ACQUIRE));
+        value_trace(self._atomic_value.load(Ordering::ACQUIRE));
     }
 
     inline void value_trace(const Traced<Atomic<Value>>& self) {
-        value_trace(self._atomic_value.load(Order::ACQUIRE));
+        value_trace(self._atomic_value.load(Ordering::ACQUIRE));
     }
 
    
@@ -387,6 +387,6 @@ namespace gc {
     
     
     
-} // namespace gc
+} // namespace wry::gc
 
 #endif /* value_hpp */

@@ -7,25 +7,43 @@
 
 #include "ctrie.hpp"
 
-namespace gc {
+namespace wry::gc {
+    
+    bool operator==(const Ctrie::Query& left, const HeapString* right) {
+        size_t n = left.view.size();
+        return ((left.hash == right->_hash)
+                && (n == right->_size)
+                && !__builtin_memcmp(left.view.data(), right->_bytes, n)
+                );
+    }
+    
+    HeapString* make_HeapString_from_Query(Ctrie::Query query) {
+        size_t n = query.view.size();
+        assert(n > 7);
+        HeapString* a = new(n) HeapString;
+        a->_hash = query.hash;
+        a->_size = n;
+        __builtin_memcpy(a->_bytes, query.view.data(), n);
+        return a;
+    }
             
     constexpr int W = 6;
     
-    std::pair<uint64_t, int> Ctrie::flagpos(uint64_t h, int lev, uint64_t bmp) {
-        uint64_t a = (h >> lev) & 63;
+    std::pair<uint64_t, int> Ctrie::flagpos(uint64_t hash, int lev, uint64_t bmp) {
+        uint64_t a = (hash >> lev) & 63;
         uint64_t flag = ((uint64_t)1 << a);
         int pos = __builtin_popcountll(bmp & (flag - 1));
         return {flag, pos};
     }
     
     Ctrie::MainNode* Ctrie::READ(Traced<Atomic<MainNode*>>& main) {
-        return main.load(Order::ACQUIRE);
+        return main.load(Ordering::ACQUIRE);
     }
     
     bool Ctrie::CAS(Traced<Atomic<MainNode*>>& main, MainNode* expected, MainNode* desired) {
         // Safety:
         //    We have already ACQUIRED the expected value
-        return main.compare_exchange_strong(expected, desired, Order::RELEASE, Order::RELAXED);
+        return main.compare_exchange_strong(expected, desired, Ordering::RELEASE, Ordering::RELAXED);
     }
 
     Object* Ctrie::object_resurrect(Object* self) {
@@ -164,10 +182,10 @@ namespace gc {
         }
     }*/
 
-    HeapString* Ctrie::find_or_emplace(std::string_view sv, size_t hc) {
+    HeapString* Ctrie::find_or_emplace(Ctrie::Query query) {
         for (;;) {
             INode* r = this->root;
-            HeapString* result = r->find_or_emplace(sv, hc, 0, nullptr);
+            HeapString* result = r->find_or_emplace(query, 0, nullptr);
             if (result)
                 return result;
         }
@@ -292,7 +310,7 @@ namespace gc {
     }
      */
     
-    HeapString* Ctrie::INode::find_or_emplace(std::string_view sv, std::size_t hc, int lev, INode* parent) {
+    HeapString* Ctrie::INode::find_or_emplace(Ctrie::Query query, int lev, INode* parent) {
         INode* i = this;
         MainNode* mn = READ(i->main);
         MainNode* nmn;
@@ -300,18 +318,9 @@ namespace gc {
         switch (mn->_class) {
             case CLASS_CTRIE_CNODE: {
                 CNode* cn = (CNode*)mn;
-                auto [flag, pos] = flagpos(hc, lev, cn->bmp);
+                auto [flag, pos] = flagpos(query.hash, lev, cn->bmp);
                 if (!(cn->bmp & flag)) {
-                    // nmn = cn->inserted(pos, flag, new SNode(k, v));
-                    // We have found a CNode with no entry for the hash
-                    // The string is not in the table
-                    // We must insert it
-                    size_t count = sv.size();
-                    assert(count > 7);
-                    nhs = new(count) HeapString;
-                    nhs->_hash = hc;
-                    nhs->_size = count;
-                    std::memcpy(nhs->_bytes, sv.data(), count);
+                    nhs = make_HeapString_from_Query(query);
                     nmn = cn->inserted(pos, flag, nhs);
                     break;
                 }
@@ -319,7 +328,7 @@ namespace gc {
                 switch (bn->_class) {
                     case CLASS_CTRIE_INODE: {
                         INode* sin = (INode*)bn;
-                        return sin->find_or_emplace(sv, hc, lev + W, i);
+                        return sin->find_or_emplace(query, lev + W, i);
                     }
                     case CLASS_STRING: {
                         // We have hashed to the same bucket as an existing
@@ -327,11 +336,11 @@ namespace gc {
                         
                         // Some of the hash bits match
                         HeapString* hs = (HeapString*)bn;
-                        if (hs->_hash == hc) {
+                        if (hs->_hash == query.hash) {
                             // All the hash bits match
-                            if (hs->_size == sv.size()) {
+                            if (hs->_size == query.view.size()) {
                                 // The sizes match
-                                if (!__builtin_memcmp(hs->_bytes, sv.data(), sv.size())) {
+                                if (!__builtin_memcmp(hs->_bytes, query.view.data(), query.view.size())) {
                                     // The strings match
                                     Color was = _color_white_to_black_color_was(hs->_color);
                                     switch (was) {
@@ -352,28 +361,18 @@ namespace gc {
                                     }
                                     
                                     // now we have to replace the thing:
-                                    size_t count = sv.size();
-                                    assert(count > 7);
-                                    nhs = new(count) HeapString;
-                                    nhs->_hash = hc;
-                                    nhs->_size = count;
-                                    std::memcpy(nhs->_bytes, sv.data(), count);
+                                    nhs = make_HeapString_from_Query(query);
                                     nmn = cn->updated(pos, nhs);
-
-
+                                    break;
                                 }
                             }
                         }
                         // We have to expand the HAMT one level
                         {
-                            size_t count = sv.size();
-                            assert(count > 7);
-                            nhs = new(count) HeapString;
-                            nhs->_hash = hc;
-                            nhs->_size = count;
-                            std::memcpy(nhs->_bytes, sv.data(), count);
+                            nhs = make_HeapString_from_Query(query);
                             INode* nbn = new INode(CNode::make(hs, nhs, lev + W));
                             nmn = cn->updated(pos, nbn);
+                            break;
                         }
                     }
                     default: {
@@ -383,7 +382,8 @@ namespace gc {
                 break;
             }
             case CLASS_CTRIE_TNODE: {
-                parent->clean(lev - W);
+                if (parent)
+                    parent->clean(lev - W);
                 return nullptr;
             }
             case CLASS_CTRIE_LNODE: {
@@ -467,26 +467,27 @@ namespace gc {
     }
      */
     
-    Value Ctrie::INode::erase(HeapString* hs, int lev, INode* parent) {
+    Value Ctrie::INode::erase(HeapString* key, int lev, INode* parent) {
         INode* i = this;
-        MainNode* mn = i->main.load(Order::ACQUIRE);
+        MainNode* mn = i->main.load(Ordering::ACQUIRE);
         switch (mn->_class) {
             case CLASS_CTRIE_CNODE: {
                 CNode* cn = (CNode*)mn;
-                auto [flag, pos] = flagpos(hs->_hash, lev, cn->bmp);
+                auto [flag, pos] = flagpos(key->_hash, lev, cn->bmp);
                 if (!(flag & cn->bmp))
-                    return true;
+                    // Key is not present; postcondition is satisfied
+                    return value_make_OK();
                 Value res;
                 Object* bn = cn->array[pos];
                 switch (bn->_class) {
                     case CLASS_CTRIE_INODE: {
                         INode* sin = (INode*)bn;
-                        res = sin->erase(hs, lev + W, i);
+                        res = sin->erase(key, lev + W, i);
                         break;
                     }
                     case CLASS_STRING: {
                         HeapString* dhs = (HeapString*)bn;
-                        if (dhs != hs) {
+                        if (dhs != key) {
                             res = value_make_NOTFOUND();
                         } else {
                             CNode* ncn = cn->removed(pos, flag);
@@ -505,31 +506,40 @@ namespace gc {
                 }
                 if (value_is_NOTFOUND(res) || value_is_RESTART(res))
                     return res;
-                mn = READ(i->main);
-                if (mn->_class == CLASS_CTRIE_TNODE)
-                    cleanParent(parent, i, hs->_hash, lev - W);
+                // We have modified the Ctrie, possibly making TNodes at lower
+                // levels that mean we may need to contract this level.
+                if (parent) {
+                    mn = READ(i->main);
+                    if (mn->_class == CLASS_CTRIE_TNODE)
+                        cleanParent(parent, i, key->_hash, lev - W);
+                }
                 return res;
             }
             case CLASS_CTRIE_TNODE: {
-                parent->clean(lev - W);
+                if (parent)
+                    parent->clean(lev - W);
                 return value_make_RESTART();
             }
             case CLASS_CTRIE_LNODE: {
                 LNode* ln = (LNode*)mn;
-                abort();
-                // TODO: collision
-                /*
-                LNode* nln = ln->removed(k);
+                LNode* nln = ln->erase(key);
+                assert(nln); // <-- any published LNode list should have had at least two nodes
+                if (nln == ln) {
+                    // Erasure did not change the list == the key was not found
+                    return value_make_NOTFOUND();
+                }
                 MainNode* nmn = nln;
-                if (nln->next == nullptr) {
-                    nmn = nln->sn->entomb();
+                if (!nln->next) {
+                    // The list has only one element, so instead of intstalling
+                    // it, we put its HashString (not the one we just erased)
+                    // into a TNode
+                    nmn = new TNode(nln->sn);
+                    if (CAS(i->main, mn, nmn)) {
+                        return value_make_OK();
+                    } else {
+                        return value_make_RESTART();
+                    }
                 }
-                if (CAS(i->main, mn, nmn)) {
-                    return ln->lookup(k);
-                } else {
-                    return value_make_RESTART();
-                }
-                 */
             }
             default:
                 abort();
@@ -635,52 +645,96 @@ namespace gc {
     Ctrie::LNode::LNode()
     : MainNode(CLASS_CTRIE_LNODE) {
     }
+    
+    
+    Ctrie::LNode* Ctrie::LNode::removed(LNode* victim) {
+        assert(victim);
+        // Reuse any nodes after the victim
+        LNode* head = victim->next;
+        // Copy any nodes before the victim
+        for (LNode* curr = this; curr != victim; curr = curr->next) {
+            assert(curr); // <-- victim was not in the list!
+            // Make a copy
+            LNode* a = new LNode;
+            a->sn = curr->sn;
+            // Push onto the list
+            a->next = exchange(head, a);
+        }
+        return head;
+    }
 
-    Object* Ctrie::LNode::find_or_emplace(string_view sv, size_t hc) {
-
-        abort();
-
-        LNode* a = this;
-        for (;;) {
-            assert(a->sn->_hash == hc);
-            if (a->sn->_size == sv.size()) {
-                if (!__builtin_memcmp(a->sn->_bytes, sv.data(), sv.size())) {
-                    // found, but we have to upgrade it
-
+    Object* Ctrie::LNode::find_or_emplace(Query query) {
+        
+        // This function will either find the CLASS_STRING key and return it,
+        // or emplace it in, and return, a new CLASS_CTRIE_LNODE list
+        
+        HeapString* key = nullptr;
+        LNode* head = this;
+        // find it
+        for (LNode* current = head; current; current = current->next) {
+            key = current->sn;
+            assert(key);
+            if (query != key)
+                continue;
+            
+            // We found the key, but we must obtain a strong reference to it
+            // before we can return it
+            Color was = _color_white_to_black_color_was(key->_color);
+            switch (was) {
+                case COLOR_GRAY: {
+                    // leafs are never GRAY
+                    object_debug(current->sn);
+                    abort();
                 }
+                case COLOR_RED:
+                    // we lost the race and have to
+                    // compete to replace it
+                    // don't interfere with the corpse
+                    break;
+                default:
+                    // was white and became black, or was already black
+                    return key;
             }
+            // The collector has condemned, and will soon erase, the key.
+            // We must race to install a new one
+            break;
         }
+        
+        // The key didn't exist or was condemned
+        //
+        // Either way, "head" is now a list that does not contain the key
+        // We must prepend a new key
+        
+        // Make the new HeapString
+        key = make_HeapString_from_Query(query);
+        
+        LNode* node = new LNode;
+        head->sn = key;
+        node->next = head;
+
+        // Send it up for CAS
+        return node;
+        
+        // TODO: test this path
+        // by breaking the hash function?
+        
     }
     
     
-    Ctrie::LNode* Ctrie::LNode::erase(HeapString* hs) {
-        LNode* a = this;
-        for (;;) {
-            if (a->sn == hs)
-                break;
-            if (!a->next)
-                return nullptr;
-            a = a->next;
-        }
-        // a->sn == hs
-        LNode* b = this;
-        LNode* c = a->next;
-        for (;;) {
-            if (b == a)
-                return c;
+    Ctrie::LNode* Ctrie::LNode::erase(HeapString* key) {
+        for (LNode* current = this; current; current = current->next) {
+            if (current->sn != key)
+                continue;
+            // Found it
             
-            // what about delete LNode to single?  to empty?
-            
-            LNode* d = new LNode;
-            d->sn = b->sn;
-            d->next = c;
-            object_shade(d->sn);
-            object_shade(d->next);
-            b = b->next;
-            c = d;
+            // We should only be erasing nodes whose keys we have marked RED
+            assert(key->_color.load(Ordering::RELAXED) == COLOR_RED);
+            return this->removed(current);
         }
+        // Not present in the list
+        return this;
     }
     
-} // namespace gc
+} // namespace wry::gc
 
 

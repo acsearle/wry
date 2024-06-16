@@ -185,6 +185,7 @@ namespace wry::value {
         switch (other.d) {
             case EMPTY:
                 d = other.d;
+                x = 0;
                 break;
             case BOOL:
             case INT64_T:
@@ -260,14 +261,17 @@ namespace wry::value {
         
     inline constexpr Value::Value() {
         d = EMPTY;
+        x = 0;
     }
     
     inline constexpr Value::Value(std::nullptr_t) {
         d = EMPTY;
+        x = 0;
     }
 
     inline constexpr Value::Value(std::monostate) {
         d = EMPTY;
+        x = 0;
     }
 
     inline constexpr Value::Value(bool value) {

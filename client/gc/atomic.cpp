@@ -11,11 +11,10 @@
 namespace wry {
     
     define_test("Atomic") {
-        using namespace gc;
         Atomic<int> b;
-        b.add_fetch(8, Order::RELAXED);
-        b.min_fetch(4, Order::RELAXED);
-        int x = b.wait(99, Order::RELAXED);
+        b.add_fetch(8, Ordering::RELAXED);
+        b.min_fetch(4, Ordering::RELAXED);
+        int x = b.wait(99, Ordering::RELAXED);
         b.notify_one();
     };
     

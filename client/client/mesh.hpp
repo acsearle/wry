@@ -1399,6 +1399,8 @@ namespace wry {
         }
         
         void _repair_invariant() {
+            abort();
+            /*
             int a = __builtin_ctzll(numerator);
             numerator >>= a;
             exponent2 += a;
@@ -1409,6 +1411,7 @@ namespace wry {
             a /= c;
             b /= c;
             _assert_invariant();
+             */
         }
 
         rational operator*(rational other) {
