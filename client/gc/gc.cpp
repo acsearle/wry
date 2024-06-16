@@ -135,9 +135,9 @@ namespace wry::gc {
         struct Collector : Mutator {
             
             // Safety:
-            // _scan_stack is only resized by the Collector thread, which is not
+            // _gray_stack is only resized by the Collector thread, which is not
             // real time bounded
-            std::vector<const Object*> _scan_stack;
+            std::vector<const Object*> _gray_stack;
             
             // These details can be done by a private class
             
@@ -161,9 +161,9 @@ namespace wry::gc {
             
             
             void _process_scan_stack() {
-                while (!this->_scan_stack.empty()) {
-                    const Object* object = this->_scan_stack.back();
-                    this->_scan_stack.pop_back();
+                while (!this->_gray_stack.empty()) {
+                    const Object* object = this->_gray_stack.back();
+                    this->_gray_stack.pop_back();
                     assert(object);
                     object_scan(object);
                 }
@@ -416,6 +416,8 @@ namespace wry::gc {
             
             Mutator::enter();
             
+            // For simplicity we keep a number of explicit bags
+            
             Bag<const Object*> object_bag;
             Bag<const Object*> black_bag;
             Bag<const Object*> white_bag;
@@ -446,10 +448,10 @@ namespace wry::gc {
                                 
                 for (;;) {
                     
-                    for (;;) {
-                        const Object* object = object_bag.pop();
-                        if (!object)
-                            break;
+                    while (!object_bag.empty()) {
+                        const Object* object = object_bag.top();
+                        object_bag.pop();
+                        assert(object);
                         // load the color and set it to black if it was gray
                         // this briefly violates the tricolor invariant but the
                         // mutator threads are blind to shades of nonwhite and this
@@ -498,10 +500,9 @@ namespace wry::gc {
                 
                 {
                     // Sweep
-                    for (;;) {
-                        const Object* object = object_bag.pop();
-                        if (!object)
-                            break;
+                    while (!object_bag.empty()) {
+                        const Object* object = object_bag.top();
+                        object_bag.pop();
                         
                         // TODO: pull this out into a function... still needs
                         // to route the object to red, black, or doom
@@ -561,28 +562,20 @@ namespace wry::gc {
                 
                 // Delete all RED objects
 
-                for (;;) {
-                    const Object* object = red_bag.pop();
-                    if (!object)
-                        break;
+                while (!red_bag.empty()) {
+                    const Object* object = red_bag.top();
+                    red_bag.pop();
                     object_delete(object);
                 }
                 
+                // All mutators are allocating WHITE
+                // Write barrier turns WHITE objects GRAY or BLACK
+                // There are no RED objects
+                assert(red_bag.empty());
                 
-                
-                
-                
-                
-            }
+            } // for(;;)
             
-        }
-        
-        
-        
-        
-        
-        
-        
+        } // Collector::collect()
         
     } // namespace <anonymous>
     
@@ -776,7 +769,7 @@ namespace wry::gc {
                 // case CLASS_CTRIE_SNODE:
                 case CLASS_CTRIE_TNODE: {
                     if (color_compare_exchange_white_black(object->_color)) {
-                        global_collector->_scan_stack.push_back(object);
+                        global_collector->_gray_stack.push_back(object);
                     }
                     break;
                 }
@@ -801,7 +794,7 @@ namespace wry::gc {
                 case CLASS_CTRIE_LNODE:
                 case CLASS_CTRIE_TNODE: {
                     if (color_compare_exchange_white_black(object->_color)) {
-                        global_collector->_scan_stack.push_back(object);
+                        global_collector->_gray_stack.push_back(object);
                     }
                     break;
                 }

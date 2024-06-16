@@ -119,9 +119,9 @@ namespace wry::gc {
             assert(count);
             for (;;) {
                 assert(head);
-                if (head->count)
-                    return head->elements[head->count - 1];
-                delete std::exchange(head, head->next);
+                if (!head->empty())
+                    return head->top();
+                delete exchange(head, head->next);
             }
         }
 
@@ -137,18 +137,14 @@ namespace wry::gc {
             head->push(std::move(x));
         }
         
-
-        [[nodiscard]] T* pop() {
-            if (!count) {
-                return nullptr;
-            }
+        void pop() {
+            if (!count)
+                abort();
             --count;
             for (;;) {
                 assert(head);
-                if (head->count) {
-                    T* p = head->elements[--head->count];
-                    return p;
-                }
+                if (!head->empty())
+                    return head->pop();
                 delete exchange(head, head->next);
             }
         }
@@ -163,7 +159,7 @@ namespace wry::gc {
                 return;
             }
             assert(tail->next == nullptr);
-            tail->next = std::exchange(other.head, nullptr);
+            tail->next = exchange(other.head, nullptr);
             tail = exchange(other.tail, nullptr);
             count += exchange(other.count, 0);
         }
