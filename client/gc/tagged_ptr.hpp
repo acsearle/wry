@@ -15,20 +15,20 @@
 
 namespace wry {
             
-    template<typename T>
+    template<typename T, typename E = intptr_t>
     struct TaggedPtr {
         
-        enum : std::intptr_t {
-            TAG_MASK = 7,
-            PTR_MASK = -8,
+        enum : intptr_t {
+            TAG_MASK = 15,
+            PTR_MASK = ~TAG_MASK,
         };
         
         struct TagImposter {
-            std::intptr_t _value;
-            operator std::intptr_t() const {
-                return _value & TAG_MASK;
+            intptr_t _value;
+            operator E() const {
+                return E{_value & TAG_MASK};
             }
-            TagImposter& operator=(std::intptr_t t) {
+            TagImposter& operator=(intptr_t t) {
                 assert(!(t & PTR_MASK));
                 _value = (_value & PTR_MASK) | t;
                 return *this;
@@ -36,19 +36,19 @@ namespace wry {
         };
         
         struct PtrImposter {
-            std::intptr_t _value;
+            intptr_t _value;
             operator T*() const {
                 return reinterpret_cast<T*>(_value & PTR_MASK);
             }
             PtrImposter& operator=(T* p) {
-                std::intptr_t q = reinterpret_cast<std::intptr_t>(p);
+                intptr_t q = reinterpret_cast<intptr_t>(p);
                 assert(!(q & TAG_MASK));
                 _value = (_value & TAG_MASK) | q;
             }
         };
         
         union {
-            std::intptr_t _value;
+            intptr_t _value;
             TagImposter tag;
             PtrImposter ptr;
         };
@@ -56,21 +56,22 @@ namespace wry {
         TaggedPtr() = default;
         
         explicit TaggedPtr(T* p) {
-            std::intptr_t q = reinterpret_cast<std::intptr_t>(p);
+            intptr_t q = reinterpret_cast<intptr_t>(p);
             assert(!(q & TAG_MASK));
             _value = q;
         }
         
-        explicit TaggedPtr(std::intptr_t pt)
+        explicit TaggedPtr(intptr_t pt)
         : _value(pt) {
         }
         
         TaggedPtr(const TaggedPtr&) = default;
         
-        TaggedPtr(T* p, std::intptr_t t) {
-            std::intptr_t q = reinterpret_cast<std::intptr_t>(p);
-            assert(!(q & TAG_MASK) && !(t & PTR_MASK));
-            _value = q | t;
+        TaggedPtr(T* p, E t) {
+            intptr_t q = (intptr_t)p;
+            intptr_t s = (intptr_t)t;
+            assert(!(q & TAG_MASK) && !(s & PTR_MASK));
+            _value = q | s;
         }
         
         T* operator->() const {
@@ -81,7 +82,7 @@ namespace wry {
             return ptr.operator T*();
         }
         
-    }; // TaggedPtr<T>
+    }; // struct TaggedPtr<T, E>
     
 } // namespace wry
 

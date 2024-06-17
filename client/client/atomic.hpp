@@ -30,6 +30,9 @@ namespace wry {
     // - remove error-prone cast / assignment
     // - improve wait / wake interface
 
+    // Cache line size on x86-64 and aarch64
+    constexpr size_t CACHE_LINE_SIZE = 128;
+    
     enum class Ordering {
         RELAXED = __ATOMIC_RELAXED,
         // CONSUME = __ATOMIC_CONSUME, // defect

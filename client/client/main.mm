@@ -11,16 +11,10 @@
 #import <AppKit/AppKit.h>
 #import "WryDelegate.h"
 
+#include "gc.hpp"
 #include "model.hpp"
-#include "test.hpp"
 
-namespace wry::gc {
-    void collector_start();
-    namespace this_thread {
-        void mutator_enter();
-        void mutator_leave();
-    }
-}
+#include "test.hpp"
 
 int main(int argc, const char** argv) {
     

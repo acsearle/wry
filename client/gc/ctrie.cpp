@@ -136,8 +136,8 @@ namespace wry::gc {
         return ncn;
     }
     
-    void* Ctrie::CNode::operator new(size_t fixed, size_t variable) {
-        return object_allocate(fixed + variable * sizeof(Object*));
+    void* Ctrie::CNode::operator new(size_t self, size_t entries) {
+        return Object::operator new(self + entries * sizeof(Object*));
     }
     
     Ctrie::CNode::CNode()
@@ -344,7 +344,7 @@ namespace wry::gc {
                                 if (!__builtin_memcmp(hs->_bytes, query.view.data(), query.view.size())) {
                                     // The strings match
                                     Color expected = Color::WHITE;
-                                    hs->_color.compare_exchange(expected, Color::BLACK);
+                                    hs->color.compare_exchange(expected, Color::BLACK);
                                     switch (expected) {
                                         case Color::WHITE:
                                         case Color::BLACK: {
@@ -684,7 +684,7 @@ namespace wry::gc {
             // before we can return it
             
             Color expected = Color::WHITE;
-            object_color_compare_exchange(key, expected, Color::BLACK);
+            key->color.compare_exchange(expected, Color::BLACK);
             switch (expected) {
                 case Color::WHITE:
                 case Color::BLACK: {
@@ -745,7 +745,7 @@ namespace wry::gc {
                 continue;
             // Found it
             // We should only be erasing nodes whose keys we have marked RED
-            assert(object_color_load(key) == Color::RED);
+            assert(key->color.load() == Color::RED);
             return this->removed(current);
         }
         // Not present in the list

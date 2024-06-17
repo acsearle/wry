@@ -8,6 +8,7 @@
 #ifndef value_hpp
 #define value_hpp
 
+#include <cassert>
 #include <string_view>
 
 #include "atomic.hpp"

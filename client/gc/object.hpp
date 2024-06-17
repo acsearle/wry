@@ -34,9 +34,11 @@ namespace wry::gc {
         
         static void* operator new(size_t count);
         static void* operator new[](size_t count) = delete;
+        static void operator delete(void*);
+        static void operator delete[](void*) = delete;
         
         Class _class;
-        mutable Atomic<Encoded<Color>> _color;
+        mutable Atomic<Encoded<Color>> color;
         
         Object() = delete;
         Object(const Object&);
@@ -57,9 +59,6 @@ namespace wry::gc {
     void object_shade(const Object*);
     size_t object_hash(const Object*);
     
-    Color object_color_load(const Object*);
-    bool object_color_compare_exchange(const Object*, Color& expected, Color desired);
-    void* object_allocate(size_t count);
     void object_trace(const Object*);
     void object_trace_weak(const Object* object);
 

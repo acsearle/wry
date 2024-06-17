@@ -582,8 +582,8 @@ namespace wry::gc {
 
     
     
-    void* HeapString::operator new(std::size_t count, std::size_t extra) {
-        return object_allocate(count + extra);
+    void* HeapString::operator new(std::size_t self, std::size_t extra) {
+        return Object::operator new(self + extra);
     }
         
     HeapString* HeapString::make(std::string_view view) {
