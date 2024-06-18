@@ -246,7 +246,7 @@ namespace wry::sim {
     
     inline void set_world_coordinate_value(World* world, Coordinate where, Value what) {
         assert(world);
-        assert(!what.is_Empty());
+        assert(!value_is_null(what));
         world->_value_for_coordinate[where] = std::move(what);
     }
     

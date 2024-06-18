@@ -21,7 +21,7 @@
 #include "Option.hpp"
 #include "stddef.hpp"
 
-#include "value.hpp"
+#include "../gc/value.hpp"
 
 namespace wry::json {
     
@@ -283,7 +283,7 @@ namespace wry::json {
     
     // parse into type-erased Value
     
-    using wry::value::Value;
+    using wry::gc::Value;
     
     bool parse_json_value(Value& x, auto& y);
     
@@ -309,7 +309,7 @@ namespace wry::json {
         return [&x](auto& v) -> bool {
             String s;
             if (parse_json_string(s)(v)) {
-                x = std::move(s);
+                x = std::string_view((const char*)s.data(), s.chars.size());
                 return true;
             }
             return false;
@@ -320,7 +320,7 @@ namespace wry::json {
         return [&x](auto& v) -> bool {
             String s;
             if (parse_json_number(s)(v)) {
-                x = std::move(s);
+                x = std::string_view((const char*)s.data(), s.chars.size());
                 return true;
             }
             return false;
@@ -329,7 +329,9 @@ namespace wry::json {
     
     inline auto parse_json_array(Value& x) {
         return [&x](auto& v) -> bool {
-            Array<Value> a;
+            //Array<Value> a;
+            Value a = gc::value_make_table();
+            int k = 0;
             Value y;
             auto u = v;
             if (!match_json_array_begin()(u))
@@ -339,7 +341,8 @@ namespace wry::json {
         expect_value:
             if (!parse_json_value(y, u))
                 return false;
-            a.push_back(std::move(y));
+            // a.push_back(std::move(y));
+            value_insert_or_assign(a, k++, y);
             if (match_json_comma()(u))
                 goto expect_value;
             if (!match_json_array_end()(u))
@@ -353,10 +356,13 @@ namespace wry::json {
     
     inline auto parse_json_object(Value& x) {
         return [&x](auto& v) -> bool {
-            Table<String, Value> o;
-            String key;
+            // Table<String, Value> o;
+            Value o = gc::value_make_table();
+            // String key;
+            Value key;
             Value value;
-            std::pair<typename Table<String, Value>::iterator, bool> result;
+            // std::pair<typename Table<String, Value>::iterator, bool> result;
+            Value result;
             auto u = v;
             if (!match_json_object_begin()(u))
                 return false;
@@ -369,8 +375,10 @@ namespace wry::json {
                 return false;
             if (!parse_json_value(value, u))
                 return false;
-            result = o.emplace(std::move(key), std::move(value));
-            if (!result.second) // duplicate key
+            // result = o.emplace(std::move(key), std::move(value));
+            result = value_insert_or_assign(o, key, value);
+            // if (!result.second) // duplicate key
+            if (!value_is_null(result))
                 return false;
             if (match_json_comma()(u))
                 goto expect_key;
@@ -468,54 +476,65 @@ namespace wry::json {
         
         template<typename E>
         Value visit_uint64_t(uint64_t x) {
-            return Value(x);
+            // return Value(x);
+            return gc::value_make_error();
         }
         
         template<typename E>
         Value visit_float32_t(float32_t x) {
-            return Value((double) x);
+            // return Value((double) x);
+            return gc::value_make_error();
         }
         
         template<typename E>
         Value visit_float64_t(float64_t x) {
-            return Value(x);
+            // return Value(x);
+            return gc::value_make_error();
         }
         
         template<typename E>
         Value visit_string(String x) {
-            return Value(std::move(x));
+            // return Value(std::move(x));
+            return Value(std::string_view((char*)x.data(), x.chars.size()));
         }
         
         template<typename E>
         Value visit_string_view(StringView x) {
-            return Value(String(x));
+            // return Value(String(x));
+            return Value(std::string_view((char*)x.chars.data(), x.chars.size()));
         }
         
         template<typename A>
         Value visit_seq(A&& accessor) {
-            Array<Value> y;
+            // Array<Value> y;
+            Value t = gc::value_make_table();
+            Value key = 0;
             for (;;) {
                 Option<Value> x(accessor.template next_element<Value>());
                 if (x.is_some()) {
                     printf("got a seq element\n");
-                    y.push_back(std::move(x).unwrap());
+                    // y.push_back(std::move(x).unwrap());
+                    value_insert_or_assign(t, key++, std::move(x).unwrap());
                 }
                 else
-                    return Value(std::move(y));
+                    return t;
             }
         }
         
         template<typename A>
         Value visit_map(A&& accessor) {
-            Table<String, Value> z;
+            // Table<String, Value> z;
+            Value t = gc::value_make_table();
             for (;;) {
                 Option<std::pair<String, Value>> x(accessor.template next_entry<String, Value>());
                 if (x.is_some()) {
-                    auto [at, flag] = z.insert(std::move(x).unwrap());
-                    if (!flag)
-                        throw ERANGE;
+                    // auto [at, flag] = z.insert(std::move(x).unwrap());
+                    // if (!flag)
+                        // throw ERANGE;
+                    auto y = std::move(x).unwrap();
+                    value_insert_or_assign(t, Value(std::string_view((char*)y.first.chars.data(), y.first.chars.size())), y.second);
                 } else {
-                    return Value(std::move(z));
+                    return t; // Value(std::move(z));
                 }
             }
         }

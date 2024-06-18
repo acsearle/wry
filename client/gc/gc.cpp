@@ -431,6 +431,21 @@ namespace wry::gc {
     
     
     
+    void mutator_enter() {
+        if (!thread_local_mutator)
+            thread_local_mutator = new Mutator;
+        thread_local_mutator->enter();
+    }
+    
+    void mutator_handshake() {
+        thread_local_mutator->handshake();
+    }
+    
+    void mutator_leave() {
+        thread_local_mutator->leave();
+    }
+    
+    
 
     void Mutator::publish_log_with_tag(Channel::Tag tag) {
         assert(thread_local_mutator == this);
@@ -808,6 +823,7 @@ namespace wry::gc {
     
     
     void collector_start() {
+        assert(global_collector == nullptr);
         global_collector = new gc::Collector;
         thread_local_mutator = global_collector;
         thread_local_mutator->enter();
@@ -838,17 +854,16 @@ namespace wry::gc {
     define_test("gc") {
         std::thread([](){
             assert(!thread_local_mutator);
-            thread_local_mutator = new Mutator;
-            thread_local_mutator->enter();
+            mutator_enter();
             for (int i = 0; i != -1; ++i) {
                 auto p = new HeapInt64(787);
                 
                 foo();
-                
-                thread_local_mutator->handshake();
+
+                mutator_handshake();
                 object_shade(p);
             }
-            thread_local_mutator->leave();
+            mutator_leave();
             delete exchange(thread_local_mutator, nullptr);
         }).detach();
     };

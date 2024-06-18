@@ -26,18 +26,28 @@ namespace wry::gc {
         uint64_t _data;
                         
         constexpr Value() = default;
-        constexpr Value(std::nullptr_t);
+        constexpr Value(nullptr_t);
         constexpr Value(bool);
-        constexpr Value(int i);
+        constexpr Value(int);
+        constexpr Value(int64_t);
         constexpr Value(const char*);
-        template<std::size_t N, typename = std::enable_if_t<(N > 0)>> constexpr Value(const char (&ntbs)[N]);
-                
-        // member operator overloads
-        Value operator()() const;
+        template<std::size_t N, typename = std::enable_if_t<(N > 0)>>
+        constexpr Value(const char (&ntbs)[N]);
+        Value(string_view);
+                        
+        Value operator()(/* args type? */) const;
         Value operator[](Value) const;
         explicit operator bool() const;
         
         _value_subscript_result_t operator[](Value);
+        
+        bool is_opcode() const;
+        int as_opcode() const;
+        
+        bool is_int64_t() const;
+        int64_t as_int64_t() const;
+        
+        bool is_Empty() const;
 
     }; // Value
 
@@ -57,10 +67,12 @@ namespace wry::gc {
     Value value_make_integer_with(int64_t z);
     Value value_make_null();
     Value value_make_string_with(const char* ntbs);
+    Value value_make_string_with(string_view);
     Value value_make_table();
     Value value_make_true();
     Value value_make_zero();
     Value value_make_one();
+    constexpr Value value_make_opcode(int);
 
     Value value_make_deep_copy(const Value&);
     
@@ -80,6 +92,7 @@ namespace wry::gc {
     int64_t value_as_int64_t_else(const Value& self, int64_t);
     string_view value_as_string_view(const Value& self);
     string_view value_as_string_view_else(const Value& self, string_view);
+    int value_as_opcode(const Value& self);
 
     bool value_contains(const Value& self, Value key);
     void value_resize(Value& self, Value count);
@@ -89,7 +102,7 @@ namespace wry::gc {
     size_t value_hash(const Value&);
     size_t value_size(const Value&);
 
-    // nonmember operator overloads
+    // non-member operator overloads
     
     Value operator++(Value&, int);
     Value operator--(Value&, int);
@@ -294,16 +307,14 @@ namespace wry::gc {
     
     enum _value_tag_e {
         VALUE_TAG_OBJECT = 0,
-        VALUE_TAG_SMALL_INTEGER,
-        VALUE_TAG_SHORT_STRING,
-        VALUE_TAG_BOOLEAN,
-        VALUE_TAG_ENUMERATION,
-        VALUE_TAG_ERROR,
-        VALUE_TAG_CHARACTER,
-        VALUE_TAG_OK,
-        VALUE_TAG_NOTFOUND,
-        VALUE_TAG_RESTART,
-        VALUE_TAG_TOMBSTONE,
+        VALUE_TAG_SMALL_INTEGER = 1,
+        VALUE_TAG_SHORT_STRING = 2,
+        VALUE_TAG_BOOLEAN = 3,
+        VALUE_TAG_ENUMERATION = 4,
+        VALUE_TAG_ERROR = 5,
+        VALUE_TAG_CHARACTER = 6,
+        VALUE_TAG_OPCODE = 7,
+        VALUE_TAG_SPECIAL = 15,
     };
     
     enum {
@@ -322,7 +333,11 @@ namespace wry::gc {
         VALUE_DATA_FALSE = VALUE_TAG_BOOLEAN,
         VALUE_DATA_TRUE = VALUE_TAG_BOOLEAN | ((uint64_t)1 << VALUE_SHIFT),
         VALUE_DATA_ERROR = VALUE_TAG_ERROR,
-        VALUE_DATA_TOMBSTONE = VALUE_TAG_TOMBSTONE,
+        VALUE_DATA_TOMBSTONE = 0x0F,
+        VALUE_DATA_OK = 0x1F,
+        VALUE_DATA_NOTFOUND = 0x2F,
+        VALUE_DATA_RESTART = 0x3F,
+
     };
     
     struct _short_string_t {
@@ -378,6 +393,41 @@ namespace wry::gc {
     
     
     
+    constexpr Value value_make_opcode(int code) {
+        Value result;
+        result._data = ((int64_t)code << VALUE_SHIFT) | VALUE_TAG_OPCODE;
+        return result;
+    }
+
+    // TODO: fixme
+    constexpr Value::Value(int64_t x) : _data((x << VALUE_SHIFT) | VALUE_TAG_SMALL_INTEGER) {}
+
+
+    inline int value_as_opcode(const Value& self) {
+        if (_value_tag(self) != VALUE_TAG_OPCODE)
+            abort();
+        return (int)((int64_t)(self._data) >> VALUE_SHIFT);
+    }
+
+    inline int64_t Value::as_int64_t() const {
+        return (int64_t)_data >> VALUE_SHIFT;
+    }
+    
+    inline int Value::as_opcode() const {
+        return (int)as_int64_t();
+    }
+    
+    inline bool Value::is_opcode() const {
+        return _value_tag(*this) == VALUE_TAG_OPCODE;
+    }
+    
+    inline bool Value::is_int64_t() const {
+        return _value_tag(*this) == VALUE_TAG_SMALL_INTEGER;
+    }
+    
+    inline bool Value::is_Empty() const {
+        return !_data;
+    }
     
     
     

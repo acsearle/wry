@@ -10,7 +10,7 @@
 
 #include "stdint.hpp"
 #include "hash.hpp"
-#include "value.hpp"
+#include "../gc/value.hpp"
 
 namespace wry::sim {
             
@@ -132,35 +132,7 @@ X(OPCODE_FLOP_FLIP),\
         return hash_combine(&x, sizeof(x));
     }
     
-    /*
-    enum DISCRIMINANT
-    : i64 {
-        
-        DISCRIMINANT_NONE     = 0,
-        DISCRIMINANT_NUMBER   = 1,
-        DISCRIMINANT_OPCODE   = 2,
-
-    };
-            
-    struct Value {
-        
-        i64 discriminant;
-        i64 value;
-        
-        operator bool() const {
-            return value;
-        }
-        
-        bool operator!() const {
-            return !value;
-        }
-        
-        bool operator==(const Value&) const = default;
-                
-    }; // struct Value
-     */
-    
-    using value::Value;
+    using gc::Value;
     
     
     enum TRANSACTION_STATE {

@@ -531,13 +531,15 @@ namespace wry::sim {
                         // these are unusal self-modifying opcodes
                     case OPCODE_FLIP_FLOP:
                         assert(wants_write_new_tile);
-                        set_world_coordinate_value(world, _new_location, {
-                            Value::OPCODE, OPCODE_FLOP_FLIP });
+                        set_world_coordinate_value(world, 
+                                                   _new_location,
+                                                   gc::value_make_opcode(OPCODE_FLOP_FLIP));
                         break;
                     case OPCODE_FLOP_FLIP:
                         assert(wants_write_new_tile);
-                        set_world_coordinate_value(world, _new_location, {
-                            Value::OPCODE, OPCODE_FLIP_FLOP });
+                        set_world_coordinate_value(world,
+                                                   _new_location,
+                                                   gc::value_make_opcode(OPCODE_FLIP_FLOP));
                         break;
                                                 
                 } // switch (next_action)

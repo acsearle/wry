@@ -26,7 +26,7 @@ namespace wry::gc {
     bool _value_is_small_integer(const Value& self) { return _value_tag(self) == VALUE_TAG_SMALL_INTEGER; }
     bool _value_is_object(const Value& self) { return _value_tag(self) == VALUE_TAG_OBJECT; }
     bool _value_is_short_string(const Value& self) { return _value_tag(self) == VALUE_TAG_SHORT_STRING; }
-    bool _value_is_tombstone(const Value& self) { return _value_tag(self) == VALUE_TAG_TOMBSTONE; }
+    bool _value_is_tombstone(const Value& self) { return _value_tag(self) == VALUE_DATA_TOMBSTONE; }
     
     bool value_is_enumeration(const Value& self) { return _value_tag(self) == VALUE_TAG_ENUMERATION; }
     bool value_is_null(const Value& self) { return !self._data; }
@@ -37,32 +37,32 @@ namespace wry::gc {
     
     
     bool value_is_RESTART(const Value& self) {
-        return _value_tag(self) == VALUE_TAG_RESTART;
+        return self._data == VALUE_DATA_RESTART;
     }
     
     Value value_make_RESTART() {
         Value result;
-        result._data = VALUE_TAG_RESTART;
+        result._data = VALUE_DATA_RESTART;
         return result;
     }
     
     bool value_is_OK(const Value& self) {
-        return _value_tag(self) == VALUE_TAG_OK;
+        return self._data == VALUE_DATA_OK;
     }
     
     Value value_make_OK() {
         Value result;
-        result._data = VALUE_TAG_OK;
+        result._data = VALUE_DATA_OK;
         return result;
     }
     
     bool value_is_NOTFOUND(const Value& self) {
-        return _value_tag(self) == VALUE_TAG_NOTFOUND;
+        return self._data == VALUE_DATA_NOTFOUND;
     }
     
     Value value_make_NOTFOUND() {
         Value result;
-        result._data = VALUE_TAG_NOTFOUND;
+        result._data = VALUE_DATA_NOTFOUND;
         return result;
     }
 
@@ -575,7 +575,7 @@ namespace wry::gc {
     
     Value value_make_error() { Value result; result._data = VALUE_TAG_ERROR; return result; }
     Value value_make_null() { Value result; result._data = 0; return result; }
-    Value _value_make_tombstone() { Value result; result._data = VALUE_TAG_TOMBSTONE; return result; }
+    Value _value_make_tombstone() { Value result; result._data = VALUE_DATA_TOMBSTONE; return result; }
 
     
    
@@ -634,8 +634,6 @@ namespace wry::gc {
                 return (void)printf("ERROR\n");
             case VALUE_TAG_OBJECT:
                 return object_debug(_value_as_object(self));
-            case VALUE_TAG_TOMBSTONE:
-                return (void)printf("TOMBSTONE\n");
             case VALUE_TAG_ENUMERATION:
                 return (void)printf("enum{%lld}\n", value_as_enumeration(self));
             case VALUE_TAG_SHORT_STRING: {
@@ -644,6 +642,19 @@ namespace wry::gc {
             }
             case VALUE_TAG_SMALL_INTEGER:
                 return (void)printf("%lld\n", _value_as_small_integer(self));
+            case VALUE_TAG_SPECIAL:
+                switch (self._data) {
+                    case VALUE_DATA_TOMBSTONE:
+                        return (void)printf("TOMBSTONE\n");
+                    case VALUE_DATA_OK:
+                        return (void)printf("OK\n");
+                    case VALUE_DATA_NOTFOUND:
+                        return (void)printf("NOTFOUND\n");
+                    case VALUE_DATA_RESTART:
+                        return (void)printf("RESTART\n");
+                    default:
+                        return (void)printf("SPECIAL{%llx}\n", self._data);
+                }
             default:
                 return (void)printf("Value{%#0." PRIx64 "}\n", self._data);
         }

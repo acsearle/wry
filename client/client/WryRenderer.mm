@@ -685,7 +685,7 @@
             for (i64 i = 0; i != _name_to_opcode.size(); ++i) {
                 if (_opcode_to_coordinate.contains(i)) {
                     
-                    _controls._payload[j % nn, j / nn] = wry::sim::Value{wry::sim::Value::OPCODE, i};
+                    _controls._payload[j % nn, j / nn] = gc::value_make_opcode((int)i);
                     ++j;
                                         
                 } else {
@@ -769,7 +769,7 @@
                 // replace cursor
                 {
                     
-                    auto coordinate = _opcode_to_coordinate[_model->_holding_value.x];
+                    auto coordinate = _opcode_to_coordinate[value_as_opcode(_model->_holding_value)];
                     matrix<RGBA8Unorm_sRGB> tile(64, 64);
                     
                     MTLRegion region = MTLRegionMake2D(coordinate.x * _symbols.width, coordinate.y * _symbols.height, 64, 64);
@@ -881,7 +881,7 @@
                     c.v.texCoord = simd_make_float2(0, 1) / 32.0f + texCoord;
                     v.push_back(c);
                     
-                    texCoord = _opcode_to_coordinate[a.x].xy;
+                    texCoord = _opcode_to_coordinate[value_as_opcode(a)].xy;
                     c.color = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f);
 
                     c.v.position = make<float4>(0, 0, 0, 0) + position;

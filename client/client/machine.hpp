@@ -37,7 +37,7 @@ namespace wry::sim {
         Time _new_time = 0;
         
         void push(Value x) {
-            if (!x.is_Empty())
+            if (!value_is_null(x))
                 _stack.push_back(x);
         }
         

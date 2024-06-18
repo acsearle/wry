@@ -15,6 +15,7 @@ namespace wry::gc {
     void collector_stop();
     
     void mutator_enter();
+    void mutator_handshake();
     void mutator_leave();
     
 } // namespace gc
