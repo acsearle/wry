@@ -41,6 +41,11 @@ namespace wry {
         ACQ_REL = __ATOMIC_ACQ_REL,
         SEQ_CST = __ATOMIC_SEQ_CST,
     };
+    
+    enum class AtomicWaitStatus {
+        NO_TIMEOUT,
+        TIMEOUT,
+    };
         
     template<typename T>
     struct Atomic {
@@ -117,14 +122,15 @@ namespace wry {
 
 #if defined(__APPLE__)
         
-        T wait(T expected, Ordering order) {
+        void wait(T& expected, Ordering order) {
             static_assert(sizeof(T) <= 8);
             uint64_t buffer;
             __builtin_memcpy(&buffer, &expected, sizeof(T));
             for (;;) {
                 T discovered = load(order);
                 if (__builtin_memcmp(&buffer, &discovered, sizeof(T))) {
-                    return discovered;
+                    expected = discovered;
+                    return;
                 }
                 int count = os_sync_wait_on_address(&value,
                                                     buffer,
@@ -133,7 +139,7 @@ namespace wry {
                 if (count < 0) switch (errno) {
                     case EINTR:
                     case EFAULT:
-                        continue;
+                        break;
                     default:
                         perror(__PRETTY_FUNCTION__);
                         abort();
@@ -141,16 +147,16 @@ namespace wry {
             }
         }
         
-        T wait_until(T expected, Ordering order, uint64_t deadline) {
+        AtomicWaitStatus wait_until(T& expected, Ordering order, uint64_t deadline) {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             uint64_t buffer;
             __builtin_memcpy(&buffer, &expected, sizeof(T));
             for (;;) {
                 T discovered = load(order);
                 if (__builtin_memcmp(&buffer, &discovered, sizeof(T))) {
-                    return discovered;
-                }
-                
+                    expected = discovered;
+                    return AtomicWaitStatus::NO_TIMEOUT;
+                }                
                 int count = os_sync_wait_on_address_with_deadline(&value,
                                                                   buffer,
                                                                   sizeof(T),
@@ -159,7 +165,7 @@ namespace wry {
                                                                   deadline);
                 if (count < 0) switch (errno) {
                     case ETIMEDOUT:
-                        return expected;
+                        return AtomicWaitStatus::TIMEOUT;
                     case EINTR:
                     case EFAULT:
                         break;
@@ -167,12 +173,13 @@ namespace wry {
                         perror(__PRETTY_FUNCTION__);
                         abort();
                 }
-                
             }
         }
         
-        T wait_for(T expected, Ordering order, uint64_t timeout_ns) {
-            return wait_until(expected, order, mach_absolute_time() + timeout_ns);
+        AtomicWaitStatus wait_for(T& expected, Ordering order, uint64_t timeout_ns) {
+            struct mach_timebase_info info;
+            mach_timebase_info(&info);
+            return wait_until(expected, order, mach_absolute_time() + timeout_ns / info.numer * info.denom);
         }
         
         void notify_one() {

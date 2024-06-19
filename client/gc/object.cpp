@@ -9,6 +9,7 @@
 
 #include "object.hpp"
 
+#include "array.hpp"
 #include "ctrie.hpp"
 #include "hash.hpp"
 #include "value.hpp"
@@ -18,7 +19,7 @@ namespace wry::gc {
     
     std::size_t object_hash(const Object* object) {
         switch (object->_class) {
-            case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
+            case Class::ARRAY:
             case Class::TABLE:
             case Class::CTRIE:
                 return std::hash<const void*>()(object);
@@ -26,6 +27,7 @@ namespace wry::gc {
                 return ((const HeapString*)object)->_hash;
             case Class::INT64:
                 return std::hash<std::int64_t>()(((const HeapInt64*)object)->_integer);
+            case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
             case Class::CTRIE_CNODE:
             case Class::CTRIE_INODE:
             case Class::CTRIE_LNODE:
@@ -43,6 +45,11 @@ namespace wry::gc {
                 return (void)printf("%#0.12" PRIx64 " IndirectFixedCapacityValueArray[%zd]\n",
                                     (uint64_t)object,
                                     ((const IndirectFixedCapacityValueArray*)object)->_capacity);
+            }
+            case Class::ARRAY: {
+                return (void)printf("%#0.12" PRIx64 " HeapArray[%zd]\n",
+                                    (uint64_t)object,
+                                    ((const HeapArray*)object)->size());
             }
             case Class::TABLE: {
                 return (void)printf("%#0.12" PRIx64 " HeapTable[%zd]\n",

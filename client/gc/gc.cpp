@@ -16,6 +16,7 @@
 #include "tagged_ptr.hpp"
 #include "utility.hpp"
 #include "value.hpp"
+#include "array.hpp"
 
 #include "test.hpp"
 
@@ -165,6 +166,7 @@ namespace wry::gc {
             return;
         switch (object->_class) {
             case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
+            case Class::ARRAY:
             case Class::TABLE:
             case Class::CTRIE:
             case Class::CTRIE_CNODE:
@@ -203,6 +205,11 @@ namespace wry::gc {
     void object_scan(const Object* object) {
         assert(object);
         switch (object->_class) {
+            case Class::STRING:
+            case Class::INT64:{
+                // These leaf classes should never be GRAY and thus never scanned
+                abort();
+            }
             case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
                 const IndirectFixedCapacityValueArray* p = (const IndirectFixedCapacityValueArray*)object;
                 auto first = p->_storage;
@@ -211,16 +218,16 @@ namespace wry::gc {
                     value_trace(*first);
                 break;
             }
+            case Class::ARRAY: {
+                const HeapArray* p = (const HeapArray*)object;
+                object_trace(p->_manager);
+                break;
+            }
             case Class::TABLE: {
                 const HeapTable* p = (const HeapTable*)object;
                 object_trace(p->_alpha._manager);
                 object_trace(p->_beta._manager);
                 break;
-            }
-            case Class::STRING:
-            case Class::INT64:{
-                // These leaf classes should never be GRAY and thus never scanned
-                abort();
             }
             case Class::CTRIE: {
                 const Ctrie* p = (const Ctrie*)object;
@@ -277,6 +284,7 @@ namespace wry::gc {
             }
             case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
             case Class::TABLE:
+            case Class::ARRAY:
             case Class::CTRIE:
             case Class::CTRIE_CNODE:
             case Class::CTRIE_INODE:
@@ -311,6 +319,7 @@ namespace wry::gc {
                 break;
             }
             case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
+            case Class::ARRAY:
             case Class::TABLE:
             case Class::CTRIE:
             case Class::CTRIE_CNODE:
@@ -340,12 +349,14 @@ namespace wry::gc {
     }
     
     void object_delete(const Object* object) {
-        object_debug(object);
+        // object_debug(object);
         if (object == nullptr)
             return;
         switch (object->_class) {
             case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
                 return delete (const IndirectFixedCapacityValueArray*)object;
+            case Class::ARRAY:
+                return delete (const HeapArray*)object;
             case Class::TABLE:
                 return delete (const HeapTable*)object;
             case Class::STRING:
@@ -581,8 +592,21 @@ namespace wry::gc {
                     break;
                 }
                 case Channel::Tag::COLLECTOR_DID_REQUEST_WAKEUP:
+                    /*
                     (void) channel->log_stack_head.wait(expected,
                                                         Ordering::ACQUIRE);
+                     */
+                    switch (channel->log_stack_head.wait_for(expected,
+                                                            Ordering::ACQUIRE,
+                                                             1000000000)) {
+                        case AtomicWaitStatus::NO_TIMEOUT:
+                            break;
+                        case AtomicWaitStatus::TIMEOUT:
+                            printf("Mutator timed out\n");
+                            break;
+                        default:
+                            abort();
+                    }
                     break;
                 case Channel::Tag::MUTATOR_DID_PUBLISH_LOGS: {
                     LogNode* log_list_head = expected.ptr;

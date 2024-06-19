@@ -13,14 +13,6 @@
 
 namespace wry::gc {
     
-    bool value_is_RESTART(const Value& self);
-    bool value_is_NOTFOUND(const Value& self);
-    bool value_is_OK(const Value& self);
-    
-    Value value_make_NOTFOUND();
-    Value value_make_RESTART();
-    Value value_make_OK();
-
     struct Ctrie : Object {
         
         struct Query {

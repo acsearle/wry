@@ -37,19 +37,19 @@ namespace wry::gc {
                         
         Value operator()(/* args type? */) const;
         Value operator[](Value) const;
-        explicit operator bool() const;
+        constexpr explicit operator bool() const;
         
         _value_subscript_result_t operator[](Value);
         
-        bool is_opcode() const;
-        int as_opcode() const;
+        constexpr bool is_opcode() const;
+        constexpr int as_opcode() const;
         
-        bool is_int64_t() const;
-        int64_t as_int64_t() const;
+        constexpr bool is_int64_t() const;
+        constexpr int64_t as_int64_t() const;
         
-        bool is_Empty() const;
+        constexpr bool is_Empty() const;
 
-    }; // Value
+    }; // struct Value
 
     // gc methods
     
@@ -57,42 +57,42 @@ namespace wry::gc {
     void value_shade(Value value);
     void value_trace(Value);
 
-
-    Value value_make_boolean_with(bool flag);
-    Value value_make_character_with(int utf32);
-    Value value_make_enumeration_with(int64_t);
-    Value value_make_error();
+    constexpr Value value_make_boolean_with(bool flag);
+    constexpr Value value_make_character_with(int utf32);
+    constexpr Value value_make_enumeration_with(int64_t);
+    constexpr Value value_make_error();
     Value value_make_error_with(const char*);
-    Value value_make_false();
+    constexpr Value value_make_false();
     Value value_make_integer_with(int64_t z);
-    Value value_make_null();
+    constexpr Value value_make_null();
     Value value_make_string_with(const char* ntbs);
     Value value_make_string_with(string_view);
+    Value value_make_array();
     Value value_make_table();
-    Value value_make_true();
-    Value value_make_zero();
-    Value value_make_one();
+    constexpr Value value_make_true();
+    constexpr Value value_make_zero();
+    constexpr Value value_make_one();
     constexpr Value value_make_opcode(int);
 
     Value value_make_deep_copy(const Value&);
     
-    bool value_is_boolean(const Value& self);
-    bool value_is_character(const Value& self);
-    bool value_is_enumeration(const Value& self);
-    bool value_is_error(const Value& self);
-    bool value_is_null(const Value& self);
+    constexpr bool value_is_boolean(const Value& self);
+    constexpr bool value_is_character(const Value& self);
+    constexpr bool value_is_enumeration(const Value& self);
+    constexpr bool value_is_error(const Value& self);
+    constexpr bool value_is_null(const Value& self);
         
-    bool value_as_boolean(const Value& self);
-    bool value_as_boolean_else(const Value& self, bool);
-    int  value_as_character(const Value& self);
-    int  value_as_character_else(const Value& self, int);
-    int64_t value_as_enumeration(const Value& self);
-    int64_t value_as_enumeration_else(const Value& self, int64_t);
-    int64_t value_as_int64_t(const Value& self);
-    int64_t value_as_int64_t_else(const Value& self, int64_t);
+    constexpr bool value_as_boolean(const Value& self);
+    constexpr bool value_as_boolean_else(const Value& self, bool);
+    constexpr int  value_as_character(const Value& self);
+    constexpr int  value_as_character_else(const Value& self, int);
+    constexpr int64_t value_as_enumeration(const Value& self);
+    constexpr int64_t value_as_enumeration_else(const Value& self, int64_t);
+    constexpr int64_t value_as_int64_t(const Value& self);
+    constexpr int64_t value_as_int64_t_else(const Value& self, int64_t);
     string_view value_as_string_view(const Value& self);
     string_view value_as_string_view_else(const Value& self, string_view);
-    int value_as_opcode(const Value& self);
+    constexpr int value_as_opcode(const Value& self);
 
     bool value_contains(const Value& self, Value key);
     void value_resize(Value& self, Value count);
@@ -101,6 +101,10 @@ namespace wry::gc {
     Value value_erase(Value& self, Value key);
     size_t value_hash(const Value&);
     size_t value_size(const Value&);
+    void value_push_back(const Value&, Value value);
+    void value_pop_back(const Value&);
+    Value value_back(const Value&);
+    Value value_front(const Value&);
 
     // non-member operator overloads
     
@@ -201,20 +205,20 @@ namespace wry::gc {
     
     
     
-    int _value_tag(const Value& self);
-    bool _value_is_small_integer(const Value& self);
-    bool _value_is_object(const Value& self);
-    bool _value_is_short_string(const Value& self);
-    bool _value_is_tombstone(const Value& self);
+    constexpr int _value_tag(const Value& self);
+    constexpr bool _value_is_small_integer(const Value& self);
+    constexpr bool _value_is_object(const Value& self);
+    constexpr bool _value_is_short_string(const Value& self);
+    constexpr bool _value_is_tombstone(const Value& self);
     
     const Object* _value_as_object(const Value& self);
     const Object* _value_as_object_else(const Value& self, const Object*);
-    int64_t _value_as_small_integer(const Value& self);
-    int64_t _value_as_small_integer_else(const Value& self, int64_t);
+    constexpr int64_t _value_as_small_integer(const Value& self);
+    constexpr int64_t _value_as_small_integer_else(const Value& self, int64_t);
     std::string_view _value_as_short_string(const Value& self);
     std::string_view _value_as_short_string_else(const Value& self);
     Value _value_make_with(const Object* object);
-    Value _value_make_tombstone();
+    constexpr Value _value_make_tombstone();
 
     
     
@@ -403,37 +407,145 @@ namespace wry::gc {
     constexpr Value::Value(int64_t x) : _data((x << VALUE_SHIFT) | VALUE_TAG_SMALL_INTEGER) {}
 
 
-    inline int value_as_opcode(const Value& self) {
+    constexpr int value_as_opcode(const Value& self) {
         if (_value_tag(self) != VALUE_TAG_OPCODE)
             abort();
         return (int)((int64_t)(self._data) >> VALUE_SHIFT);
     }
 
-    inline int64_t Value::as_int64_t() const {
+    constexpr int64_t Value::as_int64_t() const {
         return (int64_t)_data >> VALUE_SHIFT;
     }
     
-    inline int Value::as_opcode() const {
+    constexpr  int Value::as_opcode() const {
         return (int)as_int64_t();
     }
     
-    inline bool Value::is_opcode() const {
+    constexpr  bool Value::is_opcode() const {
         return _value_tag(*this) == VALUE_TAG_OPCODE;
     }
     
-    inline bool Value::is_int64_t() const {
+    constexpr  bool Value::is_int64_t() const {
         return _value_tag(*this) == VALUE_TAG_SMALL_INTEGER;
     }
     
-    inline bool Value::is_Empty() const {
+    constexpr  bool Value::is_Empty() const {
         return !_data;
     }
     
     
     
+    constexpr bool value_is_enumeration(const Value& self) { return _value_tag(self) == VALUE_TAG_ENUMERATION; }
+    constexpr bool value_is_null(const Value& self) { return !self._data; }
+    constexpr bool value_is_error(const Value& self) { return _value_tag(self) == VALUE_TAG_ERROR; }
+    constexpr bool value_is_boolean(const Value& self) { return _value_tag(self) == VALUE_TAG_BOOLEAN; }
+    constexpr bool value_is_char(const Value& self) { return _value_tag(self) == VALUE_TAG_CHARACTER; }
+
+    
+    constexpr bool value_as_boolean(const Value& self) {
+        assert(value_is_boolean(self));
+        return self._data >> VALUE_SHIFT;
+    }
+    
+    constexpr int64_t value_as_enumeration(const Value& self) {
+        assert(value_is_enumeration(self));
+        return (int64_t)self._data >> VALUE_SHIFT;
+    }
+    
+    constexpr int value_as_character(const Value& self) {
+        assert(value_is_enumeration(self));
+        return (int)((int64_t)self._data >> VALUE_SHIFT);
+    }
+    
+    constexpr Value value_make_boolean_with(bool flag) {
+        Value result;
+        result._data = ((uint64_t)flag << VALUE_SHIFT) | VALUE_TAG_BOOLEAN;
+        assert(value_is_boolean(result));
+        return result;
+    }
+
+    constexpr Value::operator bool() const {
+        // POINTER: nonnull
+        //    - All containers are true, even if empty
+        // INTEGER: nonzero
+        // STRING: nonempty
+        // ENUMERATION: nonzero
+        // BOOLEAN: nonzero
+        // ERROR: always false
+        // TOMBSTONE: always false
+        return _data >> 4;
+    }
+    
+    constexpr Value value_make_error() { Value result; result._data = VALUE_TAG_ERROR; return result; }
+    constexpr Value value_make_null() { Value result; result._data = 0; return result; }
+    constexpr Value _value_make_tombstone() { Value result; result._data = VALUE_DATA_TOMBSTONE; return result; }
+
     
     
+    constexpr int _value_tag(const Value& self) { return self._data & VALUE_MASK; }
+    constexpr bool _value_is_small_integer(const Value& self) { return _value_tag(self) == VALUE_TAG_SMALL_INTEGER; }
+    constexpr bool _value_is_object(const Value& self) { return _value_tag(self) == VALUE_TAG_OBJECT; }
+    constexpr bool _value_is_short_string(const Value& self) { return _value_tag(self) == VALUE_TAG_SHORT_STRING; }
+    constexpr bool _vaue_is_tombstone(const Value& self) { return _value_tag(self) == VALUE_DATA_TOMBSTONE; }
     
+    constexpr bool value_is_RESTART(const Value& self) {
+        return self._data == VALUE_DATA_RESTART;
+    }
+    
+    constexpr Value value_make_RESTART() {
+        Value result;
+        result._data = VALUE_DATA_RESTART;
+        return result;
+    }
+    
+    constexpr bool value_is_OK(const Value& self) {
+        return self._data == VALUE_DATA_OK;
+    }
+    
+    constexpr Value value_make_OK() {
+        Value result;
+        result._data = VALUE_DATA_OK;
+        return result;
+    }
+    
+    constexpr bool value_is_NOTFOUND(const Value& self) {
+        return self._data == VALUE_DATA_NOTFOUND;
+    }
+    
+    constexpr Value value_make_NOTFOUND() {
+        Value result;
+        result._data = VALUE_DATA_NOTFOUND;
+        return result;
+    }
+    
+    inline const Object* _value_as_object(const Value& self) {
+        assert(_value_is_object(self));
+        return (Object*)self._data;
+    }
+    
+    inline const Object* _as_pointer_or_nullptr(const Value& self) {
+        return _value_is_object(self) ? _value_as_object(self) : nullptr;
+    }
+    
+    constexpr int64_t _value_as_small_integer(const Value& self) {
+        assert(_value_is_small_integer(self));
+        return (int64_t)self._data >> VALUE_SHIFT;
+    }
+    
+    constexpr bool _value_is_tombstone(const Value& self) {
+        return self._data == VALUE_DATA_TOMBSTONE;
+    }
+
+    
+    /*
+    bool value_is_RESTART(const Value& self);
+    bool value_is_NOTFOUND(const Value& self);
+    bool value_is_OK(const Value& self);
+    
+    Value value_make_NOTFOUND();
+    Value value_make_RESTART();
+    Value value_make_OK();
+*/
     
     
 } // namespace wry::gc

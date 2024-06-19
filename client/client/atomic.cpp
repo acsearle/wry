@@ -14,7 +14,8 @@ namespace wry {
         Atomic<int> b;
         b.add_fetch(8, Ordering::RELAXED);
         b.min_fetch(4, Ordering::RELAXED);
-        int x = b.wait(99, Ordering::RELAXED);
+        int x = 99;
+        b.wait(x, Ordering::RELAXED);
         b.notify_one();
     };
     

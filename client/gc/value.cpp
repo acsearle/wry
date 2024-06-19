@@ -12,6 +12,7 @@
 #include <numeric>
 #include <random>
 
+#include "array.hpp"
 #include "hash.hpp"
 #include "table.hpp"
 #include "utility.hpp"
@@ -22,82 +23,9 @@
 
 namespace wry::gc {
     
-    int _value_tag(const Value& self) { return self._data & VALUE_MASK; }
-    bool _value_is_small_integer(const Value& self) { return _value_tag(self) == VALUE_TAG_SMALL_INTEGER; }
-    bool _value_is_object(const Value& self) { return _value_tag(self) == VALUE_TAG_OBJECT; }
-    bool _value_is_short_string(const Value& self) { return _value_tag(self) == VALUE_TAG_SHORT_STRING; }
-    bool _value_is_tombstone(const Value& self) { return _value_tag(self) == VALUE_DATA_TOMBSTONE; }
-    
-    bool value_is_enumeration(const Value& self) { return _value_tag(self) == VALUE_TAG_ENUMERATION; }
-    bool value_is_null(const Value& self) { return !self._data; }
-    bool value_is_error(const Value& self) { return _value_tag(self) == VALUE_TAG_ERROR; }
-    bool value_is_boolean(const Value& self) { return _value_tag(self) == VALUE_TAG_BOOLEAN; }
-    bool value_is_char(const Value& self) { return _value_tag(self) == VALUE_TAG_CHARACTER; }
-    
-    
-    
-    bool value_is_RESTART(const Value& self) {
-        return self._data == VALUE_DATA_RESTART;
-    }
-    
-    Value value_make_RESTART() {
-        Value result;
-        result._data = VALUE_DATA_RESTART;
-        return result;
-    }
-    
-    bool value_is_OK(const Value& self) {
-        return self._data == VALUE_DATA_OK;
-    }
-    
-    Value value_make_OK() {
-        Value result;
-        result._data = VALUE_DATA_OK;
-        return result;
-    }
-    
-    bool value_is_NOTFOUND(const Value& self) {
-        return self._data == VALUE_DATA_NOTFOUND;
-    }
-    
-    Value value_make_NOTFOUND() {
-        Value result;
-        result._data = VALUE_DATA_NOTFOUND;
-        return result;
-    }
-
-    const Object* _value_as_object(const Value& self) {
-        assert(_value_is_object(self));
-        return (Object*)self._data;
-    }
-    
-    const Object* _as_pointer_or_nullptr(const Value& self) {
-        return _value_is_object(self) ? _value_as_object(self) : nullptr;
-    }
-    
-    int64_t _value_as_small_integer(const Value& self) {
-        assert(_value_is_small_integer(self));
-        return (int64_t)self._data >> VALUE_SHIFT;
-    }
-    
     std::string_view _value_as_short_string(const Value& self) {
         assert(_value_is_short_string(self));
         return ((const _short_string_t&)self._data).as_string_view();
-    }
-    
-    bool value_as_boolean(const Value& self) {
-        assert(value_is_boolean(self));
-        return self._data >> VALUE_SHIFT;
-    }
-    
-    int64_t value_as_enumeration(const Value& self) {
-        assert(value_is_enumeration(self));
-        return (int64_t)self._data >> VALUE_SHIFT;
-    }
-
-    int value_as_character(const Value& self) {
-        assert(value_is_enumeration(self));
-        return (int)((int64_t)self._data >> VALUE_SHIFT);
     }
 
     Value& operator++(Value& self) {
@@ -249,12 +177,6 @@ namespace wry::gc {
         return result;
     }
     
-    Value value_make_boolean_with(bool flag) {
-        Value result;
-        result._data = ((uint64_t)flag << VALUE_SHIFT) | VALUE_TAG_BOOLEAN;
-        assert(value_is_boolean(result));
-        return result;
-    }
         
     
     
@@ -425,17 +347,7 @@ namespace wry::gc {
         return get();
     }
     
-    Value::operator bool() const {
-        // POINTER: nonnull
-        //    - All containers are true, even if empty
-        // INTEGER: nonzero
-        // STRING: nonempty
-        // ENUMERATION: nonzero
-        // BOOLEAN: nonzero
-        // ERROR: always false
-        // TOMBSTONE: always false
-        return _data >> 4;
-    }
+   
     
     bool operator==(const Value& a, const Value& b) {
         // POINTER: identity; requires interned bigstrings, bignums etc.
@@ -484,6 +396,8 @@ namespace wry::gc {
 
     Value find(const Object* self, Value key) {
         switch (self->_class) {
+            case Class::ARRAY:
+                return ((const HeapArray*) self)->find(key);
             case Class::TABLE:
                 return ((const HeapTable*) self)->find(key);
             default:
@@ -493,6 +407,8 @@ namespace wry::gc {
 
     Value insert_or_assign(const Object* self, Value key, Value value) {
         switch (self->_class) {
+            case Class::ARRAY:
+                return ((const HeapArray*) self)->insert_or_assign(key, value);
             case Class::TABLE:
                 return ((const HeapTable*) self)->insert_or_assign(key, value);
             default:
@@ -514,6 +430,8 @@ namespace wry::gc {
         switch (self->_class) {
             case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
                 return ((const IndirectFixedCapacityValueArray*) self)->_capacity;
+            case Class::ARRAY:
+                return ((const HeapArray*) self)->size();
             case Class::TABLE:
                 return ((const HeapTable*) self)->size();
             case Class::STRING:
@@ -573,9 +491,6 @@ namespace wry::gc {
     }
 
     
-    Value value_make_error() { Value result; result._data = VALUE_TAG_ERROR; return result; }
-    Value value_make_null() { Value result; result._data = 0; return result; }
-    Value _value_make_tombstone() { Value result; result._data = VALUE_DATA_TOMBSTONE; return result; }
 
     
    
@@ -684,7 +599,13 @@ namespace wry::gc {
         result._data = (uint64_t)(new HeapTable);
         return result;
     }
-    
+
+    Value value_make_array() {
+        Value result;
+        result._data = (uint64_t)(new HeapArray);
+        return result;
+    }
+
 } // namespace wry::gc
 
 

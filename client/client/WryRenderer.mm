@@ -1020,6 +1020,7 @@
 
 - (void)renderToMetalLayer:(nonnull CAMetalDisplayLinkUpdate*)update
 {
+    wry::gc::mutator_handshake();
 
     using namespace ::simd;
     using namespace ::wry;

@@ -330,8 +330,7 @@ namespace wry::json {
     inline auto parse_json_array(Value& x) {
         return [&x](auto& v) -> bool {
             //Array<Value> a;
-            Value a = gc::value_make_table();
-            int k = 0;
+            Value a = gc::value_make_array();
             Value y;
             auto u = v;
             if (!match_json_array_begin()(u))
@@ -342,7 +341,8 @@ namespace wry::json {
             if (!parse_json_value(y, u))
                 return false;
             // a.push_back(std::move(y));
-            value_insert_or_assign(a, k++, y);
+            // value_insert_or_assign(a, k++, y);
+            value_push_back(a, y);
             if (match_json_comma()(u))
                 goto expect_value;
             if (!match_json_array_end()(u))
@@ -507,17 +507,19 @@ namespace wry::json {
         template<typename A>
         Value visit_seq(A&& accessor) {
             // Array<Value> y;
-            Value t = gc::value_make_table();
-            Value key = 0;
+            // Value t = gc::value_make_table();
+            Value a = gc::value_make_array();
+            // Value key = 0;
             for (;;) {
                 Option<Value> x(accessor.template next_element<Value>());
                 if (x.is_some()) {
                     printf("got a seq element\n");
                     // y.push_back(std::move(x).unwrap());
-                    value_insert_or_assign(t, key++, std::move(x).unwrap());
+                    // value_insert_or_assign(t, key++, std::move(x).unwrap());
+                    value_push_back(a, std::move(x).unwrap());
                 }
                 else
-                    return t;
+                    return a;
             }
         }
         

@@ -105,7 +105,9 @@ namespace wry {
                 entity_ready_on_world(r, &_world);
             }
 
-            
+            _world._value_for_coordinate.emplace(Coordinate{-2, -2}, gc::value_make_integer_with(7));
+            _world._value_for_coordinate.emplace(Coordinate{-2, -2}, gc::value_make_array());
+
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();
 

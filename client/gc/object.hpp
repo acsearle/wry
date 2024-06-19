@@ -20,6 +20,7 @@ namespace wry::gc {
         INT64,
         STRING,
         INDIRECT_FIXED_CAPACITY_VALUE_ARRAY,
+        ARRAY,
         TABLE,
 
         CTRIE,

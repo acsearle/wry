@@ -23,6 +23,7 @@ int main(int argc, const char** argv) {
     // it is now safe to call mutator_enter on any thread; the collector global
     // state is set up even though the spawned collector thread may not have
     // actually been scheduled yet
+    wry::gc::mutator_enter();
     
     // randomness
     std::random_device rd;
