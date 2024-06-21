@@ -397,7 +397,7 @@ namespace wry::gc {
     Value find(const Object* self, Value key) {
         switch (self->_class) {
             case Class::ARRAY:
-                return ((const HeapArray*) self)->find(key);
+                return ((HeapArray*) self)->find(key);
             case Class::TABLE:
                 return ((const HeapTable*) self)->find(key);
             default:
@@ -408,7 +408,7 @@ namespace wry::gc {
     Value insert_or_assign(const Object* self, Value key, Value value) {
         switch (self->_class) {
             case Class::ARRAY:
-                return ((const HeapArray*) self)->insert_or_assign(key, value);
+                return ((HeapArray*) self)->insert_or_assign(key, value);
             case Class::TABLE:
                 return ((const HeapTable*) self)->insert_or_assign(key, value);
             default:
@@ -431,7 +431,7 @@ namespace wry::gc {
             case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
                 return ((const IndirectFixedCapacityValueArray*) self)->_capacity;
             case Class::ARRAY:
-                return ((const HeapArray*) self)->size();
+                return ((HeapArray*) self)->size();
             case Class::TABLE:
                 return ((const HeapTable*) self)->size();
             case Class::STRING:

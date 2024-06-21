@@ -49,7 +49,7 @@ namespace wry::gc {
             case Class::ARRAY: {
                 return (void)printf("%#0.12" PRIx64 " HeapArray[%zd]\n",
                                     (uint64_t)object,
-                                    ((const HeapArray*)object)->size());
+                                    ((HeapArray*)object)->size());
             }
             case Class::TABLE: {
                 return (void)printf("%#0.12" PRIx64 " HeapTable[%zd]\n",

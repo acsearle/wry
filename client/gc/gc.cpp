@@ -220,7 +220,8 @@ namespace wry::gc {
             }
             case Class::ARRAY: {
                 const HeapArray* p = (const HeapArray*)object;
-                object_trace(p->_manager);
+                object_trace(p->_alpha._manager);
+                object_trace(p->_beta._manager);
                 break;
             }
             case Class::TABLE: {
