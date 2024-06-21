@@ -77,6 +77,8 @@ namespace wry::gc {
         Traced& operator=(T* other);
         Traced& operator=(std::nullptr_t);
         
+        void swap(Traced<T*>& other);
+        
         T* operator->() const;
         bool operator!() const;
         explicit operator bool() const;
@@ -88,7 +90,7 @@ namespace wry::gc {
         T* get() const;
         
     }; // struct Traced<T*>
-    
+        
     template<typename T>
     struct Traced<Atomic<T*>> {
         
@@ -133,6 +135,15 @@ namespace wry::gc {
     Traced<T*>::Traced(std::nullptr_t)
     : _object(nullptr) {
     }
+    
+    template<typename T>
+    void Traced<T*>::swap(Traced<T*>& other) {
+        T* a = get();
+        T* b = other.get();
+        (*this) = b;
+        other = a;
+    }
+
     
     template<typename T>
     Traced<T*>& Traced<T*>::operator=(T* other) {
