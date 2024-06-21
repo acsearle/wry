@@ -9,11 +9,11 @@
 
 #include "object.hpp"
 
-#include "array.hpp"
+#include "HeapArray.hpp"
 #include "ctrie.hpp"
 #include "hash.hpp"
 #include "value.hpp"
-#include "table.hpp"
+#include "HeapTable.hpp"
 
 namespace wry::gc {
     

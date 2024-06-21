@@ -12,11 +12,11 @@
 #include "bag.hpp"
 #include "ctrie.hpp"
 #include "gc.hpp"
-#include "table.hpp"
+#include "HeapArray.hpp"
+#include "HeapTable.hpp"
 #include "tagged_ptr.hpp"
 #include "utility.hpp"
 #include "value.hpp"
-#include "array.hpp"
 
 #include "test.hpp"
 

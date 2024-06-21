@@ -1,12 +1,12 @@
 //
-//  array.hpp
+//  wry/gc/HeapArray.hpp
 //  client
 //
 //  Created by Antony Searle on 19/6/2024.
 //
 
-#ifndef array_hpp
-#define array_hpp
+#ifndef wry_gc_HeapArray_hpp
+#define wry_gc_HeapArray_hpp
 
 #include "utility.hpp"
 #include "value.hpp"
@@ -263,4 +263,4 @@ namespace wry::gc {
     
 } // namespace wry::gc
 
-#endif /* array_hpp */
+#endif /* wry_gc_HeapArray_hpp */

@@ -1,12 +1,12 @@
 //
-//  table.hpp
+//  wry/gc/HeapTable.hpp
 //  client
 //
 //  Created by Antony Searle on 14/6/2024.
 //
 
-#ifndef table_hpp
-#define table_hpp
+#ifndef wry_gc_HeapTable_hpp
+#define wry_gc_HeapTable_hpp
 
 #include <cassert>
 
@@ -474,4 +474,4 @@ namespace wry::gc {
     
 }
 
-#endif /* table_hpp */
+#endif /* wry_gc_HeapTable_hpp */

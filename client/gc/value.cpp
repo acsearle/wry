@@ -12,9 +12,9 @@
 #include <numeric>
 #include <random>
 
-#include "array.hpp"
 #include "hash.hpp"
-#include "table.hpp"
+#include "HeapArray.hpp"
+#include "HeapTable.hpp"
 #include "utility.hpp"
 #include "value.hpp"
 

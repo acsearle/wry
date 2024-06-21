@@ -1,11 +1,11 @@
 //
-//  array.cpp
+//  wry/gc/array.cpp
 //  client
 //
 //  Created by Antony Searle on 19/6/2024.
 //
 
-#include "array.hpp"
+#include "HeapArray.hpp"
 
 #include "gc.hpp"
 #include "test.hpp"
