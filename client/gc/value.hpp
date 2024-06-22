@@ -14,6 +14,7 @@
 #include "atomic.hpp"
 #include "object.hpp"
 #include "traced.hpp"
+#include "HeapString.hpp"
 
 namespace wry::gc {
     
@@ -36,6 +37,7 @@ namespace wry::gc {
         Value(string_view);
                         
         Value operator()(/* args type? */) const;
+        
         Value operator[](Value) const;
         constexpr explicit operator bool() const;
         
@@ -78,16 +80,15 @@ namespace wry::gc {
     
     constexpr bool value_is_boolean(const Value& self);
     constexpr bool value_is_character(const Value& self);
-    constexpr bool value_is_enumeration(const Value& self);
     constexpr bool value_is_error(const Value& self);
     constexpr bool value_is_null(const Value& self);
-        
+    constexpr bool value_is_enum(const Value& self);
+
     constexpr bool value_as_boolean(const Value& self);
     constexpr bool value_as_boolean_else(const Value& self, bool);
     constexpr int  value_as_character(const Value& self);
     constexpr int  value_as_character_else(const Value& self, int);
-    constexpr int64_t value_as_enumeration(const Value& self);
-    constexpr int64_t value_as_enumeration_else(const Value& self, int64_t);
+    constexpr std::pair<int, int> value_as_enum(const Value& self);
     constexpr int64_t value_as_int64_t(const Value& self);
     constexpr int64_t value_as_int64_t_else(const Value& self, int64_t);
     string_view value_as_string_view(const Value& self);
@@ -227,17 +228,6 @@ namespace wry::gc {
     
     
     
-    
-    struct IndirectFixedCapacityValueArray : Object {
-        
-        std::size_t _capacity;
-        Traced<Value>* _storage; // TODO: type?
-        explicit IndirectFixedCapacityValueArray(std::size_t count);
-        ~IndirectFixedCapacityValueArray()      ;
-    }; // struct IndirectFixedCapacityValueArray
-
-    
-    
     // TODO: upgrade to array of limbs of arbitrary precision integer
     struct HeapInt64 : Object {
         std::int64_t _integer;
@@ -245,16 +235,6 @@ namespace wry::gc {
         std::int64_t as_int64_t() const;
     };
     
-    struct HeapString : Object {
-        std::size_t _hash;
-        std::size_t _size;
-        char _bytes[0];
-        static void* operator new(std::size_t count, std::size_t extra);
-        static HeapString* make(std::size_t hash, std::string_view view);
-        static HeapString* make(std::string_view view);
-        std::string_view as_string_view() const;
-        HeapString();
-    }; // struct HeapString
         
     
     
@@ -310,14 +290,14 @@ namespace wry::gc {
     
     
     enum _value_tag_e {
-        VALUE_TAG_OBJECT = 0,
-        VALUE_TAG_SMALL_INTEGER = 1,
-        VALUE_TAG_SHORT_STRING = 2,
-        VALUE_TAG_BOOLEAN = 3,
-        VALUE_TAG_ENUMERATION = 4,
-        VALUE_TAG_ERROR = 5,
-        VALUE_TAG_CHARACTER = 6,
-        VALUE_TAG_OPCODE = 7,
+        VALUE_TAG_OBJECT,
+        VALUE_TAG_BOOLEAN,
+        VALUE_TAG_CHARACTER,
+        VALUE_TAG_ENUMERATION,
+        VALUE_TAG_ERROR,
+        VALUE_TAG_SHORT_STRING,
+        VALUE_TAG_SMALL_INTEGER,
+        VALUE_TAG_OPCODE,
         VALUE_TAG_SPECIAL = 15,
     };
     
@@ -335,13 +315,12 @@ namespace wry::gc {
         VALUE_DATA_ZERO = VALUE_TAG_SMALL_INTEGER,
         VALUE_DATA_EMPTY_STRING = VALUE_TAG_SHORT_STRING,
         VALUE_DATA_FALSE = VALUE_TAG_BOOLEAN,
-        VALUE_DATA_TRUE = VALUE_TAG_BOOLEAN | ((uint64_t)1 << VALUE_SHIFT),
+        VALUE_DATA_TRUE = VALUE_TAG_BOOLEAN | (1 << VALUE_SHIFT),
         VALUE_DATA_ERROR = VALUE_TAG_ERROR,
-        VALUE_DATA_TOMBSTONE = 0x0F,
-        VALUE_DATA_OK = 0x1F,
-        VALUE_DATA_NOTFOUND = 0x2F,
-        VALUE_DATA_RESTART = 0x3F,
-
+        VALUE_DATA_TOMBSTONE = VALUE_TAG_SPECIAL,
+        VALUE_DATA_OK = VALUE_TAG_SPECIAL | (1 << VALUE_SHIFT),
+        VALUE_DATA_NOTFOUND = VALUE_TAG_SPECIAL | (2 << VALUE_SHIFT),
+        VALUE_DATA_RESTART = VALUE_TAG_SPECIAL | (3 << VALUE_SHIFT),
     };
     
     struct _short_string_t {
@@ -435,25 +414,20 @@ namespace wry::gc {
     
     
     
-    constexpr bool value_is_enumeration(const Value& self) { return _value_tag(self) == VALUE_TAG_ENUMERATION; }
+    constexpr bool value_is_enum(const Value& self) { return _value_tag(self) == VALUE_TAG_ENUMERATION; }
     constexpr bool value_is_null(const Value& self) { return !self._data; }
     constexpr bool value_is_error(const Value& self) { return _value_tag(self) == VALUE_TAG_ERROR; }
     constexpr bool value_is_boolean(const Value& self) { return _value_tag(self) == VALUE_TAG_BOOLEAN; }
-    constexpr bool value_is_char(const Value& self) { return _value_tag(self) == VALUE_TAG_CHARACTER; }
+    constexpr bool value_is_character(const Value& self) { return _value_tag(self) == VALUE_TAG_CHARACTER; }
 
     
     constexpr bool value_as_boolean(const Value& self) {
         assert(value_is_boolean(self));
         return self._data >> VALUE_SHIFT;
     }
-    
-    constexpr int64_t value_as_enumeration(const Value& self) {
-        assert(value_is_enumeration(self));
-        return (int64_t)self._data >> VALUE_SHIFT;
-    }
-    
+        
     constexpr int value_as_character(const Value& self) {
-        assert(value_is_enumeration(self));
+        assert(value_is_character(self));
         return (int)((int64_t)self._data >> VALUE_SHIFT);
     }
     
@@ -535,17 +509,22 @@ namespace wry::gc {
     constexpr bool _value_is_tombstone(const Value& self) {
         return self._data == VALUE_DATA_TOMBSTONE;
     }
-
     
-    /*
-    bool value_is_RESTART(const Value& self);
-    bool value_is_NOTFOUND(const Value& self);
-    bool value_is_OK(const Value& self);
+    constexpr Value value_make_enum(int meta, int code) {
+        Value result;
+        result._data = (VALUE_TAG_ENUMERATION
+                        | ((uint32_t)meta << VALUE_SHIFT)
+                        | ((int64_t)code << 32));
+        return result;
+    }
     
-    Value value_make_NOTFOUND();
-    Value value_make_RESTART();
-    Value value_make_OK();
-*/
+    constexpr std::pair<int, int> value_as_enum(const Value& self) {
+        assert(value_is_enum(self));
+        int code = (int)(self._data >> 32);
+        int meta = ((int)self._data) >> VALUE_SHIFT;
+        return {meta, code};
+    }
+    
     
     
 } // namespace wry::gc

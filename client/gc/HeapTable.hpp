@@ -15,6 +15,7 @@
 #include "debug.hpp"
 #include "object.hpp"
 #include "value.hpp"
+#include "IndirectFixedCapacityValueArray.hpp"
 
 namespace wry::gc {
     

@@ -549,8 +549,10 @@ namespace wry::gc {
                 return (void)printf("ERROR\n");
             case VALUE_TAG_OBJECT:
                 return object_debug(_value_as_object(self));
-            case VALUE_TAG_ENUMERATION:
-                return (void)printf("enum{%lld}\n", value_as_enumeration(self));
+            case VALUE_TAG_ENUMERATION: {
+                auto [meta, code] = value_as_enum(self);
+                return (void)printf("enum{%d, %d}\n", meta, code);
+            }
             case VALUE_TAG_SHORT_STRING: {
                 auto v = _value_as_short_string(self);
                 return (void)printf("\"%.*s\"\n", (int)v.size(), v.data());

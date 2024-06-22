@@ -10,6 +10,7 @@
 
 #include "utility.hpp"
 #include "value.hpp"
+#include "IndirectFixedCapacityValueArray.hpp"
 
 namespace wry::gc {
     

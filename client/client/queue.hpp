@@ -104,7 +104,7 @@ namespace wry {
     // significant overhead
     //
     // It maintains both an Array and a HashSet of the elements, the former
-    // encoding order and the latter encoding memebership.  As the first
+    // encoding order and the latter encoding membership.  As the first
     // use case is for pointer type and pointer equality, we store them
     // directly in each set.  Other uses may prefer one of the containers to
     // refer into the elements of the other (array index, if erasure is
