@@ -7,6 +7,7 @@
 
 #include "utility.hpp"
 #include "ctrie.hpp"
+#include "HeapString.hpp"
 
 namespace wry::gc {
     
@@ -47,16 +48,21 @@ namespace wry::gc {
         return main.compare_exchange_strong(expected, desired, Ordering::RELEASE, Ordering::RELAXED);
     }
 
-    const Object* INode::_ctrie_resurrect() const {
+    const BranchNode* INode::_ctrie_resurrect() const {
         const MainNode* mn = Ctrie::READ(main);
-        return ctrie_resurrect(mn);
+        return mn->_ctrie_resurrect2(this);
     }
-    
-    const Object* TNode::_ctrie_resurrect() const {
+
+    const BranchNode* MainNode::_ctrie_resurrect2(const INode* i) const {
+        return i;
+    }
+
+    const BranchNode* TNode::_ctrie_resurrect2(const INode*) const {
         return sn;
     }
-    
-    const Object* Object::_ctrie_resurrect() const {
+
+
+    const BranchNode* BranchNode::_ctrie_resurrect() const {
         return this;
     }
     
@@ -66,8 +72,8 @@ namespace wry::gc {
         int num = __builtin_popcountll(this->bmp);
         if (num != 1)
             return this;
-        const Object* bn = this->array[0];
-        return ctrie_toContracted(bn, this);
+        const BranchNode* bn = this->array[0];
+        return bn->_ctrie_toContracted(this);
     }
     
     const MainNode* INode::_ctrie_toContracted(const MainNode* up) const {
@@ -86,7 +92,7 @@ namespace wry::gc {
         
     void INode::clean(int level) const {
         const MainNode* mn = Ctrie::READ(this->main);
-        ctrie_clean(mn, level, this);
+        mn->_ctrie_clean(level, this);
     }
     
     void CNode::_ctrie_clean(int level, const INode* parent) const {
@@ -98,6 +104,11 @@ namespace wry::gc {
         const MainNode* pm = READ(p->main);
         pm->_ctrie_cleanParent(p, i, hc, lev, m);
     }
+    
+    void MainNode::_ctrie_cleanParent(const INode* p, const INode* i, size_t hc, int lev, const MainNode* m) const {
+        // noop
+    }
+
     
     void CNode::_ctrie_cleanParent(const INode* p, const INode* i, size_t hc, int lev, const MainNode* m) const {
         auto [flag, pos] = Ctrie::flagpos(hc, lev, bmp);
@@ -122,7 +133,7 @@ namespace wry::gc {
         CNode* ncn = new(num) CNode;
         ncn->bmp = this->bmp;
         for (int i = 0; i != num; ++i) {
-            const Object* bn = ctrie_resurrect(this->array[i]);
+            const BranchNode* bn = this->array[i]->_ctrie_resurrect();
             object_shade(bn);
             ncn->array[i] = bn;
         }
@@ -136,12 +147,12 @@ namespace wry::gc {
     CNode::CNode() {
     }
     
-    const CNode* CNode::updated(int pos, const Object *bn) const {
+    const CNode* CNode::updated(int pos, const BranchNode *bn) const {
         int num = __builtin_popcountll(this->bmp);
         CNode* ncn = new(num) CNode;
         ncn->bmp = this->bmp;
         for (int i = 0; i != num; ++i) {
-            const Object* sub = (i == pos) ? bn : this->array[i];
+            const BranchNode* sub = (i == pos) ? bn : this->array[i];
             object_shade(sub);
             ncn->array[i] = sub;
         }
@@ -317,7 +328,7 @@ namespace wry::gc {
             nmn = cn->inserted(pos, flag, nhs);
             return Ctrie::CAS(i->main, mn, nmn) ? nhs : nullptr;
         }
-        const Object* bn = cn->array[pos];
+        const BranchNode* bn = cn->array[pos];
         return bn->_ctrie_find_or_emplace2(query, lev, parent, i, cn, pos);
     }
     
@@ -425,7 +436,7 @@ namespace wry::gc {
             // Key is not present; postcondition is satisfied
             return value_make_OK();
         Value res;
-        const Object* bn = cn->array[pos];
+        const BranchNode* bn = cn->array[pos];
         res = bn->_ctrie_erase2(key, lev, parent, i, this, pos, flag);
         if (value_is_NOTFOUND(res) || value_is_RESTART(res))
             return res;
@@ -534,7 +545,7 @@ namespace wry::gc {
         int num = __builtin_popcountll(bmp);
         CNode* ncn = new (num-1) CNode;
         ncn->bmp = bmp ^ flag;
-        const Object** dest = ncn->array;
+        const BranchNode** dest = ncn->array;
         for (int i = 0; i != num; ++i) {
             if (i != pos) {
                 object_shade(array[i]);
@@ -545,12 +556,12 @@ namespace wry::gc {
         return ncn;
     }
     
-    const CNode* CNode::inserted(int pos, uint64_t flag, const Object* bn) const {
+    const CNode* CNode::inserted(int pos, uint64_t flag, const BranchNode* bn) const {
         assert(!(bmp & flag));
         int num = __builtin_popcountll(bmp);
         CNode* ncn = new (num+1) CNode;
         ncn->bmp = bmp ^ flag;
-        const Object* const* src = array;
+        const BranchNode* const* src = array;
         for (int i = 0; i != num+1; ++i) {
             if (i != pos) {
                 ncn->array[i] = *src++;
@@ -697,15 +708,6 @@ namespace wry::gc {
     
     
     
-    const MainNode* Object::_ctrie_toContracted(const MainNode*) const { abort(); }
-    void Object::_ctrie_clean(int level, const INode* parent) const { abort(); }
-    void Object::_ctrie_cleanParent(const INode* p, const INode* i, size_t hc, int lev, const MainNode* m) const { abort(); }
-    void Object::_ctrie_cleanParent2(const INode* p, const INode* i, size_t hc, int lev, const CNode* cn, int pos) const  { abort(); }
-    const HeapString* Object::_ctrie_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const  { abort(); }
-    const HeapString* Object::_ctrie_find_or_emplace2(Query query, int lev, const INode* parent, const INode* i, const CNode* cn, int pos) const  { abort(); }
-    Value Object::_ctrie_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const  { abort(); }
-    void Object::_ctrie_cleanParent3(const INode* p, const INode* i, size_t hc, int lev) const  { abort(); }
-    Value Object::_ctrie_erase2(const HeapString* key, int lev, const INode* parent, const INode* i, const CNode* cn, int pos, uint64_t flag) const  { abort(); }
 
     
     void CNode::_object_scan() const {

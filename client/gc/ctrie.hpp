@@ -8,13 +8,18 @@
 #ifndef ctrie_hpp
 #define ctrie_hpp
 
-#include "object.hpp"
 #include "value.hpp"
 
 namespace wry::gc {
     
+    using std::string_view;
+    
     // struct Branch;
+    
+    struct CtrieNode;
+    
     struct MainNode;
+    struct BranchNode;
     
     struct CNode;
     struct INode;
@@ -27,8 +32,28 @@ namespace wry::gc {
         string_view view;
     };
     
-    struct MainNode : Object {
+    struct CtrieNode : Object {
         
+        
+    };
+    
+    struct MainNode : CtrieNode {
+        virtual void _ctrie_clean(int level, const INode* parent) const {}
+        virtual void _ctrie_cleanParent(const INode* p, const INode* i, size_t hc, int lev, const MainNode* m) const;
+        virtual void _ctrie_cleanParent2(const INode* p, const INode* i, size_t hc, int lev, const CNode* cn, int pos) const {};
+        virtual void _ctrie_cleanParent3(const INode* p, const INode* i, size_t hc, int lev) const {}
+        virtual const HeapString* _ctrie_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const = 0;
+        virtual Value _ctrie_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const = 0;
+        virtual const BranchNode* _ctrie_resurrect2(const INode* i) const;
+
+    };
+    
+    struct BranchNode : CtrieNode {
+        virtual const HeapString* _ctrie_find_or_emplace2(Query query, int lev, const INode* parent, const INode* i, const CNode* cn, int pos) const = 0;
+        virtual Value _ctrie_erase2(const HeapString* key, int lev, const INode* parent, const INode* i, const CNode* cn, int pos, uint64_t flag) const = 0;
+        virtual const BranchNode* _ctrie_resurrect() const;
+        virtual const MainNode* _ctrie_toContracted(const MainNode*) const = 0;
+
     };
     
     struct CNode : MainNode {
@@ -38,9 +63,9 @@ namespace wry::gc {
         static const CNode* make(const HeapString* sn1, const HeapString* sn2, int lev);
         CNode();
         uint64_t bmp;
-        const Object* array[0];
-        const CNode* inserted(int pos, uint64_t flag, const Object* bn) const;
-        const CNode* updated(int pos, const Object* bn) const;
+        const BranchNode* array[0];
+        const CNode* inserted(int pos, uint64_t flag, const BranchNode* bn) const;
+        const CNode* updated(int pos, const BranchNode* bn) const;
         const CNode* removed(int pos, uint64_t flag) const;
         const CNode* resurrected() const;
         const MainNode* toCompressed(int level) const;
@@ -59,7 +84,7 @@ namespace wry::gc {
         
     };
     
-    struct INode : Object {
+    struct INode : BranchNode {
         mutable Traced<Atomic<const MainNode*>> main;
         explicit INode(const MainNode*);
         virtual ~INode() final = default;
@@ -72,7 +97,7 @@ namespace wry::gc {
         Value erase(const HeapString* key, int level, const INode* parent) const;
         
         
-        virtual const Object* _ctrie_resurrect() const override;
+        virtual const BranchNode* _ctrie_resurrect() const override;
         virtual const MainNode* _ctrie_toContracted(const MainNode*) const override;
         
         virtual const HeapString* _ctrie_find_or_emplace2(Query query, int lev, const INode* parent, const INode* i, const CNode* cn, int pos) const override;
@@ -111,7 +136,7 @@ namespace wry::gc {
         explicit TNode(const HeapString* sn);
         virtual ~TNode() final = default;
         
-        virtual const Object* _ctrie_resurrect() const override;
+        const BranchNode* _ctrie_resurrect2(const INode* i) const override;
         virtual void _ctrie_cleanParent2(const INode* p, const INode* i, size_t hc, int lev,
                                          const CNode* cn, int pos) const override;
         virtual const HeapString* _ctrie_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const override;
@@ -151,6 +176,8 @@ namespace wry::gc {
        
         
     }; // struct Ctrie
+
+
     
     
 } // namespace gc

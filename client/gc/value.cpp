@@ -17,7 +17,7 @@
 #include "HeapTable.hpp"
 #include "utility.hpp"
 #include "value.hpp"
-
+#include "HeapString.hpp"
 #include "debug.hpp"
 
 

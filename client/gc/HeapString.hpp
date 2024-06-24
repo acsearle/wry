@@ -11,10 +11,11 @@
 #include <string_view>
 
 #include "object.hpp"
+#include "ctrie.hpp"
 
 namespace wry::gc {
     
-    struct HeapString : Object {
+    struct HeapString : BranchNode {
         std::size_t _hash;
         std::size_t _size;
         char _bytes[0];
@@ -44,6 +45,23 @@ namespace wry::gc {
 
         
     }; // struct HeapString
+    
+    
+    template<std::size_t N, typename>
+    constexpr Value::Value(const char (&ntbs)[N]) {
+        const std::size_t M = N - 1;
+        assert(ntbs[M] == '\0');
+        if (M < 8) {
+            _short_string_t s;
+            s._tag_and_len = (M << VALUE_SHIFT) | VALUE_TAG_SHORT_STRING;
+            // builtin for constexpr
+            __builtin_memcpy(s._chars, ntbs, M);
+            __builtin_memcpy(&_data, &s, 8);
+        } else {
+            _data = (uint64_t)HeapString::make(ntbs);
+        }
+    }
+    
     
 }
 

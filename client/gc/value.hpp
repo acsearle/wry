@@ -14,7 +14,6 @@
 #include "atomic.hpp"
 #include "object.hpp"
 #include "traced.hpp"
-#include "HeapString.hpp"
 
 namespace wry::gc {
     
@@ -349,21 +348,6 @@ namespace wry::gc {
     constexpr Value::Value(const char* ntbs) { *this = value_make_string_with(ntbs); }
     constexpr Value::Value(int i) : _data(((int64_t)i << VALUE_SHIFT) | VALUE_TAG_SMALL_INTEGER) {}
 
-    template<std::size_t N, typename>
-    constexpr Value::Value(const char (&ntbs)[N]) {
-        const std::size_t M = N - 1;
-        assert(ntbs[M] == '\0');
-        if (M < 8) {
-            _short_string_t s;
-            s._tag_and_len = (M << VALUE_SHIFT) | VALUE_TAG_SHORT_STRING;
-            // builtin for constexpr
-            __builtin_memcpy(s._chars, ntbs, M);
-            __builtin_memcpy(&_data, &s, 8);
-        } else {
-            _data = (uint64_t)HeapString::make(ntbs);
-        }
-    }
-    
     
     
     struct _value_subscript_result_t {

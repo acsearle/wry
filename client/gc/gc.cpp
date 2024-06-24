@@ -17,6 +17,7 @@
 #include "tagged_ptr.hpp"
 #include "utility.hpp"
 #include "value.hpp"
+#include "HeapString.hpp"
 
 #include "test.hpp"
 

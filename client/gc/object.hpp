@@ -68,17 +68,6 @@ namespace wry::gc {
         virtual void _object_trace() const;
         virtual void _object_trace_weak() const;
         virtual Color _object_sweep() const;
-        
-        virtual const Object* _ctrie_resurrect() const;
-        virtual const MainNode* _ctrie_toContracted(const MainNode*) const;
-        virtual void _ctrie_clean(int level, const INode* parent) const;
-        virtual void _ctrie_cleanParent(const INode* p, const INode* i, size_t hc, int lev, const MainNode* m) const;
-        virtual void _ctrie_cleanParent2(const INode* p, const INode* i, size_t hc, int lev, const CNode* cn, int pos) const;
-        virtual const HeapString* _ctrie_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const;
-        virtual const HeapString* _ctrie_find_or_emplace2(Query query, int lev, const INode* parent, const INode* i, const CNode* cn, int pos) const;
-        virtual Value _ctrie_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const;
-        virtual void _ctrie_cleanParent3(const INode* p, const INode* i, size_t hc, int lev) const;
-        virtual Value _ctrie_erase2(const HeapString* key, int lev, const INode* parent, const INode* i, const CNode* cn, int pos, uint64_t flag) const;
 
         virtual bool _value_empty() const;
         virtual size_t _value_size() const;
@@ -98,17 +87,6 @@ namespace wry::gc {
     void object_trace(const Object*);
     void object_trace_weak(const Object*);
     
-    inline const Object* ctrie_resurrect(const Object* object) {
-        return object->_ctrie_resurrect();
-    }
-    
-    inline const MainNode* ctrie_toContracted(const Object* object, const MainNode* mn) {
-        return object->_ctrie_toContracted(mn);
-    }
-    
-    inline void ctrie_clean(const Object* object, int level, const INode* parent) {
-        object->_ctrie_clean(level, parent);
-    }
 
     
     
