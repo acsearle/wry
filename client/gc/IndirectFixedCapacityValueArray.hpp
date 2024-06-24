@@ -17,7 +17,8 @@ namespace wry::gc {
         std::size_t _capacity;
         Traced<Value>* _storage;
         explicit IndirectFixedCapacityValueArray(std::size_t count);
-        ~IndirectFixedCapacityValueArray();
+        virtual ~IndirectFixedCapacityValueArray() final;
+        virtual void _object_scan() const override;
     }; // struct IndirectFixedCapacityValueArray
     
 } // namespace wry::gc

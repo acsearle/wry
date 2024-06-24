@@ -15,6 +15,7 @@
 
 namespace wry::gc {
     
+    /*
     enum struct Class {
 
         INT64,
@@ -30,7 +31,17 @@ namespace wry::gc {
         CTRIE_TNODE,
         
     };
+     */
     
+    struct MainNode;
+    struct CNode;
+    struct INode;
+    struct LNode;
+    struct TNode;
+    struct HeapString;
+    struct Query;
+    struct Value;
+
     struct Object {
         
         static void* operator new(size_t count);
@@ -38,20 +49,45 @@ namespace wry::gc {
         static void operator delete(void*);
         static void operator delete[](void*) = delete;
         
-        Class _class;
         mutable Atomic<Encoded<Color>> color;
         
-        Object() = delete;
+        Object();
         Object(const Object&);
         Object(Object&&);
-        ~Object() = default;
+        virtual ~Object() = default;
         Object& operator=(const Object&);
         Object& operator=(Object&&);
+                
+        virtual std::strong_ordering operator<=>(const Object&) const;
+        virtual bool operator==(const Object&) const;
         
-        explicit Object(Class class_);
+        virtual void _object_debug() const;
+        virtual size_t _object_hash() const;
+        virtual void _object_shade() const;
+        virtual void _object_scan() const;
+        virtual void _object_trace() const;
+        virtual void _object_trace_weak() const;
+        virtual Color _object_sweep() const;
         
-        std::strong_ordering operator<=>(const Object&) const;
-        bool operator==(const Object&) const;
+        virtual const Object* _ctrie_resurrect() const;
+        virtual const MainNode* _ctrie_toContracted(const MainNode*) const;
+        virtual void _ctrie_clean(int level, const INode* parent) const;
+        virtual void _ctrie_cleanParent(const INode* p, const INode* i, size_t hc, int lev, const MainNode* m) const;
+        virtual void _ctrie_cleanParent2(const INode* p, const INode* i, size_t hc, int lev, const CNode* cn, int pos) const;
+        virtual const HeapString* _ctrie_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const;
+        virtual const HeapString* _ctrie_find_or_emplace2(Query query, int lev, const INode* parent, const INode* i, const CNode* cn, int pos) const;
+        virtual Value _ctrie_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const;
+        virtual void _ctrie_cleanParent3(const INode* p, const INode* i, size_t hc, int lev) const;
+        virtual Value _ctrie_erase2(const HeapString* key, int lev, const INode* parent, const INode* i, const CNode* cn, int pos, uint64_t flag) const;
+
+        virtual bool _value_empty() const;
+        virtual size_t _value_size() const;
+        virtual bool _value_contains(Value key) const;
+        virtual Value _value_find(Value key) const;
+        virtual Value _value_insert_or_assign(Value key, Value value);
+        virtual Value _value_erase(Value key);
+
+        
         
     }; // struct Object
     
@@ -59,10 +95,24 @@ namespace wry::gc {
     void object_debug(const Object*);
     void object_shade(const Object*);
     size_t object_hash(const Object*);
-    
     void object_trace(const Object*);
-    void object_trace_weak(const Object* object);
+    void object_trace_weak(const Object*);
+    
+    inline const Object* ctrie_resurrect(const Object* object) {
+        return object->_ctrie_resurrect();
+    }
+    
+    inline const MainNode* ctrie_toContracted(const Object* object, const MainNode* mn) {
+        return object->_ctrie_toContracted(mn);
+    }
+    
+    inline void ctrie_clean(const Object* object, int level, const INode* parent) {
+        object->_ctrie_clean(level, parent);
+    }
 
+    
+    
+    
     template<typename T>
     struct Traced<T*> {
         
@@ -89,6 +139,8 @@ namespace wry::gc {
         
         T* get() const;
         
+        void trace() const;
+        
     }; // struct Traced<T*>
         
     template<typename T>
@@ -108,11 +160,11 @@ namespace wry::gc {
         bool compare_exchange_weak(T*& expected, T* desired, Ordering success, Ordering failure);
         bool compare_exchange_strong(T*& expected, T* desired, Ordering success, Ordering failure);
         
+        void trace() const;
+        
     }; // struct Traced<Atomic<T*>>
     
     
-    template<typename T> void object_trace(const Traced<T*>&);
-    template<typename T> void object_trace(const Traced<Atomic<T*>>&);
 
     
     
@@ -256,13 +308,13 @@ namespace wry::gc {
     
     
     template<typename T>
-    void object_trace(const Traced<T*>& object) {
-        object_trace(object._object.load(Ordering::ACQUIRE));
+    void Traced<T*>::trace() const {
+        object_trace(_object.load(Ordering::ACQUIRE));
     }
     
     template<typename T>
-    void object_trace(const Traced<Atomic<T*>>& object) {
-        object_trace(object.load(Ordering::ACQUIRE));
+    void Traced<Atomic<T*>>::trace() const {
+        object_trace(_object.load(Ordering::ACQUIRE));
     }
     
 } // namespace wry::gc

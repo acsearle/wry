@@ -212,8 +212,8 @@ namespace wry::gc {
     constexpr bool _value_is_short_string(const Value& self);
     constexpr bool _value_is_tombstone(const Value& self);
     
-    const Object* _value_as_object(const Value& self);
-    const Object* _value_as_object_else(const Value& self, const Object*);
+    Object* _value_as_object(const Value& self);
+    Object* _value_as_object_else(const Value& self, Object*);
     constexpr int64_t _value_as_small_integer(const Value& self);
     constexpr int64_t _value_as_small_integer_else(const Value& self, int64_t);
     std::string_view _value_as_short_string(const Value& self);
@@ -232,7 +232,9 @@ namespace wry::gc {
     struct HeapInt64 : Object {
         std::int64_t _integer;
         explicit HeapInt64(std::int64_t z);
+        virtual ~HeapInt64() final = default;
         std::int64_t as_int64_t() const;
+        virtual void _object_shade() const override;
     };
     
         
@@ -492,7 +494,7 @@ namespace wry::gc {
         return result;
     }
     
-    inline const Object* _value_as_object(const Value& self) {
+    inline Object* _value_as_object(const Value& self) {
         assert(_value_is_object(self));
         return (Object*)self._data;
     }

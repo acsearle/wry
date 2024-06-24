@@ -17,7 +17,10 @@
 
 namespace wry::gc {
     
-    std::size_t object_hash(const Object* object) {
+    
+    size_t object_hash(const Object* object) {
+        return object->_object_hash();
+        /*
         switch (object->_class) {
             case Class::ARRAY:
             case Class::TABLE:
@@ -34,12 +37,17 @@ namespace wry::gc {
             case Class::CTRIE_TNODE:
                 abort();
         }
+         */
     }
     
     
     void object_debug(const Object* object) {
-        if (!object)
-            return (void)printf("0x000000000000\n");
+        if (object) {
+            object->_object_debug();
+        } else {
+            printf("0x000000000000\n");
+        }
+        /*
         switch (object->_class) {
             case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
                 return (void)printf("%#0.12" PRIx64 " IndirectFixedCapacityValueArray[%zd]\n",
@@ -95,7 +103,8 @@ namespace wry::gc {
                                     object->_class);
             }
         }
+         */
     }
     
 
-}
+} // namespace wry::gc

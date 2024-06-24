@@ -24,7 +24,7 @@ namespace wry::gc {
             InnerArray();
             InnerArray(InnerArray&&);
             InnerArray& operator=(InnerArray&&);
-            
+                        
             bool full() const;
             bool empty() const;
             size_t size() const;
@@ -56,6 +56,7 @@ namespace wry::gc {
                 
         
         HeapArray();
+        virtual ~HeapArray() final = default;
 
         const Traced<Value>& operator[](size_t) const;
         Traced<Value>& operator[](size_t);

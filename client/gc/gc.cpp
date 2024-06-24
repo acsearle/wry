@@ -23,7 +23,6 @@
 namespace wry::gc {
     
     void object_scan(const Object*);
-    void object_delete(const Object*);
     
     // Log of a Mutator's actions since the last handshake with the Collector
     
@@ -149,60 +148,64 @@ namespace wry::gc {
         return ptr;
     }
     
+    /*
     Object::Object(Class class_)
     : _class(class_)
     , color() {
         thread_local_mutator->mutator_log.allocations.push(this);
     }
-        
+     */
+
+    Object::Object()
+    : color() {
+        thread_local_mutator->mutator_log.allocations.push(this);
+    }
+
     void Object::operator delete(void* ptr) {
         ::operator delete(ptr);
     }
     
-    
-    
-    void object_shade(const Object* object){
-        if (!object)
-            return;
-        switch (object->_class) {
-            case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-            case Class::ARRAY:
-            case Class::TABLE:
-            case Class::CTRIE:
-            case Class::CTRIE_CNODE:
-            case Class::CTRIE_INODE:
-            case Class::CTRIE_LNODE:
-            case Class::CTRIE_TNODE: {
-                Color expected = Color::WHITE;
-                (void) object->color.compare_exchange(expected,
-                                                      Color::GRAY);
-                switch (expected) {
-                    case Color::WHITE:
-                        thread_local_mutator->mutator_log.dirty = true;
-                    case Color::BLACK:
-                    case Color::GRAY:
-                        break;
-                    case Color::RED:
-                    default:
-                        object_debug(object);
-                        abort();
-                        break;
-                }
-            } break;
-            case Class::STRING:
-            case Class::INT64: {
-                Color expected = Color::WHITE;
-                (void) object->color.compare_exchange(expected, Color::BLACK);
+    void Object::_object_shade() const {
+        Color expected = Color::WHITE;
+        (void) color.compare_exchange(expected, Color::GRAY);
+        switch (expected) {
+            case Color::WHITE:
+                thread_local_mutator->mutator_log.dirty = true;
+            case Color::BLACK:
+            case Color::GRAY:
                 break;
-            }
-            default: {
-                object_debug(object);
+            case Color::RED:
+            default:
+                _object_debug();
                 abort();
-            }
+                break;
         }
     }
+    
+    void HeapString::_object_shade() const {
+        Color expected = Color::WHITE;
+        (void) color.compare_exchange(expected, Color::BLACK);
+    }
+
+    void HeapInt64::_object_shade() const {
+        Color expected = Color::WHITE;
+        (void) color.compare_exchange(expected, Color::BLACK);
+    }
+
+    void object_shade(const Object* object) {
+        if (object)
+            object->_object_shade();
+    }
+    
         
     void object_scan(const Object* object) {
+        if (object)
+            object->_object_scan();
+    }
+    
+    void Object::_object_scan() const {
+        abort();
+        /*
         assert(object);
         switch (object->_class) {
             case Class::STRING:
@@ -259,9 +262,31 @@ namespace wry::gc {
                 break;
             }
         }
+         */
+    }
+    
+    void Object::_object_trace() const {
+        Color expected = Color::WHITE;
+        (void) color.compare_exchange(expected, Color::BLACK);
+        switch (expected) {
+            case Color::WHITE:
+                global_collector->gray_stack.push_back(this);
+                break;
+            case Color::BLACK:
+            case Color::GRAY:
+                break;
+            case Color::RED:
+            default:
+                _object_debug();
+                abort();
+                break;
+        }
     }
     
     void object_trace(const Object* object) {
+        if (object)
+            object->_object_trace();
+        /*
         if (!object)
             return;
         Color expected = Color::WHITE;
@@ -309,9 +334,18 @@ namespace wry::gc {
                 abort();
             }
         }
+         */
     }
-    
+
+    void Object::_object_trace_weak() const {
+        // by default, treat as a strong trace
+        _object_trace();
+    }
+
     void object_trace_weak(const Object* object) {
+        if (object)
+            object->_object_trace_weak();
+        /*
         if (!object)
             return;
         switch (object->_class) {
@@ -347,44 +381,29 @@ namespace wry::gc {
                 object_debug(object);
                 abort();
         }
+         */
     }
     
-    void object_delete(const Object* object) {
-        // object_debug(object);
-        if (object == nullptr)
-            return;
-        switch (object->_class) {
-            case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-                return delete (const IndirectFixedCapacityValueArray*)object;
-            case Class::ARRAY:
-                return delete (const HeapArray*)object;
-            case Class::TABLE:
-                return delete (const HeapTable*)object;
-            case Class::STRING:
-                return delete (const HeapString*)object;
-            case Class::INT64:
-                return delete (const HeapInt64*)object;
-            case Class::CTRIE:
-                return delete (const Ctrie*)object;
-            case Class::CTRIE_CNODE:
-                return delete (const Ctrie::CNode*)object;
-            case Class::CTRIE_INODE:
-                return delete (const Ctrie::INode*)object;
-            case Class::CTRIE_LNODE:
-                return delete (const Ctrie::LNode*)object;
-            case Class::CTRIE_TNODE:
-                return delete (const Ctrie::TNode*)object;
-            default:
-                abort();
+    Color HeapString::_object_sweep() const {
+        // Try to condemn the string to the terminal RED state
+        Color expected = Color::WHITE;
+        if (color.compare_exchange(expected, Color::RED)) {
+            global_collector->string_ctrie->erase(this);
+            return Color::RED;
+        } else {
+            return expected;
         }
     }
     
-    
-    
-    HeapString* HeapString::make(size_t hash, string_view view) {
-        return global_collector->string_ctrie->find_or_emplace(Ctrie::Query{hash, view});
+    const HeapString* HeapString::make(size_t hash, string_view view) {
+        return global_collector->string_ctrie->find_or_emplace(Query{hash, view});
     }
     
+    
+    
+    Color Object::_object_sweep() const {
+        return color.load();
+    }
     
     
     
@@ -765,6 +784,7 @@ namespace wry::gc {
                 const Object* object = object_bag.top();
                 object_bag.pop();
                 // We have to handle weak objects carefully
+                /*
                 switch (object->_class) {
                     case Class::STRING: {
                         // Try to condemn the string to the terminal RED state
@@ -793,7 +813,7 @@ namespace wry::gc {
                         switch (object->color.load()) {
                             case Color::WHITE:
                                 // Authoritatively unreached by mutators
-                                object_delete(object);
+                                delete object;
                                 break;
                             case Color::BLACK:
                                 // Reached by us while in the white bag
@@ -809,6 +829,22 @@ namespace wry::gc {
                                 
                         }
                     }
+                }
+                 */
+                switch (object->_object_sweep()) {
+                    case Color::WHITE:
+                        delete object;
+                        break;
+                    case Color::BLACK:
+                        black_bag.push(object);
+                        break;
+                    case Color::RED:
+                        red_bag.push(object);
+                        break;
+                    case Color::GRAY:
+                    default:
+                        object_debug(object);
+                        abort();
                 }
             }
             
@@ -833,7 +869,7 @@ namespace wry::gc {
             while (!red_bag.empty()) {
                 const Object* object = red_bag.top();
                 red_bag.pop();
-                object_delete(object);
+                delete object;
             }
             
             // All mutators are allocating WHITE
@@ -875,6 +911,12 @@ namespace wry::gc {
     }
     
     
+    void Object::_object_debug() const { abort(); }
+    size_t Object::_object_hash() const { abort(); }
+    
+    std::strong_ordering Object::operator<=>(const Object&) const { abort(); }
+    bool Object::operator==(const Object&) const { abort(); }
+
     
     define_test("gc") {
         std::thread([](){
@@ -921,5 +963,7 @@ namespace wry {
         expected = gc::Color{encoded_expected ^ encoding};
         return result;
     }
+    
+    
     
 } // namespace wry

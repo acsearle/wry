@@ -294,6 +294,10 @@ namespace wry::gc {
                 assert(keys == _count);
             }
             
+            bool empty() {
+                return !_count;
+            }
+            
         };
         
         mutable InnerTable _alpha;
@@ -439,7 +443,11 @@ namespace wry::gc {
             return ultimate;
         }
         
-        std::size_t size() const {
+        bool empty() const {
+            return _alpha.empty();
+        }
+        
+        size_t size() const {
             return _alpha._count + _beta._count;
         }
         
@@ -466,10 +474,40 @@ namespace wry::gc {
             _partition = 0;
         }
         
-        HeapTable() : Object(Class::TABLE) {}
+        HeapTable() {}
+        virtual ~HeapTable() final = default;
         
+        
+        virtual bool _value_empty() const override {
+            return empty();
+        }
+        
+        virtual size_t _value_size() const override {
+            return size();
+        }
+        
+        virtual Value _value_find(Value key) const override {
+            return find(key);
+        }
+        
+        virtual Value _value_insert_or_assign(Value key, Value value) override {
+            return insert_or_assign(key, value);
+        }
+        
+        virtual bool _value_contains(Value key) const override {
+            return contains(key);
+        }
+        
+        virtual Value _value_erase(Value key) override {
+            return erase(key);
+        }
+
+        virtual void _object_scan() const override {
+            object_trace(_alpha._manager);
+            object_trace(_beta._manager);
+        }
+
     }; // struct HeapTable
-    
     
     
     

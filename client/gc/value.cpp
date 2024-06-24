@@ -27,6 +27,8 @@ namespace wry::gc {
         assert(_value_is_short_string(self));
         return ((const _short_string_t&)self._data).as_string_view();
     }
+    
+    /*
 
     Value& operator++(Value& self) {
         self += 1;
@@ -120,6 +122,7 @@ namespace wry::gc {
     
 #undef X
     
+     */
     
     
     size_t value_hash(const Value& self) {
@@ -250,8 +253,8 @@ namespace wry::gc {
             b = 2;
             assert(b == 2);
             Value c;
-            c = a + b;
-            assert(c == 3);
+            //c = a + b;
+            //assert(c == 3);
             /*
             value_debug(a);
             value_debug(b);
@@ -386,15 +389,20 @@ namespace wry::gc {
      */
 
     bool contains(const Object* self, Value key) {
+        return self ? self->_value_contains(key) : false;
+        /*
         switch (self->_class) {
             case Class::TABLE:
                 return ((const HeapTable*) self)->contains(key);
             default:
                 return false;
         }
+         */
     }
 
     Value find(const Object* self, Value key) {
+        return self ? self->_value_find(key) : value_make_error();
+        /*
         switch (self->_class) {
             case Class::ARRAY:
                 return ((HeapArray*) self)->find(key);
@@ -403,9 +411,12 @@ namespace wry::gc {
             default:
                 return value_make_error();
         }
+         */
     }
 
-    Value insert_or_assign(const Object* self, Value key, Value value) {
+    Value insert_or_assign(Object* self, Value key, Value value) {
+        return self ? self->_value_insert_or_assign(key, value) : value_make_error();
+        /*
         switch (self->_class) {
             case Class::ARRAY:
                 return ((HeapArray*) self)->insert_or_assign(key, value);
@@ -414,19 +425,24 @@ namespace wry::gc {
             default:
                 return value_make_error();
         }
+         */
     }
 
-    Value erase(const Object* self, Value key) {
+    Value erase(Object* self, Value key) {
+        return self ? self->_value_erase(key) : value_make_error();
+        /*
         switch (self->_class) {
             case Class::TABLE:
                 return ((const HeapTable*) self)->erase(key);
             default:
                 return value_make_error();
         }
-
+         */
     }
 
-    std::size_t size(const Object* self) {
+    size_t size(const Object* self) {
+        return self ? self->_value_size() : 0;
+        /*
         switch (self->_class) {
             case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
                 return ((const IndirectFixedCapacityValueArray*) self)->_capacity;
@@ -440,10 +456,10 @@ namespace wry::gc {
                 return 0;
             default:
                 abort();
-        }
+        }*/
     }
     
-    std::size_t value_size(const Value& self) {
+    size_t value_size(const Value& self) {
         switch (_value_tag(self)) {
             case VALUE_TAG_OBJECT:
                 return self._data ? size(_value_as_object(self)) : 0;
@@ -501,7 +517,7 @@ namespace wry::gc {
         return Object::operator new(self + extra);
     }
         
-    HeapString* HeapString::make(std::string_view view) {
+    const HeapString* HeapString::make(std::string_view view) {
         return make(std::hash<std::string_view>()(view), view);
     }
     
@@ -513,16 +529,14 @@ namespace wry::gc {
     
     
     HeapInt64::HeapInt64(std::int64_t z)
-    : Object(Class::INT64)
-    , _integer(z) {
+    : _integer(z) {
     }
 
     std::int64_t HeapInt64::as_int64_t() const {
         return _integer;
     }
         
-    HeapString::HeapString()
-    : Object(Class::STRING) {
+    HeapString::HeapString() {
     }
     
     Value value_insert_or_assign(Value& self, Value key, Value value) {
@@ -585,8 +599,7 @@ namespace wry::gc {
     }
 
     IndirectFixedCapacityValueArray::IndirectFixedCapacityValueArray(std::size_t count)
-    : Object(Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY)
-    , _capacity(count)
+    : _capacity(count)
     , _storage((Traced<Value>*) calloc(count, sizeof(Traced<Value>))) {
     }
     
@@ -607,347 +620,21 @@ namespace wry::gc {
         result._data = (uint64_t)(new HeapArray);
         return result;
     }
+    
+    
+    
+    
+    
+    bool Object::_value_empty() const { abort(); }
+    size_t Object::_value_size() const { return 0; }
+    bool Object::_value_contains(Value key) const { return false; }
+    Value Object::_value_find(Value key) const { return value_make_error(); }
+    Value Object::_value_insert_or_assign(Value key, Value value) { return value_make_error(); }
+    Value Object::_value_erase(Value key) { return value_make_error(); }
+    
+
 
 } // namespace wry::gc
 
-
-
-
-
-
-// To support basic math operators we need
-// + -> arbitrary precision
-// - -> signed
-// / -> rational
-//
-// a more conventional solution is to use floating point, but this is
-// problematic for getting consistent results across clients, and generally
-// a can of worms
-//
-// other choices:
-// hard limit at some human-friendly decimal value like 1k, 1M?
-// expose hardware modulo 2^n?
-// expose intger division?
-// fixed point?
-//
-// I don't really want to expose arbitrary math on approximate real numbers,
-// like sqrt, sin etc.
-
-
-// Pointer to a garbage-collected heap representation, or an inline integer
-// representation.  Uses invalid (misaligned) pointer values to distinguish
-// multiple cases; we can tag 15 kinds of not-pointer with the 4 lsbs, with
-// 0b...0000 being a valid aligned address.
-//
-// Some kinds of Value are exclusively represented on the heap (mutable
-// containers) or exclusively on the stack (bool, enumerations), and
-// others may switch (immutable containers such as strings and arbitrary
-// precision integers keep small, and presumed common, values inline)
-
-// TODO: Is this a Value... or a Variable?
-// "strings are immutable", but V*** can change which immutable string they
-// reference.  And indeed, the gc::String object can change what it points
-// to.  Call these things Variables instead?
-
-/*
- 
- 
- union {
- int _tag;
- const Object* _pointer;
- std::int64_t _integer;
- _short_string_t _short_string;
- _boolean_t _boolean;
- std::int64_t _enumeration;
- std::uint64_t _raw;
- };
- 
- */
-
-
-/*
- 
- // these logical types are always stored inline
- 
- // Several types have only a small number of values, we can pack
- // them all into a single tag?
- // true, false, error, tombstone, UTF-32 character
- 
- */
-
-
-
-
-
-/*
- 
- struct Array;
- struct Boolean;
- struct Character;
- struct Enumeration;
- struct Number;
- struct String;
- struct Table;
- 
- */
-
-/*
- struct HeapArray;
- struct HeapInt64;
- struct HeapNumber;
- struct HeapString;
- struct HeapTable;
- */
-
-
-/*
- struct Array {
- HeapArray* _array;
- operator Value() const { return reinterpret_cast<const Value&>(*this); };
- std::size_t size() const;
- Value operator[](std::size_t pos) const;
- Traced<Value>& operator[](std::size_t pos);
- };
- 
- struct String {
- union {
- int _tag;
- const HeapString* _pointer;
- _short_string_t _string;
- };
- int _discriminant() const { return _tag & VALUE_MASK; }
- bool _is_pointer() const { return _discriminant() == VALUE_TAG_POINTER; }
- bool _is_short_string() const { return _discriminant() == VALUE_TAG_SHORT_STRING; }
- const HeapString* _as_pointer() const {
- assert(_is_pointer());
- return _pointer;
- }
- const HeapString* _as_pointer_else_nullptr() {
- return _is_pointer() ? _pointer : nullptr;
- }
- operator Value() const { return reinterpret_cast<const Value&>(*this); }
- std::string_view as_string_view() const;
- std::size_t size() const;
- };
- 
- struct Table {
- const HeapTable* _pointer;
- Table();
- operator Value() const { return reinterpret_cast<const Value&>(*this); };
- Value operator[](Value key) const;
- Traced<Value>& operator[](Value key);
- bool contains(Value key) const;
- std::size_t size() const;
- Value find(Value key) const;
- Value erase(Value key);
- Value insert_or_assign(Value key, Value value);
- };
- 
- */
-
-
-
-
-
-
-
-
-
-// will hold a container ref and a key, and resolve to something depending
-// on how it is used (as a get, a set, or a read-modity-write)
-
-// TODO: for binary operators, we have the multiple dispatch problem
-// - elegant solution?
-// - symmetric implementation?
-
-// We expose all C++ operators on Values, for convenience and familiarity,
-// though some are problematic with the GC syntax.  Note that there is
-// no particular requirement that "the game" or "the mod scripting
-// language" follow these same semantics.
-
-/*
- 
- struct HeapValue : Object {
- 
- // to reach this point the (lhs or unary) participaing Value must be
- // a heap-allocated object, but when the operation is mutating it need
- // not remain so; for example, LongInteger *= 0 will replace the Value
- // with an inline 0.
- 
- // reflection
- 
- const HeapInt64* as_HeapInt64() const;
- const HeapString* as_HeapString() const;
- const HeapArray* as_HeapArray() const;
- const HeapTable* as_HeapTable() const;
- 
- // comparison
- 
- std::partial_ordering three_way_comparison(Value) const;
- bool equality(Value) const;
- bool logical_not() const;
- 
- // pure unary
- Value unary_plus() const;
- Value unary_minus() const;
- Value bitwise_not() const;
- 
- // mutating unary
- Value postfix_increment(Value& self) const;
- Value postfix_decrement(Value& self) const;
- void prefix_increment(Value& self) const;
- void prefix_decrement(Value& self) const;
- 
- // pure binary
- Value multiplication(Value) const;
- Value division(Value) const;
- Value remainder(Value) const;
- Value addition(Value) const;
- Value subtraction(Value) const;
- Value left_shift(Value) const;
- Value right_shift(Value) const;
- Value bitwise_and(Value) const;
- Value bitwise_xor(Value) const;
- Value bitwise_or(Value) const;
- 
- // mutating binary
- 
- // since numbers on the heap are immutable, there seems to be no
- // meaningful customization possible here; they will just have tp
- // do the basic operation and replace their handle with it
- void assigned_multiplication(Value&, Value) const;
- void assigned_division(Value&, Value) const;
- void assigned_remainder(Value&, Value) const ;
- void assigned_addition(Value&, Value) const;
- void assigned_subtraction(Value&, Value) const;
- void assigned_left_shift(Value&, Value) const;
- void assigned_right_shift(Value&, Value) const;
- void assigned_bitwise_and(Value&, Value) const;
- void assigned_bitwise_xor(Value&, Value) const;
- void assigned_bitwise_or(Value&, Value) const;
- 
- // odd cases
- Value function_call() const;
- // Value subscript_const(Value other) const;
- // DeferredElementAccess subscript_mutable(Value& self, Value other);
- //virtual
- 
- // built-in functions
- String str() const;
- 
- // common interface
- std::size_t size() const;
- bool contains(Value) const;
- Value find(Value) const;
- Value erase(Value) const;
- Value insert_or_assign(Value, Value) const;
- 
- explicit HeapValue(Class Class::) : Object(Class::) {}
- 
- };
- 
- */
-
-
-
-
-
-
-
-// This is a std::vector-like object that is garbage collected
-// It is only "concurrent enough" for GC; it does not support access by
-// multiple mutators.
-//
-// Notably it is only amortized O(1), and has a worst case O(N).  As such
-// it is unsuitable for general use in soft real time contexts, but is
-// still useful for things that have some kind of moderate bounded size,
-// and as a stepping stone to more advanced data structures.
-
-
-
-
-
-/*
- 
- template<typename F>
- auto visit(Value value, F&& f) {
- switch (value._tag & Value::MASK) {
- case Value::POINTER: {
- const HeapValue* a = value._as_pointer();
- const HeapInt64* b = dynamic_cast<const HeapInt64*>(a);
- if (b) {
- return f(b->_integer);
- }
- const HeapString* c = dynamic_cast<const HeapString*>(a);
- if (c) {
- return f(c->as_string_view());
- }
- abort();
- }
- case Value::SMALL_INTEGER: {
- return f(value._as_small_integer());
- }
- case Value::SHORT_STRING: {
- return f(value._as_short_string());
- }
- case Value::BOOLEAN: {
- return f(value.as_boolean());
- }
- default:
- abort();
- }
- }
- 
- */
-
-
-/*
- 
- // There's no need for this type until we support non-int64 numbers
- 
- struct Number {
- 
- Value _value_that_is_a_number;
- 
- operator Value() const { // upcast
- return _value_that_is_a_number;
- }
- 
- std::int64_t as_int64_t() const {
- switch (_value_that_is_a_number._get_tag()) {
- case Value::POINTER: {
- const Object* a = _value_that_is_a_number._as_object();
- assert(dynamic_cast<const HeapInt64*>(a));
- const HeapInt64* b = static_cast<const HeapInt64*>(a);
- return b->as_int64_t();
- }
- case Value::INTEGER: {
- return _value_that_is_a_number._as_integer();
- }
- default:
- abort();
- }
- }
- 
- };
- */
-
-
-
-
-/*
- std::string_view String::as_string_view() const {
- switch (_discriminant()) {
- case VALUE_TAG_POINTER: {
- return _pointer->as_string_view();
- }
- case VALUE_TAG_SHORT_STRING: {
- return _string.as_string_view();
- }
- default:
- abort();
- }
- }
- */
 
 

@@ -111,8 +111,7 @@ namespace wry::gc {
     
     
     HeapArray::HeapArray()
-    : Object(Class::ARRAY)
-    , _state(INITIAL) {
+    : _state(INITIAL) {
     }
     
     
