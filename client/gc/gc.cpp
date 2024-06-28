@@ -67,7 +67,6 @@ namespace wry::gc {
             MUTATOR_DID_REQUEST_COLLECTOR_STOPS,
         };
 
-        // reference count
         Atomic<intptr_t> reference_count{2};
         Channel* entrant_list_next = nullptr;
         Atomic<TaggedPtr<LogNode, Channel::Tag>> log_stack_head;
@@ -148,22 +147,14 @@ namespace wry::gc {
         thread_local_mutator->mutator_log.bytes_allocated += count;
         return ptr;
     }
-    
-    /*
-    Object::Object(Class class_)
-    : _class(class_)
-    , color() {
-        thread_local_mutator->mutator_log.allocations.push(this);
+
+    void Object::operator delete(void* ptr) {
+        ::operator delete(ptr);
     }
-     */
 
     Object::Object()
     : color() {
         thread_local_mutator->mutator_log.allocations.push(this);
-    }
-
-    void Object::operator delete(void* ptr) {
-        ::operator delete(ptr);
     }
     
     void Object::_object_shade() const {
@@ -182,88 +173,9 @@ namespace wry::gc {
                 break;
         }
     }
-    
-    void HeapString::_object_shade() const {
-        Color expected = Color::WHITE;
-        (void) color.compare_exchange(expected, Color::BLACK);
-    }
 
-    void HeapInt64::_object_shade() const {
-        Color expected = Color::WHITE;
-        (void) color.compare_exchange(expected, Color::BLACK);
-    }
-
-    void object_shade(const Object* object) {
-        if (object)
-            object->_object_shade();
-    }
-    
-        
-    void object_scan(const Object* object) {
-        if (object)
-            object->_object_scan();
-    }
-    
     void Object::_object_scan() const {
         abort();
-        /*
-        assert(object);
-        switch (object->_class) {
-            case Class::STRING:
-            case Class::INT64:{
-                // These leaf classes should never be GRAY and thus never scanned
-                abort();
-            }
-            case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY: {
-                const IndirectFixedCapacityValueArray* p = (const IndirectFixedCapacityValueArray*)object;
-                auto first = p->_storage;
-                auto last = first + p->_capacity;
-                for (; first != last; ++first)
-                    value_trace(*first);
-                break;
-            }
-            case Class::ARRAY: {
-                const HeapArray* p = (const HeapArray*)object;
-                object_trace(p->_alpha._manager);
-                object_trace(p->_beta._manager);
-                break;
-            }
-            case Class::TABLE: {
-                const HeapTable* p = (const HeapTable*)object;
-                object_trace(p->_alpha._manager);
-                object_trace(p->_beta._manager);
-                break;
-            }
-            case Class::CTRIE: {
-                const Ctrie* p = (const Ctrie*)object;
-                object_trace(p->root);
-                break;
-            }
-            case Class::CTRIE_CNODE: {
-                const Ctrie::CNode* cn = (const Ctrie::CNode*)object;
-                int num = __builtin_popcountll(cn->bmp);
-                for (int i = 0; i != num; ++i)
-                    object_trace_weak(cn->array[i]);
-                break;
-            }
-            case Class::CTRIE_INODE: {
-                const Ctrie::INode* in = (const Ctrie::INode*)object;
-                object_trace(in->main);
-                break;
-            }
-            case Class::CTRIE_LNODE: {
-                const Ctrie::LNode* ln = (const Ctrie::LNode*)object;
-                object_trace_weak(ln->sn);
-                object_trace(ln->next);
-                break;
-            }
-            case Class::CTRIE_TNODE: {
-                const Ctrie::TNode* tn = (const Ctrie::TNode*)object;
-                object_trace_weak(tn);
-                break;
-            }
-        }
-         */
     }
     
     void Object::_object_trace() const {
@@ -284,107 +196,41 @@ namespace wry::gc {
         }
     }
     
+    void Object::_object_trace_weak() const {
+        _object_trace();
+    }
+    
+    
+    Color Object::_object_sweep() const {
+        return color.load();
+    }
+    
+    void object_shade(const Object* object) {
+        if (object)
+            object->_object_shade();
+    }
+    
+    void object_scan(const Object* object) {
+        if (object)
+            object->_object_scan();
+    }
+    
     void object_trace(const Object* object) {
         if (object)
             object->_object_trace();
-        /*
-        if (!object)
-            return;
-        Color expected = Color::WHITE;
-        (void) object->color.compare_exchange(expected,
-                                              Color::BLACK);
-        switch (object->_class) {
-            case Class::STRING:
-            case Class::INT64:{
-                switch (expected) {
-                    case Color::WHITE:
-                    case Color::BLACK:
-                        break;
-                    case Color::GRAY:
-                    case Color::RED:
-                    default:
-                        object_debug(object);
-                        abort();
-                        break;
-                }
-                break;
-            }
-            case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-            case Class::TABLE:
-            case Class::ARRAY:
-            case Class::CTRIE:
-            case Class::CTRIE_CNODE:
-            case Class::CTRIE_INODE:
-            case Class::CTRIE_LNODE:
-            case Class::CTRIE_TNODE: {
-                switch (expected) {
-                    case Color::WHITE:
-                        global_collector->gray_stack.push_back(object);
-                    case Color::BLACK:
-                    case Color::GRAY:
-                        break;
-                    case Color::RED:
-                    default:
-                        object_debug(object);
-                        abort();
-                        break;
-                }
-            } break;
-            default: {
-                object_debug(object);
-                abort();
-            }
-        }
-         */
-    }
-
-    void Object::_object_trace_weak() const {
-        // by default, treat as a strong trace
-        _object_trace();
     }
 
     void object_trace_weak(const Object* object) {
         if (object)
             object->_object_trace_weak();
-        /*
-        if (!object)
-            return;
-        switch (object->_class) {
-            case Class::STRING:
-            case Class::INT64:{
-                break;
-            }
-            case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-            case Class::ARRAY:
-            case Class::TABLE:
-            case Class::CTRIE:
-            case Class::CTRIE_CNODE:
-            case Class::CTRIE_INODE:
-            case Class::CTRIE_LNODE:
-            case Class::CTRIE_TNODE: {
-                Color expected = Color::WHITE;
-                (void) object->color.compare_exchange(expected, Color::BLACK);
-                switch (expected) {
-                    case Color::WHITE:
-                        global_collector->gray_stack.push_back(object);
-                    case Color::BLACK:
-                    case Color::GRAY:
-                        break;
-                    case Color::RED:
-                    default:
-                        object_debug(object);
-                        abort();
-                        break;
-                }
-                break;
-            }
-            default:
-                object_debug(object);
-                abort();
-        }
-         */
     }
     
+    
+    
+    const HeapString* HeapString::make(size_t hash, string_view view) {
+        return global_collector->string_ctrie->find_or_emplace(_ctrie::Query{hash, view});
+    }
+
     Color HeapString::_object_sweep() const {
         // Try to condemn the string to the terminal RED state
         Color expected = Color::WHITE;
@@ -396,17 +242,9 @@ namespace wry::gc {
         }
     }
     
-    const HeapString* HeapString::make(size_t hash, string_view view) {
-        return global_collector->string_ctrie->find_or_emplace(Query{hash, view});
-    }
     
     
-    
-    Color Object::_object_sweep() const {
-        return color.load();
-    }
-    
-    
+
     
     Log::Log()
     : dirty(false)
@@ -783,55 +621,7 @@ namespace wry::gc {
             // Sweep
             while (!object_bag.empty()) {
                 const Object* object = object_bag.top();
-                object_bag.pop();
-                // We have to handle weak objects carefully
-                /*
-                switch (object->_class) {
-                    case Class::STRING: {
-                        // Try to condemn the string to the terminal RED state
-                        Color expected = Color::WHITE;
-                        object->color.compare_exchange(expected, Color::RED);
-                        switch (expected) {
-                            case Color::WHITE:
-                                // Make it inaccessible
-                                string_ctrie->erase((HeapString*)object);
-                                red_bag.push(object);
-                                break;
-                            case Color::BLACK:
-                                // Between the scan and the sweep a mutator claimed the string
-                                black_bag.push(object);
-                                break;
-                            case Color::GRAY:
-                            case Color::RED:
-                            default:
-                                // "Impossible"
-                                object_debug(object);
-                                abort();
-                        }
-                        break;
-                    }
-                    default: {
-                        switch (object->color.load()) {
-                            case Color::WHITE:
-                                // Authoritatively unreached by mutators
-                                delete object;
-                                break;
-                            case Color::BLACK:
-                                // Reached by us while in the white bag
-                                // (or a leaf reached by a mutator)
-                                black_bag.push(object);
-                                break;
-                            case Color::GRAY:
-                            case Color::RED:
-                            default:
-                                // "Impossible"
-                                object_debug(object);
-                                abort();
-                                
-                        }
-                    }
-                }
-                 */
+                object_bag.pop();                
                 switch (object->_object_sweep()) {
                     case Color::WHITE:
                         delete object;

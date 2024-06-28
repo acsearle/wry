@@ -9,6 +9,15 @@
 
 namespace wry::gc {
     
+    HeapString::~HeapString() {
+        printf("~\"%.*s\"\n", (int)_size, (const char*)_bytes);
+    }
+
+    void HeapString::_object_shade() const {
+        Color expected = Color::WHITE;
+        (void) color.compare_exchange(expected, Color::BLACK);
+    }
+    
     void HeapString::_object_trace() const {
         Color expected = Color::WHITE;
         (void) color.compare_exchange(expected, Color::BLACK);
@@ -27,9 +36,5 @@ namespace wry::gc {
     void HeapString::_object_trace_weak() const {
         // no-op
     }
-    
-   
-        
-        
     
 } // namespace wry::gc

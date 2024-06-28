@@ -44,12 +44,12 @@ namespace wry::gc {
             bool empty() const { return !count; }
             bool full() const { return count == CAPACITY; }
             
-            T* const& top() const {
+            T*const& top() const {
                 assert(!empty());
                 return elements[count - 1];
             }
 
-            T* & top() {
+            T*& top() {
                 assert(!empty());
                 return elements[count - 1];
             }

@@ -511,6 +511,19 @@ namespace wry::gc {
         return {meta, code};
     }
     
+    inline void object_trace(const Traced<Value>& value) {
+        return value_trace(value);
+    }
+
+    inline void object_trace(const Traced<Atomic<Value>>& value) {
+        return value_trace(value);
+    }
+    
+    inline void object_trace(const Value& value) {
+        return value_trace(value);
+    }
+
+
     
     
 } // namespace wry::gc

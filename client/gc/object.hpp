@@ -15,32 +15,9 @@
 
 namespace wry::gc {
     
-    /*
-    enum struct Class {
-
-        INT64,
-        STRING,
-        INDIRECT_FIXED_CAPACITY_VALUE_ARRAY,
-        ARRAY,
-        TABLE,
-
-        CTRIE,
-        CTRIE_CNODE,
-        CTRIE_INODE,
-        CTRIE_LNODE,
-        CTRIE_TNODE,
-        
-    };
-     */
-    
-    struct MainNode;
-    struct CNode;
-    struct INode;
-    struct LNode;
-    struct TNode;
-    struct HeapString;
-    struct Query;
     struct Value;
+    
+    using hash_t = std::size_t;
 
     struct Object {
         
@@ -62,12 +39,12 @@ namespace wry::gc {
         virtual bool operator==(const Object&) const;
         
         virtual void _object_debug() const;
-        virtual size_t _object_hash() const;
+        virtual hash_t _object_hash() const;
         virtual void _object_shade() const;
         virtual void _object_scan() const;
+        virtual Color _object_sweep() const;
         virtual void _object_trace() const;
         virtual void _object_trace_weak() const;
-        virtual Color _object_sweep() const;
 
         virtual bool _value_empty() const;
         virtual size_t _value_size() const;
@@ -76,8 +53,14 @@ namespace wry::gc {
         virtual Value _value_insert_or_assign(Value key, Value value);
         virtual Value _value_erase(Value key);
 
-        
-        
+        virtual Value _value_add(Value right) const;
+        virtual Value _value_sub(Value right) const;
+        virtual Value _value_mul(Value right) const;
+        virtual Value _value_div(Value right) const;
+        virtual Value _value_mod(Value right) const;
+        virtual Value _value_rshift(Value right) const;
+        virtual Value _value_lshift(Value right) const;
+
     }; // struct Object
     
     

@@ -17,29 +17,31 @@ namespace wry::gc {
     struct HeapArray : Object {
         
         struct InnerArray {
+            
             Traced<Value>* _begin;
             Traced<Value>* _end;
             Traced<Value>* _capacity;
-            Traced<IndirectFixedCapacityValueArray*> _manager;
+            Traced<const HeapManaged<Traced<Value>>*> _manager;
+            
             InnerArray();
             InnerArray(InnerArray&&);
             InnerArray& operator=(InnerArray&&);
-                        
-            bool full() const;
-            bool empty() const;
-            size_t size() const;
-            Traced<Value>& back();
-            const Traced<Value>& back() const;
-            Traced<Value>& front();
-            const Traced<Value>& front() const;
-            void push_back(Value);
-            void pop_back();
-            void push_front(Value);
-            void clear();
-            
-            void reserve(size_t n);
-            
             void swap(InnerArray& other);
+
+            bool empty() const;
+            bool full() const;
+            size_t size() const;
+            const Traced<Value>& front() const;
+            const Traced<Value>& back() const;
+
+            Traced<Value>& front();
+            Traced<Value>& back();
+            void push_back(Value);
+            void push_front(Value);
+            void pop_front();
+            void pop_back();
+            void clear();
+            void reserve(size_t n);
 
         };
         
@@ -49,14 +51,12 @@ namespace wry::gc {
             RESIZING,
         };
 
-        
         InnerArray _alpha;
         InnerArray _beta;
         State _state;
-                
         
         HeapArray();
-        virtual ~HeapArray() final = default;
+        virtual ~HeapArray() override;
 
         const Traced<Value>& operator[](size_t) const;
         Traced<Value>& operator[](size_t);
@@ -77,8 +77,6 @@ namespace wry::gc {
         Value find(Value key) const;
                 
     }; // struct HeapArray
-    
-    
     
 } // namespace wry::gc
 

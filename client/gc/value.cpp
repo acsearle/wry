@@ -28,8 +28,6 @@ namespace wry::gc {
         return ((const _short_string_t&)self._data).as_string_view();
     }
     
-    /*
-
     Value& operator++(Value& self) {
         self += 1;
         return self;
@@ -73,40 +71,20 @@ namespace wry::gc {
 #define X(Y)\
     Value operator Y (int64_t left, const Value& right) {\
         switch (_value_tag(right)) {\
-            case VALUE_TAG_OBJECT: {\
-                const Object* object = _value_as_object(right);\
-                if (object) switch (object->_class) {\
-                    case Class::INT64:\
-                        return value_make_integer_with(left Y ((HeapInt64*)object)->_integer);\
-                    default:\
-                        break;\
-                }\
-            } break;\
             case VALUE_TAG_SMALL_INTEGER:\
                 return value_make_integer_with(left Y _value_as_small_integer(right));\
             default:\
-                break;\
+                return value_make_error();\
         }\
-        return value_make_error();\
     }\
     \
     Value operator Y (const Value& left, const Value& right) {\
         switch (_value_tag(left)) {\
-            case VALUE_TAG_OBJECT: {\
-                const Object* object = _value_as_object(left);\
-                if (object) switch (object->_class) {\
-                    case Class::INT64:\
-                        return ((HeapInt64*)object)->_integer Y right;\
-                    default:\
-                        break;\
-                }\
-            } break;\
             case VALUE_TAG_SMALL_INTEGER:\
                 return _value_as_small_integer(left) Y right;\
             default:\
-                break;\
+                return value_make_error();\
         }\
-        return value_make_error();\
     }
         
     X(*)
@@ -121,9 +99,6 @@ namespace wry::gc {
     X(>>)
     
 #undef X
-    
-     */
-    
     
     size_t value_hash(const Value& self) {
         switch (_value_tag(self)) {
@@ -188,20 +163,6 @@ namespace wry::gc {
     
     
     
-
-    
-    
-    /*
-    String Object::str() const {
-        Value a = Value::from_ntbs("HeapValue");
-        String b;
-        b._string = a._short_string;
-        return b;
-    };
-     */
-    
-    
-    
     
     
     
@@ -214,7 +175,7 @@ namespace wry::gc {
         Value t = value_make_table();
         
         if (!(::rand() % 100)) {
-            Value trap = "trapped string should weak rot";
+            Value temp = "This weak-cached string should be occasionally collected";
         }
         
         assert(value_size(t) == 0);
@@ -253,8 +214,8 @@ namespace wry::gc {
             b = 2;
             assert(b == 2);
             Value c;
-            //c = a + b;
-            //assert(c == 3);
+            c = a + b;
+            assert(c == 3);
             /*
             value_debug(a);
             value_debug(b);
@@ -361,102 +322,26 @@ namespace wry::gc {
     }
     
     
-    /*
-    std::size_t Array::size() const {
-        return _array->_size;
-    }
-    
-    Value Array::operator[](std::size_t pos) const {
-        assert(pos < _array->_size);
-        return _array->_storage[pos].get();
-    }
-     */
-
-    
-    
-    /*
-    std::size_t String::size() const {
-        switch (_discriminant()) {
-            case VALUE_TAG_POINTER:
-                assert(_pointer);
-                return _pointer->_size;
-            case VALUE_TAG_SHORT_STRING:
-                return (_tag >> 4) & 15;
-            default:
-                abort();
-        }
-    }
-     */
+   
 
     bool contains(const Object* self, Value key) {
         return self ? self->_value_contains(key) : false;
-        /*
-        switch (self->_class) {
-            case Class::TABLE:
-                return ((const HeapTable*) self)->contains(key);
-            default:
-                return false;
-        }
-         */
     }
 
     Value find(const Object* self, Value key) {
         return self ? self->_value_find(key) : value_make_error();
-        /*
-        switch (self->_class) {
-            case Class::ARRAY:
-                return ((HeapArray*) self)->find(key);
-            case Class::TABLE:
-                return ((const HeapTable*) self)->find(key);
-            default:
-                return value_make_error();
-        }
-         */
     }
 
     Value insert_or_assign(Object* self, Value key, Value value) {
         return self ? self->_value_insert_or_assign(key, value) : value_make_error();
-        /*
-        switch (self->_class) {
-            case Class::ARRAY:
-                return ((HeapArray*) self)->insert_or_assign(key, value);
-            case Class::TABLE:
-                return ((const HeapTable*) self)->insert_or_assign(key, value);
-            default:
-                return value_make_error();
-        }
-         */
     }
 
     Value erase(Object* self, Value key) {
         return self ? self->_value_erase(key) : value_make_error();
-        /*
-        switch (self->_class) {
-            case Class::TABLE:
-                return ((const HeapTable*) self)->erase(key);
-            default:
-                return value_make_error();
-        }
-         */
     }
 
     size_t size(const Object* self) {
         return self ? self->_value_size() : 0;
-        /*
-        switch (self->_class) {
-            case Class::INDIRECT_FIXED_CAPACITY_VALUE_ARRAY:
-                return ((const IndirectFixedCapacityValueArray*) self)->_capacity;
-            case Class::ARRAY:
-                return ((HeapArray*) self)->size();
-            case Class::TABLE:
-                return ((const HeapTable*) self)->size();
-            case Class::STRING:
-                return ((const HeapString*) self)->_size;
-            case Class::INT64:
-                return 0;
-            default:
-                abort();
-        }*/
     }
     
     size_t value_size(const Value& self) {
@@ -597,17 +482,6 @@ namespace wry::gc {
         result._data = (uint64_t)p;
         return result;
     }
-
-    IndirectFixedCapacityValueArray::IndirectFixedCapacityValueArray(std::size_t count)
-    : _capacity(count)
-    , _storage((Traced<Value>*) calloc(count, sizeof(Traced<Value>))) {
-    }
-    
-    IndirectFixedCapacityValueArray::~IndirectFixedCapacityValueArray() {
-        // Safety:
-        //    Storage is a conventionally managed C++ buffer
-        free(_storage);
-    }
     
     Value value_make_table() {
         Value result;
@@ -631,6 +505,21 @@ namespace wry::gc {
     Value Object::_value_find(Value key) const { return value_make_error(); }
     Value Object::_value_insert_or_assign(Value key, Value value) { return value_make_error(); }
     Value Object::_value_erase(Value key) { return value_make_error(); }
+    
+
+    
+    Value Object::_value_add(Value right) const { return value_make_error(); }
+    Value Object::_value_sub(Value right) const { return value_make_error(); }
+    Value Object::_value_mul(Value right) const { return value_make_error(); }
+    Value Object::_value_div(Value right) const { return value_make_error(); }
+    Value Object::_value_mod(Value right) const { return value_make_error(); }
+    Value Object::_value_rshift(Value right) const { return value_make_error(); }
+    Value Object::_value_lshift(Value right) const { return value_make_error(); }
+
+    void HeapInt64::_object_shade() const {
+        Color expected = Color::WHITE;
+        (void) color.compare_exchange(expected, Color::BLACK);
+    }
     
 
 

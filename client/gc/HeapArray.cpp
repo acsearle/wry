@@ -12,7 +12,6 @@
 
 namespace wry::gc {
     
-    
     HeapArray::InnerArray::InnerArray()
     : _begin(nullptr)
     , _end(nullptr)
@@ -75,7 +74,6 @@ namespace wry::gc {
         return *_begin;
     }
     
-    
     void HeapArray::InnerArray::pop_back() {
         assert(!empty());
         // We overwrite to prevent floating garbage
@@ -102,7 +100,7 @@ namespace wry::gc {
     void HeapArray::InnerArray::reserve(size_t n) {
         assert(empty() && n);
         if (!_manager || _manager->_capacity < n) {
-            _manager = new IndirectFixedCapacityValueArray(n);
+            _manager = new HeapManaged<Traced<Value>>(n);
         }
         _begin = _manager->_storage;
         _end = _begin;
@@ -114,6 +112,9 @@ namespace wry::gc {
     : _state(INITIAL) {
     }
     
+    HeapArray::~HeapArray() {
+        printf("~HeapArray\n");
+    }
     
     void HeapArray::push_back(Value x) {
         for (;;) {
@@ -156,12 +157,14 @@ namespace wry::gc {
     
     void HeapArray::pop_back() {
         switch (_state) {
-            case INITIAL:
+            case INITIAL: {
                 abort();
-            case NORMAL:
+            }
+            case NORMAL: {
                 _alpha.pop_back();
                 break;
-            case RESIZING:
+            }
+            case RESIZING: {
                 assert(!_alpha.empty());
                 assert(!_beta.empty());
                 _beta.pop_back();
@@ -173,6 +176,7 @@ namespace wry::gc {
                     _state = NORMAL;
                 }
                 break;
+            }
         }
     }
     
