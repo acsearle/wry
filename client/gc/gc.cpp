@@ -12,7 +12,7 @@
 #include "bag.hpp"
 #include "ctrie.hpp"
 #include "gc.hpp"
-#include "HeapArray.hpp"
+#include "RealTimeGarbageCollectedDynamicArray.hpp"
 #include "HeapTable.hpp"
 #include "tagged_ptr.hpp"
 #include "utility.hpp"
@@ -142,14 +142,14 @@ namespace wry::gc {
     
     
     
-    void* Object::operator new(std::size_t count) {
-        void* ptr = ::operator new(count);
+    void* Object::operator new(size_t count) {
+        void* ptr = calloc(count, 1);
         thread_local_mutator->mutator_log.bytes_allocated += count;
         return ptr;
     }
 
     void Object::operator delete(void* ptr) {
-        ::operator delete(ptr);
+        free(ptr);
     }
 
     Object::Object()

@@ -9,7 +9,7 @@
 
 #include "object.hpp"
 
-#include "HeapArray.hpp"
+#include "RealTimeGarbageCollectedDynamicArray.hpp"
 #include "ctrie.hpp"
 #include "hash.hpp"
 #include "value.hpp"

@@ -1,12 +1,12 @@
 //
-//  IndirectFixedCapacityArray.hpp
+//  HeapManaged.hpp
 //  client
 //
 //  Created by Antony Searle on 22/6/2024.
 //
 
-#ifndef wry_gc_IndirectFixedCapacityValueArray_hpp
-#define wry_gc_IndirectFixedCapacityValueArray_hpp
+#ifndef wry_gc_Heapmanaged_hpp
+#define wry_gc_Heapmanaged_hpp
 
 #include "value.hpp"
 
@@ -70,6 +70,10 @@ namespace wry::gc {
             object_trace(*first);
     }
     
+    
+    
+    
+    
 } // namespace wry::gc
 
-#endif /* wry_gc_IndirectFixedCapacityValueArray_hpp */
+#endif /* wry_gc_Heapmanaged_hpp */

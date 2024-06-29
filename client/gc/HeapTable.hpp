@@ -15,9 +15,24 @@
 #include "debug.hpp"
 #include "object.hpp"
 #include "value.hpp"
-#include "IndirectFixedCapacityValueArray.hpp"
+#include "HeapManaged.hpp"
+#include "RealTimeGarbageCollectedDynamicArray.hpp"
 
 namespace wry::gc {
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    enum EntryState {
+        VACANT = 0,
+        OCCUPIED,
+        TOMBSTONE,
+    };
     
     struct Entry {
         
@@ -33,32 +48,35 @@ namespace wry::gc {
         
     };
     
-    inline void object_trace(const Entry& entry) {
+    void object_trace(const Entry& entry) {
         object_trace(entry.key);
         object_trace(entry.value);
     }
+
+    template<typename K, typename KK, typename... Args>
+    bool entry_match(const Entry<K, Args...>& entry, const KK& keylike) {
+        return entry.key == keylike;
+    }
     
-    struct InnerTable {
+    template<typename K, typename V>
+    V* entry_pvalue(Entry<K, V>& entry) {
+        return &entry.value;
+    }
+    
+    template<typename E>
+    struct GarbageCollectedHashMap {
         
-        Traced<const HeapManaged<Entry>*> _manager;
-        Entry* _storage = nullptr;
-        size_t _mask = 0;
+        E* _data = nullptr;
+        hash_t _mask = 0;
         size_t _count = 0;
         size_t _grace = 0;
+        Traced<const GarbageCollectedIndirectStaticArray<E>*> _storage;
         
-        void clear() {
-            _manager = nullptr;
-            _storage = nullptr;
-            _mask = -1;
-            _count = 0;
-            _grace = 0;
-        }
-        
-        size_t next(size_t i) const {
+        hash_t next(hash_t i) const {
             return (i + 1) & _mask;
         }
         
-        size_t prev(size_t i) const {
+        hash_t prev(hash_t i) const {
             return (i - 1) & _mask;
         }
         
@@ -70,46 +88,53 @@ namespace wry::gc {
             return _count;
         }
         
-        Entry* pfind(std::size_t h, Value k) const {
-            std::size_t i = h & _mask;
+        void clear() {
+            _data = nullptr;
+            _mask = -1;
+            _count = 0;
+            _grace = 0;
+            _storage = nullptr;
+        }
+        
+        template<typename KK>
+        E* pfind(hash_t h, KK&& kk) const {
+            hash_t i = h & _mask;
             for (;; i = next(i)) {
-                Entry* p = _storage + i;
-                Value ki = p->key;
-                
-                if (value_is_null(ki))
-                    // Does not exist
-                    return nullptr;
-                
-                // TODO: equals-with-one-known-hash
-                if (ki == k)
-                    // Found
-                    return p;
-                
-                // Another entry, or a tombstone
-                
+                E* p = _data + i;
+                switch (entry_state(p)) {
+                    case EntryState::VACANT:
+                        return nullptr;
+                    case EntryState::OCCUPIED:
+                        if (entry_match(p, kk))
+                            return p;
+                        break;
+                    case EntryState::TOMBSTONE:
+                        break;
+                }
             }
         }
         
         Value find(std::size_t h, Value k) const {
-            Entry* p = pfind(h, k);
-            return p ? p->value : value_make_null();
+            E* p = pfind(h, k);
+            return p ? *entry_pvalue(*p) : value_make_null();
         }
         
-        void clear_n_tombstones_before_i(std::size_t n, std::size_t i) {
+        void clear_n_tombstones_before_i(size_t n, hash_t i) {
             // grace sticks to zero
             if (!_grace)
                 return;
             {
-                Entry* pe = _storage + i;
-                [[maybe_unused]] Value ki = pe->key;
-                assert(value_is_null(ki));
+                // E* pe = _data + i;
+                // [[maybe_unused]] Value ki = pe->key;
+                // assert(value_is_null(ki));
             }
             while (n--) {
                 i = prev(i);
-                Entry* pe = _storage + i;
-                [[maybe_unused]] Value ki = pe->key;
-                assert(_value_is_tombstone(ki));
-                pe->key = value_make_null();
+                E* pe = _data + i;
+                // [[maybe_unused]] Value ki = pe->key;
+                // assert(_value_is_tombstone(ki));
+                // pe->key = value_make_null();
+                entry_exhume(*pe);
                 ++_grace;
             }
         }
@@ -218,7 +243,7 @@ namespace wry::gc {
         }
         
         void _invariant() const {
-            if (!_storage)
+            if (!_data)
                 return;
             // scan the whole thing
             std::size_t keys = 0;
@@ -401,19 +426,19 @@ namespace wry::gc {
                 // we have proved that key is not in alpha
             } else {
                 // _alpha is terminal and empty, discard it
-                if (_beta._storage) {
+                if (_beta._data) {
                     // swap in _beta
                     _alpha = _beta;
-                    _beta._manager = nullptr;
                     _beta._storage = nullptr;
+                    _beta._data = nullptr;
                     _beta._count = 0;
                     _beta._grace = 0;
                     _beta._mask = 0;
                     _partition = 0;
                 } else {
-                    assert(_alpha._storage == nullptr);
+                    assert(_alpha._data == nullptr);
                     _alpha._manager = new HeapManaged<Entry>(4);
-                    _alpha._storage = _alpha._manager->_storage;
+                    _alpha._data = _alpha._storage->_storage;
                     _alpha._mask = 3;
                     _alpha._grace = 3;
                     _alpha._count = 0;
@@ -422,12 +447,12 @@ namespace wry::gc {
                 return insert_or_assign(key, value);
             }
             if (!_beta._grace) {
-                assert(_beta._storage == nullptr);
+                assert(_beta._data == nullptr);
                 using wry::type_name;
                 std::size_t new_capacity = std::bit_ceil((_alpha._count * 8 + 2) / 3);
                 std::size_t new_grace = new_capacity * 3 / 4;
                 _beta._manager = new HeapManaged<Entry>(new_capacity);
-                _beta._storage = _beta._manager->_storage;
+                _beta._data = _beta._storage->_storage;
                 _beta._count = 0;
                 _beta._grace = new_grace;
                 _beta._mask = new_capacity - 1;
@@ -507,8 +532,8 @@ namespace wry::gc {
         }
 
         virtual void _object_scan() const override {
-            object_trace(_alpha._manager);
-            object_trace(_beta._manager);
+            object_trace(_alpha._storage);
+            object_trace(_beta._storage);
         }
 
     }; // struct HeapTable

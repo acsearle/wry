@@ -81,11 +81,13 @@ namespace wry::gc {
         
         Traced() = default;
         Traced(const Traced& other);
-        explicit Traced(T* other);
+        Traced(Traced&& other);
+        explicit Traced(T*const& other);
         explicit Traced(std::nullptr_t);
         ~Traced() = default;
         Traced& operator=(const Traced& other);
-        Traced& operator=(T* other);
+        Traced& operator=(Traced&& other);
+        Traced& operator=(T*const& other);
         Traced& operator=(std::nullptr_t);
         
         void swap(Traced<T*>& other);
@@ -99,6 +101,7 @@ namespace wry::gc {
         auto operator<=>(const Traced& other) const;
         
         T* get() const;
+        T* take();
         
         void trace() const;
         
@@ -133,17 +136,27 @@ namespace wry::gc {
     Traced<T*>::Traced(const Traced& other)
     : Traced(other.get()) {
     }
-    
+
+    template<typename T>
+    Traced<T*>::Traced(Traced&& other)
+    : Traced(other.take()) {
+    }
+
     template<typename T>
     Traced<T*>& Traced<T*>::operator=(const Traced& other) {
         return operator=(other.get());
     }
-    
+
     template<typename T>
-    Traced<T*>::Traced(T* other)
+    Traced<T*>& Traced<T*>::operator=(Traced&& other) {
+        return operator=(other.take());
+    }
+
+    template<typename T>
+    Traced<T*>::Traced(T*const& other)
     : _object(other) {
     }
-    
+
     template<typename T>
     Traced<T*>::Traced(std::nullptr_t)
     : _object(nullptr) {
@@ -159,7 +172,7 @@ namespace wry::gc {
 
     
     template<typename T>
-    Traced<T*>& Traced<T*>::operator=(T* other) {
+    Traced<T*>& Traced<T*>::operator=(T*const& other) {
         // Safety:
         //     An atomic::exchange is not used here because this_thread is
         // the only writer.
@@ -169,7 +182,7 @@ namespace wry::gc {
         object_shade(other);
         return *this;
     }
-    
+
     template<typename T>
     Traced<T*>& Traced<T*>::operator=(std::nullptr_t) {
         // Safety:
@@ -220,6 +233,13 @@ namespace wry::gc {
         return _object.load(Ordering::RELAXED);
     }
     
+    template<typename T>
+    T* Traced<T*>::take() {
+        T* discovered = get();
+        _object.store(nullptr, Ordering::RELAXED);
+        object_shade(discovered);
+        return discovered;
+    }
     
     
     
@@ -229,6 +249,7 @@ namespace wry::gc {
     Traced<Atomic<T*>>::Traced(T* object)
     : _object(object) {
     }
+    
     template<typename T>
     T* Traced<Atomic<T*>>::load(Ordering order) const {
         return _object.load(order);

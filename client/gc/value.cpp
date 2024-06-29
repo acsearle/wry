@@ -13,7 +13,7 @@
 #include <random>
 
 #include "hash.hpp"
-#include "HeapArray.hpp"
+#include "RealTimeGarbageCollectedDynamicArray.hpp"
 #include "HeapTable.hpp"
 #include "utility.hpp"
 #include "value.hpp"
@@ -491,7 +491,7 @@ namespace wry::gc {
 
     Value value_make_array() {
         Value result;
-        result._data = (uint64_t)(new HeapArray);
+        result._data = (uint64_t)(new RealTimeGarbageCollectedDynamicArray);
         return result;
     }
     
