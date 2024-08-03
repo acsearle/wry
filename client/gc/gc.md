@@ -1,6 +1,64 @@
 #  Garbage Collection
 
-## Introduction
+## Todo
+
+- Mutator shading leaf, is an unconditional write BLACK faster than a
+  compare_exchange?
+- Can we segregate leafs from the scan list?
+- Should the mutators maintain and proffer gray lists instead of just a gray
+  flag?
+- Can we use timestamps instead of colors to help do better weak pointers and
+  have the GC always in sweeping state?
+  - Each thread has an epoch
+  - Epoch advances by consensus, so all threads are running with current or
+    old epoch
+  - threads mark objects leq their epoch with their epoch+1 or +2
+  - threads mark weak objects that are one or two behind, and fail to load ones
+    that are too early
+  - collector kills objects 4-behind the epoch
+  - collector can scan and sweep simultaneously
+  - mutators can upgrade weaks that aren't too old, but how do they decide too
+    old when they have ragged epoch?  Weaks that are two cycles behind can
+    be upgraded by oldies and downgraded ny noobs
+  0 white  -> 0 weak?     -> 0 dead
+  1 gray   -> 1 weakgray? -> 1 forbidden 
+  2 black  -> 2 white     -> 2 weak ...
+              3 gray     
+              4 black
+
+- The mutator following pointers to swap their colors is not great, in
+  particular for overwriten pointers that are not otherwise needed in cache.
+  If the mutator instead records these pointers for the GC in a hot queue, it
+  could be faster.  But the queue will be immense?  And duplicative across and
+  even within mutators.  These queues effectively are the collectors's 
+  workstack, so it makes sense to publish them frequently to the collector, more
+  frequently than per handshake.  Mutators would not know if they are "dirty"
+  in this scenario.
+  
+  Conversely, if the mutator is already writing to an object header, should it
+  snapshot the pointers out of that object for the workqueue?  No, because this
+  is an unbounded amount of work.
+  
+  
+  
+  
+- This technique is pause free by most definitions, requiring the mutator to
+  check in with the collector periodically in a single lock-free operation that
+  never makes the mutator wait (though it may have to retry).  But it is not
+  widely used.  Why not?
+  
+  One reason may be that there is literally no path for the collector to apply
+  backpressure on a mutator; the mutator(s) may simply outrun the
+  collector(s) and exhaust memory even though the true live set is small.  This
+  seems unlikely in practice because the collector becomes more efficient the
+  more garbage there is, but no doubt an example could be contrived to break it
+  (several mutators allocating small objects flat-out?).  Is this efficieny 
+  argument enough to keep the system stable or do we become unstable, with
+  more allocations increasing the time to the next collection increasing the
+  number of allocations in the next collection, and so forth. 
+
+
+## Notes
 
 As we allow users to effectively execute abritrary (albeit sandboxed) code, we
 must be able to handle cycles, which pushes us to garbage collection for the

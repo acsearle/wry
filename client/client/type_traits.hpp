@@ -12,18 +12,18 @@
 
 namespace wry {
     
-    template<typename T, typename U>
+    template<typename From, typename To>
     struct copy_const {
-        using type = U;
+        using type = To;
     };
     
-    template<typename T, typename U>
-    struct copy_const<const T, U> {
-        using type = std::add_const_t<U>;
+    template<typename From, typename To>
+    struct copy_const<const From, To> {
+        using type = std::add_const_t<To>;
     };
     
-    template<typename T, typename U>
-    using copy_const_t = typename copy_const<T, U>::type;
+    template<typename From, typename To>
+    using copy_const_t = typename copy_const<From, To>::type;
     
     // # Relocate
     //

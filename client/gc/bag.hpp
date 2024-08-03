@@ -18,10 +18,8 @@ namespace wry::gc {
     // True O(1) push to append to log
     // True O(1) splice to combine logs
     
-    
     template<typename T>
     struct Bag;
-    
     
     template<typename T>
     struct Bag<T*> {
@@ -67,7 +65,12 @@ namespace wry::gc {
         };
         
         static_assert(sizeof(Page) == 4096);
-
+        
+        using value_type = T*;
+        using size_type = std::size_t;
+        using reference = T*&;
+        using const_reference = T*const&;
+        
         Page* head;
         Page* tail;
         size_t count;
@@ -94,7 +97,7 @@ namespace wry::gc {
                 delete std::exchange(head, head->next);
             }
         }
-        
+
         void swap(Bag& other) {
             std::swap(head, other.head);
             std::swap(tail, other.tail);
@@ -102,8 +105,12 @@ namespace wry::gc {
         }
         
         Bag& operator=(const Bag&) = delete;
-        Bag& operator=(Bag&&) = delete;
         
+        Bag& operator=(Bag&& other) {
+            Bag(std::move(other)).swap(*this);
+            return *this;
+        }
+                        
         T* const& top() const {
             assert(count);
             Page* page = head;
@@ -123,6 +130,14 @@ namespace wry::gc {
                     return head->top();
                 delete exchange(head, head->next);
             }
+        }
+        
+        bool empty() const {
+            return !count;
+        }
+        
+        size_t size() const {
+            return count;
         }
 
         void push(T* x) {
@@ -150,29 +165,25 @@ namespace wry::gc {
         }
                 
         void splice(Bag&& other) {
-            if (!other.head)
-                return;
-            if (!head) {
-                head = exchange(other.head, nullptr);
+            if (other.head) {
+                if (head) {
+                    assert(tail && !(tail->next));
+                    tail->next = exchange(other.head, nullptr);
+                } else {
+                    assert(!tail && !count);
+                    head = exchange(other.head, nullptr);
+                }
                 tail = exchange(other.tail, nullptr);
-                count = exchange(other.count, 0);
-                return;
+                count += exchange(other.count, 0);
             }
-            assert(tail->next == nullptr);
-            tail->next = exchange(other.head, nullptr);
-            tail = exchange(other.tail, nullptr);
-            count += exchange(other.count, 0);
         }
         
-        bool empty() const {
-            return !count;
-        }
-        
-        size_t size() const {
-            return count;
-        }
-
     }; // struct Bag<T*>
+    
+    template<typename T>
+    void swap(Bag<T*>& left, Bag<T*>& right) {
+        left.swap(right);
+    }
     
 } // namespace wry::gc
 

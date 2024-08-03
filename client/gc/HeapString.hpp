@@ -30,10 +30,12 @@ namespace wry::gc {
         virtual ~HeapString() final;
         
         virtual void _object_shade() const override;
+        virtual void _object_scan() const override;
         virtual size_t _object_hash() const override { return _hash; }
         virtual void _object_trace() const override;
         virtual void _object_trace_weak() const override;
         virtual Color _object_sweep() const override;
+        virtual void _object_debug() const override;
 
         virtual const HeapString* _ctrie_any_find_or_emplace2(const _ctrie::INode* in, const _ctrie::LNode* ln) const override;
         

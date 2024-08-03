@@ -19,6 +19,7 @@
 #include "value.hpp"
 #include "HeapString.hpp"
 #include "debug.hpp"
+#include "Box.hpp"
 
 
 namespace wry::gc {
@@ -485,13 +486,13 @@ namespace wry::gc {
     
     Value value_make_table() {
         Value result;
-        result._data = (uint64_t)(new HeapTable);
+        result._data = (uint64_t)(new HashMap<Value, Value>);
         return result;
     }
 
     Value value_make_array() {
         Value result;
-        result._data = (uint64_t)(new RealTimeGarbageCollectedDynamicArray);
+        result._data = (uint64_t)(new Box<RealTimeGarbageCollectedDynamicArray<Value>>);
         return result;
     }
     
@@ -521,6 +522,11 @@ namespace wry::gc {
         (void) color.compare_exchange(expected, Color::BLACK);
     }
     
+    void HeapInt64::_object_scan() const {
+        fprintf(stderr, "scanned a weak ");
+        _object_debug();
+        abort();
+    }
 
 
 } // namespace wry::gc

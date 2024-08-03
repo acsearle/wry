@@ -56,6 +56,7 @@ namespace wry {
         using reference = T&;
         using const_reference = const T&;
         using byte_type = byte;
+        using const_byte_type = const byte;
 
         // this layout permits punning as array_views
         

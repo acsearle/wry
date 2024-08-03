@@ -8,8 +8,9 @@
 #ifndef wry_RealTimeGarbageCollectedDynamicArray_hpp
 #define wry_RealTimeGarbageCollectedDynamicArray_hpp
 
-#include "utility.hpp"
+#include "debug.hpp"
 #include "object.hpp"
+#include "utility.hpp"
 
 namespace wry::gc {
     
@@ -45,18 +46,27 @@ namespace wry::gc {
         
         size_t size() const { return _size; }
         
-        const T* begin() const { return _data; }
+        T* data() { return _data; }
         T* begin() { return _data; }
-        
-        const T* end() const { return _data + _size; }
         T* end() { return _data + _size; }
+
+        const T* data() const { return _data; }
+        const T* begin() const { return _data; }
+        const T* end() const { return _data + _size; }
         
         virtual void _object_scan() const override {
             for (const T& element : _data)
                 object_trace(element);
         }
         
+        virtual void _object_debug() const override {
+            printf("(GarbageCollectedIndirectStaticArray)");
+            for (const T& element : _data)
+                object_debug(element);
+        }
+        
     };
+    
     
     template<typename T>
     struct GarbageCollectedFlexibleArrayMemberStaticArray : Object {
@@ -103,11 +113,15 @@ namespace wry::gc {
         }
         
         size_t size() const { return _size; }
-        const T* begin() const { return _data; }
+
+        T* data() { return _data; }
         T* begin() { return _data; }
-        const T* end() const { return _data + _size; }
         T* end() { return _data + _size; }
-        
+
+        const T* data() const { return _data; }
+        const T* begin() const { return _data; }
+        const T* end() const { return _data + _size; }
+
         virtual void _object_scan() const override {
             for (const T& element : *this)
                 object_trace(element);
@@ -216,7 +230,7 @@ namespace wry::gc {
         
         template<typename V>
         void _push_front(V&& value) {
-            if (!_storage || _begin == _storage->_begin)
+            if (!_storage || _begin == _storage->begin())
                 abort();
             *--_begin = std::forward<V>(value);
         }
@@ -252,6 +266,12 @@ namespace wry::gc {
     template<typename T>
     void object_trace(const GarbageCollectedDynamicArray<T>& self) {
         object_trace(self._storage);
+    }
+
+    template<typename T>
+    void object_debug(const GarbageCollectedDynamicArray<T>& self) {
+        printf("(GarbageCollectedDynamicArray)");
+        object_debug(self._storage);
     }
 
     // We can hoist DynamicArray itself into a collection with Box
@@ -311,7 +331,7 @@ namespace wry::gc {
                     }
                     case RESIZING: {
                         assert(!_beta.full());
-                        _alpha.push_back(std::move(value));
+                        _beta.push_back(std::move(value));
                         assert(!_alpha.empty());
                         _beta._push_front(std::move(_alpha.back()));
                         _alpha.pop_back();
@@ -429,6 +449,14 @@ namespace wry::gc {
         object_trace(self._alpha);
         object_trace(self._beta);
     }
+    
+    template<typename T>
+    void object_debug(const RealTimeGarbageCollectedDynamicArray<T>& self) {
+        printf("(RealTimeGarbageCollectedDynamicArray)");
+        object_debug(self._alpha);
+        object_debug(self._beta);
+    }
+
     
     
 

@@ -13,6 +13,10 @@
 
 namespace wry {
     
+    // A potentially uninitialized slot
+    //
+    // More like Rust MaybeUninitialized than Haskell Maybe
+    
     template<typename T>
     union Maybe {
         

@@ -41,7 +41,7 @@ namespace wry::gc {
         virtual void _object_debug() const;
         virtual hash_t _object_hash() const;
         virtual void _object_shade() const;
-        virtual void _object_scan() const;
+        virtual void _object_scan() const = 0;
         virtual Color _object_sweep() const;
         virtual void _object_trace() const;
         virtual void _object_trace_weak() const;
@@ -69,10 +69,7 @@ namespace wry::gc {
     size_t object_hash(const Object*);
     void object_trace(const Object*);
     void object_trace_weak(const Object*);
-    
-
-    
-    
+    void object_passivate(const Object*& self);
     
     template<typename T>
     struct Traced<T*> {
@@ -104,7 +101,7 @@ namespace wry::gc {
         T* take();
         
         void trace() const;
-        
+                
     }; // struct Traced<T*>
         
     template<typename T>
@@ -166,8 +163,10 @@ namespace wry::gc {
     void Traced<T*>::swap(Traced<T*>& other) {
         T* a = get();
         T* b = other.get();
-        (*this) = b;
-        other = a;
+        _object._store(b);
+        other._object._store(a);
+        object_shade(a);
+        object_shade(b);
     }
 
     
@@ -241,6 +240,10 @@ namespace wry::gc {
         return discovered;
     }
     
+    template<typename T>
+    void object_passivate(Traced<T*>& self) {
+        (void) self.take();
+    }
     
     
     
@@ -297,6 +300,13 @@ namespace wry::gc {
     template<typename T>
     void Traced<Atomic<T*>>::trace() const {
         object_trace(_object.load(Ordering::ACQUIRE));
+    }
+    
+    template<typename T>
+    void object_passivate(Traced<Atomic<T*>>& self) {
+        // TODO: suspicious that it may never be correct to do this
+        __builtin_trap();
+        object_shade(self._object.exchange(nullptr, Ordering::ACQUIRE));
     }
     
 } // namespace wry::gc

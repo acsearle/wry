@@ -22,9 +22,7 @@
 #include "test.hpp"
 
 namespace wry::gc {
-    
-    void object_scan(const Object*);
-    
+        
     // Log of a Mutator's actions since the last handshake with the Collector
     
     struct Log {
@@ -174,10 +172,6 @@ namespace wry::gc {
         }
     }
 
-    void Object::_object_scan() const {
-        abort();
-    }
-    
     void Object::_object_trace() const {
         Color expected = Color::WHITE;
         (void) color.compare_exchange(expected, Color::BLACK);
@@ -208,11 +202,6 @@ namespace wry::gc {
     void object_shade(const Object* object) {
         if (object)
             object->_object_shade();
-    }
-    
-    void object_scan(const Object* object) {
-        if (object)
-            object->_object_scan();
     }
     
     void object_trace(const Object* object) {
@@ -568,7 +557,7 @@ namespace wry::gc {
                         case Color::GRAY:
                             // Was GRAY and is now BLACK
                             // Scan its fields to restore the invariant
-                            object_scan(object);
+                            object->_object_scan();
                             [[fallthrough]];
                         case Color::BLACK:
                             // Is BLACK and will remain so
@@ -585,7 +574,7 @@ namespace wry::gc {
                         const Object* object = gray_stack.back();
                         gray_stack.pop_back();
                         assert(object);
-                        object_scan(object);
+                        object->_object_scan();
                     }
                 }
                 

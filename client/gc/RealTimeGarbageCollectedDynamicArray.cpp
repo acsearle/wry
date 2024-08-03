@@ -9,6 +9,7 @@
 
 #include "gc.hpp"
 #include "test.hpp"
+#include "value.hpp"
 
 namespace wry::gc {
     
@@ -18,7 +19,8 @@ namespace wry::gc {
         
         mutator_enter();
         
-        RealTimeGarbageCollectedDynamicArray* a = new RealTimeGarbageCollectedDynamicArray();
+       auto* a = new RealTimeGarbageCollectedDynamicArray<Value>();
+        
         assert(a->empty() == true);
         assert(a->size() == 0);
         
@@ -39,6 +41,7 @@ namespace wry::gc {
             a->pop_back();
             assert(a->size() == i);
         }
+        
         assert(a->empty() == true);
         assert(a->size() == 0);
 

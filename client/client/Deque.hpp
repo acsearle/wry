@@ -163,13 +163,9 @@ namespace wry {
             assert(_end != p->begin());
             return *(_end - 1);
         }
-
         
-        
-        
-    };
+    }; // struct Deque<T>
     
-    
-}
+} // namespace gc
 
 #endif /* Deque_hpp */

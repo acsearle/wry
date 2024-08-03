@@ -234,6 +234,7 @@ namespace wry::gc {
         virtual ~HeapInt64() final = default;
         std::int64_t as_int64_t() const;
         virtual void _object_shade() const override;
+        virtual void _object_scan() const override;
     };
     
         
@@ -522,7 +523,22 @@ namespace wry::gc {
     inline void object_trace(const Value& value) {
         return value_trace(value);
     }
+    
+    inline void object_passivate(Value& self) {
+        self = value_make_null();
+    }
+    
+    inline void object_passivate(Traced<Value>& self) {
+        self = value_make_null();
+    }
+    
+    inline void object_passivate(Traced<Atomic<Value>>& self) {
+        // TODO: Is it ever right to call this?
+        __builtin_trap();
+        self.store(value_make_null(), Ordering::ACQUIRE);
+    }
 
+    
 
     
     
