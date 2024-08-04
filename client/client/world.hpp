@@ -19,6 +19,7 @@
 #include "utility.hpp"
 #include "machine.hpp"
 #include "queue.hpp"
+#include "HeapTable.hpp"
 
 namespace wry::sim {
     
@@ -71,7 +72,7 @@ namespace wry::sim {
         // State
         
         Time _tick = 0;
-        HashMap<Coordinate, Value> _value_for_coordinate;
+        gc::HashMap<Coordinate, Value> _value_for_coordinate;
         HashMap<Coordinate, Entity*> _occupant_for_coordinate;
 
         // Participants, in no particular order
@@ -237,17 +238,19 @@ namespace wry::sim {
     
     inline Value peek_world_coordinate_value(World* world, Coordinate where) {
         assert(world);
-        auto pos = world->_value_for_coordinate.find(where);
-        if (pos != world->_value_for_coordinate.end())
-            return pos->second;
-        else
-            return Value();
+//        auto pos = world->_value_for_coordinate.find(where);
+//        if (pos != world->_value_for_coordinate.end())
+//            return pos->second;
+//        else
+//            return Value();
+        return (world->_value_for_coordinate.read(where));
     }
     
     inline void set_world_coordinate_value(World* world, Coordinate where, Value what) {
         assert(world);
         assert(!value_is_null(what));
-        world->_value_for_coordinate[where] = std::move(what);
+        // world->_value_for_coordinate[where] = std::move(what);
+        world->_value_for_coordinate.write(where, std::move(what));
     }
     
     inline void clear_world_coordinate_value(World* world, Coordinate where) {

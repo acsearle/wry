@@ -806,8 +806,9 @@
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
                 Coordinate xy{i, j};
-                auto& the_tile = _model->_world._value_for_coordinate[xy];
-                the_tile = _model->_holding_value;
+                // auto& the_tile = _model->_world._value_for_coordinate[xy];
+                // the_tile = _model->_holding_value;
+                _model->_world._value_for_coordinate.write(xy, _model->_holding_value);
                 
                 // these notifications happen logically between steps and are
                 // excused from transactions (hopefully)
@@ -827,8 +828,9 @@
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
                 Coordinate xy{i, j};
-                auto& the_tile = _model->_world._value_for_coordinate[xy];
-                the_tile = k;
+                // auto& the_tile = _model->_world._value_for_coordinate[xy];
+                // the_tile = k;
+                _model->_world._value_for_coordinate.write(xy, k);
                 // the_tile.notify_occupant(&_model->_world);
                 notify_by_world_coordinate(&_model->_world, xy);
             }
@@ -1304,7 +1306,7 @@
                 simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
-                    wry::sim::Value q = _model->_world._value_for_coordinate[wry::sim::Coordinate{i, j}];
+                    wry::sim::Value q = _model->_world._value_for_coordinate.read(wry::sim::Coordinate{i, j});
                     using namespace wry::sim;
                     if (q.is_int64_t()) {
                         coordinate = make<float4>((q.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);

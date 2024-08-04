@@ -544,4 +544,13 @@ namespace wry::gc {
     
 } // namespace wry::gc
 
+namespace wry {
+    
+    inline size_t hash(const gc::Value& value) {
+        return gc::value_hash(value);
+    }
+    
+    
+} // namespace wry
+
 #endif /* value_hpp */

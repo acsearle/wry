@@ -235,6 +235,7 @@ namespace wry::gc {
             assert(value_size(t) == i);
             assert(!value_contains(t, v[i]));
             assert(value_is_null(value_find(t, v[i])));
+            assert(hash(v[i]) == hash(Value(v[i])));
             assert(value_is_null(value_insert_or_assign(t, v[i], v[i])));
             assert(value_size(t) == i + 1);
             assert(value_contains(t, v[i]));
@@ -486,7 +487,7 @@ namespace wry::gc {
     
     Value value_make_table() {
         Value result;
-        result._data = (uint64_t)(new HashMap<Value, Value>);
+        result._data = (uint64_t)(new HeapHashMap);
         return result;
     }
 

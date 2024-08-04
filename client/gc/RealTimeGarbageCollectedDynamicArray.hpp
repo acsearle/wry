@@ -23,7 +23,7 @@ namespace wry::gc {
         const size_t _size;
         
         explicit GarbageCollectedIndirectStaticArray(size_t elements)
-        : _data(calloc(elements, sizeof(T)))
+        : _data((T*) calloc(elements, sizeof(T)))
         , _size(elements) {
             assert(_data);
             assert(std::has_single_bit(elements));
@@ -55,13 +55,13 @@ namespace wry::gc {
         const T* end() const { return _data + _size; }
         
         virtual void _object_scan() const override {
-            for (const T& element : _data)
+            for (const T& element : *this)
                 object_trace(element);
         }
         
         virtual void _object_debug() const override {
             printf("(GarbageCollectedIndirectStaticArray)");
-            for (const T& element : _data)
+            for (const T& element : *this)
                 object_debug(element);
         }
         
