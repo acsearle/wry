@@ -73,11 +73,12 @@ namespace wry::sim {
         
         Time _tick = 0;
         gc::HashMap<Coordinate, Value> _value_for_coordinate;
-        HashMap<Coordinate, Entity*> _occupant_for_coordinate;
+        gc::HashMap<Coordinate, Entity*> _occupant_for_coordinate;
 
         // Participants, in no particular order
         
-        Array<Entity*> _entities;
+        // Array<Entity*> _entities;
+        gc::RealTimeGarbageCollectedDynamicArray<Entity*> _entities;
 
         // Conditions
         
@@ -192,10 +193,13 @@ namespace wry::sim {
             }
         }
         {
-            auto pos = world->_occupant_for_coordinate.find(xy);
-            if (pos != world->_occupant_for_coordinate.end()) {
-                entity_ready_on_world(pos->second, world);
-            }
+            //auto pos = world->_occupant_for_coordinate.find(xy);
+            //if (pos != world->_occupant_for_coordinate.end()) {
+            //    entity_ready_on_world(pos->second, world);
+            //}
+            Entity* p = world->_occupant_for_coordinate.read(xy);
+            if (p)
+                entity_ready_on_world(p, world);
         }
     }
 
@@ -260,19 +264,21 @@ namespace wry::sim {
     
     inline Entity* peek_world_coordinate_occupant(World* world, Coordinate where) {
         assert(world);
-        Entity* who = nullptr;
-        auto pos = world->_occupant_for_coordinate.find(where);
-        if (pos != world->_occupant_for_coordinate.end()) {
-            who = pos->second;
-            assert(who);
-        }
-        return who;
+        //Entity* who = nullptr;
+        // auto pos = world->_occupant_for_coordinate.find(where);
+        //if (pos != world->_occupant_for_coordinate.end()) {
+        //    who = pos->second;
+        //    assert(who);
+        //}
+        // return who;
+        return world->_occupant_for_coordinate.read(where);
     }
 
     inline void set_world_coordinate_occupant(World* world, Coordinate where, Entity* who) {
         assert(world);
         assert(who);
-        world->_occupant_for_coordinate.emplace(where, who);
+        // world->_occupant_for_coordinate.emplace(where, who);
+        world->_occupant_for_coordinate.write(where, who);
     }
 
     inline void clear_world_coordinate_occupant(World* world, Coordinate where) {
@@ -308,6 +314,18 @@ namespace wry::sim {
     }
     
 } // namespace wry::sim
+
+namespace wry::gc {
+    
+    inline void object_shade(sim::World* self) {
+        if (self) {
+            object_shade(self->_value_for_coordinate);
+            object_shade(self->_occupant_for_coordinate);
+            object_shade(self->_entities);
+        }
+    }
+    
+} // namespace wry::gc
 
 
 /*

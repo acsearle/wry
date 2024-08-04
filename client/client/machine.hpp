@@ -12,6 +12,7 @@
 #include "sim.hpp"
 #include "entity.hpp"
 #include "debug.hpp"
+#include "RealTimeGarbageCollectedDynamicArray.hpp"
 
 namespace wry::sim {
     
@@ -24,7 +25,8 @@ namespace wry::sim {
         } _phase = PHASE_WAITING_FOR_NEW;
         
         i64 _on_arrival = OPCODE_NOOP;
-        Array<Value> _stack;
+        // Array<Value> _stack;
+        gc::RealTimeGarbageCollectedDynamicArray<Value> _stack;
 
         // The _old_* and _new_* states represent the beginning and end states
         // of travelling.  They are used by the visualization as a lerp
@@ -65,14 +67,20 @@ namespace wry::sim {
             return {y, z};
         }
         
-        std::pair<Value, Value> peek2() const {
+        std::pair<Value, Value> peek2() {
             switch (_stack.size()) {
                 case 0:
                     return std::pair<Value, Value>{Value{}, Value{}};
                 case 1:
                     return std::pair<Value, Value>{Value{}, _stack.back()};
-                default:
-                    return std::pair<Value, Value>{_stack._end[-2], _stack._end[-1]};
+                default: {
+                    Value z = pop();
+                    Value y = pop();
+                    push(y);
+                    push(z);
+                    return { z, y};
+                    // return std::pair<Value, Value>{_stack.end()[-2], _stack.end()[-1]};
+                }
             }
         }
         
@@ -87,10 +95,14 @@ namespace wry::sim {
             }
         }
         
-        virtual void notify(World*);
+        virtual void notify(World*) override;
         
         void _schedule_arrival(World* world);
-                
+        
+        virtual void _object_scan() const override {
+            object_trace(_stack);
+        }
+                        
     };
     
 } // namespace wry::sim

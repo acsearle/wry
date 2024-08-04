@@ -667,6 +667,58 @@ namespace wry::gc {
                         
     };
     
+    
+    
+    template<typename K, typename A>
+    struct HashMap<K, A*> {
+        
+        // TODO: Traced<K>
+        // More generally, decide on Traced by some typefunction to capture
+        // pointers convertible Object and Values and...
+        
+        using T = BasicEntry<K, Traced<A*>>;
+        
+        // TODO: sort out const-correctness
+        mutable BasicHashSetC<T> _inner;
+        
+        void _invariant() const {
+            _inner._invariant();
+        }
+        
+        size_t size() const {
+            return _inner.size();
+        }
+        
+        template<typename Q>
+        A* read(Q&& q) const {
+            size_t h = hash(q);
+            auto [i, f] = _inner._find(h, q);
+            return f ? _inner._alpha._inner._data[i]._kv.second : nullptr;
+        }
+        
+        template<typename J, typename U>
+        void write(J&& j, U&& u) {
+            size_t h = hash(j);
+            _inner._insert_or_assign(h, j, u);
+        }
+        
+        template<typename Q>
+        void erase(Q&& q) {
+            size_t h = hash(q);
+            _inner._erase(h, q);
+        }
+        
+        bool empty() const {
+            return _inner.empty();
+        }
+        
+        template<typename Q>
+        bool contains(Q&& q) const {
+            return _inner._find(hash(q), q).second;
+        }
+        
+    };
+    
     template<typename K, typename V>
     void object_trace(const HashMap<K, V>& self) {
         return object_trace(self._inner);
@@ -676,6 +728,7 @@ namespace wry::gc {
     void object_shade(const HashMap<K, V>& self) {
         return object_shade(self._inner);
     }
+
 
     
     

@@ -15,12 +15,14 @@ namespace wry::sim {
     struct LocalizedEntity : Entity {
         
         Coordinate _location = {};
+        virtual void _object_scan() const override {
+        }
 
     };
     
     struct Spawner : LocalizedEntity {
                 
-        virtual void notify(World*);
+        virtual void notify(World*) override;
         
     };
 
@@ -28,14 +30,19 @@ namespace wry::sim {
         
         Value _of_this;
         
-        virtual void notify(World*);
+        virtual void notify(World*) override;
+        virtual void _object_scan() const override {
+            value_trace(_of_this);
+        }
 
     };
 
     struct Sink : LocalizedEntity {
                 
-        virtual void notify(World*);
-
+        virtual void notify(World*) override;
+        virtual void _object_scan() const override {
+        }
+        
     };
 
 } // namespace wry::sim
