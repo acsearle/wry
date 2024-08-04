@@ -123,6 +123,8 @@ namespace wry {
                         std::chrono::steady_clock::duration endurance = std::chrono::seconds(5)) {
             _logs.emplace(std::chrono::steady_clock::now() + endurance, v);
         }
+        
+        void shade_roots();
                 
     };
     

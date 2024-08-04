@@ -125,6 +125,12 @@ namespace wry::gc {
     }
 
     template<typename K, typename V>
+    void object_shade(const BasicEntry<K, V>& e) {
+        // object_trace(e._kv.first);
+        object_shade(e._kv.second);
+    }
+
+    template<typename K, typename V>
     void object_debug(const BasicEntry<K, V>& e) {
         // object_debug(e._kv.first);
         // object_debug(e._kv.second);
@@ -453,6 +459,11 @@ namespace wry::gc {
         object_trace(self._storage);
     }
 
+    template<typename T>
+    void object_shade(const BasicHashSetB<T>& self) {
+        object_shade(self._storage);
+    }
+
     
     // ?
     // object_shade
@@ -594,7 +605,13 @@ namespace wry::gc {
         object_trace(self._alpha);
         object_trace(self._beta);
     }
-    
+
+    template<typename T>
+    void object_shade(const BasicHashSetC<T>& self) {
+        object_shade(self._alpha);
+        object_shade(self._beta);
+    }
+
     
     
     template<typename K, typename V>
@@ -654,7 +671,12 @@ namespace wry::gc {
     void object_trace(const HashMap<K, V>& self) {
         return object_trace(self._inner);
     }
-    
+
+    template<typename K, typename V>
+    void object_shade(const HashMap<K, V>& self) {
+        return object_shade(self._inner);
+    }
+
     
     
     struct HeapHashMap : Object {

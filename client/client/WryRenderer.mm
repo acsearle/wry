@@ -1023,6 +1023,7 @@
 - (void)renderToMetalLayer:(nonnull CAMetalDisplayLinkUpdate*)update
 {
     wry::gc::mutator_handshake();
+    _model->shade_roots();
 
     using namespace ::simd;
     using namespace ::wry;

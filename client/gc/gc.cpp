@@ -702,7 +702,7 @@ namespace wry::gc {
         std::thread([](){
             assert(!thread_local_mutator);
             mutator_enter();
-            for (int i = 0; i != -1; ++i) {
+            for (int i = 0; i != 100; ++i) {
                 auto p = new HeapInt64(787);
                 
                 foo();

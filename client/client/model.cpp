@@ -112,4 +112,9 @@ namespace wry {
         
     }
 
+    void model::shade_roots() {
+        object_shade(_world._value_for_coordinate);
+    }
+    
+    
 } // namespace wry
