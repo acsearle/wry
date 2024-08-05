@@ -19,7 +19,7 @@ namespace wry::gc {
         
         mutator_enter();
         
-       auto* a = new RealTimeGarbageCollectedDynamicArray<Value>();
+       auto* a = new RealTimeGarbageCollectedDynamicArray<Traced<Value>>();
         
         assert(a->empty() == true);
         assert(a->size() == 0);

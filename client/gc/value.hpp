@@ -537,6 +537,9 @@ namespace wry::gc {
         __builtin_trap();
         self.store(value_make_null(), Ordering::ACQUIRE);
     }
+    inline void object_debug(const Value& self) {
+        value_debug(self);
+    }
 
     
 

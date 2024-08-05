@@ -606,7 +606,7 @@ namespace wry::gc {
         }
         
         void INode::_object_scan() const {
-            main.trace();
+            object_trace(main);
         }
         
         void LNode::_object_scan() const {

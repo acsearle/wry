@@ -1116,7 +1116,8 @@
         v.bitangent = make<float4>(0.0f, 1.0f, 0.0f, 0.0f);
         v.normal = make<float4>(0.0f, 0.0f, 1.0f, 0.0f);
         uint k = 0;
-        for (auto q : entities) {
+        for (size_t qi = 0; qi != entities.size(); ++qi) {
+            sim::Entity* q = entities[qi];
             
             if (auto p = dynamic_cast<wry::sim::Machine*>(q)) { // ugh
                 

@@ -14,34 +14,40 @@
 
 namespace wry::gc {
     
-    // A managed allocation, presented as an array
-        
+    // TODO: garbage collected containers are not a good fit with the references
+    // and iterators of standard C++ iterators, both because they hold
+    // Atomic<T> and need to incrementally copy stuff in the background, making
+    // addresses especially unstable
+    
+    // TODO: when erasing containers we need to have an in interface to cheaply
+    // passivate an element
+    
+    
+    
+    // Managed fixed sized arrays
+    //
+    // Indirect via a pointer, to prevent the header from bumping a power of
+    // two array size as needed by hash maps
+
     template<typename T>
     struct GarbageCollectedIndirectStaticArray : Object {
         
         T* const _data;
         const size_t _size;
         
+        void _invariant() {
+            assert(_data && _size);
+        }
+        
         explicit GarbageCollectedIndirectStaticArray(size_t elements)
         : _data((T*) calloc(elements, sizeof(T)))
         , _size(elements) {
             assert(_data);
             assert(std::has_single_bit(elements));
-            // std::uninitialized_default_construct_n(_data, _size);
         }
-        
-        explicit GarbageCollectedIndirectStaticArray(size_t elements, auto&& first)
-        : _data(calloc(elements, sizeof(T)))
-        , _size(elements) {
-            assert(std::has_single_bit(elements));
-            // std::uninitialized_copy_n(first, _size, _data);
-        }
-        
+                
         virtual ~GarbageCollectedIndirectStaticArray() override {
-            std::destroy_n(_data, _size);
-            Object::operator delete(_data);
-            auto sv = type_name<T>();
-            printf("~GarbageCollectedIndirectStaticArray<%.*s>[%zd]\n", (int)sv.size(), (const char*)sv.data(), _size);
+            free(_data);
         }
         
         size_t size() const { return _size; }
@@ -54,19 +60,33 @@ namespace wry::gc {
         const T* begin() const { return _data; }
         const T* end() const { return _data + _size; }
         
+        T& front() { return *_data; }
+        T& back() { return _data[_size - 1]; }
+        T& operator[](size_t i) const {
+            assert(i < _size);
+            return _data[i];
+        }
+        
         virtual void _object_scan() const override {
             for (const T& element : *this)
                 object_trace(element);
         }
         
         virtual void _object_debug() const override {
-            printf("(GarbageCollectedIndirectStaticArray)");
-            for (const T& element : *this)
+            auto sv = type_name<T>();
+            printf("GarbageCollectedIndirectStaticArray<%.*s>(%zd){ ", (int)sv.size(), (const char*)sv.data(), _size);
+            for (const T& element : *this) {
                 object_debug(element);
+                printf(", ");
+            }
+            printf("}");
         }
         
     };
     
+    // Direct via a flexible array member
+    //
+    // Not efficient for powers of two
     
     template<typename T>
     struct GarbageCollectedFlexibleArrayMemberStaticArray : Object {
@@ -98,18 +118,9 @@ namespace wry::gc {
         
         explicit GarbageCollectedFlexibleArrayMemberStaticArray(size_t elements)
         : _size(elements) {
-            // std::uninitialized_default_construct_n(_data, _size);
-        }
-
-        explicit GarbageCollectedFlexibleArrayMemberStaticArray(size_t elements, auto&& first)
-        : _size(elements) {
-            // std::uninitialized_copy_n(first, _size, _data);
         }
 
         virtual ~GarbageCollectedFlexibleArrayMemberStaticArray() override {
-            // std::destroy_n(_data, _size);
-            auto sv = type_name<T>();
-            printf("~GarbageCollectedFlexibleArrayMemberStaticArray<%.*s>[%zd]\n", (int)sv.size(), (const char*)sv.data(), _size);
         }
         
         size_t size() const { return _size; }
@@ -121,43 +132,58 @@ namespace wry::gc {
         const T* data() const { return _data; }
         const T* begin() const { return _data; }
         const T* end() const { return _data + _size; }
+        
+        T& front() { return *_data; }
+        T& back() { return _data[_size - 1]; }
+        T& operator[](size_t i) const {
+            assert(i < _size);
+            return _data[i];
+        }
 
         virtual void _object_scan() const override {
             for (const T& element : *this)
                 object_trace(element);
         }
         
+        virtual void _object_debug() const override {
+            auto sv = type_name<T>();
+            printf("GarbageCollectedFlexibleArrayMemberStaticArray<%.*s>(%zd){ ", (int)sv.size(), (const char*)sv.data(), _size);
+            for (const T& element : *this) {
+                object_debug(element);
+                printf(", ");
+            }
+            printf("}");
+        }
     };
     
 
-    // DynamicArray is a garbage-collected version of the conventional
-    // std::vector
-    //
-    // Like std::vector, some operations are amortized O(1) and it is thus not
-    // suitable for soft real time.
     
+    
+    
+    // Manage a valid subset of an array
+        
     template<typename T>
-    struct GarbageCollectedDynamicArray {
+    struct GarbageCollectedArrayC {
         
         T* _begin;
         T* _end;
         T* _capacity;
         Traced<GarbageCollectedFlexibleArrayMemberStaticArray<T>*> _storage;
         
-        GarbageCollectedDynamicArray()
+        GarbageCollectedArrayC()
         : _begin(nullptr)
         , _end(nullptr)
         , _capacity(nullptr)
         , _storage(nullptr) {}
         
-        GarbageCollectedDynamicArray(GarbageCollectedDynamicArray&& other)
+        GarbageCollectedArrayC(GarbageCollectedArrayC&& other)
         : _begin(exchange(other._begin, nullptr))
         , _end(exchange(other._end, nullptr))
         , _capacity(exchange(other._capacity, nullptr))
         , _storage(std::move(other._storage)) {
         }
         
-        void swap(GarbageCollectedDynamicArray& other) {
+        void swap(GarbageCollectedArrayC& other) {
             using std::swap;
             swap(_begin, other._begin);
             swap(_end, other._end);
@@ -165,10 +191,11 @@ namespace wry::gc {
             swap(_storage, other._storage);
         }
         
-        GarbageCollectedDynamicArray& operator=(GarbageCollectedDynamicArray&& other) {
+        GarbageCollectedArrayC& operator=(GarbageCollectedArrayC&& other) {
             _begin = exchange(other._begin, nullptr);
             _end = exchange(other._end, nullptr);
             _capacity = exchange(other._capacity, nullptr);
+            // TODO: atomic exchange?
             _storage = std::move(other._storage);
         }
         
@@ -189,6 +216,7 @@ namespace wry::gc {
         T& front() { return *_begin; }
         T& back() { return *(_end - 1); }
 
+        /*
         void _install(GarbageCollectedFlexibleArrayMemberStaticArray<T>* new_) {
             _end = std::move(begin(), end(), new_->begin());
             _begin = new_->begin();
@@ -206,70 +234,76 @@ namespace wry::gc {
             _install(GarbageCollectedFlexibleArrayMemberStaticArray<T>::with_at_least(capacity() + 1));
             assert(_end != _capacity);
         }
+         */
+        
+        void _clear_and_reserve(size_t new_capacity) {
+            auto* p = GarbageCollectedFlexibleArrayMemberStaticArray<T>::with_at_least(new_capacity);
+            _begin = _end = p->_data;
+            _capacity = _begin + p->_size;
+            _storage = p;
+        }
         
         template<typename V>
         void push_back(V&& value) {
-            if (full())
-                _grow();
+            assert(!full());
             *_end++ = std::forward<V>(value);
         }
         
         void pop_back() {
-            if (empty())
-                abort();
+            assert(!empty());
             --_end;
-            *_end = T();
+            // TODO: passivate?
+            // *_end = T();
         }
         
         void _pop_front() {
-            if (empty())
-                abort();
-            *_begin = T();
+            assert(!empty());
+            // TODO: passivate?
             ++_begin;
         }
         
         template<typename V>
         void _push_front(V&& value) {
-            if (!_storage || _begin == _storage->begin())
-                abort();
+            assert(_storage && (_begin != _storage->begin()));
             *--_begin = std::forward<V>(value);
         }
                 
         void clear() {
-            for (auto& element : *this)
-                element = T();
+            // for (auto& element : *this)
+                // element = T();
             _end = _begin;
         }
         
-        void shrink_to_fit() {
-            _install(GarbageCollectedFlexibleArrayMemberStaticArray<T>::with_exactly(size()));
-        }
+        // void shrink_to_fit() {
+            // _install(GarbageCollectedFlexibleArrayMemberStaticArray<T>::with_exactly(size()));
+        //}
         
-        void reserve(size_t n) {
-            if (n > capacity()) {
-                _install(GarbageCollectedFlexibleArrayMemberStaticArray<T>::with_at_least(n));
-            }
-        }
+        //void reserve(size_t n) {
+            //if (n > capacity()) {
+               // _install(GarbageCollectedFlexibleArrayMemberStaticArray<T>::with_at_least(n));
+            //}
+        //}
+        
         
     };
     
     template<typename T>
-    void swap(GarbageCollectedDynamicArray<T>& a, GarbageCollectedDynamicArray<T>& b) {
+    void swap(GarbageCollectedArrayC<T>& a, GarbageCollectedArrayC<T>& b) {
         a.swap(b);
     }
     
     template<typename T>
-    void object_shade(const GarbageCollectedDynamicArray<T>& self) {
+    void object_shade(const GarbageCollectedArrayC<T>& self) {
         object_shade(self._storage);
     }
 
     template<typename T>
-    void object_trace(const GarbageCollectedDynamicArray<T>& self) {
+    void object_trace(const GarbageCollectedArrayC<T>& self) {
         object_trace(self._storage);
     }
 
     template<typename T>
-    void object_debug(const GarbageCollectedDynamicArray<T>& self) {
+    void object_debug(const GarbageCollectedArrayC<T>& self) {
         printf("(GarbageCollectedDynamicArray)");
         object_debug(self._storage);
     }
@@ -292,14 +326,14 @@ namespace wry::gc {
     template<typename T>
     struct RealTimeGarbageCollectedDynamicArray {
         
+        GarbageCollectedArrayC<T> _alpha;
+        GarbageCollectedArrayC<T> _beta;
+        
         enum State {
             INITIAL,
             NORMAL,
             RESIZING,
         };
-
-        GarbageCollectedDynamicArray<T> _alpha;
-        GarbageCollectedDynamicArray<T> _beta;
         State _state;
         
         RealTimeGarbageCollectedDynamicArray()
@@ -313,7 +347,7 @@ namespace wry::gc {
                     case INITIAL: {
                         assert(_alpha.empty());
                         assert(_beta.empty());
-                        _alpha.reserve(1);
+                        _alpha._clear_and_reserve(1);
                         _state = NORMAL;
                         break;
                     }
@@ -323,7 +357,7 @@ namespace wry::gc {
                             return;
                         }
                         assert(_beta.empty());
-                        _beta.reserve(_alpha.size() * 2);
+                        _beta._clear_and_reserve(_alpha.size() * 2);
                         _beta._begin += _alpha.size();
                         _beta._end = _beta._begin;
                         _state = RESIZING;
@@ -428,7 +462,7 @@ namespace wry::gc {
             _alpha.clear();
             _beta.clear();
         }
-                
+                        
     }; // struct RealTimeGarbageCollectedDynamicArray<T>
     
         

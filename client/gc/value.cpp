@@ -493,7 +493,7 @@ namespace wry::gc {
 
     Value value_make_array() {
         Value result;
-        result._data = (uint64_t)(new Box<RealTimeGarbageCollectedDynamicArray<Value>>);
+        result._data = (uint64_t)(new Box<RealTimeGarbageCollectedDynamicArray<Traced<Value>>>);
         return result;
     }
     

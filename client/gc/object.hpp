@@ -100,7 +100,7 @@ namespace wry::gc {
         T* get() const;
         T* take();
         
-        void trace() const;
+        // void trace() const;
                 
     }; // struct Traced<T*>
         
@@ -121,7 +121,7 @@ namespace wry::gc {
         bool compare_exchange_weak(T*& expected, T* desired, Ordering success, Ordering failure);
         bool compare_exchange_strong(T*& expected, T* desired, Ordering success, Ordering failure);
         
-        void trace() const;
+        // void trace() const;
         
     }; // struct Traced<Atomic<T*>>
     
@@ -239,12 +239,7 @@ namespace wry::gc {
         object_shade(discovered);
         return discovered;
     }
-    
-    template<typename T>
-    void object_passivate(Traced<T*>& self) {
-        (void) self.take();
-    }
-    
+        
     
     
     
@@ -291,7 +286,7 @@ namespace wry::gc {
         return result;
     }
     
-    
+    /*
     template<typename T>
     void Traced<T*>::trace() const {
         object_trace(_object.load(Ordering::ACQUIRE));
@@ -301,7 +296,29 @@ namespace wry::gc {
     void Traced<Atomic<T*>>::trace() const {
         object_trace(_object.load(Ordering::ACQUIRE));
     }
+     */
     
+    template<typename T>
+    void object_trace(const Traced<T*>& self) {
+        object_trace(self._object.load(Ordering::ACQUIRE));
+    }
+
+    template<typename T>
+    void object_trace(const Traced<Atomic<T*>>& self) {
+        object_trace(self._object.load(Ordering::ACQUIRE));
+    }
+
+    
+    
+    
+    
+    
+    
+    template<typename T>
+    void object_passivate(Traced<T*>& self) {
+        (void) self.take();
+    }
+
     template<typename T>
     void object_passivate(Traced<Atomic<T*>>& self) {
         // TODO: suspicious that it may never be correct to do this

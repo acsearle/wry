@@ -26,7 +26,7 @@ namespace wry::sim {
         
         i64 _on_arrival = OPCODE_NOOP;
         // Array<Value> _stack;
-        gc::RealTimeGarbageCollectedDynamicArray<Value> _stack;
+        gc::RealTimeGarbageCollectedDynamicArray<gc::Traced<Value>> _stack;
 
         // The _old_* and _new_* states represent the beginning and end states
         // of travelling.  They are used by the visualization as a lerp

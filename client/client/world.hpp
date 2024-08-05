@@ -78,7 +78,7 @@ namespace wry::sim {
         // Participants, in no particular order
         
         // Array<Entity*> _entities;
-        gc::RealTimeGarbageCollectedDynamicArray<Entity*> _entities;
+        gc::RealTimeGarbageCollectedDynamicArray<gc::Traced<Entity*>> _entities;
 
         // Conditions
         

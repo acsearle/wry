@@ -16,7 +16,6 @@
 #include "debug.hpp"
 #include "object.hpp"
 #include "value.hpp"
-#include "HeapManaged.hpp"
 #include "RealTimeGarbageCollectedDynamicArray.hpp"
 #include "hash.hpp"
 
