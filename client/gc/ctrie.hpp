@@ -12,7 +12,11 @@
 
 namespace wry::gc {
     
+    
+    
     struct HeapString;
+    
+    
     
     namespace _ctrie {
 
@@ -60,6 +64,7 @@ namespace wry::gc {
     } // namespace _ctrie
     
     
+    
     struct Ctrie : Object {
         
         const _ctrie::INode* root;
@@ -73,6 +78,7 @@ namespace wry::gc {
         virtual void _object_scan() const override;
         
     }; // struct Ctrie
+    
     
     
 } // namespace wry::gc

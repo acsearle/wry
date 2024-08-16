@@ -9,24 +9,73 @@
 #define object_hpp
 
 #include "atomic.hpp"
-#include "color.hpp"
-#include "traced.hpp"
-#include "object.hpp"
+#include "concepts.hpp"
+#include "type_traits.hpp"
 
 namespace wry::gc {
+        
+    using hash_t = std::size_t;
     
+    // Defines the set of free functions defining the interface of garbage
+    // collection participants, and the specific base class for garbage
+    // collection objects that implement those methods via virtual dispatch.
+    //
+    // A typical pattern is that a container will hold and trace garbage
+    // collected elements, but not itself be an object; it will be embedded in
+    // a larger object.  All of these entities support the object_ interface.
+    
+    template<typename T>
+    concept ObjectTrait = requires(T& ref, const T& cref) {
+        
+        // not everything is sensibly hashable
+        // pointer hash for mutable containers makes no sense
+        // pointer identity for strings relies on interning, for bignums also
+        // relies on interning
+        { object_hash(cref) } -> std::convertible_to<hash_t>;
+        
+        { object_debug(cref) };
+        { object_passivate(ref) };
+        { object_shade(cref) };
+        { object_trace(cref) };
+        { object_trace_weak(cref) };
+    };
+    
+    // from a Rust perspective, to efficiently allow thin pointers + dynamic
+    // dispatch we have to have push all traits up to a common base class
+
     struct Value;
     
-    using hash_t = std::size_t;
-
+    // Tricolor abstraction color
+    
+    enum class Color {
+        WHITE = 0,
+        BLACK = 1,
+        GRAY  = 2,
+        RED   = 3,
+    };
+    
+    struct AtomicEncodedColor {
+        
+        Atomic<std::underlying_type_t<Color>> _encoded;
+        
+        AtomicEncodedColor();
+        Color load() const;
+        bool compare_exchange(Color& expected, Color desired);
+        
+    };
+    
+    // TODO: VirtualObject?
     struct Object {
         
-        static void* operator new(size_t count);
-        static void* operator new[](size_t count) = delete;
+        static void* operator new(size_t number_of_bytes);
+        static void* operator new[](size_t number_of_bytes) = delete;
+        
+        // TODO: delete(number_of_bytes) p for logging?
         static void operator delete(void*);
         static void operator delete[](void*) = delete;
         
-        mutable Atomic<Encoded<Color>> color;
+        // TODO: is it useful to have a base class above tricolored + sweep?
+        mutable AtomicEncodedColor color;
         
         Object();
         Object(const Object&);
@@ -38,21 +87,22 @@ namespace wry::gc {
         virtual std::strong_ordering operator<=>(const Object&) const;
         virtual bool operator==(const Object&) const;
         
-        virtual void _object_debug() const;
         virtual hash_t _object_hash() const;
+        virtual void _object_debug() const;
         virtual void _object_shade() const;
-        virtual void _object_scan() const = 0;
-        virtual Color _object_sweep() const;
         virtual void _object_trace() const;
         virtual void _object_trace_weak() const;
+                
+        virtual void _object_scan() const = 0;
+        virtual Color _object_sweep() const;
 
+        // TODO: is it useful to have a base class above the Value interface?
+        virtual Value _value_insert_or_assign(Value key, Value value);
         virtual bool _value_empty() const;
         virtual size_t _value_size() const;
         virtual bool _value_contains(Value key) const;
         virtual Value _value_find(Value key) const;
-        virtual Value _value_insert_or_assign(Value key, Value value);
         virtual Value _value_erase(Value key);
-
         virtual Value _value_add(Value right) const;
         virtual Value _value_sub(Value right) const;
         virtual Value _value_mul(Value right) const;
@@ -63,269 +113,68 @@ namespace wry::gc {
 
     }; // struct Object
     
-    
-    void object_debug(const Object*);
-    void object_shade(const Object*);
-    size_t object_hash(const Object*);
-    void object_trace(const Object*);
-    void object_trace_weak(const Object*);
-    void object_passivate(const Object*& self);
-    
-    template<typename T>
-    struct Traced<T*> {
-        
-        Atomic<T*> _object;
-        
-        Traced() = default;
-        Traced(const Traced& other);
-        Traced(Traced&& other);
-        explicit Traced(T*const& other);
-        explicit Traced(std::nullptr_t);
-        ~Traced() = default;
-        Traced& operator=(const Traced& other);
-        Traced& operator=(Traced&& other);
-        Traced& operator=(T*const& other);
-        Traced& operator=(std::nullptr_t);
-        
-        void swap(Traced<T*>& other);
-        
-        T* operator->() const;
-        bool operator!() const;
-        explicit operator bool() const;
-        operator T*() const;
-        T& operator*() const;
-        bool operator==(const Traced& other) const;
-        auto operator<=>(const Traced& other) const;
-        
-        T* get() const;
-        T* take();
-        
-        // void trace() const;
-                
-    }; // struct Traced<T*>
-        
-    template<typename T>
-    struct Traced<Atomic<T*>> {
-        
-        Atomic<T*> _object;
-        
-        Traced() = default;
-        Traced(const Traced&) = delete;
-        explicit Traced(T* object);
-        explicit Traced(std::nullptr_t);
-        Traced& operator=(const Traced&) = delete;
-        
-        T* load(Ordering order) const;
-        void store(T* desired, Ordering order);
-        T* exchange(T* desired, Ordering order);
-        bool compare_exchange_weak(T*& expected, T* desired, Ordering success, Ordering failure);
-        bool compare_exchange_strong(T*& expected, T* desired, Ordering success, Ordering failure);
-        
-        // void trace() const;
-        
-    }; // struct Traced<Atomic<T*>>
-    
-    
+    template<std::derived_from<Object> T> hash_t object_hash(T*const& self);
+    template<std::derived_from<Object> T> void object_debug(T*const& self);
+    template<std::derived_from<Object> T> void object_passivate(T*& self);
+    template<std::derived_from<Object> T> void object_shade(T*const& self);
+    template<std::derived_from<Object> T> void object_trace(T*const& self);
+    template<std::derived_from<Object> T> void object_trace_weak(T*const& self);
+      
+} // namespace wry::gc
 
-    
-    
-    template<typename T>
-    Traced<T*>::Traced(const Traced& other)
-    : Traced(other.get()) {
-    }
 
-    template<typename T>
-    Traced<T*>::Traced(Traced&& other)
-    : Traced(other.take()) {
-    }
-
-    template<typename T>
-    Traced<T*>& Traced<T*>::operator=(const Traced& other) {
-        return operator=(other.get());
-    }
-
-    template<typename T>
-    Traced<T*>& Traced<T*>::operator=(Traced&& other) {
-        return operator=(other.take());
-    }
-
-    template<typename T>
-    Traced<T*>::Traced(T*const& other)
-    : _object(other) {
-    }
-
-    template<typename T>
-    Traced<T*>::Traced(std::nullptr_t)
-    : _object(nullptr) {
-    }
+namespace wry::gc {
     
-    template<typename T>
-    void Traced<T*>::swap(Traced<T*>& other) {
-        T* a = get();
-        T* b = other.get();
-        _object._store(b);
-        other._object._store(a);
-        object_shade(a);
-        object_shade(b);
-    }
-
+    // useful defaults
     
-    template<typename T>
-    Traced<T*>& Traced<T*>::operator=(T*const& other) {
-        // Safety:
-        //     An atomic::exchange is not used here because this_thread is
-        // the only writer.
-        T* discovered = get();
-        _object.store(other, Ordering::RELEASE);
-        object_shade(discovered);
-        object_shade(other);
-        return *this;
-    }
-
-    template<typename T>
-    Traced<T*>& Traced<T*>::operator=(std::nullptr_t) {
-        // Safety:
-        //     See above.
-        T* discovered = get();
-        _object.store(nullptr, Ordering::RELAXED);
-        object_shade(discovered);
-        return *this;
-    }
-    
-    template<typename T>
-    T* Traced<T*>::operator->() const {
-        return _object.load(Ordering::RELAXED);
-    }
-    
-    template<typename T>
-    bool Traced<T*>::operator!() const {
-        return !get();
-    }
-    
-    template<typename T>
-    Traced<T*>::operator bool() const {
-        return (bool)get();
-    }
-    
-    template<typename T>
-    Traced<T*>::operator T*() const {
-        return get();
-    }
-    
-    template<typename T>
-    T& Traced<T*>::operator*() const {
-        return *get();
-    }
-    
-    template<typename T>
-    bool Traced<T*>::operator==(const Traced& other) const {
-        return get() == other.get();
-    }
-    
-    template<typename T>
-    auto Traced<T*>::operator<=>(const Traced& other) const {
-        return get() <=> other.get();
-    }
-    
-    template<typename T>
-    T* Traced<T*>::get() const {
-        return _object.load(Ordering::RELAXED);
-    }
-    
-    template<typename T>
-    T* Traced<T*>::take() {
-        T* discovered = get();
-        _object.store(nullptr, Ordering::RELAXED);
-        object_shade(discovered);
-        return discovered;
+    inline void Object::_object_trace_weak() const {
+        _object_trace();
     }
         
-    
-    
-    
-    template<typename T>
-    Traced<Atomic<T*>>::Traced(T* object)
-    : _object(object) {
+    inline Color Object::_object_sweep() const {
+        return color.load();
     }
     
-    template<typename T>
-    T* Traced<Atomic<T*>>::load(Ordering order) const {
-        return _object.load(order);
+    
+    // implementation of
+    
+    template<std::derived_from<Object> T>
+    hash_t object_hash(T*const& self ) {
+        return self->_object_hash();
     }
     
-    template<typename T>
-    void Traced<Atomic<T*>>::store(T* desired, Ordering order) {
-        (void) exchange(desired, order);
-    }
-    
-    template<typename T>
-    T* Traced<Atomic<T*>>::exchange(T* desired, Ordering order) {
-        T* discovered = _object.exchange(desired, order);
-        object_shade(discovered);
-        object_shade(desired);
-        return discovered;
-    }
-    
-    template<typename T>
-    bool Traced<Atomic<T*>>::compare_exchange_weak(T*& expected, T* desired, Ordering success, Ordering failure) {
-        bool result = _object.compare_exchange_weak(expected, desired, success, failure);
-        if (result) {
-            object_shade(expected);
-            object_shade(desired);
+    template<std::derived_from<Object> T>
+    void object_debug(T*const& self) {
+        if (self) {
+            self->_object_debug();
+        } else {
+            printf("(const Object*)nullptr\n");
         }
-        return result;
-    }
-    
-    template<typename T>
-    bool Traced<Atomic<T*>>::compare_exchange_strong(T*& expected, T* desired, Ordering success, Ordering failure) {
-        bool result = _object.compare_exchange_strong(expected, desired, success, failure);
-        if (result) {
-            object_shade(expected);
-            object_shade(desired);
-        }
-        return result;
-    }
-    
-    /*
-    template<typename T>
-    void Traced<T*>::trace() const {
-        object_trace(_object.load(Ordering::ACQUIRE));
-    }
-    
-    template<typename T>
-    void Traced<Atomic<T*>>::trace() const {
-        object_trace(_object.load(Ordering::ACQUIRE));
-    }
-     */
-    
-    template<typename T>
-    void object_trace(const Traced<T*>& self) {
-        object_trace(self._object.load(Ordering::ACQUIRE));
     }
 
-    template<typename T>
-    void object_trace(const Traced<Atomic<T*>>& self) {
-        object_trace(self._object.load(Ordering::ACQUIRE));
+    template<std::derived_from<Object> T>
+    void object_passivate(T*& self) {
+        self = nullptr;
     }
 
-    
-    
-    
-    
-    
-    
-    template<typename T>
-    void object_passivate(Traced<T*>& self) {
-        (void) self.take();
-    }
-
-    template<typename T>
-    void object_passivate(Traced<Atomic<T*>>& self) {
-        // TODO: suspicious that it may never be correct to do this
-        __builtin_trap();
-        object_shade(self._object.exchange(nullptr, Ordering::ACQUIRE));
+    template<std::derived_from<Object> T>
+    void object_shade(T*const& self) {
+        if (self)
+            self->_object_shade();
     }
     
+    template<std::derived_from<Object> T>
+    void object_trace(T*const& self) {
+        if (self)
+            self->_object_trace();
+    }
+    
+    template<std::derived_from<Object> T>
+    void object_trace_weak(T*const& self) {
+        if (self)
+            self->_object_trace_weak();
+    }
+        
 } // namespace wry::gc
 
 #endif /* object_hpp */

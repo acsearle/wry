@@ -12,7 +12,7 @@
 #include "sim.hpp"
 #include "entity.hpp"
 #include "debug.hpp"
-#include "RealTimeGarbageCollectedDynamicArray.hpp"
+#include "HeapArray.hpp"
 
 namespace wry::sim {
     

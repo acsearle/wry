@@ -13,13 +13,12 @@
 #include <random>
 
 #include "hash.hpp"
-#include "RealTimeGarbageCollectedDynamicArray.hpp"
+#include "HeapArray.hpp"
 #include "HeapTable.hpp"
 #include "utility.hpp"
 #include "value.hpp"
 #include "HeapString.hpp"
 #include "debug.hpp"
-#include "Box.hpp"
 
 
 namespace wry::gc {
@@ -101,7 +100,7 @@ namespace wry::gc {
     
 #undef X
     
-    size_t value_hash(const Value& self) {
+    size_t object_hash(const Value& self) {
         switch (_value_tag(self)) {
             case VALUE_TAG_OBJECT: {
                 const Object* object = _value_as_object(self);
@@ -296,8 +295,8 @@ namespace wry::gc {
 
     Traced<Value>& Traced<Value>::operator=(const Value& desired) {
         Value discovered = this->_atomic_value.exchange(desired, Ordering::RELEASE);
-        value_shade(desired);
-        value_shade(discovered);
+        object_shade(desired);
+        object_shade(discovered);
         return *this;
     }
 
@@ -372,7 +371,7 @@ namespace wry::gc {
     }
     
     
-    void value_shade(Value value) {
+    void object_shade(const Value& value) {
         if (_value_is_object(value)) {
             object_shade(_value_as_object(value));
         }
@@ -440,7 +439,11 @@ namespace wry::gc {
     }
 
     
-    void value_debug(const Value& self) {
+    void object_debug(const Traced<Value>& self) {
+        object_debug(self._atomic_value.load(Ordering::ACQUIRE));
+    }
+    
+    void object_debug(const Value& self) {
         switch (_value_tag(self)) {
             case VALUE_TAG_BOOLEAN:
                 return (void)printf("%s\n", value_as_boolean(self) ? "TRUE" : "FALSE");
@@ -490,10 +493,42 @@ namespace wry::gc {
         result._data = (uint64_t)(new HeapHashMap);
         return result;
     }
+    
+    
+    
+    struct ValueArray : Object {
+        
+        RealTimeGarbageCollectedDynamicArray<Traced<Value>> _inner;
+        
+        virtual void _object_scan() const { object_trace(_inner); }
+        virtual void _object_debug() const { object_debug(_inner); }
+        
+        virtual bool _value_empty() const { return _inner.empty(); }
+        virtual size_t _value_size() const { return _inner.size(); }
+
+        // bad interface for arrays, but bad enough?
+        // Lua notably avoids arrays to provide a table interface for everything
+        // deques without indexing may be what we actually want
+        virtual Value _value_insert_or_assign(Value key, Value value) {
+            int64_t i = key.as_int64_t();
+            Value old = value_make_null();
+            if (0 <= i && i < _inner.size()) {
+                old = _inner[i];
+                _inner[i] = value;
+            } else if (i == _inner.size()) {
+                _inner.push_back(value);
+            }
+            return old;
+        }
+        virtual bool _value_contains(Value key) const { return key.as_int64_t() < _inner.size(); }
+        virtual Value _value_find(Value key) const { abort(); }
+        
+    };
+    
 
     Value value_make_array() {
         Value result;
-        result._data = (uint64_t)(new Box<RealTimeGarbageCollectedDynamicArray<Traced<Value>>>);
+        result._data = (uint64_t)(new ValueArray);
         return result;
     }
     

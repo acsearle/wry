@@ -10,7 +10,8 @@
 
 #include <cassert>
 
-#include "../gc/object.hpp"
+#include "object.hpp"
+#include "traced.hpp"
 
 namespace wry {
 

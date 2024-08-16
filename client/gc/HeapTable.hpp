@@ -16,7 +16,7 @@
 #include "debug.hpp"
 #include "object.hpp"
 #include "value.hpp"
-#include "RealTimeGarbageCollectedDynamicArray.hpp"
+#include "HeapArray.hpp"
 #include "hash.hpp"
 
 namespace wry::gc {
@@ -134,6 +134,23 @@ namespace wry::gc {
         // object_debug(e._kv.first);
         // object_debug(e._kv.second);
     }
+    
+    template<typename K, typename V>
+    hash_t object_hash(const BasicEntry<K, V>& e) {
+        return object_hash(e._kv.first);
+    }
+    
+    template<typename K, typename V>
+    void object_passivate(BasicEntry<K, V>& e) {
+        object_passivate(e._kv.second);
+    }
+    
+    template<typename K, typename V>
+    void object_trace_weak(const BasicEntry<K, V>& e) {
+        object_trace(e);
+    }
+    
+    
 
     // Provides Robin Hood semantics on a power-of-two-sized array of
     // entries that satisfy minimal requirements.
@@ -362,11 +379,11 @@ namespace wry::gc {
     // owns storage, counts occupants, knows if full
     // still not dynamically resized, but can be manually resized when empty
     
-    template<typename T>
+    template<ObjectTrait T>
     struct BasicHashSetB {
         BasicHashSetA<T> _inner;
         size_t _size;
-        Traced<GarbageCollectedIndirectStaticArray<T>*> _storage;
+        Traced<ArrayStaticIndirect<T>*> _storage;
         
         BasicHashSetB()
         : _inner()
@@ -390,7 +407,7 @@ namespace wry::gc {
         void _reserve(size_t new_capacity) {
             assert(_size == 0);
             assert(std::has_single_bit(new_capacity));
-            auto* p = new GarbageCollectedIndirectStaticArray<T>(new_capacity);
+            auto* p = new ArrayStaticIndirect<T>(new_capacity);
             _inner._data = p->data();
             _inner._capacity = new_capacity;
             _size = 0;
@@ -499,7 +516,7 @@ namespace wry::gc {
     // In a read-heavy workload, once the last incremental resize is completed
     // the only overhead is that find must check that _beta is nonempty.
     
-    template<typename T>
+    template<ObjectTrait T>
     struct BasicHashSetC {
         
         BasicHashSetB<T> _alpha;
@@ -780,6 +797,147 @@ namespace wry::gc {
         }
                 
     };
+    
+    
+    
+    
+    
+    
+    template<ObjectTrait K>
+    struct BasicHashSetEntry {
+        K _key;
+        bool _occupied;
+        
+        bool occupied() const { return _occupied; }
+        bool vacant() const { return !_occupied; }
+        void vacate() {
+            assert(_occupied);
+            _occupied = false;
+        }
+        
+        size_t hash() const {
+            using wry::hash;
+            return hash(_key);
+        }
+        
+        template<typename J>
+        static size_t hash(const J& j) {
+            return object_hash(j);
+        }
+                
+        void assign(BasicHashSetEntry&& other) {
+            assert(other._occupied);
+            _key = std::move(other._key);
+            _occupied = true;
+        }
+        
+        template<typename J>
+        void assign(J&& j) {
+            _key = std::forward<J>(j);
+            _occupied = true;
+        }
+        
+        template<typename J>
+        bool equivalent(size_t h, J&& j) const {
+            assert(_occupied);
+            return _key == j;
+        }
+        
+    };
+    
+    
+    
+    template<typename K>
+    void object_trace(const BasicHashSetEntry<K>& e) {
+        object_trace(e._key);
+    }
+    
+    template<typename K>
+    void object_shade(const BasicHashSetEntry<K>& e) {
+        object_shade(e._key);
+    }
+    
+    template<typename K>
+    void object_debug(const BasicHashSetEntry<K>& e) {
+        object_debug(e._key);
+    }
+    
+    template<typename K>
+    hash_t object_hash(const BasicHashSetEntry<K>& e) {
+        return object_hash(e._key);
+    }
+    
+    template<typename K>
+    void object_passivate(BasicHashSetEntry<K>& e) {
+        object_passivate(e._key);
+    }
+    
+    template<typename K>
+    void object_trace_weak(const BasicHashSetEntry<K>& e) {
+        object_trace(e);
+    }
+    
+    
+    
+    
+    
+    
+    
+    template<ObjectTrait K>
+    struct HashSet {
+        
+        // TODO: Traced<K>
+        // More generally, decide on Traced by some typefunction to capture
+        // pointers convertible Object and Values and...
+        
+        using T = BasicHashSetEntry<Traced<K>>;
+        
+        // TODO: sort out const-correctness
+        mutable BasicHashSetC<T> _inner;
+        
+        void _invariant() const {
+            _inner._invariant();
+        }
+        
+        size_t size() const {
+            return _inner.size();
+        }
+        
+        template<typename J>
+        void write(J&& j) {
+            size_t h = hash(j);
+            _inner._insert_or_assign(h, j);
+        }
+        
+        template<typename Q>
+        void erase(Q&& q) {
+            size_t h = hash(q);
+            _inner._erase(h, q);
+        }
+        
+        bool empty() const {
+            return _inner.empty();
+        }
+        
+        template<typename Q>
+        bool contains(Q&& q) const {
+            return _inner._find(hash(q), q).second;
+        }
+        
+    };
+    
+    template<typename K>
+    void object_trace(const HashSet<K>& self) {
+        return object_trace(self._inner);
+    }
+    
+    template<typename K>
+    void object_shade(const HashSet<K>& self) {
+        return object_shade(self._inner);
+    }
+
+    
+    
 
 } // namespace wry::gc
 

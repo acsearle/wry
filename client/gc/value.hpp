@@ -17,6 +17,7 @@
 
 namespace wry::gc {
     
+    // TODO: which string view?
     using std::string_view;
         
     struct _value_subscript_result_t;
@@ -24,6 +25,8 @@ namespace wry::gc {
     struct Value {
         
         uint64_t _data;
+        
+        // implicit construction from vocabulary types
                         
         constexpr Value() = default;
         constexpr Value(nullptr_t);
@@ -35,13 +38,19 @@ namespace wry::gc {
         constexpr Value(const char (&ntbs)[N]);
         Value(string_view);
                         
+        // TODO: call syntax
         Value operator()(/* args type? */) const;
         
+        // TODO: subscript syntax; probably get/set is the best.  We can't hand
+        // out references into the backing array which will be atomic or
+        // immutable
         Value operator[](Value) const;
-        constexpr explicit operator bool() const;
-        
         _value_subscript_result_t operator[](Value);
-        
+
+        // implicit conversion
+        constexpr explicit operator bool() const;
+
+        // TODO: make free functions
         constexpr bool is_opcode() const;
         constexpr int as_opcode() const;
         
@@ -54,9 +63,12 @@ namespace wry::gc {
 
     // gc methods
     
-    void value_debug(const Value&);
-    void value_shade(Value value);
-    void value_trace(Value);
+    size_t object_hash(const Value&);
+    void object_debug(const Value&);
+    void object_passivate(Value&);
+    void object_shade(const Value&);
+    void object_trace(const Value&);
+    void object_trace_weak(const Value&);
 
     constexpr Value value_make_boolean_with(bool flag);
     constexpr Value value_make_character_with(int utf32);
@@ -99,7 +111,6 @@ namespace wry::gc {
     Value value_find(const Value& self, Value key);
     Value value_insert_or_assign(Value& self, Value key, Value value);
     Value value_erase(Value& self, Value key);
-    size_t value_hash(const Value&);
     size_t value_size(const Value&);
     void value_push_back(const Value&, Value value);
     void value_pop_back(const Value&);
@@ -166,8 +177,13 @@ namespace wry::gc {
         Value get() const;
     };
     
-    void value_trace(const Traced<Value>& self);
-    
+    size_t object_hash(const Traced<Value>&);
+    void object_debug(const Traced<Value>&);
+    void object_passivate(Traced<Value>&);
+    void object_shade(const Traced<Value>&);
+    void object_trace(const Traced<Value>&);
+    void object_trace_weak(const Traced<Value>&);
+
     template<>
     struct Traced<Atomic<Value>> {
         
@@ -186,7 +202,12 @@ namespace wry::gc {
 
     };
     
-    void value_trace(const Traced<Atomic<Value>>& self);
+    size_t object_hash(const Traced<Atomic<Value>>&);
+    void object_debug(const Traced<Atomic<Value>>&);
+    void object_passivate(Traced<Atomic<Value>>&);
+    void object_shade(const Traced<Atomic<Value>>&);
+    void object_trace(const Traced<Atomic<Value>>&);
+    void object_trace_weak(const Traced<Atomic<Value>>&);
 
     
     
@@ -263,20 +284,32 @@ namespace wry::gc {
     
     
     
-    inline void value_trace(Value a) {
+    inline void object_trace(const Value& a) {
         if (_value_is_object(a))
             object_trace(_value_as_object(a));
     }
 
-    inline void value_trace(const Traced<Value>& self) {
-        value_trace(self._atomic_value.load(Ordering::ACQUIRE));
+    inline void object_trace(const Traced<Value>& self) {
+        object_trace(self._atomic_value.load(Ordering::ACQUIRE));
     }
 
-    inline void value_trace(const Traced<Atomic<Value>>& self) {
-        value_trace(self._atomic_value.load(Ordering::ACQUIRE));
+    inline void object_trace(const Traced<Atomic<Value>>& self) {
+        object_trace(self._atomic_value.load(Ordering::ACQUIRE));
     }
 
-   
+    inline void object_passivate(Value& self) {
+        self._data = 0;
+    }
+    
+    inline void object_passivate(Traced<Value>& self) {
+        self._atomic_value.exchange(value_make_null(), Ordering::RELAXED);
+    }
+    
+    inline void object_passivate(Traced<Atomic<Value>>& self) {
+        // TODO: Is it ever right to call this?
+        __builtin_trap();
+        self.store(value_make_null(), Ordering::ACQUIRE);
+    }
     
     // user defined literals
     
@@ -512,34 +545,7 @@ namespace wry::gc {
         return {meta, code};
     }
     
-    inline void object_trace(const Traced<Value>& value) {
-        return value_trace(value);
-    }
 
-    inline void object_trace(const Traced<Atomic<Value>>& value) {
-        return value_trace(value);
-    }
-    
-    inline void object_trace(const Value& value) {
-        return value_trace(value);
-    }
-    
-    inline void object_passivate(Value& self) {
-        self = value_make_null();
-    }
-    
-    inline void object_passivate(Traced<Value>& self) {
-        self = value_make_null();
-    }
-    
-    inline void object_passivate(Traced<Atomic<Value>>& self) {
-        // TODO: Is it ever right to call this?
-        __builtin_trap();
-        self.store(value_make_null(), Ordering::ACQUIRE);
-    }
-    inline void object_debug(const Value& self) {
-        value_debug(self);
-    }
 
     
 
@@ -550,7 +556,7 @@ namespace wry::gc {
 namespace wry {
     
     inline size_t hash(const gc::Value& value) {
-        return gc::value_hash(value);
+        return gc::object_hash(value);
     }
     
     

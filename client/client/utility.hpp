@@ -24,15 +24,31 @@ namespace wry {
     
     // # from C++23
     
-    template<typename T, typename U>
-    [[nodiscard]] constexpr auto&& forward_like(U&& value) {
-        using T2 = std::remove_reference_t<T>;
-        using U2 = std::remove_reference_t<U>;
-        using U3 = std::conditional_t<std::is_const_v<T2>, std::add_const_t<U2>, U2>;
-        using U4 = std::conditional_t<std::is_volatile_v<T2>, std::add_volatile_t<U3>, U3>;
-        using U5 = std::conditional_t<std::is_lvalue_reference_v<T>,
-        std::add_lvalue_reference_t<U4>, std::add_rvalue_reference_t<U4>>;
-        return static_cast<U5>(value);
+    // https://en.cppreference.com/w/cpp/utility/forward_like
+    template<class T, class U>
+    constexpr auto&& forward_like(U&& x) noexcept
+    {
+        constexpr bool is_adding_const = std::is_const_v<std::remove_reference_t<T>>;
+        if constexpr (std::is_lvalue_reference_v<T&&>)
+        {
+            if constexpr (is_adding_const)
+                return std::as_const(x);
+            else
+                return static_cast<U&>(x);
+        }
+        else
+        {
+            if constexpr (is_adding_const)
+                return std::move(std::as_const(x));
+            else
+                return std::move(x);
+        }
+    }
+    
+    // https://en.cppreference.com/w/cpp/utility/to_underlying
+    template< class Enum >
+    constexpr std::underlying_type_t<Enum> to_underlying( Enum e ) noexcept {
+        return static_cast<std::underlying_type_t<Enum>>(e);
     }
 
     // # heterogenous reduce

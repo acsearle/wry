@@ -9,10 +9,9 @@
 
 #include <thread>
 
-#include "bag.hpp"
 #include "ctrie.hpp"
 #include "gc.hpp"
-#include "RealTimeGarbageCollectedDynamicArray.hpp"
+#include "HeapArray.hpp"
 #include "HeapTable.hpp"
 #include "tagged_ptr.hpp"
 #include "utility.hpp"
@@ -22,6 +21,179 @@
 #include "test.hpp"
 
 namespace wry::gc {
+    
+    // Bag is unordered storage optimized to make the mutator's common
+    // operations cheap
+    //
+    // True O(1) push to append to log
+    // True O(1) splice to combine logs
+    
+    template<typename T>
+    struct Bag;
+    
+    template<typename T>
+    struct Bag<T*> {
+        
+        struct Page {
+            
+            constexpr static size_t CAPACITY = (4096 - 16) / sizeof(T*);
+            
+            Page* next;
+            size_t count;
+            T* elements[CAPACITY];
+            
+            Page(Page* next, T* item) {
+                this->next = next;
+                count = 1;
+                elements[0] = item;
+            }
+            
+            size_t size() const { return count; }
+            bool empty() const { return !count; }
+            bool full() const { return count == CAPACITY; }
+            
+            T*const& top() const {
+                assert(!empty());
+                return elements[count - 1];
+            }
+            
+            T*& top() {
+                assert(!empty());
+                return elements[count - 1];
+            }
+            
+            void pop() {
+                assert(!empty());
+                --count;
+            }
+            
+            void push(T* x) {
+                assert(!full());
+                elements[count++] = std::move(x);
+            }
+            
+        };
+        
+        static_assert(sizeof(Page) == 4096);
+        
+        using value_type = T*;
+        using size_type = std::size_t;
+        using reference = T*&;
+        using const_reference = T*const&;
+        
+        Page* head;
+        Page* tail;
+        size_t count;
+        
+        Bag()
+        : head(nullptr)
+        , tail(nullptr)
+        , count(0) {
+        }
+        
+        Bag(const Bag&) = delete;
+        
+        Bag(Bag&& other)
+        : head(std::exchange(other.head, nullptr))
+        , tail(std::exchange(other.tail, nullptr))
+        , count(std::exchange(other.count, 0)) {
+        }
+        
+        ~Bag() {
+            assert(count == 0);
+            while (head) {
+                assert(head->empty());
+                assert(head->next || head == tail);
+                delete std::exchange(head, head->next);
+            }
+        }
+        
+        void swap(Bag& other) {
+            std::swap(head, other.head);
+            std::swap(tail, other.tail);
+            std::swap(count, other.count);
+        }
+        
+        Bag& operator=(const Bag&) = delete;
+        
+        Bag& operator=(Bag&& other) {
+            Bag(std::move(other)).swap(*this);
+            return *this;
+        }
+        
+        T* const& top() const {
+            assert(count);
+            Page* page = head;
+            for (;;) {
+                assert(page);
+                if (!page->empty())
+                    return page->top();
+                page = page->next;
+            }
+        }
+        
+        T*& top() {
+            assert(count);
+            for (;;) {
+                assert(head);
+                if (!head->empty())
+                    return head->top();
+                delete exchange(head, head->next);
+            }
+        }
+        
+        bool empty() const {
+            return !count;
+        }
+        
+        size_t size() const {
+            return count;
+        }
+        
+        void push(T* x) {
+            ++count;
+            assert(!head == !tail);
+            if (!head || head->full()) {
+                head = new Page(head, std::move(x));
+                if (!tail)
+                    tail = head;
+                return;
+            }
+            head->push(std::move(x));
+        }
+        
+        void pop() {
+            if (!count)
+                abort();
+            --count;
+            for (;;) {
+                assert(head);
+                if (!head->empty())
+                    return head->pop();
+                delete exchange(head, head->next);
+            }
+        }
+        
+        void splice(Bag&& other) {
+            if (other.head) {
+                if (head) {
+                    assert(tail && !(tail->next));
+                    tail->next = exchange(other.head, nullptr);
+                } else {
+                    assert(!tail && !count);
+                    head = exchange(other.head, nullptr);
+                }
+                tail = exchange(other.tail, nullptr);
+                count += exchange(other.count, 0);
+            }
+        }
+        
+    }; // struct Bag<T*>
+    
+    template<typename T>
+    void swap(Bag<T*>& left, Bag<T*>& right) {
+        left.swap(right);
+    }
         
     // Log of a Mutator's actions since the last handshake with the Collector
     
@@ -60,6 +232,7 @@ namespace wry::gc {
             NOTHING,
             COLLECTOR_DID_REQUEST_HANDSHAKE,
             COLLECTOR_DID_REQUEST_WAKEUP,
+            // COLLECTOR_DID_REQUEST_LEAVE,
             MUTATOR_DID_PUBLISH_LOGS,
             MUTATOR_DID_LEAVE,
             MUTATOR_DID_REQUEST_COLLECTOR_STOPS,
@@ -102,8 +275,8 @@ namespace wry::gc {
         // hot fields of the collector such as .gray_stack.__end_.
         
         struct alignas(CACHE_LINE_SIZE) {
-            Atomic<int> atomic_encoded_color_encoding;
-            Atomic<int> atomic_encoded_color_alloc;
+            Atomic<std::underlying_type_t<Color>> atomic_encoded_color_encoding;
+            Atomic<std::underlying_type_t<Color>> atomic_encoded_color_alloc;
             Ctrie* string_ctrie = nullptr;
         };
         
@@ -137,7 +310,30 @@ namespace wry::gc {
     
     Collector* global_collector = nullptr;
     
+
     
+    AtomicEncodedColor::AtomicEncodedColor()
+    : _encoded(global_collector->atomic_encoded_color_alloc.load(Ordering::RELAXED)) {
+    }
+    
+    Color AtomicEncodedColor::load() const {
+        std::underlying_type_t<Color> encoding = global_collector->atomic_encoded_color_encoding.load(Ordering::RELAXED);
+        std::underlying_type_t<Color> encoded_discovered = _encoded.load(Ordering::RELAXED);
+        return Color{encoded_discovered ^ encoding};
+    }
+    
+    bool AtomicEncodedColor::compare_exchange(Color &expected, Color desired) {
+        std::underlying_type_t<Color> encoding = global_collector->atomic_encoded_color_encoding.load(Ordering::RELAXED);
+        std::underlying_type_t<Color> encoded_expected = to_underlying(expected) ^ encoding;
+        std::underlying_type_t<Color> encoded_desired = to_underlying(desired) ^ encoding;
+        bool result = _encoded.compare_exchange_strong(encoded_expected,
+                                                       encoded_desired,
+                                                       Ordering::RELAXED,
+                                                       Ordering::RELAXED);
+        expected = gc::Color{encoded_expected ^ encoding};
+        return result;
+    }
+
     
     
     void* Object::operator new(size_t count) {
@@ -190,30 +386,7 @@ namespace wry::gc {
         }
     }
     
-    void Object::_object_trace_weak() const {
-        _object_trace();
-    }
-    
-    
-    Color Object::_object_sweep() const {
-        return color.load();
-    }
-    
-    void object_shade(const Object* object) {
-        if (object)
-            object->_object_shade();
-    }
-    
-    void object_trace(const Object* object) {
-        if (object)
-            object->_object_trace();
-    }
 
-    void object_trace_weak(const Object* object) {
-        if (object)
-            object->_object_trace_weak();
-    }
-    
     
     
     const HeapString* HeapString::make(size_t hash, string_view view) {
@@ -232,8 +405,6 @@ namespace wry::gc {
     }
     
     
-    
-
     
     Log::Log()
     : dirty(false)
@@ -286,22 +457,6 @@ namespace wry::gc {
             (void) reference_count.load(Ordering::ACQUIRE);
             delete this;
         }
-    }
-    
-    
-    
-    void mutator_enter() {
-        if (!thread_local_mutator)
-            thread_local_mutator = new Mutator;
-        thread_local_mutator->enter();
-    }
-    
-    void mutator_handshake() {
-        thread_local_mutator->handshake();
-    }
-    
-    void mutator_leave() {
-        thread_local_mutator->leave();
     }
     
     
@@ -365,21 +520,14 @@ namespace wry::gc {
     
     
     
-    
-    
-    
-    
-    
-    
-    
     void Collector::flip_encoded_color_encoding() {
-        int encoding = atomic_encoded_color_encoding.load(Ordering::RELAXED);
+        std::underlying_type_t<Color> encoding = atomic_encoded_color_encoding.load(Ordering::RELAXED);
         atomic_encoded_color_encoding.store(encoding ^ 1, Ordering::RELAXED);
     }
     
     void Collector::set_alloc_to_black() {
-        int encoding = atomic_encoded_color_encoding.load(Ordering::RELAXED);
-        int encoded_black = (int)Color::BLACK ^ encoding;
+        std::underlying_type_t<Color> encoding = atomic_encoded_color_encoding.load(Ordering::RELAXED);
+        std::underlying_type_t<Color> encoded_black = to_underlying(Color::BLACK) ^ encoding;
         atomic_encoded_color_alloc.store(encoded_black, Ordering::RELAXED);
     }
     
@@ -440,17 +588,13 @@ namespace wry::gc {
                     break;
                 }
                 case Channel::Tag::COLLECTOR_DID_REQUEST_WAKEUP:
-                    /*
-                    (void) channel->log_stack_head.wait(expected,
-                                                        Ordering::ACQUIRE);
-                     */
                     switch (channel->log_stack_head.wait_for(expected,
-                                                            Ordering::ACQUIRE,
+                                                             Ordering::ACQUIRE,
                                                              1000000000)) {
                         case AtomicWaitStatus::NO_TIMEOUT:
                             break;
                         case AtomicWaitStatus::TIMEOUT:
-                            printf("Mutator timed out\n");
+                            fprintf(stderr, "Mutator TIMEOUT\n");
                             break;
                         default:
                             abort();
@@ -663,6 +807,22 @@ namespace wry::gc {
     
     
     
+    void mutator_enter() {
+        if (!thread_local_mutator)
+            thread_local_mutator = new Mutator;
+        thread_local_mutator->enter();
+    }
+    
+    void mutator_handshake() {
+        thread_local_mutator->handshake();
+    }
+    
+    void mutator_leave() {
+        thread_local_mutator->leave();
+    }
+    
+    
+    
     void collector_start() {
         assert(global_collector == nullptr);
         global_collector = new gc::Collector;
@@ -691,12 +851,6 @@ namespace wry::gc {
     }
     
     
-    void Object::_object_debug() const { abort(); }
-    size_t Object::_object_hash() const { abort(); }
-    
-    std::strong_ordering Object::operator<=>(const Object&) const { abort(); }
-    bool Object::operator==(const Object&) const { abort(); }
-
     
     define_test("gc") {
         std::thread([](){
@@ -714,36 +868,5 @@ namespace wry::gc {
             delete exchange(thread_local_mutator, nullptr);
         }).detach();
     };
-    
-    
-    
+            
 } // namespace wry::gc
-
-
-namespace wry {
-    
-    Atomic<gc::Encoded<gc::Color>>::Atomic()
-    : _encoded_color(gc::global_collector->atomic_encoded_color_alloc.load(Ordering::RELAXED)) {
-    }
-    
-    gc::Color Atomic<gc::Encoded<gc::Color>>::load() const {
-        int encoding = gc::global_collector->atomic_encoded_color_encoding.load(Ordering::RELAXED);
-        int encoded_discovered = _encoded_color.load(Ordering::RELAXED);
-        return gc::Color{encoded_discovered ^ encoding};
-    }
-    
-    bool Atomic<gc::Encoded<gc::Color>>::compare_exchange(gc::Color &expected, gc::Color desired) {
-        int encoding = gc::global_collector->atomic_encoded_color_encoding.load(Ordering::RELAXED);
-        int encoded_expected = (int)expected ^ encoding;
-        int encoded_desired = (int)desired ^ encoding;
-        bool result = _encoded_color.compare_exchange_strong(encoded_expected,
-                                                             encoded_desired,
-                                                             Ordering::RELAXED,
-                                                             Ordering::RELAXED);
-        expected = gc::Color{encoded_expected ^ encoding};
-        return result;
-    }
-    
-    
-    
-} // namespace wry

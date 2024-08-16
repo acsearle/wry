@@ -1,19 +1,17 @@
 //
-//  wry/RealTimeGarbageCollectedDynamicArray.cpp
+//  wry/HeapArray.cpp
 //  client
 //
 //  Created by Antony Searle on 19/6/2024.
 //
 
-#include "RealTimeGarbageCollectedDynamicArray.hpp"
+#include "HeapArray.hpp"
 
 #include "gc.hpp"
 #include "test.hpp"
 #include "value.hpp"
 
 namespace wry::gc {
-    
-   
     
     define_test("HeapArray") {
         

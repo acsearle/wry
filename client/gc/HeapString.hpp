@@ -15,33 +15,34 @@
 
 namespace wry::gc {
     
-    struct HeapString : _ctrie::BranchNode {
-        
+    struct HeapString final : _ctrie::BranchNode {
+
+        static void* operator new(std::size_t count, std::size_t extra);
+        static const HeapString* make(std::size_t hash, std::string_view view);
+        static const HeapString* make(std::string_view view);
+
         size_t _hash;
         size_t _size;
         char _bytes[0];
         
-        static void* operator new(std::size_t count, std::size_t extra);
-        static const HeapString* make(std::size_t hash, std::string_view view);
-        static const HeapString* make(std::string_view view);
         std::string_view as_string_view() const;
         
         HeapString();
-        virtual ~HeapString() final;
+        virtual ~HeapString() override final;
         
-        virtual void _object_shade() const override;
-        virtual void _object_scan() const override;
-        virtual size_t _object_hash() const override { return _hash; }
-        virtual void _object_trace() const override;
-        virtual void _object_trace_weak() const override;
-        virtual Color _object_sweep() const override;
-        virtual void _object_debug() const override;
+        virtual void _object_shade() const override final;
+        virtual void _object_scan() const override final;
+        virtual size_t _object_hash() const override final { return _hash; }
+        virtual void _object_trace() const override final;
+        virtual void _object_trace_weak() const override final;
+        virtual Color _object_sweep() const override final;
+        virtual void _object_debug() const override final;
 
-        virtual const HeapString* _ctrie_any_find_or_emplace2(const _ctrie::INode* in, const _ctrie::LNode* ln) const override;
+        virtual const HeapString* _ctrie_any_find_or_emplace2(const _ctrie::INode* in, const _ctrie::LNode* ln) const override final;
         
-        virtual const _ctrie::MainNode* _ctrie_bn_to_contracted(const _ctrie::CNode*) const override;
-        virtual const HeapString* _ctrie_bn_find_or_emplace(_ctrie::Query query, int lev, const _ctrie::INode* i, const _ctrie::CNode* cn, int pos) const override;
-        virtual _ctrie::EraseResult _ctrie_bn_erase(const HeapString* key, int lev, const _ctrie::INode* i, const _ctrie::CNode* cn, int pos, uint64_t flag) const override;
+        virtual const _ctrie::MainNode* _ctrie_bn_to_contracted(const _ctrie::CNode*) const override final;
+        virtual const HeapString* _ctrie_bn_find_or_emplace(_ctrie::Query query, int lev, const _ctrie::INode* i, const _ctrie::CNode* cn, int pos) const override final;
+        virtual _ctrie::EraseResult _ctrie_bn_erase(const HeapString* key, int lev, const _ctrie::INode* i, const _ctrie::CNode* cn, int pos, uint64_t flag) const override final;
         
     }; // struct HeapString
     

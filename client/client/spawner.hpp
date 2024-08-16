@@ -32,7 +32,7 @@ namespace wry::sim {
         
         virtual void notify(World*) override;
         virtual void _object_scan() const override {
-            value_trace(_of_this);
+            object_trace(_of_this);
         }
 
     };

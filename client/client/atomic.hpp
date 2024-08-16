@@ -35,13 +35,14 @@ namespace wry {
     
     enum class Ordering {
         RELAXED = __ATOMIC_RELAXED,
-        // CONSUME = __ATOMIC_CONSUME, // defect
+        // CONSUME = __ATOMIC_CONSUME,
         ACQUIRE = __ATOMIC_ACQUIRE,
         RELEASE = __ATOMIC_RELEASE,
         ACQ_REL = __ATOMIC_ACQ_REL,
         SEQ_CST = __ATOMIC_SEQ_CST,
     };
     
+    // compare std::cv_status
     enum class AtomicWaitStatus {
         NO_TIMEOUT,
         TIMEOUT,
@@ -50,7 +51,7 @@ namespace wry {
     template<typename T>
     struct Atomic {
         
-        static_assert(sizeof(T) <= 8);
+        static_assert(__atomic_always_lock_free(sizeof(T), nullptr));
         
         T value;
         

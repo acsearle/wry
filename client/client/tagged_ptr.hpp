@@ -11,8 +11,6 @@
 #include <cassert>
 #include <cstdint>
 
-#include "atomic.hpp"
-
 namespace wry {
             
     template<typename T, typename E = intptr_t>
