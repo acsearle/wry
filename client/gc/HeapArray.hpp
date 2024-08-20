@@ -15,6 +15,60 @@
 
 namespace wry::gc {
     
+    // The garbage collector thread will
+    // access .color
+    // call object_scan
+    //     call object_trace
+    // call object_sweep
+    //
+    // All but object_trace imply first-class objects
+    // object_trace will be called on embedded sub-objects
+    // it must touch only const or atomic things
+    //
+    // We have Arrays of several different kinds of thing:
+    //
+    // Trivial types (plain old data, including nonowning pointers to GC objects)
+    // Nontrivial types (invariants, copy constructors, destructors)
+    // Trivial types requiring tracing ( Values, owning pointers to GC objects, tuples including such)
+    // Nontrivial types requiring tracing ( containers, general )
+    //
+    // Notably, Array acquires its "requires tracing" state from its entries
+    // But the brute type of those entries is not always enough to decide if
+    // they need tracing.  Consider Array<Entity*> and Array<Traced<Entity*>>
+    //
+    // If elements are not traced, then the Array can directly manage its memory
+    //
+    // If something is traced, they must contain fields that are atomic (or
+    // const) and can't be directly accessed as T& in the standard C++ container
+    // way.
+    //
+    // We can thus have Array<Traced<Value>> that gives access to Traced<Value>&
+    // but not Value&.  Array<Value> is weak or leaky, but still useful for
+    // short-lived things (that do not cross the mutator boundary).  Seems like
+    // the wrong default though.  Traced is not some kind of annotation but
+    // fundamentally changes the semantics (to rust::Cell?)
+    //
+    // Likewise Array<Array<Traced<Value>>.
+    //
+    // These objects are heavyweight in some sense.  Copying is strange.
+    // Lifetime is strange.  Because the mutator is walking the storage, we
+    // cannot construct or destroy them as they move in and out of the logical
+    // array; they must always be in a valid state, and erasure can at best
+    // passivate them in some object-dependent way (nulling pointers etc.),
+    // not actually run their destructors.
+    //
+    // The traditional GC language solution is to box everything, so we are
+    // always worst case.  For us this would be Array<Traced<T*>> or some
+    // casting wrapper around a single ArrayValue implementation.
+    
+    
+    
+    
+    
+
+    
+    
+    
     // There are a variety of things presenting as an array with different
     // and sometimes incompatible backend behaviors:
     //
