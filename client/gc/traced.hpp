@@ -12,35 +12,38 @@
 
 namespace wry::gc {
     
-    
-    
-    // Traced objects are mutable and of interest to the garbage collector, so
-    // they must be atomic.  Traced<...> and Traced<Atomic<...>> provide these
-    // services.  Both are backed by Atomic<...>.
-    //
-    // Traced implements the write barrier required by concurrent
-    // garbage collection, conservatively shading both the old and new values
-    // of any store, and thus ensuring that any value seen by the mutator lasts
-    // at least until the mutator's next handshake.
-    //
-    // Traced<...> use the minimal memory Orderings required for
-    // a "typical" object that is read and written by one mutator thread:
-    //     - mutator thread loads on the mutator are RELAXED
-    //     - mutator thread stores are RELEASE
-    //     - collector thread loads are ACQUIRE
-    //     - collector thread stores are not permitted
-    // The collector thread calls only a few methods, notably sweep, trace and
-    // debug, and these conservatively use ACQUIRE loads.  We allow the user to
-    // implement sweep and trace with arbitrary code, so this is a
-    // footgun, but one that ThreadSanitizer seems to be good at detecting.
-    //
-    // Traced<Atomic<...>> relies on the user to correctly implement more
-    // complicated patterns; this usually means ACQUIRE loads everywhere.
-    
     template<typename T>
     struct Traced;
     
-    
+    template<typename T>
+    struct Traced<T* const> {
+        
+        T* const _object;
+        
+        Traced() : _object(nullptr) {}
+        Traced(const Traced& other) = default;
+        Traced(Traced&& other) = default;
+        explicit Traced(auto*const& other) : _object(other) {}
+        explicit Traced(std::nullptr_t) : _object(nullptr) {}
+        ~Traced() = default;
+        Traced& operator=(const Traced& other) = delete;
+        Traced& operator=(Traced&& other) = delete;
+        
+        T* operator->() const { return _object; }
+        bool operator!() const { return !_object; }
+        explicit operator bool() const { return static_cast<bool>(_object); }
+        operator T*() const { return _object; }
+        T& operator*() const { assert(_object); return *_object; }
+        bool operator==(const Traced& other) const = default;
+        std::strong_ordering operator<=>(const Traced& other) const = default;
+        bool operator==(auto*const& other) const { return _object == other; }
+        std::strong_ordering operator<=>(auto*const& other) const { return _object <=> other; }
+        bool operator==(std::nullptr_t) { return _object == nullptr; }
+        std::strong_ordering operator<=>(std::nullptr_t) { return _object <=> nullptr; }
+        
+        T* get() const { return _object; }
+        
+    };
     
     template<std::derived_from<Object> T>
     struct Traced<T*> {
@@ -340,5 +343,29 @@ namespace wry::gc {
 } // namespace wry::gc
 
 
+
+
+// Traced objects are mutable and of interest to the garbage collector, so
+// they must be atomic.  Traced<...> and Traced<Atomic<...>> provide these
+// services.  Both are backed by Atomic<...>.
+//
+// Traced implements the write barrier required by concurrent
+// garbage collection, conservatively shading both the old and new values
+// of any store, and thus ensuring that any value seen by the mutator lasts
+// at least until the mutator's next handshake.
+//
+// Traced<...> use the minimal memory Orderings required for
+// a "typical" object that is read and written by one mutator thread:
+//     - mutator thread loads on the mutator are RELAXED
+//     - mutator thread stores are RELEASE
+//     - collector thread loads are ACQUIRE
+//     - collector thread stores are not permitted
+// The collector thread calls only a few methods, notably sweep, trace and
+// debug, and these conservatively use ACQUIRE loads.  We allow the user to
+// implement sweep and trace with arbitrary code, so this is a
+// footgun, but one that ThreadSanitizer seems to be good at detecting.
+//
+// Traced<Atomic<...>> relies on the user to correctly implement more
+// complicated patterns; this usually means ACQUIRE loads everywhere.
 
 #endif /* traced_hpp */
