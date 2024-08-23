@@ -22,9 +22,9 @@ namespace wry {
             
             constexpr static size_t CAPACITY = (4096 - sizeof(gc::Object) - sizeof(Page*) - sizeof(Page*)) / sizeof(T*);
 
-            gc::Traced<Page*> prev;
+            gc::Scan<Page*> prev;
             T elements[CAPACITY];
-            gc::Traced<Page*> next;
+            gc::Scan<Page*> next;
             
             Page(Page* prev, Page* next)
             : prev(prev), next(next) {

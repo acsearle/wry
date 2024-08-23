@@ -160,39 +160,39 @@ namespace wry::gc {
     
     
     template<>
-    struct Traced<Value> {
+    struct Scan<Value> {
         
         Atomic<Value> _atomic_value;
 
-        Traced() = default;
-        Traced(const Traced& other);
-        ~Traced() = default;
-        Traced& operator=(const Traced& other);
-        explicit Traced(const Value& other);
-        Traced& operator=(const Value& other);
+        Scan() = default;
+        Scan(const Scan& other);
+        ~Scan() = default;
+        Scan& operator=(const Scan& other);
+        explicit Scan(const Value& other);
+        Scan& operator=(const Value& other);
         explicit operator bool() const;
         operator Value() const;
-        bool operator==(const Traced& other) const;
-        auto operator<=>(const Traced& other) const;
+        bool operator==(const Scan& other) const;
+        auto operator<=>(const Scan& other) const;
         Value get() const;
     };
     
-    size_t object_hash(const Traced<Value>&);
-    void object_debug(const Traced<Value>&);
-    void object_passivate(Traced<Value>&);
-    void object_shade(const Traced<Value>&);
-    void object_trace(const Traced<Value>&);
-    void object_trace_weak(const Traced<Value>&);
+    size_t object_hash(const Scan<Value>&);
+    void object_debug(const Scan<Value>&);
+    void object_passivate(Scan<Value>&);
+    void object_shade(const Scan<Value>&);
+    void object_trace(const Scan<Value>&);
+    void object_trace_weak(const Scan<Value>&);
 
     template<>
-    struct Traced<Atomic<Value>> {
+    struct Scan<Atomic<Value>> {
         
         Atomic<Value> _atomic_value;
         
-        constexpr Traced() = default;
-        constexpr explicit Traced(Value);
-        Traced(const Traced&) = delete;
-        Traced& operator=(const Traced&) = delete;
+        constexpr Scan() = default;
+        constexpr explicit Scan(Value);
+        Scan(const Scan&) = delete;
+        Scan& operator=(const Scan&) = delete;
         
         Value load(Ordering) const;
         void store(Value, Ordering);
@@ -202,12 +202,12 @@ namespace wry::gc {
 
     };
     
-    size_t object_hash(const Traced<Atomic<Value>>&);
-    void object_debug(const Traced<Atomic<Value>>&);
-    void object_passivate(Traced<Atomic<Value>>&);
-    void object_shade(const Traced<Atomic<Value>>&);
-    void object_trace(const Traced<Atomic<Value>>&);
-    void object_trace_weak(const Traced<Atomic<Value>>&);
+    size_t object_hash(const Scan<Atomic<Value>>&);
+    void object_debug(const Scan<Atomic<Value>>&);
+    void object_passivate(Scan<Atomic<Value>>&);
+    void object_shade(const Scan<Atomic<Value>>&);
+    void object_trace(const Scan<Atomic<Value>>&);
+    void object_trace_weak(const Scan<Atomic<Value>>&);
 
     
     
@@ -289,11 +289,11 @@ namespace wry::gc {
             object_trace(_value_as_object(a));
     }
 
-    inline void object_trace(const Traced<Value>& self) {
+    inline void object_trace(const Scan<Value>& self) {
         object_trace(self._atomic_value.load(Ordering::ACQUIRE));
     }
 
-    inline void object_trace(const Traced<Atomic<Value>>& self) {
+    inline void object_trace(const Scan<Atomic<Value>>& self) {
         object_trace(self._atomic_value.load(Ordering::ACQUIRE));
     }
 
@@ -301,11 +301,11 @@ namespace wry::gc {
         self._data = 0;
     }
     
-    inline void object_passivate(Traced<Value>& self) {
+    inline void object_passivate(Scan<Value>& self) {
         self._atomic_value.exchange(value_make_null(), Ordering::RELAXED);
     }
     
-    inline void object_passivate(Traced<Atomic<Value>>& self) {
+    inline void object_passivate(Scan<Atomic<Value>>& self) {
         // TODO: Is it ever right to call this?
         __builtin_trap();
         self.store(value_make_null(), Ordering::ACQUIRE);

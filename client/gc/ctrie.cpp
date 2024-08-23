@@ -13,16 +13,6 @@ namespace wry::gc {
     
     namespace _ctrie {
         
-        struct MainNode : AnyNode {
-            virtual void _ctrie_mn_clean(int level, const INode* parent) const;
-            virtual bool _ctrie_mn_cleanParent(const INode* p, const INode* i, size_t hc, int lev, const MainNode* m) const;
-            virtual bool _ctrie_mn_cleanParent2(const INode* p, const INode* i, size_t hc, int lev, const CNode* cn, int pos) const;
-            virtual EraseResult _ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const = 0;
-            virtual void _ctrie_mn_erase2(const INode* p, const INode* i, size_t hc, int lev) const;
-            virtual const HeapString* _ctrie_mn_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const = 0;
-            virtual const BranchNode* _ctrie_mn_resurrect(const INode* i) const;
-        };
-        
         struct CNode : MainNode {
             
             static void* operator new(size_t fixed, size_t variable);
@@ -54,36 +44,12 @@ namespace wry::gc {
             
         };
         
-        struct INode : BranchNode {
-            
-            mutable Traced<Atomic<const MainNode*>> main;
-            
-            explicit INode(const MainNode*);
-            virtual ~INode() final = default;
-            
-            void clean(int lev) const;
-            const HeapString* find_or_emplace(Query query, int level, const INode* parent) const;
-            EraseResult erase(const HeapString* key, int level, const INode* parent) const;
-            const MainNode* load() const;
-            bool compare_exchange(const MainNode* expected, const MainNode* desired) const;
-            
-            
-            virtual void _object_scan() const override;
-            
-            virtual const BranchNode* _ctrie_bn_resurrect() const override;
-            virtual const HeapString* _ctrie_bn_find_or_emplace(Query query, int level,
-                                                                const INode* in, const CNode* cn, int pos) const override;
-            virtual EraseResult _ctrie_bn_erase(const HeapString* key, int level, const INode* in,
-                                                const CNode* cn, int pos, uint64_t flag) const override;
-            
-        };
-        
         struct LNode : MainNode {
             
-            const HeapString* sn;
-            const LNode* next;
+            Scan<const HeapString*const> sn;
+            Scan<const LNode*const> next;
             
-            LNode();
+            LNode(const HeapString*const s, const LNode*const n);
             virtual ~LNode() override final;
             
             const AnyNode* find_or_copy_emplace(Query query) const;
@@ -102,7 +68,7 @@ namespace wry::gc {
         
         struct TNode : MainNode {
             
-            const HeapString* sn;
+            Scan<const HeapString*const> sn;
             
             explicit TNode(const HeapString* sn);
             virtual ~TNode() override final;
@@ -190,7 +156,7 @@ namespace wry::gc {
             return Object::operator new(self + entries * sizeof(Object*));
         }
         
-        CNode::CNode() {
+        CNode::CNode() : bmp(0) {
         }
         
         CNode::~CNode() {
@@ -483,7 +449,7 @@ namespace wry::gc {
         
         
         
-        LNode::LNode() {
+        LNode::LNode(const HeapString* a, const LNode* b) : sn(a), next(b) {
         }
         
         LNode::~LNode() {
@@ -499,10 +465,11 @@ namespace wry::gc {
             for (const LNode* curr = this; curr != victim; curr = curr->next) {
                 assert(curr); // <-- victim was not in the list!
                               // Make a copy
-                LNode* a = new LNode;
-                a->sn = curr->sn;
+                //LNode* a = new LNode;
+                //a->sn = curr->sn;
                 // Push onto the list
-                a->next = exchange(head, a);
+                //a->next = exchange(head, a);
+                head = new LNode(curr->sn, head);
             }
             return head;
         }
@@ -568,12 +535,13 @@ namespace wry::gc {
             // Make the new HeapString
             key = make_HeapString_from_Query(query);
             
-            LNode* node = new LNode;
-            node->sn = key;
-            node->next = head;
+            //LNode* node = new LNode;
+            //node->sn = key;
+            //node->next = head;
             
             // Send it up for CAS
-            return node;
+            //return node;
+            return new LNode(key, head);
             
             // TODO: test this path
             // by breaking the hash function?
@@ -638,10 +606,8 @@ namespace wry::gc {
         printf("~Ctrie\n");
     }
     
-    Ctrie::Ctrie() {
-        CNode* ncn = new(0) CNode;
-        ncn->bmp = 0;
-        root = new INode(ncn);
+    Ctrie::Ctrie()
+    : root(new INode(new(0) CNode)) {
     }
                     
     const HeapString* Ctrie::find_or_emplace(Query query) {

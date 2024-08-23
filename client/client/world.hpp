@@ -72,19 +72,19 @@ namespace wry::sim {
         // State
         
         Time _tick = 0;
-        gc::HashMap<Coordinate, Value> _value_for_coordinate;
-        gc::HashMap<Coordinate, Entity*> _occupant_for_coordinate;
+        gc::HashMap<Coordinate, gc::Scan<Value>> _value_for_coordinate;
+        gc::HashMap<Coordinate, gc::Scan<Entity*>> _occupant_for_coordinate;
 
         // Participants, in no particular order
         
         // Array<Entity*> _entities;
-        gc::RealTimeGarbageCollectedDynamicArray<gc::Traced<Entity*>> _entities;
+        gc::RealTimeGarbageCollectedDynamicArray<gc::Scan<Entity*>> _entities;
 
         // Conditions
         
         HashMap<Time,       QueueOfUnique<Entity*>> _waiting_for_time;
         HashMap<Coordinate, QueueOfUnique<Entity*>> _waiting_for_coordinate;
-        HashMap<Entity*,    QueueOfUnique<Entity*>> _waiting_for_entity;
+        HashMap<gc::Scan<Entity*>,    QueueOfUnique<Entity*>> _waiting_for_entity;
                             
         QueueOfUnique<Entity*>  _ready;
         
@@ -115,6 +115,8 @@ namespace wry::sim {
         
         
         // Transactions
+        
+        // These are an example of non-owning per-frame temporary objects
         
         HashMap<Coordinate, TRANSACTION_STATE> _transaction_state_for_coordinate;
         HashMap<Entity*,    TRANSACTION_STATE> _transaction_state_for_entity;
@@ -322,6 +324,7 @@ namespace wry::gc {
             object_shade(self->_value_for_coordinate);
             object_shade(self->_occupant_for_coordinate);
             object_shade(self->_entities);
+            // object_shade(self->_waiting_for_entity);
         }
     }
     

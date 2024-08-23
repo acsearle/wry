@@ -13,7 +13,7 @@
 namespace wry {
     
     template<class From, class To>
-    concept PointerConvertibleTo = std::is_convertible_v<From*, To*>;
+    concept PointerConvertibleTo = std::is_convertible_v<std::remove_cv_t<From>*, To*>;
 
 } // namespace wry
 

@@ -573,7 +573,7 @@ namespace wry::gc {
         T* _begin;
         T* _end;
         T* _capacity;
-        Traced<ArrayStaticFlexibleArrayMember<T>*> _storage;
+        Scan<ArrayStaticFlexibleArrayMember<T>*> _storage;
         
         GarbageCollectedArrayC()
         : _begin(nullptr)

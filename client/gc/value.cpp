@@ -280,35 +280,35 @@ namespace wry::gc {
     
     
     
-    Value Traced<Value>::get() const {
+    Value Scan<Value>::get() const {
         return _atomic_value.load(Ordering::RELAXED);
     }
         
-    Traced<Value>::Traced(const Value& value) 
+    Scan<Value>::Scan(const Value& value) 
     : _atomic_value(value) {
     }
     
-    Traced<Value>::Traced(const Traced<Value>& value)
-    : Traced(value.get()) {
+    Scan<Value>::Scan(const Scan<Value>& value)
+    : Scan(value.get()) {
     }
         
 
-    Traced<Value>& Traced<Value>::operator=(const Value& desired) {
+    Scan<Value>& Scan<Value>::operator=(const Value& desired) {
         Value discovered = this->_atomic_value.exchange(desired, Ordering::RELEASE);
         object_shade(desired);
         object_shade(discovered);
         return *this;
     }
 
-    Traced<Value>& Traced<Value>::operator=(const Traced<Value>& desired) {
+    Scan<Value>& Scan<Value>::operator=(const Scan<Value>& desired) {
         return this->operator=(desired.get());
     }
     
-    Traced<Value>::operator bool() const {
+    Scan<Value>::operator bool() const {
         return get().operator bool();
     }
     
-    Traced<Value>::operator Value() const {
+    Scan<Value>::operator Value() const {
         return get();
     }
     
@@ -439,7 +439,7 @@ namespace wry::gc {
     }
 
     
-    void object_debug(const Traced<Value>& self) {
+    void object_debug(const Scan<Value>& self) {
         object_debug(self._atomic_value.load(Ordering::ACQUIRE));
     }
     
@@ -498,7 +498,7 @@ namespace wry::gc {
     
     struct ValueArray : Object {
         
-        RealTimeGarbageCollectedDynamicArray<Traced<Value>> _inner;
+        RealTimeGarbageCollectedDynamicArray<Scan<Value>> _inner;
         
         virtual void _object_scan() const { object_trace(_inner); }
         virtual void _object_debug() const { object_debug(_inner); }
