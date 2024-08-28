@@ -13,7 +13,7 @@
 #include "../gc/value.hpp"
 
 namespace wry::sim {
-            
+    
     // simple enum reflection
     
     struct ENUM_PAIR {
@@ -89,9 +89,9 @@ X(OPCODE_FLOP_FLIP),\
 #undef X
         
     };
-        
+    
     inline constexpr ENUM_PAIR OPCODE_NAMES[] = {
-
+        
 #define X(Y) { Y, #Y }
         
         WRY_OPCODES_X
@@ -104,6 +104,19 @@ X(OPCODE_FLOP_FLIP),\
     
     
     using Time = i64;
+    
+    // These can't be found by ADL since
+    inline void any_trace(const Time&) {}
+    inline void any_shade(const Time&) {}
+    
+}
+
+namespace wry::gc {
+    inline void any_trace(const sim::Time&) {}
+    inline void any_shade(const sim::Time&) {}
+}
+
+namespace wry::sim {
     
     
     enum HEADING
@@ -132,6 +145,9 @@ X(OPCODE_FLOP_FLIP),\
         return hash_combine(&x, sizeof(x));
     }
     
+    inline void any_trace(const Coordinate&) {}
+    inline void any_shade(const Coordinate&) {}
+
     using gc::Value;
     
     

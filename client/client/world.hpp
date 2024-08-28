@@ -82,11 +82,11 @@ namespace wry::sim {
 
         // Conditions
         
-        HashMap<Time,       QueueOfUnique<Entity*>> _waiting_for_time;
-        HashMap<Coordinate, QueueOfUnique<Entity*>> _waiting_for_coordinate;
-        HashMap<gc::Scan<Entity*>,    QueueOfUnique<Entity*>> _waiting_for_entity;
+        gc::HashMap<Time,       QueueOfUnique<gc::Scan<Entity*>>> _waiting_for_time;
+        gc::HashMap<Coordinate, QueueOfUnique<gc::Scan<Entity*>>> _waiting_for_coordinate;
+        gc::HashMap<gc::Scan<Entity*>,    QueueOfUnique<gc::Scan<Entity*>>> _waiting_for_entity;
                             
-        QueueOfUnique<Entity*>  _ready;
+        QueueOfUnique<gc::Scan<Entity*>>  _ready;
         
         // Spatial hashing
         // TODO: we may variously need
@@ -126,14 +126,18 @@ namespace wry::sim {
             ++_tick;
             notify_by_world_time(this, _tick);
 
-            QueueOfUnique<Entity*> working{std::move(_ready)};
+            QueueOfUnique<gc::Scan<Entity*>> working{std::move(_ready)};
 
             assert(_ready.empty());
             assert(_transaction_state_for_entity.empty());
             assert(_transaction_state_for_coordinate.empty());
 
-            for (Entity* entity : working)
-                entity->notify(this);
+            // for (Entity* entity : working)
+                // entity->notify(this);
+            size_t n = working.queue.size();
+            for (size_t i = 0; i != n; ++i) {
+                working.queue[i]->notify(this);
+            }
 
             working.clear();
 
@@ -154,20 +158,20 @@ namespace wry::sim {
         assert(entity);
         assert(world);
         assert(when - world->_tick > 0);
-        world->_waiting_for_time[when].push(entity);
+        world->_waiting_for_time.find_or_emplace(when).push(entity);
     }
     
     inline void entity_wait_on_world_coordinate(Entity* entity, World* world, Coordinate xy) {
         assert(entity);
         assert(world);
-        world->_waiting_for_coordinate[xy].push(entity);
+        world->_waiting_for_coordinate.find_or_emplace(xy).push(entity);
     }
     
     inline void entity_wait_on_world_entity(Entity* entity, World* world, Entity* other) {
         assert(entity);
         assert(world);
         assert(other);
-        world->_waiting_for_entity[other].push(entity);
+        world->_waiting_for_entity.find_or_emplace(other).push(entity);
     }
 
     inline void entity_ready_on_world(Entity* entity, World* world) {
@@ -178,23 +182,26 @@ namespace wry::sim {
     
     inline void notify_by_world_time(World* world, Time when) {
         assert(world);
+        // TODO: these iterators aren't gonna be stable enough for this?
         auto pos = world->_waiting_for_time.find(when);
-        if (pos != world->_waiting_for_time.end()) {
+        if (pos) {
             world->_ready.push_range(std::move(pos->second));
-            world->_waiting_for_time.erase(pos);
+            world->_waiting_for_time.erase(pos->first);
         }
     }
 
     inline void notify_by_world_coordinate(World* world, Coordinate xy) {
         assert(world);
         {
+            // TODO: these iterators aren't gonna be stable enough for this?
             auto pos = world->_waiting_for_coordinate.find(xy);
-            if (pos != world->_waiting_for_coordinate.end()) {
+            if (pos) {
                 world->_ready.push_range(std::move(pos->second));
-                world->_waiting_for_coordinate.erase(pos);
+                world->_waiting_for_coordinate.erase(pos->first);
             }
         }
         {
+            // TODO: these iterators aren't gonna be stable enough for this?
             //auto pos = world->_occupant_for_coordinate.find(xy);
             //if (pos != world->_occupant_for_coordinate.end()) {
             //    entity_ready_on_world(pos->second, world);
@@ -209,9 +216,9 @@ namespace wry::sim {
         assert(entity);
         assert(world);
         auto pos = world->_waiting_for_entity.find(entity);
-        if (pos != world->_waiting_for_entity.end()) {
+        if (pos) {
             world->_ready.push_range(std::move(pos->second));
-            world->_waiting_for_entity.erase(pos);
+            world->_waiting_for_entity.erase(pos->first);
         }
     }
     
@@ -321,10 +328,13 @@ namespace wry::gc {
     
     inline void object_shade(sim::World* self) {
         if (self) {
-            object_shade(self->_value_for_coordinate);
-            object_shade(self->_occupant_for_coordinate);
-            object_shade(self->_entities);
-            // object_shade(self->_waiting_for_entity);
+            any_shade(self->_value_for_coordinate);
+            any_shade(self->_occupant_for_coordinate);
+            any_shade(self->_entities);
+            any_shade(self->_waiting_for_time);
+            any_shade(self->_waiting_for_coordinate);
+            any_shade(self->_waiting_for_entity);
+            any_shade(self->_ready);
         }
     }
     

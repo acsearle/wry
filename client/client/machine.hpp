@@ -100,7 +100,7 @@ namespace wry::sim {
         void _schedule_arrival(World* world);
         
         virtual void _object_scan() const override {
-            object_trace(_stack);
+            any_trace(_stack);
         }
                         
     };

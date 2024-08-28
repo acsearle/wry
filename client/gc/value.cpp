@@ -500,8 +500,8 @@ namespace wry::gc {
         
         RealTimeGarbageCollectedDynamicArray<Scan<Value>> _inner;
         
-        virtual void _object_scan() const { object_trace(_inner); }
-        virtual void _object_debug() const { object_debug(_inner); }
+        virtual void _object_scan() const { any_trace(_inner); }
+        virtual void _object_debug() const { any_debug(_inner); }
         
         virtual bool _value_empty() const { return _inner.empty(); }
         virtual size_t _value_size() const { return _inner.size(); }

@@ -110,6 +110,14 @@ namespace wry::gc {
         }
         
         template<typename J>
+        void emplace(J&& j) {
+            _kv.first = std::forward<J>(j);
+            _kv.second = V();
+            _occupied = true;
+        }
+        
+        
+        template<typename J>
         bool equivalent(size_t h, J&& j) const {
             assert(_occupied);
             return _kv.first == j;
@@ -120,38 +128,40 @@ namespace wry::gc {
     
     
     template<typename K, typename V>
-    void object_trace(const BasicEntry<K, V>& e) {
+    void any_trace(const BasicEntry<K, V>& e) {
         any_trace(e._kv.first);
         any_trace(e._kv.second);
     }
 
     template<typename K, typename V>
-    void object_shade(const BasicEntry<K, V>& e) {
+    void any_shade(const BasicEntry<K, V>& e) {
         any_shade(e._kv.first);
         any_shade(e._kv.second);
     }
 
     template<typename K, typename V>
-    void object_debug(const BasicEntry<K, V>& e) {
+    void any_debug(const BasicEntry<K, V>& e) {
         any_debug(e._kv.first);
         any_debug(e._kv.second);
     }
     
     template<typename K, typename V>
-    hash_t object_hash(const BasicEntry<K, V>& e) {
-        return object_hash(e._kv.first);
+    hash_t any_hash(const BasicEntry<K, V>& e) {
+        return any_hash(e._kv.first);
     }
     
     template<typename K, typename V>
-    void object_passivate(BasicEntry<K, V>& e) {
-        object_passivate(e._kv.first);
-        object_passivate(e._kv.second);
+    void any_passivate(BasicEntry<K, V>& e) {
+        any_passivate(e._kv.first);
+        any_passivate(e._kv.second);
     }
     
+    /*
     template<typename K, typename V>
     void object_trace_weak(const BasicEntry<K, V>& e) {
         object_trace(e);
     }
+     */
     
     
 
@@ -176,6 +186,17 @@ namespace wry::gc {
         BasicHashSetA()
         : _data(nullptr)
         , _capacity(0) {}
+        
+        BasicHashSetA(BasicHashSetA&& other)
+        : _data(exchange(other._data, nullptr))
+        , _capacity(exchange(other._capacity, 0)) {
+        }
+        
+        BasicHashSetA& operator=(BasicHashSetA&& other) {
+            _data = exchange(other._data, nullptr);
+            _capacity = exchange(other._capacity, 0);
+            return *this;
+        }
         
         T* data() const { return _data; }
         size_t capacity() const { return _capacity; }
@@ -353,7 +374,14 @@ namespace wry::gc {
                 _steal_from_the_rich(i);
             _data[i].assign(std::forward<Q>(q)...);
         }
-        
+
+        template<typename... Q>
+        void _emplace_absent_at(size_t i, Q&&... q) {
+            if (_data[i].occupied())
+                _steal_from_the_rich(i);
+            _data[i].emplace(std::forward<Q>(q)...);
+        }
+
         template<typename Q>
         size_t _insert_absent(size_t h, Q&& q) {
             size_t i = _find_absent(h, q);
@@ -369,7 +397,19 @@ namespace wry::gc {
             _data[i].assign(std::forward<Q>(q));
             return !f;
         }
-        
+
+        template<typename Q>
+        bool _try_insert(size_t h, Q&& q) {
+            auto [i, f] = _find(h, q);
+            if (!f) {
+                // not found; insert
+                if (_data[i].occupied())
+                    _steal_from_the_rich(i);
+                _data[i].assign(std::forward<Q>(q));
+            }
+            return !f;
+        }
+
         size_t _threshold() const {
             return _capacity - (_capacity >> 2);
         }
@@ -382,7 +422,7 @@ namespace wry::gc {
     // owns storage, counts occupants, knows if full
     // still not dynamically resized, but can be manually resized when empty
     
-    template<ObjectTrait T>
+    template<typename T>
     struct BasicHashSetB {
         BasicHashSetA<T> _inner;
         size_t _size;
@@ -394,6 +434,20 @@ namespace wry::gc {
         , _storage() {
         }
         
+        BasicHashSetB(BasicHashSetB&& other)
+        : _inner(std::move(other._inner))
+        , _size(exchange(other._size, 0))
+        , _storage(std::move(other._storage)) {
+        }
+
+        BasicHashSetB& operator=(BasicHashSetB&& other)
+        {
+            _inner = std::move(other._inner);
+            _size = exchange(other._size, 0);
+            _storage = std::move(other._storage);
+            return *this;
+        }
+
         void _invariant() {
             assert(_size < _inner._capacity || _size == 0);
             size_t n = _inner._invariant();
@@ -435,16 +489,28 @@ namespace wry::gc {
             return _size;
         }
         
-        void _insert_absent(T&& x) {
-            size_t h = x.hash();
-            _inner._insert_absent(h, std::move(x));
+        size_t _insert_absent_hash(size_t h, T&& x) {
+            size_t i = _inner._insert_absent(h, std::move(x));
             assert(!full());
             ++_size;
+            return i;
+        }
+        
+        size_t _insert_absent(T&& x) {
+            size_t h = x.hash();
+            return _insert_absent_hash(h, std::move(x));
         }
 
         template<typename... R>
         void _insert_absent_at(size_t i, R&&... r) {
             _inner._insert_absent_at(i, std::forward<R>(r)...);
+            assert(!full());
+            ++_size;
+        }
+
+        template<typename... R>
+        void _emplace_absent_at(size_t i, R&&... r) {
+            _inner._emplace_absent_at(i, std::forward<R>(r)...);
             assert(!full());
             ++_size;
         }
@@ -474,13 +540,13 @@ namespace wry::gc {
     };
     
     template<typename T>
-    void object_trace(const BasicHashSetB<T>& self) {
-        object_trace(self._storage);
+    void any_trace(const BasicHashSetB<T>& self) {
+        any_trace(self._storage);
     }
 
     template<typename T>
-    void object_shade(const BasicHashSetB<T>& self) {
-        object_shade(self._storage);
+    void any_shade(const BasicHashSetB<T>& self) {
+        any_shade(self._storage);
     }
 
     
@@ -519,12 +585,32 @@ namespace wry::gc {
     // In a read-heavy workload, once the last incremental resize is completed
     // the only overhead is that find must check that _beta is nonempty.
     
-    template<ObjectTrait T>
+    template<typename T>
     struct BasicHashSetC {
         
         BasicHashSetB<T> _alpha;
         BasicHashSetB<T> _beta;
         size_t _partition = 0;
+
+        BasicHashSetC()
+        : _alpha()
+        , _beta()
+        , _partition(0) {
+        }
+        
+        BasicHashSetC(BasicHashSetC&& other)
+        : _alpha(std::move(other._alpha))
+        , _beta(std::move(other._beta))
+        , _partition(exchange(other._partition, 0)) {
+        }
+        
+        BasicHashSetC& operator=(BasicHashSetC&& other) {
+            _alpha = std::move(other._alpha);
+            _beta = std::move(other._beta);
+            _partition = exchange(other._partition, 0);
+            return *this;
+        }
+        
         
         void _invariant() {
             _alpha._invariant();
@@ -613,22 +699,71 @@ namespace wry::gc {
             return !f;
         }
         
+        template<typename Q>
+        size_t _find_or_emplace(size_t h, Q&& q) {
+            _tax2();
+            _ensure_not_full();
+            _invariant();
+            auto [i, f] = _alpha._inner._find(h, q);
+            _invariant();
+            if (f) {
+                // Found in alpha, return
+                return i;
+            }
+            auto [j, g] = _beta._inner._find(h, q);
+            if (g) {
+                // Found in beta, move over
+                // _beta.erase(h, q);
+                i = _alpha._insert_absent_hash(h, std::move(_beta._inner._data[j]));
+                _beta._erase_present_at(j);
+                _invariant();
+                return i;
+            }
+            _invariant();
+            _alpha._emplace_absent_at(i, std::forward<Q>(q));
+            _invariant();
+            return i;
+        }
+        
+        
         bool empty() const {
             return _alpha.empty() && _beta.empty();
+        }
+        
+        void clear() {
+            _alpha.clear();
+            _beta.clear();
+            _partition = 0;
+        }
+        
+        template<typename Q>
+        bool _insert(size_t h, Q&& q) {
+            _tax2();
+            _ensure_not_full();
+            _invariant();
+            auto [i, f] = _alpha._inner._find(h, q);
+            if (f)
+                return false;
+            auto [j, g] = _beta._inner._find(h, q);
+            if (g)
+                return false;
+            _invariant();
+            _alpha._insert_absent_at(i, std::forward<Q>(q));
+            return true;
         }
 
     }; // BasicHashSetC
     
     template<typename T>
-    void object_trace(const BasicHashSetC<T>& self) {
-        object_trace(self._alpha);
-        object_trace(self._beta);
+    void any_trace(const BasicHashSetC<T>& self) {
+        any_trace(self._alpha);
+        any_trace(self._beta);
     }
-
+    
     template<typename T>
-    void object_shade(const BasicHashSetC<T>& self) {
-        object_shade(self._alpha);
-        object_shade(self._beta);
+    void any_shade(const BasicHashSetC<T>& self) {
+        any_shade(self._alpha);
+        any_shade(self._beta);
     }
 
     
@@ -680,10 +815,37 @@ namespace wry::gc {
         bool contains(Q&& q) const {
             return _inner._find(hash(q), q).second;
         }
+        
+        // aka the notorious std::map::operator[]
+        template<typename Q>
+        V& find_or_emplace(Q&& q) {
+            size_t h = hash(q);
+            size_t i = _inner._find_or_emplace(h, std::forward<Q>(q));
+            assert(_inner._alpha._inner._data);
+            return _inner._alpha._inner._data[i]._kv.second;
+        }
+        
+        template<typename Q>
+        std::pair<K, V>* find(Q&& q) {
+            size_t h = hash(q);
+            auto [i, f] = _inner._find(h, q);
+            return f ? &_inner._alpha._inner._data[i]._kv : nullptr;
+        }
+        
                         
     };
     
-//    
+    template<typename K, typename V>
+    void any_trace(const HashMap<K, V>& self) {
+        any_trace(self._inner);
+    }
+
+    template<typename K, typename V>
+    void any_shade(const HashMap<K, V>& self) {
+        any_shade(self._inner);
+    }
+
+//
 //    
 //    template<typename K, typename A>
 //    struct HashMap<K, A*> {
@@ -734,30 +896,30 @@ namespace wry::gc {
 //        }
 //        
 //    };
-    
-    template<typename K, typename V>
-    void object_trace(const HashMap<K, V>& self) {
-        return object_trace(self._inner);
-    }
-
-    template<typename K, typename V>
-    void object_shade(const HashMap<K, V>& self) {
-        return object_shade(self._inner);
-    }
+//    
+//    template<typename K, typename V>
+//    void object_trace(const HashMap<K, V>& self) {
+//        return object_trace(self._inner);
+//    }
+//
+//    template<typename K, typename V>
+//    void object_shade(const HashMap<K, V>& self) {
+//        return object_shade(self._inner);
+//    }
 
 
     
     
     struct HeapHashMap : Object {
         
-        HashMap<Value, Value> _inner;
+        HashMap<gc::Scan<Value>, gc::Scan<Value>> _inner;
         
         void _invariant() const {
             _inner._invariant();
         }
         
         virtual void _object_scan() const override {
-            object_trace(_inner);
+            any_trace(_inner);
         }
 
 
@@ -848,33 +1010,33 @@ namespace wry::gc {
     
     
     template<typename K>
-    void object_trace(const BasicHashSetEntry<K>& e) {
-        object_trace(e._key);
+    void any_trace(const BasicHashSetEntry<K>& e) {
+        any_trace(e._key);
     }
     
     template<typename K>
-    void object_shade(const BasicHashSetEntry<K>& e) {
-        object_shade(e._key);
+    void any_shade(const BasicHashSetEntry<K>& e) {
+        any_shade(e._key);
     }
     
     template<typename K>
-    void object_debug(const BasicHashSetEntry<K>& e) {
-        object_debug(e._key);
+    void any_debug(const BasicHashSetEntry<K>& e) {
+        any_debug(e._key);
     }
     
     template<typename K>
-    hash_t object_hash(const BasicHashSetEntry<K>& e) {
-        return object_hash(e._key);
+    hash_t any_hash(const BasicHashSetEntry<K>& e) {
+        return any_hash(e._key);
     }
     
     template<typename K>
-    void object_passivate(BasicHashSetEntry<K>& e) {
-        object_passivate(e._key);
+    void any_passivate(BasicHashSetEntry<K>& e) {
+        any_passivate(e._key);
     }
     
     template<typename K>
-    void object_trace_weak(const BasicHashSetEntry<K>& e) {
-        object_trace(e);
+    void any_trace_weak(const BasicHashSetEntry<K>& e) {
+        any_trace(e);
     }
     
     
@@ -882,8 +1044,8 @@ namespace wry::gc {
     
     
     
-    
-    template<ObjectTrait K>
+
+    template<typename K>
     struct HashSet {
         
         // TODO: Traced<K>
@@ -924,16 +1086,26 @@ namespace wry::gc {
             return _inner._find(hash(q), q).second;
         }
         
+        void clear() {
+            _inner.clear();
+        }
+        
+        template<typename Q>
+        bool insert(Q&& q) {
+            size_t h = hash(q);
+            return _inner._insert(h, std::forward<Q>(q));
+        }
+        
     };
     
     template<typename K>
-    void object_trace(const HashSet<K>& self) {
-        return object_trace(self._inner);
+    void any_trace(const HashSet<K>& self) {
+        return any_trace(self._inner);
     }
     
     template<typename K>
-    void object_shade(const HashSet<K>& self) {
-        return object_shade(self._inner);
+    void any_shade(const HashSet<K>& self) {
+        return any_shade(self._inner);
     }
 
     

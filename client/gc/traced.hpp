@@ -26,7 +26,7 @@ namespace wry::gc {
         Scan(const Scan& other) = default;
         Scan(Scan&& other) = default;
         explicit Scan(auto* const& other) : _object(other) {}
-        explicit Scan(std::nullptr_t) : _object(nullptr) {}
+        Scan(std::nullptr_t) : _object(nullptr) {}
         ~Scan() = default;
         Scan& operator=(const Scan& other) = delete;
         Scan& operator=(Scan&& other) = delete;
@@ -65,7 +65,7 @@ namespace wry::gc {
         Scan(const Scan& other);
         Scan(Scan&& other);
         explicit Scan(T*const& other);
-        explicit Scan(std::nullptr_t);
+        Scan(std::nullptr_t);
         ~Scan() = default;
         Scan& operator=(const Scan& other);
         Scan& operator=(Scan&& other);
@@ -104,7 +104,7 @@ namespace wry::gc {
         Scan() = default;
         Scan(const Scan&) = delete;
         explicit Scan(T* object);
-        explicit Scan(std::nullptr_t);
+        Scan(std::nullptr_t);
         Scan& operator=(const Scan&) = delete;
         
         T* load(Ordering order) const;
@@ -402,6 +402,27 @@ namespace wry::gc {
         const T* a = self.load(std::memory_order_acquire);
         if (a)
             a->_object_trace();
+    }
+    
+    
+    template<PointerConvertibleTo<Object> T>
+    void any_shade(const Scan<T* const>& self) {
+        if (self._object)
+            self._object->_object_shade();
+    }
+    
+    template<PointerConvertibleTo<Object> T>
+    void any_shade(const Scan<T*>& self) {
+        const T* a = self.get();
+        if (a)
+            a->_object_shade();
+    }
+    
+    template<PointerConvertibleTo<Object> T>
+    void any_shade(const Scan<Atomic<T*>>& self) {
+        const T* a = self.load(std::memory_order_acquire);
+        if (a)
+            a->_object_shade();
     }
     
     template<typename T>

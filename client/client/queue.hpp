@@ -12,6 +12,8 @@
 
 #include "array.hpp"
 #include "table.hpp"
+#include "HeapTable.hpp"
+#include "HeapArray.hpp"
 
 namespace wry {
     
@@ -116,15 +118,17 @@ namespace wry {
     template<typename T>
     struct QueueOfUnique {
         
+        /*
         using value_type = typename Array<T>::value_type;
         using size_type = typename Array<T>::size_type;
         using reference = typename Array<T>::const_reference;
         using const_reference = typename Array<T>::const_reference;
         using iterator = typename Array<T>::iterator;
         using const_iterator = typename Array<T>::const_iterator;
+         */
 
-        Array<T> queue;
-        HashSet<T> set;
+        gc::RealTimeGarbageCollectedDynamicArray<T> queue;
+        gc::HashSet<T> set;
         
         // invariant
         
@@ -171,12 +175,14 @@ namespace wry {
         
         // as immutable sequence
         
+        /*
         const_iterator begin() const { return queue.begin(); }
         const_iterator end() const { return queue.end(); }
         const_iterator cbegin() const { return queue.cbegin(); }
         const_iterator cend() const { return queue.cend(); }
         const_reference front() const { return queue.front(); }
         const_reference back() const { return queue.back(); }
+         */
         bool empty() const { return queue.empty(); }
         auto size() const { return queue.size(); }
         
@@ -186,10 +192,14 @@ namespace wry {
             (void) try_push(std::forward<decltype(key)>(key));
         }
         
-        void push_range(QueueOfUnique&& source) {
+        template<typename U>
+        void push_range(QueueOfUnique<U>&& source) {
             // the uniqueness of source can't help us here
-            for (auto& value : source.queue)
-                push(std::move(value));
+            size_t n = source.queue.size();
+            //for (auto& value : source.queue)
+            //    push(std::move(value));
+            for (size_t i = 0; i != n; ++i)
+                push(source.queue[i]);
             source.clear();
         }
         
@@ -233,7 +243,7 @@ namespace wry {
         }
         
         bool try_push(auto&& value) {
-            auto [_, flag] = set.insert(value);
+            bool flag = set.insert(value);
             if (flag) {
                 queue.push_back(std::forward<decltype(value)>(value));
             }
@@ -251,6 +261,21 @@ namespace wry {
         }
         
     };
+    
+    // static_assert(std::is_move_assignable_v<QueueOfUnique<gc::Scan<gc::Object*>>>);
+    static_assert(std::is_move_assignable_v<gc::HashSet<gc::Scan<gc::Object*>>>);
+
+    template<typename T>
+    void any_trace(const QueueOfUnique<T>& self) {
+        any_trace(self.queue);
+        any_trace(self.set);
+    }
+
+    template<typename T>
+    void any_shade(const QueueOfUnique<T>& self) {
+        any_shade(self.queue);
+        any_shade(self.set);
+    }
     
 } // namespace wry
 

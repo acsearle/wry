@@ -208,6 +208,14 @@ namespace wry::gc {
     void object_shade(const Scan<Atomic<Value>>&);
     void object_trace(const Scan<Atomic<Value>>&);
     void object_trace_weak(const Scan<Atomic<Value>>&);
+    
+    inline void any_trace(const Scan<Value>& self) {
+        object_trace(self._atomic_value.load(Ordering::ACQUIRE));
+    }
+
+    inline void any_shade(const Scan<Value>& self) {
+        object_shade(self._atomic_value.load(Ordering::RELAXED));
+    }
 
     
     

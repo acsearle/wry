@@ -1,5 +1,5 @@
 //
-//  wry/RealTimeGarbageCollectedDynamicArray.hpp
+//  wry/HeapArray.hpp
 //  client
 //
 //  Created by Antony Searle on 19/6/2024.
@@ -8,12 +8,383 @@
 #ifndef wry_HeapArray_hpp
 #define wry_HeapArray_hpp
 
-#include "debug.hpp"
+#include <bit>
+
+#include "assert.hpp"
 #include "object.hpp"
+#include "memory.hpp"
 #include "traced.hpp"
 #include "utility.hpp"
 
 namespace wry::gc {
+    
+    template<typename T> // requires(std::has_single_bit(sizeof(T)))
+    struct ArrayStaticIndirect : Object {
+        
+        using value_type = T;
+        using size_type = std::size_t;
+        using difference_type = std::ptrdiff_t;
+        using reference = value_type&;
+        using const_reference = const value_type&;
+        using pointer = value_type*;
+        using const_pointer = const value_type*;
+
+        T* const _data;
+        size_t const _size;
+        
+        void _invariant() {
+            assert(_data);
+            assert(std::has_single_bit(_size));
+        }
+        
+        explicit ArrayStaticIndirect(size_t n)
+        : _data((T*) calloc(n, sizeof(T)))
+        , _size(n) {
+            std::uninitialized_default_construct_n(_data, n);
+            _invariant();
+        }
+        
+        virtual ~ArrayStaticIndirect() override {
+            auto sv = type_name<T>();
+            printf("~ArrayStaticIndirect<%.*s>(%zd)\n", (int)sv.size(), (const char*)sv.data(), _size);
+            std::destroy_n(_data, _size);
+            free(_data);
+        }
+        
+        size_t size() const { return _size; }
+        
+        T* data() { return _data; }
+        const T* data() const { return _data; }
+        
+        T* begin() { return _data; }
+        const T* begin() const { return _data; }
+        
+        T* end() { return _data + _size; }
+        const T* end() const { return _data + _size; }
+        
+        T& front() { return *_data; }
+        const T& front() const { return *_data; }
+        
+        T& back() { return _data[_size - 1]; }
+        const T& back() const { return _data[_size - 1]; }
+        
+        T& operator[](size_t i) {
+            assert(i < _size);
+            return _data[i];
+        }
+        
+        const T& operator[](size_t i) const {
+            assert(i < _size);
+            return _data[i];
+        }
+        
+        virtual void _object_scan() const override {
+            for (const T& element : *this) {
+                using wry::gc::any_trace;
+                any_trace(element);
+            }
+        }
+        
+        virtual void _object_debug() const override {
+            auto sv = type_name<T>();
+            printf("ArrayStaticIndirect<%.*s>(%zd){ ", (int)sv.size(), (const char*)sv.data(), _size);
+            for (const T& element : *this) {
+                any_debug(element);
+                printf(", ");
+            }
+            printf("}");
+        }
+        
+    };
+    
+    template<typename T>
+    struct RingBufferStatic {
+        T* _data;
+        size_t _capacity;
+        Scan<ArrayStaticIndirect<T>*> _storage;
+        
+        RingBufferStatic()
+        : _data(nullptr)
+        , _capacity(0)
+        , _storage(nullptr) {
+        }
+        
+        RingBufferStatic(RingBufferStatic&& other)
+        : _data(exchange(other._data, nullptr))
+        , _capacity(exchange(other._capacity, 0))
+        , _storage(exchange(other._storage, nullptr)) {
+        }
+        
+        RingBufferStatic& operator=(RingBufferStatic&& other) {
+            _data = exchange(other._data, nullptr);
+            _capacity = exchange(other._capacity, 0);
+            _storage = std::move(other._storage);
+            return *this;
+        }
+        
+        size_t capacity() const {
+            return _capacity;
+        }
+        
+        size_t _mask(size_t i) const {
+            return i & (_capacity - 1);
+        }
+        
+        T& operator[](size_t i) {
+            return _data[_mask(i)];
+        }
+        
+        const T& operator[](size_t i) const {
+            return _data[_mask(i)];
+        }
+
+    };
+    
+    template<typename T>
+    void any_trace(const RingBufferStatic<T>& self) {
+        any_trace(self._storage);
+    }
+
+    template<typename T>
+    void any_shade(const RingBufferStatic<T>& self) {
+        any_shade(self._storage);
+    }
+
+    template<typename T>
+    struct RingDequeStatic {
+        RingBufferStatic<T> _inner;
+        size_t _begin = 0;
+        size_t _end = 0;
+        
+        RingDequeStatic() 
+        : _inner()
+        , _begin(0)
+        , _end(0) {
+        }
+        
+        RingDequeStatic(RingDequeStatic&& other)
+        : _inner(std::move(other._inner))
+        , _begin(exchange(other._begin, 0))
+        , _end(exchange(other._end, 0)) {
+        }
+        
+        RingDequeStatic& operator=(RingDequeStatic&& other) {
+            _inner = std::move(other._inner);
+            _begin = exchange(other._begin, 0);
+            _end = exchange(other._end, 0);
+            return *this;
+        }
+                
+        size_t capacity() const {
+            return _inner._capacity;
+        }
+                
+        size_t size() const {
+            return _end - _begin;
+        }
+
+        bool empty() const {
+            return _begin == _end;
+        }
+
+        bool full() const {
+            return _end - _begin == capacity();
+        }
+
+        T& front() {
+            assert(!empty());
+            return _inner[_begin];
+        }
+        
+        T& back() {
+            assert(!empty());
+            return _inner[_end - 1];
+        }
+        
+        T& operator[](size_t i) {
+            assert(_begin <= i);
+            assert(i < _end);
+            return _inner[i];
+        }
+        
+        void pop_front() {
+            assert(!empty());
+            ++_begin;
+        }
+        
+        void pop_back() {
+            assert(!empty());
+            --_end;
+        }
+        
+        template<typename U>
+        void push_front(U&& value) {
+            assert(!full());
+            _inner[_begin - 1] = std::forward<U>(value);
+            --_begin;
+        }
+
+        template<typename U>
+        void push_back(U&& value) {
+            assert(!full());
+            _inner[_end] = std::forward<U>(value);
+            ++_end;
+        }
+
+    };
+   
+    template<typename T>
+    void any_trace(const RingDequeStatic<T>& self) {
+        any_trace(self._inner);
+    }
+
+    template<typename T>
+    void any_shade(const RingDequeStatic<T>& self) {
+        any_shade(self._inner);
+    }
+
+    
+    
+    template<typename T>
+    struct RealTimeGarbageCollectedDynamicArray {
+        mutable RingDequeStatic<T> _alpha;
+        mutable RingDequeStatic<T> _beta;
+        
+        
+                
+        void _tax_front() const {
+            if (!_beta.empty()) {
+                _alpha[_beta._begin] = std::move(_beta.front());
+                _beta.pop_front();
+            }
+        }
+        
+        void _tax_back() const {
+            if (!_beta.empty()) {
+                _alpha[_beta._end - 1] = std::move(_beta.back());
+                _beta.pop_back();
+            }
+        }
+        
+        void _ensure_nonfull() const{
+            if (_alpha.full()) {
+                assert(_beta.empty());
+                _beta._inner._data = _alpha._inner._data;
+                _beta._inner._capacity = _alpha._inner._capacity;
+                _beta._inner._storage = std::move(_alpha._inner._storage);
+                _beta._begin = _alpha._begin;
+                _beta._end = _alpha._end;
+                _alpha._inner._capacity = max(_alpha._inner._capacity << 1, 1);
+                auto p = new ArrayStaticIndirect<T>(_alpha._inner._capacity);
+                _alpha._inner._data = p->_data;
+                _alpha._inner._storage = p;
+            }
+        }
+        
+        bool empty() const {
+            return _alpha.empty();
+        }
+        
+        size_t size() const {
+            return _alpha.size();
+        }
+        
+        T& front() const {
+            _tax_front();
+            return _alpha.front();
+        }
+        
+        T& back() const {
+            _tax_back();
+            return _alpha.back();
+        }
+        
+        void pop_front() {
+            _tax_front();
+            _alpha.pop_front();
+        }
+        
+        void pop_back() {
+            _tax_back();
+            _alpha.pop_back();
+        }
+        
+        template<typename U>
+        void push_front(U&& value) {
+            _tax_back();
+            _ensure_nonfull();
+            _alpha.push_front(std::forward<U>(value));
+        }
+
+        template<typename U>
+        void push_back(U&& value) {
+            _tax_back();
+            _ensure_nonfull();
+            _alpha.push_back(std::forward<U>(value));
+        }
+        
+        T& operator[](size_t i) {
+            _tax_front();
+            assert(_alpha._begin <= i);
+            assert(i < _alpha._end);
+            if (i < _beta._begin || i >= _beta._end)
+                return _alpha[i];
+            else
+                return _beta[i];
+        }
+
+        const T& operator[](size_t i) const {
+            _tax_front();
+            assert(_alpha._begin <= i);
+            assert(i < _alpha._end);
+            if (i < _beta._begin || i >= _beta._end)
+                return _alpha[i];
+            else
+                return _beta[i];
+        }
+
+        void clear() {
+            _beta._begin = _beta._end;
+            _alpha._begin = _alpha._end;
+        }
+
+    };
+    
+    template<typename T>
+    void any_trace(const RealTimeGarbageCollectedDynamicArray<T>& self) {
+        any_trace(self._alpha);
+        any_trace(self._beta);
+    }
+
+    template<typename T>
+    void any_shade(const RealTimeGarbageCollectedDynamicArray<T>& self) {
+        any_shade(self._alpha);
+        any_shade(self._beta);
+    }
+
+    
+    static_assert(std::is_move_assignable_v<gc::RealTimeGarbageCollectedDynamicArray<gc::Scan<gc::Object*>>>);
+    
+    
+} // namespace wry::gc
+
+#if 0
+
+#include "debug.hpp"
+#include "object.hpp"
+#include "traced.hpp"
+#include "utility.hpp"
+    
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
     
     // The garbage collector thread will
     // access .color
@@ -428,66 +799,6 @@ namespace wry::gc {
     
     
     
-    // Managed fixed sized arrays
-    //
-    // Indirect via a pointer, to prevent the header from bumping a power of
-    // two array size as needed by hash maps
-
-    template<ObjectTrait T>
-    struct ArrayStaticIndirect : Object {
-        
-        T* const _data;
-        const size_t _size;
-        
-        void _invariant() {
-            assert(_data && _size);
-        }
-        
-        explicit ArrayStaticIndirect(size_t elements)
-        : _data((T*) calloc(elements, sizeof(T)))
-        , _size(elements) {
-            assert(_data);
-            assert(std::has_single_bit(elements));
-        }
-                
-        virtual ~ArrayStaticIndirect() override {
-            free(_data);
-        }
-        
-        size_t size() const { return _size; }
-        
-        T* data() { return _data; }
-        const T* data() const { return _data; }
-
-        T* begin() { return _data; }
-        const T* begin() const { return _data; }
-
-        T* end() { return _data + _size; }
-        const T* end() const { return _data + _size; }
-        
-        T& front() { return *_data; }
-        T& back() { return _data[_size - 1]; }
-        T& operator[](size_t i) const {
-            assert(i < _size);
-            return _data[i];
-        }
-        
-        virtual void _object_scan() const override {
-            for (const T& element : *this)
-                object_trace(element);
-        }
-        
-        virtual void _object_debug() const override {
-            auto sv = type_name<T>();
-            printf("IndirectStaticArray<%.*s>(%zd){ ", (int)sv.size(), (const char*)sv.data(), _size);
-            for (const T& element : *this) {
-                object_debug(element);
-                printf(", ");
-            }
-            printf("}");
-        }
-        
-    };
     
     // Direct via a flexible array member
     //
@@ -602,6 +913,7 @@ namespace wry::gc {
             _capacity = exchange(other._capacity, nullptr);
             // TODO: atomic exchange?
             _storage = std::move(other._storage);
+            return *this;
         }
         
         bool empty() const { return _begin == _end; }
@@ -866,6 +1178,7 @@ namespace wry::gc {
         void clear() {
             _alpha.clear();
             _beta.clear();
+            _state = INITIAL;
         }
                         
     }; // struct RealTimeGarbageCollectedDynamicArray<T>
@@ -912,6 +1225,6 @@ namespace wry::gc {
         abort();
     }
     
-} // namespace wry::gc
+#endif
 
 #endif /* wry_HeapArray_hpp */
