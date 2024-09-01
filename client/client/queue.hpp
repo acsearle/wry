@@ -127,7 +127,7 @@ namespace wry {
         using const_iterator = typename Array<T>::const_iterator;
          */
 
-        gc::RealTimeGarbageCollectedDynamicArray<T> queue;
+        gc::GCArray<T> queue;
         gc::HashSet<T> set;
         
         // invariant

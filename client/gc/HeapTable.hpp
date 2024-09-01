@@ -965,7 +965,7 @@ namespace wry::gc {
     
     
     
-    template<ObjectTrait K>
+    template<typename K>
     struct BasicHashSetEntry {
         K _key;
         bool _occupied;
@@ -984,7 +984,7 @@ namespace wry::gc {
         
         template<typename J>
         static size_t hash(const J& j) {
-            return object_hash(j);
+            return any_hash(j);
         }
                 
         void assign(BasicHashSetEntry&& other) {

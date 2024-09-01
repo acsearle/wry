@@ -574,15 +574,15 @@ namespace wry::gc {
         }
         
         void INode::_object_scan() const {
-            object_trace(main);
+            any_trace(main);
         }
         
         void LNode::_object_scan() const {
-            object_trace_weak(sn);
-            object_trace(next);
+            any_trace_weak(sn);
+            any_trace(next);
         }
         void TNode::_object_scan() const {
-            object_trace_weak(sn);
+            any_trace_weak(sn);
         }
         
         
@@ -625,7 +625,7 @@ namespace wry::gc {
     }
 
     void Ctrie::_object_scan() const {
-        object_trace(root);
+        any_trace(root);
     }
     
     

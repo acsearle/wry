@@ -63,12 +63,14 @@ namespace wry::gc {
 
     // gc methods
     
+    /*
     size_t object_hash(const Value&);
     void object_debug(const Value&);
     void object_passivate(Value&);
     void object_shade(const Value&);
     void object_trace(const Value&);
     void object_trace_weak(const Value&);
+     */
 
     constexpr Value value_make_boolean_with(bool flag);
     constexpr Value value_make_character_with(int utf32);
@@ -177,12 +179,14 @@ namespace wry::gc {
         Value get() const;
     };
     
+    /*
     size_t object_hash(const Scan<Value>&);
     void object_debug(const Scan<Value>&);
     void object_passivate(Scan<Value>&);
     void object_shade(const Scan<Value>&);
     void object_trace(const Scan<Value>&);
     void object_trace_weak(const Scan<Value>&);
+     */
 
     template<>
     struct Scan<Atomic<Value>> {
@@ -202,20 +206,15 @@ namespace wry::gc {
 
     };
     
+    /*
     size_t object_hash(const Scan<Atomic<Value>>&);
     void object_debug(const Scan<Atomic<Value>>&);
     void object_passivate(Scan<Atomic<Value>>&);
     void object_shade(const Scan<Atomic<Value>>&);
     void object_trace(const Scan<Atomic<Value>>&);
     void object_trace_weak(const Scan<Atomic<Value>>&);
-    
-    inline void any_trace(const Scan<Value>& self) {
-        object_trace(self._atomic_value.load(Ordering::ACQUIRE));
-    }
+     */
 
-    inline void any_shade(const Scan<Value>& self) {
-        object_shade(self._atomic_value.load(Ordering::RELAXED));
-    }
 
     
     
@@ -250,6 +249,29 @@ namespace wry::gc {
     constexpr Value _value_make_tombstone();
 
     
+    
+    
+    inline void value_shade(const Value& self) {
+        if (_value_is_object(self))
+            object_shade(_value_as_object(self));
+    }
+
+    inline void value_trace(const Value& self) {
+        if (_value_is_object(self))
+            object_trace(_value_as_object(self));
+    }
+
+    inline void any_shade(const Scan<Value>& self) {
+        value_shade(self._atomic_value.load(Ordering::RELAXED));
+    }
+
+    inline void any_trace(const Scan<Value>& self) {
+        value_trace(self._atomic_value.load(Ordering::ACQUIRE));
+    }
+    
+    size_t value_hash(const Value& self);
+    
+
     
     
     
@@ -305,11 +327,11 @@ namespace wry::gc {
         object_trace(self._atomic_value.load(Ordering::ACQUIRE));
     }
 
-    inline void object_passivate(Value& self) {
+    inline void any_passivate(Value& self) {
         self._data = 0;
     }
     
-    inline void object_passivate(Scan<Value>& self) {
+    inline void any_passivate(Scan<Value>& self) {
         self._atomic_value.exchange(value_make_null(), Ordering::RELAXED);
     }
     
@@ -564,7 +586,7 @@ namespace wry::gc {
 namespace wry {
     
     inline size_t hash(const gc::Value& value) {
-        return gc::object_hash(value);
+        return gc::value_hash(value);
     }
     
     

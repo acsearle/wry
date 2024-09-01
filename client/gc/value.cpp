@@ -100,7 +100,7 @@ namespace wry::gc {
     
 #undef X
     
-    size_t object_hash(const Value& self) {
+    size_t value_hash(const Value& self) {
         switch (_value_tag(self)) {
             case VALUE_TAG_OBJECT: {
                 const Object* object = _value_as_object(self);
@@ -295,8 +295,8 @@ namespace wry::gc {
 
     Scan<Value>& Scan<Value>::operator=(const Value& desired) {
         Value discovered = this->_atomic_value.exchange(desired, Ordering::RELEASE);
-        object_shade(desired);
-        object_shade(discovered);
+        value_shade(desired);
+        value_shade(discovered);
         return *this;
     }
 
@@ -438,12 +438,8 @@ namespace wry::gc {
         return erase(_value_as_object(self), key);
     }
 
-    
-    void object_debug(const Scan<Value>& self) {
-        object_debug(self._atomic_value.load(Ordering::ACQUIRE));
-    }
-    
-    void object_debug(const Value& self) {
+        
+    void value_debug(const Value& self) {
         switch (_value_tag(self)) {
             case VALUE_TAG_BOOLEAN:
                 return (void)printf("%s\n", value_as_boolean(self) ? "TRUE" : "FALSE");
@@ -481,6 +477,11 @@ namespace wry::gc {
         }
     }
     
+    void any_debug(const Scan<Value>& self) {
+        value_debug(self._atomic_value.load(Ordering::ACQUIRE));
+    }
+
+    
     
     Value _value_make_with(const Object* p) {
         Value result;
@@ -498,7 +499,7 @@ namespace wry::gc {
     
     struct ValueArray : Object {
         
-        RealTimeGarbageCollectedDynamicArray<Scan<Value>> _inner;
+        GCArray<Scan<Value>> _inner;
         
         virtual void _object_scan() const { any_trace(_inner); }
         virtual void _object_debug() const { any_debug(_inner); }

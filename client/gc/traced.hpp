@@ -12,7 +12,11 @@
 
 namespace wry::gc {
     
-    
+    // Scan<T> indicates that the payload wants to be scanned by the garbage
+    // collector.
+    //     T* const - immutable
+    //     T* - mutable, must be atomic internally, collector will ACQUIRE
+    //     Atomic<T*> - explicitly atomic, multiple mutator threads may access
     
     template<typename T>
     struct Scan;
@@ -48,14 +52,6 @@ namespace wry::gc {
         
     }; // Scan<T*const>
     
-    template<PointerConvertibleTo<Object> T> size_t object_hash(const Scan<T*const>&);
-    template<PointerConvertibleTo<Object> T> void object_debug(const Scan<T*const>&);
-    template<PointerConvertibleTo<Object> T> void object_passivate(Scan<T*const>&);
-    template<PointerConvertibleTo<Object> T> void object_shade(const Scan<T*const>&);
-    template<PointerConvertibleTo<Object> T> void object_trace(const Scan<T*const>&);
-    template<PointerConvertibleTo<Object> T> void object_trace_weak(const Scan<T*const>&);
-
-    
     template<std::derived_from<Object> T>
     struct Scan<T*> {
         
@@ -87,15 +83,6 @@ namespace wry::gc {
         
     }; // struct Traced<T*>
     
-    template<std::derived_from<Object> T> size_t object_hash(const Scan<T*>&);
-    template<std::derived_from<Object> T> void object_debug(const Scan<T*>&);
-    template<std::derived_from<Object> T> void object_passivate(Scan<T*>&);
-    template<std::derived_from<Object> T> void object_shade(const Scan<T*>&);
-    template<std::derived_from<Object> T> void object_trace(const Scan<T*>&);
-    template<std::derived_from<Object> T> void object_trace_weak(const Scan<T*>&);
-    
-    
-    
     template<std::derived_from<Object> T>
     struct Scan<Atomic<T*>> {
         
@@ -115,49 +102,10 @@ namespace wry::gc {
         
     }; // struct Traced<Atomic<T*>>
     
-    template<std::derived_from<Object> T> size_t object_hash(const Scan<Atomic<T*>>&);
-    template<std::derived_from<Object> T> void object_debug(const Scan<Atomic<T*>>&);
-    template<std::derived_from<Object> T> void object_passivate(Scan<Atomic<T*>>&);
-    template<std::derived_from<Object> T> void object_shade(const Scan<Atomic<T*>>&);
-    template<std::derived_from<Object> T> void object_trace(const Scan<Atomic<T*>>&);
-    template<std::derived_from<Object> T> void object_trace_weak(const Scan<Atomic<T*>>&);
-    
-    
     
 } // namespace wry::gc
 
 namespace wry::gc {
-    
-    template<PointerConvertibleTo<Object> T> 
-    size_t object_hash(const Scan<T*const>& self) {
-        return object_hash(self._object);
-    }
-    
-    template<PointerConvertibleTo<Object> T> 
-    void object_debug(const Scan<T*const>& self) {
-        object_debug(self._object);
-    }
-    
-    template<PointerConvertibleTo<Object> T> 
-    void object_passivate(Scan<T*const>& self) {
-        // no-op
-    }
-    
-    template<PointerConvertibleTo<Object> T> 
-    void object_shade(const Scan<T*const>& self) {
-        object_shade(self._object);
-    }
-    
-    template<PointerConvertibleTo<Object> T> 
-    void object_trace(const Scan<T*const>& self) {
-        object_trace(self._object);
-    }
-    
-    template<PointerConvertibleTo<Object> T> 
-    void object_trace_weak(const Scan<T*const>& self) {
-        object_trace(self._object);
-    }
-
     
     template<std::derived_from<Object> T>
     Scan<T*>::Scan(const Scan& other)
@@ -269,40 +217,6 @@ namespace wry::gc {
         return discovered;
     }
     
-    
-    
-    template<std::derived_from<Object> T>
-    size_t object_hash(const Scan<T*>& self) {
-        object_hash(self.get());
-    }
-    
-    template<std::derived_from<Object> T>
-    void object_debug(const Scan<T*>& self) {
-        object_trace(self._object.load(Ordering::ACQUIRE));
-    }
-    
-    template<std::derived_from<Object> T>
-    void object_passivate(Scan<T*>& self) {
-        (void) self.take();
-    }
-    
-    template<std::derived_from<Object> T>
-    void object_shade(const Scan<T*>& self) {
-        object_shade(self.get());
-    }
-    
-    template<std::derived_from<Object> T>
-    void object_trace(const Scan<T*>& self) {
-        object_trace(self._object.load(Ordering::ACQUIRE));
-    }
-    
-    template<std::derived_from<Object> T>
-    void object_trace_weak(const Scan<T*>& self) {
-        object_trace_weak(self._object.load(Ordering::ACQUIRE));
-    }
-    
-    
-    
     template<std::derived_from<Object> T>
     Scan<Atomic<T*>>::Scan(T* object)
     : _object(object) {
@@ -347,43 +261,6 @@ namespace wry::gc {
     }
     
     
-    
-    template<std::derived_from<Object> T>
-    size_t object_hash(const Scan<Atomic<Atomic<T*>>>& self) {
-        object_hash(self.load(Ordering::ACQUIRE));
-    }
-    
-    template<std::derived_from<Object> T>
-    void object_debug(const Scan<Atomic<T*>>& self) {
-        object_trace(self.load(Ordering::ACQUIRE));
-    }
-    
-    template<std::derived_from<Object> T>
-    void object_passivate(Scan<Atomic<T*>>& self) {
-        // TODO: is it ever correct to passivate an atomic?
-        __builtin_trap();
-        self.store(nullptr, Ordering::ACQUIRE);
-    }
-    
-    template<std::derived_from<Object> T>
-    void object_shade(const Scan<Atomic<T*>>& self) {
-        object_shade(self.load(Ordering::ACQUIRE));
-    }
-    
-    template<std::derived_from<Object> T>
-    void object_trace(const Scan<Atomic<T*>>& self) {
-        object_trace(self.load(Ordering::ACQUIRE));
-    }
-    
-    template<std::derived_from<Object> T>
-    void object_trace_weak(const Scan<Atomic<T*>>& self) {
-        object_trace_weak(self.load(Ordering::ACQUIRE));
-    }
-    
-    
-    
-    
-    
     template<PointerConvertibleTo<Object> T>
     void any_trace(const Scan<T* const>& self) {
         if (self._object)
@@ -392,19 +269,19 @@ namespace wry::gc {
 
     template<PointerConvertibleTo<Object> T>
     void any_trace(const Scan<T*>& self) {
-        const T* a = self.get();
+        const T* a = // self.get();
+        self._object.load(Ordering::ACQUIRE);
         if (a)
             a->_object_trace();
     }
 
     template<PointerConvertibleTo<Object> T>
     void any_trace(const Scan<Atomic<T*>>& self) {
-        const T* a = self.load(std::memory_order_acquire);
+        const T* a = self.load(Ordering::ACQUIRE);
         if (a)
             a->_object_trace();
     }
-    
-    
+        
     template<PointerConvertibleTo<Object> T>
     void any_shade(const Scan<T* const>& self) {
         if (self._object)
@@ -420,7 +297,7 @@ namespace wry::gc {
     
     template<PointerConvertibleTo<Object> T>
     void any_shade(const Scan<Atomic<T*>>& self) {
-        const T* a = self.load(std::memory_order_acquire);
+        const T* a = self.load(Ordering::ACQUIRE);
         if (a)
             a->_object_shade();
     }
@@ -448,33 +325,19 @@ namespace wry::gc {
 
     template<typename T>
     inline constexpr T* any_none<Scan<Atomic<T*>>> = nullptr;
+    
+    
+    template<PointerConvertibleTo<Object> T>
+    void any_trace_weak(const Scan<T*const>& self) {
+        object_trace_weak(self._object);
+    }
 
+        
+    template<PointerConvertibleTo<Object> T>
+    void any_passivate(Scan<T*>& self) {
+        self = nullptr;
+    }
+    
 } // namespace wry::gc
-
-
-
-
-// Traced objects are mutable and of interest to the garbage collector, so
-// they must be atomic.  Traced<...> and Traced<Atomic<...>> provide these
-// services.  Both are backed by Atomic<...>.
-//
-// Traced implements the write barrier required by concurrent
-// garbage collection, conservatively shading both the old and new values
-// of any store, and thus ensuring that any value seen by the mutator lasts
-// at least until the mutator's next handshake.
-//
-// Traced<...> use the minimal memory Orderings required for
-// a "typical" object that is read and written by one mutator thread:
-//     - mutator thread loads on the mutator are RELAXED
-//     - mutator thread stores are RELEASE
-//     - collector thread loads are ACQUIRE
-//     - collector thread stores are not permitted
-// The collector thread calls only a few methods, notably sweep, trace and
-// debug, and these conservatively use ACQUIRE loads.  We allow the user to
-// implement sweep and trace with arbitrary code, so this is a
-// footgun, but one that ThreadSanitizer seems to be good at detecting.
-//
-// Traced<Atomic<...>> relies on the user to correctly implement more
-// complicated patterns; this usually means ACQUIRE loads everywhere.
 
 #endif /* traced_hpp */

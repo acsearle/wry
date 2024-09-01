@@ -17,37 +17,9 @@ namespace wry::gc {
         
     using hash_t = std::size_t;
     
-    // Defines the set of free functions defining the interface of garbage
-    // collection participants, and the specific base class for garbage
-    // collection objects that implement those methods via virtual dispatch.
-    //
-    // A typical pattern is that a container will hold and trace garbage
-    // collected elements, but not itself be an object; it will be embedded in
-    // a larger object.  All of these entities support the object_ interface.
-    
-    template<typename T>
-    concept ObjectTrait = requires(T& ref, const T& cref) {
-        
-        // not everything is sensibly hashable
-        // pointer hash for mutable containers makes no sense
-        // pointer identity for strings relies on interning, for bignums also
-        // relies on interning
-        { object_hash(cref) } -> std::convertible_to<hash_t>;
-        
-        { object_debug(cref) };
-        { object_passivate(ref) };
-        { object_shade(cref) };
-        { object_trace(cref) };
-        { object_trace_weak(cref) };
-    };
-    
-    // from a Rust perspective, to efficiently allow thin pointers + dynamic
-    // dispatch we have to have push all traits up to a common base class
-
     struct Value;
     
     // Tricolor abstraction color
-    
     enum class Color {
         WHITE = 0,
         BLACK = 1,
@@ -69,10 +41,9 @@ namespace wry::gc {
     struct Object {
         
         static void* operator new(size_t number_of_bytes);
-        static void* operator new[](size_t number_of_bytes) = delete;
-        
-        // TODO: delete(number_of_bytes) p for logging?
         static void operator delete(void*);
+        
+        static void* operator new[](size_t number_of_bytes) = delete;
         static void operator delete[](void*) = delete;
         
         // TODO: is it useful to have a base class above tricolored + sweep?

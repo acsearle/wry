@@ -17,7 +17,7 @@ namespace wry::gc {
         
         mutator_enter();
         
-       auto* a = new RealTimeGarbageCollectedDynamicArray<Scan<Value>>();
+       auto* a = new GCArray<Scan<Value>>();
         
         assert(a->empty() == true);
         assert(a->size() == 0);

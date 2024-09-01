@@ -113,7 +113,7 @@ namespace wry {
     }
 
     void model::shade_roots() {
-        gc::object_shade(_holding_value);
+        value_shade(_holding_value);
         gc::object_shade(&_world);
     }
     

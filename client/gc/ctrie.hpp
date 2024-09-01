@@ -13,11 +13,7 @@
 
 namespace wry::gc {
     
-    
-    
     struct HeapString;
-    
-    
     
     namespace _ctrie {
 

@@ -50,7 +50,7 @@ namespace wry {
     constexpr std::underlying_type_t<Enum> to_underlying( Enum e ) noexcept {
         return static_cast<std::underlying_type_t<Enum>>(e);
     }
-
+    
     // # heterogenous reduce
     //
     // Performs reduce over parameter packs, enabling variadic extensions to
