@@ -13,7 +13,7 @@
 #include "assert.hpp"
 #include "object.hpp"
 #include "memory.hpp"
-#include "traced.hpp"
+#include "Scan.hpp"
 #include "utility.hpp"
 #include "adl.hpp"
 

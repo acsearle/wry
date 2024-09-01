@@ -1,12 +1,12 @@
 //
-//  traced.hpp
+//  Scan.hpp
 //  client
 //
 //  Created by Antony Searle on 16/6/2024.
 //
 
-#ifndef traced_hpp
-#define traced_hpp
+#ifndef Scan_hpp
+#define Scan_hpp
 
 #include "object.hpp"
 
@@ -339,4 +339,4 @@ namespace wry::gc {
     
 } // namespace wry::gc
 
-#endif /* traced_hpp */
+#endif /* Scan_hpp */

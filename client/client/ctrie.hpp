@@ -8,7 +8,7 @@
 #ifndef ctrie_hpp
 #define ctrie_hpp
 
-#include "traced.hpp"
+#include "Scan.hpp"
 #include "value.hpp"
 
 namespace wry::gc {

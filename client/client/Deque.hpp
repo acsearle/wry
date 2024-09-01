@@ -11,7 +11,7 @@
 #include <cassert>
 
 #include "object.hpp"
-#include "traced.hpp"
+#include "Scan.hpp"
 
 namespace wry {
 

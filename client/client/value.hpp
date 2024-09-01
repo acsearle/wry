@@ -13,7 +13,7 @@
 
 #include "atomic.hpp"
 #include "object.hpp"
-#include "traced.hpp"
+#include "Scan.hpp"
 #include "adl.hpp"
 
 namespace wry::gc {
