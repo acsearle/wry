@@ -128,15 +128,15 @@ namespace wry::gc {
     
     
     template<typename K, typename V>
-    void any_trace(const BasicEntry<K, V>& e) {
-        any_trace(e._kv.first);
-        any_trace(e._kv.second);
+    void trace(const BasicEntry<K, V>& e) {
+        adl::trace(e._kv.first);
+        adl::trace(e._kv.second);
     }
 
     template<typename K, typename V>
-    void any_shade(const BasicEntry<K, V>& e) {
-        any_shade(e._kv.first);
-        any_shade(e._kv.second);
+    void shade(const BasicEntry<K, V>& e) {
+        adl::shade(e._kv.first);
+        adl::shade(e._kv.second);
     }
 
     template<typename K, typename V>
@@ -540,13 +540,13 @@ namespace wry::gc {
     };
     
     template<typename T>
-    void any_trace(const BasicHashSetB<T>& self) {
-        any_trace(self._storage);
+    void trace(const BasicHashSetB<T>& self) {
+        adl::trace(self._storage);
     }
 
     template<typename T>
-    void any_shade(const BasicHashSetB<T>& self) {
-        any_shade(self._storage);
+    void shade(const BasicHashSetB<T>& self) {
+        adl::shade(self._storage);
     }
 
     
@@ -755,15 +755,15 @@ namespace wry::gc {
     }; // BasicHashSetC
     
     template<typename T>
-    void any_trace(const BasicHashSetC<T>& self) {
-        any_trace(self._alpha);
-        any_trace(self._beta);
+    void trace(const BasicHashSetC<T>& self) {
+        adl::trace(self._alpha);
+        adl::trace(self._beta);
     }
     
     template<typename T>
-    void any_shade(const BasicHashSetC<T>& self) {
-        any_shade(self._alpha);
-        any_shade(self._beta);
+    void shade(const BasicHashSetC<T>& self) {
+        adl::shade(self._alpha);
+        adl::shade(self._beta);
     }
 
     
@@ -836,13 +836,13 @@ namespace wry::gc {
     };
     
     template<typename K, typename V>
-    void any_trace(const HashMap<K, V>& self) {
-        any_trace(self._inner);
+    void trace(const HashMap<K, V>& self) {
+        adl::trace(self._inner);
     }
 
     template<typename K, typename V>
-    void any_shade(const HashMap<K, V>& self) {
-        any_shade(self._inner);
+    void shade(const HashMap<K, V>& self) {
+        adl::shade(self._inner);
     }
 
 //
@@ -919,7 +919,7 @@ namespace wry::gc {
         }
         
         virtual void _object_scan() const override {
-            any_trace(_inner);
+            adl::trace(_inner);
         }
 
 
@@ -1010,13 +1010,13 @@ namespace wry::gc {
     
     
     template<typename K>
-    void any_trace(const BasicHashSetEntry<K>& e) {
-        any_trace(e._key);
+    void trace(const BasicHashSetEntry<K>& e) {
+        adl::trace(e._key);
     }
     
     template<typename K>
-    void any_shade(const BasicHashSetEntry<K>& e) {
-        any_shade(e._key);
+    void shade(const BasicHashSetEntry<K>& e) {
+        adl::shade(e._key);
     }
     
     template<typename K>
@@ -1036,7 +1036,7 @@ namespace wry::gc {
     
     template<typename K>
     void any_trace_weak(const BasicHashSetEntry<K>& e) {
-        any_trace(e);
+        adl::trace(e);
     }
     
     
@@ -1099,13 +1099,13 @@ namespace wry::gc {
     };
     
     template<typename K>
-    void any_trace(const HashSet<K>& self) {
-        return any_trace(self._inner);
+    void trace(const HashSet<K>& self) {
+        adl::trace(self._inner);
     }
     
     template<typename K>
-    void any_shade(const HashSet<K>& self) {
-        return any_shade(self._inner);
+    void shade(const HashSet<K>& self) {
+        return adl::shade(self._inner);
     }
 
     

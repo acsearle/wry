@@ -14,6 +14,7 @@
 #include "atomic.hpp"
 #include "object.hpp"
 #include "traced.hpp"
+#include "adl.hpp"
 
 namespace wry::gc {
     
@@ -251,22 +252,22 @@ namespace wry::gc {
     
     
     
-    inline void value_shade(const Value& self) {
+    inline void shade(const Value& self) {
         if (_value_is_object(self))
             object_shade(_value_as_object(self));
     }
 
-    inline void value_trace(const Value& self) {
+    inline void trace(const Value& self) {
         if (_value_is_object(self))
             object_trace(_value_as_object(self));
     }
 
-    inline void any_shade(const Scan<Value>& self) {
-        value_shade(self._atomic_value.load(Ordering::RELAXED));
+    inline void shade(const Scan<Value>& self) {
+        adl::shade(self._atomic_value.load(Ordering::RELAXED));
     }
 
-    inline void any_trace(const Scan<Value>& self) {
-        value_trace(self._atomic_value.load(Ordering::ACQUIRE));
+    inline void trace(const Scan<Value>& self) {
+        adl::trace(self._atomic_value.load(Ordering::ACQUIRE));
     }
     
     size_t value_hash(const Value& self);

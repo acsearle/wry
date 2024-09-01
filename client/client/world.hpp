@@ -322,73 +322,17 @@ namespace wry::sim {
         world->_entities.push_back(who);
     }
     
-} // namespace wry::sim
-
-namespace wry::gc {
-    
-    inline void object_shade(sim::World* self) {
-        if (self) {
-            any_shade(self->_value_for_coordinate);
-            any_shade(self->_occupant_for_coordinate);
-            any_shade(self->_entities);
-            any_shade(self->_waiting_for_time);
-            any_shade(self->_waiting_for_coordinate);
-            any_shade(self->_waiting_for_entity);
-            any_shade(self->_ready);
-        }
+    inline void shade(const sim::World& self) {
+        adl::shade(self._value_for_coordinate);
+        adl::shade(self._occupant_for_coordinate);
+        adl::shade(self._entities);
+        adl::shade(self._waiting_for_time);
+        adl::shade(self._waiting_for_coordinate);
+        adl::shade(self._waiting_for_entity);
+        adl::shade(self._ready);
     }
+
     
-} // namespace wry::gc
-
-
-/*
- printf("--\n");
- for (Entity* p : _entities) {
- if (Machine* q = dynamic_cast<Machine*>(p)) {
- printf("machine @ %p\n", q);
- printf("    phase is %d\n", q->_phase);
- printf("    new_location is %d %d\n", q->_new_location.x, q->_new_location.y);
- } else {
- printf("entity @ %p\n", p);
- }
- 
- // check that everything is waiting on something somewhere
- int n = 0;
- for (Entity* e : _waiting_for_step) {
- if (p == e) {
- printf("    is _ready\n");
- ++n;
- }
- }
- 
- for (const auto& [k, v] : _waiting_for_time)
- for (Entity* e : v)
- if (p == e) {
- printf("    is _waiting_for_time %lld\n", k);
- ++n;
- }
- 
- for (const auto& [k, v] : _waiting_for_coordinate) {
- for (Entity* e : v) {
- if (p == e) {
- printf("    is _waiting_for_coordinate %d %d\n", k.x, k.y);
- ++n;
- }
- }
- }
- 
- for (const auto& [k, v] : _waiting_for_entity) {
- for (Entity* e : v) {
- if (p == e) {
- printf("    is _waiting_for_entity %p\n", k);
- ++n;
- }
- }
- }
- 
- if (!n) {
- printf("    is_abandoned!\n");
- }
- */
+} // namespace wry::sim
 
 #endif /* world_hpp */

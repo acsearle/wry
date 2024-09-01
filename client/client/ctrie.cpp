@@ -9,6 +9,8 @@
 #include "ctrie.hpp"
 #include "HeapString.hpp"
 
+#include "adl.hpp"
+
 namespace wry::gc {
     
     namespace _ctrie {
@@ -574,12 +576,12 @@ namespace wry::gc {
         }
         
         void INode::_object_scan() const {
-            any_trace(main);
+            adl::trace(main);
         }
         
         void LNode::_object_scan() const {
             any_trace_weak(sn);
-            any_trace(next);
+            adl::trace(next);
         }
         void TNode::_object_scan() const {
             any_trace_weak(sn);
@@ -625,7 +627,7 @@ namespace wry::gc {
     }
 
     void Ctrie::_object_scan() const {
-        any_trace(root);
+        adl::trace(root);
     }
     
     

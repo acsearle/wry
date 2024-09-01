@@ -10,7 +10,6 @@
 
 #include "stdint.hpp"
 #include "hash.hpp"
-#include "value.hpp"
 
 namespace wry::sim {
     
@@ -106,15 +105,12 @@ X(OPCODE_FLOP_FLIP),\
     using Time = i64;
     
     // These can't be found by ADL since
-    inline void any_trace(const Time&) {}
-    inline void any_shade(const Time&) {}
+    inline void trace(const Time&) {}
+    inline void shade(const Time&) {}
     
 }
 
-namespace wry::gc {
-    inline void any_trace(const sim::Time&) {}
-    inline void any_shade(const sim::Time&) {}
-}
+#include "value.hpp"
 
 namespace wry::sim {
     
@@ -145,11 +141,10 @@ namespace wry::sim {
         return hash_combine(&x, sizeof(x));
     }
     
-    inline void any_trace(const Coordinate&) {}
-    inline void any_shade(const Coordinate&) {}
+    inline void trace(const Coordinate&) {}
+    inline void shade(const Coordinate&) {}
 
     using gc::Value;
-    
     
     enum TRANSACTION_STATE {
         

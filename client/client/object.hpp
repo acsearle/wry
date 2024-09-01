@@ -92,12 +92,6 @@ namespace wry::gc {
     template<std::derived_from<Object> T> void object_trace(T*const& self);
     template<std::derived_from<Object> T> void object_trace_weak(T*const& self);
     
-    /*
-    template<typename T> void any_trace(T const& self) {
-        // default: no-op
-    }
-     */
-
     template<typename T> void any_debug(T const& self) {
         std::string_view sv = type_name<T>();
         printf("(%.*s)\n", (int) sv.size(), sv.data());

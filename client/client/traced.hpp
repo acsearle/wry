@@ -260,15 +260,14 @@ namespace wry::gc {
         return result;
     }
     
-    
     template<PointerConvertibleTo<Object> T>
-    void any_trace(const Scan<T* const>& self) {
+    void trace(const Scan<T* const>& self) {
         if (self._object)
             self._object->_object_trace();
     }
 
     template<PointerConvertibleTo<Object> T>
-    void any_trace(const Scan<T*>& self) {
+    void trace(const Scan<T*>& self) {
         const T* a = // self.get();
         self._object.load(Ordering::ACQUIRE);
         if (a)
@@ -276,27 +275,27 @@ namespace wry::gc {
     }
 
     template<PointerConvertibleTo<Object> T>
-    void any_trace(const Scan<Atomic<T*>>& self) {
+    void trace(const Scan<Atomic<T*>>& self) {
         const T* a = self.load(Ordering::ACQUIRE);
         if (a)
             a->_object_trace();
     }
         
     template<PointerConvertibleTo<Object> T>
-    void any_shade(const Scan<T* const>& self) {
+    void shade(const Scan<T* const>& self) {
         if (self._object)
             self._object->_object_shade();
     }
     
     template<PointerConvertibleTo<Object> T>
-    void any_shade(const Scan<T*>& self) {
+    void shade(const Scan<T*>& self) {
         const T* a = self.get();
         if (a)
             a->_object_shade();
     }
     
     template<PointerConvertibleTo<Object> T>
-    void any_shade(const Scan<Atomic<T*>>& self) {
+    void shade(const Scan<Atomic<T*>>& self) {
         const T* a = self.load(Ordering::ACQUIRE);
         if (a)
             a->_object_shade();

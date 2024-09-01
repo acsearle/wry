@@ -10,6 +10,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <utility>
 
 namespace wry {
             
@@ -79,6 +80,8 @@ namespace wry {
         T& operator*() const {
             return ptr.operator T*();
         }
+        
+        std::pair<T, E> destructure() const;
         
     }; // struct TaggedPtr<T, E>
     

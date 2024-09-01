@@ -15,6 +15,7 @@
 #include "memory.hpp"
 #include "traced.hpp"
 #include "utility.hpp"
+#include "adl.hpp"
 
 namespace wry::gc {
     
@@ -80,8 +81,7 @@ namespace wry::gc {
         
         virtual void _object_scan() const override {
             for (const T& element : *this) {
-                using wry::gc::any_trace;
-                any_trace(element);
+                adl::trace(element);
             }
         }
         
@@ -233,13 +233,13 @@ namespace wry::gc {
     };
    
     template<typename T>
-    void any_trace(const RingDequeStatic<T>& self) {
-        any_trace(self._storage);
+    void trace(const RingDequeStatic<T>& self) {
+        adl::trace(self._storage);
     }
 
     template<typename T>
-    void any_shade(const RingDequeStatic<T>& self) {
-        any_shade(self._storage);
+    void shade(const RingDequeStatic<T>& self) {
+        adl::shade(self._storage);
     }
 
     
@@ -353,15 +353,15 @@ namespace wry::gc {
     };
     
     template<typename T>
-    void any_trace(const GCArray<T>& self) {
-        any_trace(self._alpha);
-        any_trace(self._beta);
+    void trace(const GCArray<T>& self) {
+        adl::trace(self._alpha);
+        adl::trace(self._beta);
     }
 
     template<typename T>
-    void any_shade(const GCArray<T>& self) {
-        any_shade(self._alpha);
-        any_shade(self._beta);
+    void shade(const GCArray<T>& self) {
+        adl::shade(self._alpha);
+        adl::shade(self._beta);
     }
 
     

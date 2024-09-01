@@ -15,7 +15,19 @@
 #include "stdint.hpp"
 #include "with_capacity.hpp"
 
+// TODO:
+// - Unify with HeapTable
+//   - Automatic choice of storage depending on trace/shade behaviour of payload
+// - Type trait: trivial gc behavior
+// - Make all things incrementally resizing
+// - Rename everything HashMap and HashSet
+//
+
 namespace wry {
+    
+    
+    
+    
     
     // hash map
     

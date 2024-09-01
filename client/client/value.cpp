@@ -295,8 +295,8 @@ namespace wry::gc {
 
     Scan<Value>& Scan<Value>::operator=(const Value& desired) {
         Value discovered = this->_atomic_value.exchange(desired, Ordering::RELEASE);
-        value_shade(desired);
-        value_shade(discovered);
+        adl::shade(desired);
+        adl::shade(discovered);
         return *this;
     }
 
@@ -501,7 +501,7 @@ namespace wry::gc {
         
         GCArray<Scan<Value>> _inner;
         
-        virtual void _object_scan() const { any_trace(_inner); }
+        virtual void _object_scan() const { adl::trace(_inner); }
         virtual void _object_debug() const { any_debug(_inner); }
         
         virtual bool _value_empty() const { return _inner.empty(); }

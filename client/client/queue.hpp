@@ -15,6 +15,10 @@
 #include "HeapTable.hpp"
 #include "HeapArray.hpp"
 
+// Various queue patterns
+//
+// TODO: Where do GC queue-like things live
+
 namespace wry {
     
     template<typename T>
@@ -266,15 +270,15 @@ namespace wry {
     static_assert(std::is_move_assignable_v<gc::HashSet<gc::Scan<gc::Object*>>>);
 
     template<typename T>
-    void any_trace(const QueueOfUnique<T>& self) {
-        any_trace(self.queue);
-        any_trace(self.set);
+    void trace(const QueueOfUnique<T>& self) {
+        adl::trace(self.queue);
+        adl::trace(self.set);
     }
 
     template<typename T>
-    void any_shade(const QueueOfUnique<T>& self) {
-        any_shade(self.queue);
-        any_shade(self.set);
+    void shade(const QueueOfUnique<T>& self) {
+        adl::shade(self.queue);
+        adl::shade(self.set);
     }
     
 } // namespace wry
