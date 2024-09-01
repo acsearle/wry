@@ -21,7 +21,7 @@
 #include "Option.hpp"
 #include "stddef.hpp"
 
-#include "../gc/value.hpp"
+#include "value.hpp"
 
 namespace wry::json {
     

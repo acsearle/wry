@@ -10,7 +10,7 @@
 
 #include "stdint.hpp"
 #include "hash.hpp"
-#include "../gc/value.hpp"
+#include "value.hpp"
 
 namespace wry::sim {
     
