@@ -12,6 +12,8 @@
 
 namespace wry {
     
+    // future std
+    
     template<typename From, typename To>
     struct copy_const {
         using type = To;

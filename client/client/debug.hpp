@@ -15,7 +15,7 @@
 
 namespace wry {
     
-    #define DUMP(X) std::cout << "(" << type_name<decltype((X))>() <<  ") " #X " = " << (X) << std::endl;
+    #define DUMP(X) std::cout << "(" << name_of<decltype((X))> <<  ") " #X " = " << (X) << std::endl;
         
     struct timer {
         

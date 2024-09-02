@@ -14,12 +14,17 @@
 namespace wry {
 
     // Compile-time type names
+    // TODO: compiler-specific parsing
+    // compiler builtins?
     
     template<typename T>
     constexpr std::string_view type_name() {
         std::string_view p = __PRETTY_FUNCTION__;
         return std::string_view(p.data() + 39, p.size() - 39 - 1);
     }
+    
+    template<typename T>
+    constexpr std::string_view name_of = type_name<T>();
     
     // Scope-level rebinding
     

@@ -18,6 +18,9 @@ namespace wry::gc {
     void mutator_handshake();
     void mutator_leave();
     
+    void* allocate(size_t bytes);
+    void deallocate(void* ptr, size_t bytes);
+    
 } // namespace gc
 
 #endif /* gc_hpp */

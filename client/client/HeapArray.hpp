@@ -46,9 +46,9 @@ namespace wry::gc {
         }
         
         virtual ~ArrayStaticIndirect() override {
-            auto sv = type_name<T>();
-            printf("~ArrayStaticIndirect<%.*s>(%zd)\n", (int)sv.size(), (const char*)sv.data(), _size);
-            std::destroy_n(_data, _size);
+            // std::string_view sv = name_of<T>;
+            // printf("~ArrayStaticIndirect<%.*s>(%zd)\n", (int)sv.size(), (const char*)sv.data(), _size);
+            // std::destroy_n(_data, _size);
             free(_data);
         }
         
@@ -86,7 +86,7 @@ namespace wry::gc {
         }
         
         virtual void _object_debug() const override {
-            auto sv = type_name<T>();
+            std::string_view sv = name_of<T>;
             printf("ArrayStaticIndirect<%.*s>(%zd){ ", (int)sv.size(), (const char*)sv.data(), _size);
             for (const T& element : *this) {
                 any_debug(element);
