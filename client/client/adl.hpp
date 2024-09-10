@@ -10,7 +10,7 @@
 
 #include <utility>
 
-namespace wry::sim {};
+namespace wry::sim {}
 
 namespace wry::adl {
     

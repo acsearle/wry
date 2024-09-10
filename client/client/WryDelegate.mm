@@ -7,11 +7,14 @@
 
 #import <AVFoundation/AVFoundation.h>
 
+#include "imgui.h"
+#include "imgui_impl_metal.h"
+#include "imgui_impl_osx.h"
+
 #include "WryRenderer.h"
 #include "WryMetalView.h"
 #include "WryDelegate.h"
 #include "WryAudio.h"
-
 
 // [1] https://sarunw.com/posts/how-to-create-macos-app-without-storyboard/
 
@@ -86,9 +89,29 @@
     _metalView.wantsLayer = YES;
     //_metalView.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
     
+    {
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO(); (void)io;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;   // Disable mouse cursor reset
+        
+        // Setup Dear ImGui style
+        ImGui::StyleColorsDark();
+        //ImGui::StyleColorsLight();
+        
+        // Setup Renderer backend
+        ImGui_ImplMetal_Init(_metalLayer.device);
+        io.Fonts->AddFontDefault();
+        ImGui_ImplOSX_Init(_metalView);
+    }
+    
+    
     _renderer = [[WryRenderer alloc] initWithMetalDevice:_metalLayer.device
                                      drawablePixelFormat:_metalLayer.pixelFormat
-                                                   model:_model];
+                                                   model:_model
+                                                    view:_metalView];
     
     _metalDisplayLink = [[CAMetalDisplayLink alloc] initWithMetalLayer:_metalLayer];
     _metalDisplayLink.preferredFrameRateRange = CAFrameRateRangeMake(60.0, 60.0, 60.0);
@@ -165,6 +188,9 @@
 
 - (void)windowWillClose:(NSNotification *)notification {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    ImGui_ImplMetal_Shutdown();
+    ImGui_ImplOSX_Shutdown();
+    ImGui::DestroyContext();
 }
 
 #pragma mark WryMetalViewDelegate
@@ -217,6 +243,8 @@
 
 - (void)keyDown:(NSEvent *)event {
     
+    if (ImGui::GetIO().WantCaptureKeyboard) return;
+
     using namespace wry;
     
     if (!event.ARepeat) {
@@ -329,10 +357,12 @@
 
 
 - (void)keyUp:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureKeyboard) return;
     NSLog(@"keyUp: \"%@\"\n", event.characters);
 }
 
 - (void)flagsChanged:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureKeyboard) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     /*
      NSEventModifierFlagCommand;
@@ -346,6 +376,7 @@
 }
 
 - (void) mouseMoved:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureMouse) return;
     NSPoint location_in_window = [event locationInWindow];
     NSPoint location_in_view = [_metalView convertPoint:location_in_window fromView:nil];
     _model->_mouse.x = 2.0f * location_in_view.x / _metalView.bounds.size.width - 1.0f;
@@ -355,21 +386,32 @@
 }
 
 - (void) mouseEntered:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureMouse) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     [_renderer resetCursor];
 }
 
-- (void) mouseExited:(NSEvent *)event {}
-- (void) mouseDown:(NSEvent *)event {}
+- (void) mouseExited:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureMouse) return;
+    // NSLog(@"%s\n", __PRETTY_FUNCTION__);
+}
+
+- (void) mouseDown:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureMouse) return;
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+}
 - (void) mouseDragged:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureMouse) return;
+    // NSLog(@"%s\n", __PRETTY_FUNCTION__);
     //auto lock = std::unique_lock{_model->_mutex};
     //_model->_looking_at.x += event.deltaX * _window.screen.backingScaleFactor;
     //_model->_looking_at.y += event.deltaY * _window.screen.backingScaleFactor;
     // NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
-    
 }
 
 - (void) mouseUp:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureMouse) return;
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
     NSPoint location_in_window = [event locationInWindow];
     NSPoint location_in_view = [_metalView convertPoint:location_in_window fromView:nil];
     _model->_mouse.x = 2.0f * location_in_view.x / _metalView.bounds.size.width - 1.0f;
@@ -377,22 +419,47 @@
     _model->_outstanding_click = true;
 }
 
-- (void) rightMouseDown:(NSEvent *)event {}
-- (void) rightMouseDragged:(NSEvent *)event {}
-- (void) rightMouseUp:(NSEvent *)event {}
-- (void) otherMouseDown:(NSEvent *)event {}
-- (void) otherMouseDragged:(NSEvent *)event {}
-- (void) otherMouseUp:(NSEvent *)event {}
+- (void) rightMouseDown:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureMouse) return;
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+}
+
+- (void) rightMouseDragged:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureMouse) return;
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+}
+
+- (void) rightMouseUp:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureMouse) return;
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+}
+
+- (void) otherMouseDown:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureMouse) return;
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+}
+
+- (void) otherMouseDragged:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureMouse) return;
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+}
+
+- (void) otherMouseUp:(NSEvent *)event {    
+    if (ImGui::GetIO().WantCaptureMouse) return;
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+}
 
 -(void) scrollWheel:(NSEvent *)event {
+    if (ImGui::GetIO().WantCaptureMouse) return;
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
     //auto lock = std::unique_lock{_model->_mutex};
     _model->_looking_at.x += event.scrollingDeltaX * _window.screen.backingScaleFactor;
     _model->_looking_at.y += event.scrollingDeltaY * _window.screen.backingScaleFactor;
     // NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
 }
 
-- (void)encodeWithCoder:(nonnull NSCoder *)coder { 
-    
+- (void)encodeWithCoder:(nonnull NSCoder *)coder {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
 @end

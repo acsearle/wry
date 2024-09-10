@@ -8,6 +8,10 @@
 #include <iostream>
 #include <thread>
 
+#include "imgui.h"
+#include "imgui_impl_metal.h"
+#include "imgui_impl_osx.h"
+
 #include "WryMetalView.h"
 
 // Metal view, like MTKView and CustomView[2], specialized to our use case of
@@ -86,44 +90,3 @@
 
 
 @end
-
-#if 0
-
-
-
-- (void)resizeDrawable:(CGFloat)scaleFactor
-{
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    
-    CGSize newSize = self.bounds.size;
-    newSize.width *= scaleFactor;
-    newSize.height *= scaleFactor;
-    
-    if(newSize.width <= 0 || newSize.width <= 0)
-    {
-        return;
-    }
-    
-    // All AppKit and UIKit calls which notify of a resize are called on the main thread.  Use
-    // a synchronized block to ensure that resize notifications on the delegate are atomic
-    
-    // TODO: we lock the _metalLayer for both resize and rendering, so a resize
-    // will stall the main thread until the current rendering (to the old size)
-    // is complete.  Instead, should we atomically update the size and resize
-    // the layer at the beginning / ending of the render loop?
-    @synchronized(_metalLayer)
-    {
-        if(newSize.width == _metalLayer.drawableSize.width &&
-           newSize.height == _metalLayer.drawableSize.height)
-        {
-            return;
-        }
-        
-        _metalLayer.drawableSize = newSize; // <-- resize here
-        
-        [_delegate drawableResize:newSize];
-    }
-    
-}
-
-#endif

@@ -912,7 +912,7 @@ namespace wry::gc {
     
     struct HeapHashMap : Object {
         
-        HashMap<gc::Scan<Value>, gc::Scan<Value>> _inner;
+        HashMap<Scan<Value>, Scan<Value>> _inner;
         
         void _invariant() const {
             _inner._invariant();

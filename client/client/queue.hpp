@@ -266,8 +266,8 @@ namespace wry {
         
     };
     
-    // static_assert(std::is_move_assignable_v<QueueOfUnique<gc::Scan<gc::Object*>>>);
-    static_assert(std::is_move_assignable_v<gc::HashSet<gc::Scan<gc::Object*>>>);
+    // static_assert(std::is_move_assignable_v<QueueOfUnique<Scan<gc::Object*>>>);
+    // static_assert(std::is_move_assignable_v<gc::HashSet<Scan<gc::Object*>>>);
 
     template<typename T>
     void trace(const QueueOfUnique<T>& self) {

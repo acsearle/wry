@@ -14,6 +14,10 @@
 #include <MetalKit/MetalKit.h>
 #include <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
+#include "imgui.h"
+#include "imgui_impl_metal.h"
+#include "imgui_impl_osx.h"
+
 #include "WryMesh.h"
 #include "WryRenderer.h"
 
@@ -112,6 +116,8 @@
     wry::Palette<wry::sim::Value> _controls;
 
     NSCursor* _cursor;
+    
+    NSView* _view;
     
 }
 
@@ -363,6 +369,7 @@
 -(nonnull instancetype)initWithMetalDevice:(nonnull id<MTLDevice>)device
                         drawablePixelFormat:(MTLPixelFormat)drawablePixelFormat
                                       model:(std::shared_ptr<wry::model>)model_
+                                       view:(NSView*)view_
 {
 
     using namespace ::wry;
@@ -381,6 +388,7 @@
         };
         
         _model = model_;
+        _view = view_;
         _drawablePixelFormat = drawablePixelFormat;
                 
         _device = device;
@@ -720,7 +728,7 @@
         }
         
     }
-    
+        
     NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
 
     return self;
@@ -728,14 +736,14 @@
 
 
 - (void) drawOverlay:(id<MTLRenderCommandEncoder>)encoder {
-
+    
     using namespace simd;
     using namespace wry;
     using namespace wry::sim;
-
+    
     
     MyUniforms uniforms;
-
+    
     [encoder setRenderPipelineState:_overlayRenderPipelineState];
     
     {
@@ -753,12 +761,12 @@
         simd_float4 b = make<float4>(_model->_mouse, 0.0f, 1.0f);
         float2 mmm = project_screen_ray(uniforms.position_transform, b);
         auto& m = _controls._payload;
-
+        
         if (_model->_outstanding_click) {
             
             difference_type i = floor(mmm.x);
             difference_type j = floor(mmm.y);
-                        
+            
             if ((0 <= i) && (i < m.minor()) && (0 <= j) && (j < m.minor())) {
                 // we have clicked on the palette
                 _model->_selected_i = i;
@@ -768,6 +776,10 @@
                 
                 // replace cursor
                 {
+                    
+                    // we need to swap the cursor image based on gui
+                    
+                    // ImGui::GetIO().WantCaptureMouse
                     
                     auto coordinate = _opcode_to_coordinate[value_as_opcode(_model->_holding_value)];
                     matrix<RGBA8Unorm_sRGB> tile(64, 64);
@@ -836,16 +848,16 @@
             }
         }
         
-            
+        
         for (difference_type j = 0; j != m.major(); ++j) {
             for (difference_type i = 0; i != m.minor(); ++i) {
                 Value a = m[i, j];
                 if (a.is_opcode()) {
-
+                    
                     vertex c;
-
+                    
                     simd_float4 position = make<float4>(i, j, 0, 1);
-                    float2 texCoord; 
+                    float2 texCoord;
                     
                     c.color = RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.875f);
                     texCoord = simd_make_float2(9, 9) / 32.0f;
@@ -857,7 +869,7 @@
                     if ((_model->_selected_i == i) && _model->_selected_j == j) {
                         c.color.r.write(0.5f);
                     }
-
+                    
                     
                     c.v.position = make<float4>(0, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
@@ -885,27 +897,27 @@
                     
                     texCoord = _opcode_to_coordinate[value_as_opcode(a)].xy;
                     c.color = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f);
-
+                    
                     c.v.position = make<float4>(0, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
                     v.push_back(c);
-
+                    
                     c.v.position = make<float4>(1, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 0) / 32.0f + texCoord;
                     v.push_back(c);
-
+                    
                     c.v.position = make<float4>(1, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
                     v.push_back(c);
-
+                    
                     c.v.position = make<float4>(0, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
                     v.push_back(c);
-
+                    
                     c.v.position = make<float4>(1, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
                     v.push_back(c);
-
+                    
                     c.v.position = make<float4>(0, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 1) / 32.0f + texCoord;
                     v.push_back(c);
@@ -1011,9 +1023,6 @@
         }
     }
     _atlas->commit(encoder);
-    
-    
-    
 }
 
 -(void)resetCursor {
@@ -1493,6 +1502,8 @@
         // Deferred render pass
         
         id <MTLRenderCommandEncoder> encoder = nil;
+        MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor new];
+
         
         {
             
@@ -1500,9 +1511,7 @@
             // are "memoryless" and use the local image block storage; we
             // can only read back locally, which is excatly what we need for
             // g-buffer
-            
-            MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor new];
-            
+                        
             descriptor.colorAttachments[AAPLColorIndexColor].clearColor = MTLClearColorMake(0, 0, 0, 1);
             descriptor.colorAttachments[AAPLColorIndexColor].loadAction = MTLLoadActionClear;
             descriptor.colorAttachments[AAPLColorIndexColor].storeAction = MTLStoreActionStore;
@@ -1704,9 +1713,30 @@
                 dispatch_semaphore_signal(self->_atlas->_semaphore);
             }];
         }
+               
+        {
+            ImGuiIO& io = ImGui::GetIO();
+            io.DisplaySize.x = _model->_viewport_size.x;
+            io.DisplaySize.y = _model->_viewport_size.y;
+            CGFloat framebufferScale = _view.window.screen.backingScaleFactor ?: NSScreen.mainScreen.backingScaleFactor;
+            io.DisplayFramebufferScale = ImVec2(framebufferScale, framebufferScale);
+            ImGui_ImplMetal_NewFrame(descriptor);
+            ImGui_ImplOSX_NewFrame(_view);
+            ImGui::NewFrame();
+            static bool show_demo_window = true;
+            ImGui::ShowDemoWindow(&show_demo_window);
+            ImGui::Render();
+            ImDrawData* draw_data = ImGui::GetDrawData();
+            // id <MTLRenderCommandEncoder> renderEncoder = [command_buffer renderCommandEncoderWithDescriptor:renderPassDescriptor];
+            [encoder pushDebugGroup:@"Dear ImGui rendering"];
+            ImGui_ImplMetal_RenderDrawData(draw_data, command_buffer, encoder);
+            [encoder popDebugGroup];
+            // [renderEncoder endEncoding];
 
+        }
+        
         [encoder endEncoding];
-            
+
     }
         
     {
@@ -1722,8 +1752,8 @@
         // TODO: we may want to mix in proportion to a texture so we can
         // increase blur under the HUD
         
-        _imageAdd.primaryScale = 0.75f; // //15.0f/16.0f;
-        _imageAdd.secondaryScale = 0.25f; ////1.0f/16.0f;
+        _imageAdd.primaryScale = 0.875f; //0.75f; // //15.0f/16.0f;
+        _imageAdd.secondaryScale = 0.125f; // 0.25f; ////1.0f/16.0f;
 
         [_imageAdd encodeToCommandBuffer:command_buffer
         primaryTexture:_deferredLightColorAttachmentTexture

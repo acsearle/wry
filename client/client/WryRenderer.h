@@ -19,7 +19,8 @@
 
 - (nonnull instancetype)initWithMetalDevice:(nonnull id<MTLDevice>)device
                         drawablePixelFormat:(MTLPixelFormat)drawablePixelFormat
-                                      model:(std::shared_ptr<wry::model>)model_;
+                                      model:(std::shared_ptr<wry::model>)model_
+                                       view:(NSView*)view;
 
 - (void)renderToMetalLayer:(nonnull CAMetalDisplayLinkUpdate*)update;
 

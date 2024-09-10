@@ -16,6 +16,9 @@
 
 namespace wry::sim {
     
+    using gc::Scan;
+    using gc::GCArray;
+    
     struct Machine : Entity {
         
         enum {
@@ -26,7 +29,7 @@ namespace wry::sim {
         
         i64 _on_arrival = OPCODE_NOOP;
         // Array<Value> _stack;
-        gc::GCArray<gc::Scan<Value>> _stack;
+        GCArray<Scan<Value>> _stack;
 
         // The _old_* and _new_* states represent the beginning and end states
         // of travelling.  They are used by the visualization as a lerp
@@ -78,7 +81,7 @@ namespace wry::sim {
                     Value y = pop();
                     push(y);
                     push(z);
-                    return { z, y};
+                    return { y, z};
                     // return std::pair<Value, Value>{_stack.end()[-2], _stack.end()[-1]};
                 }
             }

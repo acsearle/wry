@@ -14,6 +14,8 @@
 #include "Scan.hpp"
 
 namespace wry {
+    
+    using gc::Scan;
 
     template<typename T>
     struct Deque {
@@ -22,9 +24,9 @@ namespace wry {
             
             constexpr static size_t CAPACITY = (4096 - sizeof(gc::Object) - sizeof(Page*) - sizeof(Page*)) / sizeof(T*);
 
-            gc::Scan<Page*> prev;
+            Scan<Page*> prev;
             T elements[CAPACITY];
-            gc::Scan<Page*> next;
+            Scan<Page*> next;
             
             Page(Page* prev, Page* next)
             : prev(prev), next(next) {

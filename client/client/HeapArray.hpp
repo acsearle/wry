@@ -365,7 +365,7 @@ namespace wry::gc {
     }
 
     
-    static_assert(std::is_move_assignable_v<gc::GCArray<gc::Scan<gc::Object*>>>);
+    static_assert(std::is_move_assignable_v<GCArray<Scan<gc::Object*>>>);
         
 } // namespace wry::gc
 

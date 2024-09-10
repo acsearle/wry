@@ -65,28 +65,29 @@ namespace wry::sim {
     void did_write_world_entity(World* world, Entity* who);
 
     
-    
+    using gc::Scan;
+    using gc::GCArray;
     
     struct World {
         
         // State
         
         Time _tick = 0;
-        gc::HashMap<Coordinate, gc::Scan<Value>> _value_for_coordinate;
-        gc::HashMap<Coordinate, gc::Scan<Entity*>> _occupant_for_coordinate;
+        gc::HashMap<Coordinate, Scan<Value>> _value_for_coordinate;
+        gc::HashMap<Coordinate, Scan<Entity*>> _occupant_for_coordinate;
 
         // Participants, in no particular order
         
         // Array<Entity*> _entities;
-        gc::GCArray<gc::Scan<Entity*>> _entities;
+        GCArray<Scan<Entity*>> _entities;
 
         // Conditions
         
-        gc::HashMap<Time,       QueueOfUnique<gc::Scan<Entity*>>> _waiting_for_time;
-        gc::HashMap<Coordinate, QueueOfUnique<gc::Scan<Entity*>>> _waiting_for_coordinate;
-        gc::HashMap<gc::Scan<Entity*>,    QueueOfUnique<gc::Scan<Entity*>>> _waiting_for_entity;
+        gc::HashMap<Time,       QueueOfUnique<Scan<Entity*>>> _waiting_for_time;
+        gc::HashMap<Coordinate, QueueOfUnique<Scan<Entity*>>> _waiting_for_coordinate;
+        gc::HashMap<Scan<Entity*>,    QueueOfUnique<Scan<Entity*>>> _waiting_for_entity;
                             
-        QueueOfUnique<gc::Scan<Entity*>>  _ready;
+        QueueOfUnique<Scan<Entity*>>  _ready;
         
         // Spatial hashing
         // TODO: we may variously need
@@ -126,7 +127,7 @@ namespace wry::sim {
             ++_tick;
             notify_by_world_time(this, _tick);
 
-            QueueOfUnique<gc::Scan<Entity*>> working{std::move(_ready)};
+            QueueOfUnique<Scan<Entity*>> working{std::move(_ready)};
 
             assert(_ready.empty());
             assert(_transaction_state_for_entity.empty());

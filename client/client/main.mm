@@ -26,11 +26,13 @@ int main(int argc, const char** argv) {
     wry::gc::mutator_enter();
     
     // randomness
-    std::random_device rd;
-    printf("startup random\n");
-    printf("    letter  : '%c'\n", std::uniform_int_distribution<>('A', 'Z')(rd));
-    printf("    decimal : %016" PRIu64 "\n", std::uniform_int_distribution<uint64_t>(0, 9999999999999999)(rd));
-    printf("    hex     : %016" PRIX64  "\n", std::uniform_int_distribution<uint64_t>(0)(rd));
+    {
+        std::random_device rd;
+        printf("startup random\n");
+        printf("    letter  : '%c'\n", std::uniform_int_distribution<>('A', 'Z')(rd));
+        printf("    decimal : %016" PRIu64 "\n", std::uniform_int_distribution<uint64_t>(0, 9999999999999999)(rd));
+        printf("    hex     : %016" PRIX64  "\n", std::uniform_int_distribution<uint64_t>(0)(rd));
+    }
     
     
     // execute unit tests on a background queue
@@ -49,5 +51,8 @@ int main(int argc, const char** argv) {
     }
     
     // unreachable
+    //
+    // wry::gc::mutator_leave();
+    // wry::gc::collector_stop();
     
 }
