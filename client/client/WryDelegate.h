@@ -25,6 +25,8 @@
 
 @property (nonatomic, nullable) NSCursor* cursor;
 
+-(void) render;
+
 @end
 
 #endif /* WryDelegate_h */

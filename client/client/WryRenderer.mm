@@ -1029,7 +1029,7 @@
     [_cursor set];
 }
 
-- (void)renderToMetalLayer:(nonnull CAMetalDisplayLinkUpdate*)update
+- (void)renderToMetalLayer // :(nonnull CAMetalDisplayLinkUpdate*)update
 {
     wry::gc::mutator_handshake();
     _model->shade_roots();
@@ -1773,7 +1773,8 @@
         // This call will block if none of the triple? buffers are available;
         // we should only be here because the display link expects it to be
         // available
-        id<CAMetalDrawable> currentDrawable = [update drawable];
+        // id<CAMetalDrawable> currentDrawable = [update drawable];
+        id<CAMetalDrawable> currentDrawable = [(CAMetalLayer*)(_view.layer) nextDrawable];
         
         id<MTLBlitCommandEncoder> encoder =  [command_buffer blitCommandEncoder];
         [encoder copyFromTexture:_addedTexture toTexture:currentDrawable.texture];
@@ -1848,10 +1849,12 @@
     
 }
 
+/*
 - (void)metalDisplayLink:(CAMetalDisplayLink *)link needsUpdate:(CAMetalDisplayLinkUpdate *)update {
     //NSLog(@"%s\n", __PRETTY_FUNCTION__);
     [self renderToMetalLayer:update];
 }
+ */
 
 @end
 

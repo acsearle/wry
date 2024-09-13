@@ -175,7 +175,7 @@ namespace wry::gc {
         Value t = value_make_table();
         
         if (!(::rand() % 100)) {
-            Value temp = "This weak-cached string should be occasionally collected";
+            Value("This weak-cached string should be occasionally collected");
         }
         
         assert(value_size(t) == 0);

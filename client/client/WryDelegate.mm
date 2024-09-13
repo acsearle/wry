@@ -38,7 +38,7 @@
     NSWindow* _window;
     WryMetalView* _metalView;
     CAMetalLayer* _metalLayer;
-    CAMetalDisplayLink* _metalDisplayLink;
+    // CAMetalDisplayLink* _metalDisplayLink;
     WryRenderer* _renderer;
     NSThread* _renderThread;
     WryAudio* _audio;
@@ -113,10 +113,12 @@
                                                    model:_model
                                                     view:_metalView];
     
+    /*
     _metalDisplayLink = [[CAMetalDisplayLink alloc] initWithMetalLayer:_metalLayer];
     _metalDisplayLink.preferredFrameRateRange = CAFrameRateRangeMake(60.0, 60.0, 60.0);
     _metalDisplayLink.preferredFrameLatency = 2;
     _metalDisplayLink.paused = NO;
+     */
 
     _audio = [[WryAudio alloc] init];
 
@@ -188,21 +190,24 @@
 
 - (void)windowWillClose:(NSNotification *)notification {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    ImGui_ImplMetal_Shutdown();
-    ImGui_ImplOSX_Shutdown();
-    ImGui::DestroyContext();
+    // TODO: Clean shutdown requires tearing down the display link 
+    // ImGui_ImplMetal_Shutdown();
+    // ImGui_ImplOSX_Shutdown();
+    // ImGui::DestroyContext();
 }
 
 #pragma mark WryMetalViewDelegate
 
 - (void)viewDidMoveToWindow {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    /*
     if (_metalView.window) {
         _metalDisplayLink.delegate = _renderer;
         _metalDisplayLink.paused = NO;
         NSRunLoop* currentRunLoop = [NSRunLoop currentRunLoop];
         [_metalDisplayLink addToRunLoop:currentRunLoop forMode:NSRunLoopCommonModes];
     }
+     */
 }
 
 - (void)viewDidChangeFrameSize {
@@ -242,14 +247,20 @@
 }
 
 - (void)keyDown:(NSEvent *)event {
+        
+    // Dear IMGUI installs its TextInput thing as a subview
     
-    if (ImGui::GetIO().WantCaptureKeyboard) return;
+    // Forward the events where?
+    
+    
 
+    if (ImGui::GetIO().WantCaptureKeyboard) return;
+    
     using namespace wry;
     
-    if (!event.ARepeat) {
+    //if (!event.ARepeat) {
         
-    }
+    //}
     
     /*
      {
@@ -333,7 +344,7 @@
                 case 'j':
                     toggle(_model->_show_jacobian);
                     snprintf(buffer, 100, "%s [J]acobians", _model->_show_jacobian ? "Show" : "Hide");
-                    _model->append_log(buffer);
+                    _model->append_log((char*) buffer);
                     break;
                 case 'p':
                     toggle(_model->_show_points);
@@ -460,6 +471,10 @@
 
 - (void)encodeWithCoder:(nonnull NSCoder *)coder {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+}
+
+-(void)render {
+    [_renderer renderToMetalLayer];
 }
 
 @end

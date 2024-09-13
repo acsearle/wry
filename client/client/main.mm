@@ -35,19 +35,30 @@ int main(int argc, const char** argv) {
     }
     
     
-    // execute unit tests on a background queue
+    // execute unit tests on a background dispatch queue
     @autoreleasepool {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{            
             wry::run_tests();
         });
     }
     
-    // create UIKit application
+    // create AppKit application
     @autoreleasepool {
         NSApplication* application = [NSApplication sharedApplication];
         WryDelegate* delegate = [[WryDelegate alloc] init];
         [application setDelegate:delegate];
-        return NSApplicationMain(argc, argv); // noreturn
+        
+        // return NSApplicationMain(argc, argv); // noreturn
+        [application finishLaunching];
+        for (;;) {
+            while (NSEvent* event = [application nextEventMatchingMask:NSEventMaskAny
+                                                             untilDate:nil
+                                                                inMode:NSDefaultRunLoopMode
+                                                               dequeue:YES]) {
+                [application sendEvent:event];
+            }
+            [delegate render];
+        }
     }
     
     // unreachable
