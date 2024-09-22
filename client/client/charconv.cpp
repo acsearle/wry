@@ -5,6 +5,8 @@
 //  Created by Antony Searle on 10/9/2023.
 //
 
+#include <cmath>
+
 #include "assert.hpp"
 #include "chartype.hpp"
 #include "charconv.hpp"

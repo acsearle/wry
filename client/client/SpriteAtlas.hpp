@@ -23,12 +23,12 @@ namespace wry {
     // to the vertices that will be emitted - just add the offset and construct
     // the opposite corners.
     
-    struct sprite {
-        subvertex a;
-        subvertex b;
+    struct Sprite {
+        SpriteSubVertex a;
+        SpriteSubVertex b;
     };
     
-    inline sprite operator+(sprite s, float2 xy) {
+    inline Sprite operator+(Sprite s, float2 xy) {
         s.a.position.xy += xy;
         s.b.position.xy += xy;
         return s;
@@ -51,27 +51,26 @@ namespace wry {
     //
     // managing the round-robin use of GPU vertex buffers
     
-    struct atlas {
+    struct SpriteAtlas {
         
         std::size_t _size;
         packer<std::size_t> _packer;
         
-        Array<vertex> _vertices;
+        Array<SpriteVertex> _vertices;
         
         id<MTLTexture> _texture;
         id<MTLBuffer> _buffers[4];
-        dispatch_semaphore_t _semaphore;
         
-        atlas(std::size_t n, id<MTLDevice> device);
+        SpriteAtlas(std::size_t n, id<MTLDevice> device);
         
-        sprite as_sprite() const {
-            return sprite{
+        Sprite as_sprite() const {
+            return Sprite{
                 {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
                 {{(float) _size, (float)_size, 0.0f, 1.0f}, {1.0f, 1.0f}},
             };
         }
         
-        void push_sprite(sprite s, RGBA8Unorm_sRGB c = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f)) {
+        void push_sprite(Sprite s, RGBA8Unorm_sRGB c = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f)) {
             // a - x
             // | \ | => abx ayb
             // y - b
@@ -87,7 +86,7 @@ namespace wry {
                 {s.a.texCoord.x, s.b.texCoord.y}}, c});
         }
         
-        void push_quad(vertex v[]) {
+        void push_quad(SpriteVertex v[]) {
             // Draw an arbitrary quad, such as one resulting from a rotation
             _vertices.push_back(v[0]);
             _vertices.push_back(v[1]);
@@ -97,7 +96,7 @@ namespace wry {
             _vertices.push_back(v[3]);
         }
         
-        void push_triangle(vertex v[]) {
+        void push_triangle(SpriteVertex v[]) {
             _vertices.push_back(v[0]);
             _vertices.push_back(v[1]);
             _vertices.push_back(v[2]);
@@ -107,9 +106,9 @@ namespace wry {
         
         void discard();
         
-        sprite place(matrix_view<const RGBA8Unorm_sRGB>, float2 origin = { 0, 0 });
+        Sprite place(matrix_view<const RGBA8Unorm_sRGB>, float2 origin = { 0, 0 });
         
-        void release(sprite);
+        void release(Sprite);
         
     }; // atlas
     

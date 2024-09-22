@@ -15,6 +15,13 @@ namespace wry::gc {
     void collector_stop();
     
     void mutator_enter();
+    bool mutator_is_entered();
+    
+    enum class HandshakeResult {
+        OK,
+        COLLECTOR_DID_REQUEST_MUTATOR_LEAVES,
+    };
+    
     void mutator_handshake();
     void mutator_leave();
     

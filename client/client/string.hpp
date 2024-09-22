@@ -35,7 +35,7 @@ namespace wry {
     
     struct String;
     
-    template<> struct rank<String> : std::integral_constant<std::size_t, 1> {};
+    template<> struct Rank<String> : std::integral_constant<std::size_t, 1> {};
     
     
     
@@ -229,7 +229,7 @@ namespace wry {
         }
         
         auto operator<=>(const String& other) const {
-            return wry::lexicographical_compare_three_way(begin(), end(), other.begin(), other.end());
+            return std::lexicographical_compare_three_way(begin(), end(), other.begin(), other.end());
         }
 
     };

@@ -24,6 +24,7 @@
 -(nonnull instancetype) init;
 
 @property (nonatomic, nullable) NSCursor* cursor;
+@property (atomic) BOOL done;
 
 -(void) render;
 

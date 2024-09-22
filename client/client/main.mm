@@ -7,26 +7,19 @@
 
 #include <cinttypes>
 #include <random>
+#include <thread>
 
 #import <AppKit/AppKit.h>
 #import "WryDelegate.h"
 
 #include "gc.hpp"
 #include "model.hpp"
-
 #include "test.hpp"
 
 int main(int argc, const char** argv) {
     
-    // initialize garbage collection and spawn collector thread
-    wry::gc::collector_start();
-    // it is now safe to call mutator_enter on any thread; the collector global
-    // state is set up even though the spawned collector thread may not have
-    // actually been scheduled yet
-    wry::gc::mutator_enter();
-    
-    // randomness
     {
+        // randomness
         std::random_device rd;
         printf("startup random\n");
         printf("    letter  : '%c'\n", std::uniform_int_distribution<>('A', 'Z')(rd));
@@ -34,36 +27,43 @@ int main(int argc, const char** argv) {
         printf("    hex     : %016" PRIX64  "\n", std::uniform_int_distribution<uint64_t>(0)(rd));
     }
     
+    wry::gc::collector_start();
+    wry::gc::mutator_enter();
     
-    // execute unit tests on a background dispatch queue
-    @autoreleasepool {
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{            
-            wry::run_tests();
-        });
-    }
+    // execute unit tests on a background thread
     
-    // create AppKit application
+    std::thread tests(wry::run_tests);
+    
     @autoreleasepool {
+        
+        // create AppKit application
+        
         NSApplication* application = [NSApplication sharedApplication];
         WryDelegate* delegate = [[WryDelegate alloc] init];
         [application setDelegate:delegate];
         
         // return NSApplicationMain(argc, argv); // noreturn
         [application finishLaunching];
-        for (;;) {
-            while (NSEvent* event = [application nextEventMatchingMask:NSEventMaskAny
-                                                             untilDate:nil
-                                                                inMode:NSDefaultRunLoopMode
-                                                               dequeue:YES]) {
-                [application sendEvent:event];
+        while (![delegate done]) {
+            @autoreleasepool {
+                while (NSEvent* event = [application nextEventMatchingMask:NSEventMaskAny
+                                                                 untilDate:nil
+                                                                    inMode:NSDefaultRunLoopMode
+                                                                   dequeue:YES]) {
+                    [application sendEvent:event];
+                }
+                [application updateWindows];
+                [delegate render];
             }
-            [delegate render];
         }
-    }
+        
+    } // @autoreleasepool
     
-    // unreachable
-    //
-    // wry::gc::mutator_leave();
-    // wry::gc::collector_stop();
+    tests.join();
     
-}
+    wry::gc::mutator_leave();
+    wry::gc::collector_stop();
+    
+    return EXIT_SUCCESS;
+    
+} // int main(int argc, char** argv)

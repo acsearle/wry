@@ -9,6 +9,7 @@
 #define vector_view_hpp
 
 #include <iterator>
+#include <stdexcept>
 
 #include "algorithm.hpp"
 #include "type_traits.hpp"
@@ -20,7 +21,7 @@ namespace wry {
     struct vector_view;
     
     template<typename T, typename I, typename C>
-    struct rank<vector_view<T, I, C>> : std::integral_constant<std::size_t, rank<T>::value + 1> {};
+    struct Rank<vector_view<T, I, C>> : std::integral_constant<std::size_t, Rank<T>::value + 1> {};
 
 
     // view a series of elements specified by an iterator, which may not be

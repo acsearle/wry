@@ -25,7 +25,7 @@ namespace wry {
     struct StringView;
     
     template<> 
-    struct rank<StringView>
+    struct Rank<StringView>
     : std::integral_constant<std::size_t, 1> {};
     
     struct StringView {
@@ -134,7 +134,7 @@ namespace wry {
         }
         
         auto operator<=>(const StringView& other) const {
-            return lexicographical_compare_three_way(begin(), end(), other.begin(), other.end());
+            return std::lexicographical_compare_three_way(begin(), end(), other.begin(), other.end());
         }
         
         void pop_front() { 

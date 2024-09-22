@@ -76,7 +76,7 @@ namespace wry {
                 float a[20], b[20];
                 std::memcpy(a, this, sizeof(a));
                 std::memcpy(b, &other, sizeof(b));
-                return lexicographical_compare_three_way(std::begin(a), std::end(a),
+                return std::lexicographical_compare_three_way(std::begin(a), std::end(a),
                                                          std::begin(b), std::end(b),
                                                          [](float a, float b) {
                     return a <=> b;

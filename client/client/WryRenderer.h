@@ -15,14 +15,14 @@
 #include "model.hpp"
 #include "gc.hpp"
 
-@interface WryRenderer : NSObject <CAMetalDisplayLinkDelegate>
+@interface WryRenderer : NSObject
 
 - (nonnull instancetype)initWithMetalDevice:(nonnull id<MTLDevice>)device
                         drawablePixelFormat:(MTLPixelFormat)drawablePixelFormat
                                       model:(std::shared_ptr<wry::model>)model_
                                        view:(nonnull NSView*)view;
 
-- (void)renderToMetalLayer; // :(nonnull CAMetalDisplayLinkUpdate*)update;
+- (void)render;
 
 - (void)drawableResize:(CGSize)drawableSize;
 

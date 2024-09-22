@@ -14,23 +14,9 @@
 
 #include "WryMetalView.h"
 
-// Metal view, like MTKView and CustomView[2], specialized to our use case of
-// - render on a non-main thread
-// - redraw for screen refresh
-// - thread-safe update
-//
-// Todo
-// - implement the round-robin triple-buffered drawables from [3]
-// - make resize (and user interaction in general) non-blocking
-// - disentangle the drawing code from ClientView and ViewController's
-//   manipulation of the drawables
-//
 // [1] https://sarunw.com/posts/how-to-create-macos-app-without-storyboard/
 // [2] https://developer.apple.com/documentation/metal/onscreen_presentation/creating_a_custom_metal_view?language=objc
 // [3] https://developer.apple.com/documentation/metal/resource_synchronization/synchronizing_cpu_and_gpu_work?language=objc
-//
-// With CAMetalDisplayLink, this class becomes vestigial, merely delegating some
-// notifications (which might be available by subscription anyway?)
 
 @implementation WryMetalView
 {
@@ -43,11 +29,6 @@
     if ((self = [super initWithFrame:frame])) {
     }
     return self;
-}
-
-- (BOOL)acceptsFirstResponder {
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    return YES;
 }
 
 - (void)viewDidChangeBackingProperties

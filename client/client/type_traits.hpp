@@ -57,10 +57,10 @@ namespace wry {
     // Array, image, matrix containers and views
         
     template<typename T>
-    struct rank : std::rank<T> {};
+    struct Rank : std::rank<T> {};
     
     template<typename T>
-    constexpr inline std::size_t rank_v = rank<T>::value;
+    constexpr inline std::size_t rank_v = Rank<T>::value;
         
     template<typename T, unsigned N = 0>
     struct extent : std::extent<T, N> {};

@@ -16,8 +16,8 @@ namespace wry {
     template<typename> struct Stack;
     
     template<typename T>
-    struct rank<Stack<T>>
-    : std::integral_constant<std::size_t, rank<T>::value + 1> {
+    struct Rank<Stack<T>>
+    : std::integral_constant<std::size_t, Rank<T>::value + 1> {
     };
     
     // Stack hews closer to C++ vector and Rust Vec

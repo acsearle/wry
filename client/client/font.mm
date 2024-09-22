@@ -144,9 +144,9 @@ namespace wry {
      
      */
      
-    font build_font(atlas& atl) {
+    Font build_font(SpriteAtlas& atl) {
         
-        font result;
+        Font result;
         
         FT_Library ft;
         FT_Error e = FT_Init_FreeType(&ft);
@@ -175,15 +175,15 @@ namespace wry {
             // DUMP(charcode);
             
             // Render fractional pixel coverage
-            // FT_Load_Glyph(face, gindex, FT_LOAD_RENDER); // load and render for gray level
+            FT_Load_Glyph(face, gindex, FT_LOAD_RENDER); // load and render for gray level
             
             // Render signed distance field from Bezier curves
             // FT_Load_Glyph(face, gindex, FT_LOAD_DEFAULT); // load but do not render
             // FT_Render_Glyph(face->glyph, FT_RENDER_MODE_SDF);
 
             // Render signed distance field from bitmask
-            FT_Load_Glyph(face, gindex, FT_LOAD_RENDER); // load and render for gray level
-            FT_Render_Glyph(face->glyph, FT_RENDER_MODE_SDF); // re-render for SDF
+            // FT_Load_Glyph(face, gindex, FT_LOAD_RENDER); // load and render for gray level
+            // FT_Render_Glyph(face->glyph, FT_RENDER_MODE_SDF); // re-render for SDF
 
             // apply subtle dropshadow
             auto v = matrix_view<R8Unorm>(stride_iterator<R8Unorm>(reinterpret_cast<R8Unorm*>(face->glyph->bitmap.buffer),
@@ -193,13 +193,13 @@ namespace wry {
             matrix<RGBA8Unorm_sRGB> u = apply_shadow(v);
             // draw_bounding_box(u);
             
-            sprite s = atl.place(u,
+            Sprite s = atl.place(u,
                                  make<float2>(-face->glyph->bitmap_left + 2,
                                                   +face->glyph->bitmap_top + 1
                                                   ));
             
             float advance = face->glyph->advance.x * k;
-            result.charmap.insert(std::make_pair((uint) charcode, font::glyph{s, advance}));
+            result.charmap.insert(std::make_pair((uint) charcode, Font::Glyph{s, advance}));
             
             charcode = FT_Get_Next_Char(face, charcode, &gindex);
         }

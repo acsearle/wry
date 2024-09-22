@@ -9,6 +9,7 @@
 #define array_view_hpp
 
 #include <iterator>
+#include <stdexcept>
 
 #include "algorithm.hpp"
 #include "utility.hpp"
@@ -30,8 +31,8 @@ namespace wry {
     struct ArrayView;
     
     template<typename T>
-    struct rank<ArrayView<T>> 
-    : std::integral_constant<std::size_t, rank<T>::value + 1> {};
+    struct Rank<ArrayView<T>> 
+    : std::integral_constant<std::size_t, Rank<T>::value + 1> {};
     
     template<typename T>
     struct ArrayView {
@@ -49,7 +50,7 @@ namespace wry {
         using const_reference = std::add_const_t<T>&;
                 
         using byte_type = copy_const_t<T, byte>;
-        using const_byte_type = const byte;
+        using const_byte_type = std::add_const_t<byte>;
 
         pointer _begin;
         pointer _end;
@@ -114,7 +115,7 @@ namespace wry {
         }
 
         const ArrayView& operator=(auto&& other) const {
-            if constexpr (wry::rank<std::decay_t<decltype(other)>>::value == 0) {
+            if constexpr (wry::Rank<std::decay_t<decltype(other)>>::value == 0) {
                 fill(std::forward<decltype(other)>(other));
             } else {
                 using std::begin;
@@ -388,7 +389,7 @@ namespace wry {
         auto operator<=>(auto&& other) const {
             using std::begin;
             using std::end;
-            return wry::lexicographical_compare_three_way(_begin, _end, begin(other), end(other));
+            return std::lexicographical_compare_three_way(_begin, _end, begin(other), end(other));
         }
         
         bool operator==(auto&& other) const {
@@ -399,7 +400,7 @@ namespace wry {
         
 #define X(Y) \
         ArrayView& operator Y (auto&& other) {\
-            if constexpr (wry::rank<std::decay_t<decltype(other)>>::value == 0) {\
+            if constexpr (wry::Rank<std::decay_t<decltype(other)>>::value == 0) {\
                 iterator first = _begin;\
                 for (; first != _end; ++first)\
                     *first Y other;\

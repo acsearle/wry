@@ -19,8 +19,8 @@ namespace wry {
     struct matrix_view;
         
     template<typename T>
-    struct rank<matrix_view<T>> 
-    : std::integral_constant<std::size_t, wry::rank<T>::value + 2> {
+    struct Rank<matrix_view<T>> 
+    : std::integral_constant<std::size_t, wry::Rank<T>::value + 2> {
     };
     
     template<typename T>

@@ -37,13 +37,19 @@ namespace wry {
     // - Reduced iterator stability
     //
     // Array currently assumes that the stored type is Relocatable
-    
+
+// # GC, RT
+//
+// We have competing arrays that are garbage collected, real time and
+// discontiguous.  If contiguity is dropped, then ring buffers are also
+// attractive.  We need to tame these options.
+
     template<typename> 
     struct Array;
     
     template<typename T>
-    struct rank<Array<T>> 
-    : std::integral_constant<std::size_t, rank<T>::value + 1> {};
+    struct Rank<Array<T>> 
+    : std::integral_constant<std::size_t, Rank<T>::value + 1> {};
         
     template<typename T>
     struct Array {
@@ -211,7 +217,7 @@ namespace wry {
         }
                 
         Array& operator=(auto&& other) {
-            if constexpr (wry::rank<std::decay_t<decltype(other)>>::value == 0) {
+            if constexpr (wry::Rank<std::decay_t<decltype(other)>>::value == 0) {
                 fill(std::forward<decltype(other)>(other));
             } else {
                 using std::begin;
@@ -271,7 +277,7 @@ namespace wry {
         auto operator<=>(const auto& other) const {
             using std::begin;
             using std::end;
-            return wry::lexicographical_compare_three_way(this->begin(), this->end(),
+            return std::lexicographical_compare_three_way(this->begin(), this->end(),
                                                      begin(other), end(other));
         }
          */

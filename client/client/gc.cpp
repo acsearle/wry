@@ -232,7 +232,7 @@ namespace wry::gc {
             NOTHING,
             COLLECTOR_DID_REQUEST_HANDSHAKE,
             COLLECTOR_DID_REQUEST_WAKEUP,
-            // COLLECTOR_DID_REQUEST_LEAVE,
+            COLLECTOR_DID_REQUEST_MUTATOR_LEAVES,
             MUTATOR_DID_PUBLISH_LOGS,
             MUTATOR_DID_LEAVE,
             MUTATOR_DID_REQUEST_COLLECTOR_STOPS,
@@ -288,6 +288,7 @@ namespace wry::gc {
         Bag<const Object*> black_bag;
         std::vector<const Object*> gray_stack;
         Bag<const Object*> red_bag;
+        bool stop_requested = false;
 
         void collect();
         
@@ -300,6 +301,7 @@ namespace wry::gc {
         void finalize_handshakes();
         
         void synchronize_with_mutators();
+        
                 
     }; // struct Collector
     
@@ -471,13 +473,22 @@ namespace wry::gc {
         for (;;) {
             node->log_list_next = expected.ptr;
             if (channel->log_stack_head.compare_exchange_strong(expected,
-                                                                 desired,
-                                                                 Ordering::RELEASE,
-                                                                 Ordering::ACQUIRE))
+                                                                desired,
+                                                                Ordering::RELEASE,
+                                                                Ordering::ACQUIRE))
                 break;
         }
-        if (expected.tag == Channel::Tag::COLLECTOR_DID_REQUEST_WAKEUP) {
-            channel->log_stack_head.notify_one();
+        switch (expected.tag) {
+           case Channel::Tag::COLLECTOR_DID_REQUEST_WAKEUP:
+                channel->log_stack_head.notify_one();
+                break;
+            case Channel::Tag::NOTHING:
+            case Channel::Tag::COLLECTOR_DID_REQUEST_HANDSHAKE:
+            case Channel::Tag::COLLECTOR_DID_REQUEST_MUTATOR_LEAVES:
+            case Channel::Tag::MUTATOR_DID_PUBLISH_LOGS:
+            case Channel::Tag::MUTATOR_DID_LEAVE:
+            case Channel::Tag::MUTATOR_DID_REQUEST_COLLECTOR_STOPS:
+                break;
         }
     }
     
@@ -489,6 +500,9 @@ namespace wry::gc {
             case Channel::Tag::COLLECTOR_DID_REQUEST_HANDSHAKE:
             case Channel::Tag::COLLECTOR_DID_REQUEST_WAKEUP:
                 publish_log_with_tag(Channel::Tag::MUTATOR_DID_PUBLISH_LOGS);
+                break;
+            case Channel::Tag::COLLECTOR_DID_REQUEST_MUTATOR_LEAVES:
+                leave();
                 return;
             case Channel::Tag::MUTATOR_DID_PUBLISH_LOGS:
                 return;
@@ -570,8 +584,8 @@ namespace wry::gc {
     }
     
     void Collector::finalize_handshakes() {
-        auto first = active_channels.begin();
-        auto last = active_channels.end();
+        auto first = this->active_channels.begin();
+        auto last = this->active_channels.end();
         while (first != last) {
             Channel* channel = *first;
             assert(channel);
@@ -594,7 +608,7 @@ namespace wry::gc {
                         case AtomicWaitStatus::NO_TIMEOUT:
                             break;
                         case AtomicWaitStatus::TIMEOUT:
-                            fprintf(stderr, "Mutator TIMEOUT\n");
+                            fprintf(stderr, "Mutator unresponsive (1s)\n");
                             break;
                         default:
                             abort();
@@ -614,7 +628,16 @@ namespace wry::gc {
                 case Channel::Tag::MUTATOR_DID_LEAVE: {
                     LogNode* log_list_head = expected.ptr;
                     consume_log_list(log_list_head);
-                    TaggedPtr desired((LogNode*)nullptr, Channel::Tag::NOTHING);
+                    channel->release();
+                    --last;
+                    if (first != last)
+                        std::swap(*first, *last);
+                    break;
+                }
+                case Channel::Tag::MUTATOR_DID_REQUEST_COLLECTOR_STOPS: {
+                    this->stop_requested = true;
+                    LogNode* log_list_head = expected.ptr;
+                    consume_log_list(log_list_head);
                     channel->release();
                     --last;
                     if (first != last)
@@ -820,8 +843,10 @@ namespace wry::gc {
     void mutator_leave() {
         thread_local_mutator->leave();
     }
-    
-    
+
+    // todo: move these into the Collector object?
+    std::thread _collector_thread;
+    Atomic<bool> _collector_done;
     
     void collector_start() {
         assert(global_collector == nullptr);
@@ -831,19 +856,33 @@ namespace wry::gc {
         global_collector->string_ctrie = new Ctrie;
         thread_local_mutator->leave();
         thread_local_mutator = nullptr;
-        std::thread([](){
+        _collector_thread = std::thread([](){
             assert(!thread_local_mutator);
             thread_local_mutator = global_collector;
             global_collector->collect();
-        }).detach();
+        });
     }
     
     void collector_stop() {
-        // TODO: Clean shutdown.
-        //
-        // Communicate via a new Channel::Tag state?
+        _Exit(EXIT_SUCCESS);
         
-        abort();
+        // The collector will be waiting on various mutators, including itself
+        // and the main thread
+        
+        // We will be posting stop from a mutator thread, in particular the
+        // main thread.
+
+        // So the best way to stop the collector is to use the mutator to post
+        // that status
+        
+        // If we want to start-stop-start the collector then we have to
+        // keep the global collector state around to run on cumulatively
+        
+        // If we want to do parallel mark or sweep we need to make the collector
+        // objects a bit more thread safe
+        
+        // _collector_done.store(true, Ordering::RELAXED);
+        // _collector_thread.join();
     }
     
     bool collector_this_thread_is_collector_thread() {

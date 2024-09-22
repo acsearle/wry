@@ -8,20 +8,20 @@
 #ifndef font_hpp
 #define font_hpp
 
-#include "atlas.hpp"
+#include "SpriteAtlas.hpp"
 #include "string.hpp"
 #include "table.hpp"
 
 namespace wry {
     
-    struct font {
+    struct Font {
         
-        struct glyph {
-            sprite sprite_;
+        struct Glyph {
+            Sprite sprite_;
             float advance;
         };
         
-        Table<char32_t, glyph> charmap;
+        Table<char32_t, Glyph> charmap;
         
         float ascender;
         float descender;
@@ -29,7 +29,7 @@ namespace wry {
         
     };
     
-    font build_font(atlas&);
+    Font build_font(SpriteAtlas&);
     
     
     std::tuple<float2, matrix_view<R8Unorm>, float2> get_glyph(char32_t);

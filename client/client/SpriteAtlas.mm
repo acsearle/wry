@@ -10,12 +10,12 @@
 #include <chrono>
 #include <thread>
 
-#include "atlas.hpp"
+#include "SpriteAtlas.hpp"
 #include "debug.hpp"
 
 namespace wry {
     
-    atlas::atlas(std::size_t n, id<MTLDevice> device)
+    SpriteAtlas::SpriteAtlas(std::size_t n, id<MTLDevice> device)
     : _size(n)
     , _packer(n) {
         MTLTextureDescriptor *descriptor = [[MTLTextureDescriptor alloc] init];
@@ -32,20 +32,16 @@ namespace wry {
         _texture = [device newTextureWithDescriptor:descriptor];
         _vertices.reserve(65536);
         for (auto& x : _buffers) {
-            x = [device newBufferWithLength:sizeof(vertex) * _vertices.capacity()
+            x = [device newBufferWithLength:sizeof(SpriteVertex) * _vertices.capacity()
                                     options:MTLResourceStorageModeShared];
         }
-        _semaphore = dispatch_semaphore_create(4);
     }
     
-    void atlas::commit(id<MTLRenderCommandEncoder> renderEncoder) {
-        
-        dispatch_semaphore_wait(_semaphore, DISPATCH_TIME_FOREVER);
-        
-        assert(_buffers[0].length >= _vertices.size() * sizeof(vertex));
+    void SpriteAtlas::commit(id<MTLRenderCommandEncoder> renderEncoder) {
+        assert(_buffers[0].length >= _vertices.size() * sizeof(SpriteVertex));
         std::memcpy(_buffers[0].contents,
                     _vertices.data(),
-                    _vertices.size() * sizeof(vertex));
+                    _vertices.size() * sizeof(SpriteVertex));
         [renderEncoder setVertexBuffer:_buffers[0]
                                 offset:0
                                atIndex:AAPLBufferIndexVertices];
@@ -59,13 +55,13 @@ namespace wry {
         
     }
     
-    void atlas::discard() {
+    void SpriteAtlas::discard() {
         _vertices.clear();
     }
     
     // Place a sprite within the free space of the atlas
     
-    sprite atlas::place(matrix_view<const RGBA8Unorm_sRGB> v, float2 origin) {
+    Sprite SpriteAtlas::place(matrix_view<const RGBA8Unorm_sRGB> v, float2 origin) {
         auto tl = _packer.place(simd::make<simd::ulong2>(v.major(),
                                                  v.minor()));
         [_texture replaceRegion:MTLRegionMake2D(tl.x, tl.y,
@@ -73,7 +69,7 @@ namespace wry {
                     mipmapLevel:0
                       withBytes:v.data()
                     bytesPerRow:v.major_bytes()];
-        sprite s;
+        Sprite s;
         s.a.position = make<float4>(-origin, 0, 1);
         s.a.texCoord = convert<float>(tl) / (float) _size;
         s.b.position = make<float4>(v.major() - origin.x,
@@ -126,7 +122,7 @@ namespace wry {
     // somewhere
     
     
-    void atlas::release(sprite s) {
+    void SpriteAtlas::release(Sprite s) {
         auto a = convert<ulong>(s.a.texCoord * _size);
         auto b = convert<ulong>(s.b.texCoord * _size);
         _packer.release(a, b);

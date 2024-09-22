@@ -10,46 +10,51 @@
 
 #include <utility>
 
-namespace wry::sim {}
+namespace wry {
 
-namespace wry::adl {
-    
-    namespace _niebloids {
-        
-        struct _swap {
-            template<typename T>
-            void operator()(T& a, T& b) const {
-                using std::swap;
-                swap(a, b);
-            }
-        }; // struct _swap
-        
-        struct _shade {
-            template<typename T>
-            void operator()(const T& x) const {
-                // namespaces for non-ADL trace implementations
-                using namespace wry::sim;
-                // resolve via ADL (mostly)
-                shade(x);
-            }
-        }; // struct _shade
-        
-        struct _trace {
-            template<typename T>
-            void operator()(const T& x) const {
-                // namespaces for non-ADL trace implementations
-                using namespace wry::sim;
-                // resolve via ADL (mostly)
-                trace(x);
-            }
-        }; // struct _trace
-        
-    } // namespace _niebloids
+namespace sim {
+} // namespace sim
 
-    constexpr _niebloids::_swap swap;
-    constexpr _niebloids::_shade shade;
-    constexpr _niebloids::_trace trace;
-    
-} // namespace wry::adl
+namespace adl {
+
+namespace _adl {
+
+struct _swap {
+    template<typename T>
+    void operator()(T& a, T& b) const {
+        using std::swap;
+        swap(a, b);
+    }
+}; // struct _swap
+
+struct _shade {
+    template<typename T>
+    void operator()(const T& x) const {
+        // namespaces for non-ADL trace implementations
+        using namespace wry::sim;
+        // resolve via ADL (mostly)
+        shade(x);
+    }
+}; // struct _shade
+
+struct _trace {
+    template<typename T>
+    void operator()(const T& x) const {
+        // namespaces for non-ADL trace implementations
+        using namespace wry::sim;
+        // resolve via ADL (mostly)
+        trace(x);
+    }
+}; // struct _trace
+
+} // namespace _adl
+
+constexpr _adl::_swap swap;
+constexpr _adl::_shade shade;
+constexpr _adl::_trace trace;
+
+
+} // namespace adl
+} // namespace wry
 
 #endif /* adl_hpp */

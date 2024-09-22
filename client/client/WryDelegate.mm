@@ -18,19 +18,9 @@
 
 // [1] https://sarunw.com/posts/how-to-create-macos-app-without-storyboard/
 
-// Our simple application with a single window and view uses a single class as
-// application delegate, window delegate and first responder to handle all
-// external events on the main thread.  Typically these are minimally processed
-// and handed over to the renderer and simulation threads; we want to avoid
-// doing any blocking work on the main thread.
-//
-// Outstanding questions:
-// - does this include network events?
-// - does CoreAudio do any work on the calling thread (such as buffer prep)
-//
-// There's no point using the main thread to just forward notifications to the
-// render thread, so pull the render thread functionality back onto main; it
-// can still dispatch some work elsewhere if needed
+// Our structurally simple application with a single window and view uses a
+// single class as a responder and as a delegate for application, window and
+// view to handle all external events on the main thread.
 
 @implementation WryDelegate
 {
@@ -38,7 +28,6 @@
     NSWindow* _window;
     WryMetalView* _metalView;
     CAMetalLayer* _metalLayer;
-    // CAMetalDisplayLink* _metalDisplayLink;
     WryRenderer* _renderer;
     NSThread* _renderThread;
     WryAudio* _audio;
@@ -58,12 +47,6 @@
 
 - (void)applicationWillFinishLaunching:(NSNotification *)aNotification {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
-
-    _metalLayer = [[CAMetalLayer alloc] init];
-    _metalLayer.device = MTLCreateSystemDefaultDevice();
-    _metalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
-    _metalLayer.framebufferOnly = NO; // fixme: allegedly hurts performance
-    
     
     NSScreen* screen = [NSScreen mainScreen];
     CGFloat scaleFactor = [screen backingScaleFactor];
@@ -85,9 +68,13 @@
                   initWithFrame:contentRect];
     _metalView.delegate = self;
     
+    _metalLayer = [[CAMetalLayer alloc] init];
+    _metalLayer.device = MTLCreateSystemDefaultDevice();
+    _metalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
+    _metalLayer.framebufferOnly = YES;
+    _metalLayer.displaySyncEnabled = YES;
     _metalView.layer = _metalLayer;
     _metalView.wantsLayer = YES;
-    //_metalView.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
     
     {
         IMGUI_CHECKVERSION();
@@ -103,7 +90,10 @@
         
         // Setup Renderer backend
         ImGui_ImplMetal_Init(_metalLayer.device);
-        io.Fonts->AddFontDefault();
+        // io.Fonts->AddFontDefault();
+        CGFloat framebufferScale = NSScreen.mainScreen.backingScaleFactor;
+        io.Fonts->AddFontFromFileTTF("/Users/antony/Desktop/assets/Futura Medium Condensed.otf",
+                                     std::floor(18.0f * framebufferScale))->Scale = 1.0f / framebufferScale;
         ImGui_ImplOSX_Init(_metalView);
     }
     
@@ -113,16 +103,10 @@
                                                    model:_model
                                                     view:_metalView];
     
-    /*
-    _metalDisplayLink = [[CAMetalDisplayLink alloc] initWithMetalLayer:_metalLayer];
-    _metalDisplayLink.preferredFrameRateRange = CAFrameRateRangeMake(60.0, 60.0, 60.0);
-    _metalDisplayLink.preferredFrameLatency = 2;
-    _metalDisplayLink.paused = NO;
-     */
-
     _audio = [[WryAudio alloc] init];
 
     _window.contentView = _metalView;
+    // insert this delegate into the responder chain above the metalview
     _metalView.nextResponder = self;
 
 }
@@ -162,6 +146,10 @@
 
 - (void)applicationWillTerminate:(NSNotification *)aNotification {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    self.done = YES;
+    ImGui_ImplMetal_Shutdown();
+    ImGui_ImplOSX_Shutdown();
+    ImGui::DestroyContext();
 }
 
 #pragma mark NSWindowDelegate
@@ -190,24 +178,14 @@
 
 - (void)windowWillClose:(NSNotification *)notification {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    // TODO: Clean shutdown requires tearing down the display link 
-    // ImGui_ImplMetal_Shutdown();
-    // ImGui_ImplOSX_Shutdown();
-    // ImGui::DestroyContext();
+    self.done = YES;
+    // [[NSApplication sharedApplication] terminate:self];
 }
 
 #pragma mark WryMetalViewDelegate
 
 - (void)viewDidMoveToWindow {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    /*
-    if (_metalView.window) {
-        _metalDisplayLink.delegate = _renderer;
-        _metalDisplayLink.paused = NO;
-        NSRunLoop* currentRunLoop = [NSRunLoop currentRunLoop];
-        [_metalDisplayLink addToRunLoop:currentRunLoop forMode:NSRunLoopCommonModes];
-    }
-     */
 }
 
 - (void)viewDidChangeFrameSize {
@@ -243,20 +221,38 @@
 
 - (BOOL)acceptsFirstResponder
 {
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    return YES;
+}
+
+- (BOOL)becomeFirstResponder
+{
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    return YES;
+}
+
+- (BOOL)resignFirstResponder
+{
+    NSLog(@"%s\n", __PRETTY_FUNCTION__);
     return YES;
 }
 
 - (void)keyDown:(NSEvent *)event {
         
     // Dear IMGUI installs its TextInput thing as a subview
-    
+        
     // Forward the events where?
+    
+    // assert([self nextResponder]);
     
     
 
-    if (ImGui::GetIO().WantCaptureKeyboard) return;
+    if (ImGui::GetIO().WantCaptureKeyboard)
+        return;
     
     using namespace wry;
+    
+    // [self interpretKeyEvents:@[event]];
     
     //if (!event.ARepeat) {
         
@@ -412,12 +408,8 @@
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 - (void) mouseDragged:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     // NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    //auto lock = std::unique_lock{_model->_mutex};
-    //_model->_looking_at.x += event.deltaX * _window.screen.backingScaleFactor;
-    //_model->_looking_at.y += event.deltaY * _window.screen.backingScaleFactor;
-    // NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
+    [self mouseMoved:event];
 }
 
 - (void) mouseUp:(NSEvent *)event {
@@ -474,7 +466,7 @@
 }
 
 -(void)render {
-    [_renderer renderToMetalLayer];
+    [_renderer render];
 }
 
 @end
