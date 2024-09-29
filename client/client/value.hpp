@@ -17,61 +17,99 @@
 #include "adl.hpp"
 
 namespace wry::gc {
+
+// TODO: which string view?
+using std::string_view;
+
+struct _value_subscript_result_t;
+
+struct Value {
     
-    // TODO: which string view?
-    using std::string_view;
-        
-    struct _value_subscript_result_t;
+    uint64_t _data;
     
-    struct Value {
-        
-        uint64_t _data;
-        
-        // implicit construction from vocabulary types
-                        
-        constexpr Value() = default;
-        constexpr Value(nullptr_t);
-        constexpr Value(bool);
-        constexpr Value(int);
-        constexpr Value(int64_t);
-        constexpr Value(const char*);
-        template<std::size_t N, typename = std::enable_if_t<(N > 0)>>
-        constexpr Value(const char (&ntbs)[N]);
-        Value(string_view);
-                        
-        // TODO: call syntax
-        Value operator()(/* args type? */) const;
-        
-        // TODO: subscript syntax; probably get/set is the best.  We can't hand
-        // out references into the backing array which will be atomic or
-        // immutable
-        Value operator[](Value) const;
-        _value_subscript_result_t operator[](Value);
-
-        // implicit conversion
-        constexpr explicit operator bool() const;
-
-        // TODO: make free functions
-        constexpr bool is_opcode() const;
-        constexpr int as_opcode() const;
-        
-        constexpr bool is_int64_t() const;
-        constexpr int64_t as_int64_t() const;
-        
-        constexpr bool is_Empty() const;
-
-    }; // struct Value
-
-    // gc methods
+    // implicit construction from vocabulary types
     
-    /*
-    size_t object_hash(const Value&);
-    void object_debug(const Value&);
-    void object_passivate(Value&);
-    void object_shade(const Value&);
-    void object_trace(const Value&);
-    void object_trace_weak(const Value&);
-     */
+    constexpr Value() = default;
+    constexpr Value(const Value&) = default;
+    constexpr Value(Value&) = default;
+    constexpr Value(Value&&) = default;
+    constexpr Value& operator=(const Value&) = default;
+    
+    constexpr Value(nullptr_t);
+    constexpr Value(bool);
+    constexpr Value(int);
+    constexpr Value(int64_t);
+    constexpr Value(const char*);
+    template<std::size_t N, typename = std::enable_if_t<(N > 0)>>
+    constexpr Value(const char (&ntbs)[N]);
+    Value(string_view);
+    
+    // TODO: call syntax
+    Value operator()(/* args type? */) const;
+    
+    // TODO: subscript syntax; probably get/set is the best.  We can't hand
+    // out references into the backing array which will be atomic or
+    // immutable
+    Value operator[](Value) const;
+    _value_subscript_result_t operator[](Value);
+    
+    // implicit conversion
+    constexpr explicit operator bool() const;
+    
+    // TODO: make free functions
+    constexpr bool is_opcode() const;
+    constexpr int as_opcode() const;
+    
+    constexpr bool is_int64_t() const;
+    constexpr int64_t as_int64_t() const;
+    
+    constexpr bool is_Empty() const;
+    
+}; // struct Value
+
+} // namespace wry::gc
+
+namespace wry {
+
+template<>
+struct Atomic<gc::Value> {
+    
+    Atomic<std::uint64_t> _data;
+    
+    constexpr Atomic() = default;
+    constexpr explicit Atomic(gc::Value desired) : _data(desired._data) {}
+    
+    gc::Value load(Ordering order) const {
+        gc::Value v;
+        v._data = _data.load(order);
+        return v;
+    }
+
+    gc::Value exchange(gc::Value desired, Ordering order) {
+        adl::shade(desired);
+        desired._data = _data.exchange(desired._data, order);
+        adl::shade(desired);
+        return desired;
+    }
+
+    void store(gc::Value desired, Ordering order) {
+        (void) exchange(desired, order);
+    }
+    
+    
+
+    
+    
+    
+    
+};
+
+}
+
+
+
+namespace wry::gc {
+
 
     constexpr Value value_make_boolean_with(bool flag);
     constexpr Value value_make_character_with(int utf32);
@@ -167,7 +205,7 @@ namespace wry::gc {
         
         Atomic<Value> _atomic_value;
 
-        Scan() = default;
+        constexpr Scan() = default;
         Scan(const Scan& other);
         ~Scan() = default;
         Scan& operator=(const Scan& other);
@@ -207,14 +245,7 @@ namespace wry::gc {
 
     };
     
-    /*
-    size_t object_hash(const Scan<Atomic<Value>>&);
-    void object_debug(const Scan<Atomic<Value>>&);
-    void object_passivate(Scan<Atomic<Value>>&);
-    void object_shade(const Scan<Atomic<Value>>&);
-    void object_trace(const Scan<Atomic<Value>>&);
-    void object_trace_weak(const Scan<Atomic<Value>>&);
-     */
+   
 
 
     

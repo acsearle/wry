@@ -428,6 +428,14 @@ namespace wry::gc {
         size_t _size;
         Scan<ArrayStaticIndirect<T>*> _storage;
         
+        const T* begin() const {
+            return _inner._data;
+        }
+        
+        const T* end() const {
+            return _inner._data + _inner._capacity;
+        }
+        
         BasicHashSetB()
         : _inner()
         , _size(0)

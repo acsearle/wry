@@ -648,8 +648,8 @@ namespace wry {
     
     /*
      define_test("obj") {
-     //from_obj("/Users/antony/Desktop/assets/test.obj");
-     //from_obj("/Users/antony/Desktop/assets/16747_Mining_Truck_v1.obj");
+     //from_obj("test.obj");
+     //from_obj("16747_Mining_Truck_v1.obj");
      
      };
      */

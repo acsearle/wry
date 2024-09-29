@@ -8,15 +8,22 @@
 #include <cinttypes>
 #include <random>
 #include <thread>
+#include <filesystem>
 
 #import <AppKit/AppKit.h>
+
+#include <sqlite3.h>
+
 #import "WryDelegate.h"
 
 #include "gc.hpp"
 #include "model.hpp"
 #include "test.hpp"
 
+
 int main(int argc, const char** argv) {
+    
+    std::filesystem::current_path("/Users/antony/Desktop/assets/");
     
     {
         // randomness

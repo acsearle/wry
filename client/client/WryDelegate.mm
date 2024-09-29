@@ -90,10 +90,20 @@
         
         // Setup Renderer backend
         ImGui_ImplMetal_Init(_metalLayer.device);
+        
         // io.Fonts->AddFontDefault();
+        
         CGFloat framebufferScale = NSScreen.mainScreen.backingScaleFactor;
-        io.Fonts->AddFontFromFileTTF("/Users/antony/Desktop/assets/Futura Medium Condensed.otf",
+        io.Fonts->AddFontFromFileTTF("Futura Medium Condensed.otf",
                                      std::floor(18.0f * framebufferScale))->Scale = 1.0f / framebufferScale;
+        
+        // https://int10h.org/oldschool-pc-fonts/fontlist/?1#ibm-g2
+        // Should convert these to 3:4 aspect ratio
+        //"PxPlus_IBM_VGA_9x16.ttf"
+        //"PxPlus_IBM_VGA_9x8.ttf"
+//        io.Fonts->AddFontFromFileTTF("PxPlus_IBM_VGA_9x16.ttf",
+//                                     std::floor(16.0f * framebufferScale))->Scale = 1.0f / framebufferScale;
+        
         ImGui_ImplOSX_Init(_metalView);
     }
     

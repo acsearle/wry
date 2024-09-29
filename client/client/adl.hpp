@@ -10,14 +10,9 @@
 
 #include <utility>
 
-namespace wry {
+namespace wry::sim { }
 
-namespace sim {
-} // namespace sim
-
-namespace adl {
-
-namespace _adl {
+namespace wry::adl::_adl {
 
 struct _swap {
     template<typename T>
@@ -25,36 +20,33 @@ struct _swap {
         using std::swap;
         swap(a, b);
     }
-}; // struct _swap
+};
 
 struct _shade {
     template<typename T>
     void operator()(const T& x) const {
-        // namespaces for non-ADL trace implementations
         using namespace wry::sim;
-        // resolve via ADL (mostly)
         shade(x);
     }
-}; // struct _shade
+};
 
 struct _trace {
     template<typename T>
     void operator()(const T& x) const {
-        // namespaces for non-ADL trace implementations
         using namespace wry::sim;
-        // resolve via ADL (mostly)
         trace(x);
     }
-}; // struct _trace
+};
 
-} // namespace _adl
+}
+
+
+namespace wry::adl {
 
 constexpr _adl::_swap swap;
 constexpr _adl::_shade shade;
 constexpr _adl::_trace trace;
 
-
-} // namespace adl
-} // namespace wry
+}
 
 #endif /* adl_hpp */

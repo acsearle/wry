@@ -156,7 +156,7 @@ namespace wry {
         e = FT_New_Face(ft,
                         path_for_resource(u8"Futura Medium Condensed", u8"otf").c_str(),
                         // path_for_resource("Hack-Regular", "ttf").c_str(),
-                        //"/Users/antony/Desktop/assets/OpenSans-VariableFont_wdth,wght.ttf",
+                        //"OpenSans-VariableFont_wdth,wght.ttf",
                         0,
                         &face);
         assert(!e);
@@ -239,7 +239,7 @@ namespace wry {
             
             {
                 const char* filepathname
-                = "/Users/antony/Desktop/assets/Futura Medium Condensed.otf";
+                = "Futura Medium Condensed.otf";
                 FT_Long face_index = 0;
                 e = FT_New_Face(library,
                                 filepathname,

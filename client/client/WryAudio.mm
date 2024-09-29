@@ -18,7 +18,7 @@
 
 - (void)loadResource:(NSString*)name withExtension:(NSString*)ext {
     NSError* err = nil;
-    NSString* path = [NSString stringWithFormat:@"/Users/antony/Desktop/assets/%@.%@", name, ext];
+    NSString* path = [NSString stringWithFormat:@"%@.%@", name, ext];
     NSURL* fileUrl = [NSURL fileURLWithPath:path];
     AVAudioFile* file = [[AVAudioFile alloc]
                          initForReading:fileUrl

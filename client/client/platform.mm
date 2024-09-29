@@ -17,7 +17,7 @@ namespace wry {
     // On macOS, this may point to a bundle?
 
     std::filesystem::path path_for_resource(StringView name) {
-        String s(u8"/Users/antony/Desktop/assets/");
+        String s(u8"");
         s.append(name);
         return std::filesystem::path(s.begin(), s.end());
     }

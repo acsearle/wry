@@ -14,6 +14,8 @@
 #include <MetalKit/MetalKit.h>
 #include <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
+#include <sqlite3.h>
+
 #include "imgui.h"
 #include "imgui_impl_metal.h"
 #include "imgui_impl_osx.h"
@@ -30,7 +32,10 @@
 #include "palette.hpp"
 #include "platform.hpp"
 #include "sdf.hpp"
+#include "text.hpp"
 #include "Wavefront.hpp"
+
+#include "save.hpp"
 
 @implementation WryRenderer
 {
@@ -600,9 +605,9 @@
                 p.instanceCount = 0;
             };
             
-            f(_furnace_mesh, "/Users/antony/Desktop/assets/furnace.obj");
-            f(_mine_mesh, "/Users/antony/Desktop/assets/mine.obj");
-            f(_truck_mesh, "/Users/antony/Desktop/assets/truck2.obj");
+            f(_furnace_mesh, "furnace.obj");
+            f(_mine_mesh, "mine.obj");
+            f(_truck_mesh, "truck2.obj");
         }
                     
         {
@@ -612,7 +617,7 @@
 
             /*
             try {
-                auto x = json::from_file<Array<String>>("/Users/antony/Desktop/assets/opcodes.json");
+                auto x = json::from_file<Array<String>>("opcodes.json");
                 ulong i = 0;
                 for (const String& y : x)
                     _name_to_opcode[y] = i++;
@@ -632,7 +637,7 @@
             
                 
             try {
-                auto x = json::from_file<Array<Array<String>>>("/Users/antony/Desktop/assets/assets.json");
+                auto x = json::from_file<Array<Array<String>>>("assets.json");
                 ulong i = 0;
                 for (const Array<String>& y : x) {
                     ulong j = 0;
@@ -734,7 +739,6 @@
     return self;
 }
 
-
 - (void) drawOverlay:(id<MTLRenderCommandEncoder>)encoder {
     
     using namespace simd;
@@ -818,15 +822,15 @@
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
                 Coordinate xy{i, j};
-                // auto& the_tile = _model->_world._value_for_coordinate[xy];
+                // auto& the_tile = _model->_world->_value_for_coordinate[xy];
                 // the_tile = _model->_holding_value;
-                _model->_world._value_for_coordinate.write(xy, _model->_holding_value);
+                _model->_world->_value_for_coordinate.write(xy, _model->_holding_value);
                 
                 // these notifications happen logically between steps and are
                 // excused from transactions (hopefully)
                 
                 // the_tile.notify_occupant(&_model->_world);
-                notify_by_world_coordinate(&_model->_world, xy);
+                notify_by_world_coordinate(_model->_world, xy);
                 printf(" Clicked world (%d, %d)\n", i, j);
             }
             _model->_outstanding_click = false;
@@ -840,11 +844,11 @@
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
                 Coordinate xy{i, j};
-                // auto& the_tile = _model->_world._value_for_coordinate[xy];
+                // auto& the_tile = _model->_world->_value_for_coordinate[xy];
                 // the_tile = k;
-                _model->_world._value_for_coordinate.write(xy, k);
+                _model->_world->_value_for_coordinate.write(xy, k);
                 // the_tile.notify_occupant(&_model->_world);
-                notify_by_world_coordinate(&_model->_world, xy);
+                notify_by_world_coordinate(_model->_world, xy);
             }
         }
         
@@ -955,38 +959,7 @@
                      length:sizeof(uniforms)
                     atIndex:AAPLBufferIndexUniforms ];
     
-    auto draw_text = [=](wry::rect<float> x, wry::StringView v, wry::RGBA8Unorm_sRGB color) {
-        
-        auto valign = (_font->height + _font->ascender + _font->descender) / 2; // note descender is negative
-        
-        auto xy = x.a;
-        xy.y += valign;
-        while (!v.empty()) {
-            auto c = v.front();
-            v.pop_front();
-            auto q = _font->charmap.find(c);
-            if (q != _font->charmap.end()) {
-                
-                if (xy.x + q->second.advance > x.b.x) {
-                    xy.x = x.a.x;
-                    xy.y += _font->height;
-                }
-                if (xy.y - _font->descender > x.b.y) {
-                    return xy;
-                }
-                
-                wry::Sprite s = q->second.sprite_;
-                _atlas->push_sprite(s + xy, color);
-                xy.x += q->second.advance;
-                
-            } else if (c == '\n') {
-                xy.x = x.a.x;
-                xy.y += _font->height;
-            }
-        }
-        xy.y -= valign;
-        return xy;
-    };
+
     
     {
         wry::RGBA8Unorm_sRGB color(0.5f, 0.5f, 0.5f, 1.0f);
@@ -998,7 +971,13 @@
             if (p->first < t) {
                 p = _model->_logs.erase(p);
             } else {
-                z = draw_text({_font->height / 2, y, 1920, 1080}, p->second, color);
+                // TODO: actual window size
+                z = wry::drawOverlay_draw_text(_font, _atlas, {_font->height / 2, y, 1920, 1080}, p->second, color);
+                // TODO: detect multiline (draw backwards? shift? prep the size?  linebreak?)
+                // There are a lot of ways to skin a line...
+                
+                // A spite atlas might be associated with multiple fonts
+                
                 y += _font->height;
                 ++p;
             }
@@ -1015,9 +994,9 @@
         for (auto p = _model->_console.end(); (y >= 0) && (p != _model->_console.begin());) {
             --p;
             y -= _font->height;
-            z = draw_text({_font->height / 2, y, 1920, 1080}, *p, color);
+            z = wry::drawOverlay_draw_text(_font, _atlas, {_font->height / 2, y, 1920, 1080}, *p, color);
             if (first) {
-                draw_text(wry::rect<float>{z.x, z.y, 1920, 1080 }, (_frame_count & 0x40) ? "_" : " ", color);
+                wry::drawOverlay_draw_text(_font, _atlas, wry::rect<float>{z.x, z.y, 1920, 1080 }, (_frame_count & 0x40) ? "_" : " ", color);
                 first = false;
             }
         }
@@ -1039,7 +1018,7 @@
 
     // advance the simulation
     
-    _model->_world.step();
+    _model->_world->step();
 
     id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
     
@@ -1109,8 +1088,8 @@
     _truck_mesh.instanceCount = 0;
     // raid model for data
     {
-        auto tnow = world_time(&_model->_world);
-        const auto& entities = _model->_world._entities;
+        auto tnow = world_time(_model->_world);
+        const auto& entities = _model->_world->_entities;
         
         NSUInteger quad_count = entities.size() * 4 + 1000 + 2;
         NSUInteger vertex_count = quad_count * 4;
@@ -1317,7 +1296,7 @@
                 simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
-                    wry::sim::Value q = _model->_world._value_for_coordinate.read(wry::sim::Coordinate{i, j});
+                    wry::sim::Value q = _model->_world->_value_for_coordinate.read(wry::sim::Coordinate{i, j});
                     using namespace wry::sim;
                     if (q.is_int64_t()) {
                         coordinate = make<float4>((q.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
@@ -1415,9 +1394,9 @@
             xy.y = round(_model->_mouse4.z);
             ulong z = 0;
             memcpy(&z, &xy, 8);
-            //ulong value = _model->_world.get(z);
+            //ulong value = _model->_world->get(z);
             //++value;
-            //_model->_world.set(z, value);
+            //_model->_world->set(z, value);
             
         }
         
@@ -1720,8 +1699,39 @@
             ImGui_ImplMetal_NewFrame(descriptor);
             ImGui_ImplOSX_NewFrame(_view);
             ImGui::NewFrame();
+            
             static bool show_demo_window = true;
             ImGui::ShowDemoWindow(&show_demo_window);
+            
+            // ImGui::SetNextWindowSize(ImVec2(-1.0f, 0.0f));
+            ImGui::Begin("Carpentaria 0.1.0", nullptr,
+                         ImGuiWindowFlags_NoMove
+                         | ImGuiWindowFlags_NoTitleBar
+                         | ImGuiWindowFlags_NoResize);
+            
+            // ImVec2 sz = ImVec2(-FLT_MIN, 0.0f);
+            ImVec2 sz = ImVec2(128.0f, 0.0f);
+
+            if (ImGui::Button("Resume", sz)) {
+            }
+            if (ImGui::Button("Restart", sz)) {
+            }
+            // ImGui::BeginDisabled();
+            if (ImGui::Button("Load", sz)) {
+                wry::sim::World* w = wry::sim::load_game();
+                delete std::exchange(_model->_world, w);
+            }
+            // ImGui::EndDisabled();
+            if (ImGui::Button("Save", sz)) {
+                wry::sim::save_game(_model->_world);
+            }
+            if (ImGui::Button("Settings", sz)) {
+            }
+            if (ImGui::Button("Quit", sz)) {
+            }
+
+            ImGui::End();
+            
             ImGui::Render();
             ImDrawData* draw_data = ImGui::GetDrawData();
             // id <MTLRenderCommandEncoder> renderEncoder = [command_buffer renderCommandEncoderWithDescriptor:renderPassDescriptor];
