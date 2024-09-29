@@ -12,10 +12,13 @@
 
 namespace wry::sim {
 
-World* reset_game();
-World* load_game();
+World* restart_game();
+World* continue_game();
+World* load_game(int id);
 void save_game(World* world);
 
-};
+std::vector<std::pair<std::string, int>> enumerate_games();
+
+} // namespace wry::sim
 
 #endif /* save_hpp */

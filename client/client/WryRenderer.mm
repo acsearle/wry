@@ -1703,34 +1703,60 @@
             static bool show_demo_window = true;
             ImGui::ShowDemoWindow(&show_demo_window);
             
-            // ImGui::SetNextWindowSize(ImVec2(-1.0f, 0.0f));
-            ImGui::Begin("Carpentaria 0.1.0", nullptr,
-                         ImGuiWindowFlags_NoMove
-                         | ImGuiWindowFlags_NoTitleBar
-                         | ImGuiWindowFlags_NoResize);
-            
-            // ImVec2 sz = ImVec2(-FLT_MIN, 0.0f);
-            ImVec2 sz = ImVec2(128.0f, 0.0f);
+            static std::vector<std::pair<std::string, int>> enumerated_games;
 
-            if (ImGui::Button("Resume", sz)) {
+            if (enumerated_games.empty()) {
+                // ImGui::SetNextWindowSize(ImVec2(-1.0f, 0.0f));
+                ImGui::Begin(// "Carpentaria 0.1.0"
+                             "esc",
+                             nullptr,
+                             ImGuiWindowFlags_NoMove
+                             | ImGuiWindowFlags_NoTitleBar
+                             | ImGuiWindowFlags_NoResize);
+                
+                // ImVec2 sz = ImVec2(-FLT_MIN, 0.0f);
+                ImVec2 sz = ImVec2(64, 0.0f);
+                
+                if (ImGui::Button("Continue", sz)) {
+                    wry::sim::World* w = wry::sim::continue_game();
+                    delete std::exchange(_model->_world, w);
+                }
+                if (ImGui::Button("Quicksave", sz)) {
+                    wry::sim::save_game(_model->_world);
+                }
+                if (ImGui::Button("Restart", sz)) {
+                    wry::sim::World* w = wry::sim::restart_game();
+                    delete std::exchange(_model->_world, w);
+                }
+                if (ImGui::Button("Load", sz)) {
+                    enumerated_games = wry::sim::enumerate_games();
+                    
+                    
+                    
+                }
+                ImGui::BeginDisabled();
+                if (ImGui::Button("Settings", sz)) {
+                }
+                if (ImGui::Button("Quit", sz)) {
+                }
+                ImGui::EndDisabled();
+                ImGui::End();
+            } else {
+                ImGui::Begin("Load", nullptr, 0);
+                ImVec2 sz = ImVec2(-FLT_MIN, 0.0f);
+                bool didLoad = false;
+                for (auto& [s, i] : enumerated_games) {
+                    if (ImGui::Button(s.c_str(), sz)) {
+                        wry::sim::World* w = wry::sim::load_game(i);
+                        delete std::exchange(_model->_world, w);
+                        didLoad = true;
+                    }
+                }
+                ImGui::End();
+                if (didLoad) {
+                    enumerated_games.clear();
+                }
             }
-            if (ImGui::Button("Restart", sz)) {
-            }
-            // ImGui::BeginDisabled();
-            if (ImGui::Button("Load", sz)) {
-                wry::sim::World* w = wry::sim::load_game();
-                delete std::exchange(_model->_world, w);
-            }
-            // ImGui::EndDisabled();
-            if (ImGui::Button("Save", sz)) {
-                wry::sim::save_game(_model->_world);
-            }
-            if (ImGui::Button("Settings", sz)) {
-            }
-            if (ImGui::Button("Quit", sz)) {
-            }
-
-            ImGui::End();
             
             ImGui::Render();
             ImDrawData* draw_data = ImGui::GetDrawData();

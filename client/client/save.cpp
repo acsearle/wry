@@ -9,8 +9,11 @@
 
 #include "save.hpp"
 
-
 namespace wry::sim {
+
+World* restart_game() {
+    return new World;
+}
 
 void save_game(World* world) {
         
@@ -105,7 +108,7 @@ void save_game(World* world) {
 
 
 
-World* load_game() {
+World* continue_game() {
         
     gc::HashMap<Coordinate, Scan<Value>> v;
 
@@ -161,7 +164,119 @@ World* load_game() {
 
 
 
+World* load_game(int id) {
+    
+    gc::HashMap<Coordinate, Scan<Value>> v;
+    
+    {
+        
+        auto ok = [](int rc) {
+            if (rc != SQLITE_OK) {
+                fprintf(stderr, "%s\n", sqlite3_errstr(rc));
+                abort();
+            }
+        };
+        
+        auto row = [](int rc) {
+            if (rc != SQLITE_ROW) {
+                fprintf(stderr, "%s\n", sqlite3_errstr(rc));
+                abort();
+            }
+        };
+        
+        sqlite3* saves = nullptr;
+        ok(sqlite3_open_v2("saves.sqlite3", &saves, SQLITE_OPEN_READONLY, nullptr));
+        
+        
+        {
+            sqlite3_stmt* statement = nullptr;
+            ok(sqlite3_prepare_v2(saves,
+                                  "SELECT value_for_coordinate "
+                                  "FROM saves "
+                                  "WHERE id = ?",
+                                  -1,
+                                  &statement,
+                                  nullptr));
+            ok(sqlite3_bind_int(statement, 1, id));
+            row(sqlite3_step(statement));
+            using T = std::pair<Coordinate, Value>;
+            const T* p = (const T*)sqlite3_column_blob(statement, 0);
+            size_t n = sqlite3_column_bytes(statement, 0) / sizeof(T);
+            for (size_t i = 0; i != n; ++i) {
+                v.write(p[i].first, p[i].second);
+            }
+            ok(sqlite3_finalize(std::exchange(statement, nullptr)));
+        }
+        
+        ok(sqlite3_close_v2(std::exchange(saves, nullptr)));
+        
+    }
+    
+    World* w = new World;
+    adl::swap(w->_value_for_coordinate, v);
+    return w;
 }
+
+
+
+std::vector<std::pair<std::string, int>> enumerate_games() {
+    
+    std::vector<std::pair<std::string, int>> v;
+    
+    auto ok = [](int rc) {
+        if (rc != SQLITE_OK) {
+            fprintf(stderr, "%s\n", sqlite3_errstr(rc));
+            abort();
+        }
+    };
+    
+    auto row = [](int rc) {
+        if (rc != SQLITE_ROW) {
+            fprintf(stderr, "%s\n", sqlite3_errstr(rc));
+            abort();
+        }
+    };
+    
+    sqlite3* saves = nullptr;
+    ok(sqlite3_open_v2("saves.sqlite3", &saves, SQLITE_OPEN_READONLY, nullptr));
+        
+    sqlite3_stmt* statement = nullptr;
+    ok(sqlite3_prepare_v2(saves,
+                          "SELECT datetime(t, 'unixepoch', 'subsec'), id "
+                          "FROM saves "
+                          "ORDER BY t DESC",
+                          -1,
+                          &statement,
+                          nullptr));
+    
+    for (;;) {
+        int rc = sqlite3_step(statement);
+        if (rc == SQLITE_DONE) {
+            break;
+        }
+        if (rc == SQLITE_ROW) {
+            const char* t = (const char*) sqlite3_column_text(statement, 0);
+            size_t n = sqlite3_column_bytes(statement, 0);
+            int i = sqlite3_column_int(statement, 1);
+            v.emplace_back(std::string_view(t, n), i);
+        } else {
+            fprintf(stderr, "%s\n", sqlite3_errstr(rc));
+            abort();
+        }
+    }
+    
+    ok(sqlite3_finalize(std::exchange(statement, nullptr)));
+    ok(sqlite3_close_v2(std::exchange(saves, nullptr)));
+        
+    return v;
+    
+}
+
+
+} // namespace wry
+
+
+
 
 
 
