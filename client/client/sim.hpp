@@ -114,6 +114,13 @@ X(OPCODE_FLOP_FLIP),\
 
 namespace wry::sim {
     
+    struct Coordinate;
+    struct Entity;
+    struct EntityID;
+    struct PersistentWorld;
+    struct Transaction;
+    struct TransactionSet;
+    struct World;
     
     enum HEADING
     : i64 {
@@ -125,8 +132,17 @@ namespace wry::sim {
         HEADING_MASK = 3
         
     };
+    
+    enum TRANSACTION_STATE {
+        
+        TRANSACTION_STATE_NONE = 0,
+        TRANSACTION_STATE_READ = 1,
+        TRANSACTION_STATE_WRITE = 2,
+        TRANSACTION_STATE_FORBIDDEN = 3,
+        
+    };
 
-
+    
     struct Coordinate {
         
         i32 x;
@@ -144,35 +160,20 @@ namespace wry::sim {
     inline void trace(const Coordinate&) {}
     inline void shade(const Coordinate&) {}
 
-    using gc::Value;
-    
-    enum TRANSACTION_STATE {
-        
-        TRANSACTION_STATE_NONE = 0,
-        TRANSACTION_STATE_READ = 1,
-        TRANSACTION_STATE_WRITE = 2,
-        TRANSACTION_STATE_FORBIDDEN = 3,
-        
-    };
-    
-    
-    struct World;
-    struct Entity;
-    struct PersistentWorld;
-    struct Transaction;
-    struct TransactionSet;
-    struct EntityID;
-    
     struct EntityID {
         uint64_t data;
-        
-        auto operator<=>(const EntityID&) const = default;
-        
+        constexpr bool operator==(const EntityID&) const = default;
+        constexpr auto operator<=>(const EntityID&) const = default;
     };
     
+    inline u64 hash(const EntityID& x) {
+        return hash_combine(&x, sizeof(x));
+    }
+    
     inline void trace(const EntityID&) {}
-    
-    
+    inline void shade(const EntityID&) {}
+                
+    using gc::Value;
 
 
     

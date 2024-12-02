@@ -368,10 +368,6 @@ namespace wry::sim {
         
     };
     
-    
-    // TODO: gc::Persistent, gc::Ephemeral, gc::Leaf provide defaults for GC
-    // functions
-    
     uint64_t entity_get_priority(const Entity*);
     
     struct Transaction : gc::Object {
