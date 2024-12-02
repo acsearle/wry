@@ -21,6 +21,8 @@
 #include "queue.hpp"
 #include "HeapTable.hpp"
 
+#include "PersistentMap.hpp"
+
 namespace wry::sim {
     
     // somewhat abstracted interface
@@ -335,5 +337,141 @@ namespace wry::sim {
 
     
 } // namespace wry::sim
+
+
+namespace wry::sim {
+        
+    struct ConcurrentMap {
+    };
+    
+    struct WorkBag {
+    };
+    
+    template<typename>
+    struct CallTarget;
+    
+    template<typename>
+    struct CallHandle;
+    
+    template<typename R, typename... Args>
+    struct CallTarget<R(Args...)> {
+        R (*_function_pointer)(void*, Args...);
+    };
+    
+    template<typename R, typename... Args>
+    struct CallHandle<R(Args...)> {
+        CallTarget<R(Args...)>* _target;
+        
+        R operator()(Args... args) const {
+            return (*(_target->_function_pointer))(_target, std::forward<Args>(args)...);
+        }
+        
+    };
+    
+    
+    // TODO: gc::Persistent, gc::Ephemeral, gc::Leaf provide defaults for GC
+    // functions
+    
+    uint64_t entity_get_priority(const Entity*);
+    
+    struct Transaction : gc::Object {
+        
+        enum State {
+            INITIAL,
+            COMMITTED,
+            ABORTED,
+        };
+
+        struct Node {
+            const Node* _next;
+            int _wants_write;
+            const Transaction* _parent;
+            const Atomic<const Transaction::Node*>* _head;
+            
+            State resolve() const {
+                return _parent->resolve();
+            }
+            
+            uint64_t priority() const {
+                return entity_get_priority(_parent->_entity);
+            }
+            
+        };
+        
+        const Entity* _entity;
+        mutable Atomic<State> _state;
+                
+        size_t _count;
+        Node _nodes[0];
+        
+        Transaction()
+        : _state(INITIAL)
+        , _count(0) {}
+        
+        State resolve() const {
+            State observed;
+            observed = _state.load(Ordering::RELAXED);
+            if (observed != INITIAL) {
+                // already resolved
+                return observed;
+            }
+            // we are in a race to resolve ourself and our collisions
+            uint64_t priority = entity_get_priority(_entity);
+            for (size_t i = 0; i != _count; ++i) {
+                auto head = _nodes[i]._head->load(Ordering::RELAXED);
+                auto wants_write = _nodes[i]._wants_write;
+                for (; head; head = head->_next) {
+                    if ((wants_write || head->_wants_write) && (head->priority() < priority)) {
+                        // other transaction conflicts with us and outranks us
+                        observed = head->resolve();
+                        assert(observed != INITIAL);
+                        if (observed == COMMITTED) {
+                            // other transaction aborts us
+                            observed = _state.exchange(ABORTED, Ordering::RELAXED);
+                            // INITIAL: we won the race
+                            // ABORTED: another thread beat us
+                            // COMMITTED: another thread came to the opposite conclusion!
+                            assert(observed != COMMITTED);
+                            return ABORTED;
+                        }
+                        // else, other transaction ABORTED and we may proceed
+                    }
+                }
+            }
+            observed = _state.exchange(COMMITTED, Ordering::RELAXED);
+            // INITIAL: we won the race
+            // COMMITTED: another thread beat us
+            // ABORTED: another thread came to the opposite conclusion!
+            assert(observed != ABORTED);
+            return COMMITTED;
+            
+        };
+        
+    };
+        
+    struct PersistentWorld {
+        
+        Time _tick;
+
+        PersistentMap<Time, PersistentSet<EntityID>> _waiting_for_time;
+
+        PersistentMap<Coordinate, Value> _value_for_coordinate;
+        PersistentMap<Coordinate, EntityID> _entity_id_for_coordinate;
+        PersistentMap<Coordinate, PersistentSet<EntityID>> _waiting_for_coordinate;
+
+        PersistentMap<EntityID, const Entity*> _entity_for_entity_id;
+        PersistentMap<EntityID, PersistentSet<EntityID>> _waiting_for_entity_id;
+        PersistentSet<EntityID> _ready;
+
+        
+        PersistentWorld* step() const;
+            
+    };
+    
+            
+    
+} // namespace wry
+
+
 
 #endif /* world_hpp */

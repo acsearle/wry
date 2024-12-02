@@ -547,7 +547,12 @@ namespace wry::gc {
     
     void Collector::consume_log_list(LogNode* log_list_head) {
         while (log_list_head) {
-            collector_log.splice(std::move(*log_list_head));
+            auto a = log_list_head->log_list_next;
+            assert(log_list_head != log_list_head->log_list_next);
+            // TODO: we are moving from LogNode then using its next value
+            // on the rationale that the move affects only the base Log class
+            collector_log.splice(std::move(*(Log*)log_list_head));
+            assert(log_list_head->log_list_next == a);
             delete exchange(log_list_head, log_list_head->log_list_next);
         }
     }
@@ -605,9 +610,9 @@ namespace wry::gc {
                     switch (channel->log_stack_head.wait_for(expected,
                                                              Ordering::ACQUIRE,
                                                              1000000000)) {
-                        case AtomicWaitStatus::NO_TIMEOUT:
+                        case AtomicWaitResult::NO_TIMEOUT:
                             break;
-                        case AtomicWaitStatus::TIMEOUT:
+                        case AtomicWaitResult::TIMEOUT:
                             fprintf(stderr, "Mutator unresponsive (1s)\n");
                             break;
                         default:

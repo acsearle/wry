@@ -8,6 +8,7 @@
 #ifndef array_hpp
 #define array_hpp
 
+#include <array>
 #include <iterator>
 
 #include "algorithm.hpp"
@@ -38,11 +39,11 @@ namespace wry {
     //
     // Array currently assumes that the stored type is Relocatable
 
-// # GC, RT
-//
-// We have competing arrays that are garbage collected, real time and
-// discontiguous.  If contiguity is dropped, then ring buffers are also
-// attractive.  We need to tame these options.
+    // # GC, RT
+    //
+    // We have competing arrays that are garbage collected, real time and
+    // discontiguous.  If contiguity is dropped, then ring buffers are also
+    // attractive.  We need to tame these options.
 
     template<typename> 
     struct Array;

@@ -8,6 +8,9 @@
 #include <sqlite3.h>
 
 #include "save.hpp"
+#include "binary.hpp"
+#include "serialize.hpp"
+#include "deserialize.hpp"
 
 namespace wry::sim {
 
@@ -18,7 +21,6 @@ World* restart_game() {
 void save_game(World* world) {
         
     const auto& a = world->_value_for_coordinate;
-    
     const size_t n = a.size();
     
     std::vector<std::pair<Coordinate, Value>> b;

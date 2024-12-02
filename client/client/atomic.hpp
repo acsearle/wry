@@ -8,16 +8,31 @@
 #ifndef atomic_hpp
 #define atomic_hpp
 
-#if defined(__APPLE__)
-
-#include <errno.h>
-#include <mach/mach_time.h>
-#include <os/os_sync_wait_on_address.h>
-
 #include <cstdlib>
 #include <cstdio>
 
+#if defined(__APPLE__)
+#include <errno.h>
+#include <mach/mach_time.h>
+// os_sync_wait_on_address
+// os_sync_wait_on_address_dealine
+// os_sync_wake_by_address_any
+// os_sync_wake_by_address_all
+#include <os/os_sync_wait_on_address.h>
 #endif  // defined(__APPLE__)
+
+#if defined(WIN32)
+#include <synchapi.h>
+// WaitOnAddress
+// WakeByAddressSingle
+// WakeByAddressAll
+#endif
+
+#if defined(LINUX)
+#include <linux/futex.h>      /* Definition of FUTEX_* constants */
+#include <sys/syscall.h>      /* Definition of SYS_* constants */
+#include <unistd.h>
+#endif
 
 #include <atomic>
 
@@ -25,7 +40,7 @@ namespace wry {
 
     // We define our own Atomic to
     // - improve on libc++'s implementation wait on appleOS
-    // - provide a customization point
+    // - provide a legal customization point
     // - remove error-prone SEQ_CST defaults
     // - remove error-prone cast / assignment
     // - improve wait / wake interface
@@ -43,7 +58,7 @@ namespace wry {
     };
     
     // compare std::cv_status
-    enum class AtomicWaitStatus {
+    enum class AtomicWaitResult {
         NO_TIMEOUT,
         TIMEOUT,
     };
@@ -148,7 +163,7 @@ namespace wry {
             }
         }
         
-        AtomicWaitStatus wait_until(T& expected, Ordering order, uint64_t deadline) {
+        AtomicWaitResult wait_until(T& expected, Ordering order, uint64_t deadline) {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             uint64_t buffer;
             __builtin_memcpy(&buffer, &expected, sizeof(T));
@@ -156,7 +171,7 @@ namespace wry {
                 T discovered = load(order);
                 if (__builtin_memcmp(&buffer, &discovered, sizeof(T))) {
                     expected = discovered;
-                    return AtomicWaitStatus::NO_TIMEOUT;
+                    return AtomicWaitResult::NO_TIMEOUT;
                 }                
                 int count = os_sync_wait_on_address_with_deadline(&value,
                                                                   buffer,
@@ -166,7 +181,7 @@ namespace wry {
                                                                   deadline);
                 if (count < 0) switch (errno) {
                     case ETIMEDOUT:
-                        return AtomicWaitStatus::TIMEOUT;
+                        return AtomicWaitResult::TIMEOUT;
                     case EINTR:
                     case EFAULT:
                         break;
@@ -177,7 +192,7 @@ namespace wry {
             }
         }
         
-        AtomicWaitStatus wait_for(T& expected, Ordering order, uint64_t timeout_ns) {
+        AtomicWaitResult wait_for(T& expected, Ordering order, uint64_t timeout_ns) {
             struct mach_timebase_info info;
             mach_timebase_info(&info);
             return wait_until(expected, order, mach_absolute_time() + timeout_ns / info.numer * info.denom);

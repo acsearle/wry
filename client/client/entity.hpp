@@ -11,16 +11,22 @@
 #include "sim.hpp"
 
 namespace wry::sim {
-    
+        
     // This is the base class of things with behavior
     //
     // They are Objects, but are they Values?
-    
+        
     struct Entity : gc::Object {
                         
         virtual ~Entity() = default;
         
         virtual void notify(World*) = 0;
+        
+        virtual Transaction* notify2(const PersistentWorld*, TransactionSet*) const {
+            return nullptr;
+        }
+
+        EntityID _entity_id;
 
     }; // struct Entity
   
