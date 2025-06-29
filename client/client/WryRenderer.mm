@@ -1087,15 +1087,13 @@
     _mine_mesh.instanceCount = 0;
     _truck_mesh.instanceCount = 0;
     // raid model for data
-    vertices = [_device newBufferWithLength:4 * sizeof(MeshVertex) options:MTLStorageModeShared];
-    indices = [_device newBufferWithLength:6 * sizeof(uint) options:MTLStorageModeShared];
 
     {
-#if 0
-        auto tnow = world_time(_model->_world);
-        const auto& entities = _model->_world->_entities;
+
+        // auto tnow = world_time(_model->_world);
+        // const auto& entities = _model->_world->_entities;
         
-        NSUInteger quad_count = entities.size() * 4 + 1000 + 2;
+        NSUInteger quad_count = /* entities.size() * 4 +*/ 1000 + 2;
         NSUInteger vertex_count = quad_count * 4;
         index_count = quad_count * 6;
         vertices = [_device newBufferWithLength:vertex_count * sizeof(MeshVertex) options:MTLStorageModeShared];
@@ -1108,6 +1106,7 @@
         v.bitangent = make<float4>(0.0f, 1.0f, 0.0f, 0.0f);
         v.normal = make<float4>(0.0f, 0.0f, 1.0f, 0.0f);
         uint k = 0;
+#if 0
         for (size_t qi = 0; qi != entities.size(); ++qi) {
             sim::Entity* q = entities[qi];
             
@@ -1290,6 +1289,7 @@
             }
             
         }
+#endif
 
         for (int i = grid_bounds.a.x; i != grid_bounds.b.x; ++i) {
             for (int j = grid_bounds.a.y; j != grid_bounds.b.y; ++j) {
@@ -1298,6 +1298,7 @@
                 simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
+                    /*
                     wry::sim::Value q = _model->_world->_value_for_coordinate.read(wry::sim::Coordinate{i, j});
                     using namespace wry::sim;
                     if (q.is_int64_t()) {
@@ -1308,8 +1309,11 @@
                             coordinate = p->second;
                         }
                     } else {
+                     */
                         coordinate = make<float4>(0.0 / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
+                    /*
                     }
+                     */
                 }
                 
                 v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
@@ -1402,7 +1406,6 @@
             
         }
         
-#endif
     }
     
     // Our relatively flat scene permits several simplifications to the
