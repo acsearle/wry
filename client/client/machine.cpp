@@ -8,47 +8,59 @@
 #include "machine.hpp"
 #include "world.hpp"
 #include "debug.hpp"
+#include "transaction.hpp"
+#include "context.hpp"
 
 namespace wry::sim {
     
-    void Machine::notify(World* world) {
+    void Machine::notify(Context* context) const {
+#if 0
         
-        // if somebody else has acted on our state this turn, we can't actually
-        // do anything and must retry
+        Transaction* tx = Transaction::make(context, this, 10);
+
         
-        if (!can_write_world_entity(world, this)) {
-            entity_ready_on_world(this, world);
-        }
+        //// if somebody else has acted on our state this turn, we can't actually
+        //// do anything and must retry
         
-        // as we fall through the switch statement we can execute several
-        // different combinations of transactions, and must runtime track
-        // our responsibilities
+        //if (!can_write_world_entity(world, this)) {
+            //entity_ready_on_world(this, world);
+        //}
+        
+        //// as we fall through the switch statement we can execute several
+        //// different combinations of transactions, and must runtime track
+        //// our responsibilities
         
         // bool did_read_entity = false;
-        bool did_write_entity = false;
-        
+        // bool did_write_entity = false;
+                
         Value a = {};
         Value b = {};
-                
+
+        // read our own state (should this be implicit in tx creation?)
+        tx->read_entity_for_entity_id(this->_entity_id);
+        
+        Machine* new_this = nullptr;
+
         switch (_phase) {
                 
             case PHASE_TRAVELLING: {
                 assert(_old_location != _new_location);
-                if ((world_time(world) - _new_time) < 0)
+                if ((world_time(context->world) - _new_time) < 0)
                     // this was a spurious wakeup; for example, the cells under
                     // changed, or somebody mutated our payload, but we don't
                     // care until we arrive
                     // TODO: we could assert here that we are still going to
                     // be awakened at _new_time
                     return;
-                _phase = PHASE_WAITING_FOR_OLD;
-                did_write_entity = true;
+                new_this->_phase = PHASE_WAITING_FOR_OLD;
+                //did_write_entity = true;
             } [[fallthrough]];
                 
             case PHASE_WAITING_FOR_OLD: {
                 assert(_old_location != _new_location);
-                Entity* occupant = peek_world_coordinate_occupant(world, _old_location);
-                assert(occupant == this);
+                // Entity* occupant = peek_world_coordinate_occupant(world, _old_location);
+                EntityID occupant = tx->read_entity_id_for_coordinate(_old_location);
+                assert(occupant == this->_entity_id);
                 if (!can_write_world_coordinate(world, _old_location)) {
                     if (did_write_entity) {
                         did_write_world_entity(world, this);
@@ -558,7 +570,7 @@ namespace wry::sim {
                 __builtin_unreachable();
                 
         } // switch (_phase)
-        
+#endif
     }
  
     

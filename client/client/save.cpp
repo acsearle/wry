@@ -21,11 +21,12 @@ World* restart_game() {
 void save_game(World* world) {
         
     const auto& a = world->_value_for_coordinate;
-    const size_t n = a.size();
+    const size_t n = 0; // a.size();
     
     std::vector<std::pair<Coordinate, Value>> b;
     b.reserve(n);
     
+    /*
     for (const auto& e : a._inner._alpha) {
         if (e.occupied()) {
             Coordinate k = e._kv.first;
@@ -49,7 +50,8 @@ void save_game(World* world) {
             }
         }
     }
-        
+     */
+     
     std::sort(b.begin(), b.end(), [](auto x, auto y) {
         return x.first < y.first;
     });
@@ -159,7 +161,9 @@ World* continue_game() {
     }
     
     World* w = new World;
-    adl::swap(w->_value_for_coordinate, v);
+    
+    // adl::swap(w->_value_for_coordinate, v);
+    
     return w;
 }
 
@@ -215,7 +219,9 @@ World* load_game(int id) {
     }
     
     World* w = new World;
-    adl::swap(w->_value_for_coordinate, v);
+    
+    // adl::swap(w->_value_for_coordinate, v);
+    
     return w;
 }
 

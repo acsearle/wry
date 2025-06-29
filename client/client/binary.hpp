@@ -18,9 +18,30 @@
 #include "string.hpp"
 
 namespace wry {
+
+    // Notes on serializaton:
+    
+    // We have a couple of use cases
+    // - Actions to network
+    // - Game state to disk
+    // - Load assets
+    // - Testing and debugging
+    
+    // We give serious consideration to sqlite for any disk access, particularly
+    // the valuable game state.  This may either be in the form of opaque binary
+    // blobs, or actually expressing state in database types/tables
+    
+    // NOTE: Serde (and JSON) serializes trees.  For more general graphs we
+    // must accept duplication, or perform some kind of processing to represent
+    // pointers, or use an entirely different strategy
+    
+    // NOTE: Processing the graph to handle pointers is related to what sqlite
+    // would have to do to build a relational database representation.
+
     
     // Patterned after Rust Serde
     
+    // Import some Rust-like vocabulary types
     using rust::option::Option;
     using rust::option::Some;
     using rust::option::None;

@@ -45,12 +45,12 @@ namespace wry {
         ~matrix_view() = default;
 
         matrix_view& operator=(const matrix_view& other) {
-            wry::copy(other.begin(), other.end(), begin(), end());
+            copy_checked(other.begin(), other.end(), begin(), end());
             return *this;
         }
         
         matrix_view& operator=(matrix_view&& other) {
-            wry::copy(other.begin(), other.end(), begin(), end());
+            copy_checked(other.begin(), other.end(), begin(), end());
             return *this;
         }
 
@@ -74,7 +74,7 @@ namespace wry {
             if constexpr (rank_v<std::decay_t<decltype(other)>>) {
                 using std::begin;
                 using std::end;
-                wry::copy(begin(other), end(other), this->begin(), this->end());
+                copy_checked(begin(other), end(other), this->begin(), this->end());
             } else {
                 std::fill(begin(), end(), std::forward<decltype(other)>(other));
             }

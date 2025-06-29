@@ -66,6 +66,9 @@ struct Value {
     constexpr bool is_Empty() const;
     
 }; // struct Value
+    
+    void shade(const Value& value);
+    void trace(const Value& value);
 
 } // namespace wry::gc
 
@@ -119,6 +122,7 @@ namespace wry::gc {
     constexpr Value value_make_false();
     Value value_make_integer_with(int64_t z);
     constexpr Value value_make_null();
+    constexpr Value value_make_empty();
     Value value_make_string_with(const char* ntbs);
     Value value_make_string_with(string_view);
     Value value_make_array();
@@ -534,6 +538,7 @@ namespace wry::gc {
     
     constexpr Value value_make_error() { Value result; result._data = VALUE_TAG_ERROR; return result; }
     constexpr Value value_make_null() { Value result; result._data = 0; return result; }
+    constexpr Value value_make_empty() { Value result; result._data = 0; return result; }
     constexpr Value _value_make_tombstone() { Value result; result._data = VALUE_DATA_TOMBSTONE; return result; }
 
     

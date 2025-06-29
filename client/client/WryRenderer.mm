@@ -824,7 +824,7 @@
                 Coordinate xy{i, j};
                 // auto& the_tile = _model->_world->_value_for_coordinate[xy];
                 // the_tile = _model->_holding_value;
-                _model->_world->_value_for_coordinate.write(xy, _model->_holding_value);
+                // _model->_world->_value_for_coordinate.write(xy, _model->_holding_value);
                 
                 // these notifications happen logically between steps and are
                 // excused from transactions (hopefully)
@@ -846,7 +846,7 @@
                 Coordinate xy{i, j};
                 // auto& the_tile = _model->_world->_value_for_coordinate[xy];
                 // the_tile = k;
-                _model->_world->_value_for_coordinate.write(xy, k);
+                //_model->_world->_value_for_coordinate.write(xy, k);
                 // the_tile.notify_occupant(&_model->_world);
                 notify_by_world_coordinate(_model->_world, xy);
             }
@@ -1087,7 +1087,11 @@
     _mine_mesh.instanceCount = 0;
     _truck_mesh.instanceCount = 0;
     // raid model for data
+    vertices = [_device newBufferWithLength:4 * sizeof(MeshVertex) options:MTLStorageModeShared];
+    indices = [_device newBufferWithLength:6 * sizeof(uint) options:MTLStorageModeShared];
+
     {
+#if 0
         auto tnow = world_time(_model->_world);
         const auto& entities = _model->_world->_entities;
         
@@ -1286,9 +1290,7 @@
             }
             
         }
-        
-              
-        
+
         for (int i = grid_bounds.a.x; i != grid_bounds.b.x; ++i) {
             for (int j = grid_bounds.a.y; j != grid_bounds.b.y; ++j) {
 
@@ -1333,7 +1335,7 @@
                 k += 4;
             }
         }
-        
+
         {
             
             // big ground plane
@@ -1400,7 +1402,7 @@
             
         }
         
-        
+#endif
     }
     
     // Our relatively flat scene permits several simplifications to the

@@ -326,8 +326,8 @@ namespace wry::gc {
     
     bool AtomicEncodedColor::compare_exchange(Color &expected, Color desired) {
         std::underlying_type_t<Color> encoding = global_collector->atomic_encoded_color_encoding.load(Ordering::RELAXED);
-        std::underlying_type_t<Color> encoded_expected = to_underlying(expected) ^ encoding;
-        std::underlying_type_t<Color> encoded_desired = to_underlying(desired) ^ encoding;
+        std::underlying_type_t<Color> encoded_expected = std::to_underlying(expected) ^ encoding;
+        std::underlying_type_t<Color> encoded_desired = std::to_underlying(desired) ^ encoding;
         bool result = _encoded.compare_exchange_strong(encoded_expected,
                                                        encoded_desired,
                                                        Ordering::RELAXED,
@@ -541,7 +541,7 @@ namespace wry::gc {
     
     void Collector::set_alloc_to_black() {
         std::underlying_type_t<Color> encoding = atomic_encoded_color_encoding.load(Ordering::RELAXED);
-        std::underlying_type_t<Color> encoded_black = to_underlying(Color::BLACK) ^ encoding;
+        std::underlying_type_t<Color> encoded_black = std::to_underlying(Color::BLACK) ^ encoding;
         atomic_encoded_color_alloc.store(encoded_black, Ordering::RELAXED);
     }
     

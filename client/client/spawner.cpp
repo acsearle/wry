@@ -8,54 +8,34 @@
 #include "machine.hpp"
 #include "spawner.hpp"
 #include "world.hpp"
+#include "context.hpp"
 
 namespace wry::sim {
     
-    void Source::notify(World* world) {
-        if (peek_world_coordinate_occupant(world, _location)
-            || !peek_world_coordinate_value(world, _location).is_Empty())
-        {
-            // wait until unoccupied and empty
-            entity_wait_on_world_coordinate(this, world, _location);
-            return;
-        }
-        if (can_write_world_coordinate(world, _location)
-            && can_read_world_entity(world, this))
-        {
-            set_world_coordinate_value(world, _location, _of_this);
-            did_write_world_coordinate(world, _location);
-            did_read_world_entity(world, this);
-        }
-        entity_ready_on_world(this, world);
+    void Source::notify(Context* context) const {
+        Transaction* tx = Transaction::make(context, this, 2);
+        Value x = tx->read_value_for_coordinate(this->_location);
+        if (x.is_Empty())
+            tx->write_value_for_coordinate(this->_location, this->_of_this);
+        tx->wait_on_value_for_coordinate(this->_location);
     }
     
-    void Sink::notify(World* world) {
-        if (peek_world_coordinate_occupant(world, _location)
-            || peek_world_coordinate_value(world, _location).is_Empty())
-        {
-            entity_wait_on_world_coordinate(this, world, _location);
-            return;
-        }
-        if (can_write_world_coordinate(world, _location)
-            && can_read_world_entity(world, this)) 
-        {
-            clear_world_coordinate_value(world, _location);
-            did_write_world_coordinate(world, _location);
-            did_read_world_entity(world, this);
-        }
-        entity_ready_on_world(this, world);
+    void Sink::notify(Context* context) const {
+        Transaction* tx = Transaction::make(context, this, 2);
+        Value x = tx->read_value_for_coordinate(this->_location);
+        if (!x.is_Empty())
+            tx->write_value_for_coordinate(this->_location, gc::value_make_empty());
+        tx->wait_on_value_for_coordinate(this->_location);
     }
     
-    void Spawner::notify(World* world) {
-        if (peek_world_coordinate_occupant(world, _location)) {
-            // wait until unoccupied
-            entity_wait_on_world_coordinate(this, world, _location);
-            return;
-        }
-        if (can_write_world_coordinate(world, _location)
-            && can_read_world_entity(world, this)) 
-        {
+    inline EntityID spawner_new_entity_from_prototype() { return {}; }
+    
+    void Spawner::notify(Context* context) const {
+        Transaction* tx = Transaction::make(context, this, 10);
+        EntityID a = tx->read_entity_id_for_coordinate(this->_location);
+        if (!a) {
             Machine* machine = new Machine;
+            /*
             machine->_old_location = _location;
             machine->_new_location = _location;
             machine->_old_time = world_time(world);
@@ -64,8 +44,13 @@ namespace wry::sim {
             set_world_coordinate_occupant(world, _location, machine);
             did_write_world_coordinate(world, _location);
             did_read_world_entity(world, this);
+             */
+            EntityID b = spawner_new_entity_from_prototype();
+            tx->write_entity_for_entity_id(b, machine);
+            tx->write_entity_id_for_coordinate(this->_location, b);
+            tx->write_ready(b);
         }
-        entity_ready_on_world(this, world);
+        tx->wait_on_entity_id_for_coordinate(this->_location);
     }
     
 } // namespace wry::sim

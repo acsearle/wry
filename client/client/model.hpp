@@ -86,7 +86,8 @@ namespace wry {
             {
                 // new machine spawner at origin
                 Spawner* p = new Spawner;
-                _world->_entities.push_back(p);
+                p->_location = Coordinate{0, 0};
+                //_world->_entities.push_back(p);
                 entity_ready_on_world(p, _world);
             }
             
@@ -95,7 +96,7 @@ namespace wry {
                 Source* q = new Source;
                 q->_location = Coordinate{2, 2};
                 q->_of_this = Value(1);
-                _world->_entities.push_back(q);
+                //_world->_entities.push_back(q);
                 entity_ready_on_world(q, _world);
             }
             
@@ -103,11 +104,11 @@ namespace wry {
                 // value sink
                 Sink* r = new Sink;
                 r->_location = Coordinate{4, 2};
-                _world->_entities.push_back(r);
+               // _world->_entities.push_back(r);
                 entity_ready_on_world(r, _world);
             }
 
-            _world->_value_for_coordinate.write(Coordinate{-2, -2}, gc::value_make_integer_with(7));
+            //_world->_value_for_coordinate.write(Coordinate{-2, -2}, gc::value_make_integer_with(7));
             // _world->_value_for_coordinate.write(Coordinate{-2, -2}, gc::value_make_array());
 
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);

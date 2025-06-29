@@ -27,7 +27,7 @@ namespace wry {
     // ends, intended to be the general-purpose sequence storage type
     //
     // Benchmarking indicates performance is competitive with the better of
-    // C++ vector and deque on various tasks
+    // C++ vector and deque on all usage patterns.
     //
     // + Amortized O(1) push_front and pop_front
     // + Amortized O(min(distance(begin, pos), distance(pos, end)) insert and erase
@@ -39,11 +39,22 @@ namespace wry {
     //
     // Array currently assumes that the stored type is Relocatable
 
-    // # GC, RT
+    // Array (std::vector, std::Vec, ...) has good amortized performance but
+    // bad worst-case performace (in fact it has the worst latency spikes
+    // possible for an amortized O(1) object: one O(N) operation after N O(1)
+    // operations.)
     //
-    // We have competing arrays that are garbage collected, real time and
-    // discontiguous.  If contiguity is dropped, then ring buffers are also
-    // attractive.  We need to tame these options.
+    // Array should thus be used only for
+    // - Objects with a real-time bound on their lifetime, such as a per-frame
+    //   temporary.  In these cases we want a low cost for the sum of all
+    //   operations on the array, and don't care how they are distrbuted.
+    // - Non-real-time operations, such as loading assets at startup or
+    //   background saving
+    // - Collections with a strictly bounded size and therefore a bounded
+    //   latency spike potential
+    // The should not be used for
+    // - Long-lived, potentially large, potentially changing collections.
+    //   Notably, most of game state falls under these risks.
 
     template<typename> 
     struct Array;

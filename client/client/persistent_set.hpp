@@ -33,27 +33,28 @@ namespace wry {
         
         // bit tools
         
-        using std::popcount;
-        
-        inline int ctz(uint64_t x) {
-            // return __builtin_ctzll(x);
-            return std::countr_zero(x);
+        inline void print_binary(uint64_t a) {
+            fputs("0b", stdout);
+            for (int i = 63; i-- != 0;)
+                fputc((a >> i) & 1 ? '1' : '0', stdout);
+        }
+
+        inline int popcount(uint64_t x) {
+            return __builtin_popcountll(x);
         }
         
         inline int clz(uint64_t x) {
-            // return __builtin_clzll(x);
-            return std::countl_zero(x);
+            return __builtin_clzll(x);
         }
-        
-        inline uint64_t address_decode(uint64_t x) {
-            return (uint64_t)1 << x;
+
+        inline int ctz(uint64_t x) {
+            return __builtin_ctzll(x);
         }
-        
-        inline uint64_t priority_encode(uint64_t x) {
-            assert(std::has_single_bit(x));
-            return ctz(x);
+                
+        inline uint64_t ztc(uint64_t n) {
+            return (uint64_t)1 << (n & 63);
         }
-        
+                        
         // immutable array tools
         
         template<typename T>
@@ -78,40 +79,7 @@ namespace wry {
             std::construct_at(destination++, value);
             return memcat(destination, std::forward<Args>(args)...);
         }
-        
-        template<typename T>
-        T* uninitialized_copy_with_inserted(const T* first, size_t count, size_t pos, T value, T* d_first) {
-            d_first = std::uninitialized_copy(first, first + pos, d_first);
-            std::construct_at(d_first, std::move(value));
-            d_first = std::uninitialized_copy(first + pos, first + count, d_first);
-            return d_first;
-        }
-        
-        template<typename T>
-        T* uninitialized_copy_with_replaced(const T* first, size_t count, size_t pos, T value, T* d_first) {
-            d_first = std::uninitialized_copy(first, first + pos, d_first);
-            std::construct_at(d_first, std::move(value));
-            d_first = std::uninitialized_copy(first + pos + 1, first + count, d_first);
-            return d_first;
-        }
-        
-        template<typename T>
-        T* uninitialized_copy_with_erased(const T* first, size_t count, size_t pos, T* d_first) {
-            d_first = std::uninitialized_copy(first, first + pos, d_first);
-            d_first = std::uninitialized_copy(first + pos + 1, first + count, d_first);
-            return d_first;
-        }
-        
-        enum MASK : uint64_t {
-            LO =  63,
-            HI = ~LO,
-        };
-        
-        inline void print_binary(uint64_t a) {
-            for (int i = 63; i-- != 0;)
-                putchar((a >> i) & 1 ? '1' : '0');
-        }
-        
+                        
         // work out the shift required to bring the 6-aligned block of 6 bits that
         // contains the msb into the least significant 6 bits
         inline int compute_shift(uint64_t a) {
@@ -123,15 +91,7 @@ namespace wry {
         inline uint64_t prefix_from(uint64_t keylike, int shift) {
             assert(0 <= shift);
             assert(shift < 64);
-            return keylike & (~MASK::LO << shift);
-        }
-        
-        struct onehot_t {
-            uint64_t _data;
-        };
-        
-        inline uint64_t onehot(uint64_t x) {
-            return (uint64_t)1 << (x & MASK::LO);
+            return keylike & (~(uint64_t)63 << shift);
         }
         
         struct node : gc::Object {
@@ -159,7 +119,7 @@ namespace wry {
                     const node* p = _children[i];
                     assert(p->_shift < _shift);
                     assert(!((p->_prefix ^ _prefix) >> _shift >> 6));
-                    assert(_bitmap & onehot(p->_prefix >> _shift));
+                    assert(_bitmap & ztc(p->_prefix >> _shift));
                 }
             }
             
@@ -177,7 +137,7 @@ namespace wry {
                 if ((key ^ _prefix) >> _shift >> 6)
                     // prefix does not match key
                     return false;
-                uint64_t bit = onehot(key >> _shift);
+                uint64_t bit = ztc(key >> _shift);
                 if (!(bit & _bitmap))
                     // bitmap does not not contain key
                     return false;
@@ -188,12 +148,15 @@ namespace wry {
                 return _children[offset]->contains(key);
             }
             
-            node(uint64_t keylike, int shift, uint64_t bitmap)
-            : _prefix(prefix_from(keylike, shift))
+            node(uint64_t prefix, int shift, uint64_t bitmap)
+            : _prefix(prefix)
             , _shift(shift)
             , _bitmap(bitmap) {
+                assert(0 <= shift);
+                assert(shift < 64);
                 assert(!(shift % 6));
                 assert(bitmap);
+                assert(!(prefix & (~(uint64_t)0 << shift)));
             }
             
             static void* allocate_with_count(size_t n) {
@@ -201,18 +164,14 @@ namespace wry {
             }
                         
             static node* make(uint64_t prefix, int shift, uint64_t bitmap) {
-                assert(0 <= shift);
-                assert(shift < 64);
-                assert(!(shift % 6));
-                size_t count = shift ? popcount(bitmap) : 0;
-                // return new(node::allocate_with_count(count)) node(prefix, shift, bitmap);
+                size_t count = popcount(bitmap);
                 node* p = (node*) node::allocate_with_count(count);
                 std::construct_at(p, prefix, shift, bitmap);
                 return p;
             }
             
             static node* make_with_key(uint64_t key) {
-                return node::make(key, 0, onehot(key));
+                return node::make(prefix_from(key, 0), 0, ztc(key));
             }
             
             static node* make_with_children(const node* a, const node* b) {
@@ -225,8 +184,8 @@ namespace wry {
                 int shift = compute_shift(delta);
                 assert(shift > a->_shift); // else we don't need a node at this level
                 assert(shift > b->_shift);
-                uint64_t mask_a = onehot(a->_prefix >> shift);
-                uint64_t mask_b = onehot(b->_prefix >> shift);
+                uint64_t mask_a = ztc(a->_prefix >> shift);
+                uint64_t mask_b = ztc(b->_prefix >> shift);
                 uint64_t bitmap = mask_a | mask_b;
                 assert(popcount(bitmap) == 2);
                 node* result = make(a->_prefix, shift, bitmap);
@@ -252,7 +211,7 @@ namespace wry {
                 assert(a);
                 assert(_shift > a->_shift);
                 assert(!((_prefix ^ a->_prefix) >> _shift >> 6));
-                uint64_t bit  = onehot(a->_prefix >> _shift);
+                uint64_t bit  = ztc(a->_prefix >> _shift);
                 uint64_t bitmap = _bitmap | bit;
                 assert(bitmap != _bitmap); // caller should have merged and then replaced
                 node* result = make(_prefix, _shift, bitmap);
@@ -268,7 +227,7 @@ namespace wry {
                 assert(other);
                 assert(_shift > other->_shift);
                 assert(!((_prefix ^ other->_prefix) >> _shift >> 6));
-                uint64_t bit  = onehot(other->_prefix >> _shift);
+                uint64_t bit  = ztc(other->_prefix >> _shift);
                 uint64_t bitmap = _bitmap | bit;
                 assert(bitmap == _bitmap);
                 node* result = make(_prefix, _shift, bitmap);
@@ -283,7 +242,7 @@ namespace wry {
             
             node* clone_and_erase(uint64_t key) const {
                 assert(!((_prefix ^ key) >> _shift >> 6));
-                uint64_t bit = onehot(key >> _shift);
+                uint64_t bit = ztc(key >> _shift);
                 assert(_bitmap & bit);
                 uint64_t bitmap = _bitmap ^ bit;
                 node* result = node::make(_prefix, _shift, bitmap);
@@ -319,7 +278,7 @@ namespace wry {
                 
                 // prefix does match
                 // we have to modify the node at this level
-                uint64_t bit = onehot(key >> _shift);
+                uint64_t bit = ztc(key >> _shift);
                 
                 if (!(bit & _bitmap)) {
                     // we have to make a new slot
@@ -361,7 +320,7 @@ namespace wry {
                     return this;
                 
                 uint64_t index = (key >> _shift) & 0x3F;
-                uint64_t bit = onehot(index);
+                uint64_t bit = ztc(index);
                 if (!(bit & _bitmap))
                     // bitmap doesn't match so set does not contain key
                     return this;
@@ -401,9 +360,9 @@ namespace wry {
             
             
             static const node* merge(const node* a, const node* b) {
-                if (!a)
+                if (a == nullptr)
                     return b;
-                if (!b)
+                if (b == nullptr)
                     return a;
                 // structural sharing may let us prove that this merge is unnecessary
                 if (a == b)
@@ -430,8 +389,8 @@ namespace wry {
                         std::swap(a, b);
                     assert(a->_shift > b->_shift);
                     
-                    auto index = (b->_prefix >> a->_shift) & MASK::LO;
-                    auto bit = onehot(index);
+                    auto index = (b->_prefix >> a->_shift) & 63;
+                    auto bit = ztc(index);
                     
                     if (!(bit & a->_bitmap))
                         return a->clone_and_insert(b);
@@ -568,10 +527,89 @@ namespace wry {
         inline persistent_set erase(uint64_t key, persistent_set a) {
             return persistent_set{a.root ? a.root->erase(key) : nullptr};
         };
+
+        template<typename F>
+        void parallel_for_each(persistent_set s, F&& f) {
+            parallel_for_each(s.root, std::forward<F>(f));
+        }
+        
+        template<typename F>
+        void parallel_for_each(const node* p, F&& f) {
+            if (p == nullptr) {
+                return;
+            } else if (p->_shift) {
+                int n = popcount(p->_bitmap);
+                for (int i = 0; i != n; ++i)
+                    parallel_for_each(p->_children[i], f);
+                return;
+            } else {
+                uint64_t b = p->_bitmap;
+                // int i = 0;
+                for (;;) {
+                    if (!b)
+                        return;
+                    int j = ctz(b);
+                    f(p->_prefix | j);
+                    b &= (b - 1);
+                    // ++i;
+                }
+            }
+        }
+        
+        template<typename T, typename F>
+        void parallel_rebuild(uint64_t lower_bound, uint64_t upper_bound,
+                              const node* left, const T& right,
+                              F&& f) {
+            // recurse into 6-bit chunked keyspace
+            // left->_prefix is lower bound
+            // left->_prefix + ((uint64_t) 64 << _shift) is upper bound
+        }
         
     } // namespace _persistent_set
     
     // using _persistent_set::persistent_set;
+    
+    
+    
+    namespace _persistent_map {
+        
+        template<typename T>
+        struct Node : gc::Object {
+        };
+        
+        template<typename T>
+        struct Branch : gc::Object {
+            uint64_t _prefix;      // (58 - _shift) upper bits common to keys
+            int _shift;            // bits for indexing
+            uint64_t _bitmap;      // map of bits for indexing
+            Node<T>* _children[0]; // popcount(_bitmap) children
+        };
+                
+        template<typename T>
+        struct Leaf : gc::Object {
+            uint64_t _prefix; // upper 58 bits common to keys
+            uint64_t _bitmap; // map of lower six bits of keys
+            T _values[0];     // popcount(_bitmap) values
+            
+            T* find(uint64_t key) {
+                if ((_prefix ^ key) >> 6)
+                    // not present
+                    return nullptr;
+                int index = (int)(key & 63);
+                uint64_t select = (uint64_t)1 << index;
+                if (!(select & _bitmap))
+                    // not present
+                    return nullptr;
+                uint64_t mask = select - 1;
+                int compressed_index = __builtin_popcountll(mask & _bitmap);
+                return _values + compressed_index;
+            }
+            
+        };
+        
+        
+        
+    };
     
 } // namespace wry
 

@@ -18,7 +18,7 @@ namespace wry {
     
     // Extend standard algorithms to allow checking for second range exhaustion
     
-    auto copy(auto first, auto last, auto d_first, auto d_last) -> decltype(d_first) {
+    auto copy_checked(auto first, auto last, auto d_first, auto d_last) -> decltype(d_first) {
         for (; first != last; ++first, ++d_first) {
             assert(d_first != d_last);
             *d_first = *first;
@@ -27,7 +27,7 @@ namespace wry {
         return d_first;
     }
     
-    auto swap_ranges(auto first1, auto last1, auto first2, auto last2) -> decltype(first2) {
+    auto swap_ranges_checked(auto first1, auto last1, auto first2, auto last2) -> decltype(first2) {
         for (;; ++first1, ++first2) {
             bool exhaust1 = (first1 == last1);
             bool exhaust2 = (first2 == last2);

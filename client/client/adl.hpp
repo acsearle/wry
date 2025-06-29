@@ -10,54 +10,41 @@
 
 #include <utility>
 
+    
+// The intent of this file is to provide access points of the form
+//
+//     adl::foo(x)
+//
+// which find the correct implementation of foo by ADL even when the calling
+// context shadows those names.
+//
+// To provide customization points for types in closed namespaces (notably std)
+// we also may explicitly import a namespace
+    
+
+// Forward declare namespaces
+
 namespace wry {
     
-    // forward declare namespaces used for non-ADL fallback for types whose
-    // implementations are not in their own namespaces, notably primitive types
-    // and std types
-    
-    namespace sim {
-        /* ... */
-    } // namespace sim
-    
-    namespace adl {
+    namespace sim {}
         
-        namespace _hidden {
-            
-            // customization point objects / Niebloids
-            
-            struct _swap {
-                template<typename T>
-                void operator()(T& a, T& b) const {
-                    using namespace std;
-                    swap(a, b);
-                }
-            };
-            
-            struct _shade {
-                template<typename T>
-                void operator()(const T& x) const {
-                    using namespace wry::sim;
-                    shade(x);
-                }
-            };
-            
-            struct _trace {
-                template<typename T>
-                void operator()(const T& x) const {
-                    using namespace wry::sim;
-                    trace(x);
-                }
-            };
-            
-        } // namespace _hidden
-        
-        constexpr _hidden::_swap swap;
-        constexpr _hidden::_shade shade;
-        constexpr _hidden::_trace trace;
-        
-    } // namespace adl
-    
 } // namespace wry
 
+#define MAKE_CUSTOMIZATION_POINT_OBJECT(NAME, NAMESPACE)\
+namespace adl {\
+    namespace _detail {\
+        struct _##NAME {\
+            decltype(auto) operator()(auto&&... args) const {\
+                using namespace NAMESPACE;\
+                return NAME(std::forward<decltype(args)>(args)...);\
+            }\
+        };\
+    }\
+    constexpr _detail::_##NAME NAME;\
+}
+
+MAKE_CUSTOMIZATION_POINT_OBJECT(swap, ::std)
+MAKE_CUSTOMIZATION_POINT_OBJECT(shade, ::wry::sim)
+MAKE_CUSTOMIZATION_POINT_OBJECT(trace, ::wry::sim)
+    
 #endif /* adl_hpp */

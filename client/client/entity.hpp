@@ -20,15 +20,13 @@ namespace wry::sim {
                         
         virtual ~Entity() = default;
         
-        virtual void notify(World*) = 0;
-        
-        virtual Transaction* notify2(const PersistentWorld*, TransactionSet*) const {
-            return nullptr;
-        }
+        virtual void notify(Context*) const {}
 
         EntityID _entity_id;
 
     }; // struct Entity
+    
+    uint64_t entity_get_priority(const Entity*);
   
 };
 

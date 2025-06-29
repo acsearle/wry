@@ -54,7 +54,7 @@ namespace wry {
         ~matrix_transpose_view() = default;
         
         matrix_transpose_view& operator=(auto&& x) {
-            wry::copy(std::begin(x), std::end(x), begin(), end());
+            copy_checked(std::begin(x), std::end(x), begin(), end());
             return *this;
         }
         

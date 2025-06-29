@@ -22,7 +22,7 @@ namespace wry::sim {
     
     struct Spawner : LocalizedEntity {
                 
-        virtual void notify(World*) override;
+        virtual void notify(Context*) const override;
         
     };
 
@@ -30,7 +30,7 @@ namespace wry::sim {
         
         Value _of_this;
         
-        virtual void notify(World*) override;
+        virtual void notify(Context*) const override;
         virtual void _object_scan() const override {
             object_trace(_of_this);
         }
@@ -39,7 +39,7 @@ namespace wry::sim {
 
     struct Sink : LocalizedEntity {
                 
-        virtual void notify(World*) override;
+        virtual void notify(Context*) const override;
         virtual void _object_scan() const override {
         }
         

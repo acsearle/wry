@@ -152,7 +152,7 @@ namespace wry {
             if constexpr (rank_v<std::decay_t<decltype(other)>>) {
                 using std::begin;
                 using std::end;
-                wry::copy(begin(other), end(other), this->begin(), this->end());
+                copy_checked(begin(other), end(other), this->begin(), this->end());
             } else {
                 std::fill(begin(), end(), std::forward<decltype(other)>(other));
             }

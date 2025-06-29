@@ -17,11 +17,11 @@
 namespace wry {
     
     namespace _persistent_map {
+
+        // These objects will be upgraded to
+        // - array-mapped tries
+        // - skiplists
         
-        // PersistentX will be implemented in terms of
-        
-        // first implementation: wrap std::map
-        // this will have O(N) copy
                 
         template<typename Key>
         struct ObjectSet : gc::Object {
@@ -115,11 +115,17 @@ namespace wry {
             
             template<typename F>
             void parallel_for_each(const F& f) const {
-                for (Key k : _data->_set)
-                    f(k);
+                if (_data)
+                    for (Key k : _data->_set)
+                        f(k);
             }
 
         };
+        
+        template<typename Key>
+        void trace(const PersistentSet<Key>& self) {
+            adl::trace(self._data);
+        }
         
         
         template<typename Key>
@@ -137,6 +143,10 @@ namespace wry {
             
         };
 
+        template<typename Key>
+        void trace(const EphemeralSet<Key>& self) {
+            adl::trace(self._data);
+        }
         
 
         template<typename Key, typename T>
@@ -163,7 +173,12 @@ namespace wry {
             }
             
         };
-                
+               
+        
+        template<typename Key, typename T>
+        void trace(const PersistentMap<Key, T>& self) {
+            adl::trace(self._data);
+        }
         
         template<typename Key, typename T>
         struct EphemeralMap {
@@ -186,6 +201,10 @@ namespace wry {
             
         };
         
+        template<typename Key, typename T>
+        void trace(const EphemeralMap<Key, T>& self) {
+            adl::trace(self._data);
+        }
         
         template<typename Key, typename T>
         struct StableConcurrentMap {
@@ -197,13 +216,27 @@ namespace wry {
                                                const StableConcurrentMap<Key, U>& modifier,
                                                F&& action) {
             // slow dumb implementation: just iterate over both in one thread
+
+            std::map<Key, T> result;
+            if (!source._data) {
+                auto modifier_iter = modifier._map.begin();
+                auto modifier_end = modifier._map.end();
+                for (;;) {
+                    if (modifier_iter != modifier_end) {
+                        result.emplace(modifier_iter->first, action(*modifier_iter));
+                        ++modifier_iter;
+                    } else {
+                        break;
+                    }
+                }
+                return PersistentMap<Key, T>(new ObjectMap<Key, T>{std::move(result)});;
+            }
+            
             auto source_iter = source._data->_map.begin();
             auto source_end = source._data->_map.end();
             auto modifier_iter = modifier._map.begin();
             auto modifier_end = modifier._map.end();
-            
-            std::map<Key, T> result;
-            
+                        
             for (;;) {
                 if (source_iter != source_end) {
                     if (modifier_iter != modifier_end) {

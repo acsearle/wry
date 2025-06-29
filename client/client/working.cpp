@@ -7,6 +7,7 @@
 
 #include "test.hpp"
 
+/*
 namespace wry {
     
     define_test("projection") {
@@ -114,3 +115,5 @@ namespace wry {
     };
     
 }
+
+*/

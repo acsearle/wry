@@ -12,6 +12,10 @@
 
 namespace wry {
     
+    // Rust vocabulary type
+    //
+    // Mutable, but not by reference
+    
     template<typename T>
     struct Cell {
         

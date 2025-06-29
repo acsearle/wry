@@ -18,6 +18,8 @@
 
 namespace wry {
     
+    // TODO: merge with AAA skiplist
+    
     namespace _concurrent_skiplist {
         
         inline thread_local std::ranlux24* thread_local_random_number_generator = nullptr;
@@ -25,7 +27,7 @@ namespace wry {
         template<typename Key, typename Compare = std::less<>>
         struct concurrent_skiplist {
             
-            struct _node_t {
+            struct _node_t : gc::Object {
                 Key _key;
                 size_t _size;
                 mutable Atomic<_node_t*> _next[0];
@@ -36,7 +38,7 @@ namespace wry {
                 }
                 
                 static _node_t* with_size_emplace(size_t n, auto&&... args) {
-                    void* raw = calloc(sizeof(_node_t) + sizeof(std::atomic<_node_t*>) * n, 1);
+                    void* raw = gc::Object::operator new(sizeof(_node_t) + sizeof(std::atomic<_node_t*>) * n);
                     return new(raw) _node_t(n, std::forward<decltype(args)>(args)...);
                 }
                 
@@ -58,7 +60,7 @@ namespace wry {
                 
                 static _head_t* make() {
                     size_t n = 33;
-                    void* raw = calloc(sizeof(_head_t) + sizeof(std::atomic<_node_t*>) * n, 1);
+                    void* raw =  gc::Object::operator new(sizeof(_head_t) + sizeof(std::atomic<_node_t*>) * n);
                     return new(raw) _head_t;
                     
                 }

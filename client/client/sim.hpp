@@ -13,114 +13,17 @@
 
 namespace wry::sim {
     
-    // simple enum reflection
-    
-    struct ENUM_PAIR {
-        i64 first;
-        const char* second;
-    };
-    
-    // define opcodes
-    
-#define WRY_OPCODES_X \
-X(OPCODE_NOOP),\
-X(OPCODE_SKIP),\
-X(OPCODE_HALT),\
-X(OPCODE_TURN_NORTH),\
-X(OPCODE_TURN_EAST),\
-X(OPCODE_TURN_SOUTH),\
-X(OPCODE_TURN_WEST),\
-X(OPCODE_TURN_RIGHT),\
-X(OPCODE_TURN_LEFT),\
-X(OPCODE_TURN_BACK),\
-X(OPCODE_BRANCH_RIGHT),\
-X(OPCODE_BRANCH_LEFT),\
-X(OPCODE_LOAD),\
-X(OPCODE_STORE),\
-X(OPCODE_EXCHANGE),\
-X(OPCODE_HEADING_LOAD),\
-X(OPCODE_HEADING_STORE),\
-X(OPCODE_LOCATION_LOAD),\
-X(OPCODE_LOCATION_STORE),\
-X(OPCODE_DROP),\
-X(OPCODE_DUPLICATE),\
-X(OPCODE_SWAP),\
-X(OPCODE_OVER),\
-X(OPCODE_IS_ZERO),\
-X(OPCODE_IS_POSITIVE),\
-X(OPCODE_IS_NEGATIVE),\
-X(OPCODE_IS_NOT_ZERO),\
-X(OPCODE_IS_NOT_POSITIVE),\
-X(OPCODE_IS_NOT_NEGATIVE),\
-X(OPCODE_LOGICAL_NOT),\
-X(OPCODE_LOGICAL_AND),\
-X(OPCODE_LOGICAL_OR),\
-X(OPCODE_LOGICAL_XOR),\
-X(OPCODE_BITWISE_NOT),\
-X(OPCODE_BITWISE_AND),\
-X(OPCODE_BITWISE_OR),\
-X(OPCODE_BITWISE_XOR),\
-X(OPCODE_BITWISE_SPLIT),\
-X(OPCODE_SHIFT_RIGHT),\
-X(OPCODE_POPCOUNT),\
-X(OPCODE_ABS),\
-X(OPCODE_NEGATE),\
-X(OPCODE_SIGN),\
-X(OPCODE_ADD),\
-X(OPCODE_SUBTRACT),\
-X(OPCODE_EQUAL),\
-X(OPCODE_NOT_EQUAL),\
-X(OPCODE_LESS_THAN),\
-X(OPCODE_GREATER_THAN),\
-X(OPCODE_LESS_THAN_OR_EQUAL_TO),\
-X(OPCODE_GREATER_THAN_OR_EQUAL_TO),\
-X(OPCODE_COMPARE),\
-X(OPCODE_FLIP_FLOP),\
-X(OPCODE_FLOP_FLIP),\
-
-    enum OPCODE
-    : i64 {
-        
-#define X(Y) Y
-        
-        WRY_OPCODES_X
-        
-#undef X
-        
-    };
-    
-    inline constexpr ENUM_PAIR OPCODE_NAMES[] = {
-        
-#define X(Y) { Y, #Y }
-        
-        WRY_OPCODES_X
-        
-#undef X
-        
-    };
-    
-#undef WRY_OPCODES_X
-    
-    
     using Time = i64;
     
-    // These can't be found by ADL since
-    inline void trace(const Time&) {}
-    inline void shade(const Time&) {}
-    
-}
+    inline void trace(const Time&) { }
+    inline void shade(const Time&) { }
 
-#include "value.hpp"
-
-namespace wry::sim {
-    
+    struct World;
     struct Coordinate;
     struct Entity;
     struct EntityID;
-    struct PersistentWorld;
     struct Transaction;
     struct TransactionSet;
-    struct World;
     
     enum HEADING
     : i64 {
@@ -141,7 +44,7 @@ namespace wry::sim {
         TRANSACTION_STATE_FORBIDDEN = 3,
         
     };
-
+    
     
     struct Coordinate {
         
@@ -159,11 +62,27 @@ namespace wry::sim {
     
     inline void trace(const Coordinate&) {}
     inline void shade(const Coordinate&) {}
+    
+    struct MortonCoordinate {
+        uint64_t data;
+        constexpr bool operator==(const MortonCoordinate&) const = default;
+        constexpr auto operator<=>(const MortonCoordinate&) const = default;
+    };
 
+    inline void trace(const MortonCoordinate&) {}
+    inline void shade(const MortonCoordinate&) {}
+
+    
     struct EntityID {
         uint64_t data;
         constexpr bool operator==(const EntityID&) const = default;
         constexpr auto operator<=>(const EntityID&) const = default;
+        constexpr explicit operator bool() const { return (bool)data; }
+        
+        // defer the difficult problem to getting new unique EntityIDs in a way
+        // that is independent of thread scheduling across different machines
+        static EntityID oracle();
+        
     };
     
     inline u64 hash(const EntityID& x) {
@@ -172,11 +91,17 @@ namespace wry::sim {
     
     inline void trace(const EntityID&) {}
     inline void shade(const EntityID&) {}
+    
+    struct Context;
+    
+}
+
+#include "value.hpp"
+
+namespace wry::sim {
                 
     using gc::Value;
 
-
-    
 } // namespace wry::sim
 
 

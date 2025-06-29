@@ -13,6 +13,7 @@
 #include "entity.hpp"
 #include "debug.hpp"
 #include "HeapArray.hpp"
+#include "opcode.hpp"
 
 namespace wry::sim {
     
@@ -98,8 +99,8 @@ namespace wry::sim {
             }
         }
         
-        virtual void notify(World*) override;
-        
+        virtual void notify(Context* context) const override;
+
         void _schedule_arrival(World* world);
         
         virtual void _object_scan() const override {

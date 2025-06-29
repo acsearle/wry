@@ -13,6 +13,8 @@
 
 namespace wry {
     
+    // TODO: bake as a table of hex float literals
+    
     static double* _exponent5_table = []() {
         double* p = ((double*) malloc(8192)) + 512;
         for (int i = -512; i != 512; ++i) {
@@ -20,9 +22,12 @@ namespace wry {
         }
         return p;
     } ();
+        
+    // This is a stopgap measure until libc++ provides a decent implementation
+    // It's not totally naive but doubtless has many flaws
     
-    // Extra digits are ignored
-    
+    // TODO: extra digits are ignored
+
     std::from_chars_result _from_chars_double(const char* first, const char* last, double& value) {
         
         uint64_t mantissa = 0, target;
@@ -146,6 +151,7 @@ namespace wry {
             goto resolve;
         ch = *first;
         if (isalpha(ch)) {
+            // TODO: too_many_exponent_digits
             exponent10 *= 10;
             exponent10 += ch - '0';
             ++first;
@@ -165,11 +171,12 @@ namespace wry {
         exponent2 += exponent10;
         exponent5 += exponent10;
         
+        // TODO: INF
         assert(-512 <= exponent5 && exponent5 < 512);
-        value = ldexp(mantissa, exponent2)
-        // * pow(5.0, exponent5);
-        * _exponent5_table[exponent5];
-        
+        value = (ldexp(mantissa, exponent2)
+                 // * pow(5.0, exponent5);
+                 * _exponent5_table[exponent5]);
+            
         if (negate_mantissa)
             value = -value;
         

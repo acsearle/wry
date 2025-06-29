@@ -66,18 +66,18 @@ namespace wry {
         }
 
         vector_view& operator=(const vector_view& other) {
-            wry::copy(std::begin(other), std::end(other), begin(), end());
+            copy_checked(std::begin(other), std::end(other), begin(), end());
             return *this;
         }
 
         vector_view& operator=(vector_view&& other) {
-            wry::copy(std::begin(other), std::end(other), begin(), end());
+            copy_checked(std::begin(other), std::end(other), begin(), end());
             return *this;
         }
 
         vector_view& operator=(auto&& other) {
             if constexpr (rank_v<std::decay_t<decltype(other)>>) {
-                wry::copy(std::begin(other), std::end(other), begin(), end());
+                copy_checked(std::begin(other), std::end(other), begin(), end());
             } else {
                 std::fill(begin(), end(), std::forward<decltype(other)>(other));
             }
@@ -85,11 +85,11 @@ namespace wry {
         }
         
         void assign(auto first, auto last) {
-            wry::copy(first, last, begin(), end());
+            copy_checked(first, last, begin(), end());
         }
         
         void swap(auto&& other) {
-            wry::swap_ranges(std::begin(other), std::end(other), begin(), end());
+            swap_ranges_checked(std::begin(other), std::end(other), begin(), end());
         }
         
         

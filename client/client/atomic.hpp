@@ -39,25 +39,27 @@
 namespace wry {
 
     // We define our own Atomic to
-    // - improve on libc++'s implementation wait on appleOS
     // - provide a legal customization point
-    // - remove error-prone SEQ_CST defaults
-    // - remove error-prone cast / assignment
-    // - improve wait / wake interface
+    // - remove error-prone casts, assignments and defaults (of sequential
+    //   consist memory ordering)
+    // - improve the interface and libc++'s implementation of wait/notify
 
-    // Cache line size on x86-64 and aarch64
+    // The implementation depends heavily on GCC/Clang intrinsics
+    // TODO: extend to MSVC _Interlocked[op][width]_[ordering]
+
+    // TODO: architecture specific cache line size
     constexpr size_t CACHE_LINE_SIZE = 128;
     
     enum class Ordering {
         RELAXED = __ATOMIC_RELAXED,
-        // CONSUME = __ATOMIC_CONSUME,
+        // CONSUME = __ATOMIC_CONSUME, // TODO: Deprecation status of CONSUME
         ACQUIRE = __ATOMIC_ACQUIRE,
         RELEASE = __ATOMIC_RELEASE,
         ACQ_REL = __ATOMIC_ACQ_REL,
         SEQ_CST = __ATOMIC_SEQ_CST,
     };
     
-    // compare std::cv_status
+    // Compare std::cv_status
     enum class AtomicWaitResult {
         NO_TIMEOUT,
         TIMEOUT,
@@ -139,7 +141,7 @@ namespace wry {
 #if defined(__APPLE__)
         
         void wait(T& expected, Ordering order) {
-            static_assert(sizeof(T) <= 8);
+            static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             uint64_t buffer;
             __builtin_memcpy(&buffer, &expected, sizeof(T));
             for (;;) {
@@ -226,7 +228,92 @@ namespace wry {
         }
 
 #endif // defined(__APPLE__)
-    
+
+#if defined(WIN32)
+        
+        void wait(T& expected, Ordering order) {
+            static_assert(sizeof(T) == 4 || sizeof(T) == 8);
+            for (;;) {
+                T discovered = load(order);
+                if (__builtin_memcmp(&buffer, &discovered, sizeof(T))) {
+                    expected = discovered;
+                    return;
+                }
+                BOOL result = WaitOnAddress(&value,
+                                            &expected,
+                                            sizeof(T),
+                                            INFINITE
+                                            );
+                if (!result) {
+                    DWORD lastError = GetLastError();
+                    switch (lastError) {
+                        default:
+                            fprintf(stderr, "%s: %lx\n", __PRETTY_FUNCTION__, lastError);
+                            abort();
+                    }
+                }
+            }
+        }
+                
+        AtomicWaitResult wait_for(T& expected, Ordering order, uint64_t timeout_ns) {
+            static_assert(sizeof(T) == 4 || sizeof(T) == 8);
+            uint64_t buffer;
+            for (;;) {
+                T discovered = load(order);
+                if (__builtin_memcmp(&buffer, &discovered, sizeof(T))) {
+                    expected = discovered;
+                    return AtomicWaitResult::NO_TIMEOUT;
+                }
+                BOOL result = WaitOnAddress(&value,
+                                            &expected,
+                                            sizeof(T),
+                                            timeout_ns / 10000000
+                                            );
+                if (!result) {
+                    DWORD lastError = GetLastError();
+                    switch (lastError) {
+                        case ERROR_TIMEOUT:
+                            return AtomicWaitResult::TIMEOUT;
+                        default:
+                            fprintf(stderr, "%s: %lx\n", __PRETTY_FUNCTION__, lastError);
+                            abort();
+                    }
+                }
+            }
+        }
+        
+        void notify_one() {
+            static_assert(sizeof(T) == 4 || sizeof(T) == 8);
+            WakeByAddressSingle(&value);
+        }
+        
+        void notify_all() {
+            static_assert(sizeof(T) == 4 || sizeof(T) == 8);
+            WakeByAddressAll(&value);
+        }
+        
+#endif // defined(WIN32)
+        
+#if defined(__linux__)
+        
+        void wait(T& expected, Ordering order) {
+            static_assert(sizeof(T) == 4);
+            syscall(SYS_FUTEX, &value, FUTEX_WAIT_PRIVATE, &expected, nullptr, nullptr, 0);
+            
+        }
+        
+        void notify_one() {
+            static_assert(sizeof(T) == 4);
+            syscall(SYS_FUTEX, &value, FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
+        }
+
+        void notify_all() {
+            static_assert(sizeof(T) == 4);
+            syscall(SYS_FUTEX, &value, FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
+        }
+
+#endif // defined(__linux__)
+        
     }; // template<typename> struct Atomic
     
 } // namespace wry
