@@ -19,7 +19,7 @@
 #include <new>
 #include <utility>
 
-#include "object.hpp"
+#include "garbage_collected.hpp"
 #include "adl.hpp"
 
 namespace wry {
@@ -94,7 +94,7 @@ namespace wry {
             return keylike & (~(uint64_t)63 << shift);
         }
         
-        struct node : gc::Object {
+        struct node : GarbageCollected {
             
             const uint64_t _prefix;
             const int _shift;
@@ -160,7 +160,7 @@ namespace wry {
             }
             
             static void* allocate_with_count(size_t n) {
-                return gc::Object::operator new(sizeof(node) + n * sizeof(const node*));
+                return GarbageCollected::operator new(sizeof(node) + n * sizeof(const node*));
             }
                         
             static node* make(uint64_t prefix, int shift, uint64_t bitmap) {
@@ -195,10 +195,10 @@ namespace wry {
             
             
             friend void trace(const node* p) {
-                p->_object_trace();
+                p->_garbage_collected_trace();
             }
             
-            virtual void _object_scan() const {
+            virtual void _garbage_collected_scan() const {
                 if (_shift) {
                     size_t n = size();
                     for (size_t i = 0; i != n; ++i) {
@@ -574,11 +574,11 @@ namespace wry {
     namespace _persistent_map {
         
         template<typename T>
-        struct Node : gc::Object {
+        struct Node : GarbageCollected {
         };
         
         template<typename T>
-        struct Branch : gc::Object {
+        struct Branch : GarbageCollected {
             uint64_t _prefix;      // (58 - _shift) upper bits common to keys
             int _shift;            // bits for indexing
             uint64_t _bitmap;      // map of bits for indexing
@@ -586,7 +586,7 @@ namespace wry {
         };
                 
         template<typename T>
-        struct Leaf : gc::Object {
+        struct Leaf : GarbageCollected {
             uint64_t _prefix; // upper 58 bits common to keys
             uint64_t _bitmap; // map of lower six bits of keys
             T _values[0];     // popcount(_bitmap) values

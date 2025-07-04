@@ -10,7 +10,7 @@
 
 #include <cassert>
 
-#include "object.hpp"
+#include "garbage_collected.hpp"
 #include "Scan.hpp"
 
 namespace wry {
@@ -20,9 +20,9 @@ namespace wry {
     template<typename T>
     struct Deque {
         
-        struct alignas(4096) Page : gc::Object {
+        struct alignas(4096) Page : GarbageCollected {
             
-            constexpr static size_t CAPACITY = (4096 - sizeof(gc::Object) - sizeof(Page*) - sizeof(Page*)) / sizeof(T*);
+            constexpr static size_t CAPACITY = (4096 - sizeof(GarbageCollected) - sizeof(Page*) - sizeof(Page*)) / sizeof(T*);
 
             Scan<Page*> prev;
             T elements[CAPACITY];
@@ -35,11 +35,11 @@ namespace wry {
             T* begin() { return elements; }
             T* end() { return elements + CAPACITY; }
             
-            void _object_scan() const override {
-                _object_trace(prev);
+            void _garbage_collected_scan() const override {
+                _garbage_collected_trace(prev);
                 for (const T& e : elements)
-                    _object_trace(e);
-                _object_trace(next);
+                    _garbage_collected_trace(e);
+                _garbage_collected_trace(next);
             }
             
         };

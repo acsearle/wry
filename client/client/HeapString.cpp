@@ -13,11 +13,11 @@ namespace wry::gc {
         printf("~\"%.*s\"\n", (int)_size, (const char*)_bytes);
     }
 
-    void HeapString::_object_shade() const {
-        _object_trace();
+    void HeapString::_garbage_collected_shade() const {
+        _garbage_collected_trace();
     }
     
-    void HeapString::_object_trace() const {
+    void HeapString::_garbage_collected_trace() const {
         Color expected = Color::WHITE;
         (void) color.compare_exchange(expected, Color::BLACK);
         switch (expected) {
@@ -27,22 +27,22 @@ namespace wry::gc {
             case Color::GRAY:
             case Color::RED:
             default:
-                object_debug(this);
+                adl::debug(this);
                 abort();
         }
     }
     
-    void HeapString::_object_scan() const {
+    void HeapString::_garbage_collected_scan() const {
         fprintf(stderr, "Scanned a weak object ");
-        _object_debug();
+        _garbage_collected_debug();
         abort();
     }
 
-    void HeapString::_object_trace_weak() const {
+    void HeapString::_garbage_collected_trace_weak() const {
         // no-op
     }
     
-    void HeapString::_object_debug() const {
+    void HeapString::_garbage_collected_debug() const {
         printf("\"%.*s\"", (int)_size, (const char*)_bytes);
     }
     

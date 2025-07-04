@@ -13,18 +13,22 @@
 
 #include <iostream>
 
-#include "object.hpp"
 #include "adl.hpp"
+#include "garbage_collected.hpp"
 
 namespace wry {
     
     template<typename T>
-    struct ImmutableGarbageCollected : gc::Object {
+    struct ImmutableGarbageCollected : GarbageCollected {
         
         T data;
         
-        virtual void _object_scan() const override {
+        virtual void _garbage_collected_scan() const override {
             adl::trace(data);
+        }
+        
+        virtual ~ImmutableGarbageCollected() {
+            printf("%s\n", __PRETTY_FUNCTION__);
         }
         
         static const ImmutableGarbageCollected* make(auto&&... parts) {
@@ -48,11 +52,11 @@ namespace wry {
         // - skiplists
         
         template<typename Key>
-        struct PersistentSet : gc::Object {
+        struct PersistentSet : GarbageCollected {
             
             std::set<Key> data;
             
-            virtual void _object_scan() const override {
+            virtual void _garbage_collected_scan() const override {
                 printf("%s\n", __PRETTY_FUNCTION__);
                 for (const auto& k : data)
                     adl::trace(k);
@@ -89,11 +93,11 @@ namespace wry {
         };
         
         template<typename Key, typename T>
-        struct PersistentMap : gc::Object {
+        struct PersistentMap : GarbageCollected {
             
             std::map<Key, T> data;
             
-            virtual void _object_scan() const override {
+            virtual void _garbage_collected_scan() const override {
                 printf("Was traced\n");
                 for (const auto& [k, v] : data) {
                     adl::trace(k);
@@ -105,7 +109,7 @@ namespace wry {
             explicit PersistentMap(std::map<Key, T>&& x) : data(std::move(x)) {}
             
             virtual ~PersistentMap() {
-                printf("PersistentMap %zd was deleted\n", data.size());
+                printf("%s\n", __PRETTY_FUNCTION__);
             }
 
             bool contains(Key k) const {

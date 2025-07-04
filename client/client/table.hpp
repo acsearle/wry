@@ -8,6 +8,7 @@
 #ifndef table_hpp
 #define table_hpp
 
+#include "adl.hpp"
 #include "assert.hpp"
 #include "algorithm.hpp"
 #include "hash.hpp"
@@ -443,7 +444,7 @@ namespace wry {
             }
             
             std::uint64_t get_hash(const auto& keylike) const {
-                return hash(keylike) | 1;
+                return adl::hash(keylike) | 1;
             }
             
             template<typename K, typename U>

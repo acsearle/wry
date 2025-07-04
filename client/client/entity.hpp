@@ -14,9 +14,9 @@ namespace wry::sim {
         
     // This is the base class of things with behavior
     //
-    // They are Objects, but are they Values?
+    // They are GarbageCollected, but are they Values?
         
-    struct Entity : gc::Object {
+    struct Entity : GarbageCollected {
                         
         virtual ~Entity() = default;
         

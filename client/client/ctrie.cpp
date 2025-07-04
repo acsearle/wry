@@ -5,11 +5,12 @@
 //  Created by Antony Searle on 14/6/2024.
 //
 
+#include "adl.hpp"
+
 #include "utility.hpp"
 #include "ctrie.hpp"
 #include "HeapString.hpp"
 
-#include "adl.hpp"
 
 namespace wry::gc {
     
@@ -42,7 +43,7 @@ namespace wry::gc {
             virtual EraseResult _ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const override;
             virtual const HeapString* _ctrie_mn_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const override;
             
-            virtual void _object_scan() const override;
+            virtual void _garbage_collected_scan() const override;
             
         };
         
@@ -58,7 +59,7 @@ namespace wry::gc {
             const LNode* copy_erase(const HeapString* key) const;
             const LNode* copy_erase(const LNode* victim) const;
             
-            virtual void _object_scan() const override;
+            virtual void _garbage_collected_scan() const override;
             
             virtual const HeapString* _ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const override;
             
@@ -82,7 +83,7 @@ namespace wry::gc {
             virtual EraseResult _ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const override;
             virtual void _ctrie_mn_erase2(const INode* p, const INode* i, size_t hc, int lev) const override;
             
-            virtual void _object_scan() const override;
+            virtual void _garbage_collected_scan() const override;
             
         };
         
@@ -155,7 +156,7 @@ namespace wry::gc {
 
 
         void* CNode::operator new(size_t self, size_t entries) {
-            return Object::operator new(self + entries * sizeof(Object*));
+            return GarbageCollected::operator new(self + entries * sizeof(GarbageCollected*));
         }
         
         CNode::CNode() : bmp(0) {
@@ -173,7 +174,7 @@ namespace wry::gc {
             ncn->bmp = this->bmp;
             for (int i = 0; i != num; ++i) {
                 const BranchNode* sub = (i == pos) ? bn : this->array[i];
-                object_shade(sub);
+                adl::shade(sub);
                 ncn->array[i] = sub;
             }
             return ncn;
@@ -192,7 +193,7 @@ namespace wry::gc {
             ncn->bmp = this->bmp;
             for (int i = 0; i != num; ++i) {
                 const BranchNode* bn = this->array[i]->_ctrie_bn_resurrect();
-                object_shade(bn);
+                adl::shade(bn);
                 ncn->array[i] = bn;
             }
             return ncn;
@@ -415,7 +416,7 @@ namespace wry::gc {
             const BranchNode** dest = ncn->array;
             for (int i = 0; i != num; ++i) {
                 if (i != pos) {
-                    object_shade(array[i]);
+                    adl::shade(array[i]);
                     *dest++ = array[i];
                 }
             }
@@ -435,7 +436,7 @@ namespace wry::gc {
                 } else {
                     ncn->array[i] = bn;
                 }
-                object_shade(ncn->array[i]);
+                adl::shade(ncn->array[i]);
             }
             assert(src == array+num);
             return ncn;
@@ -511,7 +512,7 @@ namespace wry::gc {
                     case Color::GRAY:
                     default: {
                         // Impossible
-                        object_debug(key);
+                        adl::debug(key);
                         abort();
                     }
                 }
@@ -569,22 +570,22 @@ namespace wry::gc {
         
         
         
-        void CNode::_object_scan() const {
+        void CNode::_garbage_collected_scan() const {
             int num = __builtin_popcountll(bmp);
             for (int i = 0; i != num; ++i)
-                object_trace_weak(array[i]);
+                adl::trace_weak(array[i]);
         }
         
-        void INode::_object_scan() const {
+        void INode::_garbage_collected_scan() const {
             adl::trace(main);
         }
         
-        void LNode::_object_scan() const {
-            any_trace_weak(sn);
+        void LNode::_garbage_collected_scan() const {
+            adl::trace_weak(sn);
             adl::trace(next);
         }
-        void TNode::_object_scan() const {
-            any_trace_weak(sn);
+        void TNode::_garbage_collected_scan() const {
+            adl::trace_weak(sn);
         }
         
         
@@ -626,7 +627,7 @@ namespace wry::gc {
             ;
     }
 
-    void Ctrie::_object_scan() const {
+    void Ctrie::_garbage_collected_scan() const {
         adl::trace(root);
     }
     
@@ -680,7 +681,7 @@ namespace wry::gc {
                         case Color::GRAY:
                         default: {
                             // Impossible
-                            object_debug(hs);
+                            adl::debug(hs);
                             abort();
                         }
                     }

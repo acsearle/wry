@@ -10,7 +10,7 @@
 
 namespace wry::sim {
     
-    void World::_object_scan() const {
+    void World::_garbage_collected_scan() const {
         printf("%s\n", __PRETTY_FUNCTION__);
         adl::trace(_entity_for_entity_id);
         adl::trace(_ready);

@@ -10,7 +10,7 @@
 
 #include <string_view>
 
-#include "object.hpp"
+#include "garbage_collected.hpp"
 #include "ctrie.hpp"
 
 namespace wry::gc {
@@ -30,13 +30,13 @@ namespace wry::gc {
         HeapString();
         virtual ~HeapString() override final;
         
-        virtual void _object_shade() const override final;
-        virtual void _object_scan() const override final;
-        virtual size_t _object_hash() const override final { return _hash; }
-        virtual void _object_trace() const override final;
-        virtual void _object_trace_weak() const override final;
-        virtual Color _object_sweep() const override final;
-        virtual void _object_debug() const override final;
+        virtual void _garbage_collected_shade() const override final;
+        virtual void _garbage_collected_scan() const override final;
+        virtual size_t _garbage_collected_hash() const override final { return _hash; }
+        virtual void _garbage_collected_trace() const override final;
+        virtual void _garbage_collected_trace_weak() const override final;
+        virtual Color _garbage_collected_sweep() const override final;
+        virtual void _garbage_collected_debug() const override final;
 
         virtual const HeapString* _ctrie_any_find_or_emplace2(const _ctrie::INode* in, const _ctrie::LNode* ln) const override final;
         

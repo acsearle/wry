@@ -70,7 +70,7 @@ namespace wry::sim {
     using gc::Scan;
     using gc::GCArray;
     
-    struct World : gc::Object {
+    struct World : GarbageCollected {
         
         Time _tick;
 
@@ -93,17 +93,17 @@ namespace wry::sim {
         // transactions commit or abort, we may insert to these data structures
         // without the possibility of failure.  How does this square with
         // rebuilding, especially when double-layered?
-        const PersistentMap<Coordinate, PersistentSet<EntityID>*>* _entity_id_for_coordinate;
-        const PersistentMap<Time, PersistentSet<EntityID>*>* _waiting_for_time;
-        const PersistentMap<EntityID, PersistentSet<EntityID>*>* _waiting_for_entity_id;
-        const PersistentMap<Coordinate, PersistentSet<EntityID>*>* _waiting_for_coordinate;
+        const PersistentMap<Coordinate, const PersistentSet<EntityID>*>* _entity_id_for_coordinate;
+        const PersistentMap<Time, const PersistentSet<EntityID>*>* _waiting_for_time;
+        const PersistentMap<EntityID, const PersistentSet<EntityID>*>* _waiting_for_entity_id;
+        const PersistentMap<Coordinate, const PersistentSet<EntityID>*>* _waiting_for_coordinate;
         // These multimaps are also equivalent to PersistentSet<uint128_t>
         // The fact they are set<pair<a, b>> is what makes them CRDT; insertion
         // is idempotent
 
         
                 
-        virtual void _object_scan() const override;
+        virtual void _garbage_collected_scan() const override;
 
         
         World()
@@ -111,21 +111,21 @@ namespace wry::sim {
         , _ready{new PersistentSet<EntityID>}
         , _entity_for_entity_id{ new PersistentMap<EntityID, const Entity*> }
         , _value_for_coordinate{ new PersistentMap<Coordinate, Value> }
-        , _entity_id_for_coordinate{ new PersistentMap<Coordinate, PersistentSet<EntityID>*> }
-        , _waiting_for_time{ new PersistentMap<Time, PersistentSet<EntityID>*> }
-        , _waiting_for_entity_id{ new PersistentMap<EntityID, PersistentSet<EntityID>*> }
-        , _waiting_for_coordinate{ new PersistentMap<Coordinate, PersistentSet<EntityID>*> }
+        , _entity_id_for_coordinate{ new PersistentMap<Coordinate, const PersistentSet<EntityID>*> }
+        , _waiting_for_time{ new PersistentMap<Time, const PersistentSet<EntityID>*> }
+        , _waiting_for_entity_id{ new PersistentMap<EntityID, const PersistentSet<EntityID>*> }
+        , _waiting_for_coordinate{ new PersistentMap<Coordinate, const PersistentSet<EntityID>*> }
         {
         }
         
         World(Time tick,
               const PersistentMap<EntityID, const Entity*>* entity_for_entity_id,
               const PersistentSet<EntityID>* ready,
-              const PersistentMap<Time, PersistentSet<EntityID>*>* waiting_for_time,
-              const PersistentMap<EntityID, PersistentSet<EntityID>*>* waiting_for_entity_id,
-              const PersistentMap<Coordinate, PersistentSet<EntityID>*>* waiting_for_coordinate,
+              const PersistentMap<Time, const PersistentSet<EntityID>*>* waiting_for_time,
+              const PersistentMap<EntityID, const PersistentSet<EntityID>*>* waiting_for_entity_id,
+              const PersistentMap<Coordinate, const PersistentSet<EntityID>*>* waiting_for_coordinate,
               const PersistentMap<Coordinate, Value>* value_for_coordinate,
-              const PersistentMap<Coordinate,  PersistentSet<EntityID>*>* entity_id_for_coordinate)
+              const PersistentMap<Coordinate,  const PersistentSet<EntityID>*>* entity_id_for_coordinate)
         : _tick(tick)
         , _entity_for_entity_id(entity_for_entity_id)
         , _ready(ready)
@@ -135,6 +135,10 @@ namespace wry::sim {
         , _value_for_coordinate(value_for_coordinate)
         , _entity_id_for_coordinate(entity_id_for_coordinate)
         {}
+        
+        virtual ~World() {
+            printf("%s\n", __PRETTY_FUNCTION__);
+        }
         
 
         World* step() const;
@@ -147,7 +151,7 @@ namespace wry::sim {
     }
     
     inline void shade(const World& self) {
-        object_shade(&self);
+        adl::shade(&self);
     }
     
     /*

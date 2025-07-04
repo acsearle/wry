@@ -278,7 +278,7 @@ namespace wry::Wavefront {
         
         // Current face metadata
         String _current_smoothing_group;
-        String _current_object_name;
+        String _current_garbage_collected_name;
         String _current_group_name;
         Library _current_materials;
         Material _current_material;
@@ -304,7 +304,7 @@ namespace wry::Wavefront {
         std::map<String, Object> named_objects;
         
         void commit() {
-            auto& a = named_objects[_current_object_name];
+            auto& a = named_objects[_current_garbage_collected_name];
             auto& b = a.named_groups[_current_group_name];
             b.usemtl = _current_material;
             auto& c = b.smoothing_groups[_current_smoothing_group];
@@ -469,7 +469,7 @@ namespace wry::Wavefront {
                              parse(match_posix_portable_filename(),
                                    [this](StringView match) {
                 commit();
-                this->_current_object_name = match;
+                this->_current_garbage_collected_name = match;
             }));
         }
         

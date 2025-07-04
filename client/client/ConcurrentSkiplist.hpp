@@ -14,7 +14,7 @@
 #include <random>
 
 #include "atomic.hpp"
-#include "object.hpp"
+#include "garbage_collected.hpp"
 
 namespace wry {
     
@@ -27,7 +27,7 @@ namespace wry {
         template<typename Key, typename Compare = std::less<>>
         struct concurrent_skiplist {
             
-            struct _node_t : gc::Object {
+            struct _node_t : GarbageCollected {
                 Key _key;
                 size_t _size;
                 mutable Atomic<_node_t*> _next[0];
@@ -38,7 +38,7 @@ namespace wry {
                 }
                 
                 static _node_t* with_size_emplace(size_t n, auto&&... args) {
-                    void* raw = gc::Object::operator new(sizeof(_node_t) + sizeof(std::atomic<_node_t*>) * n);
+                    void* raw = GarbageCollected::operator new(sizeof(_node_t) + sizeof(std::atomic<_node_t*>) * n);
                     return new(raw) _node_t(n, std::forward<decltype(args)>(args)...);
                 }
                 
@@ -51,7 +51,7 @@ namespace wry {
             };
             
             
-            struct _head_t : gc::Object {
+            struct _head_t : GarbageCollected {
                 
                 mutable Atomic<size_t> _top;
                 mutable Atomic<_node_t*> _next[0];
@@ -60,7 +60,7 @@ namespace wry {
                 
                 static _head_t* make() {
                     size_t n = 33;
-                    void* raw =  gc::Object::operator new(sizeof(_head_t) + sizeof(std::atomic<_node_t*>) * n);
+                    void* raw =  GarbageCollected::operator new(sizeof(_head_t) + sizeof(std::atomic<_node_t*>) * n);
                     return new(raw) _head_t;
                     
                 }

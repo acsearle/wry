@@ -15,7 +15,7 @@ namespace wry::sim {
     struct LocalizedEntity : Entity {
         
         Coordinate _location = {};
-        virtual void _object_scan() const override {
+        virtual void _garbage_collected_scan() const override {
         }
 
     };
@@ -31,8 +31,8 @@ namespace wry::sim {
         Value _of_this;
         
         virtual void notify(Context*) const override;
-        virtual void _object_scan() const override {
-            object_trace(_of_this);
+        virtual void _garbage_collected_scan() const override {
+            adl::trace(_of_this);
         }
 
     };
@@ -40,7 +40,7 @@ namespace wry::sim {
     struct Sink : LocalizedEntity {
                 
         virtual void notify(Context*) const override;
-        virtual void _object_scan() const override {
+        virtual void _garbage_collected_scan() const override {
         }
         
     };

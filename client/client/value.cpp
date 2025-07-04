@@ -100,15 +100,15 @@ namespace wry::gc {
     
 #undef X
     
-    size_t value_hash(const Value& self) {
+    size_t hash(const Value& self) {
         switch (_value_tag(self)) {
             case VALUE_TAG_OBJECT: {
-                const Object* object = _value_as_object(self);
-                return object ? object_hash(object) : 0;
+                const GarbageCollected* object = _value_as_object(self);
+                return object ? adl::hash(object) : 0;
             }
             case VALUE_TAG_SMALL_INTEGER: {
                 std::int64_t a = _value_as_small_integer(self);
-                return wry::hash(a);
+                return adl::hash(a);
             }
             case VALUE_TAG_SHORT_STRING: {
                 return std::hash<std::string_view>()(_value_as_short_string(self));
@@ -148,7 +148,7 @@ namespace wry::gc {
         return result;
     }
     
-    Value _value_make_object_with(const Object* object) {
+    Value _value_make_garbage_collected_with(const GarbageCollected* object) {
         Value result;
         result._data = (uint64_t)object;
         assert(_value_is_object(result));
@@ -325,23 +325,23 @@ namespace wry::gc {
     
    
 
-    bool contains(const Object* self, Value key) {
+    bool contains(const GarbageCollected* self, Value key) {
         return self ? self->_value_contains(key) : false;
     }
 
-    Value find(const Object* self, Value key) {
+    Value find(const GarbageCollected* self, Value key) {
         return self ? self->_value_find(key) : value_make_error();
     }
 
-    Value insert_or_assign(Object* self, Value key, Value value) {
+    Value insert_or_assign(GarbageCollected* self, Value key, Value value) {
         return self ? self->_value_insert_or_assign(key, value) : value_make_error();
     }
 
-    Value erase(Object* self, Value key) {
+    Value erase(GarbageCollected* self, Value key) {
         return self ? self->_value_erase(key) : value_make_error();
     }
 
-    size_t size(const Object* self) {
+    size_t size(const GarbageCollected* self) {
         return self ? self->_value_size() : 0;
     }
     
@@ -400,7 +400,7 @@ namespace wry::gc {
     
     
     void* HeapString::operator new(std::size_t self, std::size_t extra) {
-        return Object::operator new(self + extra);
+        return GarbageCollected::operator new(self + extra);
     }
         
     const HeapString* HeapString::make(std::string_view view) {
@@ -439,7 +439,7 @@ namespace wry::gc {
     }
 
         
-    void value_debug(const Value& self) {
+    void debug(const Value& self) {
         switch (_value_tag(self)) {
             case VALUE_TAG_BOOLEAN:
                 return (void)printf("%s\n", value_as_boolean(self) ? "TRUE" : "FALSE");
@@ -448,7 +448,7 @@ namespace wry::gc {
             case VALUE_TAG_ERROR:
                 return (void)printf("ERROR\n");
             case VALUE_TAG_OBJECT:
-                return object_debug(_value_as_object(self));
+                return adl::debug(_value_as_object(self));
             case VALUE_TAG_ENUMERATION: {
                 auto [meta, code] = value_as_enum(self);
                 return (void)printf("enum{%d, %d}\n", meta, code);
@@ -477,13 +477,13 @@ namespace wry::gc {
         }
     }
     
-    void any_debug(const Scan<Value>& self) {
-        value_debug(self._atomic_value.load(Ordering::ACQUIRE));
+    void debug(const Scan<Value>& self) {
+        adl::debug(self._atomic_value.load(Ordering::ACQUIRE));
     }
 
     
     
-    Value _value_make_with(const Object* p) {
+    Value _value_make_with(const GarbageCollected* p) {
         Value result;
         result._data = (uint64_t)p;
         return result;
@@ -497,12 +497,12 @@ namespace wry::gc {
     
     
     
-    struct ValueArray : Object {
+    struct ValueArray : GarbageCollected {
         
         GCArray<Scan<Value>> _inner;
         
-        virtual void _object_scan() const { adl::trace(_inner); }
-        virtual void _object_debug() const { any_debug(_inner); }
+        virtual void _garbage_collected_scan() const { adl::trace(_inner); }
+        virtual void _garbage_collected_debug() const { any_debug(_inner); }
         
         virtual bool _value_empty() const { return _inner.empty(); }
         virtual size_t _value_size() const { return _inner.size(); }
@@ -537,31 +537,31 @@ namespace wry::gc {
     
     
     
-    bool Object::_value_empty() const { abort(); }
-    size_t Object::_value_size() const { return 0; }
-    bool Object::_value_contains(Value key) const { return false; }
-    Value Object::_value_find(Value key) const { return value_make_error(); }
-    Value Object::_value_insert_or_assign(Value key, Value value) { return value_make_error(); }
-    Value Object::_value_erase(Value key) { return value_make_error(); }
+    bool GarbageCollected::_value_empty() const { abort(); }
+    size_t GarbageCollected::_value_size() const { return 0; }
+    bool GarbageCollected::_value_contains(Value key) const { return false; }
+    Value GarbageCollected::_value_find(Value key) const { return value_make_error(); }
+    Value GarbageCollected::_value_insert_or_assign(Value key, Value value) { return value_make_error(); }
+    Value GarbageCollected::_value_erase(Value key) { return value_make_error(); }
     
 
     
-    Value Object::_value_add(Value right) const { return value_make_error(); }
-    Value Object::_value_sub(Value right) const { return value_make_error(); }
-    Value Object::_value_mul(Value right) const { return value_make_error(); }
-    Value Object::_value_div(Value right) const { return value_make_error(); }
-    Value Object::_value_mod(Value right) const { return value_make_error(); }
-    Value Object::_value_rshift(Value right) const { return value_make_error(); }
-    Value Object::_value_lshift(Value right) const { return value_make_error(); }
+    Value GarbageCollected::_value_add(Value right) const { return value_make_error(); }
+    Value GarbageCollected::_value_sub(Value right) const { return value_make_error(); }
+    Value GarbageCollected::_value_mul(Value right) const { return value_make_error(); }
+    Value GarbageCollected::_value_div(Value right) const { return value_make_error(); }
+    Value GarbageCollected::_value_mod(Value right) const { return value_make_error(); }
+    Value GarbageCollected::_value_rshift(Value right) const { return value_make_error(); }
+    Value GarbageCollected::_value_lshift(Value right) const { return value_make_error(); }
 
-    void HeapInt64::_object_shade() const {
+    void HeapInt64::_garbage_collected_shade() const {
         Color expected = Color::WHITE;
         (void) color.compare_exchange(expected, Color::BLACK);
     }
     
-    void HeapInt64::_object_scan() const {
+    void HeapInt64::_garbage_collected_scan() const {
         fprintf(stderr, "scanned a weak ");
-        _object_debug();
+        _garbage_collected_debug();
         abort();
     }
 

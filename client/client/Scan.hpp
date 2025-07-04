@@ -8,7 +8,8 @@
 #ifndef Scan_hpp
 #define Scan_hpp
 
-#include "object.hpp"
+#include "adl.hpp"
+#include "garbage_collected.hpp"
 
 namespace wry::gc {
     
@@ -21,7 +22,7 @@ namespace wry::gc {
     template<typename T>
     struct Scan;
     
-    template<PointerConvertibleTo<Object> T>
+    template<PointerConvertibleTo<GarbageCollected> T>
     struct Scan<T* const> {
         
         T* const _object;
@@ -52,7 +53,7 @@ namespace wry::gc {
         
     }; // Scan<T*const>
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     struct Scan<T*> {
         
         Atomic<T*> _object;
@@ -83,7 +84,7 @@ namespace wry::gc {
         
     }; // struct Traced<T*>
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     struct Scan<Atomic<T*>> {
         
         Atomic<T*> _object;
@@ -107,198 +108,198 @@ namespace wry::gc {
 
 namespace wry::gc {
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     Scan<T*>::Scan(const Scan& other)
     : Scan(other.get()) {
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     Scan<T*>::Scan(Scan&& other)
     : Scan(other.take()) {
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     Scan<T*>& Scan<T*>::operator=(const Scan& other) {
         return operator=(other.get());
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     Scan<T*>& Scan<T*>::operator=(Scan&& other) {
         return operator=(other.take());
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     Scan<T*>::Scan(T*const& other)
     : _object(other) {
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     Scan<T*>::Scan(std::nullptr_t)
     : _object(nullptr) {
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     void Scan<T*>::swap(Scan<T*>& other) {
         T* a = get();
         T* b = other.get();
         _object._store(b);
         other._object._store(a);
-        object_shade(a);
-        object_shade(b);
+        adl::shade(a);
+        adl::shade(b);
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     Scan<T*>& Scan<T*>::operator=(T*const& other) {
         // Safety:
         //     An atomic::exchange is not used here because this_thread is
         // the only writer.
         T* discovered = get();
         _object.store(other, Ordering::RELEASE);
-        object_shade(discovered);
-        object_shade(other);
+        adl::shade(discovered);
+        adl::shade(other);
         return *this;
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     Scan<T*>& Scan<T*>::operator=(std::nullptr_t) {
         // Safety:
         //     See above.
         T* discovered = get();
         _object.store(nullptr, Ordering::RELAXED);
-        object_shade(discovered);
+        adl::shade(discovered);
         return *this;
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     T* Scan<T*>::operator->() const {
         return _object.load(Ordering::RELAXED);
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     bool Scan<T*>::operator!() const {
         return !get();
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     Scan<T*>::operator bool() const {
         return (bool)get();
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     Scan<T*>::operator T*() const {
         return get();
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     T& Scan<T*>::operator*() const {
         return *get();
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     bool Scan<T*>::operator==(const Scan& other) const {
         return get() == other.get();
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     auto Scan<T*>::operator<=>(const Scan& other) const {
         return get() <=> other.get();
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     T* Scan<T*>::get() const {
         return _object.load(Ordering::RELAXED);
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     T* Scan<T*>::take() {
         T* discovered = get();
         _object.store(nullptr, Ordering::RELAXED);
-        object_shade(discovered);
+        adl::shade(discovered);
         return discovered;
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     Scan<Atomic<T*>>::Scan(T* object)
     : _object(object) {
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     T* Scan<Atomic<T*>>::load(Ordering order) const {
         return _object.load(order);
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     void Scan<Atomic<T*>>::store(T* desired, Ordering order) {
         (void) exchange(desired, order);
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     T* Scan<Atomic<T*>>::exchange(T* desired, Ordering order) {
         T* discovered = _object.exchange(desired, order);
-        object_shade(discovered);
-        object_shade(desired);
+        adl::shade(discovered);
+        adl::shade(desired);
         return discovered;
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     bool Scan<Atomic<T*>>::compare_exchange_weak(T*& expected, T* desired, Ordering success, Ordering failure) {
         bool result = _object.compare_exchange_weak(expected, desired, success, failure);
         if (result) {
-            object_shade(expected);
-            object_shade(desired);
+            adl::shade(expected);
+            adl::shade(desired);
         }
         return result;
     }
     
-    template<std::derived_from<Object> T>
+    template<std::derived_from<GarbageCollected> T>
     bool Scan<Atomic<T*>>::compare_exchange_strong(T*& expected, T* desired, Ordering success, Ordering failure) {
         bool result = _object.compare_exchange_strong(expected, desired, success, failure);
         if (result) {
-            object_shade(expected);
-            object_shade(desired);
+            adl::shade(expected);
+            adl::shade(desired);
         }
         return result;
     }
     
-    template<PointerConvertibleTo<Object> T>
+    template<PointerConvertibleTo<GarbageCollected> T>
     void trace(const Scan<T* const>& self) {
         if (self._object)
-            self._object->_object_trace();
+            self._object->_garbage_collected_trace();
     }
 
-    template<PointerConvertibleTo<Object> T>
+    template<PointerConvertibleTo<GarbageCollected> T>
     void trace(const Scan<T*>& self) {
         const T* a = // self.get();
         self._object.load(Ordering::ACQUIRE);
         if (a)
-            a->_object_trace();
+            a->_garbage_collected_trace();
     }
 
-    template<PointerConvertibleTo<Object> T>
+    template<PointerConvertibleTo<GarbageCollected> T>
     void trace(const Scan<Atomic<T*>>& self) {
         const T* a = self.load(Ordering::ACQUIRE);
         if (a)
-            a->_object_trace();
+            a->_garbage_collected_trace();
     }
         
-    template<PointerConvertibleTo<Object> T>
+    template<PointerConvertibleTo<GarbageCollected> T>
     void shade(const Scan<T* const>& self) {
         if (self._object)
-            self._object->_object_shade();
+            self._object->_garbage_collected_shade();
     }
     
-    template<PointerConvertibleTo<Object> T>
+    template<PointerConvertibleTo<GarbageCollected> T>
     void shade(const Scan<T*>& self) {
         const T* a = self.get();
         if (a)
-            a->_object_shade();
+            a->_garbage_collected_shade();
     }
     
-    template<PointerConvertibleTo<Object> T>
+    template<PointerConvertibleTo<GarbageCollected> T>
     void shade(const Scan<Atomic<T*>>& self) {
         const T* a = self.load(Ordering::ACQUIRE);
         if (a)
-            a->_object_shade();
+            a->_garbage_collected_shade();
     }
     
     template<typename T>
@@ -326,14 +327,14 @@ namespace wry::gc {
     inline constexpr T* any_none<Scan<Atomic<T*>>> = nullptr;
     
     
-    template<PointerConvertibleTo<Object> T>
+    template<PointerConvertibleTo<GarbageCollected> T>
     void any_trace_weak(const Scan<T*const>& self) {
-        object_trace_weak(self._object);
+        adl::trace_weak(self._object);
     }
 
         
-    template<PointerConvertibleTo<Object> T>
-    void any_passivate(Scan<T*>& self) {
+    template<PointerConvertibleTo<GarbageCollected> T>
+    void passivate(Scan<T*>& self) {
         self = nullptr;
     }
     

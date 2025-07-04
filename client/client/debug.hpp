@@ -27,6 +27,19 @@ namespace wry {
         ~timer();
         
     };
+    
+    namespace orphan {
+        
+        template<std::integral T>
+        void debug(const T& x) {
+            std::cout << "(" << name_of<T> <<  ") " << x << std::endl;
+        }
+        
+        inline void debug(void* p) {
+            printf("(void*) %p\n", p);
+        }
+        
+    }
 
 } // namespace wry
 

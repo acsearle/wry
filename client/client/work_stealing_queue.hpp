@@ -16,7 +16,7 @@
 #include <new>
 #include <bit>
 
-#include "object.hpp"
+#include "garbage_collected.hpp"
 
 namespace wry {
     
@@ -27,7 +27,7 @@ namespace wry {
         using std::atomic;
         
         template<typename T>
-        struct circular_array : gc::Object {
+        struct circular_array : GarbageCollected {
             
             size_t _mask;
             mutable atomic<T> _data[0];

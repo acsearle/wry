@@ -13,8 +13,9 @@
 #include <bit>
 #include <optional>
 
+#include "adl.hpp"
 #include "debug.hpp"
-#include "object.hpp"
+#include "garbage_collected.hpp"
 #include "value.hpp"
 #include "HeapArray.hpp"
 #include "hash.hpp"
@@ -74,20 +75,17 @@ namespace wry::gc {
         }
         
         size_t hash() const {
-            using wry::hash;
-            return hash(_kv.first);
+            return adl::hash(_kv.first);
         }
         
         template<typename J, typename U>
         static size_t hash(const Pair<J, U>& ju) {
-            using wry::hash; 
-            return hash(ju.first);
+            return adl::hash(ju.first);
         }
 
         template<typename J>
         static size_t hash(const J& j) {
-            using wry::hash;
-            return hash(j);
+            return adl::hash(j);
         }
 
         void assign(BasicEntry&& other) {
@@ -151,9 +149,9 @@ namespace wry::gc {
     }
     
     template<typename K, typename V>
-    void any_passivate(BasicEntry<K, V>& e) {
-        any_passivate(e._kv.first);
-        any_passivate(e._kv.second);
+    void passivate(BasicEntry<K, V>& e) {
+        adl::passivate(e._kv.first);
+        adl::passivate(e._kv.second);
     }
     
     /*
@@ -797,7 +795,7 @@ namespace wry::gc {
         
         template<typename Q>
         auto read(Q&& q) const {
-            size_t h = hash(q);
+            size_t h = adl::hash(q);
             auto [i, f] = _inner._find(h, q);
             using U = decltype(_inner._alpha._inner._data[i]._kv.second);
             return f ? any_read(_inner._alpha._inner._data[i]._kv.second) : any_none<U>;
@@ -805,13 +803,13 @@ namespace wry::gc {
         
         template<typename J, typename U>
         void write(J&& j, U&& u) {
-            size_t h = hash(j);
+            size_t h = adl::hash(j);
             _inner._insert_or_assign(h, j, u);
         }
         
         template<typename Q>
         void erase(Q&& q) {
-            size_t h = hash(q);
+            size_t h = adl::hash(q);
             _inner._erase(h, q);
         }
         
@@ -821,7 +819,7 @@ namespace wry::gc {
         
         template<typename Q>
         bool contains(Q&& q) const {
-            return _inner._find(hash(q), q).second;
+            return _inner._find(adl::hash(q), q).second;
         }
         
         // aka the notorious std::map::operator[]
@@ -911,14 +909,14 @@ namespace wry::gc {
 //    }
 //
 //    template<typename K, typename V>
-//    void object_shade(const HashMap<K, V>& self) {
-//        return object_shade(self._inner);
+//    void shade(const HashMap<K, V>& self) {
+//        return adl::shade(self._inner);
 //    }
 
 
     
     
-    struct HeapHashMap : Object {
+    struct HeapHashMap : GarbageCollected {
         
         HashMap<Scan<Value>, Scan<Value>> _inner;
         
@@ -926,7 +924,7 @@ namespace wry::gc {
             _inner._invariant();
         }
         
-        virtual void _object_scan() const override {
+        virtual void _garbage_collected_scan() const override {
             adl::trace(_inner);
         }
 
@@ -986,8 +984,7 @@ namespace wry::gc {
         }
         
         size_t hash() const {
-            using wry::hash;
-            return hash(_key);
+            return adl::hash(_key);
         }
         
         template<typename J>
@@ -1038,8 +1035,8 @@ namespace wry::gc {
     }
     
     template<typename K>
-    void any_passivate(BasicHashSetEntry<K>& e) {
-        any_passivate(e._key);
+    void passivate(BasicHashSetEntry<K>& e) {
+        adl::passivate(e._key);
     }
     
     template<typename K>

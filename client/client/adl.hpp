@@ -21,13 +21,18 @@
 // To provide customization points for types in closed namespaces (notably std)
 // we also may explicitly import a namespace
     
-
-// Forward declare namespaces
-
 namespace wry {
     
-    namespace sim {}
+    namespace orphan {
+
+        // Forward declare fallback namespace
+        //
+        // Types that are defined in namespace that we cannot or should not
+        // modify, such as :: and ::std, have their customization points
+        // dumped here
         
+    } // namespace orphan
+            
 } // namespace wry
 
 #define MAKE_CUSTOMIZATION_POINT_OBJECT(NAME, NAMESPACE)\
@@ -43,8 +48,12 @@ namespace adl {\
     constexpr _detail::_##NAME NAME;\
 }
 
+MAKE_CUSTOMIZATION_POINT_OBJECT(debug, ::wry::orphan)
+MAKE_CUSTOMIZATION_POINT_OBJECT(hash, ::wry::orphan)
+MAKE_CUSTOMIZATION_POINT_OBJECT(passivate, ::wry::orphan)
+MAKE_CUSTOMIZATION_POINT_OBJECT(shade, ::wry::orphan)
 MAKE_CUSTOMIZATION_POINT_OBJECT(swap, ::std)
-MAKE_CUSTOMIZATION_POINT_OBJECT(shade, ::wry::sim)
-MAKE_CUSTOMIZATION_POINT_OBJECT(trace, ::wry::sim)
-    
+MAKE_CUSTOMIZATION_POINT_OBJECT(trace, ::wry::orphan)
+MAKE_CUSTOMIZATION_POINT_OBJECT(trace_weak, ::wry::orphan)
+
 #endif /* adl_hpp */

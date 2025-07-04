@@ -9,6 +9,7 @@
 
 #include <thread>
 
+#include "adl.hpp"
 #include "ctrie.hpp"
 #include "gc.hpp"
 #include "HeapArray.hpp"
@@ -17,6 +18,7 @@
 #include "utility.hpp"
 #include "value.hpp"
 #include "HeapString.hpp"
+#include "garbage_collected.hpp"
 
 #include "test.hpp"
 
@@ -200,7 +202,7 @@ namespace wry::gc {
     struct Log {
         
         bool dirty;
-        Bag<const Object*> allocations;
+        Bag<const GarbageCollected*> allocations;
         std::intptr_t bytes_allocated;
         std::intptr_t bytes_deallocated;
 
@@ -283,11 +285,11 @@ namespace wry::gc {
         Atomic<Channel*> entrant_list_head;
         std::vector<Channel*> active_channels;
         Log collector_log;
-        Bag<const Object*> object_bag;
-        Bag<const Object*> white_bag;
-        Bag<const Object*> black_bag;
-        std::vector<const Object*> gray_stack;
-        Bag<const Object*> red_bag;
+        Bag<const GarbageCollected*> object_bag;
+        Bag<const GarbageCollected*> white_bag;
+        Bag<const GarbageCollected*> black_bag;
+        std::vector<const GarbageCollected*> gray_stack;
+        Bag<const GarbageCollected*> red_bag;
         bool stop_requested = false;
 
         void collect();
@@ -338,22 +340,22 @@ namespace wry::gc {
 
     
     
-    void* Object::operator new(size_t count) {
+    void* GarbageCollected::operator new(size_t count) {
         void* ptr = calloc(count, 1);
         thread_local_mutator->mutator_log.bytes_allocated += count;
         return ptr;
     }
 
-    void Object::operator delete(void* ptr) {
+    void GarbageCollected::operator delete(void* ptr) {
         free(ptr);
     }
 
-    Object::Object()
+    GarbageCollected::GarbageCollected()
     : color() {
         thread_local_mutator->mutator_log.allocations.push(this);
     }
     
-    void Object::_object_shade() const {
+    void GarbageCollected::_garbage_collected_shade() const {
         Color expected = Color::WHITE;
         (void) color.compare_exchange(expected, Color::GRAY);
         switch (expected) {
@@ -364,13 +366,13 @@ namespace wry::gc {
                 break;
             case Color::RED:
             default:
-                _object_debug();
+                _garbage_collected_debug();
                 abort();
                 break;
         }
     }
 
-    void Object::_object_trace() const {
+    void GarbageCollected::_garbage_collected_trace() const {
         Color expected = Color::WHITE;
         (void) color.compare_exchange(expected, Color::BLACK);
         switch (expected) {
@@ -382,7 +384,7 @@ namespace wry::gc {
                 break;
             case Color::RED:
             default:
-                _object_debug();
+                _garbage_collected_debug();
                 abort();
                 break;
         }
@@ -395,7 +397,7 @@ namespace wry::gc {
         return global_collector->string_ctrie->find_or_emplace(_ctrie::Query{hash, view});
     }
 
-    Color HeapString::_object_sweep() const {
+    Color HeapString::_garbage_collected_sweep() const {
         // Try to condemn the string to the terminal RED state
         Color expected = Color::WHITE;
         if (color.compare_exchange(expected, Color::RED)) {
@@ -676,7 +678,7 @@ namespace wry::gc {
         
         // Handshake ourself and shade our own root gc::objects
         this->handshake();
-        object_shade(string_ctrie);
+        adl::shade(string_ctrie);
         
         // Wait for every mutator to handshake or leave
         finalize_handshakes();
@@ -716,7 +718,7 @@ namespace wry::gc {
             for (;;) {
                 
                 while (!object_bag.empty()) {
-                    const Object* object = object_bag.top();
+                    const GarbageCollected* object = object_bag.top();
                     object_bag.pop();
                     assert(object);
                     Color expected = Color::GRAY;
@@ -729,7 +731,7 @@ namespace wry::gc {
                         case Color::GRAY:
                             // Was GRAY and is now BLACK
                             // Scan its fields to restore the invariant
-                            object->_object_scan();
+                            object->_garbage_collected_scan();
                             [[fallthrough]];
                         case Color::BLACK:
                             // Is BLACK and will remain so
@@ -738,15 +740,15 @@ namespace wry::gc {
                         case Color::RED:
                         default:
                             // "Impossible"
-                            object_debug(object);
+                            adl::debug(object);
                             abort();
                     }
                     while (!gray_stack.empty()) {
                         // Depth first tracing
-                        const Object* object = gray_stack.back();
+                        const GarbageCollected* object = gray_stack.back();
                         gray_stack.pop_back();
                         assert(object);
-                        object->_object_scan();
+                        object->_garbage_collected_scan();
                     }
                 }
                 
@@ -781,9 +783,9 @@ namespace wry::gc {
             
             // Sweep
             while (!object_bag.empty()) {
-                const Object* object = object_bag.top();
+                const GarbageCollected* object = object_bag.top();
                 object_bag.pop();                
-                switch (object->_object_sweep()) {
+                switch (object->_garbage_collected_sweep()) {
                     case Color::WHITE:
                         delete object;
                         break;
@@ -795,7 +797,7 @@ namespace wry::gc {
                         break;
                     case Color::GRAY:
                     default:
-                        object_debug(object);
+                        adl::debug(object);
                         abort();
                 }
             }
@@ -819,7 +821,7 @@ namespace wry::gc {
             // Delete all RED objects
             
             while (!red_bag.empty()) {
-                const Object* object = red_bag.top();
+                const GarbageCollected* object = red_bag.top();
                 red_bag.pop();
                 delete object;
             }
@@ -906,7 +908,7 @@ namespace wry::gc {
                 foo();
 
                 mutator_handshake();
-                object_shade(p);
+                adl::shade(p);
             }
             mutator_leave();
             delete exchange(thread_local_mutator, nullptr);

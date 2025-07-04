@@ -10,12 +10,12 @@
 
 #include "atomic.hpp"
 #include "entity.hpp"
-#include "object.hpp"
+#include "garbage_collected.hpp"
 #include "PersistentMap.hpp"
 
 namespace wry::sim {
     
-    struct Transaction : gc::Object {
+    struct Transaction : GarbageCollected {
         
         enum State {
             INITIAL,
@@ -52,10 +52,10 @@ namespace wry::sim {
         , _state(INITIAL)
         , _count(count) {}
         
-        virtual void _object_scan() const override {}
+        virtual void _garbage_collected_scan() const override {}
         
         static void* operator new(size_t basic, size_t extra) {
-            return Object::operator new(basic + extra * sizeof(Node));
+            return GarbageCollected::operator new(basic + extra * sizeof(Node));
         }
         
         static Transaction* make(Context* context, const Entity* entity, size_t count) {

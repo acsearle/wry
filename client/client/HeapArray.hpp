@@ -11,7 +11,7 @@
 #include <bit>
 
 #include "assert.hpp"
-#include "object.hpp"
+#include "garbage_collected.hpp"
 #include "memory.hpp"
 #include "Scan.hpp"
 #include "utility.hpp"
@@ -20,7 +20,7 @@
 namespace wry::gc {
     
     template<typename T> // requires(std::has_single_bit(sizeof(T)))
-    struct ArrayStaticIndirect : Object {
+    struct ArrayStaticIndirect : GarbageCollected {
         
         using value_type = T;
         using size_type = std::size_t;
@@ -79,13 +79,13 @@ namespace wry::gc {
             return _data[i];
         }
         
-        virtual void _object_scan() const override {
+        virtual void _garbage_collected_scan() const override {
             for (const T& element : *this) {
                 adl::trace(element);
             }
         }
         
-        virtual void _object_debug() const override {
+        virtual void _garbage_collected_debug() const override {
             std::string_view sv = name_of<T>;
             printf("ArrayStaticIndirect<%.*s>(%zd){ ", (int)sv.size(), (const char*)sv.data(), _size);
             for (const T& element : *this) {
@@ -206,13 +206,13 @@ namespace wry::gc {
         
         void pop_front() {
             assert(!empty());
-            any_passivate(front());
+            adl::passivate(front());
             ++_begin;
         }
         
         void pop_back() {
             assert(!empty());
-            any_passivate(back());
+            adl::passivate(back());
             --_end;
         }
         
@@ -365,7 +365,7 @@ namespace wry::gc {
     }
 
     
-    static_assert(std::is_move_assignable_v<GCArray<Scan<gc::Object*>>>);
+    static_assert(std::is_move_assignable_v<GCArray<Scan<GarbageCollected*>>>);
         
 } // namespace wry::gc
 
