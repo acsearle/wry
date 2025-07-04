@@ -42,7 +42,7 @@ namespace wry::Wavefront {
         std::optional<std::pair<float, String>> map_Bump;
     };
     
-    using Library = Array<Material>;
+    using Library = ContiguousDeque<Material>;
     
     struct Object {
         

@@ -157,7 +157,7 @@ namespace wry::json {
         
     };
     
-    inline bool _json_string_parse_XXXX(ArrayView<const char8_t>& v, char16_t& x) {
+    inline bool _json_string_parse_XXXX(ContiguousView<const char8_t>& v, char16_t& x) {
         auto first = reinterpret_cast<const char*>(v.begin());
         auto last = reinterpret_cast<const char*>(v.end());
         if (last - first < 4)
@@ -171,7 +171,7 @@ namespace wry::json {
     }
     
     inline auto parse_json_string(String& x) {
-        return [&x](ArrayView<const char8_t>& v) -> bool {
+        return [&x](ContiguousView<const char8_t>& v) -> bool {
             auto u(v);
             if (u.empty())
                 return false;

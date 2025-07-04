@@ -34,6 +34,7 @@
 #include "sdf.hpp"
 #include "text.hpp"
 #include "Wavefront.hpp"
+#include "world.hpp"
 
 #include "save.hpp"
 
@@ -637,9 +638,9 @@
             
                 
             try {
-                auto x = json::from_file<Array<Array<String>>>("assets.json");
+                auto x = json::from_file<ContiguousDeque<ContiguousDeque<String>>>("assets.json");
                 ulong i = 0;
-                for (const Array<String>& y : x) {
+                for (const ContiguousDeque<String>& y : x) {
                     ulong j = 0;
                     for (const String& z : y) {
                         printf("%.*s\n", (int) z.chars.size(), (const char*) z.chars.data());
@@ -760,7 +761,7 @@
             {0.0f, -1.0f, 0.0f, 1.0f},
         }}, _controls._transform);
         
-        wry::Array<wry::SpriteVertex> v;
+        wry::ContiguousDeque<wry::SpriteVertex> v;
         
         simd_float4 b = make<float4>(_model->_mouse, 0.0f, 1.0f);
         float2 mmm = project_screen_ray(uniforms.position_transform, b);
@@ -1010,15 +1011,16 @@
 
 - (void)render
 {
-    wry::gc::mutator_handshake();
     _model->shade_roots();
+    wry::gc::mutator_handshake();
 
     using namespace ::simd;
     using namespace ::wry;
 
     // advance the simulation
     
-    _model->_world->step();
+    _model->shade_roots();
+    _model->_world = _model->_world->step();
 
     id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
     
@@ -1090,10 +1092,12 @@
 
     {
 
-        // auto tnow = world_time(_model->_world);
-        // const auto& entities = _model->_world->_entities;
+        auto tnow = world_time(_model->_world);
+        // const auto& entities = _model->_world->_entity_for_entity_id;
         
-        NSUInteger quad_count = /* entities.size() * 4 +*/ 1000 + 2;
+        // We don't need entities.size() because entities are no longer drawn
+        // into this buffer (I think)
+        NSUInteger quad_count = /* entities.size() * 4 */ + 1000 + 2;
         NSUInteger vertex_count = quad_count * 4;
         index_count = quad_count * 6;
         vertices = [_device newBufferWithLength:vertex_count * sizeof(MeshVertex) options:MTLStorageModeShared];
@@ -1298,8 +1302,9 @@
                 simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
-                    /*
-                    wry::sim::Value q = _model->_world->_value_for_coordinate.read(wry::sim::Coordinate{i, j});
+                    //wry::sim::Value q = _model->_world->_value_for_coordinate.read(wry::sim::Coordinate{i, j});
+                    wry::sim::Value q = {};
+                    _model->_world->_value_for_coordinate->try_get(wry::sim::Coordinate{i, j}, q);
                     using namespace wry::sim;
                     if (q.is_int64_t()) {
                         coordinate = make<float4>((q.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
@@ -1309,11 +1314,8 @@
                             coordinate = p->second;
                         }
                     } else {
-                     */
                         coordinate = make<float4>(0.0 / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
-                    /*
                     }
-                     */
                 }
                 
                 v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;

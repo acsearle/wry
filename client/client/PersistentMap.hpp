@@ -11,10 +11,35 @@
 #include <map>
 #include <set>
 
+#include <iostream>
+
 #include "object.hpp"
 #include "adl.hpp"
 
 namespace wry {
+    
+    template<typename T>
+    struct ImmutableGarbageCollected : gc::Object {
+        
+        T data;
+        
+        virtual void _object_scan() const override {
+            adl::trace(data);
+        }
+        
+        static const ImmutableGarbageCollected* make(auto&&... parts) {
+            return new ImmutableGarbageCollected{T(std::forward<decltype(parts)>(parts)...)};
+        }
+        
+        const ImmutableGarbageCollected* clone_with_mutation(auto&& f) const {
+            T mutable_copy{data};
+            (void) std::forward<decltype(f)>(f)(mutable_copy);
+            return from(std::move(mutable_copy));
+        }
+        
+        
+        
+    };
     
     namespace _persistent_map {
 
@@ -22,159 +47,100 @@ namespace wry {
         // - array-mapped tries
         // - skiplists
         
-                
         template<typename Key>
-        struct ObjectSet : gc::Object {
-
-            std::set<Key> _set;
-                        
-            ObjectSet* clone() const {
-                return new ObjectSet{_set};
+        struct PersistentSet : gc::Object {
+            
+            std::set<Key> data;
+            
+            virtual void _object_scan() const override {
+                printf("%s\n", __PRETTY_FUNCTION__);
+                for (const auto& k : data)
+                    adl::trace(k);
+            }
+            
+            virtual ~PersistentSet() {
+                printf("%s\n", __PRETTY_FUNCTION__);
             }
             
             bool contains(Key k) const {
-                return _set.contains(k);
+                return data.contains(k);
+            }
+            
+            template<typename K>
+            [[nodiscard]] const PersistentSet* clone_and_erase(K&& k) const {
+                std::set<Key> a{data}; // deep copy
+                a.erase(std::forward<K>(k));
+                return new PersistentSet{std::move(a)};
+            }
+            
+            template<typename K>
+            [[nodiscard]] const PersistentSet* clone_and_insert(K&& k) const {
+                std::set<Key> a{data}; // deep copy
+                a.insert(std::forward<K>(k));
+                return new PersistentSet{std::move(a)};
+            }
+                        
+            template<typename F>
+            void parallel_for_each(const F& f) const {
+                for (const auto& k : data)
+                    f(k);
             }
 
-            bool try_insert(Key k) {
-                return _set.insert(k).second;
-            }
-            
-            virtual void _object_scan() const override {
-                for (auto&& x : _set)
-                    adl::trace(x);
-            }                        
-            
         };
-                
         
         template<typename Key, typename T>
-        struct ObjectMap : gc::Object {
+        struct PersistentMap : gc::Object {
             
-            std::map<Key, T> _map;
-            
-            ObjectMap() = default;
-            explicit ObjectMap(std::map<Key, T>&& source) : _map(std::move(source)) {}
+            std::map<Key, T> data;
             
             virtual void _object_scan() const override {
-                for (auto&& [k, v] : _map) {
+                printf("Was traced\n");
+                for (const auto& [k, v] : data) {
                     adl::trace(k);
                     adl::trace(v);
                 }
             }
             
+            PersistentMap() = default;
+            explicit PersistentMap(std::map<Key, T>&& x) : data(std::move(x)) {}
+            
+            virtual ~PersistentMap() {
+                printf("PersistentMap %zd was deleted\n", data.size());
+            }
+
             bool contains(Key k) const {
-                return _map.contains(k);
+                return data.contains(k);
             }
             
-            bool get(Key k, T& victim) const {
-                auto a = _map.find(k);
-                bool b = a != _map.end();
-                if (b)
-                    victim = a->second;
-                return b;
-            }
-            
-            ObjectMap* clone() const {
-                return new ObjectMap{_map};
-            }
-            
-            bool insert_or_assign(Key k, T t) {
-                return _map.insert_or_assign(k, t).second;
-            }
-            
-            void strict_insert(Key k, T t) {
-                auto [_, success] = _map.insert(k, t);
-                assert(success);
-            }
-            
-            void strict_assign(Key k, T t) {
-                auto a = _map.find(k);
-                assert(a != _map.end());
-                *a = std::pair(k, t);
-            }
-            
-        };
-        
-        
-        template<typename Key>
-        struct PersistentSet {
-            
-            const ObjectSet<Key>* _data;
-            
-            bool contains(Key k) const {
-                return _data && _data->contains(k);
-            }
-            
-            bool set(Key k) {
-                ObjectSet<Key>* a = _data ? _data->clone() : new ObjectSet<Key>;
-                bool result = a->set(k);
-                _data = a;
+            template<typename K>
+            bool try_get(K&& k, T& victim) const {
+                auto it = data.find(std::forward<K>(k));
+                bool result = it != data.end();
+                if (result) {
+                    victim = it->second;
+                }
                 return result;
             }
             
-            template<typename F>
-            void parallel_for_each(const F& f) const {
-                if (_data)
-                    for (Key k : _data->_set)
-                        f(k);
+            template<typename K>
+            [[nodiscard]] const PersistentMap* clone_and_erase(K&& k) const {
+                std::map<Key, T> a{data}; // deep copy
+                a.erase(std::forward<K>(k));
+                return new PersistentMap{std::move(a)};
+            }
+            
+            
+            template<typename K, typename V>
+            [[nodiscard]] const PersistentMap* clone_and_insert_or_assign(K&& k, V&& v) const {
+                std::map<Key, T> a{data}; // deep copy
+                a.insert_or_assign(std::forward<K>(k), std::forward<V>(v));
+                return new PersistentMap{std::move(a)};
             }
 
-        };
-        
-        template<typename Key>
-        void trace(const PersistentSet<Key>& self) {
-            adl::trace(self._data);
-        }
-        
-        
-        template<typename Key>
-        struct EphemeralSet {
-            
-            ObjectSet<Key>* _data;
-            
-            bool contains(Key k) const {
-                return _data && _data->contains(k);
-            }
-            
-            bool set(Key k) {
-                return _data->set(k).second;
-            }
-            
-        };
-
-        template<typename Key>
-        void trace(const EphemeralSet<Key>& self) {
-            adl::trace(self._data);
-        }
-        
-
-        template<typename Key, typename T>
-        struct PersistentMap {
-            
-            const ObjectMap<Key, T>* _data = nullptr;
-            
-            PersistentMap() : _data(nullptr) {}
-            explicit PersistentMap(const ObjectMap<Key, T>* a) : _data(a) {}
-
-            bool contains(Key k) const {
-                return _data && _data->contains(k);
-            }
-            
-            bool get(Key k, T& victim) const {
-                return _data && _data->get(k, victim);
-            }
-            
-            bool set(Key k, T t) {
-                ObjectMap<Key, T>* a = _data ?  _data->clone() : new ObjectMap<Key, T>;
-                bool result = a->set(k, t);
-                _data = a;
-                return result;
-            }
-            
         };
                
         
+        /*
         template<typename Key, typename T>
         void trace(const PersistentMap<Key, T>& self) {
             adl::trace(self._data);
@@ -205,6 +171,7 @@ namespace wry {
         void trace(const EphemeralMap<Key, T>& self) {
             adl::trace(self._data);
         }
+         */
         
         template<typename Key, typename T>
         struct StableConcurrentMap {
@@ -212,32 +179,23 @@ namespace wry {
         };
         
         template<typename Key, typename T, typename U, typename F>
-        PersistentMap<Key, T> parallel_rebuild(const PersistentMap<Key, T>& source,
+        const PersistentMap<Key, T>* parallel_rebuild(const PersistentMap<Key, T>* source,
                                                const StableConcurrentMap<Key, U>& modifier,
                                                F&& action) {
             // slow dumb implementation: just iterate over both in one thread
+            // printf("source._data: %p\n", source->_data);
 
             std::map<Key, T> result;
-            if (!source._data) {
-                auto modifier_iter = modifier._map.begin();
-                auto modifier_end = modifier._map.end();
-                for (;;) {
-                    if (modifier_iter != modifier_end) {
-                        result.emplace(modifier_iter->first, action(*modifier_iter));
-                        ++modifier_iter;
-                    } else {
-                        break;
-                    }
-                }
-                return PersistentMap<Key, T>(new ObjectMap<Key, T>{std::move(result)});;
-            }
             
-            auto source_iter = source._data->_map.begin();
-            auto source_end = source._data->_map.end();
+            auto source_iter = source->data.begin();
+            auto source_end  = source->data.end();
             auto modifier_iter = modifier._map.begin();
             auto modifier_end = modifier._map.end();
-                        
+            
+            
             for (;;) {
+                printf("source_iter != source_end: %d\n", source_iter != source_end);
+                printf("modifier_iter != modifier_end: %d\n", modifier_iter != modifier_end);
                 if (source_iter != source_end) {
                     if (modifier_iter != modifier_end) {
                         if (source_iter->first < modifier_iter->first) {
@@ -264,7 +222,7 @@ namespace wry {
                 }
             }
             
-            return PersistentMap<Key, T>(new ObjectMap<Key, T>{std::move(result)});
+            return new PersistentMap<Key, T>{std::move(result)};
             
         }
         
@@ -274,9 +232,9 @@ namespace wry {
     };
     
     using _persistent_map::PersistentMap;
-    using _persistent_map::EphemeralMap;
+    //using _persistent_map::EphemeralMap;
     using _persistent_map::PersistentSet;
-    using _persistent_map::EphemeralMap;
+    //using _persistent_map::EphemeralMap;
     using _persistent_map::StableConcurrentMap;
 
 }

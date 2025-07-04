@@ -9,7 +9,9 @@
 #define opcode_hpp
 
 #include <cstdint>
+#include <array>
 #include <utility>
+#include <cstring>
 
 namespace wry::sim {
     
@@ -102,6 +104,24 @@ X(OPCODE_FLOP_FLIP),\
     };
     
 #undef WRY_OPCODES_X
+    
+    constexpr OPCODE OPCODE_from_name(const char* name) {
+        for (std::size_t i = 0; i != std::size(OPCODE_NAMES); ++i) {
+            if (!std::strcmp(OPCODE_NAMES[i].second, name)) {
+                return OPCODE_NAMES[i].first;
+            }
+        }
+        return OPCODE{-1};
+    }
+
+    constexpr const char* name_from_OPCODE(OPCODE value) {
+        for (std::size_t i = 0; i != std::size(OPCODE_NAMES); ++i) {
+            if (OPCODE_NAMES[i].first == value) {
+                return OPCODE_NAMES[i].second;
+            }
+        }
+        return nullptr;
+    }
 
 } // namespace wry::sim
 

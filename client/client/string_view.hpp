@@ -34,7 +34,7 @@ namespace wry {
         using iterator = const_iterator;
         using value_type = char32_t;
         
-        ArrayView<const char8_t> chars;
+        ContiguousView<const char8_t> chars;
         
         bool _invariant() const {
             return utf8::isvalid(chars);

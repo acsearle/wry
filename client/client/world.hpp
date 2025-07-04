@@ -30,7 +30,7 @@ namespace wry::sim {
     struct World;
     struct Entity;
     
-    Time world_time(World* world);
+    Time world_time(const World* world);
 
     // entity scheduling
     void entity_add_to_world(Entity* entity, World* world);
@@ -74,10 +74,10 @@ namespace wry::sim {
         
         Time _tick;
 
-        PersistentSet<EntityID> _ready;
+        const PersistentSet<EntityID>* _ready;
 
-        PersistentMap<EntityID, const Entity*> _entity_for_entity_id;
-        PersistentMap<Coordinate, Value> _value_for_coordinate;
+        const PersistentMap<EntityID, const Entity*>* _entity_for_entity_id;
+        const PersistentMap<Coordinate, Value>* _value_for_coordinate;
         
         // these maps are transactional; transactions may make conflicting
         // changes to entity-for-id and to values-for-coordinates
@@ -93,10 +93,10 @@ namespace wry::sim {
         // transactions commit or abort, we may insert to these data structures
         // without the possibility of failure.  How does this square with
         // rebuilding, especially when double-layered?
-        PersistentMap<Coordinate, PersistentSet<EntityID>> _entity_id_for_coordinate;
-        PersistentMap<Time, PersistentSet<EntityID>> _waiting_for_time;
-        PersistentMap<EntityID, PersistentSet<EntityID>> _waiting_for_entity_id;
-        PersistentMap<Coordinate, PersistentSet<EntityID>> _waiting_for_coordinate;
+        const PersistentMap<Coordinate, PersistentSet<EntityID>*>* _entity_id_for_coordinate;
+        const PersistentMap<Time, PersistentSet<EntityID>*>* _waiting_for_time;
+        const PersistentMap<EntityID, PersistentSet<EntityID>*>* _waiting_for_entity_id;
+        const PersistentMap<Coordinate, PersistentSet<EntityID>*>* _waiting_for_coordinate;
         // These multimaps are also equivalent to PersistentSet<uint128_t>
         // The fact they are set<pair<a, b>> is what makes them CRDT; insertion
         // is idempotent
@@ -107,17 +107,25 @@ namespace wry::sim {
 
         
         World()
-        : _tick{0} {
+        : _tick{0}
+        , _ready{new PersistentSet<EntityID>}
+        , _entity_for_entity_id{ new PersistentMap<EntityID, const Entity*> }
+        , _value_for_coordinate{ new PersistentMap<Coordinate, Value> }
+        , _entity_id_for_coordinate{ new PersistentMap<Coordinate, PersistentSet<EntityID>*> }
+        , _waiting_for_time{ new PersistentMap<Time, PersistentSet<EntityID>*> }
+        , _waiting_for_entity_id{ new PersistentMap<EntityID, PersistentSet<EntityID>*> }
+        , _waiting_for_coordinate{ new PersistentMap<Coordinate, PersistentSet<EntityID>*> }
+        {
         }
         
         World(Time tick,
-              PersistentMap<EntityID, const Entity*> entity_for_entity_id,
-              PersistentSet<EntityID> ready,
-              PersistentMap<Time, PersistentSet<EntityID>> waiting_for_time,
-              PersistentMap<EntityID, PersistentSet<EntityID>> waiting_for_entity_id,
-              PersistentMap<Coordinate, PersistentSet<EntityID>> waiting_for_coordinate,
-              PersistentMap<Coordinate, Value> value_for_coordinate,
-              PersistentMap<Coordinate,  PersistentSet<EntityID>> entity_id_for_coordinate)
+              const PersistentMap<EntityID, const Entity*>* entity_for_entity_id,
+              const PersistentSet<EntityID>* ready,
+              const PersistentMap<Time, PersistentSet<EntityID>*>* waiting_for_time,
+              const PersistentMap<EntityID, PersistentSet<EntityID>*>* waiting_for_entity_id,
+              const PersistentMap<Coordinate, PersistentSet<EntityID>*>* waiting_for_coordinate,
+              const PersistentMap<Coordinate, Value>* value_for_coordinate,
+              const PersistentMap<Coordinate,  PersistentSet<EntityID>*>* entity_id_for_coordinate)
         : _tick(tick)
         , _entity_for_entity_id(entity_for_entity_id)
         , _ready(ready)
@@ -129,7 +137,7 @@ namespace wry::sim {
         {}
         
 
-        const World* step() const;
+        World* step() const;
                                             
     }; // World
         

@@ -150,7 +150,7 @@ namespace wry {
         };
 
         struct face {
-            Array<size_t> indices;
+            ContiguousDeque<size_t> indices;
             void flip() {
                 std::reverse(std::begin(indices), std::end(indices));
             }
@@ -158,24 +158,24 @@ namespace wry {
                 
         struct mesh {
             
-            Array<vertex> vertices;
+            ContiguousDeque<vertex> vertices;
             
-            Array<float4> positions;
-            Array<float4> coordinates;
-            Array<float4> tangents;
-            Array<float4> bitangents;
-            Array<float4> normals;
+            ContiguousDeque<float4> positions;
+            ContiguousDeque<float4> coordinates;
+            ContiguousDeque<float4> tangents;
+            ContiguousDeque<float4> bitangents;
+            ContiguousDeque<float4> normals;
 
-            Array<edge> edges;
-            Array<quad> quads;
+            ContiguousDeque<edge> edges;
+            ContiguousDeque<quad> quads;
 
-            Array<face> faces;
-            Array<triangle> triangles;
-            Array<size_t> triangle_strip;
+            ContiguousDeque<face> faces;
+            ContiguousDeque<triangle> triangles;
+            ContiguousDeque<size_t> triangle_strip;
             
-            Array<MeshVertex> hack_MeshVertex;
-            Array<float4> hack_lines;
-            Array<uint> hack_triangle_strip;
+            ContiguousDeque<MeshVertex> hack_MeshVertex;
+            ContiguousDeque<float4> hack_lines;
+            ContiguousDeque<uint> hack_triangle_strip;
             
             float distance(size_t i, size_t j) {
                 return simd::distance(vertices[i].position.xyz, vertices[j].position.xyz);
@@ -487,7 +487,7 @@ namespace wry {
             
             void erase_unindexed_vertices() {
                 size_t n = vertices.size();
-                Array<size_t> a(n, 0);
+                ContiguousDeque<size_t> a(n, 0);
                 for_each_index([&](size_t& i) {
                     ++a[i];
                 });
@@ -511,9 +511,9 @@ namespace wry {
             
             // groups nearby vertices and returns mapping from indices to the
             // index of a representative vertex of each group
-            Array<size_t> identify_colocated_vertices() {
+            ContiguousDeque<size_t> identify_colocated_vertices() {
                 size_t n = vertices.size();
-                Array<size_t> a(n);
+                ContiguousDeque<size_t> a(n);
                 for (size_t i = 0; i != n; ++i)
                     a[i] = i;
                 // one dimensional sort against a pattern-defeating direction
@@ -527,7 +527,7 @@ namespace wry {
                 std::sort(a.begin(), a.end(), compare);
                 
                 // b unscrambles a
-                Array<size_t> b(n);
+                ContiguousDeque<size_t> b(n);
                 for (size_t i = 0; i != n; ++i)
                     b[a[i]] = i;
                 
@@ -567,7 +567,7 @@ namespace wry {
             
             void colocate_similar_vertices() {
                 
-                Array<size_t> a = identify_colocated_vertices();
+                ContiguousDeque<size_t> a = identify_colocated_vertices();
                 size_t n = vertices.size();
                 assert(a.size() == n);
                 size_t count = 0;
@@ -590,7 +590,7 @@ namespace wry {
                 // similar positions
                 
                 size_t n = vertices.size();
-                Array<size_t> a(n);
+                ContiguousDeque<size_t> a(n);
                 for (size_t i = 0; i != n; ++i)
                     a[i] = i;
 
@@ -603,7 +603,7 @@ namespace wry {
                 
                 // a[i] now holds the sorted order of vertices
                 
-                Array<size_t> b(n);
+                ContiguousDeque<size_t> b(n);
                 for (size_t i = 0; i != n; ++i) {
                     b[a[i]] = i;
                 }
@@ -871,7 +871,7 @@ namespace wry {
                 // vertex[triangle_strip[i]]
                 
                 // add a layer of indirection
-                Array<size_t> a(n), b(n);
+                ContiguousDeque<size_t> a(n), b(n);
                 for (size_t i = 0; i != n; ++i) {
                     a[i] = i; // forward
                     b[i] = i; // backward
@@ -971,7 +971,7 @@ namespace wry {
                 // lenth, reasonable in a mesh with variation due to numerical
                 // error, we can do this by mapping indices to representatives
                 
-                Array<size_t> r = identify_colocated_vertices();
+                ContiguousDeque<size_t> r = identify_colocated_vertices();
 
                 // The following conditions should now hold
                 //
@@ -1006,8 +1006,8 @@ namespace wry {
                 }
                 
                 
-                Array<Array<triangle>> groups;
-                Array<size_t> perimeter;
+                ContiguousDeque<ContiguousDeque<triangle>> groups;
+                ContiguousDeque<size_t> perimeter;
                 while (!st.empty()) {
                     groups.emplace_back();
                     triangle t = *st.begin();
@@ -1035,7 +1035,7 @@ namespace wry {
         struct iquad { int indices[4]; };
 
         struct iface {
-            Array<int> indices;
+            ContiguousDeque<int> indices;
         };
 
         struct mesh {
@@ -1053,10 +1053,10 @@ namespace wry {
             Table<int, wry::packed::float3> normals;
             Table<int, wry::packed::float3> coordinates;
 
-            Array<iedge> edges;
-            Array<itriangle> triangles;
-            Array<iquad> quads;
-            Array<iface> faces;
+            ContiguousDeque<iedge> edges;
+            ContiguousDeque<itriangle> triangles;
+            ContiguousDeque<iquad> quads;
+            ContiguousDeque<iface> faces;
             
             Table<std::pair<int, int>, int> vertices_to_edge;
             Table<int, int> edge_to_triangle;

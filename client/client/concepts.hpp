@@ -10,10 +10,15 @@
 
 #include <concepts>
 
+#include "type_traits.hpp"
+
 namespace wry {
     
-    template<class From, class To>
+    template<typename From, typename To>
     concept PointerConvertibleTo = std::is_convertible_v<std::remove_cv_t<From>*, To*>;
+    
+    template<typename T>
+    concept Relocatable = is_relocatable_v<T>;
 
 } // namespace wry
 

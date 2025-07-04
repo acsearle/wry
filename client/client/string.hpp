@@ -9,6 +9,7 @@
 #define string_hpp
 
 #include <atomic>
+#include <cstdint>
 
 #include "array.hpp"
 #include "hash.hpp"
@@ -41,7 +42,7 @@ namespace wry {
     
     struct String {
                 
-        Array<char8_t> chars;
+        ContiguousDeque<char8_t> chars;
         
         using const_iterator = utf8::iterator;
         using iterator = const_iterator;
@@ -68,12 +69,12 @@ namespace wry {
             chars.assign(a.base, b.base);
         }
         
-        explicit String(Array<char8_t>&& bytes) 
+        explicit String(ContiguousDeque<char8_t>&& bytes) 
         : chars(std::move(bytes)) {
         }
         
-        operator ArrayView<const char8_t>() const {
-            return ArrayView<const char8_t>(chars.begin(), chars.end());
+        operator ContiguousView<const char8_t>() const {
+            return ContiguousView<const char8_t>(chars.begin(), chars.end());
         }
 
         operator StringView() const {
@@ -91,8 +92,8 @@ namespace wry {
             return chars.data();
         }
         
-        ArrayView<const byte> as_bytes() const {
-            return ArrayView<const byte>(reinterpret_cast<const byte*>(chars.begin()),
+        ContiguousView<const byte> as_bytes() const {
+            return ContiguousView<const byte>(reinterpret_cast<const byte*>(chars.begin()),
                                           reinterpret_cast<const byte*>(chars.end()));
         }
 
@@ -215,7 +216,7 @@ namespace wry {
             chars.append(v.chars.begin(), v.chars.end());
         }
         
-        void append(ArrayView<const char8_t> v) {
+        void append(ContiguousView<const char8_t> v) {
             chars.append(v);
         }
         

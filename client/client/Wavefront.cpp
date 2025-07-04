@@ -268,10 +268,10 @@ namespace wry::Wavefront {
                 
         using Index = std::uint32_t;
         
-        Array<float4> positions;
-        Array<packed::float3> normals;
-        Array<packed::float3> coordinates;
-        Array<packed::float3> parameters;
+        ContiguousDeque<float4> positions;
+        ContiguousDeque<packed::float3> normals;
+        ContiguousDeque<packed::float3> coordinates;
+        ContiguousDeque<packed::float3> parameters;
         
         // Running material library
         Table<String, Material> materials;
@@ -284,10 +284,10 @@ namespace wry::Wavefront {
         Material _current_material;
         
         // Current faces
-        Array<Index> _current_faces;
+        ContiguousDeque<Index> _current_faces;
         
         struct SmoothingGroup {
-            Array<Index> faces;
+            ContiguousDeque<Index> faces;
         };
         
         struct Group {
@@ -357,7 +357,7 @@ namespace wry::Wavefront {
             };
         }
         
-        auto parse_face_indices(Array<Index>& indices) {
+        auto parse_face_indices(ContiguousDeque<Index>& indices) {
             return [this, &indices](StringView& v) {
                 Index i = 0, j = 0, k = 0;
                 bool flag = match_and(parse_number_relaxed(i),
@@ -386,7 +386,7 @@ namespace wry::Wavefront {
             // TODO: static sized face array?
             //       - require triangles?
             //       - subdivide on load?
-            Array<Index> indices;
+            ContiguousDeque<Index> indices;
             return [this, indices=std::move(indices)](StringView& v) mutable -> bool {
                 indices.clear();
                 bool flag = match_and(match_character('f'),

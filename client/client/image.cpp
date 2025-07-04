@@ -37,7 +37,7 @@ namespace wry {
         png_image a;
         memset(&a, 0, sizeof(a));
         a.version = PNG_IMAGE_VERSION;
-        Array<char> c_str(v.chars);
+        ContiguousDeque<char> c_str(v.chars);
         c_str.push_back(0);
         if (!png_image_begin_read_from_file(&a, c_str.data())) {
             printf("png_image_begin_read_from_file -> \"%s\"\n", a.message);
@@ -84,7 +84,7 @@ namespace wry {
         a.height = (png_uint_32) source.minor();
         a.version =  PNG_IMAGE_VERSION;
         a.width = (png_uint_32) source.major();
-        Array<char> c_str(filename.chars);
+        ContiguousDeque<char> c_str(filename.chars);
         c_str.push_back(0);
         png_image_write_to_file(&a, c_str.data(), 0, source.data(),
                                 (png_int_32) source.stride_bytes(), nullptr);

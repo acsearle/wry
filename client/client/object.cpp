@@ -30,4 +30,13 @@ namespace wry::gc {
         abort();
     }
     
+    Object::Object(const Object&)
+    : Object() {
+    }
+    
+    Object::Object(Object&&)
+    : Object() {
+    }
+
+        
 } // namespace wry::gc

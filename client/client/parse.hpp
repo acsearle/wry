@@ -60,7 +60,7 @@ namespace wry {
                 v.chars._begin += (result.ptr - first);
                 return true;
             },
-            [&x](ArrayView<const char8_t>& v) -> bool {
+            [&x](ContiguousView<const char8_t>& v) -> bool {
                 auto first = reinterpret_cast<const char*>(v.begin());
                 auto last = reinterpret_cast<const char*>(v.end());
                 std::from_chars_result result = wry::from_chars(first, last, x);

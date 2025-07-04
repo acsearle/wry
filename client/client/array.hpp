@@ -12,59 +12,31 @@
 #include <iterator>
 
 #include "algorithm.hpp"
-#include "array_view.hpp"
-#include "maybe.hpp"
+#include "concepts.hpp"
 #include "memory.hpp"
 #include "stddef.hpp"
 #include "utility.hpp"
+
+#include "array_view.hpp"
+#include "maybe.hpp"
 #include "with_capacity.hpp"
 
 namespace wry {
     
     // # Array
     //
-    // A contiguous double-ended queue with amortized O(1) operations on the
-    // ends, intended to be the general-purpose sequence storage type
-    //
-    // Benchmarking indicates performance is competitive with the better of
-    // C++ vector and deque on all usage patterns.
-    //
-    // + Amortized O(1) push_front and pop_front
-    // + Amortized O(min(distance(begin, pos), distance(pos, end)) insert and erase
-    // + Contiguous pointer iterators
-    // - Higher constant factor for memory overhead
-    // - Higher constant factor for amortized O(1) operations (4 vs 3?)
-    // - Larger stack footprint (4 pointers vs 3 for std::vector / Rust Vec)
-    // - Reduced iterator stability
-    //
-    // Array currently assumes that the stored type is Relocatable
+    // A contiguous double-ended queue with amortized O(1) operations on both
+    // ends, intended to be a general-purpose sequence storage type.
 
-    // Array (std::vector, std::Vec, ...) has good amortized performance but
-    // bad worst-case performace (in fact it has the worst latency spikes
-    // possible for an amortized O(1) object: one O(N) operation after N O(1)
-    // operations.)
-    //
-    // Array should thus be used only for
-    // - Objects with a real-time bound on their lifetime, such as a per-frame
-    //   temporary.  In these cases we want a low cost for the sum of all
-    //   operations on the array, and don't care how they are distrbuted.
-    // - Non-real-time operations, such as loading assets at startup or
-    //   background saving
-    // - Collections with a strictly bounded size and therefore a bounded
-    //   latency spike potential
-    // The should not be used for
-    // - Long-lived, potentially large, potentially changing collections.
-    //   Notably, most of game state falls under these risks.
-
-    template<typename> 
-    struct Array;
+    template<Relocatable>
+    struct ContiguousDeque;
     
     template<typename T>
-    struct Rank<Array<T>> 
+    struct Rank<ContiguousDeque<T>> 
     : std::integral_constant<std::size_t, Rank<T>::value + 1> {};
         
-    template<typename T>
-    struct Array {
+    template<Relocatable T>
+    struct ContiguousDeque {
                 
         using size_type = size_type;
         using difference_type = difference_type;
@@ -113,30 +85,30 @@ namespace wry {
             _allocation_end = _allocation_begin + count;
         }
         
-        Array() noexcept
+        ContiguousDeque() noexcept
         : _allocation_begin(nullptr)
         , _begin(nullptr)
         , _end(nullptr)
         , _allocation_end(nullptr) {
         }
         
-        Array(const Array& other) 
-        : Array(wry::with_capacity, other.size()) {
+        ContiguousDeque(const ContiguousDeque& other) 
+        : ContiguousDeque(wry::with_capacity, other.size()) {
             _end = std::uninitialized_copy(other.begin(), other.end(), _end);
         }
         
-        Array(Array&& other)
-        : _allocation_begin(exchange(other._allocation_begin, nullptr))
-        , _begin(exchange(other._begin, nullptr))
-        , _end(exchange(other._end, nullptr))
-        , _allocation_end(exchange(other._allocation_end, nullptr)) {
+        ContiguousDeque(ContiguousDeque&& other) noexcept
+        : _allocation_begin(std::exchange(other._allocation_begin, nullptr))
+        , _begin(std::exchange(other._begin, nullptr))
+        , _end(std::exchange(other._end, nullptr))
+        , _allocation_end(std::exchange(other._allocation_end, nullptr)) {
         }
         
-        ~Array() {
+        ~ContiguousDeque() {
             _destroy();
         }
         
-        Array& operator=(const Array& other) {
+        ContiguousDeque& operator=(const ContiguousDeque& other) {
             if (other.size() <= size()) {
                 iterator last = std::copy(other.begin(), other.end(), _begin);
                 std::destroy(last, _end);
@@ -154,7 +126,7 @@ namespace wry {
             return *this;
         }
         
-        Array& operator=(Array&& other) {
+        ContiguousDeque& operator=(ContiguousDeque&& other) {
             _destroy();
             _allocation_begin = std::exchange(other._allocation_begin, nullptr);
             _begin = std::exchange(other._begin, nullptr);
@@ -164,25 +136,25 @@ namespace wry {
         }
 
         
-        explicit Array(size_type count)
-        : Array(wry::with_capacity_t{}, count) {
+        explicit ContiguousDeque(size_type count)
+        : ContiguousDeque(wry::with_capacity_t{}, count) {
             _end = std::uninitialized_value_construct_n(_begin, count);
         }
 
         template<typename U>
-        explicit Array(std::initializer_list<U> x)
-        : Array(x.begin(), x.end()) {
+        explicit ContiguousDeque(std::initializer_list<U> x)
+        : ContiguousDeque(x.begin(), x.end()) {
         }
 
-        explicit Array(auto&& other) : Array() {
+        explicit ContiguousDeque(auto&& other) : ContiguousDeque() {
             using std::begin;
             using std::end;
             assign(begin(other), end(other));
         }
         
         template<typename U>
-        explicit Array(Array<U>&& other)
-        : Array(std::make_move_iterator(other.begin()),
+        explicit ContiguousDeque(ContiguousDeque<U>&& other)
+        : ContiguousDeque(std::make_move_iterator(other.begin()),
                 std::make_move_iterator(other.end())) {
         }
 
@@ -190,34 +162,34 @@ namespace wry {
         // representation-interconvertible types such as {byte, char, char8_t},
         // {intN_t and uintN_t}, {T*, intptr_t, uintptr_t, size_t, difference_t}
 
-        Array(wry::with_capacity_t, size_type count)
+        ContiguousDeque(wry::with_capacity_t, size_type count)
         : _allocation_begin(_allocate_size(count))
         , _begin(_allocation_begin)
         , _end(_begin)
         , _allocation_end(_allocation_begin + count) {
         }
         
-        Array(auto first, auto last, std::input_iterator_tag)
-        : Array() {
+        ContiguousDeque(auto first, auto last, std::input_iterator_tag)
+        : ContiguousDeque() {
             std::copy(first, last, std::back_inserter(*this));
         }
         
-        Array(auto first, auto last, std::random_access_iterator_tag)
-        : Array(wry::with_capacity_t{}, std::distance(first, last)) {
+        ContiguousDeque(auto first, auto last, std::random_access_iterator_tag)
+        : ContiguousDeque(wry::with_capacity_t{}, std::distance(first, last)) {
             _end = std::uninitialized_copy(first, last, _end);
         }
         
-        Array(auto first, decltype(first) last)
-        : Array(first, last,
+        ContiguousDeque(auto first, decltype(first) last)
+        : ContiguousDeque(first, last,
                 typename std::iterator_traits<std::decay_t<decltype(first)>>::iterator_category{}) {
         }
 
-        Array(size_type count, const value_type& value) noexcept
-        : Array(wry::with_capacity, count) {
+        ContiguousDeque(size_type count, const value_type& value) noexcept
+        : ContiguousDeque(wry::with_capacity, count) {
             _end = std::uninitialized_fill_n(_begin, count, value);
         }
                                 
-        Array(T* allocation_begin_,
+        ContiguousDeque(T* allocation_begin_,
               T* begin_,
               T* end_,
               T* allocation_end_) noexcept
@@ -228,7 +200,7 @@ namespace wry {
             assert(invariant());
         }
                 
-        Array& operator=(auto&& other) {
+        ContiguousDeque& operator=(auto&& other) {
             if constexpr (wry::Rank<std::decay_t<decltype(other)>>::value == 0) {
                 fill(std::forward<decltype(other)>(other));
             } else {
@@ -239,12 +211,12 @@ namespace wry {
             return *this;
         }
         
-        operator ArrayView<T>&() {
-            return reinterpret_cast<ArrayView<T>&>(_begin);
+        operator ContiguousView<T>&() {
+            return reinterpret_cast<ContiguousView<T>&>(_begin);
         }
 
-        operator const ArrayView<const T>&() const {
-            return reinterpret_cast<const ArrayView<const T>&>(_begin);
+        operator const ContiguousView<const T>&() const {
+            return reinterpret_cast<const ContiguousView<const T>&>(_begin);
         }
                 
         iterator& begin() { return _begin; }
@@ -267,7 +239,7 @@ namespace wry {
         }
         */
         
-        void swap(Array& other) {
+        void swap(ContiguousDeque& other) {
             using std::swap;
             swap(_allocation_begin, other._allocation_begin);
             swap(_begin, other._begin);
@@ -344,12 +316,12 @@ namespace wry {
             _begin = _end;
         }
         
-        Array& assign(auto first, decltype(first) last) {
+        ContiguousDeque& assign(auto first, decltype(first) last) {
             return _assign(first, last,
                            typename std::iterator_traits<std::decay_t<decltype(first)>>::iterator_category());
         }
         
-        Array& assign(size_type count, const value_type& value) {
+        ContiguousDeque& assign(size_type count, const value_type& value) {
             if (count <= size()) {
                 iterator pos = std::fill_n(begin(), count, value);
                 std::destroy(pos, _end);
@@ -365,7 +337,7 @@ namespace wry {
             return *this;
         }
         
-        Array& fill(const value_type& value) {
+        ContiguousDeque& fill(const value_type& value) {
             std::fill(begin(), end(), value);
             return *this;
         }
@@ -503,7 +475,7 @@ namespace wry {
         }
                 
         void shrink_to_fit() const {
-            Array(*this).swap(*this);
+            ContiguousDeque(*this).swap(*this);
         }
                         
         void resize(size_t count) {
@@ -528,16 +500,16 @@ namespace wry {
         
         // [[Rust]] std::collections::Vec
         
-        static Array with_capacity(size_type count) {
+        static ContiguousDeque with_capacity(size_type count) {
             T* p = static_cast<T*>(::operator new(count * sizeof(T)));
-            return Array(p, p, p, p + count);
+            return ContiguousDeque(p, p, p, p + count);
         }
         
-        static Array from_raw_parts(T* allocation_begin_,
+        static ContiguousDeque from_raw_parts(T* allocation_begin_,
                                     T* begin_,
                                     T* end_,
                                     T* allocation_end_) {
-            return Array(allocation_begin_, begin_, end_, allocation_end_);
+            return ContiguousDeque(allocation_begin_, begin_, end_, allocation_end_);
         }
         
         std::tuple<T*, T*, T*, T*> into_raw_parts() && {
@@ -607,7 +579,7 @@ namespace wry {
         // Implementation
             
         template<typename InputIt>
-        Array& _assign(InputIt first, InputIt last, std::input_iterator_tag) {
+        ContiguousDeque& _assign(InputIt first, InputIt last, std::input_iterator_tag) {
             T* pos = _begin;
             for (;; ++pos, ++first) {
                 if (first == last) {
@@ -627,7 +599,7 @@ namespace wry {
         }
         
         template<typename InputIt>
-        Array& _assign(InputIt first, InputIt last, std::random_access_iterator_tag) {
+        ContiguousDeque& _assign(InputIt first, InputIt last, std::random_access_iterator_tag) {
             size_type count = std::distance(first, last);
             if (count <= size()) {
                 iterator end2 = std::copy(first, last, begin());
@@ -866,7 +838,7 @@ namespace wry {
             append(std::begin(x), std::end(x));
         }
 
-        void append(Array&& x) {
+        void append(ContiguousDeque&& x) {
             if (empty()) {
                 *this = std::move(x);
             } else if ((capacity_back() >= x.size())
@@ -884,7 +856,7 @@ namespace wry {
                 _begin = _end;
                 swap(x);
             } else {
-                Array y(wry::with_capacity, size() + x.size());
+                ContiguousDeque y(wry::with_capacity, size() + x.size());
                 assert(y.capacity_back() >= size());
                 relocate(_begin, _end, y._end);
                 y._end += size();
@@ -899,43 +871,43 @@ namespace wry {
 
         //
         
-        ArrayView<T>& as_view() {
-            return reinterpret_cast<ArrayView<T>&>(_begin);
+        ContiguousView<T>& as_view() {
+            return reinterpret_cast<ContiguousView<T>&>(_begin);
         }
 
-        const ArrayView<const T>& as_view() const {
-            return reinterpret_cast<const ArrayView<const T>&>(_begin);
+        const ContiguousView<const T>& as_view() const {
+            return reinterpret_cast<const ContiguousView<const T>&>(_begin);
         }
 
-        ArrayView<const T>& as_const_view() {
-            return reinterpret_cast<ArrayView<const T>&>(_begin);
+        ContiguousView<const T>& as_const_view() {
+            return reinterpret_cast<ContiguousView<const T>&>(_begin);
         }
 
-        const ArrayView<const T>& as_const_view() const {
-            return reinterpret_cast<const ArrayView<const T>&>(_begin);
+        const ContiguousView<const T>& as_const_view() const {
+            return reinterpret_cast<const ContiguousView<const T>&>(_begin);
         }
 
-        ArrayView<const byte> as_bytes() {
-            return ArrayView<const byte>(reinterpret_cast<const byte*>(_begin),
+        ContiguousView<const byte> as_bytes() {
+            return ContiguousView<const byte>(reinterpret_cast<const byte*>(_begin),
                                                    reinterpret_cast<const byte*>(_end));
         }
 
-        ArrayView<T> sub(difference_type i, size_type n) {
+        ContiguousView<T> sub(difference_type i, size_type n) {
             assert(0 <= i);
             assert(i + n <= size());
-            return ArrayView(_begin + i, n);
+            return ContiguousView(_begin + i, n);
         }
 
-        ArrayView<const T> sub(difference_type i, size_type n) const {
+        ContiguousView<const T> sub(difference_type i, size_type n) const {
             assert(0 <= i);
             assert(i + n <= size());
-            return ArrayView(_begin + i, n);
+            return ContiguousView(_begin + i, n);
         }
 
-        ArrayView<const T> csub(difference_type i, size_type n) const {
+        ContiguousView<const T> csub(difference_type i, size_type n) const {
             assert(0 <= i);
             assert(i + n <= size());
-            return ArrayView(_begin + i, n);
+            return ContiguousView(_begin + i, n);
         }
 
         // Array structs for all T share a compatible layout of four pointers,
@@ -958,36 +930,36 @@ namespace wry {
         // Compare with Rust `Vec::spare_capacity_mut` and `set_len`.
         
         template<typename U>
-        Array<U>& reinterpret_as() {
-            return reinterpret_cast<Array<U>&>(*this);
+        ContiguousDeque<U>& reinterpret_as() {
+            return reinterpret_cast<ContiguousDeque<U>&>(*this);
         }
 
         template<typename U>
-        const Array<U>& reinterpret_as() const {
-            return reinterpret_cast<const Array<U>&>(*this);
+        const ContiguousDeque<U>& reinterpret_as() const {
+            return reinterpret_cast<const ContiguousDeque<U>&>(*this);
         }
 
-        Array<byte>& bytes() {
-            return reinterpret_cast<Array<byte>&>(*this);
+        ContiguousDeque<byte>& bytes() {
+            return reinterpret_cast<ContiguousDeque<byte>&>(*this);
         }
 
-        const Array<byte>& bytes() const {
-            return reinterpret_cast<const Array<byte>&>(*this);
+        const ContiguousDeque<byte>& bytes() const {
+            return reinterpret_cast<const ContiguousDeque<byte>&>(*this);
         }
                 
         template<typename U = Maybe<T>>
-        ArrayView<U>& reinterpret_left_as() {
-            return reinterpret_cast<ArrayView<U>&>(_allocation_begin);
+        ContiguousView<U>& reinterpret_left_as() {
+            return reinterpret_cast<ContiguousView<U>&>(_allocation_begin);
         }
         
         template<typename U = T>
-        ArrayView<U>& reinterpret_middle_as() {
-            return reinterpret_cast<ArrayView<U>&>(_begin);
+        ContiguousView<U>& reinterpret_middle_as() {
+            return reinterpret_cast<ContiguousView<U>&>(_begin);
         }
 
         template<typename U = Maybe<T>>
-        ArrayView<U>& reinterpret_right_as() {
-            return reinterpret_cast<ArrayView<U>&>(_end);
+        ContiguousView<U>& reinterpret_right_as() {
+            return reinterpret_cast<ContiguousView<U>&>(_end);
         }
         
         
@@ -1035,10 +1007,10 @@ namespace wry {
             return std::find_if(_begin, _end,  std::forward<decltype(predicate)>(predicate)) != _end;
         }
 
-    }; // struct Array<T>
+    }; // struct ContiguousDeque<T>
     
     template<typename T>
-    void swap(Array<T>& a, Array<T>& b) {
+    void swap(ContiguousDeque<T>& a, ContiguousDeque<T>& b) {
         a.swap(b);
     }
     

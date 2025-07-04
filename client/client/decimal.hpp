@@ -102,7 +102,7 @@ namespace wry::decimal {
         // - Heap allocated
         // - Space inefficient
         
-        ArrayView<char8_t> data;
+        ContiguousView<char8_t> data;
         
         StringView as_StringView() const;
         
@@ -119,12 +119,12 @@ namespace wry::decimal {
     
     struct Descriptor {
         
-        ArrayView<const char8_t> integer;
-        ArrayView<const char8_t> fraction;
+        ContiguousView<const char8_t> integer;
+        ContiguousView<const char8_t> fraction;
         int exponent;
         bool is_negative;
         
-        explicit Descriptor(ArrayView<const char8_t> a) {
+        explicit Descriptor(ContiguousView<const char8_t> a) {
             
             exponent = 0;
             is_negative = false;
@@ -208,7 +208,7 @@ namespace wry::decimal {
     };
     
     
-    String string_add(ArrayView<const char8_t> a, ArrayView<const char8_t> b) {
+    String string_add(ContiguousView<const char8_t> a, ContiguousView<const char8_t> b) {
         
         // Our goal here is to perform subtraction on strings directly without
         // parsing into an intermediate binary representation

@@ -22,7 +22,7 @@
 namespace wry {
     
     template<typename T>
-    using Queue = std::queue<T, Array<T>>;
+    using Queue = std::queue<T, ContiguousDeque<T>>;
     
     // A major pattern in our application is building a queue of Entity* without
     // duplicates, then draining it.  These objects will typically have a small
@@ -162,7 +162,7 @@ namespace wry {
         QueueOfUnique& operator=(const QueueOfUnique&) = delete;
         QueueOfUnique& operator=(QueueOfUnique&&) = default;
 
-        QueueOfUnique(Array<T>&& a, HashSet<T>&& b)
+        QueueOfUnique(ContiguousDeque<T>&& a, HashSet<T>&& b)
         : queue(std::move(a))
         , set(std::move(b)) {
         }

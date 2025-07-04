@@ -108,11 +108,11 @@ namespace wry {
     template<typename T>
     struct _deserialize_array_visitor {
         
-        using Value = Array<T>;
+        using Value = ContiguousDeque<T>;
         
         template<typename A>
-        Array<T> visit_seq(A&& access) {
-            Array<T> x;
+        ContiguousDeque<T> visit_seq(A&& access) {
+            ContiguousDeque<T> x;
             for (;;) {
                 Option<T> y = access.template next_element<T>();
                 if (y.is_some())
@@ -124,7 +124,7 @@ namespace wry {
     };
     
     template<typename T, typename D>
-    Array<T> deserialize(std::in_place_type_t<Array<T>>, D&& deserializer) {
+    ContiguousDeque<T> deserialize(std::in_place_type_t<ContiguousDeque<T>>, D&& deserializer) {
         return std::forward<D>(deserializer).deserialize_seq(_deserialize_array_visitor<T>{});
     }
     

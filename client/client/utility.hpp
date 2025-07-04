@@ -8,9 +8,11 @@
 #ifndef utility_hpp
 #define utility_hpp
 
+#include <cstddef>
+#include <memory>
+
 #include <bit>
 #include <compare>
-#include <memory>
 #include <utility>
 
 #include "assert.hpp"

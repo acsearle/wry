@@ -34,7 +34,7 @@ namespace wry {
     // Serialize sequences
     
     template<typename T, typename S> 
-    void serialize(const ArrayView<T>& x, S&& serializer) {
+    void serialize(const ContiguousView<T>& x, S&& serializer) {
         auto seq = std::forward<S>(serializer).serialize_seq(Some(x.size()));
         for (const auto& e : x)
             seq.serialize_element(e);

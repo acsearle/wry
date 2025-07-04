@@ -51,7 +51,7 @@ namespace wry {
     template<typename ByteSink>
     struct binary_serializer {
         
-        Array<unsigned char> _buffer;
+        ContiguousDeque<unsigned char> _buffer;
         ByteSink _sink;
         
         void _maybe_sink() {
@@ -173,7 +173,7 @@ _maybe_sink();\
         }
         
         template<typename T>
-        void set_bytes(ArrayView<T>& buffer) {
+        void set_bytes(ContiguousView<T>& buffer) {
             if (buffer.can_read_first()) {
                 size_t n = fwrite(buffer.may_read_first(), sizeof(T), buffer.can_read_first(), _file_stream);
                 buffer.did_read_first(n);
@@ -184,10 +184,10 @@ _maybe_sink();\
     
     struct memory_byte_sink {
         
-        ArrayView<unsigned char> _byte_view;
+        ContiguousView<unsigned char> _byte_view;
         
         template<typename T>
-        void set_bytes(ArrayView<T>& buffer) {
+        void set_bytes(ContiguousView<T>& buffer) {
             size_t n = _byte_view.can_overwrite_first() / sizeof(T);
             size_t m = buffer.size();
             size_t count = min(m, n);
@@ -210,7 +210,7 @@ _maybe_sink();\
     struct binary_deserializer {
         
         ByteSource _byte_source;
-        Array<unsigned char> _buffer;
+        ContiguousDeque<unsigned char> _buffer;
         
         bool _ensure_available(size_t n) {
             for (;;) {
@@ -256,7 +256,7 @@ return std::forward<V>(visitor).visit_##T (x);\
             memcpy(&count, _buffer.will_read_first(sizeof(uint64_t)), count);
             if (!_ensure_available(count))
                 throw ERANGE;
-            ArrayView<const unsigned char> result(_buffer.will_read_first(count), count);
+            ContiguousView<const unsigned char> result(_buffer.will_read_first(count), count);
             return std::forward<V>(visitor).visit_bytes(result);
         };
         
@@ -353,12 +353,12 @@ return std::forward<V>(visitor).visit_##T (x);\
             return *this;
         }
         
-        void get_bytes(Array<byte>& buffer) {
+        void get_bytes(ContiguousDeque<byte>& buffer) {
             size_t count = fread(buffer.end(), 1, buffer.can_write_back(), _stream);
             buffer.did_write_back(count);
         }
         
-        void read(Array<byte>& buffer) {
+        void read(ContiguousDeque<byte>& buffer) {
             return get_bytes(buffer);
         }
         
@@ -366,9 +366,9 @@ return std::forward<V>(visitor).visit_##T (x);\
     
     struct memory_byte_source {
         
-        ArrayView<const byte> _view;
+        ContiguousView<const byte> _view;
         
-        void get_bytes(Array<byte>& buffer) {
+        void get_bytes(ContiguousDeque<byte>& buffer) {
             size_t count = min(_view.can_read_first(), buffer.can_write_back());
             memcpy(buffer.will_write_back(count), _view.will_read_first(count), count);
         }

@@ -28,14 +28,14 @@ namespace wry {
     // may not be (as when iterating over a stride_ptr)
         
     template<typename T>
-    struct ArrayView;
+    struct ContiguousView;
     
     template<typename T>
-    struct Rank<ArrayView<T>> 
+    struct Rank<ContiguousView<T>> 
     : std::integral_constant<std::size_t, Rank<T>::value + 1> {};
     
     template<typename T>
-    struct ArrayView {
+    struct ContiguousView {
         
         using size_type = size_t;
         using difference_type = ptrdiff_t;
@@ -59,30 +59,30 @@ namespace wry {
             return _begin <= _end;
         }
                                 
-        ArrayView() = default;
+        ContiguousView() = default;
         
         // reference semantics: copy is a shallow
         
-        ArrayView(const ArrayView&) = default;
-        ArrayView(ArrayView&&) = default;
+        ContiguousView(const ContiguousView&) = default;
+        ContiguousView(ContiguousView&&) = default;
                 
-        ~ArrayView() = default;
+        ~ContiguousView() = default;
         
         // reference semantics: assignment is deep
         
-        ArrayView& operator=(const ArrayView& other) {
+        ContiguousView& operator=(const ContiguousView& other) {
             copy(other._begin, other._end, _begin, _end);
             return *this;
         }
         
-        ArrayView& operator=(ArrayView&& other) {
+        ContiguousView& operator=(ContiguousView&& other) {
             copy(other._begin, other._end, _begin, _end);
             return *this;
         }
         
         // converting constructors
         
-        explicit ArrayView(auto&& other)
+        explicit ContiguousView(auto&& other)
         : _begin(std::begin(other))
         , _end(std::end(other)) {
             assert(invariant());
@@ -90,18 +90,18 @@ namespace wry {
         
         // sequence constructors
         
-        ArrayView(iterator first, iterator last)
+        ContiguousView(iterator first, iterator last)
         : _begin(first)
         , _end(last) {
             assert(invariant());
         }
         
-        ArrayView(pointer first, size_type count)
+        ContiguousView(pointer first, size_type count)
         : _begin(first)
         , _end(first + count) {
         }
         
-        const ArrayView& assign(auto&& first, auto&& last) const {
+        const ContiguousView& assign(auto&& first, auto&& last) const {
             copy(std::forward<decltype(first)>(first),
                  std::forward<decltype(last)>(last),
                  _begin,
@@ -109,12 +109,12 @@ namespace wry {
             return *this;
         }
         
-        const ArrayView& fill(const auto& value) const {
+        const ContiguousView& fill(const auto& value) const {
             std::fill(_begin, _end, value);
             return *this;
         }
 
-        const ArrayView& operator=(auto&& other) const {
+        const ContiguousView& operator=(auto&& other) const {
             if constexpr (wry::Rank<std::decay_t<decltype(other)>>::value == 0) {
                 fill(std::forward<decltype(other)>(other));
             } else {
@@ -200,20 +200,20 @@ namespace wry {
         
         // subviews
         
-        ArrayView subview(size_type i, size_type n) const {
+        ContiguousView subview(size_type i, size_type n) const {
             precondition((i + n) <= size());
-            return ArrayView(_begin + i, n);
+            return ContiguousView(_begin + i, n);
         }
 
         // mutate the ArrayView itself
         
-        ArrayView& reset() {
+        ContiguousView& reset() {
             _begin = nullptr;
             _end = nullptr;
             return *this;
         }
         
-        ArrayView& reset(auto&& other) {
+        ContiguousView& reset(auto&& other) {
             using std::begin;
             using std::end;
             _begin = begin(other);
@@ -221,13 +221,13 @@ namespace wry {
             return *this;
         }
         
-        ArrayView& reset(pointer first, size_type count) {
+        ContiguousView& reset(pointer first, size_type count) {
             _begin = first;
             _end = first + count;
             return *this;
         }
         
-        ArrayView& reset(iterator first, iterator last) {
+        ContiguousView& reset(iterator first, iterator last) {
             _begin = first;
             _end = last;
             return *this;
@@ -256,13 +256,13 @@ namespace wry {
         // unsafe alternative views
         
         template<typename U>
-        const ArrayView<U>& reinterpret_as() const {
-            return reinterpret_cast<const ArrayView<U>&>(*this);
+        const ContiguousView<U>& reinterpret_as() const {
+            return reinterpret_cast<const ContiguousView<U>&>(*this);
         }
         
         template<typename U>
-        ArrayView<U>& reinterpret_as() {
-            return reinterpret_cast<ArrayView<U>&>(*this);
+        ContiguousView<U>& reinterpret_as() {
+            return reinterpret_cast<ContiguousView<U>&>(*this);
         }
                 
         // bulk-copy interface
@@ -399,7 +399,7 @@ namespace wry {
         }
         
 #define X(Y) \
-        ArrayView& operator Y (auto&& other) {\
+        ContiguousView& operator Y (auto&& other) {\
             if constexpr (wry::Rank<std::decay_t<decltype(other)>>::value == 0) {\
                 iterator first = _begin;\
                 for (; first != _end; ++first)\
@@ -432,10 +432,10 @@ namespace wry {
 
 #undef X
         
-    }; // struct ArrayView<T>
+    }; // struct ContiguousView<T>
     
     template<typename T>
-    void swap(const ArrayView<T>& x, const ArrayView<T>& y) {
+    void swap(const ContiguousView<T>& x, const ContiguousView<T>& y) {
         x.swap(y);
     }
         

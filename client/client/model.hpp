@@ -44,7 +44,7 @@ namespace wry {
         
         // debug state
         
-        Array<String> _console;
+        ContiguousDeque<String> _console;
         std::multimap<std::chrono::steady_clock::time_point, String> _logs;
         
         bool _console_active = false;        
@@ -109,7 +109,10 @@ namespace wry {
             }
 
             //_world->_value_for_coordinate.write(Coordinate{-2, -2}, gc::value_make_integer_with(7));
-            // _world->_value_for_coordinate.write(Coordinate{-2, -2}, gc::value_make_array());
+            _world->_value_for_coordinate =  _world->_value_for_coordinate->clone_and_insert_or_assign(Coordinate{-2, -2},
+                                                                                                       gc::value_make_integer_with((7)));
+            //_world->_value_for_coordinate.write(Coordinate{-2, -2}, gc::value_make_array());
+            // _world->_value_for_coordinate.set(Coordinate{-2, -2}, gc::value_make_array());
 
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();

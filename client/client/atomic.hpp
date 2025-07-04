@@ -44,7 +44,7 @@ namespace wry {
     //   consist memory ordering)
     // - improve the interface and libc++'s implementation of wait/notify
 
-    // The implementation depends heavily on GCC/Clang intrinsics
+    // The implementation depends heavily on the GCC intrinsics
     // TODO: extend to MSVC _Interlocked[op][width]_[ordering]
 
     // TODO: architecture specific cache line size
@@ -52,7 +52,7 @@ namespace wry {
     
     enum class Ordering {
         RELAXED = __ATOMIC_RELAXED,
-        // CONSUME = __ATOMIC_CONSUME, // TODO: Deprecation status of CONSUME
+        CONSUME = __ATOMIC_CONSUME,
         ACQUIRE = __ATOMIC_ACQUIRE,
         RELEASE = __ATOMIC_RELEASE,
         ACQ_REL = __ATOMIC_ACQ_REL,
@@ -64,7 +64,7 @@ namespace wry {
         NO_TIMEOUT,
         TIMEOUT,
     };
-        
+    
     template<typename T>
     struct Atomic {
         
@@ -142,10 +142,10 @@ namespace wry {
         
         void wait(T& expected, Ordering order) {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
-            uint64_t buffer;
+            uint64_t buffer = {};
             __builtin_memcpy(&buffer, &expected, sizeof(T));
             for (;;) {
-                T discovered = load(order);
+                T discovered = this->load(order);
                 if (__builtin_memcmp(&buffer, &discovered, sizeof(T))) {
                     expected = discovered;
                     return;
@@ -167,15 +167,15 @@ namespace wry {
         
         AtomicWaitResult wait_until(T& expected, Ordering order, uint64_t deadline) {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
-            uint64_t buffer;
+            uint64_t buffer = {};
             __builtin_memcpy(&buffer, &expected, sizeof(T));
             for (;;) {
-                T discovered = load(order);
+                T discovered = this->load(order);
                 if (__builtin_memcmp(&buffer, &discovered, sizeof(T))) {
                     expected = discovered;
                     return AtomicWaitResult::NO_TIMEOUT;
                 }                
-                int count = os_sync_wait_on_address_with_deadline(&value,
+                int count = os_sync_wait_on_address_with_deadline(&(this->value),
                                                                   buffer,
                                                                   sizeof(T),
                                                                   OS_SYNC_WAIT_ON_ADDRESS_NONE,
