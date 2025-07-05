@@ -82,13 +82,21 @@ namespace wry {
             _console.emplace_back("");
 
             using namespace sim;
+                        
+            auto insert_localized_entity = [&](const LocalizedEntity* entity_ptr) {
+                EntityID entity_id = EntityID::oracle();
+                _world->_entity_for_entity_id = _world->_entity_for_entity_id->clone_and_insert_or_assign(entity_id, entity_ptr);
+                _world->_entity_id_for_coordinate = _world->_entity_id_for_coordinate->clone_and_insert_or_assign(entity_ptr->_location, new PersistentSet<EntityID>{std::set<EntityID>{entity_id}});
+            };
             
             {
                 // new machine spawner at origin
                 Spawner* p = new Spawner;
                 p->_location = Coordinate{0, 0};
                 //_world->_entities.push_back(p);
-                entity_ready_on_world(p, _world);
+                // entity_ready_on_world(p, _world);
+                insert_localized_entity(p);
+                
             }
             
             {
@@ -96,16 +104,18 @@ namespace wry {
                 Source* q = new Source;
                 q->_location = Coordinate{2, 2};
                 q->_of_this = Value(1);
-                //_world->_entities.push_back(q);
-                entity_ready_on_world(q, _world);
+                // _world->_entities.push_back(q);
+                // entity_ready_on_world(q, _world);
+                insert_localized_entity(q);
             }
             
             {
                 // value sink
                 Sink* r = new Sink;
                 r->_location = Coordinate{4, 2};
-               // _world->_entities.push_back(r);
-                entity_ready_on_world(r, _world);
+                // _world->_entities.push_back(r);
+                // entity_ready_on_world(r, _world);
+                insert_localized_entity(r);
             }
 
             //_world->_value_for_coordinate.write(Coordinate{-2, -2}, gc::value_make_integer_with(7));

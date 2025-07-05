@@ -1093,11 +1093,11 @@
     {
 
         auto tnow = world_time(_model->_world);
-        // const auto& entities = _model->_world->_entity_for_entity_id;
+        const auto* entities = _model->_world->_entity_for_entity_id;
         
         // We don't need entities.size() because entities are no longer drawn
         // into this buffer (I think)
-        NSUInteger quad_count = /* entities.size() * 4 */ + 1000 + 2;
+        NSUInteger quad_count = entities->data.size() * 4 + 1000 + 2;
         NSUInteger vertex_count = quad_count * 4;
         index_count = quad_count * 6;
         vertices = [_device newBufferWithLength:vertex_count * sizeof(MeshVertex) options:MTLStorageModeShared];
@@ -1110,11 +1110,11 @@
         v.bitangent = make<float4>(0.0f, 1.0f, 0.0f, 0.0f);
         v.normal = make<float4>(0.0f, 0.0f, 1.0f, 0.0f);
         uint k = 0;
-#if 0
-        for (size_t qi = 0; qi != entities.size(); ++qi) {
-            sim::Entity* q = entities[qi];
+
+        for (const auto& [qi, q] : entities->data) {
+            // sim::Entity* q = entities[qi];
             
-            if (auto p = dynamic_cast<wry::sim::Machine*>(q)) { // ugh
+            if (auto p = dynamic_cast<const wry::sim::Machine*>(q)) { // ugh
                 
                 auto h0 = (p->_old_heading & 3) * M_PI_2;
                 auto h1 = (p->_new_heading & 3) * M_PI_2;
@@ -1216,7 +1216,7 @@
                     k += 4;
                 }
                 
-            } else if (auto p = dynamic_cast<sim::LocalizedEntity*>(q)){
+            } else if (auto p = dynamic_cast<const sim::LocalizedEntity*>(q)){
                 
                 simd_float4 location = make<float4>(p->_location.x, p->_location.y + 1.0, 0.0, 1.0f);
                 auto A = simd_matrix_translate(location) * lookat_transform * simd_matrix_scale(0.5f);
@@ -1246,9 +1246,9 @@
                 
                 WryMesh* s = nil;
                 
-                if (auto r = dynamic_cast<sim::Source*>(q)) {
+                if (auto r = dynamic_cast<const sim::Source*>(q)) {
                     s = _mine_mesh;
-                } else if (auto r = dynamic_cast<sim::Sink*>(q)) {
+                } else if (auto r = dynamic_cast<const sim::Sink*>(q)) {
                     s = _furnace_mesh;
                 }
                 
@@ -1262,7 +1262,7 @@
                 }
 
                 
-                if (auto r = dynamic_cast<sim::Source*>(q)) {
+                if (auto r = dynamic_cast<const sim::Source*>(q)) {
                     
                     simd_float4 coordinate = make<float4>((r->_of_this.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                     
@@ -1293,7 +1293,6 @@
             }
             
         }
-#endif
 
         for (int i = grid_bounds.a.x; i != grid_bounds.b.x; ++i) {
             for (int j = grid_bounds.a.y; j != grid_bounds.b.y; ++j) {

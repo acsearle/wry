@@ -98,6 +98,8 @@ namespace wry {
                     adl::trace(k);
             }
             
+            explicit PersistentSet(auto&&... args) : data(FORWARD(args)...) {}
+            
             virtual ~PersistentSet() {
                 printf("%s\n", __PRETTY_FUNCTION__);
             }
