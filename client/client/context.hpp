@@ -19,10 +19,8 @@ namespace wry::sim {
         StableConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_for_coordinate;
         StableConcurrentMap<Time, Atomic<const Transaction::Node*>> _transactions_for_time;
         
-        
-        
     };
     
-}
+} // namespace wry::sim
 
 #endif /* context_hpp */

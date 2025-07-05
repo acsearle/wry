@@ -21,7 +21,7 @@
 #include "queue.hpp"
 #include "HeapTable.hpp"
 
-#include "PersistentMap.hpp"
+#include "persistent_map.hpp"
 
 namespace wry::sim {
     

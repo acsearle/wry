@@ -1,36 +1,39 @@
 //
-//  PersistentMap.hpp
+//  persistent_map.hpp
 //  client
 //
 //  Created by Antony Searle on 24/11/2024.
 //
 
-#ifndef PersistentMap_hpp
-#define PersistentMap_hpp
+#ifndef persistent_map_hpp
+#define persistent_map_hpp
 
 #include <map>
+#include <mutex>
 #include <set>
 
 #include <iostream>
 
 #include "adl.hpp"
 #include "garbage_collected.hpp"
+#include <os/lock.h>
 
 namespace wry {
     
+    // Immutable, Heap, GC, ...
     template<typename T>
     struct ImmutableGarbageCollected : GarbageCollected {
         
         T data;
         
-        virtual void _garbage_collected_scan() const override {
-            adl::trace(data);
-        }
-        
         virtual ~ImmutableGarbageCollected() {
             printf("%s\n", __PRETTY_FUNCTION__);
         }
-        
+
+        virtual void _garbage_collected_scan() const override {
+            adl::trace(data);
+        }
+                
         static const ImmutableGarbageCollected* make(auto&&... parts) {
             return new ImmutableGarbageCollected{T(std::forward<decltype(parts)>(parts)...)};
         }
@@ -41,7 +44,40 @@ namespace wry {
             return from(std::move(mutable_copy));
         }
         
+    }; // ImmutableGarbageCollected
+    
+    template<typename T>
+    struct Mutex {
         
+        mutable T _data;
+        mutable os_unfair_lock _mutex = OS_UNFAIR_LOCK_INIT;
+        
+        struct Guard {
+            const Mutex* _target;
+            explicit Guard(Mutex* target) : _target(target) {
+                // _target->_mutex.lock();
+                os_unfair_lock_lock(&(_target->_mutex));
+            }
+            ~Guard() {
+                // _target->_mutex.unlock();
+                os_unfair_lock_unlock(&(_target->_mutex));
+            }
+            T* operator->() const {
+                return &(_target->_data);
+            }
+        };
+        
+        Guard operator->() const {
+            return Guard{this};
+        }
+        
+        explicit Mutex(auto&& parts)
+        : _data(FORWARD(parts)) {
+        }
+        
+        T into_inner() const {
+            return std::move(*(operator->()));
+        }
         
     };
     
@@ -177,10 +213,27 @@ namespace wry {
         }
          */
         
+       
+        
         template<typename Key, typename T>
         struct StableConcurrentMap {
+            std::mutex _mutex;
             std::map<Key, T> _map;
+            
+            bool insert_or_assign(auto&& k, auto&& v) {
+                std::unique_lock lock{_mutex};
+                return _map.insert_or_assign(FORWARD(k),
+                                             FORWARD(v)).first;
+            }
+            
+            decltype(auto) subscript_and_mutate(auto&& k, auto&& f) {
+                std::unique_lock lock{_mutex};
+                return std::forward<decltype(f)>(f)(_map[FORWARD(k)]);
+            }
+            
         };
+        
+        
         
         template<typename Key, typename T, typename U, typename F>
         const PersistentMap<Key, T>* parallel_rebuild(const PersistentMap<Key, T>* source,
@@ -243,4 +296,4 @@ namespace wry {
 
 }
 
-#endif /* PersistentMap_hpp */
+#endif /* persistent_map_hpp */

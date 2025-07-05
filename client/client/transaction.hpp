@@ -11,7 +11,7 @@
 #include "atomic.hpp"
 #include "entity.hpp"
 #include "garbage_collected.hpp"
-#include "PersistentMap.hpp"
+#include "persistent_map.hpp"
 
 namespace wry::sim {
     
