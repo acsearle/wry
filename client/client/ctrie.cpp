@@ -12,7 +12,7 @@
 #include "HeapString.hpp"
 
 
-namespace wry::gc {
+namespace wry {
     
     namespace _ctrie {
         
@@ -174,7 +174,7 @@ namespace wry::gc {
             ncn->bmp = this->bmp;
             for (int i = 0; i != num; ++i) {
                 const BranchNode* sub = (i == pos) ? bn : this->array[i];
-                adl::shade(sub);
+                shade(sub);
                 ncn->array[i] = sub;
             }
             return ncn;
@@ -193,7 +193,7 @@ namespace wry::gc {
             ncn->bmp = this->bmp;
             for (int i = 0; i != num; ++i) {
                 const BranchNode* bn = this->array[i]->_ctrie_bn_resurrect();
-                adl::shade(bn);
+                shade(bn);
                 ncn->array[i] = bn;
             }
             return ncn;
@@ -416,7 +416,7 @@ namespace wry::gc {
             const BranchNode** dest = ncn->array;
             for (int i = 0; i != num; ++i) {
                 if (i != pos) {
-                    adl::shade(array[i]);
+                    shade(array[i]);
                     *dest++ = array[i];
                 }
             }
@@ -436,7 +436,7 @@ namespace wry::gc {
                 } else {
                     ncn->array[i] = bn;
                 }
-                adl::shade(ncn->array[i]);
+                shade(ncn->array[i]);
             }
             assert(src == array+num);
             return ncn;
@@ -512,7 +512,7 @@ namespace wry::gc {
                     case Color::GRAY:
                     default: {
                         // Impossible
-                        adl::debug(key);
+                        debug(key);
                         abort();
                     }
                 }
@@ -573,19 +573,19 @@ namespace wry::gc {
         void CNode::_garbage_collected_scan() const {
             int num = __builtin_popcountll(bmp);
             for (int i = 0; i != num; ++i)
-                adl::trace_weak(array[i]);
+                trace_weak(array[i]);
         }
         
         void INode::_garbage_collected_scan() const {
-            adl::trace(main);
+            trace(main);
         }
         
         void LNode::_garbage_collected_scan() const {
-            adl::trace_weak(sn);
-            adl::trace(next);
+            trace_weak(sn);
+            trace(next);
         }
         void TNode::_garbage_collected_scan() const {
-            adl::trace_weak(sn);
+            trace_weak(sn);
         }
         
         
@@ -628,7 +628,7 @@ namespace wry::gc {
     }
 
     void Ctrie::_garbage_collected_scan() const {
-        adl::trace(root);
+        trace(root);
     }
     
     
@@ -681,7 +681,7 @@ namespace wry::gc {
                         case Color::GRAY:
                         default: {
                             // Impossible
-                            adl::debug(hs);
+                            debug(hs);
                             abort();
                         }
                     }
@@ -709,5 +709,5 @@ namespace wry::gc {
         return this;
     }
     
-} // namespace wry::gc
+} // namespace wry
 

@@ -444,7 +444,7 @@ namespace wry {
             }
             
             std::uint64_t get_hash(const auto& keylike) const {
-                return adl::hash(keylike) | 1;
+                return hash(keylike) | 1;
             }
             
             template<typename K, typename U>
@@ -1184,8 +1184,8 @@ namespace wry {
     };
     
 
-    template<typename K, typename V> using HashMap = Table<K, V>;
-    template<typename K> using HashSet = hash_set<K>;
+    //template<typename K, typename V> using HashMap = Table<K, V>;
+    //template<typename K> using HashSet = hash_set<K>;
         
 } // namespace wry
 

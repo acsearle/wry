@@ -13,7 +13,7 @@
 #include "typeinfo.hpp"
 #include "type_traits.hpp"
 
-namespace wry::gc {
+namespace wry {
         
     using hash_t = std::size_t;
     
@@ -85,52 +85,16 @@ namespace wry::gc {
 
     }; // struct Object
     
-    inline hash_t hash(const GarbageCollected* self) {
-        return self->_garbage_collected_hash();
-    }
-    inline void debug(const GarbageCollected* self) {
-        self->_garbage_collected_debug();
-    }
-    inline void passivate(GarbageCollected*& self) {
-        self = nullptr;
-    }
-    inline void shade(const GarbageCollected* self) {
-        self->_garbage_collected_shade();
-    }
-    inline void trace(const GarbageCollected* self) {
-        self->_garbage_collected_trace();
-    }
-    inline void trace_weak(const GarbageCollected* self) {
-        self->_garbage_collected_trace_weak();
-    }
-    
-    template<typename T> void any_debug(T const& self) {
-        std::string_view sv = name_of<T>;
-        printf("(%.*s)\n", (int) sv.size(), sv.data());
-    }
-    
-    template<typename T> auto any_read(T const& self) {
-        return self;
-    }
-    
-    
-    
     template<typename T>
     T any_none;
     
     template<typename T>
     inline constexpr T* any_none<T*> = nullptr;
     
-} // namespace wry::gc
+} // namespace wry
+
 
 namespace wry {
-    
-    using gc::GarbageCollected;
-    
-}
-
-
-namespace wry::gc {
     
     // useful defaults
     
@@ -145,12 +109,44 @@ namespace wry::gc {
     
 }
  
-namespace wry::orphan {
+namespace wry {
     
+    inline hash_t hash(const GarbageCollected* self) {
+        return self->_garbage_collected_hash();
+    }
+    inline void debug(const GarbageCollected* self) {
+        self->_garbage_collected_debug();
+    }
+    inline void passivate(GarbageCollected*& self) {
+        self = nullptr;
+    }
+    inline void shade(const GarbageCollected* self) {
+        if (self)
+            self->_garbage_collected_shade();
+    }
+    inline void trace(const GarbageCollected* self) {
+        if (self)
+            self->_garbage_collected_trace();
+    }
+    inline void trace_weak(const GarbageCollected* self) {
+        if (self)
+            self->_garbage_collected_trace_weak();
+    }
+    
+    template<typename T> void any_debug(T const& self) {
+        std::string_view sv = name_of<T>;
+        printf("(%.*s)\n", (int) sv.size(), sv.data());
+    }
+    
+    template<typename T> auto any_read(T const& self) {
+        return self;
+    }
+    
+    /*
     // implementation of
     
     template<PointerConvertibleTo<GarbageCollected> T>
-    gc::hash_t hash(T*const self ) {
+    hash_t hash(T*const self ) {
         return self->_garbage_collected_hash();
     }
     
@@ -185,11 +181,12 @@ namespace wry::orphan {
         if (self)
             self->_garbage_collected_trace_weak();
     }
+     */
     
     template<std::integral T>
     void trace(const T& self) {
     }
 
-} // namespace wry::orphan
+} // namespace wry
 
 #endif /* garbage_collected_hpp */

@@ -119,7 +119,7 @@
     
     // controls
     
-    wry::Palette<wry::sim::Value> _controls;
+    wry::Palette<wry::Value> _controls;
 
     NSCursor* _cursor;
     
@@ -693,13 +693,13 @@
             }
 
             size_type nn = 24;
-            _controls._payload = wry::matrix<wry::sim::Value>(nn, 2);
+            _controls._payload = wry::matrix<wry::Value>(nn, 2);
             
             i64 j = 0;
             for (i64 i = 0; i != _name_to_opcode.size(); ++i) {
                 if (_opcode_to_coordinate.contains(i)) {
                     
-                    _controls._payload[j % nn, j / nn] = gc::value_make_opcode((int)i);
+                    _controls._payload[j % nn, j / nn] = value_make_opcode((int)i);
                     ++j;
                                         
                 } else {
@@ -1012,7 +1012,7 @@
 - (void)render
 {
     _model->shade_roots();
-    wry::gc::mutator_handshake();
+    wry::mutator_handshake();
 
     using namespace ::simd;
     using namespace ::wry;
@@ -1187,7 +1187,7 @@
                 location.z += 0.8;
                 for (int i = 0; i != p->_stack.size(); ++i) {
                     location.z += 0.5;
-                    wry::sim::Value value = p->_stack[i];
+                    wry::Value value = p->_stack[i];
                     simd_float4 coordinate;
                     if (value.is_opcode()) {
                         coordinate = _opcode_to_coordinate[value.as_opcode()];
@@ -1302,7 +1302,7 @@
                 
                 {
                     //wry::sim::Value q = _model->_world->_value_for_coordinate.read(wry::sim::Coordinate{i, j});
-                    wry::sim::Value q = {};
+                    wry::Value q = {};
                     _model->_world->_value_for_coordinate->try_get(wry::sim::Coordinate{i, j}, q);
                     using namespace wry::sim;
                     if (q.is_int64_t()) {

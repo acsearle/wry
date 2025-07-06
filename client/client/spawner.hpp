@@ -32,7 +32,7 @@ namespace wry::sim {
         
         virtual void notify(Context*) const override;
         virtual void _garbage_collected_scan() const override {
-            adl::trace(_of_this);
+            trace(_of_this);
         }
 
     };

@@ -20,7 +20,7 @@
 #include "HeapArray.hpp"
 #include "hash.hpp"
 
-namespace wry::gc {
+namespace wry {
         
     // If the map has tombstones, it must periodically be copied to
     // restore an acceptable number of vacancies to terminate searches.
@@ -74,18 +74,18 @@ namespace wry::gc {
             _occupied = false;
         }
         
-        size_t hash() const {
-            return adl::hash(_kv.first);
+        size_t _hash() const {
+            return hash(_kv.first);
         }
         
         template<typename J, typename U>
-        static size_t hash(const Pair<J, U>& ju) {
-            return adl::hash(ju.first);
+        static size_t _hash(const Pair<J, U>& ju) {
+            return hash(ju.first);
         }
 
         template<typename J>
-        static size_t hash(const J& j) {
-            return adl::hash(j);
+        static size_t _hash(const J& j) {
+            return hash(j);
         }
 
         void assign(BasicEntry&& other) {
@@ -127,14 +127,14 @@ namespace wry::gc {
     
     template<typename K, typename V>
     void trace(const BasicEntry<K, V>& e) {
-        adl::trace(e._kv.first);
-        adl::trace(e._kv.second);
+        trace(e._kv.first);
+        trace(e._kv.second);
     }
 
     template<typename K, typename V>
     void shade(const BasicEntry<K, V>& e) {
-        adl::shade(e._kv.first);
-        adl::shade(e._kv.second);
+        shade(e._kv.first);
+        shade(e._kv.second);
     }
 
     template<typename K, typename V>
@@ -150,8 +150,8 @@ namespace wry::gc {
     
     template<typename K, typename V>
     void passivate(BasicEntry<K, V>& e) {
-        adl::passivate(e._kv.first);
-        adl::passivate(e._kv.second);
+        passivate(e._kv.first);
+        passivate(e._kv.second);
     }
     
     /*
@@ -217,7 +217,7 @@ namespace wry::gc {
         size_t _displacement(size_t i) const {
             assert(i < capacity());
             assert(_data[i].occupied());
-            size_t h = _data[i].hash();
+            size_t h = _data[i]._hash();
             return _mask(i - h);
         }
         
@@ -503,7 +503,7 @@ namespace wry::gc {
         }
         
         size_t _insert_absent(T&& x) {
-            size_t h = x.hash();
+            size_t h = x._hash();
             return _insert_absent_hash(h, std::move(x));
         }
 
@@ -547,12 +547,12 @@ namespace wry::gc {
     
     template<typename T>
     void trace(const BasicHashSetB<T>& self) {
-        adl::trace(self._storage);
+        trace(self._storage);
     }
 
     template<typename T>
     void shade(const BasicHashSetB<T>& self) {
-        adl::shade(self._storage);
+        shade(self._storage);
     }
 
     
@@ -762,19 +762,19 @@ namespace wry::gc {
     
     template<typename T>
     void trace(const BasicHashSetC<T>& self) {
-        adl::trace(self._alpha);
-        adl::trace(self._beta);
+        trace(self._alpha);
+        trace(self._beta);
     }
     
     template<typename T>
     void shade(const BasicHashSetC<T>& self) {
-        adl::shade(self._alpha);
-        adl::shade(self._beta);
+        shade(self._alpha);
+        shade(self._beta);
     }
 
     
     template<typename K, typename V>
-    struct HashMap {
+    struct GCHashMap {
         
         // TODO: Traced<K>
         // More generally, decide on Traced by some typefunction to capture
@@ -795,7 +795,7 @@ namespace wry::gc {
         
         template<typename Q>
         auto read(Q&& q) const {
-            size_t h = adl::hash(q);
+            size_t h = hash(q);
             auto [i, f] = _inner._find(h, q);
             using U = decltype(_inner._alpha._inner._data[i]._kv.second);
             return f ? any_read(_inner._alpha._inner._data[i]._kv.second) : any_none<U>;
@@ -803,13 +803,13 @@ namespace wry::gc {
         
         template<typename J, typename U>
         void write(J&& j, U&& u) {
-            size_t h = adl::hash(j);
+            size_t h = hash(j);
             _inner._insert_or_assign(h, j, u);
         }
         
         template<typename Q>
         void erase(Q&& q) {
-            size_t h = adl::hash(q);
+            size_t h = hash(q);
             _inner._erase(h, q);
         }
         
@@ -819,7 +819,7 @@ namespace wry::gc {
         
         template<typename Q>
         bool contains(Q&& q) const {
-            return _inner._find(adl::hash(q), q).second;
+            return _inner._find(hash(q), q).second;
         }
         
         // aka the notorious std::map::operator[]
@@ -842,13 +842,13 @@ namespace wry::gc {
     };
     
     template<typename K, typename V>
-    void trace(const HashMap<K, V>& self) {
-        adl::trace(self._inner);
+    void trace(const GCHashMap<K, V>& self) {
+        trace(self._inner);
     }
 
     template<typename K, typename V>
-    void shade(const HashMap<K, V>& self) {
-        adl::shade(self._inner);
+    void shade(const GCHashMap<K, V>& self) {
+        shade(self._inner);
     }
 
 //
@@ -910,7 +910,7 @@ namespace wry::gc {
 //
 //    template<typename K, typename V>
 //    void shade(const HashMap<K, V>& self) {
-//        return adl::shade(self._inner);
+//        return shade(self._inner);
 //    }
 
 
@@ -918,14 +918,14 @@ namespace wry::gc {
     
     struct HeapHashMap : GarbageCollected {
         
-        HashMap<Scan<Value>, Scan<Value>> _inner;
+        GCHashMap<Scan<Value>, Scan<Value>> _inner;
         
         void _invariant() const {
             _inner._invariant();
         }
         
         virtual void _garbage_collected_scan() const override {
-            adl::trace(_inner);
+            trace(_inner);
         }
 
 
@@ -984,7 +984,7 @@ namespace wry::gc {
         }
         
         size_t hash() const {
-            return adl::hash(_key);
+            return hash(_key);
         }
         
         template<typename J>
@@ -1016,12 +1016,12 @@ namespace wry::gc {
     
     template<typename K>
     void trace(const BasicHashSetEntry<K>& e) {
-        adl::trace(e._key);
+        trace(e._key);
     }
     
     template<typename K>
     void shade(const BasicHashSetEntry<K>& e) {
-        adl::shade(e._key);
+        shade(e._key);
     }
     
     template<typename K>
@@ -1036,12 +1036,12 @@ namespace wry::gc {
     
     template<typename K>
     void passivate(BasicHashSetEntry<K>& e) {
-        adl::passivate(e._key);
+        passivate(e._key);
     }
     
     template<typename K>
     void any_trace_weak(const BasicHashSetEntry<K>& e) {
-        adl::trace(e);
+        trace(e);
     }
     
     
@@ -1051,7 +1051,7 @@ namespace wry::gc {
     
 
     template<typename K>
-    struct HashSet {
+    struct GCHashSet {
         
         // TODO: Traced<K>
         // More generally, decide on Traced by some typefunction to capture
@@ -1104,18 +1104,18 @@ namespace wry::gc {
     };
     
     template<typename K>
-    void trace(const HashSet<K>& self) {
-        adl::trace(self._inner);
+    void trace(const GCHashSet<K>& self) {
+        trace(self._inner);
     }
     
     template<typename K>
-    void shade(const HashSet<K>& self) {
-        return adl::shade(self._inner);
+    void shade(const GCHashSet<K>& self) {
+        return shade(self._inner);
     }
 
     
     
 
-} // namespace wry::gc
+} // namespace wry
 
 #endif /* wry_gc_HeapTable_hpp */

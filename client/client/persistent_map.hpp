@@ -18,27 +18,27 @@
 #include "adl.hpp"
 #include "garbage_collected.hpp"
 
-namespace wry::orphan {
+namespace wry {
     
     template<typename A, typename B>
     void trace(const std::pair<A, B>& p) {
-        adl::trace(p.first);
-        adl::trace(p.second);
+        trace(p.first);
+        trace(p.second);
     }
     
     template<typename Key, typename Compare>
     void trace(const std::set<Key, Compare>& s) {
         for (const Key& k : s)
-            adl::trace(k);
+            trace(k);
     }
     
     template<typename Key, typename T, typename Compare>
     void trace(const std::map<Key, T, Compare>& m) {
         for (const auto& p : m)
-            orphan::trace(p);
+            trace(p);
     }
     
-} // namespace wry::orphan
+}
 
 namespace wry {
 
@@ -57,7 +57,7 @@ namespace wry {
         }
 
         virtual void _garbage_collected_scan() const override {
-            adl::trace(data);
+            trace(data);
         }
 
         static const ImmutableGarbageCollected* make(auto&&... args) {
@@ -104,7 +104,7 @@ namespace wry {
         
         virtual void _garbage_collected_scan() const override {
             std::unique_lock guard(_lock);
-            adl::trace(_data);
+            trace(_data);
         }
         
         static SynchronizedGarbageCollected* make(auto&&... args) {
@@ -137,7 +137,7 @@ namespace wry {
             
             virtual void _garbage_collected_scan() const override {
                 printf("%s\n", __PRETTY_FUNCTION__);
-                orphan::trace(data);
+                trace(data);
             }
             
             explicit PersistentSet(auto&&... args) : data(FORWARD(args)...) {}
@@ -179,7 +179,7 @@ namespace wry {
             
             virtual void _garbage_collected_scan() const override {
                 printf("Was traced\n");
-                orphan::trace(data);
+                trace(data);
             }
             
             PersistentMap() = default;
@@ -224,7 +224,7 @@ namespace wry {
         /*
         template<typename Key, typename T>
         void trace(const PersistentMap<Key, T>& self) {
-            adl::trace(self._data);
+            trace(self._data);
         }
         
         template<typename Key, typename T>
@@ -250,7 +250,7 @@ namespace wry {
         
         template<typename Key, typename T>
         void trace(const EphemeralMap<Key, T>& self) {
-            adl::trace(self._data);
+            trace(self._data);
         }
          */
         

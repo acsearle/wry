@@ -11,7 +11,7 @@
 #include "test.hpp"
 #include "value.hpp"
 
-namespace wry::gc {
+namespace wry {
     
     define_test("HeapArray") {
         
@@ -47,5 +47,5 @@ namespace wry::gc {
         
     };
     
-}
+} // namespace wry
 

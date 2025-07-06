@@ -66,10 +66,6 @@ namespace wry::sim {
     bool can_write_world_entity(World* world, Entity* who);
     void did_write_world_entity(World* world, Entity* who);
 
-    
-    using gc::Scan;
-    using gc::GCArray;
-    
     struct World : GarbageCollected {
         
         Time _tick;
@@ -151,7 +147,7 @@ namespace wry::sim {
     }
     
     inline void shade(const World& self) {
-        adl::shade(&self);
+        shade(&self);
     }
     
     /*

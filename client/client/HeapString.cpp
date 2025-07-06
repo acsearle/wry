@@ -7,7 +7,7 @@
 
 #include "HeapString.hpp"
 
-namespace wry::gc {
+namespace wry {
     
     HeapString::~HeapString() {
         printf("~\"%.*s\"\n", (int)_size, (const char*)_bytes);
@@ -27,7 +27,7 @@ namespace wry::gc {
             case Color::GRAY:
             case Color::RED:
             default:
-                adl::debug(this);
+                debug(this);
                 abort();
         }
     }
@@ -48,4 +48,4 @@ namespace wry::gc {
     
     
     
-} // namespace wry::gc
+} // namespace wry

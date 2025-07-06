@@ -11,7 +11,7 @@
 #include "Scan.hpp"
 #include "value.hpp"
 
-namespace wry::gc {
+namespace wry {
     
     struct HeapString;
     
@@ -112,6 +112,6 @@ namespace wry::gc {
     
     
     
-} // namespace wry::gc
+} // namespace wry
 
 #endif /* ctrie_hpp */

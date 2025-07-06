@@ -95,20 +95,16 @@ namespace wry {
     // use in hash tables (in non-adversarial environments)
     //
     // TODO: obsolete for hashing?
-    
-    namespace orphan {
-        
-        inline uint64_t hash(uint64_t x) {
-            x = x * 3935559000370003845ull + 2691343689449507681ull;
-            x ^= x >> 21; x ^= x << 37; x ^= x >> 4;
-            x *= 4768777513237032717ull;
-            x ^= x << 20; x ^= x >> 41; x ^= x << 5;
-            return x;
-        }
-        
+            
+    inline constexpr uint64_t hash(uint64_t x) {
+        x = x * 3935559000370003845ull + 2691343689449507681ull;
+        x ^= x >> 21; x ^= x << 37; x ^= x >> 4;
+        x *= 4768777513237032717ull;
+        x ^= x << 20; x ^= x >> 41; x ^= x << 5;
+        return x;
     }
-    
-    inline uint32_t hash32(uint32_t x) {
+            
+    inline constexpr uint32_t hash32(uint32_t x) {
         // NR does not provide a 32-bit version of hash(), but we construct one
         // from the 32-bit versions of the components.  Test to make sure we
         // haven't gotten unlucky.
@@ -118,15 +114,11 @@ namespace wry {
         x ^= x <<  9; x ^= x >> 17; x ^= x << 6;
         return x;
     }
-    
-    namespace orphan {
-        
-        inline uint64_t hash(void* p) {
-            return hash((uintptr_t) p);
-        }
-        
+            
+    inline constexpr uint64_t hash(void* p) {
+        return hash((uintptr_t) p);
     }
-        
+            
     // Interleave bits to achieve a 1D indexing of 2D space with decent
     // locality properties.  Good for spatial hashing
     //
@@ -194,14 +186,14 @@ namespace wry {
         while (bytes >= 8) {
             uint64_t x;
             std::memcpy(&x, src, 8);
-            already_hashed = orphan::hash(already_hashed ^ x);
+            already_hashed = hash(already_hashed ^ x);
             src = ((const unsigned char*) src) + 8;
             bytes -= 8;
         }
         if (bytes) {
             uint64_t x = 0;
             std::memcpy(&x, src, bytes);
-            already_hashed = orphan::hash(already_hashed ^ x);
+            already_hashed = hash(already_hashed ^ x);
         }
         return already_hashed;
     }
@@ -235,10 +227,8 @@ namespace wry {
         return hash;
     }
     
-    namespace orphan {
-        constexpr uint64_t hash(const char* str) {
-            return fnv1a(str);
-        }
+    constexpr uint64_t hash(const char* str) {
+        return fnv1a(str);
     }
     
     // Hashed strings give us a conventional hash of the string's contents that

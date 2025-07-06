@@ -283,7 +283,7 @@ namespace wry::json {
     
     // parse into type-erased Value
     
-    using wry::gc::Value;
+    using wry::Value;
     
     bool parse_json_value(Value& x, auto& y);
     
@@ -330,7 +330,7 @@ namespace wry::json {
     inline auto parse_json_array(Value& x) {
         return [&x](auto& v) -> bool {
             //Array<Value> a;
-            Value a = gc::value_make_array();
+            Value a = value_make_array();
             Value y;
             auto u = v;
             if (!match_json_array_begin()(u))
@@ -357,7 +357,7 @@ namespace wry::json {
     inline auto parse_json_object(Value& x) {
         return [&x](auto& v) -> bool {
             // Table<String, Value> o;
-            Value o = gc::value_make_table();
+            Value o = value_make_table();
             // String key;
             Value key;
             Value value;
@@ -477,19 +477,19 @@ namespace wry::json {
         template<typename E>
         Value visit_uint64_t(uint64_t x) {
             // return Value(x);
-            return gc::value_make_error();
+            return value_make_error();
         }
         
         template<typename E>
         Value visit_float32_t(float32_t x) {
             // return Value((double) x);
-            return gc::value_make_error();
+            return value_make_error();
         }
         
         template<typename E>
         Value visit_float64_t(float64_t x) {
             // return Value(x);
-            return gc::value_make_error();
+            return value_make_error();
         }
         
         template<typename E>
@@ -507,8 +507,8 @@ namespace wry::json {
         template<typename A>
         Value visit_seq(A&& accessor) {
             // Array<Value> y;
-            // Value t = gc::value_make_table();
-            Value a = gc::value_make_array();
+            // Value t = value_make_table();
+            Value a = value_make_array();
             // Value key = 0;
             for (;;) {
                 Option<Value> x(accessor.template next_element<Value>());
@@ -526,7 +526,7 @@ namespace wry::json {
         template<typename A>
         Value visit_map(A&& accessor) {
             // Table<String, Value> z;
-            Value t = gc::value_make_table();
+            Value t = value_make_table();
             for (;;) {
                 Option<std::pair<String, Value>> x(accessor.template next_entry<String, Value>());
                 if (x.is_some()) {

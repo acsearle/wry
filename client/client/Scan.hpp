@@ -11,7 +11,7 @@
 #include "adl.hpp"
 #include "garbage_collected.hpp"
 
-namespace wry::gc {
+namespace wry {
     
     // Scan<T> indicates that the payload wants to be scanned by the garbage
     // collector.
@@ -104,9 +104,9 @@ namespace wry::gc {
     }; // struct Traced<Atomic<T*>>
     
     
-} // namespace wry::gc
+} // namespace wry
 
-namespace wry::gc {
+namespace wry {
     
     template<std::derived_from<GarbageCollected> T>
     Scan<T*>::Scan(const Scan& other)
@@ -144,8 +144,8 @@ namespace wry::gc {
         T* b = other.get();
         _object._store(b);
         other._object._store(a);
-        adl::shade(a);
-        adl::shade(b);
+        shade(a);
+        shade(b);
     }
     
     template<std::derived_from<GarbageCollected> T>
@@ -155,8 +155,8 @@ namespace wry::gc {
         // the only writer.
         T* discovered = get();
         _object.store(other, Ordering::RELEASE);
-        adl::shade(discovered);
-        adl::shade(other);
+        shade(discovered);
+        shade(other);
         return *this;
     }
     
@@ -166,7 +166,7 @@ namespace wry::gc {
         //     See above.
         T* discovered = get();
         _object.store(nullptr, Ordering::RELAXED);
-        adl::shade(discovered);
+        shade(discovered);
         return *this;
     }
     
@@ -214,7 +214,7 @@ namespace wry::gc {
     T* Scan<T*>::take() {
         T* discovered = get();
         _object.store(nullptr, Ordering::RELAXED);
-        adl::shade(discovered);
+        shade(discovered);
         return discovered;
     }
     
@@ -236,8 +236,8 @@ namespace wry::gc {
     template<std::derived_from<GarbageCollected> T>
     T* Scan<Atomic<T*>>::exchange(T* desired, Ordering order) {
         T* discovered = _object.exchange(desired, order);
-        adl::shade(discovered);
-        adl::shade(desired);
+        shade(discovered);
+        shade(desired);
         return discovered;
     }
     
@@ -245,8 +245,8 @@ namespace wry::gc {
     bool Scan<Atomic<T*>>::compare_exchange_weak(T*& expected, T* desired, Ordering success, Ordering failure) {
         bool result = _object.compare_exchange_weak(expected, desired, success, failure);
         if (result) {
-            adl::shade(expected);
-            adl::shade(desired);
+            shade(expected);
+            shade(desired);
         }
         return result;
     }
@@ -255,8 +255,8 @@ namespace wry::gc {
     bool Scan<Atomic<T*>>::compare_exchange_strong(T*& expected, T* desired, Ordering success, Ordering failure) {
         bool result = _object.compare_exchange_strong(expected, desired, success, failure);
         if (result) {
-            adl::shade(expected);
-            adl::shade(desired);
+            shade(expected);
+            shade(desired);
         }
         return result;
     }
@@ -329,7 +329,7 @@ namespace wry::gc {
     
     template<PointerConvertibleTo<GarbageCollected> T>
     void any_trace_weak(const Scan<T*const>& self) {
-        adl::trace_weak(self._object);
+        trace_weak(self._object);
     }
 
         
@@ -338,6 +338,6 @@ namespace wry::gc {
         self = nullptr;
     }
     
-} // namespace wry::gc
+} // namespace wry
 
 #endif /* Scan_hpp */

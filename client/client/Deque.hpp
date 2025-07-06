@@ -15,8 +15,6 @@
 
 namespace wry {
     
-    using gc::Scan;
-
     template<typename T>
     struct Deque {
         
@@ -169,6 +167,6 @@ namespace wry {
         
     }; // struct Deque<T>
     
-} // namespace gc
+} // namespace wry
 
 #endif /* Deque_hpp */

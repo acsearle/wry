@@ -22,7 +22,7 @@
 
 #include "test.hpp"
 
-namespace wry::gc {
+namespace wry {
     
     // Bag is unordered storage optimized to make the mutator's common
     // operations cheap
@@ -334,7 +334,7 @@ namespace wry::gc {
                                                        encoded_desired,
                                                        Ordering::RELAXED,
                                                        Ordering::RELAXED);
-        expected = gc::Color{encoded_expected ^ encoding};
+        expected = Color{encoded_expected ^ encoding};
         return result;
     }
 
@@ -676,9 +676,9 @@ namespace wry::gc {
         // at its convenience
         initiate_handshakes();
         
-        // Handshake ourself and shade our own root gc::objects
+        // Handshake ourself and shade our own root GarbageCollected objects
         this->handshake();
-        adl::shade(string_ctrie);
+        shade(string_ctrie);
         
         // Wait for every mutator to handshake or leave
         finalize_handshakes();
@@ -740,7 +740,7 @@ namespace wry::gc {
                         case Color::RED:
                         default:
                             // "Impossible"
-                            adl::debug(object);
+                            debug(object);
                             abort();
                     }
                     while (!gray_stack.empty()) {
@@ -797,7 +797,7 @@ namespace wry::gc {
                         break;
                     case Color::GRAY:
                     default:
-                        adl::debug(object);
+                        debug(object);
                         abort();
                 }
             }
@@ -857,7 +857,7 @@ namespace wry::gc {
     
     void collector_start() {
         assert(global_collector == nullptr);
-        global_collector = new gc::Collector;
+        global_collector = new Collector;
         thread_local_mutator = global_collector;
         thread_local_mutator->enter();
         global_collector->string_ctrie = new Ctrie;
@@ -908,11 +908,11 @@ namespace wry::gc {
                 foo();
 
                 mutator_handshake();
-                adl::shade(p);
+                shade(p);
             }
             mutator_leave();
             delete exchange(thread_local_mutator, nullptr);
         }).detach();
     };
             
-} // namespace wry::gc
+} // namespace wry

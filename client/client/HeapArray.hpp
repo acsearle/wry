@@ -17,7 +17,7 @@
 #include "utility.hpp"
 #include "adl.hpp"
 
-namespace wry::gc {
+namespace wry {
     
     template<typename T> // requires(std::has_single_bit(sizeof(T)))
     struct ArrayStaticIndirect : GarbageCollected {
@@ -81,7 +81,7 @@ namespace wry::gc {
         
         virtual void _garbage_collected_scan() const override {
             for (const T& element : *this) {
-                adl::trace(element);
+                trace(element);
             }
         }
         
@@ -206,13 +206,13 @@ namespace wry::gc {
         
         void pop_front() {
             assert(!empty());
-            adl::passivate(front());
+            passivate(front());
             ++_begin;
         }
         
         void pop_back() {
             assert(!empty());
-            adl::passivate(back());
+            passivate(back());
             --_end;
         }
         
@@ -234,12 +234,12 @@ namespace wry::gc {
    
     template<typename T>
     void trace(const RingDequeStatic<T>& self) {
-        adl::trace(self._storage);
+        trace(self._storage);
     }
 
     template<typename T>
     void shade(const RingDequeStatic<T>& self) {
-        adl::shade(self._storage);
+        shade(self._storage);
     }
 
     
@@ -354,19 +354,19 @@ namespace wry::gc {
     
     template<typename T>
     void trace(const GCArray<T>& self) {
-        adl::trace(self._alpha);
-        adl::trace(self._beta);
+        trace(self._alpha);
+        trace(self._beta);
     }
 
     template<typename T>
     void shade(const GCArray<T>& self) {
-        adl::shade(self._alpha);
-        adl::shade(self._beta);
+        shade(self._alpha);
+        shade(self._beta);
     }
 
     
     static_assert(std::is_move_assignable_v<GCArray<Scan<GarbageCollected*>>>);
         
-} // namespace wry::gc
+} // namespace wry
 
 #endif /* wry_HeapArray_hpp */

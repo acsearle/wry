@@ -34,8 +34,8 @@ int main(int argc, const char** argv) {
         printf("    hex     : %016" PRIX64  "\n", std::uniform_int_distribution<uint64_t>(0)(rd));
     }
     
-    wry::gc::collector_start();
-    wry::gc::mutator_enter();
+    wry::collector_start();
+    wry::mutator_enter();
     
     // execute unit tests on a background thread
     
@@ -68,8 +68,8 @@ int main(int argc, const char** argv) {
     
     tests.join();
     
-    wry::gc::mutator_leave();
-    wry::gc::collector_stop();
+    wry::mutator_leave();
+    wry::collector_stop();
     
     return EXIT_SUCCESS;
     

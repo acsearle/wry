@@ -10,7 +10,7 @@
 
 #include "garbage_collected.hpp"
 
-namespace wry::gc {
+namespace wry {
     
     // TODO: are these methods better off being abstract?
         
@@ -39,4 +39,4 @@ namespace wry::gc {
     }
 
         
-} // namespace wry::gc
+} // namespace wry

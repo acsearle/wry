@@ -16,7 +16,7 @@
 #include "Scan.hpp"
 #include "adl.hpp"
 
-namespace wry::gc {
+namespace wry {
     
     // TODO: which string view?
     using std::string_view;
@@ -70,32 +70,32 @@ namespace wry::gc {
     void shade(const Value& value);
     void trace(const Value& value);
     
-} // namespace wry::gc
+} // namespace wry
 
 namespace wry {
     
     template<>
-    struct Atomic<gc::Value> {
+    struct Atomic<Value> {
         
         Atomic<std::uint64_t> _data;
         
         constexpr Atomic() = default;
-        constexpr explicit Atomic(gc::Value desired) : _data(desired._data) {}
+        constexpr explicit Atomic(Value desired) : _data(desired._data) {}
         
-        gc::Value load(Ordering order) const {
-            gc::Value v;
+        Value load(Ordering order) const {
+            Value v;
             v._data = _data.load(order);
             return v;
         }
         
-        gc::Value exchange(gc::Value desired, Ordering order) {
-            adl::shade(desired);
+        Value exchange(Value desired, Ordering order) {
+            shade(desired);
             desired._data = _data.exchange(desired._data, order);
-            adl::shade(desired);
+            shade(desired);
             return desired;
         }
         
-        void store(gc::Value desired, Ordering order) {
+        void store(Value desired, Ordering order) {
             (void) exchange(desired, order);
         }
         
@@ -105,7 +105,7 @@ namespace wry {
 
 
 
-namespace wry::gc {
+namespace wry {
     
     
     constexpr Value value_make_boolean_with(bool flag);
@@ -283,20 +283,20 @@ namespace wry::gc {
     
     inline void shade(const Value& self) {
         if (_value_is_object(self))
-            adl::shade(_value_as_object(self));
+            shade(_value_as_object(self));
     }
     
     inline void trace(const Value& self) {
         if (_value_is_object(self))
-            adl::trace(_value_as_object(self));
+            trace(_value_as_object(self));
     }
     
     inline void shade(const Scan<Value>& self) {
-        adl::shade(self._atomic_value.load(Ordering::RELAXED));
+        shade(self._atomic_value.load(Ordering::RELAXED));
     }
     
     inline void trace(const Scan<Value>& self) {
-        adl::trace(self._atomic_value.load(Ordering::ACQUIRE));
+        trace(self._atomic_value.load(Ordering::ACQUIRE));
     }
     
     size_t hash(const Value& self);
@@ -346,7 +346,7 @@ namespace wry::gc {
     
     
     inline void trace(const Scan<Atomic<Value>>& self) {
-        adl::trace(self._atomic_value.load(Ordering::ACQUIRE));
+        trace(self._atomic_value.load(Ordering::ACQUIRE));
     }
     
     inline void passivate(Value& self) {
@@ -604,6 +604,6 @@ namespace wry::gc {
     
     
     
-} // namespace wry::gc
+} // namespace wry
 
 #endif /* value_hpp */

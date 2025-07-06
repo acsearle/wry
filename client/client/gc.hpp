@@ -8,7 +8,7 @@
 #ifndef gc_hpp
 #define gc_hpp
 
-namespace wry::gc {
+namespace wry {
     
     void collector_start();
     bool collector_this_thread_is_collector_thread();
@@ -28,6 +28,6 @@ namespace wry::gc {
     void* allocate(size_t bytes);
     void deallocate(void* ptr, size_t bytes);
     
-} // namespace gc
+} // namespace wry
 
 #endif /* gc_hpp */

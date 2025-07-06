@@ -198,11 +198,6 @@ namespace wry {
         return hash(StringView(c));
     }
     
-    inline uint64_t hash(const char* c) {
-        return hash(StringView(c));
-    }
-
-    
 } // namespace wry
 
 #endif /* string_view_hpp */

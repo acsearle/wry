@@ -202,7 +202,7 @@ namespace wry {
                 if (_shift) {
                     size_t n = size();
                     for (size_t i = 0; i != n; ++i) {
-                        adl::trace(_children[i]);
+                        trace(_children[i]);
                     }
                 }
             }

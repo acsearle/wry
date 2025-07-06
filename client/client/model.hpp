@@ -56,7 +56,7 @@ namespace wry {
         // user interface state
         
         bool _outstanding_click = false;
-        sim::Value _holding_value = {};
+        Value _holding_value = {};
         difference_type _selected_i = -1;
         difference_type _selected_j = -1;
         float2 _looking_at = {};
@@ -118,11 +118,11 @@ namespace wry {
                 insert_localized_entity(r);
             }
 
-            //_world->_value_for_coordinate.write(Coordinate{-2, -2}, gc::value_make_integer_with(7));
+            //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_integer_with(7));
             _world->_value_for_coordinate =  _world->_value_for_coordinate->clone_and_insert_or_assign(Coordinate{-2, -2},
-                                                                                                       gc::value_make_integer_with((7)));
-            //_world->_value_for_coordinate.write(Coordinate{-2, -2}, gc::value_make_array());
-            // _world->_value_for_coordinate.set(Coordinate{-2, -2}, gc::value_make_array());
+                                                                                                       value_make_integer_with((7)));
+            //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_array());
+            // _world->_value_for_coordinate.set(Coordinate{-2, -2}, value_make_array());
 
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();

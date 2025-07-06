@@ -98,12 +98,5 @@ namespace wry::sim {
 
 #include "value.hpp"
 
-namespace wry::sim {
-                
-    using gc::Value;
-
-} // namespace wry::sim
-
-
 
 #endif /* sim_hpp */

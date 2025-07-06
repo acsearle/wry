@@ -16,10 +16,7 @@
 #include "opcode.hpp"
 
 namespace wry::sim {
-    
-    using gc::Scan;
-    using gc::GCArray;
-    
+        
     struct Machine : Entity {
         
         enum {
@@ -104,7 +101,7 @@ namespace wry::sim {
         void _schedule_arrival(World* world);
         
         virtual void _garbage_collected_scan() const override {
-            adl::trace(_stack);
+            trace(_stack);
         }
                         
     };

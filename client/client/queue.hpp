@@ -131,8 +131,8 @@ namespace wry {
         using const_iterator = typename Array<T>::const_iterator;
          */
 
-        gc::GCArray<T> queue;
-        gc::HashSet<T> set;
+        GCArray<T> queue;
+        GCHashSet<T> set;
         
         // invariant
         
@@ -162,13 +162,13 @@ namespace wry {
         QueueOfUnique& operator=(const QueueOfUnique&) = delete;
         QueueOfUnique& operator=(QueueOfUnique&&) = default;
 
-        QueueOfUnique(ContiguousDeque<T>&& a, HashSet<T>&& b)
+        QueueOfUnique(ContiguousDeque<T>&& a, GCHashSet<T>&& b)
         : queue(std::move(a))
         , set(std::move(b)) {
         }
         
-        std::pair<Queue<T>, HashSet<T>> destructure() {
-            return std::pair<Queue<T>, HashSet<T>>(std::move(queue),
+        std::pair<Queue<T>, GCHashSet<T>> destructure() {
+            return std::pair<Queue<T>, GCHashSet<T>>(std::move(queue),
                                                    std::move(set));
         }
         
@@ -266,19 +266,19 @@ namespace wry {
         
     };
     
-    // static_assert(std::is_move_assignable_v<QueueOfUnique<Scan<gc::Object*>>>);
-    // static_assert(std::is_move_assignable_v<gc::HashSet<Scan<gc::Object*>>>);
+    // static_assert(std::is_move_assignable_v<QueueOfUnique<Scan<Object*>>>);
+    // static_assert(std::is_move_assignable_v<HashSet<Scan<Object*>>>);
 
     template<typename T>
     void trace(const QueueOfUnique<T>& self) {
-        adl::trace(self.queue);
-        adl::trace(self.set);
+        trace(self.queue);
+        trace(self.set);
     }
 
     template<typename T>
     void shade(const QueueOfUnique<T>& self) {
-        adl::shade(self.queue);
-        adl::shade(self.set);
+        shade(self.queue);
+        shade(self.set);
     }
     
 } // namespace wry

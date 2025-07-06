@@ -24,7 +24,7 @@ namespace wry::sim {
         Transaction* tx = Transaction::make(context, this, 2);
         Value x = tx->read_value_for_coordinate(this->_location);
         if (!x.is_Empty())
-            tx->write_value_for_coordinate(this->_location, gc::value_make_empty());
+            tx->write_value_for_coordinate(this->_location, value_make_empty());
         tx->wait_on_value_for_coordinate(this->_location);
     }
     

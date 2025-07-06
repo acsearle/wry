@@ -12,13 +12,13 @@ namespace wry::sim {
     
     void World::_garbage_collected_scan() const {
         printf("%s\n", __PRETTY_FUNCTION__);
-        adl::trace(_entity_for_entity_id);
-        adl::trace(_ready);
-        adl::trace(_waiting_for_time);
-        adl::trace(_waiting_for_entity_id);
-        adl::trace(_waiting_for_coordinate);
-        adl::trace(_value_for_coordinate);
-        adl::trace(_entity_id_for_coordinate);
+        trace(_entity_for_entity_id);
+        trace(_ready);
+        trace(_waiting_for_time);
+        trace(_waiting_for_entity_id);
+        trace(_waiting_for_coordinate);
+        trace(_value_for_coordinate);
+        trace(_entity_id_for_coordinate);
     }
         
     World* World::step() const {

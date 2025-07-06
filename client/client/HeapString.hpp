@@ -13,7 +13,7 @@
 #include "garbage_collected.hpp"
 #include "ctrie.hpp"
 
-namespace wry::gc {
+namespace wry {
     
     struct HeapString final : _ctrie::BranchNode {
 
@@ -62,6 +62,6 @@ namespace wry::gc {
         }
     }
     
-} // namespace wry::gc
+} // namespace wry
 
 #endif /* wry_gc_HeapString_hpp */

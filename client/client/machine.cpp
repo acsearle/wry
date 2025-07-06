@@ -545,13 +545,13 @@ namespace wry::sim {
                         assert(wants_write_new_tile);
                         set_world_coordinate_value(world, 
                                                    _new_location,
-                                                   gc::value_make_opcode(OPCODE_FLOP_FLIP));
+                                                   value_make_opcode(OPCODE_FLOP_FLIP));
                         break;
                     case OPCODE_FLOP_FLIP:
                         assert(wants_write_new_tile);
                         set_world_coordinate_value(world,
                                                    _new_location,
-                                                   gc::value_make_opcode(OPCODE_FLIP_FLOP));
+                                                   value_make_opcode(OPCODE_FLIP_FLOP));
                         break;
                                                 
                 } // switch (next_action)

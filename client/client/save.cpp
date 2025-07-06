@@ -114,7 +114,7 @@ void save_game(World* world) {
 
 World* continue_game() {
         
-    gc::HashMap<Coordinate, Scan<Value>> v;
+    GCHashMap<Coordinate, Scan<Value>> v;
 
     {
         
@@ -162,7 +162,7 @@ World* continue_game() {
     
     World* w = new World;
     
-    // adl::swap(w->_value_for_coordinate, v);
+    // swap(w->_value_for_coordinate, v);
     
     return w;
 }
@@ -172,7 +172,7 @@ World* continue_game() {
 
 World* load_game(int id) {
     
-    gc::HashMap<Coordinate, Scan<Value>> v;
+    GCHashMap<Coordinate, Scan<Value>> v;
     
     {
         
@@ -220,7 +220,7 @@ World* load_game(int id) {
     
     World* w = new World;
     
-    // adl::swap(w->_value_for_coordinate, v);
+    // swap(w->_value_for_coordinate, v);
     
     return w;
 }

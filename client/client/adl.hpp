@@ -13,7 +13,7 @@
     
 // The intent of this file is to provide access points of the form
 //
-//     adl::foo(x)
+//     foo(x)
 //
 // which find the correct implementation of foo by ADL even when the calling
 // context shadows those names.

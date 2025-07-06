@@ -21,7 +21,7 @@
 #include "debug.hpp"
 
 
-namespace wry::gc {
+namespace wry {
     
     std::string_view _value_as_short_string(const Value& self) {
         assert(_value_is_short_string(self));
@@ -104,11 +104,11 @@ namespace wry::gc {
         switch (_value_tag(self)) {
             case VALUE_TAG_OBJECT: {
                 const GarbageCollected* object = _value_as_object(self);
-                return object ? adl::hash(object) : 0;
+                return object ? hash(object) : 0;
             }
             case VALUE_TAG_SMALL_INTEGER: {
                 std::int64_t a = _value_as_small_integer(self);
-                return adl::hash(a);
+                return hash(a);
             }
             case VALUE_TAG_SHORT_STRING: {
                 return std::hash<std::string_view>()(_value_as_short_string(self));
@@ -295,8 +295,8 @@ namespace wry::gc {
 
     Scan<Value>& Scan<Value>::operator=(const Value& desired) {
         Value discovered = this->_atomic_value.exchange(desired, Ordering::RELEASE);
-        adl::shade(desired);
-        adl::shade(discovered);
+        shade(desired);
+        shade(discovered);
         return *this;
     }
 
@@ -448,7 +448,7 @@ namespace wry::gc {
             case VALUE_TAG_ERROR:
                 return (void)printf("ERROR\n");
             case VALUE_TAG_OBJECT:
-                return adl::debug(_value_as_object(self));
+                return debug(_value_as_object(self));
             case VALUE_TAG_ENUMERATION: {
                 auto [meta, code] = value_as_enum(self);
                 return (void)printf("enum{%d, %d}\n", meta, code);
@@ -478,7 +478,7 @@ namespace wry::gc {
     }
     
     void debug(const Scan<Value>& self) {
-        adl::debug(self._atomic_value.load(Ordering::ACQUIRE));
+        debug(self._atomic_value.load(Ordering::ACQUIRE));
     }
 
     
@@ -501,7 +501,7 @@ namespace wry::gc {
         
         GCArray<Scan<Value>> _inner;
         
-        virtual void _garbage_collected_scan() const { adl::trace(_inner); }
+        virtual void _garbage_collected_scan() const { trace(_inner); }
         virtual void _garbage_collected_debug() const { any_debug(_inner); }
         
         virtual bool _value_empty() const { return _inner.empty(); }
@@ -566,7 +566,7 @@ namespace wry::gc {
     }
 
 
-} // namespace wry::gc
+} // namespace wry
 
 
 
