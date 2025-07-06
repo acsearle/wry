@@ -190,6 +190,6 @@ namespace wry::orphan {
     void trace(const T& self) {
     }
 
-}
+} // namespace wry::orphan
 
 #endif /* garbage_collected_hpp */

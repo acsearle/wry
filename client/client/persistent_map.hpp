@@ -8,23 +8,49 @@
 #ifndef persistent_map_hpp
 #define persistent_map_hpp
 
+#include <os/lock.h>
+
+#include <iostream>
 #include <map>
 #include <mutex>
 #include <set>
 
-#include <iostream>
-
 #include "adl.hpp"
 #include "garbage_collected.hpp"
-#include <os/lock.h>
+
+namespace wry::orphan {
+    
+    template<typename A, typename B>
+    void trace(const std::pair<A, B>& p) {
+        adl::trace(p.first);
+        adl::trace(p.second);
+    }
+    
+    template<typename Key, typename Compare>
+    void trace(const std::set<Key, Compare>& s) {
+        for (const Key& k : s)
+            adl::trace(k);
+    }
+    
+    template<typename Key, typename T, typename Compare>
+    void trace(const std::map<Key, T, Compare>& m) {
+        for (const auto& p : m)
+            orphan::trace(p);
+    }
+    
+} // namespace wry::orphan
 
 namespace wry {
+
+    // Two ways of hoisting ordinary objects into a concurrent garbage collected
+    // context: make them copy-on-write or make them
     
-    // Immutable, Heap, GC, ...
     template<typename T>
     struct ImmutableGarbageCollected : GarbageCollected {
-        
+                
         T data;
+        
+        explicit ImmutableGarbageCollected(auto&&... args) : data(FORWARD(args)...) {}
         
         virtual ~ImmutableGarbageCollected() {
             printf("%s\n", __PRETTY_FUNCTION__);
@@ -33,53 +59,70 @@ namespace wry {
         virtual void _garbage_collected_scan() const override {
             adl::trace(data);
         }
-                
-        static const ImmutableGarbageCollected* make(auto&&... parts) {
-            return new ImmutableGarbageCollected{T(std::forward<decltype(parts)>(parts)...)};
+
+        static const ImmutableGarbageCollected* make(auto&&... args) {
+            return new ImmutableGarbageCollected{T(FORWARD(args)...)};
         }
         
-        const ImmutableGarbageCollected* clone_with_mutation(auto&& f) const {
+        T copy_inner() const {
+            return T{data};
+        }
+        
+        const ImmutableGarbageCollected* copy_with_mutation(auto&& f) const {
             T mutable_copy{data};
-            (void) std::forward<decltype(f)>(f)(mutable_copy);
-            return from(std::move(mutable_copy));
+            (void) FORWARD(f)(mutable_copy);
+            return make(std::move(mutable_copy));
         }
         
     }; // ImmutableGarbageCollected
     
+    struct PlatformFastBasicLockable {
+        os_unfair_lock _lock = OS_UNFAIR_LOCK_INIT;
+        void lock() {
+#ifndef NDEBUG
+            os_unfair_lock_assert_not_owner(&_lock);
+#endif
+            os_unfair_lock_lock(&_lock);
+        }
+        void unlock() {
+#ifndef NDEBUG
+            os_unfair_lock_assert_owner(&_lock);
+#endif
+            os_unfair_lock_unlock(&_lock);
+        }
+    };
+    
     template<typename T>
-    struct Mutex {
+    struct SynchronizedGarbageCollected : GarbageCollected {
         
-        mutable T _data;
-        mutable os_unfair_lock _mutex = OS_UNFAIR_LOCK_INIT;
+        T _data;
+        mutable PlatformFastBasicLockable _lock;
         
-        struct Guard {
-            const Mutex* _target;
-            explicit Guard(Mutex* target) : _target(target) {
-                // _target->_mutex.lock();
-                os_unfair_lock_lock(&(_target->_mutex));
-            }
-            ~Guard() {
-                // _target->_mutex.unlock();
-                os_unfair_lock_unlock(&(_target->_mutex));
-            }
-            T* operator->() const {
-                return &(_target->_data);
-            }
-        };
-        
-        Guard operator->() const {
-            return Guard{this};
+        explicit SynchronizedGarbageCollected(auto&&... args)
+        : _data(FORWARD(args)...) {
         }
         
-        explicit Mutex(auto&& parts)
-        : _data(FORWARD(parts)) {
+        virtual void _garbage_collected_scan() const override {
+            std::unique_lock guard(_lock);
+            adl::trace(_data);
         }
         
-        T into_inner() const {
-            return std::move(*(operator->()));
+        static SynchronizedGarbageCollected* make(auto&&... args) {
+            return new SynchronizedGarbageCollected{FORWARD(args)...};
+        }
+
+        decltype(auto) access(auto&& f) const {
+            std::unique_lock guard(_lock);
+            return FORWARD(f)(_data);
+        }
+
+        decltype(auto) access(auto&& f) {
+            std::unique_lock guard(_lock);
+            return FORWARD(f)(_data);
         }
         
     };
+   
     
     namespace _persistent_map {
 
@@ -94,8 +137,7 @@ namespace wry {
             
             virtual void _garbage_collected_scan() const override {
                 printf("%s\n", __PRETTY_FUNCTION__);
-                for (const auto& k : data)
-                    adl::trace(k);
+                orphan::trace(data);
             }
             
             explicit PersistentSet(auto&&... args) : data(FORWARD(args)...) {}
@@ -137,10 +179,7 @@ namespace wry {
             
             virtual void _garbage_collected_scan() const override {
                 printf("Was traced\n");
-                for (const auto& [k, v] : data) {
-                    adl::trace(k);
-                    adl::trace(v);
-                }
+                orphan::trace(data);
             }
             
             PersistentMap() = default;

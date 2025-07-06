@@ -45,7 +45,7 @@ namespace adl {\
             }\
         };\
     }\
-    constexpr _detail::_##NAME NAME;\
+    inline constexpr _detail::_##NAME NAME;\
 }
 
 MAKE_CUSTOMIZATION_POINT_OBJECT(debug, ::wry::orphan)
