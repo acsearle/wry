@@ -11,7 +11,7 @@
 namespace wry::sim {
     
     void World::_garbage_collected_scan() const {
-        printf("%s\n", __PRETTY_FUNCTION__);
+        // printf("%s\n", __PRETTY_FUNCTION__);
         trace(_entity_for_entity_id);
         trace(_ready);
         trace(_waiting_for_time);
@@ -23,14 +23,14 @@ namespace wry::sim {
         
     World* World::step() const {
         
-        Context context;
+        TransactionContext context;
 
         // each entity constructs a transaction and links it with all of its
         // accessed variables
         
-        printf("_ready: %zd\n", _ready ? _ready->data.size() : 0);
+        printf("World step %lld  with %zd ready\n", _tick, _ready ? _ready->data.size() : 0);
         _ready->parallel_for_each([this, &context](EntityID entity_id) {
-            printf("EntityID %lld\n", entity_id.data);
+            //printf("EntityID %lld\n", entity_id.data);
             const Entity* a = nullptr;
             bool b = _entity_for_entity_id->try_get(entity_id, a);
             assert(b);
@@ -64,7 +64,9 @@ namespace wry::sim {
             // resolve the transactions associated with this coordinate
             const Transaction::Node* head = kv.second.load(Ordering::ACQUIRE);
             for (; head; head = head->_next) {
-                head->resolve();
+                if (head->resolve() == Transaction::State::COMMITTED) {
+                    return head->_desired;
+                }
             }
             Value v;
             _value_for_coordinate->try_get(kv.first, v);

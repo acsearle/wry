@@ -21,7 +21,9 @@
 #include "queue.hpp"
 #include "HeapTable.hpp"
 
+#include "persistent_set.hpp"
 #include "persistent_map.hpp"
+
 
 namespace wry::sim {
     
@@ -133,7 +135,7 @@ namespace wry::sim {
         {}
         
         virtual ~World() {
-            printf("%s\n", __PRETTY_FUNCTION__);
+            // printf("%s\n", __PRETTY_FUNCTION__);
         }
         
 

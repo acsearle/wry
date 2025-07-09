@@ -87,6 +87,7 @@ namespace wry {
                 EntityID entity_id = EntityID::oracle();
                 _world->_entity_for_entity_id = _world->_entity_for_entity_id->clone_and_insert_or_assign(entity_id, entity_ptr);
                 _world->_entity_id_for_coordinate = _world->_entity_id_for_coordinate->clone_and_insert_or_assign(entity_ptr->_location, new PersistentSet<EntityID>{std::set<EntityID>{entity_id}});
+                _world->_ready = _world->_ready->clone_and_insert(entity_id);
             };
             
             {
@@ -116,6 +117,12 @@ namespace wry {
                 // _world->_entities.push_back(r);
                 // entity_ready_on_world(r, _world);
                 insert_localized_entity(r);
+            }
+            
+            {
+                Counter* s = new Counter;
+                s->_location = Coordinate{-2, 2};
+                insert_localized_entity(s);
             }
 
             //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_integer_with(7));

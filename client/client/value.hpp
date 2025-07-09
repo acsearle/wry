@@ -122,8 +122,8 @@ namespace wry {
     Value value_make_array();
     Value value_make_table();
     constexpr Value value_make_true();
-    constexpr Value value_make_zero();
-    constexpr Value value_make_one();
+    Value value_make_zero();
+    Value value_make_one();
     constexpr Value value_make_opcode(int);
     
     Value value_make_deep_copy(const Value&);

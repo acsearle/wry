@@ -17,6 +17,72 @@ namespace wry::sim {
     
     struct Transaction : GarbageCollected {
         
+        // A ready entity is notfied
+        // In the notification, it can read from the current world state and
+        // propose a set of writes to make produce a new world state
+        // This proposal is a transaction, and all or none will succeed.
+        // Each entity has a unique priority (hash of entity ID salted with
+        // time)
+        // Transactions abort if another transaction with a conflicting write
+        // commits.  Transactions may only commit after proving all conflicting
+        // higher priority transactions have aborted, because their writes to
+        // other locations conflicted with even higher priority transactions.
+        // At least one transaction commits, because one entity has the unique
+        // highest priority.
+        // The common case is for transactions to not conflict at all.
+        // It is rare for there to be long chains of dependencies.
+        // Transactions can mostly be resolved in parallel.
+        // Entities whose transactions that are aborted can choose to try again
+        // next tick, that is they can requeue the entity as ready.
+        // Transactions that commit can also choose to requeue themselves to do
+        // something else next tick, or on a change, etc.
+        // Because the priority ranking of entities is pseudorandomized every
+        // tick, an entity can't starve indefinitely.
+        
+        // A transaction that wants to write to a location (entity, etc.) looks
+        // up that thing in an address-stable concurrent map structure
+        // (such as a skiplist) that maps to an atomic pointer.  If the entry
+        // does not exist, the transaction races to create a null pointer there.
+        // The transaction then atomically prepends a link to itself to the
+        // list.  This list contains all transactions that want to write to the
+        // location.  Orthogonally, each transaction contains a list of all the
+        // locations it wants to write to.  By following pointers around we
+        // can navigate the whole structure.
+        
+        // We now build the new state.
+        // We traverse the old world state maps and the write location maps for
+        // each kind of thing (location, entity, ...).  Once we find a subtree
+        // with no writes we can just keep it.  Once we find a leaf write, we
+        // resolve which transaction, if any, wins.  To do this, we follow the
+        // transaction list for the location, until we prove that one commits
+        // or all abort.  This recursively navigates the graph of transactions
+        // resolving their state, always terminating because only higher
+        // priority transactions affect the state of lower priority transactions,
+        // and on average quickly, because conflicts are statistically rare
+        // anyway.  Once we made (or found) a committed transaction for the
+        // location, we know its value in the new world state map, and can
+        // build up that part of the new map.
+        //
+        // Writes are rare.  Most locations do not change value on a given tick.
+        // Transaction conflicts are rarer.  Most transactions commit.
+        // The new state is mostly the old state.  We can build the new state
+        // in parallel quickly.
+        
+        // One problem with efficient implementation is that we need to store
+        // the written value for each write location, which is of variable size
+        // in principle, and we want to avoid doing an allocation for every
+        // written location for every transaction.  The array of Nodes used
+        // below means we have to have a fixed or max size value to write.
+        // - Is this actually a problem?  Is it uncommon enough we just use an
+        // indirection when needed?
+        //
+        // The transaction itself and all these nodes and values could be
+        // embedded in the pseudostack of a coroutine implementing "notify",
+        // giving a very flexible structure.
+        //
+        // We don't want to bake only a few transaction subtypes since the
+        // system should be open to extension at runtime
+        
         enum State {
             INITIAL,
             COMMITTED,
@@ -25,9 +91,9 @@ namespace wry::sim {
         
         struct Node {
             const Node* _next;
-            int _wants_write;
             const Transaction* _parent;
             const Atomic<const Transaction::Node*>* _head;
+            Value _desired;
             
             State resolve() const {
                 return _parent->resolve();
@@ -39,26 +105,31 @@ namespace wry::sim {
             
         };
         
-        Context* _context;
-        const Entity* _entity;
+        TransactionContext* _context = nullptr;
+        const Entity* _entity = nullptr;
         mutable Atomic<State> _state;
         
-        size_t _count;
+        size_t _capacity = 0;
+        size_t _size = 0;
         Node _nodes[0];
-        
-        Transaction(Context* context, const Entity* entity, size_t count)
-        : _context(context)
-        , _entity(entity)
-        , _state(INITIAL)
-        , _count(count) {}
-        
+                
         virtual void _garbage_collected_scan() const override {}
         
         static void* operator new(size_t basic, size_t extra) {
             return GarbageCollected::operator new(basic + extra * sizeof(Node));
         }
         
-        static Transaction* make(Context* context, const Entity* entity, size_t count) {
+        Transaction(TransactionContext* context, const Entity* entity, size_t capacity)
+        : _context(context)
+        , _entity(entity)
+        , _state(INITIAL)
+        , _capacity(capacity) {}
+        
+        ~Transaction() {
+            //printf("%s\n", __PRETTY_FUNCTION__);
+        }
+        
+        static Transaction* make(TransactionContext* context, const Entity* entity, size_t count) {
             return new(count) Transaction(context, entity, count);
         }
         
@@ -68,7 +139,7 @@ namespace wry::sim {
         EntityID read_entity_id_for_coordinate(Coordinate) { return {}; }
 
         void write_entity_for_entity_id(EntityID, const Entity*) {}
-        void write_value_for_coordinate(Coordinate, Value) {}
+        void write_value_for_coordinate(Coordinate, Value);
         void write_entity_id_for_coordinate(Coordinate, EntityID) {}
         void write_ready(EntityID) {}
         
@@ -90,12 +161,13 @@ namespace wry::sim {
             }
             // we are in a race to resolve ourself and our collisions
             uint64_t priority = entity_get_priority(_entity);
-            for (size_t i = 0; i != _count; ++i) {
+            for (size_t i = 0; i != _size; ++i) {
                 auto head = _nodes[i]._head->load(Ordering::RELAXED);
-                auto wants_write = _nodes[i]._wants_write;
                 for (; head; head = head->_next) {
-                    if ((wants_write || head->_wants_write) && (head->priority() < priority)) {
+                    if (head->priority() < priority) {
                         // other transaction conflicts with us and outranks us
+                        // we can only continue if we prove that the other
+                        // transaction ABORTED
                         observed = head->resolve();
                         assert(observed != INITIAL);
                         if (observed == COMMITTED) {
@@ -120,9 +192,34 @@ namespace wry::sim {
             
         };
         
+    }; // Transaction
+    
+    struct TransactionContext {
+        
+        const World* world;
+        StableConcurrentMap<EntityID, Atomic<const Transaction::Node*>> _transactions_for_entity;
+        StableConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_for_coordinate;
+        StableConcurrentMap<Time, Atomic<const Transaction::Node*>> _transactions_for_time;
+                
     };
     
-}
+    
+    inline void Transaction::write_value_for_coordinate(Coordinate xy, Value v) {
+        this->_context->_transactions_for_coordinate.access([&] (auto& m) {
+            auto q = _nodes + _size++;
+            q->_parent = this;
+            q->_desired = v;
+            auto* p = &(m.try_emplace(xy, nullptr).first->second);
+            q->_head = p;
+            q->_next = p->load(Ordering::ACQUIRE);
+            while (!p->compare_exchange_weak(q->_next, q, Ordering::RELEASE, Ordering::ACQUIRE))
+                ;
+        }
+                                                             );
+    }
+
+    
+} // namespace wry::sim
 
 
 #endif /* transaction_hpp */

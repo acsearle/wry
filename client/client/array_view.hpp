@@ -102,8 +102,8 @@ namespace wry {
         }
         
         const ContiguousView& assign(auto&& first, auto&& last) const {
-            copy(std::forward<decltype(first)>(first),
-                 std::forward<decltype(last)>(last),
+            copy(FORWARD(first),
+                 FORWARD(last),
                  _begin,
                  _end);
             return *this;
@@ -116,7 +116,7 @@ namespace wry {
 
         const ContiguousView& operator=(auto&& other) const {
             if constexpr (wry::Rank<std::decay_t<decltype(other)>>::value == 0) {
-                fill(std::forward<decltype(other)>(other));
+                fill(FORWARD(other));
             } else {
                 using std::begin;
                 using std::end;

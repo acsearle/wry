@@ -22,7 +22,7 @@ namespace wry::sim {
     
     struct Spawner : LocalizedEntity {
                 
-        virtual void notify(Context*) const override;
+        virtual void notify(TransactionContext*) const override;
         
     };
 
@@ -30,7 +30,7 @@ namespace wry::sim {
         
         Value _of_this;
         
-        virtual void notify(Context*) const override;
+        virtual void notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {
             trace(_of_this);
         }
@@ -39,10 +39,16 @@ namespace wry::sim {
 
     struct Sink : LocalizedEntity {
                 
-        virtual void notify(Context*) const override;
+        virtual void notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {
         }
         
+    };
+    
+    struct Counter : LocalizedEntity {
+        virtual void notify(TransactionContext*) const override;
+        virtual void _garbage_collected_scan() const override {
+        }
     };
 
 } // namespace wry::sim

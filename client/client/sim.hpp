@@ -92,7 +92,7 @@ namespace wry::sim {
     inline void trace(const EntityID&) {}
     inline void shade(const EntityID&) {}
     
-    struct Context;
+    struct TransactionContext;
     
 }
 

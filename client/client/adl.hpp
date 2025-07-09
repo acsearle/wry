@@ -41,7 +41,7 @@ namespace adl {\
         struct _##NAME {\
             decltype(auto) operator()(auto&&... args) const {\
                 using namespace NAMESPACE;\
-                return NAME(std::forward<decltype(args)>(args)...);\
+                return NAME(FORWARD(args)...);\
             }\
         };\
     }\

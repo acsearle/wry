@@ -16,20 +16,75 @@
 #include <algorithm>
 #include <bit>
 #include <memory>
+#include <set>
 #include <new>
-#include <utility>
 
 #include "garbage_collected.hpp"
-#include "adl.hpp"
+
 
 namespace wry {
     
-    // A functional ordered set of 64 bit ints
+    template<typename Key, typename Compare>
+    void trace(const std::set<Key, Compare>& s) {
+        for (const Key& k : s)
+            trace(k);
+    }
     
-    // TODO: for pure sets, the shift == 0 level nodes only hold the bitmap
-    // we can pull them up into the shift == 1 level
+    namespace _persistent_set0 {
+        
+        template<typename Key>
+        struct PersistentSet : GarbageCollected {
+            
+            std::set<Key> data;
+            
+            virtual void _garbage_collected_scan() const override {
+                //printf("%s\n", __PRETTY_FUNCTION__);
+                trace(data);
+            }
+            
+            explicit PersistentSet(auto&&... args) : data(FORWARD(args)...) {}
+            
+            virtual ~PersistentSet() {
+                //printf("%s\n", __PRETTY_FUNCTION__);
+            }
+            
+            bool contains(Key k) const {
+                return data.contains(k);
+            }
+            
+            template<typename K>
+            [[nodiscard]] const PersistentSet* clone_and_erase(K&& k) const {
+                std::set<Key> a{data}; // deep copy
+                a.erase(std::forward<K>(k));
+                return new PersistentSet{std::move(a)};
+            }
+            
+            template<typename K>
+            [[nodiscard]] const PersistentSet* clone_and_insert(K&& k) const {
+                std::set<Key> a{data}; // deep copy
+                a.insert(std::forward<K>(k));
+                return new PersistentSet{std::move(a)};
+            }
+            
+            template<typename F>
+            void parallel_for_each(const F& f) const {
+                for (const auto& k : data)
+                    f(k);
+            }
+            
+        };
+        
+    }
     
-    namespace _persistent_set {
+    using _persistent_set0::PersistentSet;
+    
+    namespace _persistent_set1 {
+    
+        // A functional ordered set of 64 bit ints
+        
+        // TODO: for pure sets, the shift == 0 level nodes only hold the bitmap
+        // we can pull them up into the shift == 1 level
+        
         
         // bit tools
         
@@ -565,13 +620,13 @@ namespace wry {
             // left->_prefix + ((uint64_t) 64 << _shift) is upper bound
         }
         
-    } // namespace _persistent_set
+    } // namespace _persistent_set1
     
     // using _persistent_set::persistent_set;
     
     
     
-    namespace _persistent_map {
+    namespace _persistent_map2 {
         
         template<typename T>
         struct Node : GarbageCollected {
@@ -607,9 +662,7 @@ namespace wry {
             
         };
         
-        
-        
-    };
+    } // namespace _persistent_map1
     
 } // namespace wry
 

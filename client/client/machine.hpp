@@ -96,7 +96,7 @@ namespace wry::sim {
             }
         }
         
-        virtual void notify(Context* context) const override;
+        virtual void notify(TransactionContext* context) const override;
 
         void _schedule_arrival(World* world);
         

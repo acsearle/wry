@@ -12,7 +12,8 @@
 
 namespace wry::sim {
     
-    void Source::notify(Context* context) const {
+    void Source::notify(TransactionContext* context) const {
+        printf("%s\n", __PRETTY_FUNCTION__);
         Transaction* tx = Transaction::make(context, this, 2);
         Value x = tx->read_value_for_coordinate(this->_location);
         if (x.is_Empty())
@@ -20,7 +21,7 @@ namespace wry::sim {
         tx->wait_on_value_for_coordinate(this->_location);
     }
     
-    void Sink::notify(Context* context) const {
+    void Sink::notify(TransactionContext* context) const {
         Transaction* tx = Transaction::make(context, this, 2);
         Value x = tx->read_value_for_coordinate(this->_location);
         if (!x.is_Empty())
@@ -30,7 +31,7 @@ namespace wry::sim {
     
     inline EntityID spawner_new_entity_from_prototype() { return {}; }
     
-    void Spawner::notify(Context* context) const {
+    void Spawner::notify(TransactionContext* context) const {
         Transaction* tx = Transaction::make(context, this, 10);
         EntityID a = tx->read_entity_id_for_coordinate(this->_location);
         if (!a) {
@@ -52,5 +53,16 @@ namespace wry::sim {
         }
         tx->wait_on_entity_id_for_coordinate(this->_location);
     }
+    
+    void Counter::notify(TransactionContext* context) const {
+        Transaction* tx = Transaction::make(context, this, 10);
+        Value x = value_make_zero();
+        context->world->_value_for_coordinate->try_get(this->_location, x);
+        printf("Counter reads %lld\n", x.as_int64_t());
+        x = value_make_integer_with(x.as_int64_t() + 1);
+        tx->write_value_for_coordinate(this->_location, x);
+        tx->wait_on_time(context->world->_tick + 120);
+    }
+        
     
 } // namespace wry::sim

@@ -13,7 +13,7 @@
 
 namespace wry::sim {
     
-    void Machine::notify(Context* context) const {
+    void Machine::notify(TransactionContext* context) const {
 #if 0
         
         Transaction* tx = Transaction::make(context, this, 10);

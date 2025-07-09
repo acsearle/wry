@@ -132,6 +132,14 @@ namespace wry {
         return result;
     }
     
+    Value value_make_zero() {
+        return value_make_integer_with(0);
+    }
+
+    Value value_make_one() {
+        return value_make_integer_with(1);
+    }
+
     Value value_make_string_with(const char* ntbs) {
         Value result;
         std::size_t n = std::strlen(ntbs);

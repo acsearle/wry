@@ -20,7 +20,7 @@ namespace wry::sim {
                         
         virtual ~Entity() = default;
         
-        virtual void notify(Context*) const {}
+        virtual void notify(TransactionContext*) const {}
 
         EntityID _entity_id;
 

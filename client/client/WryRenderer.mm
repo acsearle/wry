@@ -1095,8 +1095,6 @@
         auto tnow = world_time(_model->_world);
         const auto* entities = _model->_world->_entity_for_entity_id;
         
-        // We don't need entities.size() because entities are no longer drawn
-        // into this buffer (I think)
         NSUInteger quad_count = entities->data.size() * 4 + 1000 + 2;
         NSUInteger vertex_count = quad_count * 4;
         index_count = quad_count * 6;

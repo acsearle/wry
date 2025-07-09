@@ -8,15 +8,14 @@
 #ifndef persistent_map_hpp
 #define persistent_map_hpp
 
-#include <os/lock.h>
-
 #include <iostream>
 #include <map>
-#include <mutex>
 #include <set>
 
 #include "adl.hpp"
 #include "garbage_collected.hpp"
+#include "mutex.hpp"
+#include "utility.hpp"
 
 namespace wry {
     
@@ -26,102 +25,15 @@ namespace wry {
         trace(p.second);
     }
     
-    template<typename Key, typename Compare>
-    void trace(const std::set<Key, Compare>& s) {
-        for (const Key& k : s)
-            trace(k);
-    }
+   
     
     template<typename Key, typename T, typename Compare>
     void trace(const std::map<Key, T, Compare>& m) {
         for (const auto& p : m)
             trace(p);
     }
-    
-}
-
-namespace wry {
-
-    // Two ways of hoisting ordinary objects into a concurrent garbage collected
-    // context: make them copy-on-write or make them
-    
-    template<typename T>
-    struct ImmutableGarbageCollected : GarbageCollected {
-                
-        T data;
         
-        explicit ImmutableGarbageCollected(auto&&... args) : data(FORWARD(args)...) {}
-        
-        virtual ~ImmutableGarbageCollected() {
-            printf("%s\n", __PRETTY_FUNCTION__);
-        }
-
-        virtual void _garbage_collected_scan() const override {
-            trace(data);
-        }
-
-        static const ImmutableGarbageCollected* make(auto&&... args) {
-            return new ImmutableGarbageCollected{T(FORWARD(args)...)};
-        }
-        
-        T copy_inner() const {
-            return T{data};
-        }
-        
-        const ImmutableGarbageCollected* copy_with_mutation(auto&& f) const {
-            T mutable_copy{data};
-            (void) FORWARD(f)(mutable_copy);
-            return make(std::move(mutable_copy));
-        }
-        
-    }; // ImmutableGarbageCollected
-    
-    struct PlatformFastBasicLockable {
-        os_unfair_lock _lock = OS_UNFAIR_LOCK_INIT;
-        void lock() {
-#ifndef NDEBUG
-            os_unfair_lock_assert_not_owner(&_lock);
-#endif
-            os_unfair_lock_lock(&_lock);
-        }
-        void unlock() {
-#ifndef NDEBUG
-            os_unfair_lock_assert_owner(&_lock);
-#endif
-            os_unfair_lock_unlock(&_lock);
-        }
-    };
-    
-    template<typename T>
-    struct SynchronizedGarbageCollected : GarbageCollected {
-        
-        T _data;
-        mutable PlatformFastBasicLockable _lock;
-        
-        explicit SynchronizedGarbageCollected(auto&&... args)
-        : _data(FORWARD(args)...) {
-        }
-        
-        virtual void _garbage_collected_scan() const override {
-            std::unique_lock guard(_lock);
-            trace(_data);
-        }
-        
-        static SynchronizedGarbageCollected* make(auto&&... args) {
-            return new SynchronizedGarbageCollected{FORWARD(args)...};
-        }
-
-        decltype(auto) access(auto&& f) const {
-            std::unique_lock guard(_lock);
-            return FORWARD(f)(_data);
-        }
-
-        decltype(auto) access(auto&& f) {
-            std::unique_lock guard(_lock);
-            return FORWARD(f)(_data);
-        }
-        
-    };
+   
    
     
     namespace _persistent_map {
@@ -130,47 +42,7 @@ namespace wry {
         // - array-mapped tries
         // - skiplists
         
-        template<typename Key>
-        struct PersistentSet : GarbageCollected {
-            
-            std::set<Key> data;
-            
-            virtual void _garbage_collected_scan() const override {
-                printf("%s\n", __PRETTY_FUNCTION__);
-                trace(data);
-            }
-            
-            explicit PersistentSet(auto&&... args) : data(FORWARD(args)...) {}
-            
-            virtual ~PersistentSet() {
-                printf("%s\n", __PRETTY_FUNCTION__);
-            }
-            
-            bool contains(Key k) const {
-                return data.contains(k);
-            }
-            
-            template<typename K>
-            [[nodiscard]] const PersistentSet* clone_and_erase(K&& k) const {
-                std::set<Key> a{data}; // deep copy
-                a.erase(std::forward<K>(k));
-                return new PersistentSet{std::move(a)};
-            }
-            
-            template<typename K>
-            [[nodiscard]] const PersistentSet* clone_and_insert(K&& k) const {
-                std::set<Key> a{data}; // deep copy
-                a.insert(std::forward<K>(k));
-                return new PersistentSet{std::move(a)};
-            }
-                        
-            template<typename F>
-            void parallel_for_each(const F& f) const {
-                for (const auto& k : data)
-                    f(k);
-            }
-
-        };
+        
         
         template<typename Key, typename T>
         struct PersistentMap : GarbageCollected {
@@ -178,7 +50,7 @@ namespace wry {
             std::map<Key, T> data;
             
             virtual void _garbage_collected_scan() const override {
-                printf("Was traced\n");
+                //printf("Was traced\n");
                 trace(data);
             }
             
@@ -186,7 +58,7 @@ namespace wry {
             explicit PersistentMap(std::map<Key, T>&& x) : data(std::move(x)) {}
             
             virtual ~PersistentMap() {
-                printf("%s\n", __PRETTY_FUNCTION__);
+                //printf("%s\n", __PRETTY_FUNCTION__);
             }
 
             bool contains(Key k) const {
@@ -269,7 +141,12 @@ namespace wry {
             
             decltype(auto) subscript_and_mutate(auto&& k, auto&& f) {
                 std::unique_lock lock{_mutex};
-                return std::forward<decltype(f)>(f)(_map[FORWARD(k)]);
+                return FORWARD(f)(_map[FORWARD(k)]);
+            }
+            
+            decltype(auto) access(auto&& f) {
+                std::unique_lock lock{_mutex};
+                FORWARD(f)(_map);
             }
             
         };
@@ -292,8 +169,8 @@ namespace wry {
             
             
             for (;;) {
-                printf("source_iter != source_end: %d\n", source_iter != source_end);
-                printf("modifier_iter != modifier_end: %d\n", modifier_iter != modifier_end);
+                //printf("source_iter != source_end: %d\n", source_iter != source_end);
+                //printf("modifier_iter != modifier_end: %d\n", modifier_iter != modifier_end);
                 if (source_iter != source_end) {
                     if (modifier_iter != modifier_end) {
                         if (source_iter->first < modifier_iter->first) {
@@ -330,9 +207,6 @@ namespace wry {
     };
     
     using _persistent_map::PersistentMap;
-    //using _persistent_map::EphemeralMap;
-    using _persistent_map::PersistentSet;
-    //using _persistent_map::EphemeralMap;
     using _persistent_map::StableConcurrentMap;
 
 }

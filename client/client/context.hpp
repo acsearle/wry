@@ -12,14 +12,7 @@
 
 namespace wry::sim {
     
-    struct Context {
-        
-        const World* world;
-        StableConcurrentMap<EntityID, Atomic<const Transaction::Node*>> _transactions_for_entity;
-        StableConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_for_coordinate;
-        StableConcurrentMap<Time, Atomic<const Transaction::Node*>> _transactions_for_time;
-        
-    };
+   
     
 } // namespace wry::sim
 
