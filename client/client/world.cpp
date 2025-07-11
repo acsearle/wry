@@ -45,12 +45,16 @@ namespace wry::sim {
         
         Time new_tick = _tick + 1;
         
+        /*
         auto new_entity_for_entity_id
         = parallel_rebuild(_entity_for_entity_id,
                            context._transactions_for_entity,
                            [](const std::pair<const EntityID, Atomic<const Transaction::Node*>>& kv) -> const Entity* {
             return nullptr;
         });
+        */
+        
+        auto new_entity_for_entity_id = _entity_for_entity_id;
         
         auto new_ready = _ready;
         auto new_waiting_for_time = _waiting_for_time;
@@ -63,17 +67,28 @@ namespace wry::sim {
                            [this](const std::pair<const Coordinate, Atomic<const Transaction::Node*>>& kv) -> Value {
             // resolve the transactions associated with this coordinate
             const Transaction::Node* head = kv.second.load(Ordering::ACQUIRE);
+            const Transaction::Node* winner = nullptr;
             for (; head; head = head->_next) {
-                if (head->resolve() == Transaction::State::COMMITTED) {
-                    return head->_desired;
+                if (!winner && (head->resolve() == Transaction::State::COMMITTED)) {
+                    winner = head;
+                } else {
+                    head->abort();
                 }
             }
+            if (winner)
+                return winner->_desired;
             Value v;
             _value_for_coordinate->try_get(kv.first, v);
             return v;
         });
-
+        
+        
         auto new_entity_id_for_coordinate = _entity_id_for_coordinate;
+        
+        // problem: if we lazily resolve transactions, prompted by doing
+        // minimal work to determine who, if anybody, can write, we don't
+        // actually resolve every transaction.
+        
 
         return new World{
             new_tick,

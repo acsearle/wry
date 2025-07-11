@@ -55,13 +55,13 @@ namespace wry::sim {
     }
     
     void Counter::notify(TransactionContext* context) const {
-        Transaction* tx = Transaction::make(context, this, 10);
+        Transaction* transaction = Transaction::make(context, this, 10);
         Value x = value_make_zero();
-        context->world->_value_for_coordinate->try_get(this->_location, x);
+        context->try_read_value_for_coordinate(this->_location, x);
         printf("Counter reads %lld\n", x.as_int64_t());
         x = value_make_integer_with(x.as_int64_t() + 1);
-        tx->write_value_for_coordinate(this->_location, x);
-        tx->wait_on_time(context->world->_tick + 120);
+        transaction->write_value_for_coordinate(this->_location, x);
+        transaction->wait_on_time(context->_world->_tick + 120);
     }
         
     

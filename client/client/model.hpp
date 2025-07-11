@@ -84,12 +84,13 @@ namespace wry {
             using namespace sim;
                         
             auto insert_localized_entity = [&](const LocalizedEntity* entity_ptr) {
-                EntityID entity_id = EntityID::oracle();
+                EntityID entity_id  = entity_ptr->_entity_id;
                 _world->_entity_for_entity_id = _world->_entity_for_entity_id->clone_and_insert_or_assign(entity_id, entity_ptr);
                 _world->_entity_id_for_coordinate = _world->_entity_id_for_coordinate->clone_and_insert_or_assign(entity_ptr->_location, new PersistentSet<EntityID>{std::set<EntityID>{entity_id}});
                 _world->_ready = _world->_ready->clone_and_insert(entity_id);
             };
             
+            /*
             {
                 // new machine spawner at origin
                 Spawner* p = new Spawner;
@@ -118,8 +119,16 @@ namespace wry {
                 // entity_ready_on_world(r, _world);
                 insert_localized_entity(r);
             }
+             */
             
             {
+                Counter* s = new Counter;
+                s->_location = Coordinate{-2, 2};
+                insert_localized_entity(s);
+            }
+
+            {
+                // a second counter to contest the transaction
                 Counter* s = new Counter;
                 s->_location = Coordinate{-2, 2};
                 insert_localized_entity(s);

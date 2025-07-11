@@ -23,11 +23,11 @@ namespace wry::sim {
         virtual void notify(TransactionContext*) const {}
 
         EntityID _entity_id;
+        
+        Entity();
 
     }; // struct Entity
-    
-    uint64_t entity_get_priority(const Entity*);
-  
+      
 };
 
 #endif /* entity_hpp */

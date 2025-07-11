@@ -99,9 +99,13 @@ namespace wry::sim {
                 return _parent->resolve();
             }
             
-            uint64_t priority() const {
-                return entity_get_priority(_parent->_entity);
+            State abort() const {
+                return _parent->abort();
             }
+            
+            // seems dubious to commit at the Node level
+                        
+            uint64_t priority() const;
             
         };
         
@@ -152,72 +156,27 @@ namespace wry::sim {
         void wait_on_entity_for_entity_id(EntityID) {}
         void wait_on_time(Time) {}
 
-        State resolve() const {
-            State observed;
-            observed = _state.load(Ordering::RELAXED);
-            if (observed != INITIAL) {
-                // already resolved
-                return observed;
-            }
-            // we are in a race to resolve ourself and our collisions
-            uint64_t priority = entity_get_priority(_entity);
-            for (size_t i = 0; i != _size; ++i) {
-                auto head = _nodes[i]._head->load(Ordering::RELAXED);
-                for (; head; head = head->_next) {
-                    if (head->priority() < priority) {
-                        // other transaction conflicts with us and outranks us
-                        // we can only continue if we prove that the other
-                        // transaction ABORTED
-                        observed = head->resolve();
-                        assert(observed != INITIAL);
-                        if (observed == COMMITTED) {
-                            // other transaction aborts us
-                            observed = _state.exchange(ABORTED, Ordering::RELAXED);
-                            // INITIAL: we won the race
-                            // ABORTED: another thread beat us
-                            // COMMITTED: another thread came to the opposite conclusion!
-                            assert(observed != COMMITTED);
-                            return ABORTED;
-                        }
-                        // else, other transaction ABORTED and we may proceed
-                    }
-                }
-            }
-            observed = _state.exchange(COMMITTED, Ordering::RELAXED);
-            // INITIAL: we won the race
-            // COMMITTED: another thread beat us
-            // ABORTED: another thread came to the opposite conclusion!
-            assert(observed != ABORTED);
-            return COMMITTED;
-            
-        };
+        State resolve() const;
+        State abort() const;
+        State commit() const;
         
     }; // Transaction
     
     struct TransactionContext {
         
-        const World* world;
+        const World* _world;
         StableConcurrentMap<EntityID, Atomic<const Transaction::Node*>> _transactions_for_entity;
         StableConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_for_coordinate;
         StableConcurrentMap<Time, Atomic<const Transaction::Node*>> _transactions_for_time;
+
+        uint64_t entity_get_priority(const Entity*);
+        
+        bool try_read_value_for_coordinate(Coordinate, Value&);
                 
     };
     
     
-    inline void Transaction::write_value_for_coordinate(Coordinate xy, Value v) {
-        this->_context->_transactions_for_coordinate.access([&] (auto& m) {
-            auto q = _nodes + _size++;
-            q->_parent = this;
-            q->_desired = v;
-            auto* p = &(m.try_emplace(xy, nullptr).first->second);
-            q->_head = p;
-            q->_next = p->load(Ordering::ACQUIRE);
-            while (!p->compare_exchange_weak(q->_next, q, Ordering::RELEASE, Ordering::ACQUIRE))
-                ;
-        }
-                                                             );
-    }
-
+   
     
 } // namespace wry::sim
 
