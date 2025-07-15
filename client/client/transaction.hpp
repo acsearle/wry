@@ -164,7 +164,7 @@ namespace wry::sim {
     
     struct TransactionContext {
         
-        const World* _world;
+        const World* _world = nullptr;
         StableConcurrentMap<EntityID, Atomic<const Transaction::Node*>> _transactions_for_entity;
         StableConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_for_coordinate;
         StableConcurrentMap<Time, Atomic<const Transaction::Node*>> _transactions_for_time;

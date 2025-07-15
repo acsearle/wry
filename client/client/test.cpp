@@ -11,10 +11,11 @@
 namespace wry {
     
     namespace detail {
-        
+
+        constinit static test_t::base* _head = nullptr;
+
         test_t::base*& test_t::get_head() {
-            static base* head = nullptr;
-            return head;
+            return _head;
         }
         
         void test_t::run_all() {

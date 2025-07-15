@@ -12,18 +12,19 @@ namespace wry::sim {
     
     void World::_garbage_collected_scan() const {
         // printf("%s\n", __PRETTY_FUNCTION__);
-        trace(_entity_for_entity_id);
         trace(_ready);
+        trace(_entity_for_entity_id);
+        trace(_value_for_coordinate);
+        trace(_entity_id_for_coordinate);
         trace(_waiting_for_time);
         trace(_waiting_for_entity_id);
         trace(_waiting_for_coordinate);
-        trace(_value_for_coordinate);
-        trace(_entity_id_for_coordinate);
     }
         
     World* World::step() const {
         
         TransactionContext context;
+        context._world = this;
 
         // each entity constructs a transaction and links it with all of its
         // accessed variables
@@ -61,7 +62,7 @@ namespace wry::sim {
         auto new_waiting_for_entity_id = _waiting_for_entity_id;
         auto new_waiting_for_coordinate = _waiting_for_coordinate;
 
-        auto new_value_for_coordinate
+        auto new_value_for_coordinate // = _value_for_coordinate;
         = parallel_rebuild(_value_for_coordinate,
                            context._transactions_for_coordinate,
                            [this](const std::pair<const Coordinate, Atomic<const Transaction::Node*>>& kv) -> Value {
@@ -81,7 +82,6 @@ namespace wry::sim {
             _value_for_coordinate->try_get(kv.first, v);
             return v;
         });
-        
         
         auto new_entity_id_for_coordinate = _entity_id_for_coordinate;
         

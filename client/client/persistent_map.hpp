@@ -38,9 +38,7 @@ namespace wry {
     
     namespace _persistent_map {
 
-        // These objects will be upgraded to
-        // - array-mapped tries
-        // - skiplists
+        // TODO: replace with array-mapped trie
         
         
         
@@ -127,6 +125,8 @@ namespace wry {
          */
         
        
+        // TODO: replace with skiplist
+
         
         template<typename Key, typename T>
         struct StableConcurrentMap {
