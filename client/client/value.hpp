@@ -14,7 +14,7 @@
 #include "atomic.hpp"
 #include "garbage_collected.hpp"
 #include "Scan.hpp"
-#include "adl.hpp"
+//#include "adl.hpp"
 
 namespace wry {
     
@@ -68,7 +68,7 @@ namespace wry {
     }; // struct Value
     
     void shade(const Value& value);
-    void trace(const Value& value);
+    void trace(const Value& value,void*p);
     
 } // namespace wry
 
@@ -286,17 +286,17 @@ namespace wry {
             shade(_value_as_object(self));
     }
     
-    inline void trace(const Value& self) {
+    inline void trace(const Value& self,void*p) {
         if (_value_is_object(self))
-            trace(_value_as_object(self));
+            trace(_value_as_object(self),p);
     }
     
     inline void shade(const Scan<Value>& self) {
         shade(self._atomic_value.load(Ordering::RELAXED));
     }
     
-    inline void trace(const Scan<Value>& self) {
-        trace(self._atomic_value.load(Ordering::ACQUIRE));
+    inline void trace(const Scan<Value>& self,void*p) {
+        trace(self._atomic_value.load(Ordering::ACQUIRE),p);
     }
     
     size_t hash(const Value& self);
@@ -315,7 +315,7 @@ namespace wry {
         virtual ~HeapInt64() final = default;
         std::int64_t as_int64_t() const;
         virtual void _garbage_collected_shade() const override;
-        virtual void _garbage_collected_scan() const override;
+        virtual void _garbage_collected_scan(void*) const override;
     };
     
     
@@ -345,8 +345,8 @@ namespace wry {
     
     
     
-    inline void trace(const Scan<Atomic<Value>>& self) {
-        trace(self._atomic_value.load(Ordering::ACQUIRE));
+    inline void trace(const Scan<Atomic<Value>>& self,void*p) {
+        trace(self._atomic_value.load(Ordering::ACQUIRE),p);
     }
     
     inline void passivate(Value& self) {

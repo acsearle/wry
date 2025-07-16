@@ -14,10 +14,15 @@ namespace wry {
     }
 
     void HeapString::_garbage_collected_shade() const {
-        _garbage_collected_trace();
+        abort();
+#if 0
+        _garbage_collected_trace(p);
+#endif
     }
     
-    void HeapString::_garbage_collected_trace() const {
+    void HeapString::_garbage_collected_trace(void*p) const {
+        abort();
+#if 0
         Color expected = Color::WHITE;
         (void) color.compare_exchange(expected, Color::BLACK);
         switch (expected) {
@@ -30,15 +35,16 @@ namespace wry {
                 debug(this);
                 abort();
         }
+#endif
     }
     
-    void HeapString::_garbage_collected_scan() const {
+    void HeapString::_garbage_collected_scan(void*) const {
         fprintf(stderr, "Scanned a weak object ");
         _garbage_collected_debug();
         abort();
     }
 
-    void HeapString::_garbage_collected_trace_weak() const {
+    void HeapString::_garbage_collected_trace_weak(void*) const {
         // no-op
     }
     

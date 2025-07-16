@@ -15,7 +15,7 @@ namespace wry::sim {
     
     using Time = i64;
     
-    inline void trace(const Time&) { }
+    inline void trace(const Time&,void*) { }
     inline void shade(const Time&) { }
 
     struct World;
@@ -60,7 +60,7 @@ namespace wry::sim {
         return hash_combine(&x, sizeof(x));
     }
     
-    inline void trace(const Coordinate&) {}
+    inline void trace(const Coordinate&,void*) {}
     inline void shade(const Coordinate&) {}
     
     struct MortonCoordinate {
@@ -69,7 +69,7 @@ namespace wry::sim {
         constexpr auto operator<=>(const MortonCoordinate&) const = default;
     };
 
-    inline void trace(const MortonCoordinate&) {}
+    inline void trace(const MortonCoordinate&,void*) {}
     inline void shade(const MortonCoordinate&) {}
 
     
@@ -89,7 +89,7 @@ namespace wry::sim {
         return hash_combine(&x, sizeof(x));
     }
     
-    inline void trace(const EntityID&) {}
+    inline void trace(const EntityID&,void*) {}
     inline void shade(const EntityID&) {}
     
     struct TransactionContext;

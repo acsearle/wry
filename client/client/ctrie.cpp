@@ -5,7 +5,7 @@
 //  Created by Antony Searle on 14/6/2024.
 //
 
-#include "adl.hpp"
+//#include "adl.hpp"
 
 #include "utility.hpp"
 #include "ctrie.hpp"
@@ -43,7 +43,7 @@ namespace wry {
             virtual EraseResult _ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const override;
             virtual const HeapString* _ctrie_mn_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const override;
             
-            virtual void _garbage_collected_scan() const override;
+            virtual void _garbage_collected_scan(void*) const override;
             
         };
         
@@ -59,7 +59,7 @@ namespace wry {
             const LNode* copy_erase(const HeapString* key) const;
             const LNode* copy_erase(const LNode* victim) const;
             
-            virtual void _garbage_collected_scan() const override;
+            virtual void _garbage_collected_scan(void*) const override;
             
             virtual const HeapString* _ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const override;
             
@@ -83,7 +83,7 @@ namespace wry {
             virtual EraseResult _ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const override;
             virtual void _ctrie_mn_erase2(const INode* p, const INode* i, size_t hc, int lev) const override;
             
-            virtual void _garbage_collected_scan() const override;
+            virtual void _garbage_collected_scan(void*) const override;
             
         };
         
@@ -495,7 +495,8 @@ namespace wry {
                 
                 // We found the key, but we must obtain a strong reference to it
                 // before we can return it
-                
+                abort();
+#if 0
                 Color expected = Color::WHITE;
                 key->color.compare_exchange(expected, Color::BLACK);
                 switch (expected) {
@@ -525,6 +526,7 @@ namespace wry {
                 head = this->copy_erase(current);
                 
                 break;
+#endif
             }
             
             // The key didn't exist or was condemned
@@ -553,6 +555,8 @@ namespace wry {
         
         
         const LNode* LNode::copy_erase(const HeapString* key) const {
+            abort();
+#if 0
             // this should only be called by the garbage collector
             for (const LNode* current = this; current; current = current->next) {
                 if (current->sn != key)
@@ -564,28 +568,29 @@ namespace wry {
             }
             // Not present in the list
             return this;
+#endif
         }
         
         
         
         
         
-        void CNode::_garbage_collected_scan() const {
+        void CNode::_garbage_collected_scan(void* p) const {
             int num = __builtin_popcountll(bmp);
             for (int i = 0; i != num; ++i)
-                trace_weak(array[i]);
+                trace_weak(array[i], p);
         }
         
-        void INode::_garbage_collected_scan() const {
-            trace(main);
+        void INode::_garbage_collected_scan(void* p) const {
+            trace(main, p);
         }
         
-        void LNode::_garbage_collected_scan() const {
-            trace_weak(sn);
-            trace(next);
+        void LNode::_garbage_collected_scan(void* p) const {
+            trace_weak(sn, p);
+            trace(next, p);
         }
-        void TNode::_garbage_collected_scan() const {
-            trace_weak(sn);
+        void TNode::_garbage_collected_scan(void* p) const {
+            trace_weak(sn, p);
         }
         
         
@@ -627,8 +632,8 @@ namespace wry {
             ;
     }
 
-    void Ctrie::_garbage_collected_scan() const {
-        trace(root);
+    void Ctrie::_garbage_collected_scan(void*p) const {
+        trace(root,p);
     }
     
     
@@ -666,6 +671,8 @@ namespace wry {
                 // The sizes match
                 if (!__builtin_memcmp(hs->_bytes, query.view.data(), query.view.size())) {
                     // The strings match
+                    abort();
+#if 0
                     Color expected = Color::WHITE;
                     hs->color.compare_exchange(expected, Color::BLACK);
                     switch (expected) {
@@ -689,6 +696,7 @@ namespace wry {
                     nhs = make_HeapString_from_Query(query);
                     nmn = cn->copy_assign(pos, nhs);
                     return i->compare_exchange(mn, nmn) ? nhs : nullptr;
+#endif
                 }
             }
         }

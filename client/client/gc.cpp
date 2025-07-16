@@ -8,8 +8,10 @@
 #include <cinttypes>
 
 #include <thread>
+#include <queue>
+#include <deque>
 
-#include "adl.hpp"
+//#include "adl.hpp"
 #include "ctrie.hpp"
 #include "gc.hpp"
 #include "HeapArray.hpp"
@@ -21,6 +23,802 @@
 #include "garbage_collected.hpp"
 
 #include "test.hpp"
+
+#define dump(X) printf("C0.%d: %016llx = " #X "\n", __LINE__, (X));
+
+
+namespace wry {
+    
+    
+    // Bag
+    
+    // constinit true O(1) bag via std::deque
+    template<typename T>
+    struct DequeBag {
+        
+        std::deque<T>* _inner = nullptr;
+        
+        bool is_empty() {
+            return !_inner || _inner->empty();
+        }
+        
+        constexpr DequeBag() = default;
+        ~DequeBag() {
+            delete _inner;
+        }
+        DequeBag(const DequeBag&) = delete;
+        DequeBag(DequeBag&& other)
+        : _inner(std::exchange(other._inner, nullptr)) {
+        }
+        
+        void swap(DequeBag& other) {
+            using std::swap;
+            swap(_inner, other._inner);
+        }
+        
+        DequeBag& operator=(const DequeBag&) = delete;
+        DequeBag& operator=(DequeBag&& other) {
+            DequeBag(std::move(other)).swap(*this);
+            return *this;
+        }
+        
+        size_t size() const {
+            return _inner ? _inner->size() : 0;
+        }
+        
+        void push(T value) {
+            if (!_inner)
+                _inner = new std::deque<T>;
+            _inner->push_back(std::move(value));
+        }
+        
+        bool try_pop(T& victim) {
+            if (is_empty())
+                return false;
+            victim = std::move(_inner->front());
+            _inner->pop_front();
+            return true;
+        }
+        
+        void extend(DequeBag&& other) {
+            T victim;
+            while (other.try_pop(victim)) {
+                push(std::move(victim));
+            }
+        }
+        
+    };
+    
+    template<typename T>
+    using Bag = DequeBag<T>;
+    
+    // Stack
+    
+    template<typename T>
+    struct Stack {
+        std::deque<T> c;
+        void push(T x) { c.push_back(std::move(x)); }
+        bool try_pop(T& victim) {
+            bool result = !c.empty();
+            if (result) {
+                victim = std::move(c.back());
+                c.pop_back();
+            }
+            return result;
+        }
+    };
+    
+    
+    
+    // Channel
+    
+    
+    
+    using Mutex = std::mutex;
+    using ConditionVariable = std::condition_variable;
+    
+    
+    // Unbounded communication channel
+    template<typename T>
+    struct Channel {
+        
+        struct Result {
+            enum Tag {
+                VALUE = 0,
+                EMPTY,
+                TIMEOUT,
+                CLOSED,
+            } tag;
+            union {
+                char _dummy;
+                T value;
+            };
+        };
+        
+        std::mutex _mutex;
+        std::condition_variable _condition_variable;
+        std::queue<T> _queue;
+        ptrdiff_t _waiting = 0;
+        
+        bool was_empty() const {
+            bool result;
+            {
+                std::unique_lock lock{_mutex};
+                result = _queue.empty();
+            }
+            return result;
+        }
+        
+        void push(T x) {
+            ptrdiff_t waiting;
+            {
+                std::unique_lock lock{_mutex};
+                _queue.push(std::move(x));
+                waiting = _waiting;
+            }
+            if (waiting) {
+                _condition_variable.notify_all();
+            }
+        }
+        
+        bool try_pop(T& victim) {
+            std::unique_lock lock{_mutex};
+            bool result = !_queue.empty();
+            if (result) {
+                victim = std::move(_queue.front());
+                _queue.pop();
+            }
+            return result;
+        }
+        
+        void pop_wait(T& victim) {
+            std::unique_lock lock{_mutex};
+            for (;;) {
+                if (_queue.empty()) {
+                    ++_waiting;
+                    _condition_variable.wait(lock);
+                    --_waiting;
+                } else {
+                    victim = std::move(_queue.front());
+                    _queue.pop();
+                    return;
+                }
+            }
+        }
+        
+        void hack_wait_until(auto absolute_time) {
+            std::unique_lock lock{_mutex};
+            while (_queue.empty()) {
+                ++_waiting;
+                auto t0 = std::chrono::high_resolution_clock::now();
+                printf("hack_wait_nonempty: waiting\n");
+                std::cv_status result = _condition_variable.wait_until(lock, std::move(absolute_time));
+                auto t1 = std::chrono::high_resolution_clock::now();
+                --_waiting;
+                printf("hack_wait_nonempty: waited %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+                if (result == std::cv_status::timeout) {
+                    return;
+                }
+            }
+        }
+        
+        bool pop_wait_until(T& victim, auto absolute_time) {
+            std::unique_lock lock{_mutex};
+            for (;;) {
+                if (_queue.empty()) {
+                    ++_waiting;
+                    auto t0 = std::chrono::high_resolution_clock::now();
+                    std::cv_status result = _condition_variable.wait_until(lock, absolute_time);
+                    auto t1 = std::chrono::high_resolution_clock::now();
+                    --_waiting;
+                    printf("%s: waited %.3gs\n", __PRETTY_FUNCTION__, std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+                    if (result == std::cv_status::timeout)
+                        return false;
+                } else {
+                    victim = std::move(_queue.front());
+                    _queue.pop();
+                    return true;
+                }
+            }
+        }
+        
+    }; // Channel
+    
+    
+    // Mutator
+    
+    struct MessageFromMutatorToCollector {
+        Color color_did_shade;
+        Bag<const GarbageCollected*> nursery;
+        bool done;
+    };
+    
+    struct MessageFromCollectorToMutator {
+        
+    };
+    
+    // What is initial state of channels?
+    // Starts out empty and unknown to collector
+    // Collector discovers it and requests update
+    // Mutator needs to be able to quit first, so it must be able to publish in
+    // this state
+    // Thus, initial state is COLLECTOR_SHOULD_CONSUME
+    enum : uintptr_t {
+        COLLECTOR_SHOULD_CONSUME = 0,
+        MUTATOR_SHOULD_PUBLISH = 1,
+        COLLECTOR_SHOULD_CONSUME_AND_RELEASE = 2,
+        MUTATOR_SHOULD_PUBLISH_AND_NOTIFY = 3,
+    };
+    
+    struct MutatorInterface {
+        
+        // Communication
+        Channel<MessageFromCollectorToMutator> _channel_from_collector_to_mutator;
+        Channel<MessageFromMutatorToCollector> _channel_from_mutator_to_collector;
+        
+        // Stuff the collector needs to track for each mutator
+        struct State {
+            bool is_done = false;
+        };
+        State collector_state;
+        
+        std::string _name;
+        
+        // We use reference counting to manage the mutator interface lifetime
+        std::atomic<ptrdiff_t> _reference_count_minus_one = 1;
+        
+        void acquire() {
+            _reference_count_minus_one.fetch_add(1, std::memory_order_relaxed);
+        }
+        
+        void release() {
+            if (!_reference_count_minus_one.fetch_sub(1, std::memory_order_release)) {
+                _reference_count_minus_one.load(std::memory_order_acquire);
+                printf("%s(interface): goodbye\n", _name.c_str());
+                delete this;
+            }
+        }
+        
+        
+    };
+    
+    namespace garbage_collector_thread {
+        
+        using Tracer = Stack<const GarbageCollected*>;
+        
+        void record_child(void* tracer, const GarbageCollected* child) {
+            assert(child);
+            ((Tracer*)tracer)->push(child);
+        }
+        
+        static Channel<MutatorInterface*> _new_mutator_interfaces;
+        
+        
+        // The new color is synchronized the channel
+        //
+        // collector writes new color
+        // collector releases channel
+        // new mutator acquires channel
+        // new mutator reads new color
+        inline static std::atomic<Color> _new_mutator_color;
+        Color get_new_mutator_params() {
+            return _new_mutator_color.load(std::memory_order_relaxed);
+        }
+        
+        
+    }
+    
+    
+    namespace this_thread {
+        
+        // Todo: put these behind a single thread_local pointer or structure
+        
+        constinit thread_local Color _color_for_allocation = 0;
+        constinit thread_local Color _color_did_shade = 0;
+        constinit thread_local MutatorInterface* _mutator_interface = nullptr;
+        constinit thread_local Bag<const GarbageCollected*> _nursery;
+        
+        inline Color get_color_for_allocation() {
+            return _color_for_allocation;
+        }
+        
+        inline Color get_color_for_shade() {
+            return _color_for_allocation & LOW_MASK;
+        }
+        
+        inline void record_shade(Color color_delta) {
+            _color_did_shade |= color_delta;
+        }
+        
+        inline void record_infant(const GarbageCollected* infant) {
+            _nursery.push(infant);
+        }
+        
+        inline void handshake(bool mark_done = false) {
+            
+            bool did_pop = false;
+            MessageFromCollectorToMutator incoming = {};
+            if ((did_pop = _mutator_interface->_channel_from_collector_to_mutator.try_pop(incoming))) {
+                // this_thread::_color_for_allocation = incoming.color_for_allocation;
+                this_thread::_color_for_allocation = garbage_collector_thread::_new_mutator_color.load(std::memory_order_relaxed);
+            }
+            
+            if (did_pop || mark_done) {
+                MessageFromMutatorToCollector outgoing = {
+                    .color_did_shade = std::exchange(this_thread::_color_did_shade, 0),
+                    .nursery = std::move(this_thread::_nursery),
+                    .done = mark_done,
+                };
+                _mutator_interface->_channel_from_mutator_to_collector.push(std::move(outgoing));
+            }
+            
+            if (mark_done) {
+                std::exchange(_mutator_interface, nullptr)->release();
+            }
+            
+        }
+        
+    }
+    
+    void mutator_become_with_name(const char* name) {
+        MutatorInterface* mutator_interface = new MutatorInterface{
+            ._name = name
+        };
+        garbage_collector_thread::_new_mutator_interfaces.push(mutator_interface);
+        
+        this_thread::_mutator_interface = mutator_interface;
+        this_thread::_color_for_allocation = garbage_collector_thread::get_new_mutator_params();
+    }
+    
+    
+    
+    
+    GarbageCollected::GarbageCollected()
+    : _color(this_thread::get_color_for_allocation())
+    {
+        // SAFETY: 'this' points to a partially constructed object.  It is
+        // unsafe to use it before all constructors complete.  Here we
+        // make a thread-local record of 'this' that is not used until
+        // after the constructor completes.
+        this_thread::record_infant(this);
+    }
+    
+    void GarbageCollected::_garbage_collected_shade() const {
+        const Color color_for_shade = this_thread::get_color_for_shade();
+        const Color before = _color.fetch_or(color_for_shade, Ordering::RELAXED);
+        const Color after  =  before | color_for_shade;
+        const Color did_shade = (~before) & after;
+        this_thread::record_shade(did_shade);
+    }
+    
+    void GarbageCollected::_garbage_collected_trace(void* tracer) const {
+        collector_acknowledge_child(tracer, this);
+    }
+    
+    struct Collector {
+        
+        std::vector<MutatorInterface*> _known_mutator_interfaces;
+        std::deque<Color> _color_history;
+        std::deque<Color> _shade_history;
+        
+        Bag<const GarbageCollected*> _known_objects;
+        
+        Color _color_for_allocation = 0;
+        Color _color_in_use = 0;
+        Color _mask_for_tracing = 0;
+        Color _mask_for_deleting = 0;
+        Color _mask_for_clearing = 0;
+        
+        void loop_until(std::chrono::steady_clock::time_point collector_deadline) {
+            
+            // The collector also registers itself as a mutator:
+            
+            {
+                MutatorInterface* mutator_interface = new MutatorInterface{
+                    ._name = "C0",
+                };
+                // It skips the queue so we always have at least one mutator
+                // present, simplifying the later logic
+                _known_mutator_interfaces.push_back(mutator_interface);
+                Color color_initial = garbage_collector_thread::get_new_mutator_params();
+                this_thread::_mutator_interface = mutator_interface;
+                this_thread::_color_for_allocation = color_initial;
+                mutator_interface->_channel_from_mutator_to_collector.push({});
+            }
+            
+            printf("C0: go\n");
+            
+            _color_history.push_front(0);
+            _color_history.push_front(0);
+            _color_history.push_front(0);
+            
+            _shade_history.push_front(0);
+            _shade_history.push_front(0);
+            _shade_history.push_front(0);
+            
+            // HACK: loop until a time significantly later than the mutator stop time
+            while (std::chrono::steady_clock::now() < collector_deadline) {
+                
+                // The collector at least knows about itself-as-mutator
+                assert(!_known_mutator_interfaces.empty());
+                
+                if (_known_objects.is_empty()) {
+                    printf("C0: No known objects!\n");
+                }
+                
+#pragma mark Receive all mutator messages
+                
+                // A thread report covers events in a given interval
+                
+                {
+                    printf("C0: There are %zd known mutators\n", _known_mutator_interfaces.size());
+                    size_t number_of_new_objects = 0;
+                    size_t number_of_resignations = 0;
+                    Color did_shade = 0;
+                    for (auto& u : _known_mutator_interfaces) {
+                        auto& v = u->collector_state;
+                        MessageFromMutatorToCollector outgoing = {};
+                        size_t n = 0;
+                        printf("C0: try_pop \"%s\"\n", u->_name.c_str());
+                        // u->_channel_from_mutator_to_collector.hack_wait_until(collector_deadline);
+                        if (u->_channel_from_mutator_to_collector.pop_wait_until(outgoing, collector_deadline)) {
+                            do {
+                                ++n;
+                                did_shade |= outgoing.color_did_shade;
+                                v.is_done = v.is_done || outgoing.done;
+                                number_of_new_objects += outgoing.nursery.size();
+                                _known_objects.extend(std::move(outgoing.nursery));
+                                assert(outgoing.nursery.is_empty());
+                            } while ((u->_channel_from_mutator_to_collector.try_pop(outgoing)));
+                        } else {
+                            printf("C0: A mutator timed out?\n");
+                        }
+                        if (v.is_done) {
+                            ++number_of_resignations;
+                        }
+                    }
+                    _shade_history.push_front(did_shade);
+                    
+                    printf("C0: ack %zd resignations\n", number_of_resignations);
+                    printf("C0: ack %zd new objects\n", number_of_new_objects);
+                }
+                
+#pragma mark Combine thread reports
+                
+                // Have all mutators acknowledged that a bit was set or cleared?
+                
+                std::erase_if(_known_mutator_interfaces, [](MutatorInterface* x) -> bool {
+                    bool is_done = x->collector_state.is_done;
+                    if (is_done) {
+                        printf("C0: forgetting a mutator\n");
+                        x->release();
+                    }
+                    return is_done;
+                });
+                
+                // Do we know that no mutators shaded a given bit during a given
+                // sweep?
+                
+                // The logic required for this is likely much more concise than
+                // what we use here.
+                
+                // TODO: color_is_stable (color_is_final?)
+                
+#pragma mark Compute new state
+                
+                //Color old_color_for_allocation = _color_for_allocation;
+                //Color old_mask_for_tracing = _mask_for_tracing;
+                Color old_mask_for_deleting = _mask_for_deleting;
+                Color old_mask_for_clearing = _mask_for_clearing;
+                
+                
+                {
+                    // When all threads have acknowledged k-grey, publish k-black
+                    _color_for_allocation |= (_color_history[0] & ~_color_history[1]) << 32;
+                }
+                
+                {
+                    // When all threads have acknowledged k-black, start tracing
+                    _mask_for_tracing |= (_color_history[0] & ~_color_history[1]) >> 32;
+                }
+                
+                {
+                    // When we can prove all threads have made no new k-grey
+                    // during a whole sweep
+                    Color color_is_stable = _mask_for_tracing;
+                    color_is_stable &= ~_shade_history[0];
+                    color_is_stable &= ~_shade_history[1];
+                    color_is_stable &= ~_shade_history[2];
+                    _mask_for_tracing &= ~color_is_stable;
+                    _mask_for_deleting = color_is_stable;
+                }
+                
+                {
+                    // When we have deleted k-white, unpublish k-grey and k-black
+                    assert(is_subset_of(old_mask_for_deleting, _color_for_allocation));
+                    _color_for_allocation &= ~(old_mask_for_deleting | (old_mask_for_deleting << 32));
+                }
+                
+                {
+                    // When all threads stop using k-grey and k-black, clear all k-bits
+                    _mask_for_clearing = (~_color_history[1] & _color_history[2]);
+                    // We need to wait two cycles so that the collector
+                    // has received objects allocated k-white by a leading
+                    // mutator but shaded grey by a trailing mutator
+                    // This means that we will clear objects in all k-states:
+                    // recently allocated white, old allocated black, and
+                    // recently allocated white and shaded black by leading and
+                    // trailling mutators
+                }
+                
+                {
+                    _color_in_use &= ~old_mask_for_clearing;
+                    Color new_grey = (_color_in_use + 1) & ~_color_in_use & LOW_MASK;
+                    _color_for_allocation |= new_grey;
+                    _color_in_use |= new_grey;
+                    _color_in_use |= new_grey << 32;
+                }
+                
+#pragma mark Publish the color for allocation and timestamp
+                
+                _color_history.push_front(_color_for_allocation);
+                garbage_collector_thread::_new_mutator_color.store(_color_for_allocation, std::memory_order_relaxed);
+                
+                {
+                    MutatorInterface* victim = nullptr;
+                    if ((_known_mutator_interfaces.size() == 1) && _known_objects.is_empty()) {
+                        printf("C0: Waiting for work\n");
+                        garbage_collector_thread::_new_mutator_interfaces.hack_wait_until(collector_deadline);
+                        printf("C0: Woke\n");
+                    }
+                    while (garbage_collector_thread::_new_mutator_interfaces.try_pop(victim)) {
+                        _known_mutator_interfaces.push_back(std::move(victim));
+                        printf("C0: A mutator enrolled\n");
+                    }
+                }
+                
+                for (MutatorInterface* p : _known_mutator_interfaces) {
+                    MessageFromCollectorToMutator incoming = {
+                        // .color_for_allocation = _color_for_allocation,
+                    };
+                    p->_channel_from_collector_to_mutator.push(std::move(incoming));
+                }
+                
+                this_thread::handshake();
+                
+#pragma mark Receive new mutators
+                
+#pragma mark Visit every object to trace, shade, sweep and clean
+                
+                scan();
+                
+            } // loop until killed
+            
+        } // Collector::loop
+        
+        void scan() {
+            
+#pragma mark Scan all known objects
+            
+            Stack<const GarbageCollected*> greystack;
+            Stack<const GarbageCollected*> children;
+            Bag<const GarbageCollected*> survivors;
+            
+            size_t trace_count = 0;
+            size_t mark_count = 0;
+            size_t delete_count = 0;
+            auto t0 = std::chrono::steady_clock::now();
+            
+            assert(greystack.c.empty());
+            assert(survivors.is_empty());
+            assert(children.c.empty());
+            
+            // validate state:
+            
+            assert(is_subset_of(_color_for_allocation, _color_in_use));
+            
+            assert(is_subset_of(_mask_for_tracing, _color_in_use));
+            assert(is_subset_of(_mask_for_deleting, _color_in_use));
+            assert(is_subset_of(_mask_for_clearing, _color_in_use));
+            
+            assert(is_subset_of(_mask_for_tracing, _color_for_allocation));
+            assert((_mask_for_tracing & _mask_for_deleting) == 0);
+            assert((_mask_for_tracing & _mask_for_clearing) == 0);
+            assert((_mask_for_deleting & _mask_for_clearing) == 0);
+            assert((_mask_for_clearing & _color_for_allocation) == 0);
+            
+            // dump(old_color_for_allocation);
+            dump(_color_for_allocation);
+            
+            // dump(old_mask_for_tracing);
+            dump(_mask_for_tracing);
+            
+            // dump(old_mask_for_deleting);
+            dump(_mask_for_deleting);
+            
+            // dump(old_mask_for_clearing);
+            dump(_mask_for_clearing);
+            
+            printf("C0: Start scanning %zd objects with\n"
+                   "              trace mask %016llx\n"
+                   "             delete mask %016llx\n"
+                   "              clear mask %016llx\n"
+                   "    color_for_allocation %016llx\n",
+                   _known_objects.size(),
+                   _mask_for_tracing,
+                   _mask_for_deleting,
+                   _mask_for_clearing,
+                   _color_for_allocation);
+            
+            // While any objects are unprocessed
+            for (;;) {
+                
+#pragma mark Depth-first recusively trace all children
+                
+                const GarbageCollected* parent = nullptr;
+                while (greystack.try_pop(parent)) {
+                    assert(parent);
+                    Color parent_color = parent->_color.load(Ordering::RELAXED);
+                    parent->_garbage_collected_scan(&children);
+                    const GarbageCollected* child = nullptr;
+                    while (children.try_pop(child)) {
+                        Color after = 0;
+                        Color before = child->_color.load(Ordering::RELAXED);
+                        do  {
+                            assert(is_subset_of(before, _color_in_use));
+                            after = before | (parent_color & _mask_for_tracing);
+                            Color mark = (after & _mask_for_tracing) << 32;
+                            after = (after | mark) & ~_mask_for_clearing;
+                            assert(is_subset_of(after, _color_in_use));
+                        } while ((after != before) &&
+                                 !child->_color.compare_exchange_weak(before,
+                                                                      after,
+                                                                      Ordering::RELAXED,
+                                                                      Ordering::RELAXED));
+                        Color did_set = ((~before) & after);
+                        if (did_set) {
+                            ++mark_count;
+                            greystack.push(child);
+                        }
+                    }
+                }
+                
+#pragma mark Process each object
+                
+                const GarbageCollected* object = nullptr;
+                if (!_known_objects.try_pop(object))
+                    break;
+                assert(object);
+                // process the object
+                Color after = 0;
+                Color before = object->_color.load(Ordering::RELAXED);
+                do {
+                    assert(is_subset_of(before, _color_in_use));
+                    Color mark = (before & _mask_for_tracing) << 32;
+                    after = (before | mark) & ~_mask_for_clearing;
+                    assert(is_subset_of(after, _color_in_use));
+                } while ((after != before) &&
+                         !object->_color.compare_exchange_weak(before,
+                                                               after,
+                                                               Ordering::RELAXED,
+                                                               Ordering::RELAXED));
+                Color did_set = (~before) & after;
+                assert((did_set & LOW_MASK) == 0);
+                bool must_trace = did_set & HIGH_MASK;
+                if (must_trace) {
+                    ++trace_count;
+                    greystack.push(object);
+                }
+                bool is_not_grey = (((before >> 32) & _mask_for_deleting) == (before & _mask_for_deleting));
+                if ((_mask_for_deleting == 0) || (before & _mask_for_deleting)) {
+                    // k-reachable
+                    if (!is_not_grey) {
+                        dump(before);
+                        dump(after);
+                        dump(did_set);
+                        dump(did_set & HIGH_MASK);
+                        dump(before & _mask_for_deleting);
+                        abort();
+                    }
+                    survivors.push(object);
+                } else {
+                    // k-unreachable
+                    if (must_trace) {
+                        dump(before);
+                        dump(after);
+                        dump(did_set);
+                        dump(did_set & HIGH_MASK);
+                        dump(before & _mask_for_deleting);
+                        abort();
+                    }
+                    // must not be grey; grey would imply not k-stable
+                    assert(are_grey(before & (_mask_for_deleting | (_mask_for_deleting << 32))) == 0);
+                    delete object;
+                    ++delete_count;
+                }
+                
+            } // loop until no objects
+            
+            assert(greystack.c.empty());
+            assert(_known_objects.is_empty());
+            assert(children.c.empty());
+            _known_objects = std::move(survivors);
+            
+            auto t1 = std::chrono::steady_clock::now();
+            
+            printf("C0:     marked %zd\n", trace_count + mark_count);
+            printf("C0:     deleted %zd\n", delete_count);
+            printf("C0:     in %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+            
+            total_deleted.fetch_add(delete_count, std::memory_order::relaxed);
+            
+            
+        }
+        
+    };
+    
+    
+    
+    
+    Collector collector;
+    
+    void collector_run_on_this_thread_until(std::chrono::steady_clock::time_point collector_deadline) {
+        collector.loop_until(collector_deadline);
+    }
+    
+    void mutator_handshake(bool is_done) {
+        this_thread::handshake(is_done);
+    }
+    
+    void collector_acknowledge_child(void* tracer, const GarbageCollected* child) {
+        garbage_collector_thread::record_child(tracer, child);
+    }
+    
+    void mutator_did_overwrite(const GarbageCollected* a) {
+        if (a) {
+            a->_garbage_collected_shade();
+        }
+    }
+    
+
+    
+}
+
+
+
+
+
+
+
+// LEGACY
+
+namespace wry {
+    
+    const HeapString* HeapString::make(size_t hash, string_view view) {
+        abort();
+#if 0
+        return global_collector->string_ctrie->find_or_emplace(_ctrie::Query{hash, view});
+#endif
+    }
+    
+    Color HeapString::_garbage_collected_sweep() const {
+        abort();
+#if 0
+        // Try to condemn the string to the terminal RED state
+        Color expected = Color::WHITE;
+        if (color.compare_exchange(expected, Color::RED)) {
+            global_collector->string_ctrie->erase(this);
+            return Color::RED;
+        } else {
+            return expected;
+        }
+#endif
+    }
+    
+}
+
+
+#if 0
 
 namespace wry {
     
@@ -393,21 +1191,7 @@ namespace wry {
 
     
     
-    const HeapString* HeapString::make(size_t hash, string_view view) {
-        return global_collector->string_ctrie->find_or_emplace(_ctrie::Query{hash, view});
-    }
 
-    Color HeapString::_garbage_collected_sweep() const {
-        // Try to condemn the string to the terminal RED state
-        Color expected = Color::WHITE;
-        if (color.compare_exchange(expected, Color::RED)) {
-            global_collector->string_ctrie->erase(this);
-            return Color::RED;
-        } else {
-            return expected;
-        }
-    }
-    
     
     
     Log::Log()
@@ -916,3 +1700,5 @@ namespace wry {
     };
             
 } // namespace wry
+
+#endif

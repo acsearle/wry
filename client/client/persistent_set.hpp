@@ -25,9 +25,9 @@
 namespace wry {
     
     template<typename Key, typename Compare>
-    void trace(const std::set<Key, Compare>& s) {
+    void trace(const std::set<Key, Compare>& s,void*q) {
         for (const Key& k : s)
-            trace(k);
+            trace(k,q);
     }
     
     namespace _persistent_set0 {
@@ -37,9 +37,9 @@ namespace wry {
             
             std::set<Key> data;
             
-            virtual void _garbage_collected_scan() const override {
+            virtual void _garbage_collected_scan(void* p) const override {
                 //printf("%s\n", __PRETTY_FUNCTION__);
-                trace(data);
+                trace(data, p);
             }
             
             explicit PersistentSet(auto&&... args) : data(FORWARD(args)...) {}

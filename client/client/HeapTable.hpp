@@ -13,7 +13,7 @@
 #include <bit>
 #include <optional>
 
-#include "adl.hpp"
+//#include "adl.hpp"
 #include "debug.hpp"
 #include "garbage_collected.hpp"
 #include "value.hpp"
@@ -126,9 +126,9 @@ namespace wry {
     
     
     template<typename K, typename V>
-    void trace(const BasicEntry<K, V>& e) {
-        trace(e._kv.first);
-        trace(e._kv.second);
+    void trace(const BasicEntry<K, V>& e,void*p) {
+        trace(e._kv.first,p);
+        trace(e._kv.second,p);
     }
 
     template<typename K, typename V>
@@ -546,8 +546,8 @@ namespace wry {
     };
     
     template<typename T>
-    void trace(const BasicHashSetB<T>& self) {
-        trace(self._storage);
+    void trace(const BasicHashSetB<T>& self,void*p) {
+        trace(self._storage,p);
     }
 
     template<typename T>
@@ -761,9 +761,9 @@ namespace wry {
     }; // BasicHashSetC
     
     template<typename T>
-    void trace(const BasicHashSetC<T>& self) {
-        trace(self._alpha);
-        trace(self._beta);
+    void trace(const BasicHashSetC<T>& self,void*p) {
+        trace(self._alpha,p);
+        trace(self._beta,p);
     }
     
     template<typename T>
@@ -842,8 +842,8 @@ namespace wry {
     };
     
     template<typename K, typename V>
-    void trace(const GCHashMap<K, V>& self) {
-        trace(self._inner);
+    void trace(const GCHashMap<K, V>& self,void*p) {
+        trace(self._inner,p);
     }
 
     template<typename K, typename V>
@@ -924,8 +924,8 @@ namespace wry {
             _inner._invariant();
         }
         
-        virtual void _garbage_collected_scan() const override {
-            trace(_inner);
+        virtual void _garbage_collected_scan(void*p) const override {
+            trace(_inner,p);
         }
 
 

@@ -117,7 +117,7 @@ namespace wry::sim {
         size_t _size = 0;
         Node _nodes[0];
                 
-        virtual void _garbage_collected_scan() const override {}
+        virtual void _garbage_collected_scan(void*) const override {}
         
         static void* operator new(size_t basic, size_t extra) {
             return GarbageCollected::operator new(basic + extra * sizeof(Node));

@@ -33,11 +33,11 @@ namespace wry {
             T* begin() { return elements; }
             T* end() { return elements + CAPACITY; }
             
-            void _garbage_collected_scan() const override {
-                _garbage_collected_trace(prev);
+            void _garbage_collected_scan(void*p) const override {
+                _garbage_collected_trace(prev,p);
                 for (const T& e : elements)
-                    _garbage_collected_trace(e);
-                _garbage_collected_trace(next);
+                    _garbage_collected_trace(e,p);
+                _garbage_collected_trace(next,p);
             }
             
         };

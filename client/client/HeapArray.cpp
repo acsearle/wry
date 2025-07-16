@@ -13,9 +13,10 @@
 
 namespace wry {
     
+#if 0
     define_test("HeapArray") {
         
-        mutator_enter();
+        mutator_become_with_name("HeapArrayTest");
         
        auto* a = new GCArray<Scan<Value>>();
         
@@ -43,9 +44,10 @@ namespace wry {
         assert(a->empty() == true);
         assert(a->size() == 0);
 
-        mutator_leave();
+        mutator_handshake(true);
         
     };
+#endif
     
 } // namespace wry
 

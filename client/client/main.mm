@@ -34,8 +34,14 @@ int main(int argc, const char** argv) {
         printf("    hex     : %016" PRIX64  "\n", std::uniform_int_distribution<uint64_t>(0)(rd));
     }
     
-    wry::collector_start();
-    wry::mutator_enter();
+    // wry::collector_start();
+    //wry::mutator_enter();
+    
+    std::thread collector_thread([](){
+        wry::collector_run_on_this_thread_until(std::chrono::steady_clock::now() + std::chrono::seconds(1000));
+    });
+    wry::mutator_become_with_name("main thread");
+    
     
     // execute unit tests on a background thread
     
@@ -68,8 +74,9 @@ int main(int argc, const char** argv) {
     
     tests.join();
     
-    wry::mutator_leave();
-    wry::collector_stop();
+    wry::mutator_handshake(true);
+    // wry::collector_stop();
+    collector_thread.join();
     
     return EXIT_SUCCESS;
     

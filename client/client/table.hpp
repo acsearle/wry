@@ -8,7 +8,7 @@
 #ifndef table_hpp
 #define table_hpp
 
-#include "adl.hpp"
+//#include "adl.hpp"
 #include "assert.hpp"
 #include "algorithm.hpp"
 #include "hash.hpp"

@@ -509,7 +509,7 @@ namespace wry {
         
         GCArray<Scan<Value>> _inner;
         
-        virtual void _garbage_collected_scan() const { trace(_inner); }
+        virtual void _garbage_collected_scan(void*p) const { trace(_inner,p); }
         virtual void _garbage_collected_debug() const { any_debug(_inner); }
         
         virtual bool _value_empty() const { return _inner.empty(); }
@@ -563,11 +563,12 @@ namespace wry {
     Value GarbageCollected::_value_lshift(Value right) const { return value_make_error(); }
 
     void HeapInt64::_garbage_collected_shade() const {
-        Color expected = Color::WHITE;
-        (void) color.compare_exchange(expected, Color::BLACK);
+        abort();
+        //Color expected = Color::WHITE;
+        //(void) color.compare_exchange(expected, Color::BLACK);
     }
     
-    void HeapInt64::_garbage_collected_scan() const {
+    void HeapInt64::_garbage_collected_scan(void*) const {
         fprintf(stderr, "scanned a weak ");
         _garbage_collected_debug();
         abort();

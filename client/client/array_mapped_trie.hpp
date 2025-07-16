@@ -20,12 +20,12 @@
 
 namespace wry {
     
-    inline void trace(std::monostate) {}
+    inline void trace(std::monostate,void*) {}
 
     template<typename ForwardIterator, typename Size>
-    ForwardIterator trace_n(ForwardIterator first, Size count) {
+    ForwardIterator trace_n(ForwardIterator first, Size count,void*p) {
         for (; count > 0; (void)++first, --count) {
-            trace(*first);
+            trace(*first,p);
         }
         return first;
     }
@@ -373,23 +373,23 @@ namespace wry {
                  */
             }
             
-            virtual void _garbage_collected_scan() const override {
+            virtual void _garbage_collected_scan(void*p) const override {
                 //printf("AMT scan %p\n", this);
                 int count = popcount(_bitmap);
                 if (get_shift()) {
                     assert(count == _capacity);
                     // trace_n(_children, count);
                     for (int j = 0; j != count; ++j) {
-                        _children[j]->_garbage_collected_trace();
+                        _children[j]->_garbage_collected_trace(p);
                     }
                 } else {
-// trace_n(_values, count);
+                    trace_n(_values, count, p);
                 }
             }
             
-            virtual void _garbage_collected_trace() const override {
+            virtual void _garbage_collected_trace(void*p) const override {
                 //printf("AMT trace %p\n", this);
-                GarbageCollected::_garbage_collected_trace();
+                GarbageCollected::_garbage_collected_trace(p);
             }
             
             Node(uint64_t prefix_and_shift_, size_t capacity, uint64_t bitmap)
@@ -969,10 +969,10 @@ namespace wry {
             
             virtual ~Inner() {}
             
-            virtual void _garbage_collected_scan() const override {
+            virtual void _garbage_collected_scan(void*p) const override {
                 int n = popcount(_bitmap);
                 for (int i = 0; i != n; ++i)
-                    trace(_children[i]);
+                    trace(_children[i],p);
             }
             
             virtual const void* type_erased_lookup(uint64_t key) const override {
@@ -1008,10 +1008,10 @@ namespace wry {
             
             virtual ~Leaf() {}
             
-            virtual void _garbage_collected_scan() const override {
+            virtual void _garbage_collected_scan(void* p) const override {
                 int n = popcount(_bitmap);
                 for (int i = 0; i != n; ++i)
-                    trace(_values[i]);
+                    trace(_values[i],p);
             }
             
             virtual const void* type_erased_lookup(uint64_t key) const override {
@@ -1105,8 +1105,8 @@ namespace wry {
             }
         };
         template<typename T>
-        void trace(const IntMap<T>& self) {
-            trace(self._root);
+        void trace(const IntMap<T>& self,void*p) {
+            trace(self._root,p);
         }
         
     } // namespace _amt1

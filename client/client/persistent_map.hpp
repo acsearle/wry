@@ -12,7 +12,7 @@
 #include <map>
 #include <set>
 
-#include "adl.hpp"
+//#include "adl.hpp"
 #include "garbage_collected.hpp"
 #include "mutex.hpp"
 #include "utility.hpp"
@@ -20,17 +20,17 @@
 namespace wry {
     
     template<typename A, typename B>
-    void trace(const std::pair<A, B>& p) {
-        trace(p.first);
-        trace(p.second);
+    void trace(const std::pair<A, B>& p,void*q) {
+        trace(p.first,q);
+        trace(p.second,q);
     }
     
    
     
     template<typename Key, typename T, typename Compare>
-    void trace(const std::map<Key, T, Compare>& m) {
+    void trace(const std::map<Key, T, Compare>& m,void*q) {
         for (const auto& p : m)
-            trace(p);
+            trace(p,q);
     }
         
    
@@ -47,9 +47,9 @@ namespace wry {
             
             std::map<Key, T> data;
             
-            virtual void _garbage_collected_scan() const override {
+            virtual void _garbage_collected_scan(void*p) const override {
                 //printf("Was traced\n");
-                trace(data);
+                trace(data,p);
             }
             
             PersistentMap() = default;

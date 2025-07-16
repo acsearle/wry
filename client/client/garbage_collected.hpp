@@ -19,6 +19,7 @@ namespace wry {
     
     struct Value;
     
+#if 0
     // Tricolor abstraction color
     enum class Color {
         WHITE = 0,
@@ -37,17 +38,54 @@ namespace wry {
         
     };
     
+#endif
+    
+    using Color = uint64_t;
+    
+    constexpr Color LOW_MASK  = 0x00000000FFFFFFFF;
+    constexpr Color HIGH_MASK = 0xFFFFFFFF00000000;
+    
+    constexpr uint64_t rotate_left(uint64_t x, int y) {
+        return __builtin_rotateleft64(x, y);
+    }
+    
+    constexpr uint64_t rotate_right(uint64_t x, int y) {
+        return __builtin_rotateright64(x, y);
+    }
+    
+    constexpr bool is_subset_of(Color a, Color b) {
+        return !(a & ~b);
+    }
+    
+    constexpr Color are_black(Color color) {
+        return color & __builtin_rotateleft64(color, 32);
+    }
+    
+    constexpr Color are_white(Color color) {
+        return are_black(~color);
+    }
+    
+    constexpr Color are_grey(Color color) {
+        return are_black(color ^ HIGH_MASK);
+    }
+    
+    
     // TODO: VirtualObject?
     struct GarbageCollected {
         
-        static void* operator new(size_t number_of_bytes);
-        static void operator delete(void*);
+        static void* operator new(std::size_t count) {
+            return calloc(count, 1);
+        }
         
+        static void operator delete(void* pointer) {
+            free(pointer);
+        }
+
         static void* operator new[](size_t number_of_bytes) = delete;
         static void operator delete[](void*) = delete;
         
         // TODO: is it useful to have a base class above tricolored + sweep?
-        mutable AtomicEncodedColor color;
+        mutable Atomic<Color> _color;
         
         GarbageCollected();
         GarbageCollected(const GarbageCollected&);
@@ -62,10 +100,12 @@ namespace wry {
         virtual hash_t _garbage_collected_hash() const;
         virtual void _garbage_collected_debug() const;
         virtual void _garbage_collected_shade() const;
-        virtual void _garbage_collected_trace() const;
-        virtual void _garbage_collected_trace_weak() const;
+        virtual void _garbage_collected_trace(void*) const;
+        virtual void _garbage_collected_trace_weak(void*) const;
                 
-        virtual void _garbage_collected_scan() const = 0;
+        // SCAN calls TRACE on all children
+        // TRACE adds itself to the child list
+        virtual void _garbage_collected_scan(void*) const = 0;
         virtual Color _garbage_collected_sweep() const;
 
         // TODO: is it useful to have a base class above the Value interface?
@@ -98,12 +138,17 @@ namespace wry {
     
     // useful defaults
     
-    inline void GarbageCollected::_garbage_collected_trace_weak() const {
-        _garbage_collected_trace();
+    inline void GarbageCollected::_garbage_collected_trace_weak(void* p) const {
+        this->_garbage_collected_trace(p);
     }
     
+#if 0
+    // inline Color GarbageCollected::_garbage_collected_sweep() const {
+        // return color.load();
+    // }
+#endif
     inline Color GarbageCollected::_garbage_collected_sweep() const {
-        return color.load();
+        return _color.load(Ordering::RELAXED);
     }
     
     
@@ -124,13 +169,13 @@ namespace wry {
         if (self)
             self->_garbage_collected_shade();
     }
-    inline void trace(const GarbageCollected* self) {
+    inline void trace(const GarbageCollected* self, void* p) {
         if (self)
-            self->_garbage_collected_trace();
+            self->_garbage_collected_trace(p);
     }
-    inline void trace_weak(const GarbageCollected* self) {
+    inline void trace_weak(const GarbageCollected* self, void* p) {
         if (self)
-            self->_garbage_collected_trace_weak();
+            self->_garbage_collected_trace_weak(p);
     }
     
     template<typename T> void any_debug(T const& self) {
@@ -184,7 +229,7 @@ namespace wry {
      */
     
     template<std::integral T>
-    void trace(const T& self) {
+    void trace(const T& self, void* p) {
     }
 
 } // namespace wry

@@ -8,7 +8,7 @@
 #ifndef Scan_hpp
 #define Scan_hpp
 
-#include "adl.hpp"
+//#include "adl.hpp"
 #include "garbage_collected.hpp"
 
 namespace wry {
@@ -262,24 +262,24 @@ namespace wry {
     }
     
     template<PointerConvertibleTo<GarbageCollected> T>
-    void trace(const Scan<T* const>& self) {
+    void trace(const Scan<T* const>& self, void* p) {
         if (self._object)
-            self._object->_garbage_collected_trace();
+            self._object->_garbage_collected_trace(p);
     }
 
     template<PointerConvertibleTo<GarbageCollected> T>
-    void trace(const Scan<T*>& self) {
+    void trace(const Scan<T*>& self, void* p) {
         const T* a = // self.get();
         self._object.load(Ordering::ACQUIRE);
         if (a)
-            a->_garbage_collected_trace();
+            a->_garbage_collected_trace(p);
     }
 
     template<PointerConvertibleTo<GarbageCollected> T>
-    void trace(const Scan<Atomic<T*>>& self) {
+    void trace(const Scan<Atomic<T*>>& self, void* p) {
         const T* a = self.load(Ordering::ACQUIRE);
         if (a)
-            a->_garbage_collected_trace();
+            a->_garbage_collected_trace(p);
     }
         
     template<PointerConvertibleTo<GarbageCollected> T>

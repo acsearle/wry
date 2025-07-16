@@ -13,7 +13,7 @@
 namespace wry::_amt0 {
     
     define_test("AMT") {
-        mutator_enter();
+        mutator_become_with_name("AMT test");
         
         {
             for (int i = 0; i != 63; ++i) {
@@ -60,7 +60,7 @@ namespace wry::_amt0 {
                 
         {
             const Node<int>* p = nullptr;
-            for (int i = 0; i != 1 << 24; ++i) {
+            for (int i = 0; i != 1 << 20; ++i) {
                 int a = rand() & 0xFF;
                 int b = rand() & 0xFF;
                 uint64_t k = (uint64_t)a * (uint64_t)b;
@@ -69,13 +69,14 @@ namespace wry::_amt0 {
                 //shade(p);
                 //shade(q);
                 mutator_handshake();
+                // shade p because we use it after the handshake
                 p->_garbage_collected_shade();
                 //shade(p);
                 //shade(q);
             }
         }
          
-        mutator_leave();
+        mutator_handshake(true);
     };
         
 }

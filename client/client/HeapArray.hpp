@@ -15,7 +15,7 @@
 #include "memory.hpp"
 #include "Scan.hpp"
 #include "utility.hpp"
-#include "adl.hpp"
+//#include "adl.hpp"
 
 namespace wry {
     
@@ -79,9 +79,9 @@ namespace wry {
             return _data[i];
         }
         
-        virtual void _garbage_collected_scan() const override {
+        virtual void _garbage_collected_scan(void* p) const override {
             for (const T& element : *this) {
-                trace(element);
+                trace(element, p);
             }
         }
         
@@ -233,8 +233,8 @@ namespace wry {
     };
    
     template<typename T>
-    void trace(const RingDequeStatic<T>& self) {
-        trace(self._storage);
+    void trace(const RingDequeStatic<T>& self, void* p) {
+        trace(self._storage, p);
     }
 
     template<typename T>
@@ -353,9 +353,9 @@ namespace wry {
     };
     
     template<typename T>
-    void trace(const GCArray<T>& self) {
-        trace(self._alpha);
-        trace(self._beta);
+    void trace(const GCArray<T>& self, void* p) {
+        trace(self._alpha, p);
+        trace(self._beta, p);
     }
 
     template<typename T>

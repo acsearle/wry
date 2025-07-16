@@ -10,15 +10,15 @@
 
 namespace wry::sim {
     
-    void World::_garbage_collected_scan() const {
+    void World::_garbage_collected_scan(void*p) const {
         // printf("%s\n", __PRETTY_FUNCTION__);
-        trace(_ready);
-        trace(_entity_for_entity_id);
-        trace(_value_for_coordinate);
-        trace(_entity_id_for_coordinate);
-        trace(_waiting_for_time);
-        trace(_waiting_for_entity_id);
-        trace(_waiting_for_coordinate);
+        trace(_ready,p);
+        trace(_entity_for_entity_id,p);
+        trace(_value_for_coordinate,p);
+        trace(_entity_id_for_coordinate,p);
+        trace(_waiting_for_time,p);
+        trace(_waiting_for_entity_id,p);
+        trace(_waiting_for_coordinate,p);
     }
         
     World* World::step() const {
