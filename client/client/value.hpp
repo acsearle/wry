@@ -315,7 +315,7 @@ namespace wry {
         virtual ~HeapInt64() final = default;
         std::int64_t as_int64_t() const;
         virtual void _garbage_collected_shade() const override;
-        virtual void _garbage_collected_scan(void*) const override;
+        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override;
     };
     
     

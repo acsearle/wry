@@ -18,7 +18,7 @@ namespace wry::_amt0 {
         {
             for (int i = 0; i != 63; ++i) {
                 assert(decode(i) == ((uint64_t)1 << i));
-                assert(shift_for_suffix(decode(i)) == (i / 6) * 6);
+                assert(shift_for_keylike_difference(decode(i)) == (i / 6) * 6);
                 assert(encode(decode(i)) == i);
             }
         }

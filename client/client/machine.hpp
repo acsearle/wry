@@ -100,7 +100,7 @@ namespace wry::sim {
 
         void _schedule_arrival(World* world);
         
-        virtual void _garbage_collected_scan(void*p) const override {
+        virtual void _garbage_collected_enumerate_fields(TraceContext*p) const override {
             trace(_stack,p);
         }
                         

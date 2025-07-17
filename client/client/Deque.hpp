@@ -33,7 +33,7 @@ namespace wry {
             T* begin() { return elements; }
             T* end() { return elements + CAPACITY; }
             
-            void _garbage_collected_scan(void*p) const override {
+            void _garbage_collected_enumerate_fields(TraceContext*p) const override {
                 _garbage_collected_trace(prev,p);
                 for (const T& e : elements)
                     _garbage_collected_trace(e,p);

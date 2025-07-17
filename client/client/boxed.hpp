@@ -24,7 +24,7 @@ namespace wry {
             printf("%s\n", __PRETTY_FUNCTION__);
         }
         
-        virtual void _garbage_collected_scan(void* p) const override {
+        virtual void _garbage_collected_enumerate_fields(TraceContext* p) const override {
             trace(data, p);
         }
         
@@ -55,7 +55,7 @@ namespace wry {
         : _data(FORWARD(args)...) {
         }
         
-        virtual void _garbage_collected_scan(void*p) const override {
+        virtual void _garbage_collected_enumerate_fields(TraceContext*p) const override {
             std::unique_lock guard(_lock);
             trace(_data,p);
         }

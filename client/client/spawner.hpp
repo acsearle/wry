@@ -15,7 +15,7 @@ namespace wry::sim {
     struct LocalizedEntity : Entity {
         
         Coordinate _location = {};
-        virtual void _garbage_collected_scan(void*) const override {
+        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override {
         }
 
     };
@@ -31,7 +31,7 @@ namespace wry::sim {
         Value _of_this;
         
         virtual void notify(TransactionContext*) const override;
-        virtual void _garbage_collected_scan(void*p) const override {
+        virtual void _garbage_collected_enumerate_fields(TraceContext*p) const override {
             trace(_of_this,p);
         }
 
@@ -40,14 +40,14 @@ namespace wry::sim {
     struct Sink : LocalizedEntity {
                 
         virtual void notify(TransactionContext*) const override;
-        virtual void _garbage_collected_scan(void*) const override {
+        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override {
         }
         
     };
     
     struct Counter : LocalizedEntity {
         virtual void notify(TransactionContext*) const override;
-        virtual void _garbage_collected_scan(void*) const override {
+        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override {
         }
     };
 

@@ -30,34 +30,9 @@ namespace wry {
         return first;
     }
         
-    namespace _amt_tools {
+    namespace _amt0 {
         
-        inline void print_binary(uint64_t a) {
-            fputs("0b", stdout);
-            for (int i = 63; i-- != 0;)
-                fputc((a >> i) & 1 ? '1' : '0', stdout);
-        }
-        
-        inline int popcount(uint64_t x) {
-            return __builtin_popcountll(x);
-        }
-        
-        inline int clz(uint64_t x) {
-            assert(x);
-            return __builtin_clzll(x);
-        }
-        
-        inline int ctz(uint64_t x) {
-            assert(x);
-            return __builtin_ctzll(x);
-        }
-        
-        // 2 ** (n mod 64) is in some sense the inverse of ctz
-        inline uint64_t ztc(uint64_t n) {
-            return (uint64_t)1 << (n & 63);
-        }
-        
-        // immutable array tools
+#pragma mark - Memory tools
         
         // forward declare to break cycles when using from another namespace
         template<typename T> T* memcat(T* destination);
@@ -88,44 +63,94 @@ namespace wry {
             return memcat(destination, std::forward<Args>(args)...);
         }
         
-        // work out the shift required to bring the 6-aligned block of 6 bits that
-        // contains the msb into the least significant 6 bits
-        inline int shift_for_suffix(uint64_t a) {
-            int shift = ((63 - clz(a)) / 6) * 6;
-            assert((a >> shift) && !(a >> shift >> 6));
-            assert(!(shift % 6));
-            assert(0 <= shift);
-            assert(shift < 64);
-            return shift;
+        
+        
+        
+#pragma mark - Binary tools
+        
+        inline void print_binary(uint64_t a) {
+            fputs("0b", stdout);
+            for (int i = 63; i-- != 0;)
+                fputc((a >> i) & 1 ? '1' : '0', stdout);
         }
         
-        inline uint64_t prefix_for_key(uint64_t keylike, int shift) {
+        using std::has_single_bit;
+        
+        constexpr int popcount(uint64_t x) {
+            return __builtin_popcountg(x);
+        }
+        
+        constexpr int clz(uint64_t x) {
+            assert(x);
+            return __builtin_clzg(x);
+        }
+        
+        constexpr int ctz(uint64_t x) {
+            assert(x);
+            return __builtin_ctzg(x);
+        }
+
+        constexpr uint64_t decode(int n) {
+            return (uint64_t)1 << (n & 63);
+        }
+
+        constexpr uint64_t decode(uint64_t n) {
+            return (uint64_t)1 << (n & (uint64_t)63);
+        }
+        
+        constexpr int encode(uint64_t onehot) {
+            assert(has_single_bit(onehot));
+            return ctz(onehot);
+        }
+
+                
+#pragma mark - Tools for packed prefix and shift
+                
+        inline void _assert_valid_shift(int shift) {
             assert(0 <= shift);
             assert(shift < 64);
+            assert(!(shift % 6));
+        }
+                
+        inline void _assert_valid_prefix_and_shift(uint64_t prefix, int shift) {
+            _assert_valid_shift(shift);
+            assert((prefix & ~(~(uint64_t)63 << shift)) == 0);
+        }
+                
+        void _assert_valid_prefix_and_shift(uint64_t prefix_and_shift) {
+            uint64_t prefix = ~(uint64_t)63 & prefix_and_shift;
+            int shift = (int)((uint64_t)63 & prefix_and_shift);
+            assert(!(shift % 6));
+            assert((prefix & ~(~(uint64_t)63 << shift)) == 0);
+        }
+        
+        inline uint64_t prefix_for_keylike_and_shift(uint64_t keylike, int shift) {
+            _assert_valid_shift(shift);
             return keylike & (~(uint64_t)63 << shift);
         }
         
         inline uint64_t prefix_and_shift_for_keylike_and_shift(uint64_t keylike, int shift) {
-            assert(0 <= shift);
-            assert(shift < 64);
-            assert(!(shift % 6));
+            _assert_valid_shift(shift);
             return (keylike & ((~(uint64_t)63) << shift)) | (uint64_t)shift;
         };
-        
-        bool is_onehot(uint64_t x) {
-            return std::has_single_bit(x);
-        }
-        
-        uint64_t decode(int index) {
-            assert(0 <= index);
-            assert(index < 64);
-            return (uint64_t)1 << (index & 63);
-        }
 
-        int encode(uint64_t select) {
-            assert(is_onehot(select));
-            return ctz(select);
+        
+        
+        
+        
+        
+        // work out the shift required to bring the 6-aligned block of 6 bits that
+        // contains the msb into the least significant 6 bits
+        inline int shift_for_keylike_difference(uint64_t keylike_difference) {
+            assert(keylike_difference != 0);
+            int shift = ((63 - clz(keylike_difference)) / 6) * 6;
+            _assert_valid_shift(shift);
+            // The (a >> shift) >> 6 saves us from shifting by 60 + 6 = 66 > 63
+            assert((keylike_difference >> shift) && !((keylike_difference >> shift) >> 6));
+            return shift;
         }
+        
+        
 
         
         uint64_t bit_for_index(int index) {
@@ -195,53 +220,55 @@ namespace wry {
             
         };
         
-    }
-    
-    namespace _amt0 {
         
-        // A functional ordered set of 64 bit ints
         
-        // TODO: for pure sets, the shift == 0 level nodes only hold the bitmap
-        // we can pull them up into the shift == 1 level
-        
-        using namespace _amt_tools;
-        
-        // bit tools
-        
+        template<typename T, typename U, typename V, typename F>
+        void transform_compressed_arrays(uint64_t b1, uint64_t b2, const T* v1, const U* v2, V* v3, const F& f) {
+            uint64_t common = b1 | b2;
+            for (;;) {
+                if (!common)
+                    break;
+                uint64_t select = common & ~(common - 1);
+                *v3++ = f((b1 & select) ? v1++ : nullptr,
+                          (b2 & select) ? v2++ : nullptr);
+                common &= ~select;
+            }
+        }        
 
         template<typename T>
         struct Node : GarbageCollected {
             
-            uint64_t _prefix_and_shift;
-#ifndef NDEBUG
-            size_t _capacity;
-#endif
-            uint64_t _bitmap;
-            union {
-                const Node* _children[0];
-                T _values[0];
-            };
-            
-            static void _assert_shift(int shift) {
-                assert(0 <= shift);
-                assert(shift < 64);
-                assert((shift % 6) == 0);
-            }
-            
-            static void _assert_prefix_and_shift(uint64_t prefix, int shift) {
-                _assert_shift(shift);
-                assert((prefix & ~(~(uint64_t)63 << shift)) == 0);
+            static void* operator new(size_t count, void* ptr) {
+                return ptr;
             }
             
             constexpr static uint64_t get_select_for_index(int index) {
-                return (uint64_t)1 << (index & 63);
+                return decode(index);
             }
             
             constexpr static uint64_t get_mask_for_index(int index) {
                 return ~(~(uint64_t)0 << (index & 63));
             }
 
-  
+            
+            uint64_t _prefix_and_shift; // 6 bit shift, 64 - (6 * shift) prefix
+#ifndef NDEBUG
+            size_t _capacity; // capacity in items of either _children or values
+#endif
+            uint64_t _bitmap; // bitmap of which items are present
+            union {
+                const Node* _children[0]; // compressed flexible member array of children or values
+                T _values[0];
+            };
+                                    
+            int get_compressed_index_for_mask(uint64_t mask) {
+                return popcount(_bitmap & mask);
+            }
+            
+            void compress_index(int index) {
+                return get_compressed_index_for_mask(get_mask_for_index(index));
+            }
+              
             int get_shift() const {
                 int shift = (int) (_prefix_and_shift & (uint64_t)63);
                 assert(!(shift % 6));
@@ -265,11 +292,7 @@ namespace wry {
                 assert(!((key ^ _prefix_and_shift) >> (get_shift() + 6)));
                 return (int)((key >> get_shift()) & (uint64_t)63);
             }
-                        
-            int get_compressed_index_for_mask(uint64_t mask) {
-                return popcount(_bitmap & mask);
-            }
-            
+                                    
             int get_compressed_index_for_key(uint64_t key) {
                 int index = get_index_for_key(key);
                 assert(_bitmap & get_select_for_index(index));
@@ -373,15 +396,15 @@ namespace wry {
                  */
             }
             
-            virtual void _garbage_collected_scan(void*p) const override {
+            virtual void _garbage_collected_enumerate_fields(TraceContext*p) const override {
                 //printf("AMT scan %p\n", this);
                 int count = popcount(_bitmap);
                 if (get_shift()) {
                     assert(count == _capacity);
-                    // trace_n(_children, count);
-                    for (int j = 0; j != count; ++j) {
-                        _children[j]->_garbage_collected_trace(p);
-                    }
+                    trace_n(_children, count,p);
+                    //for (int j = 0; j != count; ++j) {
+                    //    _children[j]->_garbage_collected_trace(p);
+                    //}
                 } else {
                     trace_n(_values, count, p);
                 }
@@ -392,25 +415,33 @@ namespace wry {
                 GarbageCollected::_garbage_collected_trace(p);
             }
             
-            Node(uint64_t prefix_and_shift_, size_t capacity, uint64_t bitmap)
-            : _prefix_and_shift(prefix_and_shift_)
+            Node(uint64_t prefix_and_shift, size_t capacity, uint64_t bitmap)
+            : _prefix_and_shift(prefix_and_shift)
             , _capacity(capacity)
             , _bitmap(bitmap) {
                 assert(capacity >= popcount(bitmap));
             }
 
-            static Node* make(uint64_t prefix_and_shift_, size_t capacity, uint64_t bitmap) {
-                size_t size = prefix_and_shift_ & (uint64_t)63 ? sizeof(const Node*) : sizeof(T);
-                Node* node = (Node*)GarbageCollected::operator new(sizeof(Node) + capacity * size);
-                std::construct_at(node, prefix_and_shift_, capacity, bitmap);
-                node->_capacity = capacity;
-                return node;
+            static Node* make(uint64_t prefix_and_shift, size_t capacity, uint64_t bitmap) {
+                size_t item_size = prefix_and_shift & (uint64_t)63 ? sizeof(const Node*) : sizeof(T);
+                void* v = GarbageCollected::operator new(sizeof(Node) + capacity * item_size);
+                Node* n = new(v) Node(prefix_and_shift, capacity, bitmap);
+                return n;
             }
             
+            Node* clone_with_capacity(size_t capacity) const {
+                assert(capacity >= _capacity);
+                Node* node = make(_prefix_and_shift, capacity, _bitmap);
+                size_t item_size = _prefix_and_shift & (uint64_t)63 ? sizeof(const Node*) : sizeof(T);
+                int count = popcount(_bitmap);
+                memcpy(node->_children, _children, count * item_size);
+            }
+            
+            // Make a map with a single key-value pair
             static Node* make_with_key_value(uint64_t key, T value) {
                 int shift = 0;
                 size_t capacity = 1;
-                uint64_t bitmap = ztc(key);
+                uint64_t bitmap = decode(key);
                 Node* node = Node::make(prefix_and_shift_for_keylike_and_shift(key,
                                                                                shift),
                                         capacity,
@@ -419,7 +450,26 @@ namespace wry {
                 return node;
             }
             
-            static Node* make_with_children(const Node* a, const Node* b) {
+            // This is a true mutating method, can't be used after node escapes
+            void insert(const Node* a) {
+                auto [prefix, shift] = get_prefix_and_shift();
+                auto [a_prefix, a_shift] = a->get_prefix_and_shift();
+                // levels compatible with parent-child
+                assert(a_shift < shift);
+                // prefix compatibile
+                assert(((prefix ^ a_prefix) >> shift) >> 6);
+                int index = get_index_for_key(a_prefix);
+                // assert not occupied
+                // assert capacity is sufficient
+                // memmove tail sequence
+                // must be child
+                // blah
+                abort();
+            }
+            
+            // Merge two disjoint nodes by making them the children of a higher
+            // level node
+            static Node* merge_disjoint(const Node* a, const Node* b) {
                 // printf("%s\n", __PRETTY_FUNCTION__);
                 assert(a);
                 assert(b);
@@ -432,12 +482,12 @@ namespace wry {
                     swap(a_prefix, b_prefix);
                     swap(a_shift, b_shift);
                 }
-                uint64_t suffix = a_prefix ^ b_prefix;
-                int shift = shift_for_suffix(suffix);
+                uint64_t prefix_difference = a_prefix ^ b_prefix;
+                int shift = shift_for_keylike_difference(prefix_difference);
                 assert(shift > a_shift); // else we don't need a node at this level
                 assert(shift > b_shift);
-                uint64_t mask_a = ztc(a_prefix >> shift);
-                uint64_t mask_b = ztc(b_prefix >> shift);
+                uint64_t mask_a = decode(a_prefix >> shift);
+                uint64_t mask_b = decode(b_prefix >> shift);
                 uint64_t bitmap = mask_a | mask_b;
                 assert(popcount(bitmap) == 2);
                 Node* result = make(prefix_and_shift_for_keylike_and_shift(a_prefix, shift), popcount(bitmap), bitmap);
@@ -454,7 +504,7 @@ namespace wry {
                 auto [a_prefix, a_shift] = a->get_prefix_and_shift();
                 assert(shift > a_shift);
                 assert(!((prefix ^ a_prefix) >> shift >> 6));
-                uint64_t bit  = ztc(a_prefix >> shift);
+                uint64_t bit  = decode(a_prefix >> shift);
                 uint64_t bitmap = _bitmap | bit;
                 assert(bitmap != _bitmap); // caller should have merged and replaced
                 Node* result = make(prefix_and_shift_for_keylike_and_shift(prefix, shift), popcount(bitmap), bitmap);
@@ -475,7 +525,7 @@ namespace wry {
                 auto [a_prefix, a_shift] = a->get_prefix_and_shift();
                 assert(shift > a_shift);
                 assert(!((prefix ^ a_prefix) >> shift >> 6));
-                uint64_t bit  = ztc(a_prefix >> shift);
+                uint64_t bit  = decode(a_prefix >> shift);
                 uint64_t bitmap = _bitmap | bit;
                 assert(bitmap == _bitmap);
                 Node* result = make(prefix_and_shift_for_keylike_and_shift(prefix, shift), popcount(bitmap), bitmap);
@@ -530,11 +580,11 @@ namespace wry {
                 uint64_t delta = key ^ prefix;
                 if ((delta >> shift) >> 6)
                     // prefix does not match
-                    return Node::make_with_children(this, Node::make_with_key_value(key, value));
+                    return Node::merge_disjoint(this, Node::make_with_key_value(key, value));
                 
                 // prefix does match
                 // we have to modify the node at this level
-                uint64_t bit = ztc(key >> shift);
+                uint64_t bit = decode(key >> shift);
                 
                 if (!(bit & _bitmap)) {
                     // we have to make a new slot
@@ -648,7 +698,7 @@ namespace wry {
                 uint64_t c_shift = std::max(a_shift, b_shift);
                 if (delta >> (c_shift + 6)) {
                     // High bits don't match, sets are disjoint
-                    return Node::make_with_children(a, b);
+                    return Node::merge_disjoint(a, b);
                 }
                 
                 if (a_shift != b_shift) {
@@ -663,7 +713,7 @@ namespace wry {
                     assert(a_shift > b_shift);
                     
                     auto index = (b_prefix >> a_shift) & 63;
-                    auto bit = ztc(index);
+                    auto bit = decode(index);
                     
                     if (!(bit & a->_bitmap))
                         return a->clone_and_insert(b);
@@ -874,243 +924,6 @@ namespace wry {
         }
         
     } // namespace _amt0
-    
-
-    namespace _amt1 {
-        
-        // Design notes:
-        //
-        // The basic structure is a bitmap + flexible array member, where
-        // the bitmap indicates an element is present, and the array stores
-        // only those elements that are present.  The compressed array index
-        // is given by popcount(bitmap & ~(~0 << index))
-        //
-        // We use 6 consecutive bits of the key to index this compressed array
-        // The 6 bits are chosen by field shift.  Shift = 0 for leaf nodes.
-        //
-        // We compose a map out of leaf nodes that have shift zero and store the
-        // value type T, and inner nodes that have shift nonzero and store
-        // pointers to child nodes.
-        //
-        // To permit efficient composition of subtrees we require that shifts
-        // be multiples of six.  Without this the subtrees become incompatible
-        // and overlapping.
-        //
-        // To prevent long chains of trivial nodes, children may have shifts
-        // other than the parent shift minus six.  That is, we can skip levels
-        // of the tree when keys are sparse.  Without the bitfields of any
-        // skipped levels, we cannot reconstruct that chunk of the key, so
-        // each node must include at least part of the common prefix it
-        // represents.  In fact, there may be no nodes above any given node,
-        // so the whole key prefix must be preserved.
-        //
-        // We can pack the 6-bit shift into the unused least significant bits
-        // of the common key prefix.
-        
-        using namespace _amt_tools;
-        
-        
-                
-        
-        
-
-        
-        template<typename T, typename U, typename V, typename F>
-        void transform_compressed_arrays(uint64_t b1, uint64_t b2, const T* v1, const U* v2, V* v3, const F& f) {
-            uint64_t common = b1 | b2;
-            for (;;) {
-                if (!common)
-                    break;
-                uint64_t select = common & ~(common - 1);
-                *v3++ = f((b1 & select) ? v1++ : nullptr,
-                          (b2 & select) ? v2++ : nullptr);
-                common &= ~select;
-            }
-        }
-
-        
-        
-        
-        
-        
-        struct Node : GarbageCollected {
-            
-            uint64_t _prefix_and_shift;
-            uint64_t _bitmap;
-            
-            virtual ~Node() = default;
-            
-            virtual void _garbage_collected_scan() const = 0;
-            
-            virtual const void* type_erased_lookup(uint64_t key) const = 0;
-            
-            bool contains(uint64_t key) const {
-                return (bool)type_erased_lookup(key);
-            }
-            
-            std::pair<uint64_t, int> get_prefix_and_shift() const {
-                return {
-                    _prefix_and_shift & ~(uint64_t)63,
-                    _prefix_and_shift & (uint64_t)63
-                };
-            }
-
-        };
-        
-        
-
-        struct Inner final : Node {
-            
-            const Node* _children[0];
-            
-            static void* allocate_with_capacity(size_t n) {
-                return GarbageCollected::operator new(sizeof(Inner) + n * sizeof(const Node*));
-            }
-            
-            virtual ~Inner() {}
-            
-            virtual void _garbage_collected_scan(void*p) const override {
-                int n = popcount(_bitmap);
-                for (int i = 0; i != n; ++i)
-                    trace(_children[i],p);
-            }
-            
-            virtual const void* type_erased_lookup(uint64_t key) const override {
-                int shift = (int)(_prefix_and_shift & (uint64_t)63);
-                uint64_t mask = (~(uint64_t)63) << shift;
-                uint64_t prefix = _prefix_and_shift & mask;
-                if ((key & mask) != prefix)
-                    // key does not have the right prefix
-                    return nullptr;
-                int index = (int)((key >> shift) & (uint64_t)63);
-                uint64_t select = (uint64_t)1 << index;
-                if (!(_bitmap & select))
-                    // key does not appear in bitmap
-                    return nullptr;
-                int compressed_index = popcount(_bitmap & (select - 1));
-                const Node* child = _children[compressed_index];
-                if (!child)
-                    return nullptr;
-                return child->type_erased_lookup(key);
-            }
-            
-        };
-
-        
-        template<typename T>
-        struct Leaf final : Node {
-            
-            T _values[0];
-            
-            static void* allocate_with_capacity(size_t n) {
-                return GarbageCollected::operator new(sizeof(Leaf) + n * sizeof(T));
-            }
-            
-            virtual ~Leaf() {}
-            
-            virtual void _garbage_collected_scan(void* p) const override {
-                int n = popcount(_bitmap);
-                for (int i = 0; i != n; ++i)
-                    trace(_values[i],p);
-            }
-            
-            virtual const void* type_erased_lookup(uint64_t key) const override {
-                uint64_t prefix = _prefix_and_shift;
-                if ((key & ~(uint64_t)63) != prefix)
-                    // key does not have the right prefix
-                    return nullptr;
-                int index = (int)(key & (uint64_t)63);
-                uint64_t select = (uint64_t)1 << index;
-                if (!(_bitmap & select))
-                    // key does not appear in bitmap
-                    return nullptr;
-                int compressed_index = popcount(_bitmap & (select - 1));
-                return _values + compressed_index;
-            }
-            
-        };
-        
-        
-        const Node* merge_siblings(const Node* left, const Node* right) {
-            return nullptr;
-        }
-        
-        const Node* merge_parent_child(const Node* left, const Node* right) {
-            return nullptr;
-        }
-        
-        const Node* merge_disjoint(const Node* left, const Node* right) {
-            return nullptr;
-        }
-        
-        const Node* merge(const Node* left, const Node* right) {
-            
-            // is left trivial
-            if (!left) {
-                return right;
-            }
-            
-            // is right trivial
-            if (!right) {
-                return left;
-            }
-            
-            int left_shift = (int)(left->_prefix_and_shift & (uint64_t)63);
-            int right_shift = (int)(right->_prefix_and_shift & (uint64_t)63);
-            int max_shift = std::max(left_shift, right_shift);
-            uint64_t delta = left->_prefix_and_shift ^ right->_prefix_and_shift;
-            if (delta & (~(uint64_t)63 << max_shift)) {
-                // The nodes represent disjoint regions of key space
-                // We must insert a new parent of both
-            } else if (left_shift < right_shift) {
-                // Left is a subtree of right
-            } else if (left_shift == right_shift) {
-                // Merge siblings
-            } else /* (left_shift > right_shift) */ {
-                // Right is a subtree of left
-            }
-            
-            
-            
-            
-            return nullptr;
-            
-        }
-        
-        
-        
-        
-        
-        
-        // convenience wrapper
-        
-        template<typename T>
-        struct IntMap {
-            const Node* _root;
-            
-            bool contains(uint64_t key) const {
-                if (_root) {
-                    return _root->contains(key);
-                } else {
-                    return false;
-                }
-            }
-            
-            const T* lookup(uint64_t key) const {
-                if (_root) {
-                    return (const T*)(_root->type_erased_lookup(key));
-                } else {
-                    return nullptr;
-                }
-            }
-        };
-        template<typename T>
-        void trace(const IntMap<T>& self,void*p) {
-            trace(self._root,p);
-        }
-        
-    } // namespace _amt1
-    
     
 } // namespace wry
 

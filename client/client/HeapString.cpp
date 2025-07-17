@@ -38,7 +38,7 @@ namespace wry {
 #endif
     }
     
-    void HeapString::_garbage_collected_scan(void*) const {
+    void HeapString::_garbage_collected_enumerate_fields(TraceContext*) const {
         fprintf(stderr, "Scanned a weak object ");
         _garbage_collected_debug();
         abort();

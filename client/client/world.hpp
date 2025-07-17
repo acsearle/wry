@@ -101,7 +101,7 @@ namespace wry::sim {
 
         
                 
-        virtual void _garbage_collected_scan(void*) const override;
+        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override;
 
         
         World()

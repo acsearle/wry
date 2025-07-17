@@ -10,7 +10,7 @@
 
 namespace wry::sim {
     
-    void World::_garbage_collected_scan(void*p) const {
+    void World::_garbage_collected_enumerate_fields(TraceContext*p) const {
         // printf("%s\n", __PRETTY_FUNCTION__);
         trace(_ready,p);
         trace(_entity_for_entity_id,p);

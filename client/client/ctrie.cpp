@@ -43,7 +43,7 @@ namespace wry {
             virtual EraseResult _ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const override;
             virtual const HeapString* _ctrie_mn_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const override;
             
-            virtual void _garbage_collected_scan(void*) const override;
+            virtual void _garbage_collected_enumerate_fields(TraceContext*) const override;
             
         };
         
@@ -59,7 +59,7 @@ namespace wry {
             const LNode* copy_erase(const HeapString* key) const;
             const LNode* copy_erase(const LNode* victim) const;
             
-            virtual void _garbage_collected_scan(void*) const override;
+            virtual void _garbage_collected_enumerate_fields(TraceContext*) const override;
             
             virtual const HeapString* _ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const override;
             
@@ -83,7 +83,7 @@ namespace wry {
             virtual EraseResult _ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const override;
             virtual void _ctrie_mn_erase2(const INode* p, const INode* i, size_t hc, int lev) const override;
             
-            virtual void _garbage_collected_scan(void*) const override;
+            virtual void _garbage_collected_enumerate_fields(TraceContext*) const override;
             
         };
         
@@ -575,21 +575,21 @@ namespace wry {
         
         
         
-        void CNode::_garbage_collected_scan(void* p) const {
+        void CNode::_garbage_collected_enumerate_fields(TraceContext* p) const {
             int num = __builtin_popcountll(bmp);
             for (int i = 0; i != num; ++i)
                 trace_weak(array[i], p);
         }
         
-        void INode::_garbage_collected_scan(void* p) const {
+        void INode::_garbage_collected_enumerate_fields(TraceContext* p) const {
             trace(main, p);
         }
         
-        void LNode::_garbage_collected_scan(void* p) const {
+        void LNode::_garbage_collected_enumerate_fields(TraceContext* p) const {
             trace_weak(sn, p);
             trace(next, p);
         }
-        void TNode::_garbage_collected_scan(void* p) const {
+        void TNode::_garbage_collected_enumerate_fields(TraceContext* p) const {
             trace_weak(sn, p);
         }
         
@@ -632,7 +632,7 @@ namespace wry {
             ;
     }
 
-    void Ctrie::_garbage_collected_scan(void*p) const {
+    void Ctrie::_garbage_collected_enumerate_fields(TraceContext*p) const {
         trace(root,p);
     }
     

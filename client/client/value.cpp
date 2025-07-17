@@ -509,7 +509,7 @@ namespace wry {
         
         GCArray<Scan<Value>> _inner;
         
-        virtual void _garbage_collected_scan(void*p) const { trace(_inner,p); }
+        virtual void _garbage_collected_enumerate_fields(TraceContext*p) const { trace(_inner,p); }
         virtual void _garbage_collected_debug() const { any_debug(_inner); }
         
         virtual bool _value_empty() const { return _inner.empty(); }
@@ -568,7 +568,7 @@ namespace wry {
         //(void) color.compare_exchange(expected, Color::BLACK);
     }
     
-    void HeapInt64::_garbage_collected_scan(void*) const {
+    void HeapInt64::_garbage_collected_enumerate_fields(TraceContext*) const {
         fprintf(stderr, "scanned a weak ");
         _garbage_collected_debug();
         abort();

@@ -924,7 +924,7 @@ namespace wry {
             _inner._invariant();
         }
         
-        virtual void _garbage_collected_scan(void*p) const override {
+        virtual void _garbage_collected_enumerate_fields(TraceContext*p) const override {
             trace(_inner,p);
         }
 

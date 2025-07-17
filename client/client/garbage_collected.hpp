@@ -18,28 +18,7 @@ namespace wry {
     using hash_t = std::size_t;
     
     struct Value;
-    
-#if 0
-    // Tricolor abstraction color
-    enum class Color {
-        WHITE = 0,
-        BLACK = 1,
-        GRAY  = 2,
-        RED   = 3,
-    };
-    
-    struct AtomicEncodedColor {
         
-        Atomic<std::underlying_type_t<Color>> _encoded;
-        
-        AtomicEncodedColor();
-        Color load() const;
-        bool compare_exchange(Color& expected, Color desired);
-        
-    };
-    
-#endif
-    
     using Color = uint64_t;
     
     constexpr Color LOW_MASK  = 0x00000000FFFFFFFF;
@@ -68,9 +47,8 @@ namespace wry {
     constexpr Color are_grey(Color color) {
         return are_black(color ^ HIGH_MASK);
     }
+
     
-    
-    // TODO: VirtualObject?
     struct GarbageCollected {
         
         static void* operator new(std::size_t count) {
@@ -84,7 +62,6 @@ namespace wry {
         static void* operator new[](size_t number_of_bytes) = delete;
         static void operator delete[](void*) = delete;
         
-        // TODO: is it useful to have a base class above tricolored + sweep?
         mutable Atomic<Color> _color;
         
         GarbageCollected();
@@ -103,9 +80,11 @@ namespace wry {
         virtual void _garbage_collected_trace(void*) const;
         virtual void _garbage_collected_trace_weak(void*) const;
                 
-        // SCAN calls TRACE on all children
-        // TRACE adds itself to the child list
-        virtual void _garbage_collected_scan(void*) const = 0;
+        // ENUMERATE_FIELDS calls TRACE on all fields
+        // TRACE of a GarbageCollected object adds itself to the child list
+        // TRACE of a composite object recurses into its fields
+        struct TraceContext;
+        virtual void _garbage_collected_enumerate_fields(TraceContext*) const = 0;
         virtual Color _garbage_collected_sweep() const;
 
         // TODO: is it useful to have a base class above the Value interface?
@@ -233,5 +212,30 @@ namespace wry {
     }
 
 } // namespace wry
+
+
+#if 0
+// Tricolor abstraction color
+enum class Color {
+    WHITE = 0,
+    BLACK = 1,
+    GRAY  = 2,
+    RED   = 3,
+};
+
+struct AtomicEncodedColor {
+    
+    Atomic<std::underlying_type_t<Color>> _encoded;
+    
+    AtomicEncodedColor();
+    Color load() const;
+    bool compare_exchange(Color& expected, Color desired);
+    
+};
+
+#endif
+
+
+
 
 #endif /* garbage_collected_hpp */

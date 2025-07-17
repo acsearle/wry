@@ -79,7 +79,7 @@ namespace wry {
             return _data[i];
         }
         
-        virtual void _garbage_collected_scan(void* p) const override {
+        virtual void _garbage_collected_enumerate_fields(TraceContext* p) const override {
             for (const T& element : *this) {
                 trace(element, p);
             }

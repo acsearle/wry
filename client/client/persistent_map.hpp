@@ -47,7 +47,7 @@ namespace wry {
             
             std::map<Key, T> data;
             
-            virtual void _garbage_collected_scan(void*p) const override {
+            virtual void _garbage_collected_enumerate_fields(TraceContext*p) const override {
                 //printf("Was traced\n");
                 trace(data,p);
             }

@@ -37,7 +37,7 @@ namespace wry {
             
             std::set<Key> data;
             
-            virtual void _garbage_collected_scan(void* p) const override {
+            virtual void _garbage_collected_enumerate_fields(TraceContext* p) const override {
                 //printf("%s\n", __PRETTY_FUNCTION__);
                 trace(data, p);
             }

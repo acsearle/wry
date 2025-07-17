@@ -31,6 +31,8 @@ namespace wry {
                 head->run();
                 delete exchange(head, head->next);
             }
+            printf("[all] : pass\n");
+            std::quick_exit(EXIT_SUCCESS);
         }
         
     } // namespace detail
