@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <utility>
 
+#include "atomic.hpp"
+
 namespace wry {
             
     template<typename T, typename E = intptr_t>
@@ -84,6 +86,8 @@ namespace wry {
         std::pair<T, E> destructure() const;
         
     }; // struct TaggedPtr<T, E>
+    
+    
     
 } // namespace wry
 

@@ -31,8 +31,67 @@
 
 namespace wry {
     
-    // Reference blocking implementation of Channel
     
+    struct Log {
+
+        Color _color_did_shade = 0;
+        Bag<const GarbageCollected*> _allocations;
+        
+        constexpr Log();
+        Log(Color, Bag<const GarbageCollected*>&&);
+        Log(const Log&) = delete;
+        Log(Log&& other);
+        ~Log();
+        
+        Log& operator=(const Log&) = delete;
+        Log& operator=(Log&&) = delete;
+        
+        Log& splice(Log&& other);
+        
+    }; // struct Log
+    
+    // TODO: why LogNode?
+    struct LogNode : Log {
+        
+        LogNode* _log_list_next = nullptr;
+        
+        LogNode(Log&&, LogNode*);
+        
+        
+    }; // struct LogNode
+    
+    
+    constexpr Log::Log()
+    : _color_did_shade{0}
+    , _allocations{} {
+    }
+    
+    Log::Log(Color color_did_shade, Bag<const GarbageCollected*>&& allocations)
+    : _color_did_shade(color_did_shade)
+    , _allocations(std::move(allocations)) {
+    }
+    
+    Log::Log(Log&& other)
+    : _color_did_shade(std::exchange(other._color_did_shade, 0))
+    , _allocations(std::move(other._allocations)) {
+        assert(other._allocations.debug_is_empty());
+    }
+    
+    Log::~Log() {
+        assert(_color_did_shade == 0);
+        assert(_allocations.debug_is_empty());
+    }
+    
+    Log& Log::splice(Log&& other) {
+        _color_did_shade |= std::exchange(other._color_did_shade, 0);
+        _allocations.splice(std::move(other._allocations));
+        return *this;
+    }
+    
+    LogNode::LogNode(Log&& other, LogNode* next)
+    : Log(std::move(other))
+    , _log_list_next(next) {
+    }
 
     
     
@@ -73,7 +132,7 @@ namespace wry {
     // Mutator needs to be able to quit first, so it must be able to publish in
     // this state
     // Thus, initial state is COLLECTOR_SHOULD_CONSUME
-    enum : uintptr_t {
+    enum : intptr_t {
         COLLECTOR_SHOULD_CONSUME = 0,
         MUTATOR_SHOULD_PUBLISH = 1,
         COLLECTOR_SHOULD_CONSUME_AND_RELEASE = 2,
@@ -86,8 +145,9 @@ namespace wry {
     struct MutatorInterface {
         
         // Communication
-        Channel<MessageFromCollectorToMutator> _channel_from_collector_to_mutator;
-        Channel<MessageFromMutatorToCollector> _channel_from_mutator_to_collector;
+        // Channel<MessageFromCollectorToMutator> _channel_from_collector_to_mutator;
+        // Channel<MessageFromMutatorToCollector> _channel_from_mutator_to_collector;
+        Atomic<TaggedPtr<LogNode>> _channel = {};
         
         // Stuff the collector needs to track for each mutator
         struct State {
@@ -144,7 +204,9 @@ namespace wry {
     
     namespace this_thread {
         
-        // Todo: put these behind a single thread_local pointer or structure
+        // TODO: more performant to put these in a thread_local structure?
+        // TODO: constinit thread_local performance vs viral monad everywhere?
+        // TODO: make GarbageCollected::TraceContext a simple global vs current viral monad?
         
         constinit thread_local Color _color_for_allocation = 0;
         constinit thread_local Color _color_did_shade = 0;
@@ -170,12 +232,51 @@ namespace wry {
         inline void handshake(bool mark_done = false) {
             
             bool did_pop = false;
-            MessageFromCollectorToMutator incoming = {};
-            if ((did_pop = _mutator_interface->_channel_from_collector_to_mutator.try_pop(incoming))) {
+            
+            TaggedPtr<LogNode> expected = _mutator_interface->_channel.load(Ordering::RELAXED);
+            switch (expected.tag) {
+                case COLLECTOR_SHOULD_CONSUME:
+                    if (mark_done) {
+                        goto PUBLISH;
+                    }
+                    break;
+                case MUTATOR_SHOULD_PUBLISH:
+                case MUTATOR_SHOULD_PUBLISH_AND_NOTIFY: {
+                    // The collector requests we publish a new update
+                    did_pop = true;
+                PUBLISH:
+                    auto desired = TaggedPtr<LogNode>{
+                        new LogNode{
+                            Log{
+                                std::exchange(_color_did_shade, 0),
+                                std::move(_nursery)
+                            },
+                            expected.ptr
+                        },
+                        mark_done ? COLLECTOR_SHOULD_CONSUME_AND_RELEASE : COLLECTOR_SHOULD_CONSUME
+                    };
+                    expected = _mutator_interface->_channel.exchange(desired, Ordering::ACQ_REL);
+                } break;
+                default:
+                case COLLECTOR_SHOULD_CONSUME_AND_RELEASE: {
+                    // We should not be handshaking after we have marked_done
+                    abort();
+                } break;
+            }
+            
+            if (expected.tag == MUTATOR_SHOULD_PUBLISH_AND_NOTIFY) {
+                _mutator_interface->_channel.notify_one();
+            }
+            
+            // bool did_pop = false;
+            //MessageFromCollectorToMutator incoming = {};
+            // if ((did_pop = _mutator_interface->_channel_from_collector_to_mutator.try_pop(incoming))) {
+            if (did_pop) {
                 // this_thread::_color_for_allocation = incoming.color_for_allocation;
                 this_thread::_color_for_allocation = garbage_collector_thread::_new_mutator_color.load(std::memory_order_relaxed);
             }
             
+            /*
             if (did_pop || mark_done) {
                 MessageFromMutatorToCollector outgoing = {
                     .color_did_shade = std::exchange(this_thread::_color_did_shade, 0),
@@ -184,6 +285,7 @@ namespace wry {
                 };
                 _mutator_interface->_channel_from_mutator_to_collector.push(std::move(outgoing));
             }
+             */
             
             if (mark_done) {
                 std::exchange(_mutator_interface, nullptr)->release();
@@ -250,13 +352,19 @@ namespace wry {
                 MutatorInterface* mutator_interface = new MutatorInterface{
                     ._name = "C0",
                 };
+                mutator_interface->_channel.store(TaggedPtr<LogNode>{
+                    nullptr,
+                    COLLECTOR_SHOULD_CONSUME
+                },
+                                                  Ordering::RELAXED);
+
                 // It skips the queue so we always have at least one mutator
                 // present, simplifying the later logic
                 _known_mutator_interfaces.push_back(mutator_interface);
                 Color color_initial = garbage_collector_thread::get_new_mutator_params();
                 this_thread::_mutator_interface = mutator_interface;
                 this_thread::_color_for_allocation = color_initial;
-                mutator_interface->_channel_from_mutator_to_collector.push({});
+                // mutator_interface->_channel_from_mutator_to_collector.push({});
             }
             
             printf("C0: go\n");
@@ -293,6 +401,50 @@ namespace wry {
                         MessageFromMutatorToCollector outgoing = {};
                         size_t n = 0;
                         printf("C0: try_pop \"%s\"\n", u->_name.c_str());
+                        TaggedPtr<LogNode> expected;
+                    ALPHA:
+                        expected = u->_channel.load(Ordering::RELAXED);
+                    BETA:
+                        switch (expected.tag) {
+                            case COLLECTOR_SHOULD_CONSUME:
+                            case COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
+                                expected = u->_channel.exchange(TaggedPtr<LogNode>{
+                                    nullptr,
+                                    expected.tag
+                                },
+                                                                Ordering::ACQUIRE);
+                                break;
+                            case MUTATOR_SHOULD_PUBLISH: {
+                                TaggedPtr<LogNode> desired{
+                                    nullptr,
+                                    MUTATOR_SHOULD_PUBLISH_AND_NOTIFY
+                                };
+                                if (u->_channel.compare_exchange_weak(expected,
+                                                                       desired,
+                                                                       Ordering::RELAXED,
+                                                                       Ordering::RELAXED)) {
+                                    expected = desired;
+                                } else {
+                                    goto BETA;
+                                }
+                            } [[fallthrough]];
+                            case MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
+                                // TODO: timeout ?
+                                u->_channel.wait(expected, Ordering::RELAXED);
+                                goto BETA;
+                        } // switch (expected.tag)
+                        {
+                            LogNode* a = expected.ptr;
+                            while (a) {
+                                ++n;
+                                did_shade |= a->_color_did_shade;
+                                v.is_done = v.is_done || (expected.tag == COLLECTOR_SHOULD_CONSUME_AND_RELEASE);
+                                number_of_new_objects += a->_allocations.debug_size();
+                                _known_objects.splice(std::move(a->_allocations));
+                                a = a->_log_list_next;
+                            }
+                        }
+#if 0
                         // u->_channel_from_mutator_to_collector.hack_wait_until(collector_deadline);
                         if (u->_channel_from_mutator_to_collector.pop_wait_until(outgoing, collector_deadline)) {
                             do {
@@ -306,6 +458,7 @@ namespace wry {
                         } else {
                             printf("C0: A mutator timed out?\n");
                         }
+#endif
                         if (v.is_done) {
                             ++number_of_resignations;
                         }
@@ -411,10 +564,34 @@ namespace wry {
                 }
                 
                 for (MutatorInterface* p : _known_mutator_interfaces) {
-                    MessageFromCollectorToMutator incoming = {
+                    //MessageFromCollectorToMutator incoming = {
                         // .color_for_allocation = _color_for_allocation,
-                    };
-                    p->_channel_from_collector_to_mutator.push(std::move(incoming));
+                    //};
+                    // p->_channel_from_collector_to_mutator.push(std::move(incoming));
+                    auto expected = p->_channel.load(Ordering::RELAXED);
+                    // We don't care about any publications the mutator has made
+                    // since we consumed them
+                GAMMA:
+                    switch (expected.tag) {
+                        case COLLECTOR_SHOULD_CONSUME: {
+                            TaggedPtr<LogNode> desired{
+                                expected.ptr,
+                                MUTATOR_SHOULD_PUBLISH
+                            };
+                            if (!p->_channel.compare_exchange_weak(expected, desired, Ordering::RELEASE, Ordering::RELAXED)) {
+                                goto GAMMA;
+                            }
+                        } break;
+                        case COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
+                            // The thread is done, leave it alone
+                            break;
+                        case MUTATOR_SHOULD_PUBLISH:
+                        case MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
+                        default:
+                            // Not allowed
+                            abort();
+                    }
+                    
                 }
                 
                 this_thread::handshake();
