@@ -1,0 +1,154 @@
+//
+//  bag.hpp
+//  client
+//
+//  Created by Antony Searle on 17/7/2025.
+//
+
+#ifndef bag_hpp
+#define bag_hpp
+
+#include <cstdio>
+#include "utility.hpp"
+
+namespace wry {
+        
+    template<typename T>
+    struct SinglyLinkedListOfInlineStacksBag {
+        
+        using Self = SinglyLinkedListOfInlineStacksBag;
+        
+        struct Node {
+            
+            constexpr static size_t CAPACITY = (4096 - 16) / sizeof(T);
+            
+            Node* _next = nullptr;
+            size_t _size = 0;
+            T _elements[CAPACITY];
+            
+            size_t size() const { return _size; }
+            bool is_empty() const { return !_size; }
+            bool is_full() const { return _size == CAPACITY; }
+            
+            bool try_push(T&& value) {
+                bool result = !is_full();
+                if (result) {
+                    _elements[_size++] = std::move(value);
+                }
+                return result;
+            }
+            
+            bool try_pop(T& victim) {
+                bool result = !is_empty();
+                if (result) {
+                    victim = std::move(_elements[--_size]);
+                }
+                return result;
+            }
+
+        };
+        
+        static_assert(sizeof(Node) == 4096);
+        
+        using value_type = T;
+        using size_type = std::size_t;
+        using reference = T&;
+        using const_reference = T const&;
+        
+        Node* _head = nullptr;
+        Node* _tail = nullptr;
+        size_t _debug_size = 0;
+        
+        void swap(Self& other) {
+            using std::swap;
+            swap(_head, other._head);
+            swap(_tail, other._tail);
+            swap(_debug_size, other._debug_size);
+        }
+
+        // constexpr constructor permits use as a constinit thread_local
+        constexpr SinglyLinkedListOfInlineStacksBag()
+        : _head(nullptr)
+        , _tail(nullptr)
+        , _debug_size(0) {
+        }
+        
+        SinglyLinkedListOfInlineStacksBag(const Self&) = delete;
+        
+        SinglyLinkedListOfInlineStacksBag(Self&& other)
+        : _head(std::exchange(other._head, nullptr))
+        , _tail(std::exchange(other._tail, nullptr))
+        , _debug_size(std::exchange(other._debug_size, 0)) {
+        }
+        
+        ~SinglyLinkedListOfInlineStacksBag() {
+            assert(_head == nullptr);
+            assert(_tail == nullptr);
+            assert(_debug_size == 0);
+        }
+                
+        Self& operator=(const Self&) = delete;
+        
+        Self& operator=(Self&& other) {
+            Self(std::move(other)).swap(*this);
+            return *this;
+        }
+        
+        bool debug_is_empty() const {
+            return !_debug_size;
+        }
+        
+        size_t debug_size() const {
+            return _debug_size;
+        }
+        
+        void push(T&& value) {
+            ++_debug_size;
+            while (!_head || !_head->try_push(std::move(value))) {
+                _head = new Node{_head, 0};
+                if (!_tail)
+                    _tail = _head;
+            }
+        }
+        
+        bool try_pop(T& victim) {
+            for (;;) {
+                if (!_head)
+                    return false;
+                if (_head->try_pop(victim)) {
+                    --_debug_size;
+                    return true;
+                }
+                delete std::exchange(_head, _head->_next);
+                if (!_head)
+                    _tail = nullptr;
+            }
+        }
+        
+        void splice(SinglyLinkedListOfInlineStacksBag&& other) {
+            if (other._head) {
+                if (_head) {
+                    assert(_tail && !(_tail->_next));
+                    _tail->_next = exchange(other._head, nullptr);
+                } else {
+                    assert(!_tail);
+                    _head = exchange(other._head, nullptr);
+                }
+                _tail = exchange(other._tail, nullptr);
+                _debug_size += exchange(other._debug_size, 0);
+            }
+        }
+        
+    }; // struct SinglyLinkedListOfInlineStacksBag<T>
+    
+    template<typename T>
+    void swap(SinglyLinkedListOfInlineStacksBag<T>& left, SinglyLinkedListOfInlineStacksBag<T>& right) {
+        left.swap(right);
+    }
+    
+    template<typename T>
+    using Bag = SinglyLinkedListOfInlineStacksBag<T>;
+        
+}
+
+#endif /* bag_hpp */

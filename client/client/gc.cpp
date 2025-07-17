@@ -21,6 +21,7 @@
 #include "value.hpp"
 #include "HeapString.hpp"
 #include "garbage_collected.hpp"
+#include "bag.hpp"
 
 #include "test.hpp"
 
@@ -29,245 +30,6 @@
 
 namespace wry {
     
-    
-    // Bag
-    
-    // constinit true O(1) bag via std::deque
-    template<typename T>
-    struct StandardDequeBag {
-        
-        std::deque<T>* _inner = nullptr;
-        
-        bool is_empty() {
-            return !_inner || _inner->empty();
-        }
-        
-        constexpr StandardDequeBag() = default;
-        ~StandardDequeBag() {
-            delete _inner;
-        }
-        StandardDequeBag(const StandardDequeBag&) = delete;
-        StandardDequeBag(StandardDequeBag&& other)
-        : _inner(std::exchange(other._inner, nullptr)) {
-        }
-        
-        void swap(StandardDequeBag& other) {
-            using std::swap;
-            swap(_inner, other._inner);
-        }
-        
-        StandardDequeBag& operator=(const StandardDequeBag&) = delete;
-        StandardDequeBag& operator=(StandardDequeBag&& other) {
-            StandardDequeBag(std::move(other)).swap(*this);
-            return *this;
-        }
-        
-        size_t size() const {
-            return _inner ? _inner->size() : 0;
-        }
-        
-        void push(T value) {
-            if (!_inner)
-                _inner = new std::deque<T>;
-            _inner->push_back(std::move(value));
-        }
-        
-        bool try_pop(T& victim) {
-            if (is_empty())
-                return false;
-            victim = std::move(_inner->front());
-            _inner->pop_front();
-            return true;
-        }
-        
-        void extend(StandardDequeBag&& other) {
-            T victim;
-            while (other.try_pop(victim)) {
-                push(std::move(victim));
-            }
-        }
-        
-    };
-    
-    template<typename T>
-    struct SinglyLinkedListOfInlineStacksBag {
-        
-        struct Page {
-            
-            constexpr static size_t CAPACITY = (4096 - 16) / sizeof(T*);
-            
-            Page* next;
-            size_t count;
-            T elements[CAPACITY];
-            
-            Page(Page* next, T&& item) {
-                this->next = next;
-                count = 1;
-                elements[0] = std::move(item);
-            }
-            
-            size_t size() const { return count; }
-            bool empty() const { return !count; }
-            bool full() const { return count == CAPACITY; }
-            
-            T const& top() const {
-                assert(!empty());
-                return elements[count - 1];
-            }
-            
-            T& top() {
-                assert(!empty());
-                return elements[count - 1];
-            }
-            
-            void pop() {
-                assert(!empty());
-                --count;
-            }
-            
-            void push(T&& x) {
-                assert(!full());
-                elements[count++] = std::move(x);
-            }
-            
-        };
-        
-        static_assert(sizeof(Page) == 4096);
-        
-        using value_type = T;
-        using size_type = std::size_t;
-        using reference = T&;
-        using const_reference = T const&;
-        
-        Page* head;
-        Page* tail;
-        size_t count;
-        
-        constexpr SinglyLinkedListOfInlineStacksBag()
-        : head(nullptr)
-        , tail(nullptr)
-        , count(0) {
-        }
-        
-        SinglyLinkedListOfInlineStacksBag(const SinglyLinkedListOfInlineStacksBag&) = delete;
-        
-        SinglyLinkedListOfInlineStacksBag(SinglyLinkedListOfInlineStacksBag&& other)
-        : head(std::exchange(other.head, nullptr))
-        , tail(std::exchange(other.tail, nullptr))
-        , count(std::exchange(other.count, 0)) {
-        }
-        
-        ~SinglyLinkedListOfInlineStacksBag() {
-            assert(count == 0);
-            while (head) {
-                assert(head->empty());
-                assert(head->next || head == tail);
-                delete std::exchange(head, head->next);
-            }
-        }
-        
-        void swap(SinglyLinkedListOfInlineStacksBag& other) {
-            std::swap(head, other.head);
-            std::swap(tail, other.tail);
-            std::swap(count, other.count);
-        }
-        
-        SinglyLinkedListOfInlineStacksBag& operator=(const SinglyLinkedListOfInlineStacksBag&) = delete;
-        
-        SinglyLinkedListOfInlineStacksBag& operator=(SinglyLinkedListOfInlineStacksBag&& other) {
-            SinglyLinkedListOfInlineStacksBag(std::move(other)).swap(*this);
-            return *this;
-        }
-        
-        T const& top() const {
-            assert(count);
-            Page* page = head;
-            for (;;) {
-                assert(page);
-                if (!page->empty())
-                    return page->top();
-                page = page->next;
-            }
-        }
-        
-        T& top() {
-            assert(count);
-            for (;;) {
-                assert(head);
-                if (!head->empty())
-                    return head->top();
-                delete exchange(head, head->next);
-            }
-        }
-        
-        bool empty() const {
-            return !count;
-        }
-        
-        bool is_empty() const {
-            return !count;
-        }
-        
-        size_t size() const {
-            return count;
-        }
-        
-        void push(T&& x) {
-            ++count;
-            assert(!head == !tail);
-            if (!head || head->full()) {
-                head = new Page(head, std::move(x));
-                if (!tail)
-                    tail = head;
-                return;
-            }
-            head->push(std::move(x));
-        }
-        
-        void pop() {
-            if (!count)
-                abort();
-            --count;
-            for (;;) {
-                assert(head);
-                if (!head->empty())
-                    return head->pop();
-                delete exchange(head, head->next);
-            }
-        }
-        
-        bool try_pop(T& victim) {
-            bool result = !is_empty();
-            if (result) {
-                victim = std::move(top());
-                pop();
-            }
-            return  result;
-        }
-        
-        void splice(SinglyLinkedListOfInlineStacksBag&& other) {
-            if (other.head) {
-                if (head) {
-                    assert(tail && !(tail->next));
-                    tail->next = exchange(other.head, nullptr);
-                } else {
-                    assert(!tail && !count);
-                    head = exchange(other.head, nullptr);
-                }
-                tail = exchange(other.tail, nullptr);
-                count += exchange(other.count, 0);
-            }
-        }
-        
-    }; // struct SinglyLinkedListOfInlineStacksBag<T>
-    
-    template<typename T>
-    void swap(SinglyLinkedListOfInlineStacksBag<T>& left, SinglyLinkedListOfInlineStacksBag<T>& right) {
-        left.swap(right);
-    }
-    
-    template<typename T>
-    using Bag = SinglyLinkedListOfInlineStacksBag<T>;
     
 
     // Stack
@@ -622,7 +384,7 @@ namespace wry {
                 // The collector at least knows about itself-as-mutator
                 assert(!_known_mutator_interfaces.empty());
                 
-                if (_known_objects.is_empty()) {
+                if (_known_objects.debug_is_empty()) {
                     printf("C0: No known objects!\n");
                 }
                 
@@ -646,9 +408,9 @@ namespace wry {
                                 ++n;
                                 did_shade |= outgoing.color_did_shade;
                                 v.is_done = v.is_done || outgoing.done;
-                                number_of_new_objects += outgoing.nursery.size();
+                                number_of_new_objects += outgoing.nursery.debug_size();
                                 _known_objects.splice(std::move(outgoing.nursery));
-                                assert(outgoing.nursery.is_empty());
+                                assert(outgoing.nursery.debug_is_empty());
                             } while ((u->_channel_from_mutator_to_collector.try_pop(outgoing)));
                         } else {
                             printf("C0: A mutator timed out?\n");
@@ -746,7 +508,7 @@ namespace wry {
                 
                 {
                     MutatorInterface* victim = nullptr;
-                    if ((_known_mutator_interfaces.size() == 1) && _known_objects.is_empty()) {
+                    if ((_known_mutator_interfaces.size() == 1) && _known_objects.debug_is_empty()) {
                         printf("C0: Waiting for work\n");
                         garbage_collector_thread::_new_mutator_interfaces.hack_wait_until(collector_deadline);
                         printf("C0: Woke\n");
@@ -790,7 +552,7 @@ namespace wry {
             auto t0 = std::chrono::steady_clock::now();
             
             assert(greystack.c.empty());
-            assert(survivors.is_empty());
+            assert(survivors.debug_is_empty());
             assert(children.c.empty());
             
             // validate state:
@@ -824,7 +586,7 @@ namespace wry {
                    "             delete mask %016llx\n"
                    "              clear mask %016llx\n"
                    "    color_for_allocation %016llx\n",
-                   _known_objects.size(),
+                   _known_objects.debug_size(),
                    _mask_for_tracing,
                    _mask_for_deleting,
                    _mask_for_clearing,
@@ -920,7 +682,7 @@ namespace wry {
             } // loop until no objects
             
             assert(greystack.c.empty());
-            assert(_known_objects.is_empty());
+            assert(_known_objects.debug_is_empty());
             assert(children.c.empty());
             _known_objects = std::move(survivors);
             
