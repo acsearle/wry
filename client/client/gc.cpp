@@ -6,22 +6,23 @@
 //
 
 #include <cinttypes>
-
 #include <thread>
 #include <queue>
 #include <deque>
 
-//#include "adl.hpp"
-#include "ctrie.hpp"
 #include "gc.hpp"
-#include "HeapArray.hpp"
-#include "HeapTable.hpp"
+
+#include "bag.hpp"
+#include "channel.hpp"
+//#include "ctrie.hpp"
+#include "garbage_collected.hpp"
+//#include "HeapArray.hpp"
+#include "HeapString.hpp"
+//#include "HeapTable.hpp"
+#include "stack.hpp"
 #include "tagged_ptr.hpp"
 #include "utility.hpp"
 #include "value.hpp"
-#include "HeapString.hpp"
-#include "garbage_collected.hpp"
-#include "bag.hpp"
 
 #include "test.hpp"
 
@@ -30,144 +31,31 @@
 
 namespace wry {
     
+    // Reference blocking implementation of Channel
     
 
-    // Stack
-    
-    template<typename T>
-    struct StandardDequeStack {
-        std::deque<T> c;
-        void push(T x) { c.push_back(std::move(x)); }
-        bool try_pop(T& victim) {
-            bool result = !c.empty();
-            if (result) {
-                victim = std::move(c.back());
-                c.pop_back();
-            }
-            return result;
-        }
-    };
-
-    template<typename T>
-    using Stack = StandardDequeStack<T>;
-    
-    
-    // Channel
-    
-    
-    
-    using Mutex = std::mutex;
-    using ConditionVariable = std::condition_variable;
-    
-    
-    // Unbounded communication channel
-    template<typename T>
-    struct Channel {
-        
-        struct Result {
-            enum Tag {
-                VALUE = 0,
-                EMPTY,
-                TIMEOUT,
-                CLOSED,
-            } tag;
-            union {
-                char _dummy;
-                T value;
-            };
-        };
-        
-        std::mutex _mutex;
-        std::condition_variable _condition_variable;
-        std::queue<T> _queue;
-        ptrdiff_t _waiting = 0;
-        
-        bool was_empty() const {
-            bool result;
-            {
-                std::unique_lock lock{_mutex};
-                result = _queue.empty();
-            }
-            return result;
-        }
-        
-        void push(T x) {
-            ptrdiff_t waiting;
-            {
-                std::unique_lock lock{_mutex};
-                _queue.push(std::move(x));
-                waiting = _waiting;
-            }
-            if (waiting) {
-                _condition_variable.notify_all();
-            }
-        }
-        
-        bool try_pop(T& victim) {
-            std::unique_lock lock{_mutex};
-            bool result = !_queue.empty();
-            if (result) {
-                victim = std::move(_queue.front());
-                _queue.pop();
-            }
-            return result;
-        }
-        
-        void pop_wait(T& victim) {
-            std::unique_lock lock{_mutex};
-            for (;;) {
-                if (_queue.empty()) {
-                    ++_waiting;
-                    _condition_variable.wait(lock);
-                    --_waiting;
-                } else {
-                    victim = std::move(_queue.front());
-                    _queue.pop();
-                    return;
-                }
-            }
-        }
-        
-        void hack_wait_until(auto absolute_time) {
-            std::unique_lock lock{_mutex};
-            while (_queue.empty()) {
-                ++_waiting;
-                auto t0 = std::chrono::high_resolution_clock::now();
-                printf("hack_wait_nonempty: waiting\n");
-                std::cv_status result = _condition_variable.wait_until(lock, std::move(absolute_time));
-                auto t1 = std::chrono::high_resolution_clock::now();
-                --_waiting;
-                printf("hack_wait_nonempty: waited %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
-                if (result == std::cv_status::timeout) {
-                    return;
-                }
-            }
-        }
-        
-        bool pop_wait_until(T& victim, auto absolute_time) {
-            std::unique_lock lock{_mutex};
-            for (;;) {
-                if (_queue.empty()) {
-                    ++_waiting;
-                    auto t0 = std::chrono::high_resolution_clock::now();
-                    std::cv_status result = _condition_variable.wait_until(lock, absolute_time);
-                    auto t1 = std::chrono::high_resolution_clock::now();
-                    --_waiting;
-                    printf("%s: waited %.3gs\n", __PRETTY_FUNCTION__, std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
-                    if (result == std::cv_status::timeout)
-                        return false;
-                } else {
-                    victim = std::move(_queue.front());
-                    _queue.pop();
-                    return true;
-                }
-            }
-        }
-        
-    }; // Channel
     
     
     // Mutator
+    
+    // TODO: Refactor communication between mutators and collector
+    //
+    // Mutators only communicate their shaded colors, allocated objects, and
+    // resignation
+    //
+    // Collectors only communicate the presence of a new color state
+    //
+    // This fits well into the atomic tagged pointer to Log system of the older
+    // collector
+    //
+    // Mutator publishes a chain of Logs of color and objects, and indicates
+    // resignation with a pointer bit
+    //
+    // Collector publishes tag bits requesting color acknowledgement and
+    // upgrades tag to to waiting if needed
+    //
+    // TODO: Rather than chain Logs with Bags, what if we add the only Log
+    // field to the bags and splice them in atomically?
     
     struct MessageFromMutatorToCollector {
         Color color_did_shade;
@@ -191,6 +79,9 @@ namespace wry {
         COLLECTOR_SHOULD_CONSUME_AND_RELEASE = 2,
         MUTATOR_SHOULD_PUBLISH_AND_NOTIFY = 3,
     };
+    
+    
+    // TODO: This is the interface for a "session", call it that?
     
     struct MutatorInterface {
         

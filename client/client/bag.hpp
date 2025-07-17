@@ -29,7 +29,15 @@ namespace wry {
             size_t size() const { return _size; }
             bool is_empty() const { return !_size; }
             bool is_full() const { return _size == CAPACITY; }
-            
+
+            bool try_push(const T& value) {
+                bool result = !is_full();
+                if (result) {
+                    _elements[_size++] = value;
+                }
+                return result;
+            }
+
             bool try_push(T&& value) {
                 bool result = !is_full();
                 if (result) {
@@ -101,10 +109,10 @@ namespace wry {
         size_t debug_size() const {
             return _debug_size;
         }
-        
-        void push(T&& value) {
+
+        void push(T value) {
             ++_debug_size;
-            while (!_head || !_head->try_push(std::move(value))) {
+            while (!_head || !_head->try_push(value)) {
                 _head = new Node{_head, 0};
                 if (!_tail)
                     _tail = _head;
