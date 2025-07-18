@@ -74,8 +74,7 @@ int main(int argc, const char** argv) {
     
     tests.join();
     
-    wry::mutator_handshake(true);
-    // wry::collector_stop();
+    wry::mutator_resign();
     collector_thread.join();
     
     return EXIT_SUCCESS;

@@ -17,12 +17,12 @@ namespace wry {
     
     void collector_acknowledge_child(void* tracer, const GarbageCollected* child);
     void collector_run_on_this_thread_until(std::chrono::steady_clock::time_point collector_deadline);
-    inline std::atomic<ptrdiff_t> total_deleted = 0;
     
     // Mutator
     
     void mutator_become_with_name(const char*);
-    void mutator_handshake(bool is_done = false);
+    void mutator_handshake();
+    void mutator_resign();
     void mutator_did_overwrite(const GarbageCollected*);
     void mutator_declare_root(const GarbageCollected*);
 

@@ -31,21 +31,40 @@
 
 namespace wry {
 
-    // TODO: do we want to put allocation statistics in LogNode?  We could just
-    // do them thread locally and lazily combine them whenever.
-    // Allocate a statistics node at thread startup and link it into a global
-    // list, then on thread shutdown mark it for later deletion by whatever
-    // cares about crawling the statistics.  This is similar to the
-    // MutatorInterface but less transitory
+    // TODO: statistics
     
-    // TODO: Make the MutatorInterface a lock-free linked list
-    // TODO: Cleanup names
+    static constinit Atomic<ptrdiff_t> total_deleted;
 
+    // Global and thread_local scope variables
     
+    struct Session;
+    
+    constinit static Atomic<Session*> _global_new_sessions;
+    constinit static Atomic<Color> _global_atomic_color_for_allocation;
+    
+    constinit thread_local Color _thread_local_color_for_allocation;
+    constinit thread_local Color _thread_local_color_did_shade;
+    constinit thread_local Session* _thread_local_session;
+    constinit thread_local Bag<const GarbageCollected*> _thread_local_new_objects;
+    
+    Color get_global_color_for_allocation() {
+        return _global_atomic_color_for_allocation.load(Ordering::RELAXED);
+    }
+    
+    inline Color get_thread_local_color_for_allocation() {
+        return _thread_local_color_for_allocation;
+    }
+    
+    inline Color get_thread_local_color_for_shade() {
+        return _thread_local_color_for_allocation & LOW_MASK;
+    }
+
     // A session exists between a thread becoming a mutator, multiple handshakes,
     // and resiging mutator status
     
     struct Session {
+        
+        Session* _next = nullptr;
         
         struct Node {
             
@@ -53,7 +72,7 @@ namespace wry {
             Color color_did_shade = 0;
             Bag<const GarbageCollected*> allocations;
             
-        }; // struct MutatorLog
+        }; // struct Node
         
         enum struct Tag : intptr_t {
             COLLECTOR_SHOULD_CONSUME = 0,
@@ -77,7 +96,8 @@ namespace wry {
         
         std::string _name;
         
-        // We use reference counting to manage the mutator interface lifetime
+        
+        // We use reference counting to manage the Session lifetime
         Atomic<ptrdiff_t> _reference_count_minus_one{1};
         
         void acquire() {
@@ -93,6 +113,91 @@ namespace wry {
         }
         
         
+        
+        
+        void handshake() {
+            
+            TaggedPtr<Node, Tag> expected = _atomic_tagged_head.load(Ordering::RELAXED);
+            switch (expected.tag) {
+                    
+                case Tag::COLLECTOR_SHOULD_CONSUME: {
+                    // The collector doesn't need anything from us at this time
+                } break;
+                    
+                case Tag::MUTATOR_SHOULD_PUBLISH:
+                    [[fallthrough]];
+                case Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY: {
+                    auto desired = TaggedPtr<Node, Tag>{
+                        new Node{
+                            expected.ptr,
+                            std::exchange(_thread_local_color_did_shade, 0),
+                            std::move(_thread_local_new_objects)
+                        },
+                        Tag::COLLECTOR_SHOULD_CONSUME
+                    };
+                    expected = _atomic_tagged_head.exchange(desired, Ordering::ACQ_REL);
+                    if (expected.tag == Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY)
+                        _atomic_tagged_head.notify_one();
+                    _thread_local_color_for_allocation = get_global_color_for_allocation();
+                } break;
+                    
+                case Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE: {
+                    // We should not be handshaking after we have marked_done
+                    abort();
+                }
+                    
+            } // switch (expected.tag)
+            
+        } // void Session::handshake()
+
+        
+        void resign() {
+            
+            TaggedPtr<Session::Node, Session::Tag> desired{
+                new Session::Node{
+                    nullptr,
+                    std::exchange(_thread_local_color_did_shade, 0),
+                    std::move(_thread_local_new_objects)
+                },
+                Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE
+            };
+            
+            TaggedPtr<Node, Tag> expected = _atomic_tagged_head.load(Ordering::RELAXED);
+            for (;;) {
+                
+                switch (expected.tag) {
+                        
+                    case Tag::COLLECTOR_SHOULD_CONSUME:
+                    case Tag::MUTATOR_SHOULD_PUBLISH:
+                    case Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
+                        // Permitted states
+                        break;
+                        
+                    case Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
+                        // Already released
+                    default:
+                        abort();
+                        
+                } // switch (expected.tag)
+                
+                desired->_next = expected.ptr;
+                if (_atomic_tagged_head.compare_exchange_weak(expected,
+                                                              desired,
+                                                              Ordering::RELEASE,
+                                                              Ordering::RELAXED)) {
+                    
+                    if (expected.tag == Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY)
+                        _atomic_tagged_head.notify_one();
+                    
+                    std::exchange(_thread_local_session, nullptr)->release();
+                    
+                    return;
+                }
+                
+            } // for (;;)
+            
+        } // void Session::resign()
+                        
     }; // struct Session
     
 
@@ -102,118 +207,27 @@ namespace wry {
         assert(child);
         ((Tracer*)tracer)->push(child);
     }
-    
-    static Channel<Session*> _new_mutator_interfaces;
-    
-    
-    inline static std::atomic<Color> _new_mutator_color;
-
-    Color get_new_mutator_params() {
-        return _new_mutator_color.load(std::memory_order_relaxed);
-    }
+        
     
     
 
 
     
-    // TODO: more performant to put these in a thread_local structure?
-    // TODO: constinit thread_local performance vs viral monad everywhere?
-    // TODO: make GarbageCollected::TraceContext a simple global vs current viral monad?
-    
-    constinit thread_local Color _thread_local_color_for_allocation = 0;
-    constinit thread_local Color _thread_local_color_did_shade = 0;
-    constinit thread_local Session* _thread_local_session = nullptr;
-    constinit thread_local Bag<const GarbageCollected*> _thread_local_nursery;
-    
-    inline Color get_thread_local_color_for_allocation() {
-        return _thread_local_color_for_allocation;
-    }
-    
-    inline Color get_thread_local_color_for_shade() {
-        return _thread_local_color_for_allocation & LOW_MASK;
-    }
-    
-    inline void record_shade(Color color_delta) {
-        _thread_local_color_did_shade |= color_delta;
-    }
-    
-    inline void record_infant(const GarbageCollected* infant) {
-        _thread_local_nursery.push(std::move(infant));
-    }
-    
-    inline void handshake(bool mark_done = false) {
-        
-        bool did_pop = false;
-        
-        TaggedPtr<Session::Node, Session::Tag> expected = _thread_local_session->_atomic_tagged_head.load(Ordering::RELAXED);
-        switch (expected.tag) {
-            case Session::Tag::COLLECTOR_SHOULD_CONSUME:
-                if (mark_done) {
-                    goto PUBLISH;
-                }
-                break;
-            case Session::Tag::MUTATOR_SHOULD_PUBLISH:
-            case Session::Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY: {
-                // The collector requests we publish a new update
-                did_pop = true;
-            PUBLISH:
-                auto desired = TaggedPtr<Session::Node, Session::Tag>{
-                    new Session::Node{
-                        expected.ptr,
-                        std::exchange(_thread_local_color_did_shade, 0),
-                        std::move(_thread_local_nursery)
-                    },
-                    (mark_done
-                     ? Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE
-                     : Session::Tag::COLLECTOR_SHOULD_CONSUME)
-                };
-                expected = _thread_local_session->_atomic_tagged_head.exchange(desired, Ordering::ACQ_REL);
-            } break;
-            default:
-            case Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE: {
-                // We should not be handshaking after we have marked_done
-                abort();
-            } break;
-        }
-        
-        if (expected.tag == Session::Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY) {
-            _thread_local_session->_atomic_tagged_head.notify_one();
-        }
-        
-        // bool did_pop = false;
-        //MessageFromCollectorToMutator incoming = {};
-        // if ((did_pop = _mutator_interface->_channel_from_collector_to_mutator.try_pop(incoming))) {
-        if (did_pop) {
-            // this_thread::_color_for_allocation = incoming.color_for_allocation;
-            _thread_local_color_for_allocation = _new_mutator_color.load(std::memory_order_relaxed);
-        }
-        
-        /*
-        if (did_pop || mark_done) {
-            MessageFromMutatorToCollector outgoing = {
-                .color_did_shade = std::exchange(this_thread::_color_did_shade, 0),
-                .nursery = std::move(this_thread::_nursery),
-                .done = mark_done,
-            };
-            _mutator_interface->_channel_from_mutator_to_collector.push(std::move(outgoing));
-        }
-         */
-        
-        if (mark_done) {
-            std::exchange(_thread_local_session, nullptr)->release();
-        }
-        
-    }
-        
     
     void mutator_become_with_name(const char* name) {
+
         Session* session = new Session{
             ._name = name
         };
-        _new_mutator_interfaces.push(session);
         
+        session->_next = _global_new_sessions.load(Ordering::RELAXED);
+        while (!_global_new_sessions.compare_exchange_weak(session->_next, session, Ordering::RELEASE, Ordering::RELAXED))
+            ;
+        _global_new_sessions.notify_one();
+                
         _thread_local_session = session;
-        _thread_local_color_for_allocation = get_new_mutator_params();
+        _thread_local_color_for_allocation = get_global_color_for_allocation();
+                
     }
     
     
@@ -221,7 +235,10 @@ namespace wry {
     
     GarbageCollected::GarbageCollected()
     : _color(get_thread_local_color_for_allocation()) {
-        record_infant(this);
+        // SAFETY: pointer to a partially constructed object escapes.  These
+        // pointers are only published to the collector thread after the
+        // constructor has completed.
+        _thread_local_new_objects.push(this);
     }
     
     void GarbageCollected::_garbage_collected_shade() const {
@@ -229,18 +246,39 @@ namespace wry {
         const Color before = _color.fetch_or(color_for_shade, Ordering::RELAXED);
         const Color after  =  before | color_for_shade;
         const Color did_shade = (~before) & after;
-        record_shade(did_shade);
+        _thread_local_color_did_shade |= did_shade;
     }
     
     void GarbageCollected::_garbage_collected_trace(void* tracer) const {
         collector_acknowledge_child(tracer, this);
     }
+
     
     struct Collector {
         
+        template<typename T, size_t N, size_t MASK = N-1>
+        struct RingBuffer {
+            
+            static_assert(std::has_single_bit(N), "RingBuffer capacity must be a power of two");
+            
+            size_t offset = 0;
+            T _array[N] = {};
+            
+            void push_front(T value) {
+                _array[--offset &= MASK] = value;
+            }
+            
+            const T& operator[](ptrdiff_t i) const {
+                assert((0 <= i) && (i < N));
+                return _array[(offset + i) & MASK];
+            }
+            
+        }; // struct RingBuffer<T, N, MASK>
+        
         std::vector<Session*> _known_mutator_interfaces;
-        std::deque<Color> _color_history;
-        std::deque<Color> _shade_history;
+        
+        RingBuffer<Color, 4> _color_history;
+        RingBuffer<Color, 4> _shade_history;
         
         Bag<const GarbageCollected*> _known_objects;
         
@@ -258,30 +296,12 @@ namespace wry {
                 Session* session = new Session{
                     ._name = "C0",
                 };
-                session->_atomic_tagged_head.store(TaggedPtr<Session::Node, Session::Tag>{
-                    nullptr,
-                    Session::Tag::COLLECTOR_SHOULD_CONSUME
-                },
-                                                  Ordering::RELAXED);
-
-                // It skips the queue so we always have at least one mutator
-                // present, simplifying the later logic
-                _known_mutator_interfaces.push_back(session);
-                Color color_initial = get_new_mutator_params();
                 _thread_local_session = session;
-                _thread_local_color_for_allocation = color_initial;
-                // mutator_interface->_channel_from_mutator_to_collector.push({});
+                _thread_local_color_for_allocation = get_global_color_for_allocation();
+                _known_mutator_interfaces.push_back(session);
             }
             
             printf("C0: go\n");
-            
-            _color_history.push_front(0);
-            _color_history.push_front(0);
-            _color_history.push_front(0);
-            
-            _shade_history.push_front(0);
-            _shade_history.push_front(0);
-            _shade_history.push_front(0);
             
             // HACK: loop until a time significantly later than the mutator stop time
             while (std::chrono::steady_clock::now() < collector_deadline) {
@@ -304,8 +324,6 @@ namespace wry {
                     Color did_shade = 0;
                     for (auto& u : _known_mutator_interfaces) {
                         auto& v = u->collector_state;
-                        // MessageFromMutatorToCollector outgoing = {};
-                        // size_t n = 0;
                         printf("C0: try_pop \"%s\"\n", u->_name.c_str());
                         TaggedPtr<Session::Node, Session::Tag> expected = {};
                     ALPHA:
@@ -326,9 +344,9 @@ namespace wry {
                                     Session::Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY
                                 };
                                 if (u->_atomic_tagged_head.compare_exchange_weak(expected,
-                                                                      desired,
-                                                                      Ordering::RELAXED,
-                                                                      Ordering::RELAXED)) {
+                                                                                 desired,
+                                                                                 Ordering::RELAXED,
+                                                                                 Ordering::RELAXED)) {
                                     expected = desired;
                                 } else {
                                     goto BETA;
@@ -340,31 +358,15 @@ namespace wry {
                                 goto BETA;
                         } // switch (expected.tag)
                         {
-                            Session::Node* a = expected.ptr;
-                            while (a) {
-                                // ++n;
-                                did_shade |= a->color_did_shade;
+                            Session::Node* node = expected.ptr;
+                            while (node) {
+                                did_shade |= node->color_did_shade;
                                 v.is_done = v.is_done || (expected.tag == Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE);
-                                number_of_new_objects += a->allocations.debug_size();
-                                _known_objects.splice(std::move(a->allocations));
-                                a = a->_next;
+                                number_of_new_objects += node->allocations.debug_size();
+                                _known_objects.splice(std::move(node->allocations));
+                                delete std::exchange(node, node->_next);
                             }
                         }
-#if 0
-                        // u->_channel_from_mutator_to_collector.hack_wait_until(collector_deadline);
-                        if (u->_channel_from_mutator_to_collector.pop_wait_until(outgoing, collector_deadline)) {
-                            do {
-                                ++n;
-                                did_shade |= outgoing.color_did_shade;
-                                v.is_done = v.is_done || outgoing.done;
-                                number_of_new_objects += outgoing.nursery.debug_size();
-                                _known_objects.splice(std::move(outgoing.nursery));
-                                assert(outgoing.nursery.debug_is_empty());
-                            } while ((u->_channel_from_mutator_to_collector.try_pop(outgoing)));
-                        } else {
-                            printf("C0: A mutator timed out?\n");
-                        }
-#endif
                         if (v.is_done) {
                             ++number_of_resignations;
                         }
@@ -454,18 +456,25 @@ namespace wry {
 #pragma mark Publish the color for allocation and timestamp
                 
                 _color_history.push_front(_color_for_allocation);
-                _new_mutator_color.store(_color_for_allocation, std::memory_order_relaxed);
+                _global_atomic_color_for_allocation.store(_color_for_allocation, Ordering::RELAXED);
                 
                 {
-                    Session* victim = nullptr;
+                    Session* expected = nullptr;
                     if ((_known_mutator_interfaces.size() == 1) && _known_objects.debug_is_empty()) {
                         printf("C0: Waiting for work\n");
-                        _new_mutator_interfaces.hack_wait_until(collector_deadline);
+                        // _new_mutator_interfaces.hack_wait_until(collector_deadline);
+                        _global_new_sessions.wait(expected, Ordering::RELAXED);
                         printf("C0: Woke\n");
                     }
-                    while (_new_mutator_interfaces.try_pop(victim)) {
-                        _known_mutator_interfaces.push_back(std::move(victim));
-                        printf("C0: A mutator enrolled\n");
+                    //while (_new_mutator_interfaces.try_pop(victim)) {
+                    //_known_mutator_interfaces.push_back(std::move(victim));
+                    //printf("C0: A mutator enrolled\n");
+                    //}
+                    expected = _global_new_sessions.exchange(nullptr, Ordering::ACQUIRE);
+                    while (expected) {
+                        _known_mutator_interfaces.push_back(expected);
+                        //printf("C0: A mutator enrolled\n");
+                        expected = expected->_next;
                     }
                 }
                 
@@ -503,7 +512,7 @@ namespace wry {
                     
                 }
                 
-                handshake();
+                _thread_local_session->handshake();
                 
 #pragma mark Receive new mutators
                 
@@ -669,7 +678,7 @@ namespace wry {
             printf("C0:     deleted %zd\n", delete_count);
             printf("C0:     in %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
             
-            total_deleted.fetch_add(delete_count, std::memory_order::relaxed);
+            total_deleted.fetch_add(delete_count, Ordering::RELAXED);
             
             
         }
@@ -678,15 +687,19 @@ namespace wry {
     
     
     
-    
-    Collector collector;
+    // TODO: make constinit
+    static Collector collector;
     
     void collector_run_on_this_thread_until(std::chrono::steady_clock::time_point collector_deadline) {
         collector.loop_until(collector_deadline);
     }
     
-    void mutator_handshake(bool is_done) {
-        handshake(is_done);
+    void mutator_handshake() {
+        _thread_local_session->handshake();
+    }
+    
+    void mutator_resign() {
+        _thread_local_session->resign();
     }
     
     void collector_acknowledge_child(void* tracer, const GarbageCollected* child) {
@@ -698,6 +711,7 @@ namespace wry {
             a->_garbage_collected_shade();
         }
     }
+    
     
 
     
@@ -1547,6 +1561,19 @@ struct UnrolledLinkedList {
         }
     }
 };
+
+
+
+// TODO: do we want to put allocation statistics in LogNode?  We could just
+// do them thread locally and lazily combine them whenever.
+// Allocate a statistics node at thread startup and link it into a global
+// list, then on thread shutdown mark it for later deletion by whatever
+// cares about crawling the statistics.  This is similar to the
+// MutatorInterface but less transitory
+
+// TODO: Make the MutatorInterface a lock-free linked list
+// TODO: Cleanup names
+
 
 
 

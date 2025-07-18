@@ -76,7 +76,7 @@ namespace wry::_amt0 {
             }
         }
          
-        mutator_handshake(true);
+        mutator_resign();
     };
         
 }
