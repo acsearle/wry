@@ -8,6 +8,8 @@
 #ifndef gc_hpp
 #define gc_hpp
 
+#include <chrono>
+
 namespace wry {
     
     struct GarbageCollected;

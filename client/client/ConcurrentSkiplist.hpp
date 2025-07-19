@@ -15,56 +15,83 @@
 
 #include "atomic.hpp"
 #include "garbage_collected.hpp"
+#include "utility.hpp"
 
 namespace wry {
     
     // TODO: merge with AAA skiplist
     
-    namespace _concurrent_skiplist {
+    namespace concurrent_skiplist {
         
-        inline thread_local std::ranlux24* thread_local_random_number_generator = nullptr;
+        constinit thread_local std::ranlux24* thread_local_random_number_generator = nullptr;
         
-        template<typename Key, typename Compare = std::less<>>
-        struct concurrent_skiplist {
+        template<typename Key, typename Compare = std::less<Key>>
+        struct ConcurrentSkiplistSet {
             
-            struct _node_t : GarbageCollected {
+            struct Node : GarbageCollected {
+                
+                // TODO: do we need the size member?
+                
                 Key _key;
                 size_t _size;
-                mutable Atomic<_node_t*> _next[0];
+                mutable Atomic<Node*> _next[0];
                 
-                explicit _node_t(size_t n, auto&&... args)
+                static void* operator new(size_t count, void* ptr) {
+                    return ptr;
+                }
+                
+                explicit Node(size_t n, auto&&... args)
                 : _key(std::forward<decltype(args)>(args)...)
                 , _size(n) {
                 }
                 
-                static _node_t* with_size_emplace(size_t n, auto&&... args) {
-                    void* raw = GarbageCollected::operator new(sizeof(_node_t) + sizeof(std::atomic<_node_t*>) * n);
-                    return new(raw) _node_t(n, std::forward<decltype(args)>(args)...);
+                static Node* with_size_emplace(size_t n, auto&&... args) {
+                    void* raw = GarbageCollected::operator new(sizeof(Node) + sizeof(Atomic<Node*>) * n);
+                    return new(raw) Node(n, FORWARD(args)...);
                 }
                 
-                static _node_t* with_random_size_emplace(auto&&... args) {
-                    size_t n = 1 + __builtin_ctz( (*thread_local_random_number_generator)() );
-                    _node_t* a = with_size_emplace(n, std::forward<decltype(args)>(args)...);
+                // TODO: restrict generator to a maximum of 1 + current size?
+                //
+                // TODO: tune shape of distribution
+                // Quick experiment indicates a n^{-0.5} is better than n^{-0.25}
+                static Node* with_random_size_emplace(auto&&... args) {
+                    size_t n = 1 + __builtin_ctz((*thread_local_random_number_generator)());
+                    Node* a = with_size_emplace(n, std::forward<decltype(args)>(args)...);
                     return a;
                 }
                 
-            };
+                // SAFETY: the skiplist is an ephemeral object and may not
+                // live across handshakes.  It does not own its fields.
+                //
+                // TODO: Consider arena allocation rather than involving the
+                // garbage collector
+                virtual void _garbage_collected_enumerate_fields(TraceContext* context) const override {
+                }
+
+            }; // struct Node
             
             
-            struct _head_t : GarbageCollected {
+            struct Head : GarbageCollected {
                 
                 mutable Atomic<size_t> _top;
-                mutable Atomic<_node_t*> _next[0];
+                mutable Atomic<Node*> _next[0];
                 
-                _head_t() : _top(1) {}
-                
-                static _head_t* make() {
-                    size_t n = 33;
-                    void* raw =  GarbageCollected::operator new(sizeof(_head_t) + sizeof(std::atomic<_node_t*>) * n);
-                    return new(raw) _head_t;
-                    
+                static void* operator new(size_t count, void* ptr) {
+                    return ptr;
                 }
                 
+                Head() : _top(1) {}
+                
+                static Head* make() {
+                    size_t n = 33;
+                    void* raw =  GarbageCollected::operator new(sizeof(Head) + sizeof(Atomic<Node*>) * n);
+                    return new(raw) Head;
+                }
+                
+                virtual void _garbage_collected_enumerate_fields(TraceContext* context) const override {
+                    
+                }
+
             };
             
             struct iterator {
@@ -72,7 +99,7 @@ namespace wry {
                 // we can iterate across a live sequence but obviously that won't
                 // be authoritative
                 
-                const _node_t* current;
+                const Node* current;
                 
                 bool operator==(const iterator&) const = default;
                 
@@ -81,11 +108,16 @@ namespace wry {
                     return current->_key;
                 }
                 
+                const Key* operator->() const {
+                    assert(current);
+                    return &(current->_key);
+                }
+                
                 iterator& operator++() {
                     assert(current);
                     // acquire to iterate a live sequence, relaxed to iterate a frozen
                     // sequence
-                    current = current->_next[0].load(std::memory_order_acquire);
+                    current = current->_next[0].load(Ordering::ACQUIRE);
                     return *this;
                 }
                 
@@ -101,15 +133,16 @@ namespace wry {
                 
             }; // struct iterator
             
-            const _head_t* _head;
+            const Head* _head;
             
-            
-            concurrent_skiplist()
-            : _head(_head_t::make()) {
+            ConcurrentSkiplistSet()
+            : _head(Head::make()) {
             }
             
             iterator begin() const {
-                return iterator{_head->_next[0].load(std::memory_order_acquire)};
+                return iterator{
+                    _head->_next[0].load(Ordering::ACQUIRE)
+                };
             }
             
             iterator end() const {
@@ -117,11 +150,11 @@ namespace wry {
             }
             
             template<typename Query>
-            iterator find(const Query& query) {
-                std::size_t i = _head->_top.load(std::memory_order_relaxed) - 1;
-                std::atomic<_node_t*>* left = _head->_next + i;
+            iterator find(const Query& query) const {
+                size_t i = _head->_top.load(Ordering::RELAXED) - 1;
+                Atomic<Node*>* left = _head->_next + i;
                 for (;;) {
-                    const _node_t* candidate = left->load(std::memory_order_acquire);
+                    const Node* candidate = left->load(Ordering::ACQUIRE);
                     if (!candidate || Compare()(query, candidate->_key)) {
                         if (i == 0)
                             return iterator{nullptr};
@@ -135,15 +168,15 @@ namespace wry {
                 }
             }
             
-            static std::pair<_node_t*, bool> _link_level(std::size_t i, std::atomic<_node_t*>* left, _node_t* expected, _node_t* desired) {
+            static std::pair<Node*, bool> _link_level(size_t i, Atomic<Node*>* left, Node* expected, Node* desired) {
             alpha:
                 assert(left && desired);
                 assert(!expected || (desired->_key < expected->_key));
-                desired->_next[i].store(expected, std::memory_order_release);
+                desired->_next[i].store(expected, Ordering::RELEASE);
                 if (left->compare_exchange_strong(expected,
                                                   desired,
-                                                  std::memory_order_release,
-                                                  std::memory_order_acquire))
+                                                  Ordering::RELEASE,
+                                                  Ordering::ACQUIRE))
                     return {desired, true};
             beta:
                 if (!expected || (Compare()(desired->_key, expected->_key)))
@@ -151,13 +184,13 @@ namespace wry {
                 if (!(Compare()(expected->_key, desired->_key)))
                     return std::pair(expected, false);
                 left = expected->_next + i;
-                expected = left->load(std::memory_order_acquire);
+                expected = left->load(Ordering::ACQUIRE);
                 goto beta;
             }
             
-            static std::pair<_node_t*, bool> _emplace(size_t i, std::atomic<_node_t*>* left, const auto& query, auto&&... args) {
+            static std::pair<Node*, bool> _emplace(size_t i, Atomic<Node*>* left, const auto& query, auto&&... args) {
             alpha:
-                _node_t* candidate = left->load(std::memory_order_acquire);
+                Node* candidate = left->load(Ordering::ACQUIRE);
                 if (!candidate || Compare()(query, candidate->_key))
                     goto beta;
                 if (!(Compare()(candidate->_key, query)))
@@ -167,7 +200,7 @@ namespace wry {
             beta:
                 assert(!candidate || Compare()(query, candidate->_key));
                 if (i == 0) {
-                    _node_t* p = _node_t::with_random_size_emplace(query, std::forward<decltype(args)>(args)...);
+                    Node* p = Node::with_random_size_emplace(query, FORWARD(args)...);
                     auto result = _link_level(0, left, candidate, p);
                     if (!result.second)
                         free(p);
@@ -184,24 +217,27 @@ namespace wry {
             
             std::pair<iterator, bool> emplace(const auto& query, auto&&... args) {
                 assert(_head);
-                size_t i = _head->_top.load(std::memory_order_relaxed);
+                size_t i = _head->_top.load(Ordering::RELAXED);
                 assert(i > 0);
                 auto result = _emplace(i - 1, _head->_next + (i - 1), query, std::forward<decltype(args)>(args)...);
                 if (result.second && result.first->_size > i) {
-                    __atomic_fetch_max((size_t*)&(_head->_top), result.first->_size, __ATOMIC_RELAXED);
+                    _head->_top.fetch_max(result.first->_size, Ordering::RELAXED);
                     while (i < result.first->_size) {
                         _link_level(i, _head->_next + i, nullptr, result.first);
                         ++i;
                     }
                 }
-                return {iterator{result.first}, result.second};
+                return { iterator{ result.first }, result.second };
             }
+            
+            // TODO: emplace keeps an existing value.  What do we want for
+            // pairs?
             
         }; // concurrent_skiplist<Key, Compare>
         
         
-        template<typename Key, typename T, typename Compare = std::less<>>
-        struct concurrent_skiplist_map {
+        template<typename Key, typename T, typename Compare = std::less<Key>>
+        struct ConcurrentSkiplistMap {
             
             using P = std::pair<Key, T>;
             
@@ -216,13 +252,13 @@ namespace wry {
                 }
                 
                 bool operator()(auto&& a, auto&& b) const {
-                    return Compare()(key_if_pair(std::forward<decltype(a)>(a)),
-                                     key_if_pair(std::forward<decltype(b)>(b)));
+                    return Compare()(key_if_pair(FORWARD(a)),
+                                     key_if_pair(FORWARD(b)));
                 }
                 
             };
             
-            using S = concurrent_skiplist<P, ComparePair>;
+            using S = ConcurrentSkiplistSet<P, ComparePair>;
             using iterator = S::iterator;
             
             S _set;
@@ -244,16 +280,16 @@ namespace wry {
             }
             
             const T& operator[](auto&& query) const {
-                return _set.emplace(std::forward<decltype(query)>(query)).first->second;
+                return _set.emplace(FORWARD(query)).first->second;
             }
             
             T& operator[](auto&& query) {
-                return _set.emplace(std::forward<decltype(query)>(query)).first->second;
+                return _set.emplace(FORWARD(query)).first->second;
             }
             
         }; // struct concurrent_skiplist_map
         
-    } // namespace _concurrent_skiplist
+    } // namespace concurrent_skiplist
     
 } // namespace wry
 
