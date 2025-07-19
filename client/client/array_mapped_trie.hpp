@@ -134,11 +134,6 @@ namespace wry {
             return (keylike & ((~(uint64_t)63) << shift)) | (uint64_t)shift;
         };
         
-        
-        
-        
-        
-        
         // work out the shift required to bring the 6-aligned block of 6 bits that
         // contains the msb into the least significant 6 bits
         inline int shift_for_keylike_difference(uint64_t keylike_difference) {
@@ -151,8 +146,9 @@ namespace wry {
         }
         
         
-        
-        
+                
+#pragma mark Mutable compressed array tools
+
         uint64_t mask_for_index(int index) {
             assert(0 <= index);
             assert(index < 64);
@@ -182,8 +178,6 @@ namespace wry {
         void bitmap_clear_for_index(uint64_t& bitmap, int index) {
             bitmap &= ~mask_for_index(index);
         }
-
-#pragma mark Mutable compressed array tools
         
         // A compressed array is a bitmap and an array of T that compactly
         // represents std::array<std::optional<T>, 64>
@@ -270,6 +264,7 @@ namespace wry {
         
         
         
+        // TODO: fixme
         
         template<typename T, typename U, typename V, typename F>
         void transform_compressed_arrays(uint64_t b1, uint64_t b2, const T* v1, const U* v2, V* v3, const F& f) {
@@ -282,8 +277,36 @@ namespace wry {
                           (b2 & select) ? v2++ : nullptr);
                 common &= ~select;
             }
-        }        
-
+        }
+        
+        
+        
+        // TODO: Naming
+        //
+        // Immutable and persistent integer map
+        //
+        // Implemented as an array-mapped-trie with a branching factor of 64.
+        //
+        // "Modifying" operations produce a new object that shares much of the
+        // structure of the old map.  Nodes on the path to the modifcation
+        // are cloned-with-modifications.  There are O(log N) such nodes.
+        //
+        // It is possible to bulk-modify the map efficiently by rebuilding up
+        // from the leaf nodes, in parallel.
+        //
+        // Unlike a hash map, this structure is efficient for densely populated
+        // regions of key space.  The key should be chosen, or transformed,
+        // such that the low bits exhibit high entropy.
+        //
+        // For example, to encode a (int32_t, int32_t) coordinate, the bits
+        // should be interleaved in Morton or Z-order.  The integer map then
+        // encodes a quadtree. Spatial regions map to subtrees with a
+        // particular prefix.  Chances of a common prefix can be maximized by
+        // using or offsetting coordinates to be around INT_MAX / 3 = 0101010101...
+        // where the alternating bit pattern stops the carries and borrows
+        // produced by small coordinate differences from propagating all the
+        // way up the prefix.
+        
         template<typename T>
         struct Node : GarbageCollected {
             
@@ -302,7 +325,9 @@ namespace wry {
             
             uint64_t _prefix_and_shift; // 6 bit shift, 64 - (6 * shift) prefix
 #ifndef NDEBUG
-            size_t _capacity; // capacity in items of either _children or values
+            // Capacity in items of either _children or values.  We only need
+            // this value when debugging some array operations.
+            size_t _debug_capacity;
 #endif
             uint64_t _bitmap; // bitmap of which items are present
             union {
@@ -362,7 +387,7 @@ namespace wry {
                 assert(_bitmap);
                 int count = popcount(_bitmap);
                 assert(count > 0);
-                assert(count <= _capacity);
+                assert(count <= _debug_capacity);
                 if (has_children()) {
                     uint64_t prefix_mask = ~(uint64_t)63 << shift;
                     for (int j = 0; j != count; ++j) {
@@ -458,7 +483,7 @@ namespace wry {
                 //printf("AMT scan %p\n", this);
                 int count = popcount(_bitmap);
                 if (get_shift()) {
-                    assert(count == _capacity);
+                    assert(count == _debug_capacity);
                     trace_n(_children, count,p);
                     //for (int j = 0; j != count; ++j) {
                     //    _children[j]->_garbage_collected_trace(p);
@@ -475,7 +500,7 @@ namespace wry {
             
             Node(uint64_t prefix_and_shift, size_t capacity, uint64_t bitmap)
             : _prefix_and_shift(prefix_and_shift)
-            , _capacity(capacity)
+            , _debug_capacity(capacity)
             , _bitmap(bitmap) {
                 assert(capacity >= popcount(bitmap));
             }
@@ -488,7 +513,7 @@ namespace wry {
             }
             
             Node* clone_with_capacity(size_t capacity) const {
-                assert(capacity >= _capacity);
+                assert(capacity >= _debug_capacity);
                 Node* node = make(_prefix_and_shift, capacity, _bitmap);
                 size_t item_size = _prefix_and_shift & (uint64_t)63 ? sizeof(const Node*) : sizeof(T);
                 int count = popcount(_bitmap);
@@ -523,7 +548,7 @@ namespace wry {
                 if (!(select & _bitmap)) {
                     // There is no existing slot, we need to move everything up one
                     int count = popcount(_bitmap);
-                    assert(count < _capacity);
+                    assert(count < _debug_capacity);
                     std::memmove(_children + compressed_index + 1,
                                  _children + compressed_index,
                                  (count - compressed_index) * sizeof(const Node*));
@@ -542,7 +567,7 @@ namespace wry {
                 if (!(select & _bitmap)) {
                     // There is no existing slot, we need to move everything up one
                     int count = popcount(_bitmap);
-                    assert(count < _capacity);
+                    assert(count < _debug_capacity);
                     std::memmove(_values + compressed_index + 1,
                                  _values + compressed_index,
                                  (count - compressed_index) * sizeof(T));
@@ -911,7 +936,7 @@ namespace wry {
                 Node* node = clone_with_capacity(popcount(_bitmap | select));
                 if (shift == 0) {
                     T _ = {};
-                    (void) compressed_array_insert_or_assign_for_index(node->_capacity,
+                    (void) compressed_array_insert_or_assign_for_index(node->_debug_capacity,
                                                                        node->_bitmap,
                                                                        node->_values,
                                                                        index,
@@ -925,7 +950,7 @@ namespace wry {
                         child = make_with_key_value(key, value);
                     }
                     const Node* _ = nullptr;
-                    (void) compressed_array_insert_or_assign_for_index(node->_capacity,
+                    (void) compressed_array_insert_or_assign_for_index(node->_debug_capacity,
                                                                        node->_bitmap,
                                                                        node->_children,
                                                                        index,
