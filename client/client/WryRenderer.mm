@@ -1093,7 +1093,7 @@
     {
 
         auto tnow = world_time(_model->_world);
-        const auto* entities = _model->_world->_entity_for_entity_id;
+        auto&& entities = _model->_world->_entity_for_entity_id;
         
         NSUInteger quad_count = /*entities->data.size()*/ 10 * 4 + 1000 + 2;
         NSUInteger vertex_count = quad_count * 4;
@@ -1303,7 +1303,7 @@
                 {
                     //wry::sim::Value q = _model->_world->_value_for_coordinate.read(wry::sim::Coordinate{i, j});
                     wry::Value q = {};
-                    bool result = _model->_world->_value_for_coordinate->try_get(wry::sim::Coordinate{i, j}.data(), q);
+                    (void) _model->_world->_value_for_coordinate.try_get(wry::sim::Coordinate{i, j}, q);
                     //printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::sim::Coordinate{i, j}.data(), result, q._data);
                     using namespace wry::sim;
                     if (q.is_int64_t()) {

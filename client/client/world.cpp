@@ -29,11 +29,11 @@ namespace wry::sim {
         // each entity constructs a transaction and links it with all of its
         // accessed variables
         
-        printf("World step %lld  with %zd ready\n", _tick, _ready ? _ready->data.size() : 0);
-        _ready->parallel_for_each([this, &context](EntityID entity_id) {
+        printf("World step %lld  with ? ready\n", _tick);
+        _ready.parallel_for_each([this, &context](EntityID entity_id) {
             //printf("EntityID %lld\n", entity_id.data);
             const Entity* a = nullptr;
-            bool b = _entity_for_entity_id->try_get(entity_id.data, a);
+            bool b = _entity_for_entity_id.try_get(entity_id, a);
             assert(b);
             a->notify(&context);
         });
@@ -63,16 +63,22 @@ namespace wry::sim {
         auto new_waiting_for_coordinate = _waiting_for_coordinate;
 
         auto new_value_for_coordinate // = _value_for_coordinate;
-        = _amt0::parallel_rebuild(_value_for_coordinate,
+        = parallel_rebuild(_value_for_coordinate,
                            context._transactions_for_coordinate,
                            [this](const std::pair<const Coordinate, Atomic<const Transaction::Node*>>& kv) -> Value {
             // resolve the transactions associated with this coordinate
             const Transaction::Node* head = kv.second.load(Ordering::ACQUIRE);
             const Transaction::Node* winner = nullptr;
             for (; head; head = head->_next) {
-                if (!winner && (head->resolve() == Transaction::State::COMMITTED)) {
-                    winner = head;
+                if (!winner) {
+                    if (head->resolve() == Transaction::State::COMMITTED) {
+                        winner = head;
+                    }
                 } else {
+                    // We know who gets to write to this coordinate, but
+                    // resolving that did not necessarily resolve all of the
+                    // transactions on this coordinate.  If we don't
+                    // proactively abort them, they might never be resolved.
                     head->abort();
                 }
             }
@@ -83,7 +89,7 @@ namespace wry::sim {
             
             // TODO: change the interface so we can support no-action
             Value v;
-            (void) _value_for_coordinate->try_get(kv.first.data(), v);
+            (void) _value_for_coordinate.try_get(kv.first, v);
             return v;
         });
         

@@ -66,6 +66,10 @@ namespace wry::sim {
         return hash_combine(&x, sizeof(x));
     }
     
+    inline uint64_t persistent_map_index_for_key(Coordinate key) {
+        return key.data();
+    }
+    
     inline void trace(const Coordinate&,void*) {}
     inline void shade(const Coordinate&) {}
     
@@ -94,6 +98,11 @@ namespace wry::sim {
     inline u64 hash(const EntityID& x) {
         return hash_combine(&x, sizeof(x));
     }
+    
+    inline uint64_t persistent_map_index_for_key(EntityID entity_id) {
+        return entity_id.data;
+    }
+
     
     inline void trace(const EntityID&,void*) {}
     inline void shade(const EntityID&) {}

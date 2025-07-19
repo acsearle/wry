@@ -216,6 +216,16 @@ namespace wry {
         operator delete(ptr);
     }
    
+    
+
+    // Trace for <utility> types
+    
+    template<typename A, typename B>
+    void trace(const std::pair<A, B>& p, void* context) {
+        trace(p.first, context);
+        trace(p.second, context);
+    }
+    
 } // namespace wry
 
 #endif /* utility_hpp */

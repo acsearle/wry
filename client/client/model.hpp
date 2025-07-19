@@ -85,21 +85,11 @@ namespace wry {
                         
             auto insert_localized_entity = [&](const LocalizedEntity* entity_ptr) {
                 EntityID entity_id  = entity_ptr->_entity_id;
-                _world->_entity_for_entity_id
-                = (_world->_entity_for_entity_id
-                   ? _world->_entity_for_entity_id->clone_and_insert_or_assign_key_value(entity_id.data,
-                                                                                         entity_ptr)
-                   : PersistentMap<EntityID, const Entity*>::make_with_key_value(entity_id.data, entity_ptr)
-                   );
-                _world->_entity_id_for_coordinate
-                = (_world->_entity_id_for_coordinate ?
-                   _world->_entity_id_for_coordinate->clone_and_insert_or_assign_key_value(entity_ptr->_location.data(),
-                                                                                           
-                                                           new PersistentSet<EntityID>{std::set<EntityID>{entity_id}})
-                   : PersistentMap<Coordinate, const PersistentSet<EntityID>*>::make_with_key_value(entity_ptr->_location.data(),
-                                                                              new PersistentSet<EntityID>{std::set<EntityID>{entity_id}})
-                   );
-                _world->_ready = _world->_ready->clone_and_insert(entity_id);
+                _world->_entity_for_entity_id.set(entity_id,
+                                                  entity_ptr);
+                _world->_entity_id_for_coordinate.set(entity_ptr->_location,
+                                                      PersistentSet<EntityID>{}.set(entity_id));
+                _world->_ready.set(entity_id);
             };
             
             /*
@@ -147,15 +137,10 @@ namespace wry {
             }
 
             //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_integer_with(7));
-            _world->_value_for_coordinate
-            = (_world->_value_for_coordinate
-               ? _world->_value_for_coordinate->clone_and_insert_or_assign_key_value(Coordinate{-2, -2}.data(),
-                                                                                   value_make_integer_with((7)))
-               : PersistentMap<Coordinate, Value>::make_with_key_value(Coordinate{-2, -2}.data(),
-                                                                           value_make_integer_with((7))));
+            _world->_value_for_coordinate.set(Coordinate{-2, -2},
+                                              value_make_integer_with((7)));
             //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_array());
             // _world->_value_for_coordinate.set(Coordinate{-2, -2}, value_make_array());
-
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();
 

@@ -15,7 +15,7 @@ namespace wry::sim {
     }
     
     bool TransactionContext::try_read_value_for_coordinate(Coordinate xy, Value& v) {
-        return this->_world->_value_for_coordinate->try_get(xy.data(), v);
+        return this->_world->_value_for_coordinate.try_get(xy, v);
     }
     
     uint64_t TransactionContext::entity_get_priority(const Entity* entity) {
