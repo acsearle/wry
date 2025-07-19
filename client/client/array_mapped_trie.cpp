@@ -5,6 +5,8 @@
 //  Created by Antony Searle on 12/7/2025.
 //
 
+#include <map>
+
 #include "array_mapped_trie.hpp"
 
 #include "gc.hpp"
@@ -58,6 +60,8 @@ namespace wry::_amt0 {
                 
         mutator_handshake();
                 
+        // stress test
+        /*
         {
             const Node<int>* p = nullptr;
             for (int i = 0; i != 1 << 20; ++i) {
@@ -75,6 +79,49 @@ namespace wry::_amt0 {
                 //shade(q);
             }
         }
+         */
+        {
+            const Node<int>* p = nullptr;
+            std::map<uint64_t, int> m;
+            for (int i = 0; i != 1024; ++i) {
+                uint64_t k = rand() & (64 * 1024 - 1); // We will have some missing and some multiply occipied leaves
+                int v = rand();
+                m.insert_or_assign(k, v);
+                // auto q = Node<int>::make_with_key_value(k, v);
+                // printf("insert_or_assign {%llx, %x}\n", k, v);
+                // p = p ? Node<int>::merge(p, q) : q;
+                p = (p
+                     ? p->clone_and_insert_or_assign_key_value(k, v)
+                     : Node<int>::make_with_key_value(k, v));
+                
+                int u = {};
+                if (!p->try_get(k, u)) {
+                    printf("expected to find {%llx, %x}\n", k, v);
+                    abort();
+                }
+                if (u != v) {
+                    printf("expected to find {%llx, %x}, found {%llx, %x}\n", k, v, k, u);
+                    abort();
+                }
+                mutator_handshake();
+                shade(p);
+            }
+            for (uint64_t k = 0; k != 65536; ++k) {
+                if (m.count(k)) {
+                    int v = {};
+                    bool result = p->try_get(k, v);
+                    assert(result);
+                    assert(v == m[k]);
+                } else {
+                    int v = {};
+                    assert(!p->try_get(k, v));
+                }
+                mutator_handshake();
+                shade(p);
+            }
+            
+        }
+        
          
         mutator_resign();
     };

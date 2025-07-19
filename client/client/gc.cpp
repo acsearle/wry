@@ -30,15 +30,19 @@
 
 
 namespace wry {
-
-    // TODO: statistics
     
-    static constinit Atomic<ptrdiff_t> total_deleted;
-
-    // Global and thread_local scope variables
+#pragma mark - Forward declarations
     
     struct Session;
-    
+
+#pragma mark - Global and thread_local variables
+
+    // Globals are unfashionable but passing a context pointer to every
+    // function is worse.  Think of the thread local storage register as an
+    // implicit monadic argument if you wish.
+    //
+    // They are constinit to avoid the static initialization order fiasco
+        
     constinit static Atomic<Session*> _global_new_sessions;
     constinit static Atomic<Color> _global_atomic_color_for_allocation;
     
@@ -46,11 +50,13 @@ namespace wry {
     constinit thread_local Color _thread_local_color_did_shade;
     constinit thread_local Session* _thread_local_session;
     constinit thread_local Bag<const GarbageCollected*> _thread_local_new_objects;
+    // TODO: Bag destructor at thread exit?  Should be empty when there is no
+    // Session in progress.
     
     Color get_global_color_for_allocation() {
         return _global_atomic_color_for_allocation.load(Ordering::RELAXED);
     }
-    
+
     inline Color get_thread_local_color_for_allocation() {
         return _thread_local_color_for_allocation;
     }
@@ -58,9 +64,17 @@ namespace wry {
     inline Color get_thread_local_color_for_shade() {
         return _thread_local_color_for_allocation & LOW_MASK;
     }
+    
+    // TODO: statistics
+    //
+    // thread_local pointer, to a heap allocated struct of counters, that is
+    // itself part of a global intrusive linked list?
+    static constinit Atomic<ptrdiff_t> total_deleted;
 
+    
+    
     // A session exists between a thread becoming a mutator, multiple handshakes,
-    // and resiging mutator status
+    // and resiging mutator status.  Name it Mutator?
     
     struct Session {
         
@@ -127,6 +141,10 @@ namespace wry {
                 case Tag::MUTATOR_SHOULD_PUBLISH:
                     [[fallthrough]];
                 case Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY: {
+                    // The collector needs us to publish what we have and
+                    // refresh our color_for_allocation.  It may not have
+                    // consumed our last report, so we always respect the
+                    // pointer and maintain the chain
                     auto desired = TaggedPtr<Node, Tag>{
                         new Node{
                             expected.ptr,
@@ -142,7 +160,7 @@ namespace wry {
                 } break;
                     
                 case Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE: {
-                    // We should not be handshaking after we have marked_done
+                    // We should not be handshaking after we have called release
                     abort();
                 }
                     
@@ -174,7 +192,7 @@ namespace wry {
                         break;
                         
                     case Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
-                        // Already released
+                        // We should not call release twice
                     default:
                         abort();
                         
@@ -188,9 +206,7 @@ namespace wry {
                     
                     if (expected.tag == Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY)
                         _atomic_tagged_head.notify_one();
-                    
-                    std::exchange(_thread_local_session, nullptr)->release();
-                    
+                                        
                     return;
                 }
                 
@@ -322,13 +338,15 @@ namespace wry {
                     size_t number_of_new_objects = 0;
                     size_t number_of_resignations = 0;
                     Color did_shade = 0;
+                    
+                    // TODO: keep the Sessions in a linked list?
+                    // Delete them on the fly?
                     for (auto& u : _known_mutator_interfaces) {
                         auto& v = u->collector_state;
                         printf("C0: try_pop \"%s\"\n", u->_name.c_str());
                         TaggedPtr<Session::Node, Session::Tag> expected = {};
-                    ALPHA:
                         expected = u->_atomic_tagged_head.load(Ordering::RELAXED);
-                    BETA:
+                    SWITCH_ON_EXPECTED_TAG:
                         switch (expected.tag) {
                             case Session::Tag::COLLECTOR_SHOULD_CONSUME:
                             case Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
@@ -349,38 +367,36 @@ namespace wry {
                                                                                  Ordering::RELAXED)) {
                                     expected = desired;
                                 } else {
-                                    goto BETA;
+                                    goto SWITCH_ON_EXPECTED_TAG;
                                 }
                             } [[fallthrough]];
                             case Session::Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
                                 // TODO: timeout ?
                                 u->_atomic_tagged_head.wait(expected, Ordering::RELAXED);
-                                goto BETA;
+                                goto SWITCH_ON_EXPECTED_TAG;
                         } // switch (expected.tag)
-                        {
-                            Session::Node* node = expected.ptr;
-                            while (node) {
-                                did_shade |= node->color_did_shade;
-                                v.is_done = v.is_done || (expected.tag == Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE);
-                                number_of_new_objects += node->allocations.debug_size();
-                                _known_objects.splice(std::move(node->allocations));
-                                delete std::exchange(node, node->_next);
-                            }
+                        Session::Node* node = expected.ptr;
+                        while (node) {
+                            did_shade |= node->color_did_shade;
+                            v.is_done = v.is_done || (expected.tag == Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE);
+                            number_of_new_objects += node->allocations.debug_size();
+                            _known_objects.splice(std::move(node->allocations));
+                            delete std::exchange(node, node->_next);
                         }
                         if (v.is_done) {
                             ++number_of_resignations;
                         }
                     }
+                    // We only care about the combined shading history of all
+                    // threads in the era
                     _shade_history.push_front(did_shade);
                     
                     printf("C0: ack %zd resignations\n", number_of_resignations);
                     printf("C0: ack %zd new objects\n", number_of_new_objects);
                 }
                 
-#pragma mark Combine thread reports
-                
-                // Have all mutators acknowledged that a bit was set or cleared?
-                
+#pragma mark Process resignations from mutator status
+                                
                 std::erase_if(_known_mutator_interfaces, [](Session* x) -> bool {
                     bool is_done = x->collector_state.is_done;
                     if (is_done) {
@@ -389,15 +405,7 @@ namespace wry {
                     }
                     return is_done;
                 });
-                
-                // Do we know that no mutators shaded a given bit during a given
-                // sweep?
-                
-                // The logic required for this is likely much more concise than
-                // what we use here.
-                
-                // TODO: color_is_stable (color_is_final?)
-                
+                                
 #pragma mark Compute new state
                 
                 //Color old_color_for_allocation = _color_for_allocation;
@@ -700,6 +708,7 @@ namespace wry {
     
     void mutator_resign() {
         _thread_local_session->resign();
+        std::exchange(_thread_local_session, nullptr)->release();
     }
     
     void collector_acknowledge_child(void* tracer, const GarbageCollected* child) {

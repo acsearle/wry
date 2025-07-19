@@ -32,7 +32,7 @@ namespace wry {
                 delete exchange(head, head->next);
             }
             printf("[all] : pass\n");
-            std::quick_exit(EXIT_SUCCESS);
+            // std::quick_exit(EXIT_SUCCESS);
         }
         
     } // namespace detail

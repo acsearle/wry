@@ -20,7 +20,7 @@ namespace wry::sim {
     
     uint64_t TransactionContext::entity_get_priority(const Entity* entity) {
         uint64_t priority = entity->_entity_id.data ^ this->_world->_tick;
-        printf("looked up priority %llu\n", priority);
+        // printf("looked up priority %llu\n", priority);
         return priority;
     }
     
@@ -80,8 +80,8 @@ namespace wry::sim {
     Transaction::State Transaction::abort() const {
         State prior = _state.exchange(State::ABORTED, Ordering::RELAXED);
         assert(prior != State::COMMITTED);
-        if (prior != State::ABORTED)
-            printf("ABORTED transaction for EntityID %llu\n", _entity->_entity_id.data);
+        //if (prior != State::ABORTED)
+          //  printf("ABORTED transaction for EntityID %llu\n", _entity->_entity_id.data);
         // if (prior == State::ABORTED)
             // printf("    Redundant ABORT for EntityID %llu\n", _entity->_entity_id.data);
         return ABORTED;
@@ -90,8 +90,8 @@ namespace wry::sim {
     Transaction::State Transaction::commit() const {
         State prior = _state.exchange(State::COMMITTED, Ordering::RELAXED);
         assert(prior != State::ABORTED);
-        if (prior != State::COMMITTED)
-            printf("COMMITTED transaction for EntityID %llu\n", _entity->_entity_id.data);
+        //if (prior != State::COMMITTED)
+          //  printf("COMMITTED transaction for EntityID %llu\n", _entity->_entity_id.data);
         // if (prior == State::COMMITTED)
             // printf("    Redundant COMMIT for EntityID %llu\n", _entity->_entity_id.data);
         return COMMITTED;
