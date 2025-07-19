@@ -33,7 +33,7 @@ namespace wry::sim {
         _ready->parallel_for_each([this, &context](EntityID entity_id) {
             //printf("EntityID %lld\n", entity_id.data);
             const Entity* a = nullptr;
-            bool b = _entity_for_entity_id->try_get(entity_id, a);
+            bool b = _entity_for_entity_id->try_get(entity_id.data, a);
             assert(b);
             a->notify(&context);
         });
@@ -63,7 +63,7 @@ namespace wry::sim {
         auto new_waiting_for_coordinate = _waiting_for_coordinate;
 
         auto new_value_for_coordinate // = _value_for_coordinate;
-        = parallel_rebuild(_value_for_coordinate,
+        = _amt0::parallel_rebuild(_value_for_coordinate,
                            context._transactions_for_coordinate,
                            [this](const std::pair<const Coordinate, Atomic<const Transaction::Node*>>& kv) -> Value {
             // resolve the transactions associated with this coordinate
@@ -78,8 +78,12 @@ namespace wry::sim {
             }
             if (winner)
                 return winner->_desired;
+            // If there was no winner, all transactions on this location got
+            // aborted by conflicts at other locations
+            
+            // TODO: change the interface so we can support no-action
             Value v;
-            _value_for_coordinate->try_get(kv.first, v);
+            (void) _value_for_coordinate->try_get(kv.first.data(), v);
             return v;
         });
         

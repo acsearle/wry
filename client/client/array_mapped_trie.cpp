@@ -83,7 +83,7 @@ namespace wry::_amt0 {
         {
             const Node<int>* p = nullptr;
             std::map<uint64_t, int> m;
-            for (int i = 0; i != 1024; ++i) {
+            for (int i = 0; i != 65536; ++i) {
                 uint64_t k = rand() & (64 * 1024 - 1); // We will have some missing and some multiply occipied leaves
                 int v = rand();
                 m.insert_or_assign(k, v);

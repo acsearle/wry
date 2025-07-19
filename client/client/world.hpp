@@ -24,6 +24,8 @@
 #include "persistent_set.hpp"
 #include "persistent_map.hpp"
 
+#include "array_mapped_trie.hpp"
+
 
 namespace wry::sim {
     
@@ -107,12 +109,12 @@ namespace wry::sim {
         World()
         : _tick{0}
         , _ready{new PersistentSet<EntityID>}
-        , _entity_for_entity_id{ new PersistentMap<EntityID, const Entity*> }
-        , _value_for_coordinate{ new PersistentMap<Coordinate, Value> }
-        , _entity_id_for_coordinate{ new PersistentMap<Coordinate, const PersistentSet<EntityID>*> }
-        , _waiting_for_time{ new PersistentMap<Time, const PersistentSet<EntityID>*> }
-        , _waiting_for_entity_id{ new PersistentMap<EntityID, const PersistentSet<EntityID>*> }
-        , _waiting_for_coordinate{ new PersistentMap<Coordinate, const PersistentSet<EntityID>*> }
+        , _entity_for_entity_id{ nullptr }
+        , _value_for_coordinate{ nullptr }
+        , _entity_id_for_coordinate{ nullptr }
+        , _waiting_for_time{ nullptr }
+        , _waiting_for_entity_id{ nullptr }
+        , _waiting_for_coordinate{ nullptr }
         {
         }
         

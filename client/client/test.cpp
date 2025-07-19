@@ -5,6 +5,8 @@
 //  Created by Antony Searle on 25/7/2023.
 //
 
+#include <mach/mach_time.h>
+
 #include "utility.hpp"
 #include "test.hpp"
 
@@ -28,7 +30,15 @@ namespace wry {
                 std::swap(head, p);
             }
             while (head) {
-                head->run();
+                uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+                bool pass = false;
+                try {
+                    head->run();
+                    pass = true;
+                } catch (...) {
+                }
+                uint64_t t1 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+                head->print_metadata(pass ? ": pass" : " fail", (t1 - t0) * 1e-9);
                 delete exchange(head, head->next);
             }
             printf("[all] : pass\n");

@@ -54,6 +54,12 @@ namespace wry::sim {
         constexpr bool operator==(const Coordinate&) const = default;
         constexpr auto operator<=>(const Coordinate&) const = default;
         
+        uint64_t data() const {
+            uint64_t a = {};
+            std::memcpy(&a, &x, 8);
+            return a;
+        }
+        
     }; // struct Coordinate
     
     inline u64 hash(const Coordinate& x) {

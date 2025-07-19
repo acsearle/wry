@@ -206,7 +206,7 @@ namespace wry {
         
     };
     
-    using _persistent_map::PersistentMap;
+    // using _persistent_map::PersistentMap;
     using _persistent_map::StableConcurrentMap;
 
 }

@@ -26,7 +26,7 @@ namespace wry {
                 : _metadata(std::move(metadata)) {}
                 virtual ~base() = default;
                 virtual void run() = 0;
-                void print_metadata(const char* suffix) {
+                void print_metadata(const char* suffix, double tau) {
                     printf("[");
                     if (!_metadata.empty()) for (size_t i = 0;;) {
                         printf("%s", _metadata[i]);
@@ -34,7 +34,7 @@ namespace wry {
                             break;
                         printf(",");
                     }
-                    printf("] %s", suffix);
+                    printf("] %s (%g seconds)\n", suffix, tau);
                 }
             };
             
@@ -46,12 +46,7 @@ namespace wry {
                 , _x(std::forward<Y>(y)) {}
                 virtual ~derived() override = default;
                 virtual void run() override {
-                    try {
-                        _x();
-                        print_metadata(": pass\n");
-                    } catch (...) {
-                        print_metadata(": fail\n");
-                    }
+                    _x();
                 }
             };
             
