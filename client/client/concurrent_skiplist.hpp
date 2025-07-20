@@ -1,12 +1,12 @@
 //
-//  ConcurrentSkiplist.hpp
+//  concurrent_skiplist.hpp
 //  client
 //
 //  Created by Antony Searle on 23/11/2024.
 //
 
-#ifndef ConcurrentSkiplist_hpp
-#define ConcurrentSkiplist_hpp
+#ifndef concurrent_skiplist_hpp
+#define concurrent_skiplist_hpp
 
 
 #include <cassert>
@@ -18,9 +18,7 @@
 #include "utility.hpp"
 
 namespace wry {
-    
-    // TODO: merge with AAA skiplist
-    
+        
     namespace concurrent_skiplist {
         
         inline constinit thread_local std::ranlux24* thread_local_random_number_generator = nullptr;
@@ -41,7 +39,7 @@ namespace wry {
                 }
                 
                 explicit Node(size_t n, auto&&... args)
-                : _key(std::forward<decltype(args)>(args)...)
+                : _key(FORWARD(args)...)
                 , _size(n) {
                 }
                 
@@ -192,25 +190,25 @@ namespace wry {
                 goto beta;
             }
             
-            static std::pair<Node*, bool> _emplace(size_t i, Atomic<Node*>* left, const auto& query, auto&&... args) {
+            static std::pair<Node*, bool> _try_emplace(size_t i, Atomic<Node*>* left, auto&& keylike, auto&&... args) {
             alpha:
                 Node* candidate = left->load(Ordering::ACQUIRE);
-                if (!candidate || Compare()(query, candidate->_key))
+                if (!candidate || Compare()(keylike, candidate->_key))
                     goto beta;
-                if (!(Compare()(candidate->_key, query)))
+                if (!(Compare()(candidate->_key, keylike)))
                     return std::pair(candidate, false);
                 left = candidate->_next + i;
                 goto alpha;
             beta:
-                assert(!candidate || Compare()(query, candidate->_key));
+                assert(!candidate || Compare()(keylike, candidate->_key));
                 if (i == 0) {
-                    Node* p = Node::with_random_size_emplace(query, FORWARD(args)...);
+                    Node* p = Node::with_random_size_emplace(FORWARD(keylike), FORWARD(args)...);
                     auto result = _link_level(0, left, candidate, p);
                     if (!result.second)
                         free(p);
                     return result;
                 } else {
-                    auto result = _emplace(i - 1, left - 1, query, std::forward<decltype(args)>(args)...);
+                    auto result = _try_emplace(i - 1, left - 1, FORWARD(keylike), FORWARD(args)...);
                     if (result.second && (i < result.first->_size)) {
                         result = _link_level(i, left, candidate, result.first);
                         assert(result.second);
@@ -219,11 +217,11 @@ namespace wry {
                 }
             }
             
-            std::pair<iterator, bool> emplace(const auto& query, auto&&... args) {
+            std::pair<iterator, bool> try_emplace(auto&& keylike, auto&&... args) {
                 assert(_head);
                 size_t i = _head->_top.load(Ordering::RELAXED);
                 assert(i > 0);
-                auto result = _emplace(i - 1, _head->_next + (i - 1), query, std::forward<decltype(args)>(args)...);
+                auto result = _try_emplace(i - 1, _head->_next + (i - 1), FORWARD(keylike), FORWARD(args)...);
                 if (result.second && result.first->_size > i) {
                     _head->_top.fetch_max(result.first->_size, Ordering::RELAXED);
                     while (i < result.first->_size) {
@@ -247,11 +245,11 @@ namespace wry {
             
             struct ComparePair {
                 
-                static decltype(auto) key_if_pair(auto&& query) {
-                    if constexpr (std::is_same_v<std::decay_t<decltype(query)>, P>) {
-                        return forward_like<decltype(query)>(query.first);
+                static decltype(auto) key_if_pair(auto&& keylike) {
+                    if constexpr (std::is_same_v<std::decay_t<decltype(keylike)>, P>) {
+                        return forward_like<decltype(keylike)>(keylike.first);
                     } else {
-                        return std::forward<decltype(query)>(query);
+                        return FORWARD(keylike);
                     }
                 }
                 
@@ -275,21 +273,23 @@ namespace wry {
                 return _set.end();
             }
             
-            iterator find(auto&& query) const {
-                return _set.find(std::forward<decltype(query)>(query));
+            iterator find(auto&& keylike) const {
+                return _set.find(FORWARD(keylike));
             }
             
-            std::pair<iterator, bool> emplace(auto&&... args) {
-                return _set.emplace(std::forward<decltype(args)>(args)...);
+            std::pair<iterator, bool> try_emplace(auto&& keylike, auto&&... args) {
+                return _set.try_emplace(FORWARD(keylike), FORWARD(args)...);
             }
             
-            const T& operator[](auto&& query) const {
-                return _set.emplace(FORWARD(query)).first->second;
+            /*
+            const T& operator[](auto&& keylike) const {
+                return _set.try_emplace(FORWARD(keylike), T{}).first->second;
             }
             
-            T& operator[](auto&& query) {
-                return _set.emplace(FORWARD(query)).first->second;
+            T& operator[](auto&& keylike) {
+                return _set.try_emplace(FORWARD(keylike), T{}).first->second;
             }
+             */
             
         }; // struct concurrent_skiplist_map
         
@@ -299,4 +299,4 @@ namespace wry {
 
 
 
-#endif /* ConcurrentSkiplist_hpp */
+#endif /* concurrent_skiplist_hpp */

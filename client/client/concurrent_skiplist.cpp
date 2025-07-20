@@ -1,5 +1,5 @@
 //
-//  ConcurrentSkiplist.cpp
+//  concurrent_skiplist.cpp
 //  client
 //
 //  Created by Antony Searle on 23/11/2024.
@@ -9,7 +9,7 @@
 #include <set>
 
 #include "gc.hpp"
-#include "ConcurrentSkiplist.hpp"
+#include "concurrent_skiplist.hpp"
 
 #include "test.hpp"
 
@@ -28,7 +28,7 @@ namespace wry::concurrent_skiplist {
             int N = 1 << 7;
             for (int i = 0; i != N; ++i) {
                 int j = rand() & (N - 1);
-                a.emplace(j);
+                a.try_emplace(j);
                 b.emplace(j);
                 for (int k = 0; k != N; ++k) {
                     auto c = a.find(k);
@@ -53,8 +53,8 @@ namespace wry::concurrent_skiplist {
             for (int i = 0; i != N; ++i) {
                 int j = rand() & (N - 1);
                 int v = rand() & (N - 1);
-                a.emplace(j, v);
-                b.emplace(j, v);
+                a.try_emplace(j, v);
+                b.try_emplace(j, v);
                 for (int k = 0; k != N; ++k) {
                     auto c = a.find(k);
                     auto d = b.find(k);

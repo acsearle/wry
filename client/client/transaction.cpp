@@ -46,20 +46,21 @@ namespace wry::sim {
         Transaction::Node* node = _nodes + _size++;
         node->_parent = this;
         node->_desired = v;
-        auto [iterator, flag] = _context->_transactions_for_coordinate.emplace(xy, nullptr);
+        node->_next = nullptr;
+        // Race to create the atomic with our desired value
+        auto [iterator, flag] = _context->_transactions_for_coordinate.try_emplace(xy, node);
+        // We always get back its address
         Atomic<const Transaction::Node*>& head = iterator->second;
         node->_head = &head;
-        node->_next = head.load(Ordering::ACQUIRE);
-        while (!head.compare_exchange_weak(node->_next,
-                                           node,
-                                           Ordering::RELEASE, Ordering::ACQUIRE))
-            ;
-
-        
-        
-        
-        
-                                                            
+        if (!flag) {
+            // If we lost the race to construct the atomic, we need to atomically
+            // insert our node
+            node->_next = head.load(Ordering::ACQUIRE);
+            while (!head.compare_exchange_weak(node->_next,
+                                               node,
+                                               Ordering::RELEASE, Ordering::ACQUIRE))
+                ;
+        }
     }
     
 

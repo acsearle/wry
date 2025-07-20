@@ -73,7 +73,7 @@ namespace wry {
         T value;
         
         constexpr Atomic() : value{} {}
-        explicit constexpr Atomic(T desired) : value(desired) {}
+        explicit constexpr Atomic(T desired) : value{desired} {}
         Atomic(const Atomic&) = delete;
         Atomic& operator=(const Atomic&) = delete;
         
