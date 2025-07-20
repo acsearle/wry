@@ -8,13 +8,21 @@
 #ifndef concurrent_map_hpp
 #define concurrent_map_hpp
 
+/*
 #include <map>
 #include <mutex>
 
 #include "utility.hpp"
+ */
+
+#include "ConcurrentSkiplist.hpp"
 
 namespace wry {
     
+    template<typename Key, typename T>
+    using ConcurrentMap = concurrent_skiplist::ConcurrentSkiplistMap<Key, T>;
+    
+    /*
     template<typename Key, typename T>
     struct StableConcurrentMap {
         std::mutex _mutex;
@@ -37,6 +45,7 @@ namespace wry {
         }
         
     };
+     */
     
 }
 #endif /* concurrent_map_hpp */

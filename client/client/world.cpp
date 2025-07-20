@@ -65,7 +65,7 @@ namespace wry::sim {
         auto new_value_for_coordinate // = _value_for_coordinate;
         = parallel_rebuild(_value_for_coordinate,
                            context._transactions_for_coordinate,
-                           [this](const std::pair<const Coordinate, Atomic<const Transaction::Node*>>& kv) -> Value {
+                           [this](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv) -> Value {
             // resolve the transactions associated with this coordinate
             const Transaction::Node* head = kv.second.load(Ordering::ACQUIRE);
             const Transaction::Node* winner = nullptr;

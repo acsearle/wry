@@ -23,7 +23,7 @@ namespace wry {
     
     namespace concurrent_skiplist {
         
-        constinit thread_local std::ranlux24* thread_local_random_number_generator = nullptr;
+        inline constinit thread_local std::ranlux24* thread_local_random_number_generator = nullptr;
         
         template<typename Key, typename Compare = std::less<Key>>
         struct ConcurrentSkiplistSet {
@@ -55,6 +55,10 @@ namespace wry {
                 // TODO: tune shape of distribution
                 // Quick experiment indicates a n^{-0.5} is better than n^{-0.25}
                 static Node* with_random_size_emplace(auto&&... args) {
+                    // TODO: initialize this on thread
+                    if (!thread_local_random_number_generator) {
+                        thread_local_random_number_generator = new std::ranlux24;
+                    }
                     size_t n = 1 + __builtin_ctz((*thread_local_random_number_generator)());
                     Node* a = with_size_emplace(n, std::forward<decltype(args)>(args)...);
                     return a;
@@ -99,16 +103,16 @@ namespace wry {
                 // we can iterate across a live sequence but obviously that won't
                 // be authoritative
                 
-                const Node* current;
+                Node* current;
                 
                 bool operator==(const iterator&) const = default;
                 
-                const Key& operator*() const {
+                Key& operator*() const {
                     assert(current);
                     return current->_key;
                 }
                 
-                const Key* operator->() const {
+                Key* operator->() const {
                     assert(current);
                     return &(current->_key);
                 }
@@ -154,7 +158,7 @@ namespace wry {
                 size_t i = _head->_top.load(Ordering::RELAXED) - 1;
                 Atomic<Node*>* left = _head->_next + i;
                 for (;;) {
-                    const Node* candidate = left->load(Ordering::ACQUIRE);
+                    Node* candidate = left->load(Ordering::ACQUIRE);
                     if (!candidate || Compare()(query, candidate->_key)) {
                         if (i == 0)
                             return iterator{nullptr};
@@ -171,7 +175,7 @@ namespace wry {
             static std::pair<Node*, bool> _link_level(size_t i, Atomic<Node*>* left, Node* expected, Node* desired) {
             alpha:
                 assert(left && desired);
-                assert(!expected || (desired->_key < expected->_key));
+                assert(!expected || (Compare()(desired->_key, expected->_key)));
                 desired->_next[i].store(expected, Ordering::RELEASE);
                 if (left->compare_exchange_strong(expected,
                                                   desired,

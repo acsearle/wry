@@ -8,6 +8,7 @@
 #ifndef transaction_hpp
 #define transaction_hpp
 
+#include "concurrent_map.hpp"
 #include "atomic.hpp"
 #include "entity.hpp"
 #include "garbage_collected.hpp"
@@ -165,9 +166,9 @@ namespace wry::sim {
     struct TransactionContext {
         
         const World* _world = nullptr;
-        StableConcurrentMap<EntityID, Atomic<const Transaction::Node*>> _transactions_for_entity;
-        StableConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_for_coordinate;
-        StableConcurrentMap<Time, Atomic<const Transaction::Node*>> _transactions_for_time;
+        ConcurrentMap<EntityID, Atomic<const Transaction::Node*>> _transactions_for_entity;
+        ConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_for_coordinate;
+        ConcurrentMap<Time, Atomic<const Transaction::Node*>> _transactions_for_time;
 
         uint64_t entity_get_priority(const Entity*);
         

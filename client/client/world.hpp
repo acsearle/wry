@@ -330,9 +330,6 @@ namespace wry::sim {
 
 namespace wry::sim {
         
-    struct ConcurrentMap {
-    };
-    
     struct WorkBag {
     };
     

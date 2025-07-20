@@ -78,7 +78,7 @@ namespace wry {
     
     template<typename Key, typename T, typename U, typename F>
     PersistentMap<Key, T> parallel_rebuild(const PersistentMap<Key, T>& source,
-                                           const StableConcurrentMap<Key, U>& modifier,
+                                           const ConcurrentMap<Key, U>& modifier,
                                            F&& action) {
         // Simple single-threaded implementation
         
@@ -88,8 +88,8 @@ namespace wry {
         PersistentMap<Key, T> result{source};
         // SAFETY: We can use the map unlocked here because it is immutable in
         // this phase
-        auto first = modifier._map.begin();
-        auto last = modifier._map.end();
+        auto first = modifier.begin();
+        auto last = modifier.end();
         for (; first != last; ++first)
             result.set(first->first, action(*first));
         return result;

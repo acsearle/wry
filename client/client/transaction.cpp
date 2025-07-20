@@ -30,6 +30,7 @@ namespace wry::sim {
     }
     
     void Transaction::write_value_for_coordinate(Coordinate xy, Value v) {
+        /*
         this->_context->_transactions_for_coordinate.access([&] (auto& m) {
             auto q = _nodes + _size++;
             q->_parent = this;
@@ -40,7 +41,25 @@ namespace wry::sim {
             while (!p->compare_exchange_weak(q->_next, q, Ordering::RELEASE, Ordering::ACQUIRE))
                 ;
         }
-                                                            );
+         );
+         */
+        Transaction::Node* node = _nodes + _size++;
+        node->_parent = this;
+        node->_desired = v;
+        auto [iterator, flag] = _context->_transactions_for_coordinate.emplace(xy, nullptr);
+        Atomic<const Transaction::Node*>& head = iterator->second;
+        node->_head = &head;
+        node->_next = head.load(Ordering::ACQUIRE);
+        while (!head.compare_exchange_weak(node->_next,
+                                           node,
+                                           Ordering::RELEASE, Ordering::ACQUIRE))
+            ;
+
+        
+        
+        
+        
+                                                            
     }
     
 
