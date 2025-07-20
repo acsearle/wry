@@ -10,10 +10,6 @@
 
 namespace wry::sim {
     
-    uint64_t Transaction::Node::priority() const {
-        return _parent->_context->entity_get_priority(_parent->_entity);
-    }
-    
     bool TransactionContext::try_read_value_for_coordinate(Coordinate xy, Value& v) {
         return this->_world->_value_for_coordinate.try_get(xy, v);
     }
@@ -22,6 +18,15 @@ namespace wry::sim {
         uint64_t priority = entity->_entity_id.data ^ this->_world->_tick;
         // printf("looked up priority %llu\n", priority);
         return priority;
+    }
+
+    
+    uint64_t Transaction::Node::priority() const {
+        return _parent->_context->entity_get_priority(_parent->_entity);
+    }
+    
+    bool Transaction::try_read_value_for_coordinate(Coordinate xy, Value& victim) const {
+        return _context->try_read_value_for_coordinate(xy, victim);
     }
     
     void Transaction::write_value_for_coordinate(Coordinate xy, Value v) {

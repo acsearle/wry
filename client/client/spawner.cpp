@@ -15,16 +15,16 @@ namespace wry::sim {
     void Source::notify(TransactionContext* context) const {
         printf("%s\n", __PRETTY_FUNCTION__);
         Transaction* tx = Transaction::make(context, this, 2);
-        Value x = tx->read_value_for_coordinate(this->_location);
-        if (x.is_Empty())
+        Value _ = {};
+        if (!tx->try_read_value_for_coordinate(this->_location, _))
             tx->write_value_for_coordinate(this->_location, this->_of_this);
         tx->wait_on_value_for_coordinate(this->_location);
     }
     
     void Sink::notify(TransactionContext* context) const {
         Transaction* tx = Transaction::make(context, this, 2);
-        Value x = tx->read_value_for_coordinate(this->_location);
-        if (!x.is_Empty())
+        Value x = {};
+        if (tx->try_read_value_for_coordinate(this->_location, x))
             tx->write_value_for_coordinate(this->_location, value_make_empty());
         tx->wait_on_value_for_coordinate(this->_location);
     }
@@ -57,7 +57,7 @@ namespace wry::sim {
     void Counter::notify(TransactionContext* context) const {
         Transaction* transaction = Transaction::make(context, this, 10);
         Value x = value_make_zero();
-        context->try_read_value_for_coordinate(this->_location, x);
+        transaction->try_read_value_for_coordinate(this->_location, x);
         printf("Counter reads %lld\n", x.as_int64_t());
         x = value_make_integer_with(x.as_int64_t() + 1);
         transaction->write_value_for_coordinate(this->_location, x);

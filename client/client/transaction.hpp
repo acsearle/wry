@@ -137,9 +137,9 @@ namespace wry::sim {
             return new(count) Transaction(context, entity, count);
         }
         
-        const Entity* read_entity_for_entity_id(EntityID);
+        const Entity* read_entity_for_entity_id(EntityID);        
         
-        Value read_value_for_coordinate(Coordinate) { return {}; }
+        bool try_read_value_for_coordinate(Coordinate xy, Value& victim) const;
         EntityID read_entity_id_for_coordinate(Coordinate) { return {}; }
 
         void write_entity_for_entity_id(EntityID, const Entity*) {}
