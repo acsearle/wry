@@ -29,40 +29,84 @@ namespace wry::sim {
         return _context->try_read_value_for_coordinate(xy, victim);
     }
     
-    void Transaction::write_value_for_coordinate(Coordinate xy, Value v) {
-        /*
-        this->_context->_transactions_for_coordinate.access([&] (auto& m) {
-            auto q = _nodes + _size++;
-            q->_parent = this;
-            q->_desired = v;
-            auto* p = &(m.try_emplace(xy, nullptr).first->second);
-            q->_head = p;
-            q->_next = p->load(Ordering::ACQUIRE);
-            while (!p->compare_exchange_weak(q->_next, q, Ordering::RELEASE, Ordering::ACQUIRE))
-                ;
-        }
-         );
-         */
-        Transaction::Node* node = _nodes + _size++;
-        node->_parent = this;
-        node->_desired = v;
+    template<typename Key, typename T>
+    void transaction_write_value_for_generic(Transaction* self,
+                                             ConcurrentMap<Key, Atomic<const Transaction::Node*>>* map,
+                                             Key key,
+                                             T desired) {
+        Transaction::Node* node = self->_nodes + (self->_size)++;
+        node->_parent = self;
+        std::memcpy(&(node->_desired), &desired, 8);
+        node->_condition = Transaction::ON_COMMIT; // Unused for exclusive writes
         node->_next = nullptr;
-        // Race to create the atomic with our desired value
-        auto [iterator, flag] = _context->_transactions_for_coordinate.try_emplace(xy, node);
+        // Race to initialize the atomic linked list with our desired value
+        auto [iterator, flag] = map->try_emplace(key, node);
         // We always get back its address
         Atomic<const Transaction::Node*>& head = iterator->second;
         node->_head = &head;
         if (!flag) {
             // If we lost the race to construct the atomic, we need to atomically
             // insert our node
-            node->_next = head.load(Ordering::ACQUIRE);
+
+            // ORDER: We don't need to ACQUIRE or even RELEASE here because we
+            // don't follow any pointers until after the thread barrier that
+            // separates setting up all transactions from resolving all transactions
+            node->_next = head.load(Ordering::RELAXED);
             while (!head.compare_exchange_weak(node->_next,
                                                node,
-                                               Ordering::RELEASE, Ordering::ACQUIRE))
+                                               Ordering::RELAXED,
+                                               Ordering::RELAXED))
                 ;
         }
     }
     
+    void Transaction::wait_on_value_for_coordinate(Coordinate key,
+                                                   Transaction::Condition condition) {
+        Transaction::Node* node = _nodes + (_size)++;
+        node->_parent = this;
+        std::memcpy(&(node->_desired), &(_entity->_entity_id), 8);
+        node->_condition = condition;
+        node->_next = nullptr;
+        // Race to initialize the atomic linked list with our desired value
+        auto [iterator, flag] = _context->_transactions_on_wait_on_value_for_coordinate.try_emplace(key, node);
+        // We always get back its address
+        Atomic<const Transaction::Node*>& head = iterator->second;
+        node->_head = nullptr; // We don't set the head for non-exclusive targets
+        if (!flag) {
+            // If we lost the race to construct the atomic, we need to atomically
+            // insert our node
+            
+            // ORDER: We don't need to ACQUIRE or even RELEASE here because we
+            // don't follow any pointers until after the thread barrier that
+            // separates setting up all transactions from resolving all transactions
+            node->_next = head.load(Ordering::RELAXED);
+            while (!head.compare_exchange_weak(node->_next,
+                                               node,
+                                               Ordering::RELAXED,
+                                               Ordering::RELAXED))
+                ;
+        }
+
+
+    }
+
+    
+    void Transaction::write_value_for_coordinate(Coordinate key, Value desired) {
+       transaction_write_value_for_generic(this,
+                                           &(_context->_transactions_on_value_for_coordinate),
+                                           key,
+                                           desired);
+    }
+
+    void Transaction::write_entity_for_entity_id(EntityID key, const Entity* desired) {
+        transaction_write_value_for_generic(this,
+                                            &(_context->_transactions_on_entity_for_entity_id),
+                                            key,
+                                            desired);
+    }
+    
+    
+
 
     
     
@@ -79,22 +123,25 @@ namespace wry::sim {
         uint64_t priority = _context->entity_get_priority(_entity);
         // for each of our proposed writes
         for (size_t i = 0; i != _size; ++i) {
-            const Node* head = _nodes[i]._head->load(Ordering::RELAXED);
-            // for each transaction proposing a conflicting write
-            for (; head; head = head->_next) {
-                // if that transaction is higher priority than us
-                if (head->priority() < priority) {
-                    // A higher priority transaction conflicts with us.  We
-                    // must resolve it, to see if it aborts us, or is aborted by
-                    // a third even higher priority transaction on some other
-                    // collision
-                    observed = head->resolve();
-                    assert(observed != INITIAL);
-                    if (observed == COMMITTED) {
-                        // other transaction aborts us
-                        return abort();
+            // ORDER: Transactions are resolved after the barrier
+            if (_nodes[i]._head) {
+                const Node* head = _nodes[i]._head->load(Ordering::RELAXED);
+                // for each transaction proposing a conflicting write
+                for (; head; head = head->_next) {
+                    // if that transaction is higher priority than us
+                    if (head->priority() < priority) {
+                        // A higher priority transaction conflicts with us.  We
+                        // must resolve it, to see if it aborts us, or is aborted by
+                        // a third even higher priority transaction on some other
+                        // collision
+                        observed = head->resolve();
+                        assert(observed != INITIAL);
+                        if (observed == COMMITTED) {
+                            // other transaction aborts us
+                            return abort();
+                        }
+                        // else, other transaction ABORTED and we may continue resolving
                     }
-                    // else, other transaction ABORTED and we may continue resolving
                 }
             }
         }

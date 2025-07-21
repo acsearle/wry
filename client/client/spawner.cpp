@@ -18,7 +18,7 @@ namespace wry::sim {
         Value _ = {};
         if (!tx->try_read_value_for_coordinate(this->_location, _))
             tx->write_value_for_coordinate(this->_location, this->_of_this);
-        tx->wait_on_value_for_coordinate(this->_location);
+        tx->wait_on_value_for_coordinate(this->_location, Transaction::Condition::ALWAYS);
     }
     
     void Sink::notify(TransactionContext* context) const {
@@ -26,7 +26,7 @@ namespace wry::sim {
         Value x = {};
         if (tx->try_read_value_for_coordinate(this->_location, x))
             tx->write_value_for_coordinate(this->_location, value_make_empty());
-        tx->wait_on_value_for_coordinate(this->_location);
+        tx->wait_on_value_for_coordinate(this->_location, Transaction::Condition::ALWAYS);
     }
     
     inline EntityID spawner_new_entity_from_prototype() { return {}; }
@@ -49,9 +49,9 @@ namespace wry::sim {
             EntityID b = spawner_new_entity_from_prototype();
             tx->write_entity_for_entity_id(b, machine);
             tx->write_entity_id_for_coordinate(this->_location, b);
-            tx->write_ready(b);
+            // tx->wait_on_next(b);
         }
-        tx->wait_on_entity_id_for_coordinate(this->_location);
+        tx->wait_on_entity_id_for_coordinate(this->_location, Transaction::Condition::ALWAYS);
     }
     
     void Counter::notify(TransactionContext* context) const {
@@ -61,8 +61,9 @@ namespace wry::sim {
         printf("Counter reads %lld\n", x.as_int64_t());
         x = value_make_integer_with(x.as_int64_t() + 1);
         transaction->write_value_for_coordinate(this->_location, x);
-        transaction->wait_on_time(context->_world->_tick + 120);
-    }
+        transaction->wait_on_time(context->_world->_tick + 120, Transaction::Condition::ON_COMMIT);
+        transaction->wait_on_value_for_coordinate(this->_location, Transaction::Condition::NEVER);
+}
         
     
 } // namespace wry::sim

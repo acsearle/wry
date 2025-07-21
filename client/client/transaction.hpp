@@ -90,11 +90,19 @@ namespace wry::sim {
             ABORTED,
         };
         
+        enum Condition {
+            NEVER = 0,
+            ON_COMMIT = 1,
+            ON_ABORT = 2,
+            ALWAYS = 3
+        };
+        
         struct Node {
             const Node* _next;
             const Transaction* _parent;
             const Atomic<const Transaction::Node*>* _head;
-            Value _desired;
+            uint64_t _desired;
+            Condition _condition;
             
             State resolve() const {
                 return _parent->resolve();
@@ -139,23 +147,19 @@ namespace wry::sim {
         }
         
         const Entity* read_entity_for_entity_id(EntityID);        
+        void write_entity_for_entity_id(EntityID, const Entity*);
         
         bool try_read_value_for_coordinate(Coordinate xy, Value& victim) const;
-        EntityID read_entity_id_for_coordinate(Coordinate) { return {}; }
-
-        void write_entity_for_entity_id(EntityID, const Entity*) {}
         void write_value_for_coordinate(Coordinate, Value);
-        void write_entity_id_for_coordinate(Coordinate, EntityID) {}
-        void write_ready(EntityID) {}
-        
-        void fail_and_wait_on_value_for_coordinate(Coordinate) {}
-        void fail_and_wait_on_entity_id_for_coordinate(Coordinate) {}
-        void succeed_or_wait_on_value_for_coordinate(Coordinate) {}
 
-        void wait_on_entity_id_for_coordinate(Coordinate) {}
-        void wait_on_value_for_coordinate(Coordinate) {}
-        void wait_on_entity_for_entity_id(EntityID) {}
-        void wait_on_time(Time) {}
+        EntityID read_entity_id_for_coordinate(Coordinate) { return {}; }
+        void write_entity_id_for_coordinate(Coordinate, EntityID) {}
+                                
+        void wait_on_next(Condition) {}
+        void wait_on_value_for_coordinate(Coordinate, Condition);
+        void wait_on_entity_id_for_coordinate(Coordinate, Condition) {}
+        void wait_on_entity_for_entity_id(EntityID, Condition) {}
+        void wait_on_time(Time, Condition) {}
 
         State resolve() const;
         State abort() const;
@@ -166,9 +170,12 @@ namespace wry::sim {
     struct TransactionContext {
         
         const World* _world = nullptr;
-        ConcurrentMap<EntityID, Atomic<const Transaction::Node*>> _transactions_for_entity;
-        ConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_for_coordinate;
-        ConcurrentMap<Time, Atomic<const Transaction::Node*>> _transactions_for_time;
+        ConcurrentMap<EntityID, Atomic<const Transaction::Node*>> _transactions_on_entity_for_entity_id;
+        ConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_on_value_for_coordinate;
+        ConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_on_entity_id_for_coordinate;
+        
+        // TODO: These are nonexclusive, require different handling
+        ConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_on_wait_on_value_for_coordinate;
 
         uint64_t entity_get_priority(const Entity*);
         
