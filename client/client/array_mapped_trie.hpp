@@ -492,10 +492,10 @@ namespace wry {
 
             
             [[nodiscard]] Node* clone_with_capacity(size_t capacity) const {
-                assert(capacity >= _debug_capacity);
+                int count = popcount(_bitmap);
+                assert(capacity >= count);
                 Node* node = make(_prefix_and_shift, capacity, _bitmap);
                 size_t item_size = _prefix_and_shift & (uint64_t)63 ? sizeof(const Node*) : sizeof(T);
-                int count = popcount(_bitmap);
                 memcpy(node->_children, _children, count * item_size);
                 return node;
             }
@@ -910,39 +910,71 @@ namespace wry {
                 
             }
                                     
-            [[nodiscard]] Node* clone_and_insert_or_assign_key_value(uint64_t key, T value) const {
+            [[nodiscard]] std::pair<Node*, bool> clone_and_insert_or_assign_key_value(uint64_t key, T value, T& victim) const {
                 if (!prefix_covers_key(key)) {
-                    return merge_disjoint(this,  make_with_key_value(key, value));
+                    return {
+                        merge_disjoint(this,
+                                       make_with_key_value(key, value)),
+                        true
+                    };
                 }
                 auto [prefix, shift] = get_prefix_and_shift();
                 int index = get_index_for_key(key);
                 uint64_t select = mask_for_index(index);
                 int compressed_index = get_compressed_index_for_index(index);
-                Node* node = clone_with_capacity(popcount(_bitmap | select));
-                if (shift == 0) {
-                    T _ = {};
-                    (void) compressed_array_insert_or_assign_for_index(node->_debug_capacity,
-                                                                       node->_bitmap,
-                                                                       node->_values,
-                                                                       index,
-                                                                       value,
-                                                                       _);
+                Node* new_node = clone_with_capacity(popcount(_bitmap | select));
+                bool leaf_did_assign = false;
+                if (has_values()) {
+                    leaf_did_assign = compressed_array_insert_or_assign_for_index(new_node->_debug_capacity,
+                                                                                  new_node->_bitmap,
+                                                                                  new_node->_values,
+                                                                                  index,
+                                                                                  value,
+                                                                                  victim);
                 } else {
-                    Node* child = nullptr;
+                    assert(has_children());
+                    Node* new_child = nullptr;
                     if (_bitmap & select) {
-                        child = _children[compressed_index]->clone_and_insert_or_assign_key_value(key, value);
+                        const Node* child = _children[compressed_index];
+                        std::tie(new_child, leaf_did_assign) = child->clone_and_insert_or_assign_key_value(key, value, victim);
                     } else {
-                        child = make_with_key_value(key, value);
+                        new_child = make_with_key_value(key, value);
                     }
-                    const Node* _ = nullptr;
-                    (void) compressed_array_insert_or_assign_for_index(node->_debug_capacity,
-                                                                       node->_bitmap,
-                                                                       node->_children,
+                    const Node* _;
+                    (void) compressed_array_insert_or_assign_for_index(new_node->_debug_capacity,
+                                                                       new_node->_bitmap,
+                                                                       new_node->_children,
                                                                        index,
-                                                                       child,
+                                                                       new_child,
                                                                        _);
                 }
-                return node;
+                return { new_node, leaf_did_assign };
+            }
+            
+            [[nodiscard]] std::pair<const Node*, bool> clone_and_erase_key(uint64_t key, T& victim) const {
+                if (!prefix_covers_key(key) || !bitmap_covers_key(key))
+                    return { this, false };
+                int compressed_index = get_compressed_index_for_key(key);
+                if (has_children()) {
+                    const Node* child = _children[compressed_index];
+                    assert(child);
+                    auto [new_child, did_erase] = child->clone_and_erase_key(key, victim);
+                    assert((new_child == child) == !did_erase);
+                    return {
+                        (did_erase ? clone_and_replace(new_child) : this),
+                        did_erase
+                    };
+                } else {
+                    assert(has_values());
+                    Node* new_node = clone();
+                    int index = get_index_for_key(key);
+                    bool did_erase = compressed_array_try_erase_for_index(new_node->_bitmap,
+                                                                          new_node->_values,
+                                                                          index,
+                                                                          victim);
+                    assert(did_erase);
+                    return { new_node, did_erase };
+                }
             }
             
             

@@ -34,26 +34,23 @@ namespace wry {
             return _inner && _inner->try_get(j, _);
         }
         
-        // Mutable interface.  The backing structure remains immutable; this is
-        // just sugar to tersely swing the pointer.
-        PersistentSet& set(Key key) {
-            uint64_t j = persistent_map_index_for_key(key);
-            uint64_t value = {};
-            _inner = (_inner
-                      ? _inner->clone_and_insert_or_assign_key_value(j, value)
-                      : array_mapped_trie::Node<uint64_t>::make_with_key_value(j, value));
-            return *this;
-        }
-        
         [[nodiscard]] PersistentSet clone_and_set(Key key) const {
             uint64_t j = persistent_map_index_for_key(key);
             uint64_t value = {};
+            uint64_t _ = {};
             return PersistentSet{
                 _inner
-                ? _inner->clone_and_insert_or_assign_key_value(j, value)
+                ? _inner->clone_and_insert_or_assign_key_value(j, value, _).first
                 : array_mapped_trie::Node<uint64_t>::make_with_key_value(j, value)
             };
         }
+        
+        // Mutable interface.  The backing structure remains immutable; this is
+        // just sugar to tersely swing the pointer.
+        PersistentSet& set(Key key) {
+            return *this = clone_and_set(key);
+        }
+        
         
         void parallel_for_each(auto&& action) const {
             if (_inner) {

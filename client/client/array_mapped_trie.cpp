@@ -84,15 +84,23 @@ namespace wry::array_mapped_trie {
             const Node<int>* p = nullptr;
             std::map<uint64_t, int> m;
             for (int i = 0; i != 65536; ++i) {
-                uint64_t k = rand() & (64 * 1024 - 1); // We will have some missing and some multiply occipied leaves
+                uint64_t k = rand() & (64 * 1024 - 1);
                 int v = rand();
-                m.insert_or_assign(k, v);
-                // auto q = Node<int>::make_with_key_value(k, v);
-                // printf("insert_or_assign {%llx, %x}\n", k, v);
-                // p = p ? Node<int>::merge(p, q) : q;
+                
+                uint64_t h = rand() & (64 * 1024 - 1);
+                m.erase(h);
+                int w = {};
                 p = (p
-                     ? p->clone_and_insert_or_assign_key_value(k, v)
+                     ? p->clone_and_erase_key(h, w).first
+                     : p);
+                
+                
+
+                m.insert_or_assign(k, v);
+                p = (p
+                     ? p->clone_and_insert_or_assign_key_value(k, v, w).first
                      : Node<int>::make_with_key_value(k, v));
+
                 
                 int u = {};
                 if (!p->try_get(k, u)) {

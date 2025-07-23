@@ -13,6 +13,7 @@
 
 #include <random>
 
+#include "arena_allocator.hpp"
 #include "atomic.hpp"
 #include "garbage_collected.hpp"
 #include "utility.hpp"
@@ -26,7 +27,7 @@ namespace wry {
         template<typename Key, typename Compare = std::less<Key>>
         struct ConcurrentSkiplistSet {
             
-            struct Node : GarbageCollected {
+            struct Node : ArenaAllocated {
                 
                 // TODO: do we need the size member?
                 
@@ -44,7 +45,11 @@ namespace wry {
                 }
                 
                 static Node* with_size_emplace(size_t n, auto&&... args) {
-                    void* raw = GarbageCollected::operator new(sizeof(Node) + sizeof(Atomic<Node*>) * n);
+                    // void* raw = GarbageCollected::operator new(sizeof(Node) + sizeof(Atomic<Node*>) * n);
+                    size_t number_of_bytes = sizeof(Node) + sizeof(Atomic<Node*>) * n;
+                    void* raw = ArenaAllocated::operator new(number_of_bytes,
+                                                             std::align_val_t{alignof(Node)});
+                    std::memset(raw, 0, number_of_bytes);
                     return new(raw) Node(n, FORWARD(args)...);
                 }
                 
@@ -67,13 +72,13 @@ namespace wry {
                 //
                 // TODO: Consider arena allocation rather than involving the
                 // garbage collector
-                virtual void _garbage_collected_enumerate_fields(TraceContext* context) const override {
-                }
+                //virtual void _garbage_collected_enumerate_fields(TraceContext* context) const /* override */ {
+                //}
 
             }; // struct Node
             
             
-            struct Head : GarbageCollected {
+            struct Head : ArenaAllocated {
                 
                 mutable Atomic<size_t> _top;
                 mutable Atomic<Node*> _next[0];
@@ -86,13 +91,17 @@ namespace wry {
                 
                 static Head* make() {
                     size_t n = 33;
-                    void* raw =  GarbageCollected::operator new(sizeof(Head) + sizeof(Atomic<Node*>) * n);
+                    // void* raw =  GarbageCollected::operator new(sizeof(Head) + sizeof(Atomic<Node*>) * n);
+                    size_t number_of_bytes = sizeof(Head) + sizeof(Atomic<Node*>) * n;
+                    void* raw = ArenaAllocated::operator new(number_of_bytes,
+                                                             std::align_val_t{alignof(Head)});
+                    std::memset(raw, 0, number_of_bytes);
                     return new(raw) Head;
                 }
                 
-                virtual void _garbage_collected_enumerate_fields(TraceContext* context) const override {
-                    
-                }
+                //virtual void _garbage_collected_enumerate_fields(TraceContext* context) const override {
+                //
+                //}
 
             };
             

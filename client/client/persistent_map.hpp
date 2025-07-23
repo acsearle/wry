@@ -39,25 +39,37 @@ namespace wry {
             return _inner && _inner->try_get(j,
                                              victim);
         }
+                        
+        [[nodiscard]] PersistentMap clone_and_set(Key key, T value) const {
+            uint64_t j = persistent_map_index_for_key(key);
+            T _ = {};
+            return PersistentMap{
+                _inner
+                ? _inner->clone_and_insert_or_assign_key_value(j, value, _).first
+                : array_mapped_trie::Node<T>::make_with_key_value(j, value)
+            };
+        }
+        
+        [[nodiscard]] PersistentMap clone_and_erase(Key key) const {
+            uint64_t j = persistent_map_index_for_key(key);
+            return PersistentMap{
+                _inner
+                ? _inner->try_erase_key(j).second
+                : _inner
+            };
+        }
+
         
         // Mutable interface.  The backing structure remains immutable; this is
         // just sugar to tersely swing the pointer.
         PersistentMap& set(Key key, T value) {
-            uint64_t j = persistent_map_index_for_key(key);
-            _inner = (_inner
-                      ? _inner->clone_and_insert_or_assign_key_value(j, value)
-                      : array_mapped_trie::Node<T>::make_with_key_value(j, value));
-            return *this;
+            return *this = clone_and_set(key, value);
         }
-                
-        [[nodiscard]] PersistentMap clone_and_set(Key key, T value) const {
-            uint64_t j = persistent_map_index_for_key(key);
-            return PersistentMap{
-                _inner
-                ? _inner->clone_and_insert_or_assign_key_value(j, value)
-                : array_mapped_trie::Node<T>::make_with_key_value(j, value)
-            };
+
+        PersistentMap& erase(Key key) {
+            return *this = clone_and_erase(key);
         }
+
         
         void parallel_for_each(auto&& action) const {
             if (_inner) {

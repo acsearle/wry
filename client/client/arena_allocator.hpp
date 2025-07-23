@@ -16,89 +16,107 @@ namespace wry {
     
     namespace _arena_allocator {
         
-        struct ArenaAllocator;
+        struct Node;
         
-        
-        struct ArenaAllocator {
-                    
-            constinit inline static thread_local ArenaAllocator* _head = nullptr;
-            
-            intptr_t _address;
-            intptr_t _end;
-            ArenaAllocator* _next;
-            unsigned char _start[0];
-            
-            void* _try_allocate(size_t count) {
-                intptr_t new_address = (_address - count) & ~(alignof(max_align_t)-1);
-                intptr_t start = (intptr_t)(_start);
-                if (new_address >= start) {
-                    _address = new_address;
-                    return (void*)new_address;
-                } else {
-                    return nullptr;
-                }
-            }
-            
-            static ArenaAllocator* _make_arena_allocator(size_t count) {
-                count = std::bit_ceil(count);
-                void* a = malloc(count);
-                intptr_t b = (intptr_t)a;
-                ArenaAllocator* self = new(a) ArenaAllocator;
-                self->_address = self->_end = b + count;
-                self->_next = nullptr;
-                return self;
-            }
+        constinit inline thread_local Node* _thread_local_node = nullptr;
+        constinit inline thread_local Node* _thread_local_head = nullptr;
 
-            static void* allocate(size_t count) {
-                ArenaAllocator* p = _head;
-                if (p) {
-                    void* q = p->_try_allocate(count);
-                    if (q)
-                        return q;
-                }
-                return _allocate_slow(p, count);
-            }
-            
-            static void* _allocate_slow(ArenaAllocator* p, size_t count) {
-                if (!p) {
-                    // no slabs are present on this thread
-                    size_t n = (count + sizeof(ArenaAllocator)) | ((size_t)1 << 20);
-                    p = _make_arena_allocator(n);
-                    _head = p;
-                } else {
-                    // The slab is full
-                    ArenaAllocator* q = p->_next;
-                    if (!q) {
-                        q = _make_arena_allocator((count + sizeof(ArenaAllocator)) | ((size_t)1 << 20));
-                    }
-                    // We now need to retire p
-                    
-                    // Reset its address, since the next time we encounter it
-                    // will be when we reset the arena
-                    p->_address = p->_end;
-                    
-                    // Install q for future requests
-                    // Stash p somewhere for reuse in the next epoch
-                }
-                abort();
-                return nullptr;
-            }
-
-
-                        
-            
+        struct Node {
+            void* _begin;
+            void* _end;
+            Node* _next;
         };
+        
+        constexpr inline uintptr_t aligned_down(uintptr_t address, size_t count, size_t alignment) {
+            assert(count < address);
+            assert(std::has_single_bit((std::size_t)alignment));
+            return (address - count) & ~((std::size_t)alignment - 1);
+        }
+        
+        [[nodiscard]] inline Node* make_node_with_capacity(size_t capacity) {
+            printf("Arena new chunk\n");
+            void* begin = malloc(capacity);
+            assert(begin);
+            uintptr_t a = (uintptr_t)begin;
+            uintptr_t c = a + capacity;
+            uintptr_t b = aligned_down(c, sizeof(Node), alignof(Node));
+            assert(a < b);
+            Node* node = new((void*) b) Node;
+            node->_begin = (void*)a;
+            node->_end = (void*)node;
+            return node;
+        }
+        
+        inline void* allocate_slow(size_t count, size_t alignment, Node* node) {
+            if (node) {
+                while (node->_next) {
+                    node = node->_next;
+                    node->_end = node;
+                    uintptr_t a = (uintptr_t) node->_begin;
+                    uintptr_t c = (uintptr_t) node->_end;
+                    uintptr_t b = aligned_down(c, count, alignment);
+                    if (!(b < a)) {
+                        return node->_end = (void*)b;
+                    }
+                }
+            }
+            size_t capacity = std::bit_ceil(std::max(count + sizeof(Node), (size_t)1 << 20));
+            Node* node2 = make_node_with_capacity(capacity);
+            if (node) {
+                node->_next = node2;
+            } else {
+                _thread_local_head = node2;
+            }
+            node = node2;
+            _thread_local_node = node;
+            uintptr_t a = (uintptr_t) node->_begin;
+            uintptr_t c = (uintptr_t) node->_end;
+            uintptr_t b = aligned_down(c, count, alignment);
+            assert(!(b < a));
+            return node->_end = (void*)b;
+        }
+        
+        inline void* allocate(size_t count, size_t alignment) {
+            Node* node = _thread_local_head;
+            if (node) {
+                uintptr_t a = (uintptr_t) node->_begin;
+                uintptr_t c = (uintptr_t) node->_end;
+                uintptr_t b = aligned_down(c, count, alignment);
+                if (!(b < a)) {
+                    return node->_end = (void*)b;
+                }
+            }
+            return allocate_slow(count, alignment, node);
+        }
+        
+        inline void reset() {
+            Node* node = _thread_local_head;
+            if (node) {
+                node->_end = node;
+            }
+            _thread_local_node = node;
+        }
+        
+        
 
+        
+        
                 
         struct ArenaAllocated {
-            static void* operator new(size_t size);
-            static void* operator new(size_t size, void*);
+            static void* operator new(std::size_t size, std::align_val_t align) {
+                return allocate(size, (size_t)align);
+            }
+            static void* operator new(std::size_t size, void* ptr) {
+                return ptr;
+            }
             static void operator delete(void*) {
                 // no-op
             }
         };
         
     } // namespace _arena_allocator
+    
+    using _arena_allocator::ArenaAllocated;
     
 } // namespace wry
 #endif /* arena_allocator_hpp */

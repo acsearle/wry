@@ -140,7 +140,7 @@ namespace wry::sim {
         
         TransactionContext* _context = nullptr;
         const Entity* _entity = nullptr;
-        mutable Atomic<State> _state;
+        mutable Atomic<State> _state{};
         
         size_t _capacity = 0;
         size_t _size = 0;

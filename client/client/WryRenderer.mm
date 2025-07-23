@@ -1013,6 +1013,7 @@
 {
     _model->shade_roots();
     wry::mutator_handshake();
+    wry::_arena_allocator::reset();
 
     using namespace ::simd;
     using namespace ::wry;
