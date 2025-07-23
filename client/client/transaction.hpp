@@ -15,6 +15,26 @@
 #include "persistent_map.hpp"
 
 namespace wry::sim {
+
+    // SAFETY: None
+    template<size_t N = 8>
+    struct ExternallyDiscriminatedVariant {
+        alignas(N) unsigned char _data[N];
+        template<typename T>
+        ExternallyDiscriminatedVariant& operator=(const T& value) {
+            static_assert((sizeof(T) <= N) && (alignof(T) <= N));
+            std::memcpy(_data, &value, sizeof(value));
+            return *this;
+        }
+    };
+    
+    template<typename T, size_t N>
+    T get(const ExternallyDiscriminatedVariant<N>& x) {
+        static_assert((sizeof(T) <= 8) && (alignof(T) <= 8));
+        T result;
+        std::memcpy(&result, x._data, sizeof(T));
+        return result;
+    }
     
     struct Transaction : GarbageCollected {
         
@@ -101,7 +121,7 @@ namespace wry::sim {
             const Node* _next;
             const Transaction* _parent;
             const Atomic<const Transaction::Node*>* _head;
-            uint64_t _desired;
+            ExternallyDiscriminatedVariant<> _desired;
             Condition _condition;
             
             State resolve() const {
@@ -148,18 +168,17 @@ namespace wry::sim {
         
         const Entity* read_entity_for_entity_id(EntityID);        
         void write_entity_for_entity_id(EntityID, const Entity*);
-        
+        void wait_on_entity_for_entity_id(EntityID, Condition);
+
         bool try_read_value_for_coordinate(Coordinate xy, Value& victim) const;
         void write_value_for_coordinate(Coordinate, Value);
+        void wait_on_value_for_coordinate(Coordinate, Condition);
 
         EntityID read_entity_id_for_coordinate(Coordinate) { return {}; }
-        void write_entity_id_for_coordinate(Coordinate, EntityID) {}
-                                
-        void wait_on_next(Condition) {}
-        void wait_on_value_for_coordinate(Coordinate, Condition);
-        void wait_on_entity_id_for_coordinate(Coordinate, Condition) {}
-        void wait_on_entity_for_entity_id(EntityID, Condition) {}
-        void wait_on_time(Time, Condition) {}
+        void write_entity_id_for_coordinate(Coordinate, EntityID);
+        void wait_on_entity_id_for_coordinate(Coordinate, Condition);
+
+        void wait_on_time(Time, Condition);
 
         State resolve() const;
         State abort() const;
@@ -170,16 +189,37 @@ namespace wry::sim {
     struct TransactionContext {
         
         const World* _world = nullptr;
-        ConcurrentMap<EntityID, Atomic<const Transaction::Node*>> _transactions_on_entity_for_entity_id;
-        ConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_on_value_for_coordinate;
-        ConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_on_entity_id_for_coordinate;
         
-        // TODO: These are nonexclusive, require different handling
-        ConcurrentMap<Coordinate, Atomic<const Transaction::Node*>> _transactions_on_wait_on_value_for_coordinate;
-
+        
         uint64_t entity_get_priority(const Entity*);
         
         bool try_read_value_for_coordinate(Coordinate, Value&);
+        bool try_read_entity_id_for_coordinate(Coordinate, EntityID&);
+        bool try_read_entity_for_entity_id(EntityID, const Entity*&);
+
+        
+        template<typename Key>
+        using Map = ConcurrentMap<Key, Atomic<const Transaction::Node*>>;
+
+        // "write" to a map-key is exclusive; at most one transaction will
+        // COMMIT and write its value, all others will ABORT.
+                
+        Map<Coordinate> _write_entity_id_for_coordinate;
+        Map<Coordinate> _write_value_for_coordinate;
+        Map<EntityID> _write_entity_for_entity_id;
+        
+        // "wait on" (a write to) a key is nonexclusive.  A transaction can
+        // choose to write if it COMMITs, or ABORTs, or both.
+        
+        Map<Coordinate> _wait_on_value_for_coordinate;
+        Map<Coordinate> _wait_on_entity_id_for_coordinate;
+        Map<EntityID> _wait_on_entity_for_entity_id;
+        
+        // Wait in other ways
+        
+        Map<Time> _wait_on_time; // Run at a future time
+        // Retry is a special case of schedule, but also a very common case
+        // and also it gets deleted from the schedule right away
                 
     };
     

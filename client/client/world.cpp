@@ -62,15 +62,14 @@ namespace wry::sim {
         auto new_waiting_for_entity_id = _waiting_for_entity_id;
         auto new_waiting_for_coordinate // = _waiting_for_coordinate;
         = parallel_rebuild(_waiting_for_coordinate,
-                           context._transactions_on_wait_on_value_for_coordinate,
+                           context._wait_on_value_for_coordinate,
                            [this](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv) -> PersistentSet<EntityID> {
             PersistentSet<EntityID> result;
             _waiting_for_coordinate.try_get(kv.first, result);
             const Transaction::Node* head = kv.second.load(Ordering::ACQUIRE);
             for (; head; head = head->_next) {
-                EntityID entity_id{
-                    .data = head->_desired
-                };
+                using std::get;
+                EntityID entity_id = get<EntityID>(head->_desired);
                 switch (head->resolve()) {
                     case Transaction::State::INITIAL:
                         abort();
@@ -89,7 +88,7 @@ namespace wry::sim {
 
         auto new_value_for_coordinate // = _value_for_coordinate;
         = parallel_rebuild(_value_for_coordinate,
-                           context._transactions_on_value_for_coordinate,
+                           context._write_value_for_coordinate,
                            [this](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv) -> Value {
             // resolve the transactions associated with this coordinate
             const Transaction::Node* head = kv.second.load(Ordering::ACQUIRE);
@@ -110,8 +109,8 @@ namespace wry::sim {
             Value result = {};
             if (winner) {
                 // The desired value is type-erased (for now)
-                // TODO: externally-discriminated variant
-                std::memcpy(&result, &(winner->_desired), 8);
+                using std::get;
+                result = get<Value>(winner->_desired);
             } else {
                 // If there was no winner, all transactions on this location got
                 // aborted by conflicts at other locations

@@ -44,8 +44,17 @@ namespace wry {
     //   consist memory ordering)
     // - improve the interface and libc++'s implementation of wait/notify
 
-    // The implementation depends heavily on the GCC intrinsics
+    // The implementation depends heavily on GCC-style intrinsics
     // TODO: extend to MSVC _Interlocked[op][width]_[ordering]
+    
+    // TODO: Implementations do not support dynamic choice of ordering; should
+    // they therefore be template areguments?  Are we relying on inlining?
+    // Should we never put order in the signature of a function whose
+    // declaration has different visibility to its definition?
+    
+    // TODO: Platform specific wait is interesting, but we should be preferring
+    // userspace task switching to blocking threads.  The collector may be an
+    // exception.
 
     // TODO: architecture specific cache line size
     constexpr size_t CACHE_LINE_SIZE = 128;
@@ -66,10 +75,11 @@ namespace wry {
     };
     
     template<typename T>
+    concept AlwaysLockFreeAtomic = __atomic_always_lock_free(sizeof(T), nullptr);
+    
+    template<AlwaysLockFreeAtomic T>
     struct Atomic {
-        
-        static_assert(__atomic_always_lock_free(sizeof(T), nullptr));
-        
+                
         T value;
         
         constexpr Atomic() : value{} {}
@@ -127,6 +137,7 @@ namespace wry {
             return __atomic_##Y##_fetch (&value, operand, (int)order);\
         }
                 
+        // GCC builtins provide significantly more operations than std::atomic
         X(add)
         X(and)
         X(max)

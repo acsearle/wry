@@ -30,13 +30,13 @@ namespace wry::sim {
     }
     
     template<typename Key, typename T>
-    void transaction_write_value_for_generic(Transaction* self,
-                                             ConcurrentMap<Key, Atomic<const Transaction::Node*>>* map,
-                                             Key key,
-                                             T desired) {
+    void transaction_write_generic(Transaction* self,
+                                   ConcurrentMap<Key, Atomic<const Transaction::Node*>>* map,
+                                   Key key,
+                                   T desired) {
         Transaction::Node* node = self->_nodes + (self->_size)++;
         node->_parent = self;
-        std::memcpy(&(node->_desired), &desired, 8);
+        node->_desired = desired;
         node->_condition = Transaction::ON_COMMIT; // Unused for exclusive writes
         node->_next = nullptr;
         // Race to initialize the atomic linked list with our desired value
@@ -60,15 +60,44 @@ namespace wry::sim {
         }
     }
     
-    void Transaction::wait_on_value_for_coordinate(Coordinate key,
-                                                   Transaction::Condition condition) {
-        Transaction::Node* node = _nodes + (_size)++;
-        node->_parent = this;
-        std::memcpy(&(node->_desired), &(_entity->_entity_id), 8);
+
+
+    
+    void Transaction::write_entity_for_entity_id(EntityID key, const Entity* desired) {
+        transaction_write_generic(this,
+                                  &(_context->_write_entity_for_entity_id),
+                                  key,
+                                  desired);
+    }
+
+    void Transaction::write_value_for_coordinate(Coordinate key, Value desired) {
+       transaction_write_generic(this,
+                                           &(_context->_write_value_for_coordinate),
+                                           key,
+                                           desired);
+    }
+
+    void Transaction::write_entity_id_for_coordinate(Coordinate key, EntityID desired) {
+        transaction_write_generic(this,
+                                  &(_context->_write_entity_id_for_coordinate),
+                                  key,
+                                  desired);
+    }
+
+    
+    
+    template<typename Key>
+    void transaction_wait_on_generic(Transaction* self,
+                                     ConcurrentMap<Key, Atomic<const Transaction::Node*>>* map,
+                                     Key key,
+                                     Transaction::Condition condition) {
+        Transaction::Node* node = self->_nodes + (self->_size)++;
+        node->_parent = self;
+        node->_desired = self->_entity->_entity_id;
         node->_condition = condition;
         node->_next = nullptr;
         // Race to initialize the atomic linked list with our desired value
-        auto [iterator, flag] = _context->_transactions_on_wait_on_value_for_coordinate.try_emplace(key, node);
+        auto [iterator, flag] = map->try_emplace(key, node);
         // We always get back its address
         Atomic<const Transaction::Node*>& head = iterator->second;
         node->_head = nullptr; // We don't set the head for non-exclusive targets
@@ -86,24 +115,40 @@ namespace wry::sim {
                                                Ordering::RELAXED))
                 ;
         }
-
-
+        
+        
     }
 
     
-    void Transaction::write_value_for_coordinate(Coordinate key, Value desired) {
-       transaction_write_value_for_generic(this,
-                                           &(_context->_transactions_on_value_for_coordinate),
-                                           key,
-                                           desired);
+    void Transaction::wait_on_value_for_coordinate(Coordinate key, Transaction::Condition condition) {
+        transaction_wait_on_generic(this,
+                                    &(_context->_wait_on_value_for_coordinate),
+                                    key,
+                                    condition);
+    }
+    
+    void Transaction::wait_on_entity_id_for_coordinate(Coordinate key, Transaction::Condition condition) {
+        transaction_wait_on_generic(this,
+                                    &(_context->_wait_on_entity_id_for_coordinate),
+                                    key,
+                                    condition);
+    }
+    
+    void Transaction::wait_on_entity_for_entity_id(EntityID key, Transaction::Condition condition) {
+        transaction_wait_on_generic(this,
+                                    &(_context->_wait_on_entity_for_entity_id),
+                                    key,
+                                    condition);
     }
 
-    void Transaction::write_entity_for_entity_id(EntityID key, const Entity* desired) {
-        transaction_write_value_for_generic(this,
-                                            &(_context->_transactions_on_entity_for_entity_id),
-                                            key,
-                                            desired);
+    void Transaction::wait_on_time(Time key, Transaction::Condition condition) {
+        transaction_wait_on_generic(this,
+                                    &(_context->_wait_on_time),
+                                    key,
+                                    condition);
     }
+
+    
     
     
 
@@ -123,8 +168,9 @@ namespace wry::sim {
         uint64_t priority = _context->entity_get_priority(_entity);
         // for each of our proposed writes
         for (size_t i = 0; i != _size; ++i) {
-            // ORDER: Transactions are resolved after the barrier
+            // Head is not present if the node is for a nonexclusive container
             if (_nodes[i]._head) {
+                // ORDER: Transactions are resolved after the barrier
                 const Node* head = _nodes[i]._head->load(Ordering::RELAXED);
                 // for each transaction proposing a conflicting write
                 for (; head; head = head->_next) {
