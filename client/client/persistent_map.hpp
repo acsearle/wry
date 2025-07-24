@@ -32,7 +32,12 @@ namespace wry {
     template<typename Key, typename T>
     struct PersistentMap {
         
-        array_mapped_trie::Node<T>* _inner = nullptr;
+        const array_mapped_trie::Node<T>* _inner = nullptr;
+        
+        bool contains(Key key) const {
+            uint64_t j = persistent_map_index_for_key(key);
+            return _inner && _inner->contains(j);
+        }
                 
         bool try_get(Key key, T& victim) const {
             uint64_t j = persistent_map_index_for_key(key);
@@ -52,9 +57,10 @@ namespace wry {
         
         [[nodiscard]] PersistentMap clone_and_erase(Key key) const {
             uint64_t j = persistent_map_index_for_key(key);
+            T _ = {};
             return PersistentMap{
                 _inner
-                ? _inner->try_erase_key(j).second
+                ? _inner->clone_and_erase_key(j, _).first
                 : _inner
             };
         }
@@ -86,6 +92,11 @@ namespace wry {
     template<typename Key, typename T>
     void trace(const PersistentMap<Key, T>& x, void* context) {
         trace(x._inner, context);
+    }
+    
+    template<typename Key, typename T>
+    void shade(const PersistentMap<Key, T>& x) {
+        shade(x._inner);
     }
     
     template<typename Key, typename T, typename U, typename F>
