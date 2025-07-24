@@ -61,7 +61,7 @@ namespace wry::sim {
         printf("Counter reads %lld\n", x.as_int64_t());
         x = value_make_integer_with(x.as_int64_t() + 1);
         transaction->write_value_for_coordinate(this->_location, x);
-        transaction->wait_on_time(context->_world->_tick + 120, Transaction::Condition::ON_COMMIT);
+        transaction->wait_on_time(context->_world->_time + 120, Transaction::Condition::ON_COMMIT);
         transaction->wait_on_value_for_coordinate(this->_location, Transaction::Condition::NEVER);
 }
         

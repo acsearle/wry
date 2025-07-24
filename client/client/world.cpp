@@ -10,15 +10,13 @@
 
 namespace wry::sim {
     
-    void World::_garbage_collected_enumerate_fields(TraceContext*p) const {
+    void World::_garbage_collected_enumerate_fields(TraceContext* context) const {
         // printf("%s\n", __PRETTY_FUNCTION__);
-        trace(_ready,p);
-        trace(_entity_for_entity_id,p);
-        trace(_value_for_coordinate,p);
-        trace(_entity_id_for_coordinate,p);
-        trace(_waiting_for_time,p);
-        trace(_waiting_for_entity_id,p);
-        trace(_waiting_for_coordinate,p);
+        trace(_entity_id_for_coordinate, context);
+        trace(_entity_for_entity_id, context);
+        trace(_value_for_coordinate, context);
+        trace(_ready, context);
+        trace(_waiting_on_time, context);
     }
         
     World* World::step() const {
@@ -29,11 +27,10 @@ namespace wry::sim {
         // each entity constructs a transaction and links it with all of its
         // accessed variables
         
-        printf("World step %lld  with ? ready\n", _tick);
+        printf("World step %lld\n", _time);
         _ready.parallel_for_each([this, &context](EntityID entity_id) {
-            //printf("EntityID %lld\n", entity_id.data);
             const Entity* a = nullptr;
-            bool b = _entity_for_entity_id.try_get(entity_id, a);
+            bool b = _entity_for_entity_id._map.try_get(entity_id, a);
             assert(b);
             a->notify(&context);
         });
@@ -44,29 +41,23 @@ namespace wry::sim {
         // and rebuild the new world state from the leaves up; untouched
         // subtrees are structurally shared with the original
         
-        Time new_tick = _tick + 1;
+        Time new_time = _time + 1;
         
-        /*
-        auto new_entity_for_entity_id
-        = parallel_rebuild(_entity_for_entity_id,
-                           context._transactions_for_entity,
-                           [](const std::pair<const EntityID, Atomic<const Transaction::Node*>>& kv) -> const Entity* {
-            return nullptr;
-        });
-        */
+        auto new_entity_id_for_coordinate = _entity_id_for_coordinate;
         
         auto new_entity_for_entity_id = _entity_for_entity_id;
-        
+
         auto new_ready = _ready;
-        auto new_waiting_for_time = _waiting_for_time;
-        auto new_waiting_for_entity_id = _waiting_for_entity_id;
-        auto new_waiting_for_coordinate // = _waiting_for_coordinate;
-        = parallel_rebuild(_waiting_for_coordinate,
+        auto new_waiting_on_time = _waiting_on_time;
+
+        decltype(_value_for_coordinate) new_value_for_coordinate;
+        
+        new_value_for_coordinate._waiting = parallel_rebuild(_value_for_coordinate._waiting,
                            context._wait_on_value_for_coordinate,
                            [this](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv) -> PersistentSet<EntityID> {
             PersistentSet<EntityID> result;
-            _waiting_for_coordinate.try_get(kv.first, result);
-            const Transaction::Node* head = kv.second.load(Ordering::ACQUIRE);
+            _value_for_coordinate._waiting.try_get(kv.first, result);
+            const Transaction::Node* head = kv.second.load(Ordering::RELAXED);
             for (; head; head = head->_next) {
                 using std::get;
                 EntityID entity_id = get<EntityID>(head->_desired);
@@ -86,8 +77,8 @@ namespace wry::sim {
             return result;
         });
 
-        auto new_value_for_coordinate // = _value_for_coordinate;
-        = parallel_rebuild(_value_for_coordinate,
+        new_value_for_coordinate._map
+        = parallel_rebuild(_value_for_coordinate._map,
                            context._write_value_for_coordinate,
                            [this](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv) -> Value {
             // resolve the transactions associated with this coordinate
@@ -116,27 +107,20 @@ namespace wry::sim {
                 // aborted by conflicts at other locations
                 
                 // TODO: change the interface so we can support no-action
-                (void) _value_for_coordinate.try_get(kv.first, result);
+                (void) _value_for_coordinate._map.try_get(kv.first, result);
             }
             return result;
         });
-        
-        auto new_entity_id_for_coordinate = _entity_id_for_coordinate;
-        
-        // problem: if we lazily resolve transactions, prompted by doing
-        // minimal work to determine who, if anybody, can write, we don't
-        // actually resolve every transaction.
-        
+                
+    
 
         return new World{
-            new_tick,
-            new_entity_for_entity_id,
-            new_ready,
-            new_waiting_for_time,
-            new_waiting_for_entity_id,
-            new_waiting_for_coordinate,
-            new_value_for_coordinate,
+            new_time,
             new_entity_id_for_coordinate,
+            new_entity_for_entity_id,
+            new_value_for_coordinate,
+            new_ready,
+            new_waiting_on_time
         };
         
     }

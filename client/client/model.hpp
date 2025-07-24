@@ -85,10 +85,10 @@ namespace wry {
                         
             auto insert_localized_entity = [&](const LocalizedEntity* entity_ptr) {
                 EntityID entity_id  = entity_ptr->_entity_id;
-                _world->_entity_for_entity_id.set(entity_id,
-                                                  entity_ptr);
-                _world->_entity_id_for_coordinate.set(entity_ptr->_location,
-                                                      PersistentSet<EntityID>{}.set(entity_id));
+                _world->_entity_for_entity_id._map.set(entity_id,
+                                                       entity_ptr);
+                _world->_entity_id_for_coordinate._map.set(entity_ptr->_location,
+                                                           entity_id);
                 _world->_ready.set(entity_id);
             };
             
@@ -137,8 +137,8 @@ namespace wry {
             }
 
             //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_integer_with(7));
-            _world->_value_for_coordinate.set(Coordinate{-2, -2},
-                                              value_make_integer_with((7)));
+            _world->_value_for_coordinate._map.set(Coordinate{-2, -2},
+                                                   value_make_integer_with((7)));
             //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_array());
             // _world->_value_for_coordinate.set(Coordinate{-2, -2}, value_make_array());
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);

@@ -70,47 +70,7 @@ namespace wry {
         }
         
         
-#pragma mark - Tools for packed prefix and shift
-        
-        inline void _assert_valid_shift(int shift) {
-            assert(0 <= shift);
-            assert(shift < 64);
-            assert(!(shift % 6));
-        }
-        
-        inline void _assert_valid_prefix_and_shift(uint64_t prefix, int shift) {
-            _assert_valid_shift(shift);
-            assert((prefix & ~(~(uint64_t)63 << shift)) == 0);
-        }
-        
-        inline void _assert_valid_prefix_and_shift(uint64_t prefix_and_shift) {
-            uint64_t prefix = ~(uint64_t)63 & prefix_and_shift;
-            int shift = (int)((uint64_t)63 & prefix_and_shift);
-            assert(!(shift % 6));
-            assert((prefix & ~(~(uint64_t)63 << shift)) == 0);
-        }
-        
-        inline uint64_t prefix_for_keylike_and_shift(uint64_t keylike, int shift) {
-            _assert_valid_shift(shift);
-            return keylike & (~(uint64_t)63 << shift);
-        }
-        
-        inline uint64_t prefix_and_shift_for_keylike_and_shift(uint64_t keylike, int shift) {
-            _assert_valid_shift(shift);
-            return (keylike & ((~(uint64_t)63) << shift)) | (uint64_t)shift;
-        };
-        
-        // work out the shift required to bring the 6-aligned block of 6 bits that
-        // contains the msb into the least significant 6 bits
-        inline int shift_for_keylike_difference(uint64_t keylike_difference) {
-            assert(keylike_difference != 0);
-            int shift = ((63 - clz(keylike_difference)) / 6) * 6;
-            _assert_valid_shift(shift);
-            // The (a >> shift) >> 6 saves us from shifting by (60 + 6) = 66 > 63
-            assert((keylike_difference >> shift) && !((keylike_difference >> shift) >> 6));
-            return shift;
-        }
-        
+
         
                 
 #pragma mark Mutable compressed array tools
@@ -212,7 +172,6 @@ namespace wry {
             return std::exchange(array[compressed_index], std::move(value));
         }
         
-
         template<typename T>
         bool compressed_array_insert_or_exchange_for_index(size_t debug_capacity,
                                                            uint64_t& bitmap,
@@ -255,13 +214,10 @@ namespace wry {
             }
             return was_found;
         }
-        
-        
-        
-        // TODO: fixme
-        
+                    
         template<typename T, typename U, typename V, typename F>
         void transform_compressed_arrays(uint64_t b1, uint64_t b2, const T* v1, const U* v2, V* v3, const F& f) {
+            abort();
             uint64_t common = b1 | b2;
             for (;;) {
                 if (!common)
@@ -271,6 +227,48 @@ namespace wry {
                           (b2 & select) ? v2++ : nullptr);
                 common &= ~select;
             }
+        }
+        
+        
+#pragma mark - Tools for packed prefix and shift
+        
+        inline void assert_valid_shift(int shift) {
+            assert(0 <= shift);
+            assert(shift < 64);
+            assert(!(shift % 6));
+        }
+        
+        inline void assert_valid_prefix_and_shift(uint64_t prefix, int shift) {
+            assert_valid_shift(shift);
+            assert((prefix & ~(~(uint64_t)63 << shift)) == 0);
+        }
+        
+        inline void _assert_valid_prefix_and_shift(uint64_t prefix_and_shift) {
+            uint64_t prefix = ~(uint64_t)63 & prefix_and_shift;
+            int shift = (int)((uint64_t)63 & prefix_and_shift);
+            assert(!(shift % 6));
+            assert((prefix & ~(~(uint64_t)63 << shift)) == 0);
+        }
+        
+        inline uint64_t prefix_for_keylike_and_shift(uint64_t keylike, int shift) {
+            assert_valid_shift(shift);
+            return keylike & (~(uint64_t)63 << shift);
+        }
+        
+        inline uint64_t prefix_and_shift_for_keylike_and_shift(uint64_t keylike, int shift) {
+            assert_valid_shift(shift);
+            return (keylike & ((~(uint64_t)63) << shift)) | (uint64_t)shift;
+        };
+        
+        // work out the shift required to bring the 6-aligned block of 6 bits that
+        // contains the msb into the least significant 6 bits
+        inline int shift_for_keylike_difference(uint64_t keylike_difference) {
+            assert(keylike_difference != 0);
+            int shift = ((63 - clz(keylike_difference)) / 6) * 6;
+            assert_valid_shift(shift);
+            // The (a >> shift) >> 6 saves us from shifting by (60 + 6) = 66 > 63
+            assert((keylike_difference >> shift) && !((keylike_difference >> shift) >> 6));
+            return shift;
         }
         
         
@@ -435,22 +433,21 @@ namespace wry {
                 bool has_children_ = prefix_and_shift & (uint64_t)63;
                 size_t item_bytes = has_children_ ? sizeof(const Node*) : sizeof(T);
                 void* pointer = GarbageCollected::operator new(sizeof(Node) + (capacity * item_bytes));
-                Node* node = new(pointer) Node(prefix_and_shift,
+                return new(pointer) Node(prefix_and_shift,
                                                capacity,
                                                bitmap);
-                return node;
             }
             
             [[nodiscard]] static Node* make_with_key_value(uint64_t key, T value) {
                 int shift = 0;
                 size_t capacity = 1;
                 uint64_t bitmap = (uint64_t)1 << (int)(key & (uint64_t)63);
-                Node* node = Node::make(prefix_and_shift_for_keylike_and_shift(key,
-                                                                               shift),
-                                        capacity,
-                                        bitmap);
-                node->_values[0] = std::move(value);
-                return node;
+                Node* new_node = Node::make(prefix_and_shift_for_keylike_and_shift(key,
+                                                                                   shift),
+                                            capacity,
+                                            bitmap);
+                new_node->_values[0] = std::move(value);
+                return new_node;
             }
             
             [[nodiscard]] Node* clone_with_capacity(size_t capacity) const {
@@ -466,8 +463,6 @@ namespace wry {
                 return clone_with_capacity(popcount(_bitmap));
             }
 
-            
-                        
             bool contains(uint64_t key) const {
                 if (!prefix_covers_key(key)) {
                     // prefix excludes key
@@ -717,24 +712,25 @@ namespace wry {
             if (a == b)
                 // by identity
                 return true;
-            if (a->_prefix != b->_prefix)
-                // by prefix
-                return false;
-            if (a->_shift != b->_shift)
-                // by level
+            if (a->_prefix_and_shift != b->_prefix_and_shift)
+                // by prefix and level
                 return false;
             if (a->_bitmap != b->_bitmap)
                 // by contents
                 return false;
-            if (a->_shift == 0)
-                // by leaf
+            int compressed_size = popcount(a->_bitmap);
+            if (a->has_children()) {
+                // by recursion
+                for (int i = 0; i != compressed_size; ++i)
+                    if (!equality(a->_children[i], b->_children[i]))
+                        return false;
                 return true;
-            // by recursion
-            int n = popcount(a->_bitmap);
-            for (int i = 0; i != n; ++i)
-                if (!equality(a->_children[i], b->_children[i]))
-                    return false;
-            return true;
+            } else {
+                for (int i = 0; i != compressed_size; ++i)
+                    if (a->_values[i] != b->_values[i])
+                        return false;
+                return true;
+            }
         }
         
     } // namespace array_mapped_trie

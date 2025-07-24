@@ -831,7 +831,7 @@
                 // excused from transactions (hopefully)
                 
                 // the_tile.notify_occupant(&_model->_world);
-                notify_by_world_coordinate(_model->_world, xy);
+                // notify_by_world_coordinate(_model->_world, xy);
                 printf(" Clicked world (%d, %d)\n", i, j);
             }
             _model->_outstanding_click = false;
@@ -849,7 +849,7 @@
                 // the_tile = k;
                 //_model->_world->_value_for_coordinate.write(xy, k);
                 // the_tile.notify_occupant(&_model->_world);
-                notify_by_world_coordinate(_model->_world, xy);
+                // notify_by_world_coordinate(_model->_world, xy);
             }
         }
         
@@ -1093,7 +1093,7 @@
 
     {
 
-        auto tnow = world_time(_model->_world);
+        auto tnow = world_get_time(_model->_world);
         auto&& entities = _model->_world->_entity_for_entity_id;
         
         NSUInteger quad_count = /*entities->data.size()*/ 10 * 4 + 1000 + 2;
@@ -1304,7 +1304,7 @@
                 {
                     //wry::sim::Value q = _model->_world->_value_for_coordinate.read(wry::sim::Coordinate{i, j});
                     wry::Value q = {};
-                    (void) _model->_world->_value_for_coordinate.try_get(wry::sim::Coordinate{i, j}, q);
+                    (void) _model->_world->_value_for_coordinate._map.try_get(wry::sim::Coordinate{i, j}, q);
                     //printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::sim::Coordinate{i, j}.data(), result, q._data);
                     using namespace wry::sim;
                     if (q.is_int64_t()) {

@@ -11,11 +11,11 @@
 namespace wry::sim {
     
     bool TransactionContext::try_read_value_for_coordinate(Coordinate xy, Value& v) {
-        return this->_world->_value_for_coordinate.try_get(xy, v);
+        return this->_world->_value_for_coordinate._map.try_get(xy, v);
     }
     
     uint64_t TransactionContext::entity_get_priority(const Entity* entity) {
-        uint64_t priority = entity->_entity_id.data ^ this->_world->_tick;
+        uint64_t priority = entity->_entity_id.data ^ this->_world->_time;
         // printf("looked up priority %llu\n", priority);
         return priority;
     }
