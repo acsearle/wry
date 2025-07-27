@@ -38,7 +38,10 @@ namespace wry::sim {
     
     template<typename Key, typename T>
     struct WaitableMap {
+        // The actual key-value mapping
         PersistentMap<Key, T> _map;
+        // The set of entities to notify when we write for a key; this will
+        // typically be a much smaller collection
         PersistentMap<Key, PersistentSet<EntityID>> _waiting;
     };
     
@@ -57,7 +60,6 @@ namespace wry::sim {
         WaitableMap<Coordinate, Value> _value_for_coordinate;
         
 
-        PersistentSet<EntityID> _ready;
         PersistentMap<Time, PersistentSet<EntityID>> _waiting_on_time;
         
         World()
@@ -65,7 +67,6 @@ namespace wry::sim {
         , _entity_id_for_coordinate{}
         , _entity_for_entity_id{}
         , _value_for_coordinate{}
-        , _ready{}
         , _waiting_on_time{}
         {
         }
@@ -74,13 +75,11 @@ namespace wry::sim {
               WaitableMap<Coordinate, EntityID> entity_id_for_coordinate,
               WaitableMap<EntityID, const Entity*> entity_for_entity_id,
               WaitableMap<Coordinate, Value> value_for_coordinate,
-              PersistentSet<EntityID> ready,
               PersistentMap<Time, PersistentSet<EntityID>> waiting_on_time)
         : _time(time)
         , _entity_id_for_coordinate(entity_id_for_coordinate)
         , _entity_for_entity_id(entity_for_entity_id)
         , _value_for_coordinate(value_for_coordinate)
-        , _ready(ready)
         , _waiting_on_time(waiting_on_time)
         {}
         

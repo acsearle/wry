@@ -696,11 +696,12 @@ namespace wry {
             if (!s) {
                 printf("nullptr\n");
             }
+            auto [prefix, shift] = s->get_prefix_and_shift();
             int count = popcount(s->_bitmap);
-            printf("%llx:%d:", s->_prefix & ((uint64_t)-1 << s->_shift), s->_shift);
+            printf("%llx:%d:", prefix, shift);
             print_binary(s->_bitmap);
             printf("(%d)\n", count);
-            if (s->_shift) {
+            if (shift) {
                 assert(count >= 2);
                 for (int i = 0; i != count; ++i)
                     print(s->_children[i]);

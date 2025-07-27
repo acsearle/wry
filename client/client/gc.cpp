@@ -334,7 +334,7 @@ namespace wry {
                 // A thread report covers events in a given interval
                 
                 {
-                    printf("C0: There are %zd known mutators\n", _known_mutator_interfaces.size());
+                    //printf("C0: There are %zd known mutators\n", _known_mutator_interfaces.size());
                     size_t number_of_new_objects = 0;
                     size_t number_of_resignations = 0;
                     Color did_shade = 0;
@@ -343,7 +343,7 @@ namespace wry {
                     // Delete them on the fly?
                     for (auto& u : _known_mutator_interfaces) {
                         auto& v = u->collector_state;
-                        printf("C0: try_pop \"%s\"\n", u->_name.c_str());
+                        //printf("C0: try_pop \"%s\"\n", u->_name.c_str());
                         TaggedPtr<Session::Node, Session::Tag> expected = {};
                         expected = u->_atomic_tagged_head.load(Ordering::RELAXED);
                     SWITCH_ON_EXPECTED_TAG:
@@ -391,8 +391,8 @@ namespace wry {
                     // threads in the era
                     _shade_history.push_front(did_shade);
                     
-                    printf("C0: ack %zd resignations\n", number_of_resignations);
-                    printf("C0: ack %zd new objects\n", number_of_new_objects);
+                    //printf("C0: ack %zd resignations\n", number_of_resignations);
+                    //printf("C0: ack %zd new objects\n", number_of_new_objects);
                 }
                 
 #pragma mark Process resignations from mutator status
@@ -564,27 +564,27 @@ namespace wry {
             assert((_mask_for_clearing & _color_for_allocation) == 0);
             
             // dump(old_color_for_allocation);
-            dump(_color_for_allocation);
+            //dump(_color_for_allocation);
             
             // dump(old_mask_for_tracing);
-            dump(_mask_for_tracing);
+            //dump(_mask_for_tracing);
             
             // dump(old_mask_for_deleting);
-            dump(_mask_for_deleting);
+            //dump(_mask_for_deleting);
             
             // dump(old_mask_for_clearing);
-            dump(_mask_for_clearing);
+            //dump(_mask_for_clearing);
             
-            printf("C0: Start scanning %zd objects with\n"
-                   "              trace mask %016llx\n"
-                   "             delete mask %016llx\n"
-                   "              clear mask %016llx\n"
-                   "    color_for_allocation %016llx\n",
-                   _known_objects.debug_size(),
-                   _mask_for_tracing,
-                   _mask_for_deleting,
-                   _mask_for_clearing,
-                   _color_for_allocation);
+//            printf("C0: Start scanning %zd objects with\n"
+//                   "              trace mask %016llx\n"
+//                   "             delete mask %016llx\n"
+//                   "              clear mask %016llx\n"
+//                   "    color_for_allocation %016llx\n",
+//                   _known_objects.debug_size(),
+//                   _mask_for_tracing,
+//                   _mask_for_deleting,
+//                   _mask_for_clearing,
+//                   _color_for_allocation);
             
             // While any objects are unprocessed
             for (;;) {
@@ -680,11 +680,11 @@ namespace wry {
             assert(children.c.empty());
             _known_objects = std::move(survivors);
             
-            auto t1 = std::chrono::steady_clock::now();
-            
-            printf("C0:     marked %zd\n", trace_count + mark_count);
-            printf("C0:     deleted %zd\n", delete_count);
-            printf("C0:     in %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+            //auto t1 = std::chrono::steady_clock::now();
+            //
+            //printf("C0:     marked %zd\n", trace_count + mark_count);
+            //printf("C0:     deleted %zd\n", delete_count);
+            //printf("C0:     in %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
             
             total_deleted.fetch_add(delete_count, Ordering::RELAXED);
             

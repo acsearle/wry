@@ -93,7 +93,8 @@ namespace wry {
                 
                 uint64_t h = rand() & (64 * 1024 - 1);
                 m.erase(h);
-                p.erase(h);
+                int _;
+                (void) p.try_erase(h, _);
                 
                 
                 m.insert_or_assign(k, v);

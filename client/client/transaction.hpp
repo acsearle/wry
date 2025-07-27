@@ -105,9 +105,9 @@ namespace wry::sim {
         // system should be open to extension at runtime
         
         enum State {
-            INITIAL,
-            COMMITTED,
-            ABORTED,
+            INITIAL = 0,
+            COMMITTED = 1,
+            ABORTED = 2,
         };
         
         enum Condition {
@@ -171,7 +171,7 @@ namespace wry::sim {
         void wait_on_entity_for_entity_id(EntityID, Condition);
 
         bool try_read_value_for_coordinate(Coordinate xy, Value& victim) const;
-        void write_value_for_coordinate(Coordinate, Value);
+        void try_write_value_for_coordinate(Coordinate, Value);
         void wait_on_value_for_coordinate(Coordinate, Condition);
 
         EntityID read_entity_id_for_coordinate(Coordinate) { return {}; }
@@ -179,6 +179,9 @@ namespace wry::sim {
         void wait_on_entity_id_for_coordinate(Coordinate, Condition);
 
         void wait_on_time(Time, Condition);
+
+        void on_commit_sleep_for(uint64_t ticks);
+        void on_abort_retry();
 
         State resolve() const;
         State abort() const;
@@ -189,14 +192,6 @@ namespace wry::sim {
     struct TransactionContext {
         
         const World* _world = nullptr;
-        
-        
-        uint64_t entity_get_priority(const Entity*);
-        
-        bool try_read_value_for_coordinate(Coordinate, Value&);
-        bool try_read_entity_id_for_coordinate(Coordinate, EntityID&);
-        bool try_read_entity_for_entity_id(EntityID, const Entity*&);
-
         
         template<typename Key>
         using Map = ConcurrentMap<Key, Atomic<const Transaction::Node*>>;
@@ -220,6 +215,13 @@ namespace wry::sim {
         Map<Time> _wait_on_time; // Run at a future time
         // Retry is a special case of schedule, but also a very common case
         // and also it gets deleted from the schedule right away
+        
+        
+        uint64_t entity_get_priority(const Entity*);
+        
+        bool try_read_value_for_coordinate(Coordinate, Value&);
+        bool try_read_entity_id_for_coordinate(Coordinate, EntityID&);
+        bool try_read_entity_for_entity_id(EntityID, const Entity*&);
                 
     };
     

@@ -98,20 +98,21 @@ namespace wry {
         }
         
         
-
-        
-        
                 
         struct ArenaAllocated {
+            
             static void* operator new(std::size_t size, std::align_val_t align) {
                 return allocate(size, (size_t)align);
             }
+            
             static void* operator new(std::size_t size, void* ptr) {
                 return ptr;
             }
+            
             static void operator delete(void*) {
                 // no-op
             }
+            
         };
         
     } // namespace _arena_allocator

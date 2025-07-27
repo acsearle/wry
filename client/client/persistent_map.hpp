@@ -55,14 +55,14 @@ namespace wry {
             };
         }
         
-        [[nodiscard]] PersistentMap clone_and_erase(Key key) const {
+        [[nodiscard]] std::pair<PersistentMap, bool> clone_and_try_erase(Key key, T& victim) const {
             uint64_t j = persistent_map_index_for_key(key);
-            T _ = {};
-            return PersistentMap{
-                _inner
-                ? _inner->clone_and_erase_key(j, _).first
-                : _inner
-            };
+            std::pair<PersistentMap, bool> result = { *this, false };
+            if (_inner) {
+                std::tie(result.first._inner,
+                         result.second) = _inner->clone_and_erase_key(j, victim);
+            }
+            return result;
         }
 
         
@@ -72,8 +72,10 @@ namespace wry {
             return *this = clone_and_set(key, value);
         }
 
-        PersistentMap& erase(Key key) {
-            return *this = clone_and_erase(key);
+        bool try_erase(Key key, T& victim) {
+            auto [node, flag] = clone_and_try_erase(key, victim);
+            _inner = node._inner;
+            return flag;
         }
 
         
@@ -99,10 +101,20 @@ namespace wry {
         shade(x._inner);
     }
     
+    template<typename T>
+    struct ParallelRebuildAction {
+        enum {
+            NONE,
+            WRITE,
+            ERASE,
+        } tag;
+        T value;
+    };
+    
     template<typename Key, typename T, typename U, typename F>
     PersistentMap<Key, T> parallel_rebuild(const PersistentMap<Key, T>& source,
                                            const ConcurrentMap<Key, U>& modifier,
-                                           F&& action) {
+                                           F&& action_for_key) {
         // Simple single-threaded implementation
         
         // TODO: Descend the two trees and rebuild up from the leaves.
@@ -113,8 +125,19 @@ namespace wry {
         // this phase
         auto first = modifier.begin();
         auto last = modifier.end();
-        for (; first != last; ++first)
-            result.set(first->first, action(*first));
+        for (; first != last; ++first) {
+            ParallelRebuildAction<T> action = action_for_key(*first);
+            switch (action.tag) {
+                case ParallelRebuildAction<T>::NONE:
+                    break;
+                case ParallelRebuildAction<T>::WRITE:
+                    result.set(first->first, action.value);
+                    break;
+                case ParallelRebuildAction<T>::ERASE:
+                    (void) result.try_erase(first->first, action.value);
+                    break;
+            }
+        }
         return result;
     }
 

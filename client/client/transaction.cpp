@@ -70,7 +70,7 @@ namespace wry::sim {
                                   desired);
     }
 
-    void Transaction::write_value_for_coordinate(Coordinate key, Value desired) {
+    void Transaction::try_write_value_for_coordinate(Coordinate key, Value desired) {
        transaction_write_generic(this,
                                            &(_context->_write_value_for_coordinate),
                                            key,
@@ -142,12 +142,22 @@ namespace wry::sim {
     }
 
     void Transaction::wait_on_time(Time key, Transaction::Condition condition) {
+        // Can't schedule things for past or present
+        assert(key > _context->_world->_time);
         transaction_wait_on_generic(this,
                                     &(_context->_wait_on_time),
                                     key,
                                     condition);
     }
 
+    void Transaction::on_commit_sleep_for(uint64_t ticks) {
+        assert(ticks > 0);
+        wait_on_time(_context->_world->_time + ticks, Transaction::ON_COMMIT);
+    }
+
+    void Transaction::on_abort_retry() {
+        wait_on_time(_context->_world->_time + 1, Transaction::ON_ABORT);
+    }
     
     
     
@@ -160,21 +170,22 @@ namespace wry::sim {
         observed = _state.load(Ordering::RELAXED);
         if (observed != INITIAL) {
             // printf("    Transaction for EntityID %llu is already resolved\n", _entity->_entity_id.data);
-            // already resolved
+            // The transaction has already been resolved.
             return observed;
         }
-        // we are in a race to resolve ourself and our collisions
-        // TODO: we need to get some global seed into this
+        // We are in a race to resolve ourself and our dependencies
         uint64_t priority = _context->entity_get_priority(_entity);
-        // for each of our proposed writes
+        // For each of our proposed actions
         for (size_t i = 0; i != _size; ++i) {
             // Head is not present if the node is for a nonexclusive container
+            // TODO: this is something of a hack.  Describe state better.
             if (_nodes[i]._head) {
-                // ORDER: Transactions are resolved after the barrier
+                // ORDER: Transaction mutations happen-before the completion
+                // barrier happens-before transaction resolution
                 const Node* head = _nodes[i]._head->load(Ordering::RELAXED);
-                // for each transaction proposing a conflicting write
+                // For each transaction proposing a conflicting write
                 for (; head; head = head->_next) {
-                    // if that transaction is higher priority than us
+                    // If that transaction is higher priority than us
                     if (head->priority() < priority) {
                         // A higher priority transaction conflicts with us.  We
                         // must resolve it, to see if it aborts us, or is aborted by
@@ -188,6 +199,10 @@ namespace wry::sim {
                         }
                         // else, other transaction ABORTED and we may continue resolving
                     }
+                    // else, the transaction is lower priority (or it is our
+                    // own entry in the list, and the same priority).  We don't
+                    // need to resolve it, and eagerly attempting to do so
+                    // would cause a cyclic dependency.
                 }
             }
         }
@@ -198,20 +213,20 @@ namespace wry::sim {
     Transaction::State Transaction::abort() const {
         State prior = _state.exchange(State::ABORTED, Ordering::RELAXED);
         assert(prior != State::COMMITTED);
-        //if (prior != State::ABORTED)
-          //  printf("ABORTED transaction for EntityID %llu\n", _entity->_entity_id.data);
-        // if (prior == State::ABORTED)
-            // printf("    Redundant ABORT for EntityID %llu\n", _entity->_entity_id.data);
+        if (prior != State::ABORTED)
+            printf("ABORTED transaction for EntityID %llu\n", _entity->_entity_id.data);
+         if (prior == State::ABORTED)
+             printf("    Redundant ABORT for EntityID %llu\n", _entity->_entity_id.data);
         return ABORTED;
     }
 
     Transaction::State Transaction::commit() const {
         State prior = _state.exchange(State::COMMITTED, Ordering::RELAXED);
         assert(prior != State::ABORTED);
-        //if (prior != State::COMMITTED)
-          //  printf("COMMITTED transaction for EntityID %llu\n", _entity->_entity_id.data);
-        // if (prior == State::COMMITTED)
-            // printf("    Redundant COMMIT for EntityID %llu\n", _entity->_entity_id.data);
+        if (prior != State::COMMITTED)
+            printf("COMMITTED transaction for EntityID %llu\n", _entity->_entity_id.data);
+         if (prior == State::COMMITTED)
+             printf("    Redundant COMMIT for EntityID %llu\n", _entity->_entity_id.data);
         return COMMITTED;
     }
 

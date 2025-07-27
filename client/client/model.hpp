@@ -89,7 +89,12 @@ namespace wry {
                                                        entity_ptr);
                 _world->_entity_id_for_coordinate._map.set(entity_ptr->_location,
                                                            entity_id);
-                _world->_ready.set(entity_id);
+                // _world->_ready.set(entity_id);
+                // TODO: clumsy
+                PersistentSet<EntityID> q;
+                _world->_waiting_on_time.try_get(Time{0}, q);
+                q.set(entity_id);
+                _world->_waiting_on_time.set(Time{0}, q);
             };
             
             /*
