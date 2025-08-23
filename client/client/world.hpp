@@ -8,23 +8,16 @@
 #ifndef world_hpp
 #define world_hpp
 
-#include <set>
-#include <map>
-#include <unordered_map>
-
 #include "sim.hpp"
 #include "simd.hpp"
-#include "table.hpp"
 #include "tile.hpp"
 #include "utility.hpp"
 #include "machine.hpp"
 #include "queue.hpp"
-#include "HeapTable.hpp"
 
 #include "persistent_set.hpp"
 #include "persistent_map.hpp"
-
-#include "array_mapped_trie.hpp"
+#include "waitable_map.hpp"
 
 
 namespace wry::sim {
@@ -35,15 +28,6 @@ namespace wry::sim {
     struct Entity;
     
     Time world_get_time(const World* world);
-    
-    template<typename Key, typename T>
-    struct WaitableMap {
-        // The actual key-value mapping
-        PersistentMap<Key, T> _map;
-        // The set of entities to notify when we write for a key; this will
-        // typically be a much smaller collection
-        PersistentMap<Key, PersistentSet<EntityID>> _waiting;
-    };
     
     template<typename Key, typename T>
     void trace(const WaitableMap<Key, T>& x, void* context) {

@@ -543,7 +543,7 @@ namespace wry {
             size_t trace_count = 0;
             size_t mark_count = 0;
             size_t delete_count = 0;
-            auto t0 = std::chrono::steady_clock::now();
+            // auto t0 = std::chrono::steady_clock::now();
             
             assert(greystack.c.empty());
             assert(survivors.debug_is_empty());

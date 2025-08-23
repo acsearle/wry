@@ -11,25 +11,18 @@
 #include <cassert>
 #include <memory>
 
-// TODO: for std::monostate, which should be in <utility>
 #include <bit>
-#include <variant>
+#include <variant> // for std::monostate before C++26
 
 #include "garbage_collected.hpp"
 #include "algorithm.hpp"
 
 namespace wry {
     
-    inline void trace(std::monostate,void*) {}
-
-    template<typename ForwardIterator, typename Size>
-    ForwardIterator trace_n(ForwardIterator first, Size count,void*p) {
-        for (; count > 0; (void)++first, --count) {
-            trace(*first,p);
-        }
-        return first;
+    inline void trace(std::monostate, void* _Nullable) {
+        // no-op
     }
-        
+    
     namespace array_mapped_trie {
         
 #pragma mark - Binary tools
@@ -70,39 +63,37 @@ namespace wry {
         }
         
         
-
         
-                
 #pragma mark Mutable compressed array tools
 
-        inline uint64_t mask_for_index(int index) {
+        inline uint64_t bitmask_for_index(int index) {
             assert(0 <= index);
             assert(index < 64);
             return (uint64_t)1 << (index & 63);
         }
         
-        inline uint64_t mask_below_index(int index) {
+        inline uint64_t bitmask_below_index(int index) {
             assert(0 <= index);
             assert(index < 64);
             return ~(~(uint64_t)0 << (index & 63));
         }
         
-        inline uint64_t mask_above_index(int index) {
+        inline uint64_t bitmask_above_index(int index) {
             assert(0 <= index);
             assert(index < 64);
             return ~(uint64_t)1 << (index & 63);
         }
         
         inline bool bitmap_get_for_index(uint64_t bitmap, int index) {
-            return bitmap & mask_for_index(index);
+            return bitmap & bitmask_for_index(index);
         }
         
         inline void bitmap_set_for_index(uint64_t& bitmap, int index) {
-            bitmap |= mask_for_index(index);
+            bitmap |= bitmask_for_index(index);
         }
         
         inline void bitmap_clear_for_index(uint64_t& bitmap, int index) {
-            bitmap &= ~mask_for_index(index);
+            bitmap &= ~bitmask_for_index(index);
         }
         
         // A compressed array is a bitmap and an array of T that compactly
@@ -125,12 +116,12 @@ namespace wry {
         }
         
         inline int compressed_array_get_compressed_index_for_index(uint64_t bitmap, int index) {
-            return popcount(bitmap & mask_below_index(index));
+            return popcount(bitmap & bitmask_below_index(index));
         }
 
         template<typename T>
         bool compressed_array_try_get_for_index(uint64_t bitmap,
-                                               T* array,
+                                               T* _Nonnull array,
                                                int index,
                                                std::remove_const_t<T>& victim) {
             bool result = compressed_array_contains_for_index(bitmap, index);
@@ -148,7 +139,7 @@ namespace wry {
         template<typename T>
         void compressed_array_insert_for_index(size_t debug_capacity,
                                                uint64_t& bitmap,
-                                               T* array,
+                                               T* _Nonnull array,
                                                int index,
                                                std::type_identity_t<T> value) {
             assert(!compressed_array_contains_for_index(bitmap, index));
@@ -164,7 +155,7 @@ namespace wry {
         
         template<typename T>
         T compressed_array_exchange_for_index(uint64_t& bitmap,
-                                              T* array,
+                                              T* _Nonnull array,
                                               int index,
                                               std::type_identity_t<T> value) {
             assert(compressed_array_contains_for_index(bitmap, index));
@@ -175,7 +166,7 @@ namespace wry {
         template<typename T>
         bool compressed_array_insert_or_exchange_for_index(size_t debug_capacity,
                                                            uint64_t& bitmap,
-                                                           T* array,
+                                                           T* _Nonnull array,
                                                            int index,
                                                            std::type_identity_t<T> value,
                                                            std::type_identity_t<T>& victim) {
@@ -199,7 +190,7 @@ namespace wry {
         
         template<typename T>
         bool compressed_array_try_erase_for_index(uint64_t& bitmap,
-                                                  T* array,
+                                                  T* _Nonnull array,
                                                   int index,
                                                   std::type_identity_t<T>& victim) {
             bool was_found = compressed_array_contains_for_index(bitmap, index);
@@ -216,16 +207,20 @@ namespace wry {
         }
                     
         template<typename T, typename U, typename V, typename F>
-        void transform_compressed_arrays(uint64_t b1, uint64_t b2, const T* v1, const U* v2, V* v3, const F& f) {
+        void transform_compressed_arrays(uint64_t b1,
+                                         uint64_t b2,
+                                         T const* _Nonnull v1,
+                                         U const* _Nonnull v2,
+                                         V* _Nonnull v3,
+                                         const F& f) {
             abort();
             uint64_t common = b1 | b2;
-            for (;;) {
-                if (!common)
-                    break;
-                uint64_t select = common & ~(common - 1);
+            while (common) {
+                uint64_t next = common - 1;
+                uint64_t select = common & ~next;
                 *v3++ = f((b1 & select) ? v1++ : nullptr,
                           (b2 & select) ? v2++ : nullptr);
-                common &= ~select;
+                common = next;
             }
         }
         
@@ -302,7 +297,7 @@ namespace wry {
         template<typename T>
         struct Node : GarbageCollected {
             
-            static void* operator new(size_t count, void* ptr) {
+            static void* _Nonnull operator new(size_t count, void* _Nonnull ptr) {
                 return ptr;
             }
             
@@ -314,11 +309,10 @@ namespace wry {
 #endif
             uint64_t _bitmap; // bitmap of which items are present
             union {
-                const Node* _children[0]; // compressed flexible member array of children or values
+                // compressed flexible member array of children or values
+                Node const* _Nonnull _children[0];
                 T _values[0];
             };
-            
-            
             
             bool has_children() const {
                 return (bool)(_prefix_and_shift & (uint64_t)63);
@@ -336,7 +330,8 @@ namespace wry {
             
             uint64_t get_prefix() const {
                 uint64_t prefix = _prefix_and_shift & ~(uint64_t)63;
-                assert(!(prefix & ~(~(uint64_t)63 << get_shift())));
+                [[maybe_unused]] int shift = get_shift();
+                assert(!(prefix & ~(~(uint64_t)63 << shift)));
                 return prefix;
             }
             
@@ -353,7 +348,7 @@ namespace wry {
             }
 
             int get_index_for_key(uint64_t key) const {
-                int shift = get_shift();
+                [[maybe_unused]] int shift = get_shift();
                 assert(!((key ^ _prefix_and_shift) >> shift >> 6));
                 return (int)((key >> get_shift()) & (uint64_t)63);
             }
@@ -417,7 +412,7 @@ namespace wry {
             , _bitmap(bitmap) {
             }
             
-            virtual void _garbage_collected_enumerate_fields(TraceContext* context) const override {
+            virtual void _garbage_collected_enumerate_fields(TraceContext* _Nullable context) const override {
                 int compressed_size = popcount(_bitmap);
                 if (has_children()) {
                     assert(compressed_size <= _debug_capacity);
@@ -427,22 +422,22 @@ namespace wry {
                 }
             }
                         
-            [[nodiscard]] static Node* make(uint64_t prefix_and_shift,
+            [[nodiscard]] static Node* _Nonnull make(uint64_t prefix_and_shift,
                                             size_t capacity,
                                             uint64_t bitmap) {
                 bool has_children_ = prefix_and_shift & (uint64_t)63;
                 size_t item_bytes = has_children_ ? sizeof(const Node*) : sizeof(T);
-                void* pointer = GarbageCollected::operator new(sizeof(Node) + (capacity * item_bytes));
+                void* _Nonnull pointer = GarbageCollected::operator new(sizeof(Node) + (capacity * item_bytes));
                 return new(pointer) Node(prefix_and_shift,
-                                               capacity,
-                                               bitmap);
+                                         capacity,
+                                         bitmap);
             }
             
-            [[nodiscard]] static Node* make_with_key_value(uint64_t key, T value) {
+            [[nodiscard]] static Node* _Nonnull make_with_key_value(uint64_t key, T value) {
                 int shift = 0;
                 size_t capacity = 1;
                 uint64_t bitmap = (uint64_t)1 << (int)(key & (uint64_t)63);
-                Node* new_node = Node::make(prefix_and_shift_for_keylike_and_shift(key,
+                Node* _Nonnull new_node = Node::make(prefix_and_shift_for_keylike_and_shift(key,
                                                                                    shift),
                                             capacity,
                                             bitmap);
@@ -450,16 +445,16 @@ namespace wry {
                 return new_node;
             }
             
-            [[nodiscard]] Node* clone_with_capacity(size_t capacity) const {
+            [[nodiscard]] Node* _Nonnull clone_with_capacity(size_t capacity) const {
                 int count = popcount(_bitmap);
                 assert(capacity >= count);
-                Node* node = make(_prefix_and_shift, capacity, _bitmap);
+                Node* _Nonnull node = make(_prefix_and_shift, capacity, _bitmap);
                 size_t item_size = _prefix_and_shift & (uint64_t)63 ? sizeof(const Node*) : sizeof(T);
                 memcpy(node->_children, _children, count * item_size);
                 return node;
             }
             
-            [[nodiscard]] Node* clone() const {
+            [[nodiscard]] Node* _Nonnull clone() const {
                 return clone_with_capacity(popcount(_bitmap));
             }
 
@@ -502,9 +497,8 @@ namespace wry {
             
             
             
-            void insert_child(const Node* new_child) {
+            void insert_child(Node const* _Nonnull new_child) {
                 assert(has_children());
-                assert(new_child);
                 uint64_t key = new_child->get_prefix();
                 assert(prefix_covers_key(key));
                 compressed_array_insert_for_index(_debug_capacity,
@@ -514,9 +508,8 @@ namespace wry {
                                                   new_child);
             }
             
-            const Node* exchange_child(const Node* new_child) {
+            Node const* _Nonnull exchange_child(Node const* _Nonnull new_child) {
                 assert(has_children());
-                assert(new_child);
                 uint64_t key = new_child->get_prefix();
                 assert(prefix_covers_key(key));
                 return compressed_array_exchange_for_index(_bitmap,
@@ -548,7 +541,7 @@ namespace wry {
 
             // Merge two disjoint nodes by making them the children of a higher
             // level node
-            [[nodiscard]] static Node* merge_disjoint(const Node* a, const Node* b) {
+            [[nodiscard]] static Node* _Nonnull merge_disjoint(Node const* _Nonnull a, Node const* _Nonnull b) {
                 assert(a && b);
                 uint64_t prefix_difference = a->_prefix_and_shift ^ b->_prefix_and_shift;
                 int shift = shift_for_keylike_difference(prefix_difference);
@@ -561,12 +554,12 @@ namespace wry {
             }
             
                        
-            [[nodiscard]] Node* clone_and_insert_child(const Node* new_child) const {
+            [[nodiscard]] Node* _Nonnull clone_and_insert_child(const Node* _Nonnull new_child) const {
                 assert(has_children());
                 uint64_t key = new_child->get_prefix();
                 assert(prefix_covers_key(key));
-                Node* new_node = clone_with_capacity(popcount(_bitmap) + 1);
-                const Node* _ = nullptr;
+                Node* _Nonnull new_node = clone_with_capacity(popcount(_bitmap) + 1);
+                Node const* _Nullable _ = nullptr;
                 bool did_assign = compressed_array_insert_or_assign_for_index(new_node->_debug_capacity,
                                                                               new_node->_bitmap,
                                                                               new_node->_children,
@@ -577,11 +570,11 @@ namespace wry {
                 return new_node;
             }
             
-            [[nodiscard]] Node* clone_and_assign_child(const Node* new_child) const {
+            [[nodiscard]] Node* _Nonnull clone_and_assign_child(Node const* _Nonnull new_child) const {
                 assert(has_children());
                 uint64_t key = new_child->get_prefix();
                 assert(prefix_covers_key(key));
-                Node* new_node = clone_with_capacity(popcount(_bitmap));
+                Node* _Nonnull new_node = clone_with_capacity(popcount(_bitmap));
                 (void) compressed_array_exchange_for_index(new_node->_bitmap,
                                                            new_node->_children,
                                                            get_index_for_key(key),
@@ -589,7 +582,7 @@ namespace wry {
                 return new_node;
             }
                         
-            Node* clone_and_erase_child_containing_key(uint64_t key) const {
+            Node* _Nonnull clone_and_erase_child_containing_key(uint64_t key) const {
                 assert(has_children());
                 Node* new_node = clone_with_capacity(popcount(_bitmap));
                 const Node* _ = nullptr;
@@ -605,7 +598,7 @@ namespace wry {
             
         
                                     
-            [[nodiscard]] std::pair<Node*, bool> clone_and_insert_or_assign_key_value(uint64_t key, T value, T& victim) const {
+            [[nodiscard]] std::pair<Node* _Nonnull, bool> clone_and_insert_or_assign_key_value(uint64_t key, T value, T& victim) const {
                 if (!prefix_covers_key(key)) {
                     return {
                         merge_disjoint(this,
@@ -614,9 +607,9 @@ namespace wry {
                     };
                 }
                 int index = get_index_for_key(key);
-                uint64_t select = mask_for_index(index);
+                uint64_t select = bitmask_for_index(index);
                 int compressed_index = get_compressed_index_for_index(index);
-                Node* new_node = clone_with_capacity(popcount(_bitmap | select));
+                Node* _Nonnull new_node = clone_with_capacity(popcount(_bitmap | select));
                 bool leaf_did_assign = false;
                 if (has_values()) {
                     leaf_did_assign = compressed_array_insert_or_exchange_for_index(new_node->_debug_capacity,
@@ -627,14 +620,14 @@ namespace wry {
                                                                                     victim);
                 } else {
                     assert(has_children());
-                    Node* new_child = nullptr;
+                    Node* _Nullable new_child = nullptr;
                     if (_bitmap & select) {
-                        const Node* child = _children[compressed_index];
+                        const Node* _Nonnull child = _children[compressed_index];
                         std::tie(new_child, leaf_did_assign) = child->clone_and_insert_or_assign_key_value(key, value, victim);
                     } else {
                         new_child = make_with_key_value(key, value);
                     }
-                    const Node* _;
+                    Node const* _Nullable _ = nullptr;
                     (void) compressed_array_insert_or_exchange_for_index(new_node->_debug_capacity,
                                                                          new_node->_bitmap,
                                                                          new_node->_children,
@@ -645,7 +638,7 @@ namespace wry {
                 return { new_node, leaf_did_assign };
             }
             
-            [[nodiscard]] std::pair<const Node*, bool> clone_and_erase_key(uint64_t key, T& victim) const {
+            [[nodiscard]] std::pair<Node const* _Nullable, bool> clone_and_erase_key(uint64_t key, T& victim) const {
                 if (!prefix_covers_key(key) || !bitmap_covers_key(key))
                     return { this, false };
                 int compressed_index = get_compressed_index_for_key(key);
@@ -660,7 +653,7 @@ namespace wry {
                     };
                 } else {
                     assert(has_values());
-                    Node* new_node = clone();
+                    Node* _Nonnull new_node = clone();
                     int index = get_index_for_key(key);
                     bool did_erase = compressed_array_try_erase_for_index(new_node->_bitmap,
                                                                           new_node->_values,
@@ -692,7 +685,7 @@ namespace wry {
         }; // Node
         
         template<typename T>
-        void print(const Node<T>* s) {
+        void print(Node<T> const* _Nullable s) {
             if (!s) {
                 printf("nullptr\n");
             }
@@ -709,7 +702,7 @@ namespace wry {
         }
         
         template<typename T>
-        bool equality(const Node<T>* a, const Node<T>* b) {
+        bool equality(Node<T> const* _Nonnull a, Node<T> const* _Nonnull b) {
             if (a == b)
                 // by identity
                 return true;

@@ -61,7 +61,9 @@ namespace wry {
     struct matrix<const T>; // undefined
     
     template<typename T>
-    struct Rank<matrix<T>> : std::integral_constant<std::size_t, wry::Rank<T>::value + 2> {};
+    struct Rank<matrix<T>>
+    : std::integral_constant<std::size_t, wry::Rank<T>::value + 2> {
+    };
     
 
     template<typename T>

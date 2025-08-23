@@ -19,6 +19,12 @@
 
 namespace wry {
     
+    // TODO: image concept
+    //
+    // We attempt to support matrix and matrix_view of various pixel formats
+
+    // Duck typed interface?
+    
     size_type image_width(const auto& v) {
         return v.minor();
     }

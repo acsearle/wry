@@ -93,7 +93,7 @@ namespace wry::sim {
             // Value result = {};
             ParallelRebuildAction<Value> result;
             if (winner) {
-                result.tag = ParallelRebuildAction<Value>::WRITE;
+                result.tag = ParallelRebuildAction<Value>::WRITE_VALUE;
                 // The desired value is type-erased (for now)
                 using std::get;
                 result.value = get<Value>(winner->_desired);
@@ -119,13 +119,21 @@ namespace wry::sim {
         // expect any locality here.  We do need a prefix search on Coordinate,
         // so we might need a 128 bit key of hash(Coordinate) cat hash(EntityID).
         
+        // TODO: This must be more tightly coupled with writes to the kv store.
+        // When we write, we want to wake up all previous waiters, and put all
+        // new waiters into the readylist, except only the writer if it has also
+        // requested to be woken (i.e. they all wait against the value they
+        // expect at the end of the cycle).  If this is genuinely complex we can
+        // also wake the writer immediately because of benign spurious wakeups
+        //
+        
         new_value_for_coordinate._waiting
         = parallel_rebuild(_value_for_coordinate._waiting,
                            context._wait_on_value_for_coordinate,
                            [this](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
                            -> ParallelRebuildAction<PersistentSet<EntityID>> {
             ParallelRebuildAction<PersistentSet<EntityID>> result;
-            result.tag = ParallelRebuildAction<PersistentSet<EntityID>>::WRITE;
+            result.tag = ParallelRebuildAction<PersistentSet<EntityID>>::WRITE_VALUE;
             _value_for_coordinate._waiting.try_get(kv.first, result.value);
             const Transaction::Node* head = kv.second.load(Ordering::RELAXED);
             for (; head; head = head->_next) {
@@ -146,7 +154,7 @@ namespace wry::sim {
                            [this](const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
                            -> ParallelRebuildAction<PersistentSet<EntityID>> {
             ParallelRebuildAction<PersistentSet<EntityID>> result;
-            result.tag = ParallelRebuildAction<PersistentSet<EntityID>>::WRITE;
+            result.tag = ParallelRebuildAction<PersistentSet<EntityID>>::WRITE_VALUE;
             _waiting_on_time.try_get(kv.first, result.value);
             const Transaction::Node* head = kv.second.load(Ordering::RELAXED);
             for (; head; head = head->_next) {

@@ -22,7 +22,7 @@ namespace wry {
         
     namespace concurrent_skiplist {
         
-        inline constinit thread_local std::ranlux24* thread_local_random_number_generator = nullptr;
+        inline constinit thread_local std::ranlux24* _Nullable thread_local_random_number_generator = nullptr;
         
         template<typename Key, typename Compare = std::less<Key>>
         struct ConcurrentSkiplistSet {
@@ -33,9 +33,9 @@ namespace wry {
                 
                 Key _key;
                 size_t _size;
-                mutable Atomic<Node*> _next[0];
+                Atomic<Node* _Nullable> _next[] __counted_by(_size);
                 
-                static void* operator new(size_t count, void* ptr) {
+                static void* _Nonnull operator new(size_t count, void* _Nonnull ptr) {
                     return ptr;
                 }
                 
@@ -44,11 +44,11 @@ namespace wry {
                 , _size(n) {
                 }
                 
-                static Node* with_size_emplace(size_t n, auto&&... args) {
+                static Node* _Nonnull with_size_emplace(size_t n, auto&&... args) {
                     // void* raw = GarbageCollected::operator new(sizeof(Node) + sizeof(Atomic<Node*>) * n);
                     size_t number_of_bytes = sizeof(Node) + sizeof(Atomic<Node*>) * n;
-                    void* raw = ArenaAllocated::operator new(number_of_bytes,
-                                                             std::align_val_t{alignof(Node)});
+                    void* _Nonnull raw = ArenaAllocated::operator new(number_of_bytes,
+                                                                      std::align_val_t{alignof(Node)});
                     std::memset(raw, 0, number_of_bytes);
                     return new(raw) Node(n, FORWARD(args)...);
                 }
@@ -57,7 +57,7 @@ namespace wry {
                 //
                 // TODO: tune shape of distribution
                 // Quick experiment indicates a n^{-0.5} is better than n^{-0.25}
-                static Node* with_random_size_emplace(auto&&... args) {
+                static Node* _Nonnull with_random_size_emplace(auto&&... args) {
                     // TODO: initialize this on thread
                     if (!thread_local_random_number_generator) {
                         thread_local_random_number_generator = new std::ranlux24;
@@ -80,21 +80,21 @@ namespace wry {
             
             struct Head : ArenaAllocated {
                 
-                mutable Atomic<size_t> _top;
-                mutable Atomic<Node*> _next[0];
+                Atomic<size_t> _top;
+                Atomic<Node* _Nullable> _next[0];
                 
-                static void* operator new(size_t count, void* ptr) {
+                static void* _Nonnull  operator new(size_t count, void* _Nonnull ptr) {
                     return ptr;
                 }
                 
                 Head() : _top(1) {}
                 
-                static Head* make() {
+                static Head* _Nonnull make() {
                     size_t n = 33;
                     // void* raw =  GarbageCollected::operator new(sizeof(Head) + sizeof(Atomic<Node*>) * n);
                     size_t number_of_bytes = sizeof(Head) + sizeof(Atomic<Node*>) * n;
-                    void* raw = ArenaAllocated::operator new(number_of_bytes,
-                                                             std::align_val_t{alignof(Head)});
+                    void* _Nonnull raw = ArenaAllocated::operator new(number_of_bytes,
+                                                                      std::align_val_t{alignof(Head)});
                     std::memset(raw, 0, number_of_bytes);
                     return new(raw) Head;
                 }
@@ -110,7 +110,7 @@ namespace wry {
                 // we can iterate across a live sequence but obviously that won't
                 // be authoritative
                 
-                Node* current;
+                Node* _Nullable current;
                 
                 bool operator==(const iterator&) const = default;
                 
@@ -119,7 +119,7 @@ namespace wry {
                     return current->_key;
                 }
                 
-                Key* operator->() const {
+                Key* _Nonnull operator->() const {
                     assert(current);
                     return &(current->_key);
                 }
@@ -144,7 +144,7 @@ namespace wry {
                 
             }; // struct iterator
             
-            const Head* _head;
+            Head* _Nonnull _head;
             
             ConcurrentSkiplistSet()
             : _head(Head::make()) {
@@ -163,7 +163,7 @@ namespace wry {
             template<typename Query>
             iterator find(const Query& query) const {
                 size_t i = _head->_top.load(Ordering::RELAXED) - 1;
-                Atomic<Node*>* left = _head->_next + i;
+                Atomic<Node*> const* _Nonnull left = _head->_next + i;
                 for (;;) {
                     Node* candidate = left->load(Ordering::ACQUIRE);
                     if (!candidate || Compare()(query, candidate->_key)) {
@@ -179,7 +179,10 @@ namespace wry {
                 }
             }
             
-            static std::pair<Node*, bool> _link_level(size_t i, Atomic<Node*>* left, Node* expected, Node* desired) {
+            static std::pair<Node* _Nullable, bool> _link_level(size_t i,
+                                                                Atomic<Node*>* _Nonnull left,
+                                                                Node* _Nullable expected,
+                                                                Node* _Nonnull desired) {
             alpha:
                 assert(left && desired);
                 assert(!expected || (Compare()(desired->_key, expected->_key)));
@@ -199,19 +202,22 @@ namespace wry {
                 goto beta;
             }
             
-            static std::pair<Node*, bool> _try_emplace(size_t i, Atomic<Node*>* left, auto&& keylike, auto&&... args) {
+            static std::pair<Node* _Nullable, bool> _try_emplace(size_t i,
+                                                             Atomic<Node*>* _Nonnull left,
+                                                             auto&& keylike,
+                                                             auto&&... args) {
             alpha:
-                Node* candidate = left->load(Ordering::ACQUIRE);
+                Node* _Nullable candidate = left->load(Ordering::ACQUIRE);
                 if (!candidate || Compare()(keylike, candidate->_key))
                     goto beta;
                 if (!(Compare()(candidate->_key, keylike)))
-                    return std::pair(candidate, false);
+                    return {candidate, false};
                 left = candidate->_next + i;
                 goto alpha;
             beta:
                 assert(!candidate || Compare()(keylike, candidate->_key));
                 if (i == 0) {
-                    Node* p = Node::with_random_size_emplace(FORWARD(keylike), FORWARD(args)...);
+                    Node* _Nonnull p = Node::with_random_size_emplace(FORWARD(keylike), FORWARD(args)...);
                     auto result = _link_level(0, left, candidate, p);
                     if (!result.second)
                         free(p);
@@ -256,7 +262,7 @@ namespace wry {
                 
                 static decltype(auto) key_if_pair(auto&& keylike) {
                     if constexpr (std::is_same_v<std::decay_t<decltype(keylike)>, P>) {
-                        return forward_like<decltype(keylike)>(keylike.first);
+                        return std::forward_like<decltype(keylike)>(keylike.first);
                     } else {
                         return FORWARD(keylike);
                     }

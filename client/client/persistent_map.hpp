@@ -19,15 +19,31 @@
 
 namespace wry {
         
+    // TODO: move elsewhere
     template<typename Key, typename T, typename Compare>
-    void trace(const std::map<Key, T, Compare>& m,void*q) {
+    void trace(const std::map<Key, T, Compare>& m, void* context) {
         for (const auto& p : m)
-            trace(p,q);
+            trace(p, context);
     }
 
+    // TODO: this interface clumsy
     inline uint64_t persistent_map_index_for_key(uint64_t key) {
         return key;
     }
+    
+    // PersistentMap provides key-value mapping backed by an array_mapped_trie
+    //
+    // Requires the key be mapped to a 64-bit index.  Optimal for blocks of
+    // contiguous indices.  Explicitly not a standard hash; must be perfect;
+    // should concentrate entropy at lsbs.
+    //
+    // It is efficient to look up the subtrees bounding index ranges.
+    // For coordinates represented in Z-order, the data structure operates
+    // somewhat like a quadtree.
+    
+    // TODO: index range lookup
+    
+    // TODO: bottom-up rebuild
     
     template<typename Key, typename T>
     struct PersistentMap {
@@ -69,7 +85,8 @@ namespace wry {
         // Mutable interface.  The backing structure remains immutable; this is
         // just sugar to tersely swing the pointer.
         PersistentMap& set(Key key, T value) {
-            return *this = clone_and_set(key, value);
+            *this = clone_and_set(key, value);
+            return *this;
         }
 
         bool try_erase(Key key, T& victim) {
@@ -77,7 +94,6 @@ namespace wry {
             _inner = node._inner;
             return flag;
         }
-
         
         void parallel_for_each(auto&& action) const {
             if (_inner) {
@@ -104,9 +120,9 @@ namespace wry {
     template<typename T>
     struct ParallelRebuildAction {
         enum {
-            NONE,
-            WRITE,
-            ERASE,
+            NONE = 0,
+            WRITE_VALUE,
+            CLEAR_VALUE,
         } tag;
         T value;
     };
@@ -121,8 +137,8 @@ namespace wry {
         // This can be made highly parallel.
         
         PersistentMap<Key, T> result{source};
-        // SAFETY: We can use the map unlocked here because it is immutable in
-        // this phase
+        // SAFETY: We can iterate the concurrent map here because it is
+        // immutable in this phase
         auto first = modifier.begin();
         auto last = modifier.end();
         for (; first != last; ++first) {
@@ -130,10 +146,10 @@ namespace wry {
             switch (action.tag) {
                 case ParallelRebuildAction<T>::NONE:
                     break;
-                case ParallelRebuildAction<T>::WRITE:
+                case ParallelRebuildAction<T>::WRITE_VALUE:
                     result.set(first->first, action.value);
                     break;
-                case ParallelRebuildAction<T>::ERASE:
+                case ParallelRebuildAction<T>::CLEAR_VALUE:
                     (void) result.try_erase(first->first, action.value);
                     break;
             }

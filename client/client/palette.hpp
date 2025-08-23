@@ -14,6 +14,8 @@
 #include "simd.hpp"
 
 namespace wry {
+    
+    // Basic/placeholder UI element to pick from a 2D grid
         
     template<typename T>
     struct Palette {

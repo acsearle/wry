@@ -12,25 +12,40 @@
 
 namespace wry {
     
-    // A type that holds a T and provides access to it via the pointer
-    // interface.  Useful for implementing operator->() on iterators that
-    // return a value.
+    // A type that holds a T but provides access to it via a subset of the
+    // pointer interface.
     
     template<typename T>
     class indirect {
+        
         T _value;
+        
     public:
-        indirect() = delete;
-        indirect(const indirect&) = delete;
-        indirect(indirect&&) = default;
-        explicit indirect(T&& x) : _value(std::move(x)) {}
-        ~indirect() = default;
-        indirect& operator=(const indirect&) = delete;
-        indirect& operator=(indirect&&) = delete;
-        const T* operator->() const { return std::addressof(_value); }
-        const T& operator*() const { return _value; }
-        explicit operator bool() const { return true; }
-        bool operator!() const { return false; }
+        
+        constexpr explicit indirect(T&& x)
+        : _value(std::move(x)) {
+        }
+        
+        constexpr indirect() = delete;
+        
+        // (other special member functions defaulted)
+        
+        constexpr const T* _Nonnull operator->() const {
+            return std::addressof(_value);
+        }
+        
+        constexpr const T& operator*() const {
+            return _value;
+        }
+        
+        constexpr explicit operator bool() const {
+            return true;
+        }
+        
+        constexpr bool operator!() const {
+            return false;
+        }
+        
     };
     
 } // namespace wry

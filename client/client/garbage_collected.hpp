@@ -121,11 +121,6 @@ namespace wry {
         this->_garbage_collected_trace(p);
     }
     
-#if 0
-    // inline Color GarbageCollected::_garbage_collected_sweep() const {
-        // return color.load();
-    // }
-#endif
     inline Color GarbageCollected::_garbage_collected_sweep() const {
         return _color.load(Ordering::RELAXED);
     }
@@ -166,76 +161,18 @@ namespace wry {
         return self;
     }
     
-    /*
-    // implementation of
-    
-    template<PointerConvertibleTo<GarbageCollected> T>
-    hash_t hash(T*const self ) {
-        return self->_garbage_collected_hash();
-    }
-    
-    template<PointerConvertibleTo<GarbageCollected> T>
-    void debug(const T* self) {
-        if (self) {
-            self->_garbage_collected_debug();
-        } else {
-            printf("(const GarbageCollected*)nullptr\n");
-        }
-    }
-    
-    template<PointerConvertibleTo<GarbageCollected> T>
-    void passivate(T* self) {
-        self = nullptr;
-    }
-    
-    template<PointerConvertibleTo<GarbageCollected> T>
-    void shade(T*const self) {
-        if (self)
-            self->_garbage_collected_shade();
-    }
-    
-    template<PointerConvertibleTo<GarbageCollected> T>
-    void trace(T*const self) {
-        if (self)
-            self->_garbage_collected_trace();
-    }
-    
-    template<PointerConvertibleTo<GarbageCollected> T>
-    void trace_weak(T*const self) {
-        if (self)
-            self->_garbage_collected_trace_weak();
-    }
-     */
-    
     template<std::integral T>
     void trace(const T& self, void* p) {
     }
-
+    
+    template<typename ForwardIterator, typename Size>
+    ForwardIterator trace_n(ForwardIterator first, Size count, void* p) {
+        for (; count > 0; (void)++first, --count) {
+            trace(*first,p);
+        }
+        return first;
+    }
+    
 } // namespace wry
-
-
-#if 0
-// Tricolor abstraction color
-enum class Color {
-    WHITE = 0,
-    BLACK = 1,
-    GRAY  = 2,
-    RED   = 3,
-};
-
-struct AtomicEncodedColor {
-    
-    Atomic<std::underlying_type_t<Color>> _encoded;
-    
-    AtomicEncodedColor();
-    Color load() const;
-    bool compare_exchange(Color& expected, Color desired);
-    
-};
-
-#endif
-
-
-
 
 #endif /* garbage_collected_hpp */

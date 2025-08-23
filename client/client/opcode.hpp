@@ -15,15 +15,6 @@
 
 namespace wry::sim {
     
-    // simple enum reflection
-    
-    /*
-    struct ENUM_PAIR {
-        int64_t first;
-        const char* second;
-    };
-     */
-    
     // define opcodes
     
 #define WRY_OPCODES_X \

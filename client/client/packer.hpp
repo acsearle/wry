@@ -17,7 +17,7 @@ namespace wry {
     // Guillotine algorithm for packing rectangles, typically for packing
     // images into a sprite sheet / texture atlas
 
-// We don't assume that the inputs are sorted.
+    // We don't assume that the inputs are sorted.
 
     template<typename T>
     struct packer {

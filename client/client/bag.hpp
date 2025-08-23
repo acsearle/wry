@@ -113,7 +113,10 @@ namespace wry {
         void push(T value) {
             ++_debug_size;
             while (!_head || !_head->try_push(value)) {
-                _head = new Node{_head, 0};
+                Node* node = new Node;
+                node->_next = _head;
+                node->_size = 0;
+                _head = node;
                 if (!_tail)
                     _tail = _head;
             }

@@ -14,6 +14,8 @@
 
 namespace wry {
     
+    // Platform-specific lightweight locks
+    
 #ifdef __APPLE__
     struct FastLockable {
         os_unfair_lock _lock = OS_UNFAIR_LOCK_INIT;

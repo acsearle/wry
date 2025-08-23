@@ -209,7 +209,7 @@ namespace wry {
             return bn->_ctrie_bn_to_contracted(this);
         }
         
-        const MainNode* CNode::to_compressed(int level) const {
+        [[nodiscard]] const MainNode* CNode::to_compressed(int level) const {
             return resurrected()->to_contracted(level);
         }
         
@@ -218,6 +218,9 @@ namespace wry {
             // INode::clean() is only invoked in contexts where we are already
             // going to RESTART descending the tree, so we don't need to report
             // if this compare_exchange fails
+            // SAFETY: Static analysis correctly notes that we sometimes
+            // discard the node returned by to_compressed.  This is only OK
+            // because the garbage collector saves us.
             parent->compare_exchange(this, this->to_compressed(level));
         }
         
@@ -645,6 +648,8 @@ namespace wry {
                                       uint64_t flag) const {
         if (this != key)
             return EraseResult::NOTFOUND;
+        // SAFETY: We sometimes discard the pointer to the contracted node; this
+        // is OK because the garbage collector saves us
         return (i->compare_exchange(cn, cn->copy_erase(pos, flag)->to_contracted(lev))
                 ? EraseResult::OK
                 : EraseResult::RESTART);
@@ -671,6 +676,8 @@ namespace wry {
                 // The sizes match
                 if (!__builtin_memcmp(hs->_bytes, query.view.data(), query.view.size())) {
                     // The strings match
+                    // TODO: We need to reintroduce weak support into the
+                    // garbage collector to ressurrect this code path
                     abort();
 #if 0
                     Color expected = Color::WHITE;
@@ -705,6 +712,9 @@ namespace wry {
             nhs = make_HeapString_from_Query(query);
             INode* nbn = new INode(CNode::make(hs, nhs, lev + W));
             nmn = cn->copy_assign(pos, nbn);
+            // SAFETY: "Potential leak detected"; specifically when we lose the
+            // race to update the trie, we discard the new node and rely on
+            // the garbage collector to eventually deal with it
             return i->compare_exchange(mn, nmn) ? nhs : nullptr;
         }
     }

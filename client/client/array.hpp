@@ -8,6 +8,8 @@
 #ifndef array_hpp
 #define array_hpp
 
+#include <sanitizer/asan_interface.h>
+
 #include <array>
 #include <iterator>
 
@@ -18,7 +20,6 @@
 #include "utility.hpp"
 
 #include "array_view.hpp"
-#include "maybe.hpp"
 #include "with_capacity.hpp"
 
 namespace wry {
@@ -34,7 +35,13 @@ namespace wry {
     template<typename T>
     struct Rank<ContiguousDeque<T>> 
     : std::integral_constant<std::size_t, Rank<T>::value + 1> {};
-        
+    
+    // TODO:
+    //    void SANITIZER_CDECL __sanitizer_annotate_double_ended_contiguous_container(
+    //        const void *storage_beg, const void *storage_end,
+    //        const void *old_container_beg, const void *old_container_end,
+    //        const void *new_container_beg, const void *new_container_end);
+    
     template<Relocatable T>
     struct ContiguousDeque {
                 
@@ -62,7 +69,9 @@ namespace wry {
         }
         
         static T* _allocate_size_in_bytes(size_type count) {
-            return static_cast<T*>(operator new(count));
+            void* addr = (operator new(count));
+            ASAN_POISON_MEMORY_REGION(addr, count);
+            return (T*)addr;
         }
         
         static T* _allocate_size(size_type count) {
@@ -73,9 +82,22 @@ namespace wry {
             operator delete(static_cast<void*>(allocation_begin));
         }
         
+        void _poison(T* a, T* b) {
+            ASAN_POISON_MEMORY_REGION(a, (b - a) * sizeof(T));
+        }
+        
+        void _unpoison(T* a, T* b) {
+            ASAN_UNPOISON_MEMORY_REGION(a, (b - a) * sizeof(T));
+        }
+        
         void _destroy() noexcept {
             std::destroy(_begin, _end);
+            _poison(_begin, _end);
             _deallocate(_allocation_begin);
+            _allocation_begin = nullptr;
+            _allocation_end = nullptr;
+            _begin = nullptr;
+            _end = nullptr;
         }
 
         void _construct_with_capacity(size_type count) noexcept {
@@ -94,6 +116,8 @@ namespace wry {
         
         ContiguousDeque(const ContiguousDeque& other) 
         : ContiguousDeque(wry::with_capacity, other.size()) {
+            size_t n = other.size();
+            _unpoison(_end, _end + n);
             _end = std::uninitialized_copy(other.begin(), other.end(), _end);
         }
         
@@ -110,18 +134,26 @@ namespace wry {
         
         ContiguousDeque& operator=(const ContiguousDeque& other) {
             if (other.size() <= size()) {
-                iterator last = std::copy(other.begin(), other.end(), _begin);
-                std::destroy(last, _end);
-                _end = last;
+                T* new_end = std::copy(other.begin(), other.end(), _begin);
+                std::destroy(new_end, _end);
+                _poison(new_end, _end);
+                _end = new_end;
             } else if (other.size() <= capacity()) {
-                const_iterator middle = other.begin() + size();
+                // Note that capacity() represents [_begin, _allocation_end)
+                T const* middle = other.begin() + size();
+                T* new_end = _begin + other.size();
+                _unpoison(_end, new_end);
                 _end = std::uninitialized_copy(middle, other.end(),
                                                std::copy(other.begin(), middle,
                                                          _begin));
+                assert(_end == new_end);
             } else {
                 _destroy();
                 _construct_with_capacity(other.size());
+                auto new_end = _begin + other.size();
+                _unpoison(_begin, new_end);
                 _end = std::uninitialized_copy(other.begin(), other.end(), begin());
+                assert(_end == new_end);
             }
             return *this;
         }
@@ -138,7 +170,10 @@ namespace wry {
         
         explicit ContiguousDeque(size_type count)
         : ContiguousDeque(wry::with_capacity_t{}, count) {
-            _end = std::uninitialized_value_construct_n(_begin, count);
+            T* new_end = _end + count;
+            _unpoison(_end, new_end);
+            _end = std::uninitialized_value_construct_n(_end, count);
+            assert(_end == new_end);
         }
 
         template<typename U>
@@ -176,7 +211,10 @@ namespace wry {
         
         ContiguousDeque(auto first, auto last, std::random_access_iterator_tag)
         : ContiguousDeque(wry::with_capacity_t{}, std::distance(first, last)) {
+            T* new_end = _end + std::distance(first, last);
+            _unpoison(_end, new_end);
             _end = std::uninitialized_copy(first, last, _end);
+            assert(_end == new_end);
         }
         
         ContiguousDeque(auto first, decltype(first) last)
@@ -186,6 +224,8 @@ namespace wry {
 
         ContiguousDeque(size_type count, const value_type& value) noexcept
         : ContiguousDeque(wry::with_capacity, count) {
+            T* new_end = _end + count;
+            _unpoison(_end, new_end);
             _end = std::uninitialized_fill_n(_begin, count, value);
         }
                                 
@@ -311,8 +351,7 @@ namespace wry {
         
         void clear() {
             std::destroy(_begin, _end);
-            //difference_type n = _allocation_end - _allocation_begin;
-            //_end = _begin = _allocation_begin + (n >> 1);
+            _poison(_begin, _end);
             _begin = _end;
         }
         
@@ -325,20 +364,26 @@ namespace wry {
             if (count <= size()) {
                 iterator pos = std::fill_n(begin(), count, value);
                 std::destroy(pos, _end);
+                _poison(pos, _end);
                 _end = pos;
             } else if (count <= capacity()) {
                 std::fill(begin(), end(), value);
-                _end = std::uninitialized_fill_n(end(), count - size(), value);
+                T* new_end = _begin + count;
+                _unpoison(_end, new_end);
+                _end = std::uninitialized_fill_n(_end, count - size(), value);
+                assert(_end == new_end);
             } else {
                 _destroy();
                 _construct_with_capacity(count);
-                _end = std::uninitialized_fill_n(begin(), count, value);
+                T* new_end = _begin + count;
+                _unpoison(_end, new_end);
+                _end = std::uninitialized_fill_n(_begin, count, value);
             }
             return *this;
         }
         
         ContiguousDeque& fill(const value_type& value) {
-            std::fill(begin(), end(), value);
+            std::fill(_begin, _end, value);
             return *this;
         }
         
@@ -400,24 +445,35 @@ namespace wry {
         
         void pop_front() noexcept {
             precondition(!is_empty());
-            std::destroy_at(_begin++);
+            std::destroy_at(_begin);
+            T* new_begin = _begin + 1;
+            _poison(_begin, new_begin);
+            _begin = new_begin;
+            
         }
         
         void pop_back() noexcept {
             precondition(!is_empty());
-            std::destroy_at(--_end);
+            T* new_end = _end - 1;
+            std::destroy_at(new_end);
+            _poison(new_end, _end);
+            _end = new_end;
         }
 
         void unsafe_unpop_front() {
             static_assert(std::is_trivially_destructible_v<T>);
             precondition(_allocation_begin != _begin);
-            --_begin;
+            T* new_begin = _begin - 1;
+            _unpoison(new_begin, _begin);
+            _begin = new_begin;
         }
         
         void unsafe_unpop_back() {
             static_assert(std::is_trivially_destructible_v<T>);
             precondition(_end != _allocation_end);
-            ++_end;
+            T* new_end = _end + 1;
+            _unpoison(_end, new_end);
+            _end = new_end;
         }
         
         reference operator[](size_type pos) {
@@ -501,8 +557,7 @@ namespace wry {
         // [[Rust]] std::collections::Vec
         
         static ContiguousDeque with_capacity(size_type count) {
-            T* p = static_cast<T*>(::operator new(count * sizeof(T)));
-            return ContiguousDeque(p, p, p, p + count);
+            return ContiguousDeque(with_capacity_t{}, count);
         }
         
         static ContiguousDeque from_raw_parts(T* allocation_begin_,
@@ -532,12 +587,15 @@ namespace wry {
                 _begin = p;
                 _end = p + n;
                 _allocation_end = p + m;
+                _poison(_end, _allocation_end);
             }
         }
         
         void unsafe_set_size(size_type count) {
             precondition(count < capacity());
+            _poison(_begin, _end);
             _end = _begin + count;
+            _unpoison(_begin, _end);
         }
         
         T swap_remove(size_type index) {
@@ -580,11 +638,13 @@ namespace wry {
             
         template<typename InputIt>
         ContiguousDeque& _assign(InputIt first, InputIt last, std::input_iterator_tag) {
+            _unpoison(_end, _allocation_end);
             T* pos = _begin;
             for (;; ++pos, ++first) {
                 if (first == last) {
                     std::destroy(pos, _end);
                     _end = pos;
+                    _poison(_end, _allocation_end);
                     return *this;
                 }
                 if (pos == _end) {
@@ -603,16 +663,23 @@ namespace wry {
             size_type count = std::distance(first, last);
             if (count <= size()) {
                 iterator end2 = std::copy(first, last, begin());
-                std::destroy(end2, end());
+                std::destroy(end2, _end);
+                _poison(end2, _end);
                 _end = end2;
             } else if (count <= capacity()) {
                 InputIt pos = first + size();
                 std::copy(first, pos, begin());
-                _end = std::uninitialized_copy(pos, last, end());
+                T* new_end = _begin + count;
+                _unpoison(_end, new_end);
+                _end = std::uninitialized_copy(pos, last, _end);
+                assert(_end == new_end);
             } else {
                 _destroy();
                 _construct_with_capacity(count);
-                _end = std::uninitialized_copy(first, last, begin());
+                T* new_end = _end + count;
+                _unpoison(_end, new_end);
+                _end = std::uninitialized_copy(first, last, _begin);
+                assert(_end == new_end);
             }
             return *this;
         }
@@ -624,12 +691,16 @@ namespace wry {
             size_type k = _allocation_end - _end;
             if ((j <= i) && (k >= count)) {
                 // relocate_backward_n(j, _end, _end + count);
-                std::memmove(_end - j + count, _end - j, j * sizeof(T));
-                _end += count;
+                T* new_end = _end + count;
+                _unpoison(_end, new_end);
+                std::memmove(new_end - j, _end - j, j * sizeof(T));
+                _end = new_end;
             } else if ((i <= j) && (h >= count)) {
                 // relocate_n(_begin, i, _begin - count);
-                std::memmove(_begin - count, _begin, i * sizeof(T));
-                _begin -= count;
+                T* new_begin = _begin - count;
+                _unpoison(new_begin, _begin);
+                std::memmove(new_begin, _begin, i * sizeof(T));
+                _begin = new_begin;
             } else {
                 size_type n = _end - _begin;
                 size_type m = 3 * n + count;
@@ -637,6 +708,8 @@ namespace wry {
                 T* d = a + m;
                 T* b = a + ((m - n - count) >> 1);
                 T* c = b + n + count;
+                _poison(a, b);
+                _poison(c, d);
                 // relocate_n(_begin, i, b);
                 std::memcpy(b, _begin, i * sizeof(T));
                 // relocate_backward_n(j, _end, c);
@@ -651,14 +724,19 @@ namespace wry {
         }
                         
         iterator _erase_uninitialized_n(const_iterator pos, size_type count) {
+            assert(count <= size());
             size_type i = pos - _begin;
             size_type j = _end - (pos + count);
             if (i <= j) {
-                relocate_backward(_begin, _begin + i, _begin + i + count);
-                _begin += count;
+                T* new_begin = _begin + count;
+                relocate_backward(_begin, _begin + i, new_begin + i);
+                _poison(_begin, new_begin);
+                _begin = new_begin;
             } else {
+                T* new_end = _end - count;
                 relocate(_begin + i + count, _end, _begin + i);
-                _end -= count;
+                _poison(new_end, _end);
+                _end = new_end;
             }
             return _begin + i;
         }
@@ -673,9 +751,10 @@ namespace wry {
                 size_type n = count - size();
                 return _insert_uninitialized_n(_end, n);
             } else {
-                iterator end2 = _begin + count;
-                std::destroy(end2, _end);
-                _end = end2;
+                T* new_end = _begin + count;
+                std::destroy(new_end, _end);
+                _poison(new_end, _end);
+                _end = new_end;
                 return _end;
             }
         }
@@ -688,6 +767,8 @@ namespace wry {
                 T* d = a + m;
                 T* b = a + ((m - n - count) >> 1);
                 T* c = b + n;
+                _poison(a, b);
+                _poison(c, d);
                 std::memcpy(b, _begin, n * sizeof(T));
                 ::operator delete(static_cast<void*>(_allocation_begin));
                 _allocation_begin = a;
@@ -706,6 +787,8 @@ namespace wry {
                 T* d = a + m;
                 T* b = a + ((m - n + count) >> 1);
                 T* c = b + n;
+                _poison(a, b);
+                _poison(c, d);
                 std::memcpy(b, _begin, n * sizeof(T));
                 ::operator delete(static_cast<void*>(_allocation_begin));
                 _allocation_begin = a;
@@ -720,15 +803,19 @@ namespace wry {
         template<typename... Args>
         void _emplace_front(Args&&... args) {
             precondition(_allocation_begin < _begin);
-            std::construct_at(_begin - 1, std::forward<Args>(args)...);
-            --_begin;
+            T* new_begin = _begin - 1;
+            _unpoison(new_begin, _begin);
+            std::construct_at(new_begin, std::forward<Args>(args)...);
+            _begin = new_begin;
         }
         
         template<typename... Args>
         void _emplace_back(Args&&... args) {
             precondition(_end < _allocation_end);
+            T* new_end = _end + 1;
+            _unpoison(_end, new_end);
             std::construct_at(_end, std::forward<Args>(args)...);
-            ++_end;
+            _end = new_end;
         }
         
         size_t capacity_back() const {
@@ -757,17 +844,23 @@ namespace wry {
         
         T* may_write_back(size_type n) {
             _reserve_back(n);
+            T* may_end = _end + n;
+            _unpoison(_end, may_end);
             return _end;
         }
         
         [[nodiscard]] T* will_write_back(size_type n) {
             _reserve_back(n);
-            return exchange(_end, _end + n);
+            T* new_end = _end + n;
+            _unpoison(_end, new_end);
+            return exchange(_end, new_end);
         }
         
         void did_write_back(size_type n) {
             precondition(n <= _allocation_end - _end);
-            _end += n;
+            T* new_end = _end + n;
+            _poison(new_end, _allocation_end);
+            _end = new_end;
         }
         
         size_type can_read_first() {
@@ -786,7 +879,9 @@ namespace wry {
         
         void did_read_first(size_t n) {
             precondition(n <= _end - _begin);
-            _begin += n;
+            T* new_begin = _begin + n;
+            _poison(_begin, new_begin);
+            _begin = new_begin;
         }
         
         size_type can_read_last() const {
@@ -795,12 +890,15 @@ namespace wry {
         
         [[nodiscard]] const_pointer will_read_last(size_type n) {
             precondition(n <= size());
+            // Don't poison since we are indicating intent to access them
             return _end -= n;
         }
         
         void did_read_last(size_type n) {
             precondition(n <= size());
-            return _end -= n;
+            T* new_end = _end - n;
+            _poison(new_end, _end);
+            _end = new_end;
         }
         
         size_type can_write_front(size_type n) const {
@@ -809,17 +907,23 @@ namespace wry {
         
         pointer may_write_front(size_type n) {
             _reserve_front(n);
-            return _begin - n;
+            T* may_begin = _begin - n;
+            _unpoison(may_begin, _begin);
+            return may_begin;
         }
         
         [[nodiscard]] pointer will_write_front(size_type n) {
             _reserve_front(n);
-            return _begin -= n;
+            T* new_begin = _begin - n;
+            _unpoison(new_begin, _begin);
+            return (_begin = new_begin);
         }
         
         void did_write_front(size_type n) {
             precondition(n <= (_begin - _allocation_begin));
-            _begin -= n;
+            T* new_begin = _begin - n;
+            _poison(_allocation_begin, new_begin);
+            _begin = new_begin;
         }
         
         //
@@ -846,25 +950,41 @@ namespace wry {
                            || (x.capacity_front() < size()))) {
                 // we can relocate x to free space at the back of this
                 // and it's the better or only option
+                T* new_end = _end + x.size();
+                T* x_new_begin = x._end;
+                _unpoison(_end, new_end);
                 relocate(x._begin, x._end, _end);
-                _end += x.size();
-                x._begin = x._end;
+                x._poison(x._begin, x_new_begin);
+                _end = new_end;
+                x._begin = x_new_begin;
             } else if (size() <= x.capacity_front()) {
                 // we can relocate this to free space at the front of x
-                x._begin -= size();
-                relocate(_begin, _end, x._begin);
-                _begin = _end;
+                T* new_begin = _end;
+                T* x_new_begin = x._begin - size();
+                x._unpoison(x_new_begin, x._begin);
+                relocate(_begin, _end, x_new_begin);
+                _poison(_begin, new_begin);
+                _begin = new_begin;
+                x._begin = x_new_begin;
                 swap(x);
             } else {
                 ContiguousDeque y(wry::with_capacity, size() + x.size());
                 assert(y.capacity_back() >= size());
+                T* new_begin = _end;
+                T* y_new_end = y._end + size();
+                y._unpoison(y._end, y_new_end);
                 relocate(_begin, _end, y._end);
-                y._end += size();
-                _begin = _end;
+                _poison(_begin, new_begin);
+                _begin = new_begin;
+                y._end = y_new_end;
                 assert(y.capacity_back() >= x.size());
+                T* x_new_begin = x._end;
+                y_new_end = y._end + x.size();
+                y._unpoison(y._end, y_new_end);
                 relocate(x._begin, x._end, y._end);
-                y._end += x.size();
-                x._begin = x._end;
+                x._poison(x._begin, x_new_begin);
+                x._begin = x_new_begin;
+                y._end = y_new_end;
                 swap(y);
             }
         }
@@ -947,17 +1067,17 @@ namespace wry {
             return reinterpret_cast<const ContiguousDeque<byte>&>(*this);
         }
                 
-        template<typename U = Maybe<T>>
+        template<typename U>
         ContiguousView<U>& reinterpret_left_as() {
             return reinterpret_cast<ContiguousView<U>&>(_allocation_begin);
         }
         
-        template<typename U = T>
+        template<typename U>
         ContiguousView<U>& reinterpret_middle_as() {
             return reinterpret_cast<ContiguousView<U>&>(_begin);
         }
 
-        template<typename U = Maybe<T>>
+        template<typename U>
         ContiguousView<U>& reinterpret_right_as() {
             return reinterpret_cast<ContiguousView<U>&>(_end);
         }
@@ -966,28 +1086,30 @@ namespace wry {
         // remove-erase idiom and friends
         
         size_type erase(const T& value) {
-            iterator last = std::remove(_begin, _end, value);
-            size_type n = _end - last;
-            std::destroy(last, _end);
-            _end = last;
+            T* new_end = std::remove(_begin, _end, value);
+            size_type n = _end - new_end;
+            std::destroy(new_end, _end);
+            _poison(new_end, _end);
+            _end = new_end;
             return n;
         }
 
         size_type erase_if(auto&& predicate) {
-            iterator last = std::remove_if(_begin, _end, std::forward<decltype(predicate)>(predicate));
-            size_type n = _end - last;
-            std::destroy(last, _end);
-            _end = last;
+            T* new_end = std::remove_if(_begin, _end, std::forward<decltype(predicate)>(predicate));
+            size_type n = _end - new_end;
+            std::destroy(new_end, _end);
+            _poison(new_end, _end);
+            _end = new_end;
             return n;
         }
         
         iterator erase_first(const T& value) {
-            iterator i = std::find(_begin, _end, value);
+            T* i = std::find(_begin, _end, value);
             return this->erase(i);
         }
         
         iterator erase_first_if(auto&& predicate) {
-            iterator i = std::find_if(_begin, _end, std::forward<decltype(predicate)>(predicate));
+            T* i = std::find_if(_begin, _end, std::forward<decltype(predicate)>(predicate));
             return this->erase(i);
         }
         

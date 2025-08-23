@@ -37,8 +37,13 @@ namespace wry {
         // the platform-independent / platform-specific code dividing line,
         // though things like simd_ make this ambiguous
         
-        // simulation state
+        // TODO: This is not some singular world state; it is specifcally the
+        // world state for display to the user (and against which user inputs
+        // should be interpreted).  Other states will be be present; old states
+        // being serialized to save game or initialize a multiplayer peer; and
+        // new states that have been computed but not yet displayed
         
+        // simulation state
         sim::World* _world;
 
         
