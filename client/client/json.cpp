@@ -15,7 +15,7 @@
 #include "debug.hpp"
 #include "json.hpp"
 #include "table.hpp"
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 
 namespace wry {
     

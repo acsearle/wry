@@ -9,7 +9,7 @@
 #define tile_hpp
 
 #include "sim.hpp"
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 #include "entity.hpp"
 
 namespace wry::sim {

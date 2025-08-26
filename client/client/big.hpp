@@ -8,7 +8,7 @@
 #ifndef big_hpp
 #define big_hpp
 
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 
 namespace wry {
     

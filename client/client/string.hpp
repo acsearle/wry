@@ -11,7 +11,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 #include "hash.hpp"
 #include "string_view.hpp"
 

@@ -10,7 +10,7 @@
 #include <iostream>
 #include <map>
 
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 #include "filesystem.hpp"
 #include "parse.hpp"
 #include "platform.hpp"

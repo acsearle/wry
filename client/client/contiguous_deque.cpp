@@ -5,12 +5,12 @@
 //  Created by Antony Searle on 25/6/2023.
 //
 
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 #include "test.hpp"
 
 namespace wry {
     
-    define_test("array") {
+    define_test("contiguous_deque") {
         
         ContiguousDeque<int> a;
         

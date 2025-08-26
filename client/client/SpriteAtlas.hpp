@@ -10,7 +10,7 @@
 
 #import <Metal/Metal.h>
 
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 #include "image.hpp"
 #include "packer.hpp"
 #include "vertex.hpp"

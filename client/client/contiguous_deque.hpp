@@ -1,12 +1,12 @@
 //
-//  array.hpp
+//  contiguous_deque.hpp
 //  client
 //
 //  Created by Antony Searle on 25/6/2023.
 //
 
-#ifndef array_hpp
-#define array_hpp
+#ifndef contiguous_deque_hpp
+#define contiguous_deque_hpp
 
 #include <sanitizer/asan_interface.h>
 
@@ -24,7 +24,7 @@
 
 namespace wry {
     
-    // # Array
+    // # ContiguousDeque
     //
     // A contiguous double-ended queue with amortized O(1) operations on both
     // ends, intended to be a general-purpose sequence storage type.
@@ -35,12 +35,6 @@ namespace wry {
     template<typename T>
     struct Rank<ContiguousDeque<T>> 
     : std::integral_constant<std::size_t, Rank<T>::value + 1> {};
-    
-    // TODO:
-    //    void SANITIZER_CDECL __sanitizer_annotate_double_ended_contiguous_container(
-    //        const void *storage_beg, const void *storage_end,
-    //        const void *old_container_beg, const void *old_container_end,
-    //        const void *new_container_beg, const void *new_container_end);
     
     template<Relocatable T>
     struct ContiguousDeque {
@@ -1030,7 +1024,7 @@ namespace wry {
             return ContiguousView(_begin + i, n);
         }
 
-        // Array structs for all T share a compatible layout of four pointers,
+        // ContiguousDeque structs for all T share a compatible layout of four pointers,
         // so we can pun the entire Array into an Array of a different type,
         // and even mutate it in that form.  This relies on common
         // implementation-defined behavior:
@@ -1138,4 +1132,4 @@ namespace wry {
     
 } // namespace wry
 
-#endif /* array_hpp */
+#endif /* contiguous_deque_hpp */

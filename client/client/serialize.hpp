@@ -10,7 +10,7 @@
 
 #include <variant>
 
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 #include "stdint.hpp"
 #include "type_traits.hpp"
 #include "stdfloat.hpp"

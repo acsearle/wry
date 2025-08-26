@@ -8,7 +8,7 @@
 #ifndef machine_hpp
 #define machine_hpp
 
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 #include "sim.hpp"
 #include "entity.hpp"
 #include "debug.hpp"

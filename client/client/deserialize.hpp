@@ -11,7 +11,7 @@
 #include "stdint.hpp"
 #include "stdfloat.hpp"
 #include "utility.hpp"
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 #include "string.hpp"
 
 #include "Option.hpp"

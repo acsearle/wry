@@ -10,7 +10,7 @@
 
 #include <queue>
 
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 #include "table.hpp"
 #include "HeapTable.hpp"
 #include "HeapArray.hpp"

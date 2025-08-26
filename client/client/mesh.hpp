@@ -14,7 +14,7 @@
 #include <unordered_set>
 #include <set>
 
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 #include "image.hpp"
 #include "packed.hpp"
 #include "simd.hpp"

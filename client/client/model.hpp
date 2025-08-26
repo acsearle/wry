@@ -14,7 +14,7 @@
 #include <mutex>
 #include <map>
 
-#include "array.hpp"
+#include "contiguous_deque.hpp"
 #include "entity.hpp"
 #include "hash.hpp"
 #include "machine.hpp"
