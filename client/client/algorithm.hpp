@@ -14,10 +14,13 @@
 #include "assert.hpp"
 #include "stddef.hpp"
 
+// Wrap <algorithms> and provide extended, related and future standard
+// functionality
+
 namespace wry {
     
-    // Extend standard algorithms to allow checking for second range exhaustion
-    
+    // Extend std::copy to check destination range for premature exhaustion (in
+    // debug mode)    
     auto copy_checked(auto first, auto last, auto d_first, auto d_last) -> decltype(d_first) {
         for (; first != last; ++first, ++d_first) {
             assert(d_first != d_last);
@@ -27,6 +30,8 @@ namespace wry {
         return d_first;
     }
     
+    // Extend std::swap_ranges to check second range for premature exhaustion
+    // (in debug mode)
     auto swap_ranges_checked(auto first1, auto last1, auto first2, auto last2) -> decltype(first2) {
         for (;; ++first1, ++first2) {
             bool exhaust1 = (first1 == last1);

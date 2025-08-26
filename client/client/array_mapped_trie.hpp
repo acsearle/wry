@@ -187,6 +187,21 @@ namespace wry {
             array[compressed_index] = std::move(value);
             return was_found;
         }
+
+        template<typename T>
+        void compressed_array_erase_for_index(uint64_t& bitmap,
+                                              T* _Nonnull array,
+                                              int index,
+                                              std::type_identity_t<T>& victim) {
+            int compressed_index = compressed_array_get_compressed_index_for_index(bitmap, index);
+            int compressed_size = compressed_array_get_compressed_size(bitmap);
+            victim = std::move(array[compressed_index]);
+            std::copy(array + compressed_index + 1,
+                      array + compressed_size,
+                      array + compressed_index);
+            bitmap_clear_for_index(bitmap, index);
+        }
+
         
         template<typename T>
         bool compressed_array_try_erase_for_index(uint64_t& bitmap,
@@ -302,16 +317,16 @@ namespace wry {
             }
             
             uint64_t _prefix_and_shift; // 6 bit shift, 64 - (6 * shift) prefix
-#ifndef NDEBUG
             // Capacity in items of either _children or values.  We only need
             // this value when debugging some array operations.
-            size_t _debug_capacity;
-#endif
+            uint32_t _debug_capacity;
+            uint32_t _debug_count;
             uint64_t _bitmap; // bitmap of which items are present
             union {
                 // compressed flexible member array of children or values
-                Node const* _Nonnull _children[0];
-                T _values[0];
+                // problem: we don't have a member representing the count directly
+                Node const* _Nonnull _children[] __counted_by(_debug_count);
+                T _values[] __counted_by(_debug_count);
             };
             
             bool has_children() const {
@@ -373,6 +388,7 @@ namespace wry {
                 int count = popcount(_bitmap);
                 assert(count > 0);
                 assert(count <= _debug_capacity);
+                assert(count == _debug_count);
                 if (has_children()) {
                     uint64_t prefix_mask = ~(uint64_t)63 << shift;
                     for (int j = 0; j != count; ++j) {
@@ -405,10 +421,12 @@ namespace wry {
             
             
             Node(uint64_t prefix_and_shift,
-                 size_t debug_capacity,
+                 uint32_t debug_capacity,
+                 uint32_t debug_count,
                  uint64_t bitmap)
             : _prefix_and_shift(prefix_and_shift)
             , _debug_capacity(debug_capacity)
+            , _debug_count(debug_count)
             , _bitmap(bitmap) {
             }
             
@@ -423,32 +441,32 @@ namespace wry {
             }
                         
             [[nodiscard]] static Node* _Nonnull make(uint64_t prefix_and_shift,
-                                            size_t capacity,
+                                            uint32_t capacity,
                                             uint64_t bitmap) {
                 bool has_children_ = prefix_and_shift & (uint64_t)63;
                 size_t item_bytes = has_children_ ? sizeof(const Node*) : sizeof(T);
                 void* _Nonnull pointer = GarbageCollected::operator new(sizeof(Node) + (capacity * item_bytes));
                 return new(pointer) Node(prefix_and_shift,
                                          capacity,
+                                         popcount(bitmap),
                                          bitmap);
             }
             
             [[nodiscard]] static Node* _Nonnull make_with_key_value(uint64_t key, T value) {
                 int shift = 0;
-                size_t capacity = 1;
                 uint64_t bitmap = (uint64_t)1 << (int)(key & (uint64_t)63);
                 Node* _Nonnull new_node = Node::make(prefix_and_shift_for_keylike_and_shift(key,
-                                                                                   shift),
-                                            capacity,
-                                            bitmap);
+                                                                                            shift),
+                                                     /* capacity = */ 1,
+                                                     bitmap);
                 new_node->_values[0] = std::move(value);
                 return new_node;
             }
             
             [[nodiscard]] Node* _Nonnull clone_with_capacity(size_t capacity) const {
                 int count = popcount(_bitmap);
-                assert(capacity >= count);
-                Node* _Nonnull node = make(_prefix_and_shift, capacity, _bitmap);
+                assert((int)capacity >= count);
+                Node* _Nonnull node = make(_prefix_and_shift, (uint32_t)capacity, _bitmap);
                 size_t item_size = _prefix_and_shift & (uint64_t)63 ? sizeof(const Node*) : sizeof(T);
                 memcpy(node->_children, _children, count * item_size);
                 return node;
@@ -501,6 +519,7 @@ namespace wry {
                 assert(has_children());
                 uint64_t key = new_child->get_prefix();
                 assert(prefix_covers_key(key));
+                ++_debug_count;
                 compressed_array_insert_for_index(_debug_capacity,
                                                   _bitmap,
                                                   _children,
@@ -521,6 +540,7 @@ namespace wry {
             void insert_key_value(uint64_t key, T value) {
                 assert(has_values());
                 assert(prefix_covers_key(key));
+                ++_debug_count;
                 compressed_array_insert_for_index(_debug_capacity,
                                                   _bitmap,
                                                   _values,
@@ -560,6 +580,7 @@ namespace wry {
                 assert(prefix_covers_key(key));
                 Node* _Nonnull new_node = clone_with_capacity(popcount(_bitmap) + 1);
                 Node const* _Nullable _ = nullptr;
+                ++(new_node->_debug_count);
                 bool did_assign = compressed_array_insert_or_assign_for_index(new_node->_debug_capacity,
                                                                               new_node->_bitmap,
                                                                               new_node->_children,
@@ -592,6 +613,7 @@ namespace wry {
                                                                   get_index_for_key(key),
                                                                   _);
                 assert(did_erase);
+                --(new_node->_debug_count);
                 return new_node;
             }
             
@@ -602,7 +624,8 @@ namespace wry {
                 if (!prefix_covers_key(key)) {
                     return {
                         merge_disjoint(this,
-                                       make_with_key_value(key, value)),
+                                       make_with_key_value(key,
+                                                           value)),
                         true
                     };
                 }
@@ -610,6 +633,7 @@ namespace wry {
                 uint64_t select = bitmask_for_index(index);
                 int compressed_index = get_compressed_index_for_index(index);
                 Node* _Nonnull new_node = clone_with_capacity(popcount(_bitmap | select));
+                new_node->_debug_count = popcount(_bitmap | select);
                 bool leaf_did_assign = false;
                 if (has_values()) {
                     leaf_did_assign = compressed_array_insert_or_exchange_for_index(new_node->_debug_capacity,
@@ -639,28 +663,35 @@ namespace wry {
             }
             
             [[nodiscard]] std::pair<Node const* _Nullable, bool> clone_and_erase_key(uint64_t key, T& victim) const {
+                // TODO: Do we handle all cases correctly?
+                // - Replacing a count one node with nullptr
+                // - Replacing a count two node with surviving child
                 if (!prefix_covers_key(key) || !bitmap_covers_key(key))
+                    // Key not present
                     return { this, false };
                 int compressed_index = get_compressed_index_for_key(key);
                 if (has_children()) {
-                    const Node* child = _children[compressed_index];
+                    const Node* _Nonnull child = _children[compressed_index];
                     assert(child);
                     auto [new_child, did_erase] = child->clone_and_erase_key(key, victim);
                     assert((new_child == child) == !did_erase);
+                    if (!did_erase)
+                        return { this, false };
                     return {
-                        (did_erase ? clone_and_assign_child(new_child) : this),
-                        did_erase
+                        clone_and_assign_child(new_child),
+                        true
                     };
                 } else {
                     assert(has_values());
+                    // we already established that bitmap_covers_key(key)
                     Node* _Nonnull new_node = clone();
+                    // TODO: we allocate enough for the clone then erase one
                     int index = get_index_for_key(key);
-                    bool did_erase = compressed_array_try_erase_for_index(new_node->_bitmap,
-                                                                          new_node->_values,
-                                                                          index,
-                                                                          victim);
-                    assert(did_erase);
-                    return { new_node, did_erase };
+                    compressed_array_erase_for_index(new_node->_bitmap,
+                                                     new_node->_values,
+                                                     index,
+                                                     victim);
+                    return { new_node, true };
                 }
             }
             

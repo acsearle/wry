@@ -144,7 +144,7 @@ namespace wry::sim {
         
         size_t _capacity = 0;
         size_t _size = 0;
-        Node _nodes[0];
+        Node _nodes[] __counted_by(_size);
                 
         virtual void _garbage_collected_enumerate_fields(TraceContext*) const override {}
         
