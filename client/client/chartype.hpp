@@ -14,7 +14,7 @@
 
 namespace wry {
     
-    // # Related predicates
+    // More character predicates
     
     inline constexpr int isascii(int ch) {
         return !(ch & 0xFFFFFF80);

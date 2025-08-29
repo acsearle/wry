@@ -42,26 +42,33 @@ namespace wry {
     // - provide a legal customization point
     // - remove error-prone casts, assignments and defaults (of sequential
     //   consist memory ordering)
-    // - improve the interface and libc++'s implementation of wait/notify
+    // - improve the interface and implementation(*) of wait and notify
+    // - provide add_fetch and other primitives supported by builtins but not
+    //   std::atomic
+    //
+    // (*) libc++ is slow to adopt platform-specific futexes
 
     // The implementation depends heavily on GCC-style intrinsics
     // TODO: extend to MSVC _Interlocked[op][width]_[ordering]
     
-    // TODO: Implementations do not support dynamic choice of ordering; should
+    // TODO: Implementations do not support runtime choice of ordering; should
     // they therefore be template areguments?  Are we relying on inlining?
     // Should we never put order in the signature of a function whose
     // declaration has different visibility to its definition?
     
-    // TODO: Platform specific wait is interesting, but we should be preferring
-    // userspace task switching to blocking threads.  The collector may be an
-    // exception.
+    // TODO: Userspace task switch on wait
+    // Waiting, i.e. deferring to the OS scheduler, is rarely what we actually
+    // want to do.  Ensure that we can do userspace task switching instead with
+    // a coroutine, callback, or other.  Raw atomics are unlikely to be the
+    // right level of abstraction for this.
 
     // TODO: architecture specific cache line size
+    // std::hardware_destructive_interference_size seems unimplemented
     constexpr size_t CACHE_LINE_SIZE = 128;
     
     enum class Ordering {
         RELAXED = __ATOMIC_RELAXED,
-        CONSUME = __ATOMIC_CONSUME,
+        CONSUME = __ATOMIC_CONSUME, // TODO: deprecation/implementation status
         ACQUIRE = __ATOMIC_ACQUIRE,
         RELEASE = __ATOMIC_RELEASE,
         ACQ_REL = __ATOMIC_ACQ_REL,
@@ -242,6 +249,8 @@ namespace wry {
 
 #if defined(WIN32)
         
+        // TODO: This code sketch is untested
+
         void wait(T& expected, Ordering order) {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             for (;;) {
@@ -306,6 +315,8 @@ namespace wry {
 #endif // defined(WIN32)
         
 #if defined(__linux__)
+        
+        // TODO: This code sketch is untested
         
         void wait(T& expected, Ordering order) {
             static_assert(sizeof(T) == 4);

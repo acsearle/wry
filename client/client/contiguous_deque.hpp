@@ -19,15 +19,23 @@
 #include "stddef.hpp"
 #include "utility.hpp"
 
-#include "array_view.hpp"
+#include "contiguous_view.hpp"
 #include "with_capacity.hpp"
 
 namespace wry {
     
     // # ContiguousDeque
     //
-    // A contiguous double-ended queue with amortized O(1) operations on both
-    // ends, intended to be a general-purpose sequence storage type.
+    // A double-ended queue with amortized O(1) operations on both ends,
+    // elements that are consecutive and ordered in memory, and iterators that
+    // are simple pointers.
+    
+    // It is intended to be a general-purpose sequence storage type that
+    // is competitive with vector, deque, Vec and VecDeque, and can be aliased
+    // to simple buffers.
+    
+    // push_* is amortized O(1) but worst case O(N); this container is
+    // generally unsuitable for use in real-time contexts.
 
     template<Relocatable>
     struct ContiguousDeque;
@@ -49,7 +57,7 @@ namespace wry {
         using byte_type = byte;
         using const_byte_type = const byte;
 
-        // this layout permits punning as array_views
+        // this layout permits punning as contiguous_views
         
         T* _allocation_begin;
         T* _begin;
@@ -1035,7 +1043,7 @@ namespace wry {
         // that respects the size and alignment of the original Array.
         //
         // Similarly, the three regions of the Array (left, middle, and right)
-        // can themselves be punned to mutable array_views.  A common use
+        // can themselves be punned to mutable contiguous_views.  A common use
         // case for this might be to supply the right region as a buffer
         // for bulk writes, with the writer moving up the view's _begin
         // which aliases the array's _end, and thus directly leaving the Array

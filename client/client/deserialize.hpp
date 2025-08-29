@@ -20,7 +20,7 @@ namespace wry {
     
     using namespace rust::option;
     
-    // serde-rs deserialization
+    // serde-rs inspired deserialization
     
     template<typename T, typename D>
     T deserialize(D&& deserializer) {

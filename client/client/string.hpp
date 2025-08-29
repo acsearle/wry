@@ -21,7 +21,7 @@ namespace wry {
     
     // A String presents a UTF-8 array<char8_t> as a sequence of UTF-32 scalars
     //
-    // String, StringView, array<char8_t> and ArrayView<char8_t> all maintain
+    // String, StringView, array<char8_t> and ContiguousView<char8_t> all maintain
     // valid UTF-8 strings.
     //
     // std::string::c_str() is not worth the complication it induces; we make a

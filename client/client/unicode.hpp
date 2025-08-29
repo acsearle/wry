@@ -10,7 +10,7 @@
 
 #include <compare>
 
-#include "array_view.hpp"
+#include "contiguous_view.hpp"
 #include "assert.hpp"
 #include "stddef.hpp"
 #include "stdint.hpp"

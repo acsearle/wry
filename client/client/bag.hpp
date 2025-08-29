@@ -12,11 +12,17 @@
 #include "utility.hpp"
 
 namespace wry {
+    
+    // A simple and fast unordered collection for plain old data types,
+    // implemented as an unrolled linked list.  Push and pop are usually
+    // trivial, and in the worst case still O(1), so this data structure is
+    // suitable for real-time contexts.
+    //
+    // Used by the garbage collector to receive and manage pointers.  The
+    // bag nodes are not themselves garbage collected.
         
     template<typename T>
     struct SinglyLinkedListOfInlineStacksBag {
-        
-        using Self = SinglyLinkedListOfInlineStacksBag;
         
         struct Node {
             
@@ -67,7 +73,7 @@ namespace wry {
         Node* _tail = nullptr;
         size_t _debug_size = 0;
         
-        void swap(Self& other) {
+        void swap(SinglyLinkedListOfInlineStacksBag& other) {
             using std::swap;
             swap(_head, other._head);
             swap(_tail, other._tail);
@@ -81,9 +87,9 @@ namespace wry {
         , _debug_size(0) {
         }
         
-        SinglyLinkedListOfInlineStacksBag(const Self&) = delete;
+        SinglyLinkedListOfInlineStacksBag(const SinglyLinkedListOfInlineStacksBag&) = delete;
         
-        SinglyLinkedListOfInlineStacksBag(Self&& other)
+        SinglyLinkedListOfInlineStacksBag(SinglyLinkedListOfInlineStacksBag&& other)
         : _head(std::exchange(other._head, nullptr))
         , _tail(std::exchange(other._tail, nullptr))
         , _debug_size(std::exchange(other._debug_size, 0)) {
@@ -95,10 +101,10 @@ namespace wry {
             assert(_debug_size == 0);
         }
                 
-        Self& operator=(const Self&) = delete;
+        SinglyLinkedListOfInlineStacksBag& operator=(const SinglyLinkedListOfInlineStacksBag&) = delete;
         
-        Self& operator=(Self&& other) {
-            Self(std::move(other)).swap(*this);
+        SinglyLinkedListOfInlineStacksBag& operator=(SinglyLinkedListOfInlineStacksBag&& other) {
+            SinglyLinkedListOfInlineStacksBag(std::move(other)).swap(*this);
             return *this;
         }
         

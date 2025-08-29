@@ -18,7 +18,7 @@ namespace wry {
     // Matchers look for a pattern at the start of their View argument,
     // and if found, advance the beginning of the view and return Truthy
     //
-    // string_views or ArrayView<char8_t> views are the canonical arguments;
+    // string_views or ContiguousView<char8_t> views are the canonical arguments;
     // since many formats are specified in terms of ASCII characters the same
     // code can parse both, passing multibyte UTF-8 through unaltered.
     //

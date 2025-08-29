@@ -53,7 +53,7 @@ namespace wry {
 
         struct Reader {
             
-            std::expected<std::size_t, std::error_code> read(ArrayView<byte>& buffer);
+            std::expected<std::size_t, std::error_code> read(ContiguousView<byte>& buffer);
             
         };
         
@@ -61,7 +61,7 @@ namespace wry {
         
         struct Writer {
             
-            std::expected<std::size_t, std::error_code> write(ArrayView<const byte>& buffer);
+            std::expected<std::size_t, std::error_code> write(ContiguousView<const byte>& buffer);
             
         };
         
@@ -110,8 +110,8 @@ namespace wry {
         };
         
         Result encode(State& self, 
-                      ArrayView<const byte>& source,
-                      ArrayView<char>& sink) {
+                      ContiguousView<const byte>& source,
+                      ContiguousView<char>& sink) {
             assert(self.invariant());
             if (self.padded)
                 return INVALID;
@@ -130,7 +130,7 @@ namespace wry {
             }
         }
         
-        Result encode_finalize(State& self, ArrayView<char>& sink) {
+        Result encode_finalize(State& self, ContiguousView<char>& sink) {
             assert(self.invariant());
             while (self.count >= 6) {
                 if (sink.empty())
@@ -157,7 +157,7 @@ namespace wry {
             return OK;
         }
         
-        Result decode(State& self, ArrayView<const char>& source, ArrayView<byte>& sink) {
+        Result decode(State& self, ContiguousView<const char>& source, ContiguousView<byte>& sink) {
             assert(self.invariant());
             for (;;) {
                 if (self.count >= 8) {

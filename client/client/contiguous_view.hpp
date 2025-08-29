@@ -1,12 +1,12 @@
 //
-//  array_view.hpp
+//  contiguous_view.hpp
 //  client
 //
 //  Created by Antony Searle on 9/9/2023.
 //
 
-#ifndef array_view_hpp
-#define array_view_hpp
+#ifndef contiguous_view_hpp
+#define contiguous_view_hpp
 
 #include <iterator>
 #include <stdexcept>
@@ -16,15 +16,15 @@
 
 namespace wry {
 
-    // ArrayView into a contguous sequence
+    // ContiguousView into a contguous sequence
     //
     // compare span, slice, range
     //
-    // ArrayView models a reference; assignment assigns to the elements, not
-    // the bounds.  ArrayView<const T>::operator= is an error.  use ::reset to
-    // change what the ArrayView points into
+    // ContiguousView models a reference; assignment assigns to the elements, not
+    // the bounds.  ContiguousView<const T>::operator= is an error.  use ::reset to
+    // change what the ContiguousView points into
     
-    // ArrayView is always a contiguous true pointer; compare vector_view which
+    // ContiguousView is always a contiguous true pointer; compare vector_view which
     // may not be (as when iterating over a stride_ptr)
         
     template<typename T>
@@ -205,7 +205,7 @@ namespace wry {
             return ContiguousView(_begin + i, n);
         }
 
-        // mutate the ArrayView itself
+        // mutate the ContiguousView itself
         
         ContiguousView& reset() {
             _begin = nullptr;
@@ -441,4 +441,4 @@ namespace wry {
         
 }
 
-#endif /* array_view_hpp */
+#endif /* contiguous_view_hpp */

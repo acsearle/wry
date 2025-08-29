@@ -14,7 +14,7 @@
 
 #include "assert.hpp"
 #include "algorithm.hpp"
-#include "array_view.hpp"
+#include "contiguous_view.hpp"
 #include "unicode.hpp"
 #include "hash.hpp"
 

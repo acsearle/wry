@@ -797,7 +797,7 @@ namespace wry {
      
      */
     
-    void json_parse_whitespace(ArrayView<const char>& a) {
+    void json_parse_whitespace(ContiguousView<const char>& a) {
         for (;;) {
             if (a.empty())
                 return;
@@ -827,7 +827,7 @@ namespace wry {
         return d[c];
     }
     
-    bool json_parse_string(ArrayView<const char>& a, Array<char>& z) {
+    bool json_parse_string(ContiguousView<const char>& a, Array<char>& z) {
         for(;;)  {
             if (a.empty())
                 return false;
@@ -899,9 +899,9 @@ namespace wry {
         }
     }
             
-    bool json_parse_element(ArrayView<const char>& a, json&);
+    bool json_parse_element(ContiguousView<const char>& a, json&);
     
-    bool json_parse_array(ArrayView<const char>& a, Array<json>& result) {
+    bool json_parse_array(ContiguousView<const char>& a, Array<json>& result) {
         json value;
         char c = 0;
         
@@ -939,7 +939,7 @@ namespace wry {
         
     }
     
-    bool json_parse_object(ArrayView<const char>& a, table<string, json>& result) {
+    bool json_parse_object(ContiguousView<const char>& a, table<string, json>& result) {
         
         Array<char> chars;
         json value;
@@ -994,7 +994,7 @@ namespace wry {
         }
     }
     
-    bool json_parse_false(ArrayView<const char>& a, json& value) {
+    bool json_parse_false(ContiguousView<const char>& a, json& value) {
         const char* z = "false";
         for (;;) {
             if (!*z)
@@ -1009,7 +1009,7 @@ namespace wry {
         }
     }
 
-    bool json_parse_null(ArrayView<const char>& a, json& value) {
+    bool json_parse_null(ContiguousView<const char>& a, json& value) {
         const char* z = "null";
         for (;;) {
             if (!*z)
@@ -1024,7 +1024,7 @@ namespace wry {
         }
     }
 
-    bool json_parse_true(ArrayView<const char>& a, json& value) {
+    bool json_parse_true(ContiguousView<const char>& a, json& value) {
         const char* z = "true";
         for (;;) {
             if (!*z)
@@ -1039,7 +1039,7 @@ namespace wry {
         }
     }
 
-    bool json_parse_element(ArrayView<const char>& a, json& value) {
+    bool json_parse_element(ContiguousView<const char>& a, json& value) {
 
         // expect element
         assert(!a.empty());
@@ -1096,7 +1096,7 @@ namespace wry {
         
     }
     
-    bool json_parse_json(ArrayView<const char>& a, json& value) {
+    bool json_parse_json(ContiguousView<const char>& a, json& value) {
         json_parse_whitespace(a);
         if (!json_parse_element(a, value))
             return false;

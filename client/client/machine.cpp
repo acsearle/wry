@@ -9,7 +9,6 @@
 #include "world.hpp"
 #include "debug.hpp"
 #include "transaction.hpp"
-#include "context.hpp"
 
 namespace wry::sim {
     

@@ -56,8 +56,8 @@ namespace wry::coroutine {
 
      */
     
-    // We can manually construct objects with the appropriate callbacks to
-    // be consumed by the thread pool as-if they are coroutines
+    // We can manually construct objects with the appropriate header to
+    // be consumed by an executor as-if they are coroutines
         
     struct Header {
         void (*resume)(void*);
@@ -74,7 +74,7 @@ namespace wry::coroutine {
     };
     
     std::coroutine_handle<> coroutine_handle_from(Header* header) {
-        return std::coroutine_handle<>::from_address(header);
+        return std::coroutine_handle<>::from_address((void*)header);
     }
     
     void resume_by_address(void* address) {
