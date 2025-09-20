@@ -7,10 +7,6 @@
 
 #import <AVFoundation/AVFoundation.h>
 
-#include "imgui.h"
-#include "imgui_impl_metal.h"
-#include "imgui_impl_osx.h"
-
 #include "WryRenderer.h"
 #include "WryMetalView.h"
 #include "WryDelegate.h"
@@ -76,38 +72,6 @@
     _metalView.layer = _metalLayer;
     _metalView.wantsLayer = YES;
     
-    {
-        IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
-        ImGuiIO& io = ImGui::GetIO(); (void)io;
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
-        io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;   // Disable mouse cursor reset
-        
-        // Setup Dear ImGui style
-        ImGui::StyleColorsDark();
-        //ImGui::StyleColorsLight();
-        
-        // Setup Renderer backend
-        ImGui_ImplMetal_Init(_metalLayer.device);
-        
-        // io.Fonts->AddFontDefault();
-        
-        CGFloat framebufferScale = NSScreen.mainScreen.backingScaleFactor;
-        io.Fonts->AddFontFromFileTTF("Futura Medium Condensed.otf",
-                                     std::floor(18.0f * framebufferScale))->Scale = 1.0f / framebufferScale;
-        
-        // https://int10h.org/oldschool-pc-fonts/fontlist/?1#ibm-g2
-        // Should convert these to 3:4 aspect ratio
-        //"PxPlus_IBM_VGA_9x16.ttf"
-        //"PxPlus_IBM_VGA_9x8.ttf"
-//        io.Fonts->AddFontFromFileTTF("PxPlus_IBM_VGA_9x16.ttf",
-//                                     std::floor(16.0f * framebufferScale))->Scale = 1.0f / framebufferScale;
-        
-        ImGui_ImplOSX_Init(_metalView);
-    }
-    
-    
     _renderer = [[WryRenderer alloc] initWithMetalDevice:_metalLayer.device
                                      drawablePixelFormat:_metalLayer.pixelFormat
                                                    model:_model
@@ -157,9 +121,6 @@
 - (void)applicationWillTerminate:(NSNotification *)aNotification {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     self.done = YES;
-    ImGui_ImplMetal_Shutdown();
-    ImGui_ImplOSX_Shutdown();
-    ImGui::DestroyContext();
 }
 
 #pragma mark NSWindowDelegate
@@ -248,17 +209,13 @@
 }
 
 - (void)keyDown:(NSEvent *)event {
-        
-    // Dear IMGUI installs its TextInput thing as a subview
-        
+                
     // Forward the events where?
     
     // assert([self nextResponder]);
     
     
 
-    if (ImGui::GetIO().WantCaptureKeyboard)
-        return;
     
     using namespace wry;
     
@@ -374,12 +331,10 @@
 
 
 - (void)keyUp:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureKeyboard) return;
     NSLog(@"keyUp: \"%@\"\n", event.characters);
 }
 
 - (void)flagsChanged:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureKeyboard) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     /*
      NSEventModifierFlagCommand;
@@ -393,7 +348,6 @@
 }
 
 - (void) mouseMoved:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     NSPoint location_in_window = [event locationInWindow];
     NSPoint location_in_view = [_metalView convertPoint:location_in_window fromView:nil];
     _model->_mouse.x = 2.0f * location_in_view.x / _metalView.bounds.size.width - 1.0f;
@@ -403,18 +357,15 @@
 }
 
 - (void) mouseEntered:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     [_renderer resetCursor];
 }
 
 - (void) mouseExited:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     // NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
 - (void) mouseDown:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 - (void) mouseDragged:(NSEvent *)event {
@@ -423,7 +374,6 @@
 }
 
 - (void) mouseUp:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     NSPoint location_in_window = [event locationInWindow];
     NSPoint location_in_view = [_metalView convertPoint:location_in_window fromView:nil];
@@ -433,37 +383,30 @@
 }
 
 - (void) rightMouseDown:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
 - (void) rightMouseDragged:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
 - (void) rightMouseUp:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
 - (void) otherMouseDown:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
 - (void) otherMouseDragged:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
 - (void) otherMouseUp:(NSEvent *)event {    
-    if (ImGui::GetIO().WantCaptureMouse) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
 -(void) scrollWheel:(NSEvent *)event {
-    if (ImGui::GetIO().WantCaptureMouse) return;
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     //auto lock = std::unique_lock{_model->_mutex};
     _model->_looking_at.x += event.scrollingDeltaX * _window.screen.backingScaleFactor;

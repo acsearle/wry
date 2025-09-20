@@ -8,6 +8,7 @@
 #ifndef hash_hpp
 #define hash_hpp
 
+#include <cstddef>
 #include <cstring>
 #include <cmath>
 #include <tuple>

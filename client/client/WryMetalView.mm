@@ -8,10 +8,6 @@
 #include <iostream>
 #include <thread>
 
-#include "imgui.h"
-#include "imgui_impl_metal.h"
-#include "imgui_impl_osx.h"
-
 #include "WryMetalView.h"
 
 // [1] https://sarunw.com/posts/how-to-create-macos-app-without-storyboard/

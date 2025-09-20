@@ -16,10 +16,6 @@
 
 #include <sqlite3.h>
 
-#include "imgui.h"
-#include "imgui_impl_metal.h"
-#include "imgui_impl_osx.h"
-
 #include "WryMesh.h"
 #include "WryRenderer.h"
 
@@ -783,9 +779,7 @@
                 {
                     
                     // we need to swap the cursor image based on gui
-                    
-                    // ImGui::GetIO().WantCaptureMouse
-                    
+                                        
                     auto coordinate = _opcode_to_coordinate[value_as_opcode(_model->_holding_value)];
                     matrix<RGBA8Unorm_sRGB> tile(64, 64);
                     
@@ -1697,85 +1691,7 @@
         {
             [self drawOverlay:encoder];
         }
-               
-        {
-            ImGuiIO& io = ImGui::GetIO();
-            io.DisplaySize.x = _model->_viewport_size.x;
-            io.DisplaySize.y = _model->_viewport_size.y;
-            CGFloat framebufferScale = _view.window.screen.backingScaleFactor;
-            io.DisplayFramebufferScale = ImVec2(framebufferScale, framebufferScale);
-            ImGui_ImplMetal_NewFrame(descriptor);
-            ImGui_ImplOSX_NewFrame(_view);
-            ImGui::NewFrame();
-            
-            static bool show_demo_window = true;
-            ImGui::ShowDemoWindow(&show_demo_window);
-            
-            static std::vector<std::pair<std::string, int>> enumerated_games;
-
-            if (enumerated_games.empty()) {
-                // ImGui::SetNextWindowSize(ImVec2(-1.0f, 0.0f));
-                ImGui::Begin(// "Carpentaria 0.1.0"
-                             "esc",
-                             nullptr,
-                             ImGuiWindowFlags_NoMove
-                             | ImGuiWindowFlags_NoTitleBar
-                             | ImGuiWindowFlags_NoResize);
-                
-                // ImVec2 sz = ImVec2(-FLT_MIN, 0.0f);
-                ImVec2 sz = ImVec2(64, 0.0f);
-                
-                if (ImGui::Button("Continue", sz)) {
-                    wry::sim::World* w = wry::sim::continue_game();
-                    delete std::exchange(_model->_world, w);
-                }
-                if (ImGui::Button("Quicksave", sz)) {
-                    wry::sim::save_game(_model->_world);
-                }
-                if (ImGui::Button("Restart", sz)) {
-                    wry::sim::World* w = wry::sim::restart_game();
-                    delete std::exchange(_model->_world, w);
-                }
-                if (ImGui::Button("Load", sz)) {
-                    enumerated_games = wry::sim::enumerate_games();
-                    
-                    
-                    
-                }
-                ImGui::BeginDisabled();
-                if (ImGui::Button("Settings", sz)) {
-                }
-                if (ImGui::Button("Quit", sz)) {
-                }
-                ImGui::EndDisabled();
-                ImGui::End();
-            } else {
-                ImGui::Begin("Load", nullptr, 0);
-                ImVec2 sz = ImVec2(-FLT_MIN, 0.0f);
-                bool didLoad = false;
-                for (auto& [s, i] : enumerated_games) {
-                    if (ImGui::Button(s.c_str(), sz)) {
-                        wry::sim::World* w = wry::sim::load_game(i);
-                        delete std::exchange(_model->_world, w);
-                        didLoad = true;
-                    }
-                }
-                ImGui::End();
-                if (didLoad) {
-                    enumerated_games.clear();
-                }
-            }
-            
-            ImGui::Render();
-            ImDrawData* draw_data = ImGui::GetDrawData();
-            // id <MTLRenderCommandEncoder> renderEncoder = [command_buffer renderCommandEncoderWithDescriptor:renderPassDescriptor];
-            [encoder pushDebugGroup:@"Dear ImGui rendering"];
-            ImGui_ImplMetal_RenderDrawData(draw_data, command_buffer, encoder);
-            [encoder popDebugGroup];
-            // [renderEncoder endEncoding];
-
-        }
-        
+         
         [encoder endEncoding];
 
     }
