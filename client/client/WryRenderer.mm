@@ -627,7 +627,7 @@
             }
              */
             
-            for (auto&& [k, v] : wry::sim::OPCODE_NAMES) {
+            for (auto&& [k, v] : wry::OPCODE_NAMES) {
                 _opcode_to_name.emplace(k, v);
                 _name_to_opcode.emplace(v + 7, k);
             }
@@ -740,7 +740,6 @@
     
     using namespace simd;
     using namespace wry;
-    using namespace wry::sim;
     
     
     MyUniforms uniforms;
@@ -1106,9 +1105,9 @@
 
 #if 0
         for (const auto& [qi, q] : entities->data) {
-            // sim::Entity* q = entities[qi];
+            // Entity* q = entities[qi];
             
-            if (auto p = dynamic_cast<const wry::sim::Machine*>(q)) { // ugh
+            if (auto p = dynamic_cast<const wry::Machine*>(q)) { // ugh
                 
                 auto h0 = (p->_old_heading & 3) * M_PI_2;
                 auto h1 = (p->_new_heading & 3) * M_PI_2;
@@ -1210,7 +1209,7 @@
                     k += 4;
                 }
                 
-            } else if (auto p = dynamic_cast<const sim::LocalizedEntity*>(q)){
+            } else if (auto p = dynamic_cast<const LocalizedEntity*>(q)){
                 
                 simd_float4 location = make<float4>(p->_location.x, p->_location.y + 1.0, 0.0, 1.0f);
                 auto A = simd_matrix_translate(location) * lookat_transform * simd_matrix_scale(0.5f);
@@ -1240,9 +1239,9 @@
                 
                 WryMesh* s = nil;
                 
-                if (auto r = dynamic_cast<const sim::Source*>(q)) {
+                if (auto r = dynamic_cast<const Source*>(q)) {
                     s = _mine_mesh;
-                } else if (auto r = dynamic_cast<const sim::Sink*>(q)) {
+                } else if (auto r = dynamic_cast<const Sink*>(q)) {
                     s = _furnace_mesh;
                 }
                 
@@ -1256,7 +1255,7 @@
                 }
 
                 
-                if (auto r = dynamic_cast<const sim::Source*>(q)) {
+                if (auto r = dynamic_cast<const Source*>(q)) {
                     
                     simd_float4 coordinate = make<float4>((r->_of_this.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                     
@@ -1296,11 +1295,10 @@
                 simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
-                    //wry::sim::Value q = _model->_world->_value_for_coordinate.read(wry::sim::Coordinate{i, j});
+                    //wry::Value q = _model->_world->_value_for_coordinate.read(wry::Coordinate{i, j});
                     wry::Value q = {};
-                    (void) _model->_world->_value_for_coordinate._map.try_get(wry::sim::Coordinate{i, j}, q);
-                    //printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::sim::Coordinate{i, j}.data(), result, q._data);
-                    using namespace wry::sim;
+                    (void) _model->_world->_value_for_coordinate._map.try_get(wry::Coordinate{i, j}, q);
+                    //printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::Coordinate{i, j}.data(), result, q._data);
                     if (q.is_int64_t()) {
                         coordinate = make<float4>((q.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                     } else if (q.is_opcode()) {

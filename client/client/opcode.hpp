@@ -13,7 +13,7 @@
 #include <utility>
 #include <cstring>
 
-namespace wry::sim {
+namespace wry {
     
     // define opcodes
     
@@ -114,6 +114,6 @@ X(OPCODE_FLOP_FLIP),\
         return nullptr;
     }
 
-} // namespace wry::sim
+} // namespace wry
 
 #endif /* opcode_hpp */

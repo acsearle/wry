@@ -12,7 +12,7 @@
 #include "serialize.hpp"
 #include "deserialize.hpp"
 
-namespace wry::sim {
+namespace wry {
 
 World* restart_game() {
     return new World;

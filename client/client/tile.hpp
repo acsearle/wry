@@ -12,7 +12,7 @@
 #include "contiguous_deque.hpp"
 #include "entity.hpp"
 
-namespace wry::sim {
+namespace wry {
     
     // todo: we squander lots of memory here; there will be many more
     // tiles than machines, so having multiple queue headers inline is

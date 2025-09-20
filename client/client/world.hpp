@@ -20,7 +20,7 @@
 #include "waitable_map.hpp"
 
 
-namespace wry::sim {
+namespace wry {
     
     // somewhat abstracted interface
     

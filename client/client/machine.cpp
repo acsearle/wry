@@ -10,7 +10,7 @@
 #include "debug.hpp"
 #include "transaction.hpp"
 
-namespace wry::sim {
+namespace wry {
     
     void Machine::notify(TransactionContext* context) const {
 #if 0

@@ -7,7 +7,7 @@
 
 #include "entity.hpp"
 
-namespace wry::sim {
+namespace wry {
     
     // It's not obvious how to let transactions create new unique EntityIDs
     // in a way that is consistent across different machines and different

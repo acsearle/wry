@@ -11,7 +11,7 @@
 #include "stdint.hpp"
 #include "hash.hpp"
 
-namespace wry::sim {
+namespace wry {
     
     using Time = i64;
     

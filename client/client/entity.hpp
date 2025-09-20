@@ -10,7 +10,7 @@
 
 #include "sim.hpp"
 
-namespace wry::sim {
+namespace wry {
         
     // This is the base class of things with behavior
     //

@@ -10,7 +10,7 @@
 
 #include "entity.hpp"
 
-namespace wry::sim {
+namespace wry {
 
     struct LocalizedEntity : Entity {
         

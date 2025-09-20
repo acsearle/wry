@@ -15,7 +15,7 @@
 #include "HeapArray.hpp"
 #include "opcode.hpp"
 
-namespace wry::sim {
+namespace wry {
         
     struct Machine : Entity {
         

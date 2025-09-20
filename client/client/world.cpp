@@ -8,7 +8,7 @@
 #include "transaction.hpp"
 #include "world.hpp"
 
-namespace wry::sim {
+namespace wry {
     
     void World::_garbage_collected_enumerate_fields(TraceContext* context) const {
         // printf("%s\n", __PRETTY_FUNCTION__);

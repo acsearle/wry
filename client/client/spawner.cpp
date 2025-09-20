@@ -10,7 +10,7 @@
 #include "world.hpp"
 #include "transaction.hpp"
 
-namespace wry::sim {
+namespace wry {
     
     void Source::notify(TransactionContext* context) const {
         printf("%s\n", __PRETTY_FUNCTION__);

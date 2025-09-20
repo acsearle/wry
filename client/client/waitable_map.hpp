@@ -20,7 +20,7 @@ namespace wry {
         PersistentMap<Key, T> _map;
         // The set of entities to notify when we write for a key; this will
         // typically be a much smaller collection
-        PersistentMap<Key, PersistentSet<sim::EntityID>> _waiting;
+        PersistentMap<Key, PersistentSet<EntityID>> _waiting;
     };
     
     template<typename Key, typename T, typename U, typename F>

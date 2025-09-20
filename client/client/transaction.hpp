@@ -14,7 +14,7 @@
 #include "garbage_collected.hpp"
 #include "persistent_map.hpp"
 
-namespace wry::sim {
+namespace wry {
 
     // SAFETY: None
     template<size_t N = 8>

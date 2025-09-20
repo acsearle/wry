@@ -10,7 +10,7 @@
 
 #include "world.hpp"
 
-namespace wry::sim {
+namespace wry {
 
 World* restart_game();
 World* continue_game();

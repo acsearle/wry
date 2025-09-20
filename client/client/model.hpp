@@ -30,7 +30,7 @@ namespace wry {
     
     struct model {
         
-        // The model holds all the app state, including the sim::world, but
+        // The model holds all the app state, including the World, but
         // also the visualization-only parts of the app state
         
         // We'll try to keep the model / WryRenderer distinction to roughly be
@@ -44,7 +44,7 @@ namespace wry {
         // new states that have been computed but not yet displayed
         
         // simulation state
-        sim::World* _world;
+        World* _world;
 
         
         // debug state
@@ -81,12 +81,10 @@ namespace wry {
 
         model() {
             
-            _world = new sim::World;
+            _world = new World;
 
             _console.emplace_back("WryApplication");
             _console.emplace_back("");
-
-            using namespace sim;
                         
             auto insert_localized_entity = [&](const LocalizedEntity* entity_ptr) {
                 EntityID entity_id  = entity_ptr->_entity_id;

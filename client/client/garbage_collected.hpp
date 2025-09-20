@@ -37,7 +37,7 @@ namespace wry {
     }
     
     constexpr Color are_black(Color color) {
-        return color & __builtin_rotateleft64(color, 32);
+        return color & rotate_left(color, 32);
     }
     
     constexpr Color are_white(Color color) {
@@ -51,6 +51,8 @@ namespace wry {
     
     struct GarbageCollected {
         
+        mutable Atomic<Color> _color;
+        
         static void* operator new(std::size_t count) {
             return calloc(count, 1);
         }
@@ -61,9 +63,7 @@ namespace wry {
 
         static void* operator new[](size_t number_of_bytes) = delete;
         static void operator delete[](void*) = delete;
-        
-        mutable Atomic<Color> _color;
-        
+                
         GarbageCollected();
         GarbageCollected(const GarbageCollected&);
         GarbageCollected(GarbageCollected&&);
@@ -74,7 +74,6 @@ namespace wry {
         virtual std::strong_ordering operator<=>(const GarbageCollected&) const;
         virtual bool operator==(const GarbageCollected&) const;
         
-        virtual hash_t _garbage_collected_hash() const;
         virtual void _garbage_collected_debug() const;
         virtual void _garbage_collected_shade() const;
         virtual void _garbage_collected_trace(void*) const;
@@ -87,6 +86,9 @@ namespace wry {
         virtual void _garbage_collected_enumerate_fields(TraceContext*) const = 0;
         virtual Color _garbage_collected_sweep() const;
 
+        
+        virtual hash_t _garbage_collected_hash() const;
+        
         // TODO: is it useful to have a base class above the Value interface?
         virtual Value _value_insert_or_assign(Value key, Value value);
         virtual bool _value_empty() const;

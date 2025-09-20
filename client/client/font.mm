@@ -5,12 +5,10 @@
 //  Created by Antony Searle on 25/6/2023.
 //
 
-// include FreeType2, suppressing warnings
-//#pragma clang diagnostic push
-//#pragma clang diagnostic ignored "-Wdocumentation"
+// .mm - Infected by SpriteAtlas?
+
 #include <ft2build.h>
 #include FT_FREETYPE_H
-//#pragma clang diagnostic pop
 
 #include <iostream>
 

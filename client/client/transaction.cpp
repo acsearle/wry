@@ -8,7 +8,7 @@
 #include "transaction.hpp"
 #include "world.hpp"
 
-namespace wry::sim {
+namespace wry {
     
     bool TransactionContext::try_read_value_for_coordinate(Coordinate xy, Value& v) {
         return this->_world->_value_for_coordinate._map.try_get(xy, v);
