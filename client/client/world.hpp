@@ -30,9 +30,9 @@ namespace wry {
     Time world_get_time(const World* world);
     
     template<typename Key, typename T>
-    void trace(const WaitableMap<Key, T>& x, void* context) {
-        trace(x._map, context);
-        trace(x._waiting, context);
+    void garbage_collected_scan(const WaitableMap<Key, T>& x) {
+        garbage_collected_scan(x._map);
+        garbage_collected_scan(x._waiting);
     }
 
     struct World : GarbageCollected {
@@ -69,7 +69,7 @@ namespace wry {
         
         virtual ~World() = default;
         
-        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override;
+        virtual void _garbage_collected_scan() const override;
 
         World* step() const;
                                             
@@ -80,8 +80,8 @@ namespace wry {
         return world->_time;
     }
     
-    inline void shade(const World& self) {
-        shade(&self);
+    inline void garbage_collected_shade(const World& self) {
+        garbage_collected_shade(&self);
     }
     
    

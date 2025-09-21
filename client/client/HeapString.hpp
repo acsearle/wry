@@ -31,11 +31,8 @@ namespace wry {
         virtual ~HeapString() override final;
         
         virtual void _garbage_collected_shade() const override final;
-        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override final;
+        virtual void _garbage_collected_scan() const override final;
         virtual size_t _garbage_collected_hash() const override final { return _hash; }
-        virtual void _garbage_collected_trace(void*) const override final;
-        virtual void _garbage_collected_trace_weak(void*) const override final;
-        virtual Color _garbage_collected_sweep() const override final;
         virtual void _garbage_collected_debug() const override final;
 
         virtual const HeapString* _ctrie_any_find_or_emplace2(const _ctrie::INode* in, const _ctrie::LNode* ln) const override final;

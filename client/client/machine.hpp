@@ -100,8 +100,8 @@ namespace wry {
 
         void _schedule_arrival(World* world);
         
-        virtual void _garbage_collected_enumerate_fields(TraceContext*p) const override {
-            trace(_stack,p);
+        virtual void _garbage_collected_scan() const override {
+            garbage_collected_scan(_stack);
         }
                         
     };

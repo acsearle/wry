@@ -10,12 +10,12 @@
 
 namespace wry {
     
-    void World::_garbage_collected_enumerate_fields(TraceContext* context) const {
+    void World::_garbage_collected_scan() const {
         // printf("%s\n", __PRETTY_FUNCTION__);
-        trace(_entity_id_for_coordinate, context);
-        trace(_entity_for_entity_id, context);
-        trace(_value_for_coordinate, context);
-        trace(_waiting_on_time, context);
+        garbage_collected_scan(_entity_id_for_coordinate);
+        garbage_collected_scan(_entity_for_entity_id);
+        garbage_collected_scan(_value_for_coordinate);
+        garbage_collected_scan(_waiting_on_time);
     }
         
     World* World::step() const {

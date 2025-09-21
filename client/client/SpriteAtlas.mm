@@ -78,7 +78,7 @@ namespace wry {
                                         1);
         s.b.texCoord = make<float2>(tl.x + v.major(), tl.y + v.minor()) / _size;
         
-        // for debug, also shade the split regions
+        // for debug, also garbage_collected_shade the split regions
         
         /*
         {

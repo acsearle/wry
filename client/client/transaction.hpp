@@ -146,7 +146,7 @@ namespace wry {
         size_t _size = 0;
         Node _nodes[] __counted_by(_size);
                 
-        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override {}
+        virtual void _garbage_collected_scan() const override {}
         
         static void* operator new(size_t basic, size_t extra) {
             return GarbageCollected::operator new(basic + extra * sizeof(Node));

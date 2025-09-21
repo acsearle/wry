@@ -74,13 +74,13 @@ namespace wry {
          uint64_t k = (uint64_t)a * (uint64_t)b;
          auto q = Node<int>::make_with_key_value(k, a);
          p = p ? Node<int>::merge(p, q) : q;
-         //shade(p);
-         //shade(q);
+         //garbage_collected_shade(p);
+         //garbage_collected_shade(q);
          mutator_handshake();
-         // shade p because we use it after the handshake
+         // garbage_collected_shade p because we use it after the handshake
          p->_garbage_collected_shade();
-         //shade(p);
-         //shade(q);
+         //garbage_collected_shade(p);
+         //garbage_collected_shade(q);
          }
          }
          */
@@ -111,7 +111,7 @@ namespace wry {
                     abort();
                 }
                 mutator_handshake();
-                shade(p);
+                garbage_collected_shade(p);
             }
             for (uint64_t k = 0; k != 65536; ++k) {
                 if (m.count(k)) {
@@ -124,7 +124,7 @@ namespace wry {
                     assert(!p.try_get(k, v));
                 }
                 mutator_handshake();
-                shade(p);
+                garbage_collected_shade(p);
             }
             
         }
@@ -151,9 +151,9 @@ namespace _persistent_map {
         
         std::map<Key, T> data;
         
-        virtual void _garbage_collected_enumerate_fields(TraceContext*p) const override {
+        virtual void _garbage_collected_scan() const override {
             //printf("Was traced\n");
-            trace(data,p);
+            garbage_collected_scan(data);
         }
         
         PersistentMap() = default;

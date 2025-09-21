@@ -14,7 +14,6 @@
 #include "atomic.hpp"
 #include "garbage_collected.hpp"
 #include "Scan.hpp"
-//#include "adl.hpp"
 
 namespace wry {
     
@@ -67,8 +66,8 @@ namespace wry {
         
     }; // struct Value
     
-    void shade(const Value& value);
-    void trace(const Value& value,void*p);
+    void garbage_collected_shade(const Value& value);
+    void garbage_collected_scan(const Value& value);
     
 } // namespace wry
 
@@ -89,9 +88,9 @@ namespace wry {
         }
         
         Value exchange(Value desired, Ordering order) {
-            shade(desired);
+            garbage_collected_shade(desired);
             desired._data = _data.exchange(desired._data, order);
-            shade(desired);
+            garbage_collected_shade(desired);
             return desired;
         }
         
@@ -220,7 +219,7 @@ namespace wry {
      size_t object_hash(const Scan<Value>&);
      void object_debug(const Scan<Value>&);
      void object_passivate(Scan<Value>&);
-     void shade(const Scan<Value>&);
+     void garbage_collected_shade(const Scan<Value>&);
      void object_trace(const Scan<Value>&);
      void object_trace_weak(const Scan<Value>&);
      */
@@ -250,14 +249,35 @@ namespace wry {
     
     
     
+    using ValueHash = std::size_t;
     
+    struct HeapValue : GarbageCollected {
+        
+        
+        
+        virtual ValueHash _garbage_collected_hash() const { abort(); }
+        
+        // TODO: is it useful to have a base class above the Value interface?
+        virtual Value _value_insert_or_assign(Value key, Value value);
+        virtual bool _value_empty() const;
+        virtual size_t _value_size() const;
+        virtual bool _value_contains(Value key) const;
+        virtual Value _value_find(Value key) const;
+        virtual Value _value_erase(Value key);
+        virtual Value _value_add(Value right) const;
+        virtual Value _value_sub(Value right) const;
+        virtual Value _value_mul(Value right) const;
+        virtual Value _value_div(Value right) const;
+        virtual Value _value_mod(Value right) const;
+        virtual Value _value_rshift(Value right) const;
+        virtual Value _value_lshift(Value right) const;
+        
+    };
     
-    
-    
-    
-    
-    
-    
+    inline ValueHash hash(const HeapValue* self) {
+        return self->_garbage_collected_hash();
+    }
+
     
     
     
@@ -269,8 +289,8 @@ namespace wry {
     constexpr bool _value_is_short_string(const Value& self);
     constexpr bool _value_is_tombstone(const Value& self);
     
-    GarbageCollected* _value_as_object(const Value& self);
-    GarbageCollected* _value_as_garbage_collected_else(const Value& self, GarbageCollected*);
+    HeapValue* _value_as_object(const Value& self);
+    HeapValue* _value_as_garbage_collected_else(const Value& self, const HeapValue*);
     constexpr int64_t _value_as_small_integer(const Value& self);
     constexpr int64_t _value_as_small_integer_else(const Value& self, int64_t);
     std::string_view _value_as_short_string(const Value& self);
@@ -281,22 +301,22 @@ namespace wry {
     
     
     
-    inline void shade(const Value& self) {
+    inline void garbage_collected_shade(const Value& self) {
         if (_value_is_object(self))
-            shade(_value_as_object(self));
+            garbage_collected_shade(_value_as_object(self));
     }
     
-    inline void trace(const Value& self,void*p) {
+    inline void garbage_collected_scan(const Value& self) {
         if (_value_is_object(self))
-            trace(_value_as_object(self),p);
+            garbage_collected_scan(_value_as_object(self));
     }
     
-    inline void shade(const Scan<Value>& self) {
-        shade(self._atomic_value.load(Ordering::RELAXED));
+    inline void garbage_collected_shade(const Scan<Value>& self) {
+        garbage_collected_shade(self._atomic_value.load(Ordering::RELAXED));
     }
     
-    inline void trace(const Scan<Value>& self,void*p) {
-        trace(self._atomic_value.load(Ordering::ACQUIRE),p);
+    inline void garbage_collected_scan(const Scan<Value>& self) {
+        garbage_collected_scan(self._atomic_value.load(Ordering::ACQUIRE));
     }
     
     size_t hash(const Value& self);
@@ -309,13 +329,13 @@ namespace wry {
     
     
     // TODO: upgrade to array of limbs of arbitrary precision integer
-    struct HeapInt64 : GarbageCollected {
+    struct HeapInt64 : HeapValue {
         std::int64_t _integer;
         explicit HeapInt64(std::int64_t z);
         virtual ~HeapInt64() final = default;
         std::int64_t as_int64_t() const;
         virtual void _garbage_collected_shade() const override;
-        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override;
+        virtual void _garbage_collected_scan() const override;
     };
     
     
@@ -345,19 +365,19 @@ namespace wry {
     
     
     
-    inline void trace(const Scan<Atomic<Value>>& self,void*p) {
-        trace(self._atomic_value.load(Ordering::ACQUIRE),p);
+    inline void garbage_collected_scan(const Scan<Atomic<Value>>& self) {
+        garbage_collected_scan(self._atomic_value.load(Ordering::ACQUIRE));
     }
     
-    inline void passivate(Value& self) {
+    inline void garbage_collected_passivate(Value& self) {
         self._data = 0;
     }
     
-    inline void passivate(Scan<Value>& self) {
+    inline void garbage_collected_passivate(Scan<Value>& self) {
         self._atomic_value.exchange(value_make_null(), Ordering::RELAXED);
     }
     
-    inline void passivate(Scan<Atomic<Value>>& self) {
+    inline void garbage_collected_passivate(Scan<Atomic<Value>>& self) {
         // TODO: Is it ever right to call this?
         __builtin_trap();
         self.store(value_make_null(), Ordering::ACQUIRE);
@@ -565,12 +585,12 @@ namespace wry {
         return result;
     }
     
-    inline GarbageCollected* _value_as_object(const Value& self) {
+    inline HeapValue* _value_as_object(const Value& self) {
         assert(_value_is_object(self));
-        return (GarbageCollected*)self._data;
+        return (HeapValue*)self._data;
     }
     
-    inline const GarbageCollected* _as_pointer_or_nullptr(const Value& self) {
+    inline HeapValue* _as_pointer_or_nullptr(const Value& self) {
         return _value_is_object(self) ? _value_as_object(self) : nullptr;
     }
     

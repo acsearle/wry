@@ -270,15 +270,15 @@ namespace wry {
     // static_assert(std::is_move_assignable_v<HashSet<Scan<Object*>>>);
 
     template<typename T>
-    void trace(const QueueOfUnique<T>& self) {
-        trace(self.queue);
-        trace(self.set);
+    void garbage_collected_scan(const QueueOfUnique<T>& self) {
+        garbage_collected_scan(self.queue);
+        garbage_collected_scan(self.set);
     }
 
     template<typename T>
-    void shade(const QueueOfUnique<T>& self) {
-        shade(self.queue);
-        shade(self.set);
+    void garbage_collected_shade(const QueueOfUnique<T>& self) {
+        garbage_collected_shade(self.queue);
+        garbage_collected_shade(self.set);
     }
     
 } // namespace wry

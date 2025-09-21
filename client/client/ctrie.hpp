@@ -35,7 +35,7 @@ namespace wry {
             std::string_view view;
         };
         
-        struct AnyNode : GarbageCollected {
+        struct AnyNode : HeapValue {
             virtual const HeapString* 
             _ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const;
         };
@@ -82,7 +82,7 @@ namespace wry {
             bool compare_exchange(const MainNode* expected, const MainNode* desired) const;
             
             
-            virtual void _garbage_collected_enumerate_fields(TraceContext*) const override;
+            virtual void _garbage_collected_scan() const override;
             
             virtual const BranchNode* _ctrie_bn_resurrect() const override;
             virtual const HeapString* _ctrie_bn_find_or_emplace(Query query, int level,
@@ -106,7 +106,7 @@ namespace wry {
         const HeapString* find_or_emplace(_ctrie::Query query);
         void erase(const HeapString* key);
         
-        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override;
+        virtual void _garbage_collected_scan() const override;
         
     }; // struct Ctrie
     

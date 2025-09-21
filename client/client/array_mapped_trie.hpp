@@ -58,7 +58,7 @@
 
 namespace wry {
     
-    inline void trace(std::monostate, void* _Nullable) {
+    inline void garbage_collected_scan(std::monostate) {
         // no-op
     }
     
@@ -474,13 +474,17 @@ namespace wry {
             , _bitmap(bitmap) {
             }
             
-            virtual void _garbage_collected_enumerate_fields(TraceContext* _Nullable context) const override {
-                int compressed_size = popcount(_bitmap);
+            virtual void _garbage_collected_scan() const override {
+                size_t compressed_size = popcount(_bitmap);
                 if (has_children()) {
                     assert(compressed_size <= _debug_capacity);
-                    trace_n(_children, compressed_size, context);
+                    // trace_n(_children, compressed_size);
+                    for (size_t i = 0; i != compressed_size; ++i)
+                        garbage_collected_scan(_children[i]);
                 } else {
-                    trace_n(_values, compressed_size, context);
+                    // trace_n(_values, compressed_size);
+                    for (size_t i = 0; i != compressed_size; ++i)
+                        garbage_collected_scan(_values[i]);
                 }
             }
                         

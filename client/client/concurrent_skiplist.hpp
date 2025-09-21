@@ -72,7 +72,7 @@ namespace wry {
                 //
                 // TODO: Consider arena allocation rather than involving the
                 // garbage collector
-                //virtual void _garbage_collected_enumerate_fields(TraceContext* context) const /* override */ {
+                //virtual void _garbage_collected_scan() const /* override */ {
                 //}
 
             }; // struct Node
@@ -99,7 +99,7 @@ namespace wry {
                     return new(raw) Head;
                 }
                 
-                //virtual void _garbage_collected_enumerate_fields(TraceContext* context) const override {
+                //virtual void _garbage_collected_scan() const override {
                 //
                 //}
 

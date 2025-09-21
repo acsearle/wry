@@ -113,8 +113,8 @@ namespace wry {
     }
 
     void model::shade_roots() {
-        shade(_holding_value);
-        shade(*_world);
+        garbage_collected_shade(_holding_value);
+        garbage_collected_shade(*_world);
     }
     
     

@@ -79,9 +79,9 @@ namespace wry {
             return _data[i];
         }
         
-        virtual void _garbage_collected_enumerate_fields(TraceContext* p) const override {
+        virtual void _garbage_collected_scan() const override {
             for (const T& element : *this) {
-                trace(element, p);
+                garbage_collected_scan(element);
             }
         }
         
@@ -206,13 +206,13 @@ namespace wry {
         
         void pop_front() {
             assert(!empty());
-            passivate(front());
+            garbage_collected_passivate(front());
             ++_begin;
         }
         
         void pop_back() {
             assert(!empty());
-            passivate(back());
+            garbage_collected_passivate(back());
             --_end;
         }
         
@@ -233,13 +233,13 @@ namespace wry {
     };
    
     template<typename T>
-    void trace(const RingDequeStatic<T>& self, void* p) {
-        trace(self._storage, p);
+    void garbage_collected_scan(const RingDequeStatic<T>& self) {
+        garbage_collected_scan(self._storage);
     }
 
     template<typename T>
-    void shade(const RingDequeStatic<T>& self) {
-        shade(self._storage);
+    void garbage_collected_shade(const RingDequeStatic<T>& self) {
+        garbage_collected_shade(self._storage);
     }
 
     
@@ -353,15 +353,15 @@ namespace wry {
     };
     
     template<typename T>
-    void trace(const GCArray<T>& self, void* p) {
-        trace(self._alpha, p);
-        trace(self._beta, p);
+    void garbage_collected_scan(const GCArray<T>& self) {
+        garbage_collected_scan(self._alpha);
+        garbage_collected_scan(self._beta);
     }
 
     template<typename T>
-    void shade(const GCArray<T>& self) {
-        shade(self._alpha);
-        shade(self._beta);
+    void garbage_collected_shade(const GCArray<T>& self) {
+        garbage_collected_shade(self._alpha);
+        garbage_collected_shade(self._beta);
     }
 
     

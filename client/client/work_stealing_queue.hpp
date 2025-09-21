@@ -97,8 +97,8 @@ namespace wry {
                         CircularArray<T>* new_array = CircularArray<T>::make(capacity << 1);
                         for (ptrdiff_t i = _cached_top; i != bottom; ++i)
                             (*new_array)[i].store((*array)[i].load(Ordering::RELAXED), Ordering::RELAXED);
-                        array->shade();
-                        new_array->shade();
+                        array->garbage_collected_shade();
+                        new_array->garbage_collected_shade();
                         _array.store(new_array, Ordering::RELEASE);
                         array = new_array;
                     }

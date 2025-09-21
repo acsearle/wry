@@ -15,7 +15,7 @@ namespace wry {
     struct LocalizedEntity : Entity {
         
         Coordinate _location = {};
-        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override {
+        virtual void _garbage_collected_scan() const override {
         }
 
     };
@@ -31,8 +31,8 @@ namespace wry {
         Value _of_this;
         
         virtual void notify(TransactionContext*) const override;
-        virtual void _garbage_collected_enumerate_fields(TraceContext*p) const override {
-            trace(_of_this,p);
+        virtual void _garbage_collected_scan() const override {
+            garbage_collected_scan(_of_this);
         }
 
     };
@@ -40,14 +40,14 @@ namespace wry {
     struct Sink : LocalizedEntity {
                 
         virtual void notify(TransactionContext*) const override;
-        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override {
+        virtual void _garbage_collected_scan() const override {
         }
         
     };
     
     struct Counter : LocalizedEntity {
         virtual void notify(TransactionContext*) const override;
-        virtual void _garbage_collected_enumerate_fields(TraceContext*) const override {
+        virtual void _garbage_collected_scan() const override {
         }
     };
 

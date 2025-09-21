@@ -21,9 +21,9 @@ namespace wry {
         
     // TODO: move elsewhere
     template<typename Key, typename T, typename Compare>
-    void trace(const std::map<Key, T, Compare>& m, void* context) {
+    void garbage_collected_scan(const std::map<Key, T, Compare>& m) {
         for (const auto& p : m)
-            trace(p, context);
+            garbage_collected_scan(p);
     }
 
     // TODO: this interface clumsy
@@ -108,13 +108,13 @@ namespace wry {
     };
     
     template<typename Key, typename T>
-    void trace(const PersistentMap<Key, T>& x, void* context) {
-        trace(x._inner, context);
+    void garbage_collected_scan(const PersistentMap<Key, T>& x) {
+        garbage_collected_scan(x._inner);
     }
     
     template<typename Key, typename T>
-    void shade(const PersistentMap<Key, T>& x) {
-        shade(x._inner);
+    void garbage_collected_shade(const PersistentMap<Key, T>& x) {
+        garbage_collected_shade(x._inner);
     }
     
     template<typename T>

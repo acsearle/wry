@@ -24,8 +24,8 @@ namespace wry {
             printf("%s\n", __PRETTY_FUNCTION__);
         }
         
-        virtual void _garbage_collected_enumerate_fields(TraceContext* p) const override {
-            trace(data, p);
+        virtual void _garbage_collected_scan() const override {
+            garbage_collected_enumerate_strong_pointers(data);
         }
         
         static const ImmutableBoxed* make(auto&&... args) {
@@ -55,9 +55,9 @@ namespace wry {
         : _data(FORWARD(args)...) {
         }
         
-        virtual void _garbage_collected_enumerate_fields(TraceContext*p) const override {
+        virtual void _garbage_collected_scan() const override {
             std::unique_lock guard(_lock);
-            trace(_data,p);
+            garbage_collected_enumerate_strong_pointers(_data);
         }
         
         static SynchronizedBoxed* make(auto&&... args) {

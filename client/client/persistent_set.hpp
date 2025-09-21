@@ -18,9 +18,9 @@
 namespace wry {
     
     template<typename Key, typename Compare>
-    void trace(const std::set<Key, Compare>& s,void*q) {
+    void garbage_collected_scan(const std::set<Key, Compare>& s) {
         for (const Key& k : s)
-            trace(k,q);
+            garbage_collected_scan(k);
     }
     
     template<typename Key>
@@ -65,8 +65,8 @@ namespace wry {
     };
     
     template<typename Key>
-    void trace(const PersistentSet<Key>& x, void* context) {
-        trace(x._inner, context);
+    void garbage_collected_scan(const PersistentSet<Key>& x) {
+        garbage_collected_scan(x._inner);
     }
             
 } // namespace wry

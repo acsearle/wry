@@ -303,8 +303,8 @@ namespace wry {
 
     Scan<Value>& Scan<Value>::operator=(const Value& desired) {
         Value discovered = this->_atomic_value.exchange(desired, Ordering::RELEASE);
-        shade(desired);
-        shade(discovered);
+        garbage_collected_shade(desired);
+        garbage_collected_shade(discovered);
         return *this;
     }
 
@@ -333,23 +333,23 @@ namespace wry {
     
    
 
-    bool contains(const GarbageCollected* self, Value key) {
+    bool contains(const HeapValue* self, Value key) {
         return self ? self->_value_contains(key) : false;
     }
 
-    Value find(const GarbageCollected* self, Value key) {
+    Value find(const HeapValue* self, Value key) {
         return self ? self->_value_find(key) : value_make_error();
     }
 
-    Value insert_or_assign(GarbageCollected* self, Value key, Value value) {
+    Value insert_or_assign(HeapValue* self, Value key, Value value) {
         return self ? self->_value_insert_or_assign(key, value) : value_make_error();
     }
 
-    Value erase(GarbageCollected* self, Value key) {
+    Value erase(HeapValue* self, Value key) {
         return self ? self->_value_erase(key) : value_make_error();
     }
 
-    size_t size(const GarbageCollected* self) {
+    size_t size(const HeapValue* self) {
         return self ? self->_value_size() : 0;
     }
     
@@ -505,11 +505,11 @@ namespace wry {
     
     
     
-    struct ValueArray : GarbageCollected {
+    struct ValueArray : HeapValue {
         
         GCArray<Scan<Value>> _inner;
         
-        virtual void _garbage_collected_enumerate_fields(TraceContext*p) const { trace(_inner,p); }
+        virtual void _garbage_collected_scan() const { garbage_collected_scan(_inner); }
         virtual void _garbage_collected_debug() const { any_debug(_inner); }
         
         virtual bool _value_empty() const { return _inner.empty(); }
@@ -545,22 +545,22 @@ namespace wry {
     
     
     
-    bool GarbageCollected::_value_empty() const { abort(); }
-    size_t GarbageCollected::_value_size() const { return 0; }
-    bool GarbageCollected::_value_contains(Value key) const { return false; }
-    Value GarbageCollected::_value_find(Value key) const { return value_make_error(); }
-    Value GarbageCollected::_value_insert_or_assign(Value key, Value value) { return value_make_error(); }
-    Value GarbageCollected::_value_erase(Value key) { return value_make_error(); }
+    bool HeapValue::_value_empty() const { abort(); }
+    size_t HeapValue::_value_size() const { return 0; }
+    bool HeapValue::_value_contains(Value key) const { return false; }
+    Value HeapValue::_value_find(Value key) const { return value_make_error(); }
+    Value HeapValue::_value_insert_or_assign(Value key, Value value) { return value_make_error(); }
+    Value HeapValue::_value_erase(Value key) { return value_make_error(); }
     
 
     
-    Value GarbageCollected::_value_add(Value right) const { return value_make_error(); }
-    Value GarbageCollected::_value_sub(Value right) const { return value_make_error(); }
-    Value GarbageCollected::_value_mul(Value right) const { return value_make_error(); }
-    Value GarbageCollected::_value_div(Value right) const { return value_make_error(); }
-    Value GarbageCollected::_value_mod(Value right) const { return value_make_error(); }
-    Value GarbageCollected::_value_rshift(Value right) const { return value_make_error(); }
-    Value GarbageCollected::_value_lshift(Value right) const { return value_make_error(); }
+    Value HeapValue::_value_add(Value right) const { return value_make_error(); }
+    Value HeapValue::_value_sub(Value right) const { return value_make_error(); }
+    Value HeapValue::_value_mul(Value right) const { return value_make_error(); }
+    Value HeapValue::_value_div(Value right) const { return value_make_error(); }
+    Value HeapValue::_value_mod(Value right) const { return value_make_error(); }
+    Value HeapValue::_value_rshift(Value right) const { return value_make_error(); }
+    Value HeapValue::_value_lshift(Value right) const { return value_make_error(); }
 
     void HeapInt64::_garbage_collected_shade() const {
         abort();
@@ -568,7 +568,7 @@ namespace wry {
         //(void) color.compare_exchange(expected, Color::BLACK);
     }
     
-    void HeapInt64::_garbage_collected_enumerate_fields(TraceContext*) const {
+    void HeapInt64::_garbage_collected_scan() const {
         fprintf(stderr, "scanned a weak ");
         _garbage_collected_debug();
         abort();

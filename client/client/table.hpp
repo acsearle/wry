@@ -18,7 +18,7 @@
 
 // TODO:
 // - Unify with HeapTable
-//   - Automatic choice of storage depending on trace/shade behaviour of payload
+//   - Automatic choice of storage depending on trace/garbage_collected_shade behaviour of payload
 // - Type trait: trivial gc behavior
 // - Make all things incrementally resizing
 // - Rename everything HashMap and HashSet

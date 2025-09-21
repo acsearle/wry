@@ -144,8 +144,8 @@ namespace wry {
         T* b = other.get();
         _object._store(b);
         other._object._store(a);
-        shade(a);
-        shade(b);
+        garbage_collected_shade(a);
+        garbage_collected_shade(b);
     }
     
     template<std::derived_from<GarbageCollected> T>
@@ -155,8 +155,8 @@ namespace wry {
         // the only writer.
         T* discovered = get();
         _object.store(other, Ordering::RELEASE);
-        shade(discovered);
-        shade(other);
+        garbage_collected_shade(discovered);
+        garbage_collected_shade(other);
         return *this;
     }
     
@@ -166,7 +166,7 @@ namespace wry {
         //     See above.
         T* discovered = get();
         _object.store(nullptr, Ordering::RELAXED);
-        shade(discovered);
+        garbage_collected_shade(discovered);
         return *this;
     }
     
@@ -214,7 +214,7 @@ namespace wry {
     T* Scan<T*>::take() {
         T* discovered = get();
         _object.store(nullptr, Ordering::RELAXED);
-        shade(discovered);
+        garbage_collected_shade(discovered);
         return discovered;
     }
     
@@ -236,8 +236,8 @@ namespace wry {
     template<std::derived_from<GarbageCollected> T>
     T* Scan<Atomic<T*>>::exchange(T* desired, Ordering order) {
         T* discovered = _object.exchange(desired, order);
-        shade(discovered);
-        shade(desired);
+        garbage_collected_shade(discovered);
+        garbage_collected_shade(desired);
         return discovered;
     }
     
@@ -245,8 +245,8 @@ namespace wry {
     bool Scan<Atomic<T*>>::compare_exchange_weak(T*& expected, T* desired, Ordering success, Ordering failure) {
         bool result = _object.compare_exchange_weak(expected, desired, success, failure);
         if (result) {
-            shade(expected);
-            shade(desired);
+            garbage_collected_shade(expected);
+            garbage_collected_shade(desired);
         }
         return result;
     }
@@ -255,48 +255,43 @@ namespace wry {
     bool Scan<Atomic<T*>>::compare_exchange_strong(T*& expected, T* desired, Ordering success, Ordering failure) {
         bool result = _object.compare_exchange_strong(expected, desired, success, failure);
         if (result) {
-            shade(expected);
-            shade(desired);
+            garbage_collected_shade(expected);
+            garbage_collected_shade(desired);
         }
         return result;
     }
     
     template<PointerConvertibleTo<GarbageCollected> T>
-    void trace(const Scan<T* const>& self, void* p) {
-        if (self._object)
-            self._object->_garbage_collected_trace(p);
+    void garbage_collected_scan(const Scan<T* const>& self) {
+        garbage_collected_scan(self._object);
     }
 
     template<PointerConvertibleTo<GarbageCollected> T>
-    void trace(const Scan<T*>& self, void* p) {
-        const T* a = // self.get();
-        self._object.load(Ordering::ACQUIRE);
-        if (a)
-            a->_garbage_collected_trace(p);
+    void garbage_collected_scan(const Scan<T*>& self) {
+        garbage_collected_scan(self._object.load(Ordering::ACQUIRE));
     }
 
     template<PointerConvertibleTo<GarbageCollected> T>
-    void trace(const Scan<Atomic<T*>>& self, void* p) {
+    void garbage_collected_scan(const Scan<Atomic<T*>>& self) {
         const T* a = self.load(Ordering::ACQUIRE);
-        if (a)
-            a->_garbage_collected_trace(p);
+        garbage_collected_scan(a);
     }
         
     template<PointerConvertibleTo<GarbageCollected> T>
-    void shade(const Scan<T* const>& self) {
+    void garbage_collected_shade(const Scan<T* const>& self) {
         if (self._object)
             self._object->_garbage_collected_shade();
     }
     
     template<PointerConvertibleTo<GarbageCollected> T>
-    void shade(const Scan<T*>& self) {
+    void garbage_collected_shade(const Scan<T*>& self) {
         const T* a = self.get();
         if (a)
             a->_garbage_collected_shade();
     }
     
     template<PointerConvertibleTo<GarbageCollected> T>
-    void shade(const Scan<Atomic<T*>>& self) {
+    void garbage_collected_shade(const Scan<Atomic<T*>>& self) {
         const T* a = self.load(Ordering::ACQUIRE);
         if (a)
             a->_garbage_collected_shade();
@@ -334,7 +329,7 @@ namespace wry {
 
         
     template<PointerConvertibleTo<GarbageCollected> T>
-    void passivate(Scan<T*>& self) {
+    void garbage_collected_passivate(Scan<T*>& self) {
         self = nullptr;
     }
     

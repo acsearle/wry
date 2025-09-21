@@ -20,7 +20,7 @@ namespace wry {
 #endif
     }
     
-    void HeapString::_garbage_collected_trace(void*p) const {
+    void HeapString::_garbage_collected_scan() const {
         abort();
 #if 0
         Color expected = Color::WHITE;
@@ -38,15 +38,6 @@ namespace wry {
 #endif
     }
     
-    void HeapString::_garbage_collected_enumerate_fields(TraceContext*) const {
-        fprintf(stderr, "Scanned a weak object ");
-        _garbage_collected_debug();
-        abort();
-    }
-
-    void HeapString::_garbage_collected_trace_weak(void*) const {
-        // no-op
-    }
     
     void HeapString::_garbage_collected_debug() const {
         printf("\"%.*s\"", (int)_size, (const char*)_bytes);

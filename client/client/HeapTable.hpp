@@ -126,15 +126,15 @@ namespace wry {
     
     
     template<typename K, typename V>
-    void trace(const BasicEntry<K, V>& e,void*p) {
-        trace(e._kv.first,p);
-        trace(e._kv.second,p);
+    void garbage_collected_scan(const BasicEntry<K, V>& e) {
+        garbage_collected_scan(e._kv.first);
+        garbage_collected_scan(e._kv.second);
     }
 
     template<typename K, typename V>
-    void shade(const BasicEntry<K, V>& e) {
-        shade(e._kv.first);
-        shade(e._kv.second);
+    void garbage_collected_shade(const BasicEntry<K, V>& e) {
+        garbage_collected_shade(e._kv.first);
+        garbage_collected_shade(e._kv.second);
     }
 
     template<typename K, typename V>
@@ -144,14 +144,14 @@ namespace wry {
     }
     
     template<typename K, typename V>
-    hash_t any_hash(const BasicEntry<K, V>& e) {
+    ValueHash any_hash(const BasicEntry<K, V>& e) {
         return any_hash(e._kv.first);
     }
     
     template<typename K, typename V>
-    void passivate(BasicEntry<K, V>& e) {
-        passivate(e._kv.first);
-        passivate(e._kv.second);
+    void garbage_collected_passivate(BasicEntry<K, V>& e) {
+        garbage_collected_passivate(e._kv.first);
+        garbage_collected_passivate(e._kv.second);
     }
     
     /*
@@ -546,13 +546,13 @@ namespace wry {
     };
     
     template<typename T>
-    void trace(const BasicHashSetB<T>& self,void*p) {
-        trace(self._storage,p);
+    void garbage_collected_scan(const BasicHashSetB<T>& self) {
+        garbage_collected_scan(self._storage);
     }
 
     template<typename T>
-    void shade(const BasicHashSetB<T>& self) {
-        shade(self._storage);
+    void garbage_collected_shade(const BasicHashSetB<T>& self) {
+        garbage_collected_shade(self._storage);
     }
 
     
@@ -761,15 +761,15 @@ namespace wry {
     }; // BasicHashSetC
     
     template<typename T>
-    void trace(const BasicHashSetC<T>& self,void*p) {
-        trace(self._alpha,p);
-        trace(self._beta,p);
+    void garbage_collected_scan(const BasicHashSetC<T>& self) {
+        garbage_collected_scan(self._alpha);
+        garbage_collected_scan(self._beta);
     }
     
     template<typename T>
-    void shade(const BasicHashSetC<T>& self) {
-        shade(self._alpha);
-        shade(self._beta);
+    void garbage_collected_shade(const BasicHashSetC<T>& self) {
+        garbage_collected_shade(self._alpha);
+        garbage_collected_shade(self._beta);
     }
 
     
@@ -842,13 +842,13 @@ namespace wry {
     };
     
     template<typename K, typename V>
-    void trace(const GCHashMap<K, V>& self,void*p) {
-        trace(self._inner,p);
+    void garbage_collected_scan(const GCHashMap<K, V>& self) {
+        garbage_collected_scan(self._inner);
     }
 
     template<typename K, typename V>
-    void shade(const GCHashMap<K, V>& self) {
-        shade(self._inner);
+    void garbage_collected_shade(const GCHashMap<K, V>& self) {
+        garbage_collected_shade(self._inner);
     }
 
 //
@@ -909,14 +909,14 @@ namespace wry {
 //    }
 //
 //    template<typename K, typename V>
-//    void shade(const HashMap<K, V>& self) {
-//        return shade(self._inner);
+//    void garbage_collected_shade(const HashMap<K, V>& self) {
+//        return garbage_collected_shade(self._inner);
 //    }
 
 
     
     
-    struct HeapHashMap : GarbageCollected {
+    struct HeapHashMap : HeapValue {
         
         GCHashMap<Scan<Value>, Scan<Value>> _inner;
         
@@ -924,8 +924,8 @@ namespace wry {
             _inner._invariant();
         }
         
-        virtual void _garbage_collected_enumerate_fields(TraceContext*p) const override {
-            trace(_inner,p);
+        virtual void _garbage_collected_scan() const override {
+            garbage_collected_scan(_inner);
         }
 
 
@@ -1015,13 +1015,13 @@ namespace wry {
     
     
     template<typename K>
-    void trace(const BasicHashSetEntry<K>& e) {
-        trace(e._key);
+    void garbage_collected_scan(const BasicHashSetEntry<K>& e) {
+        garbage_collected_scan(e._key);
     }
     
     template<typename K>
-    void shade(const BasicHashSetEntry<K>& e) {
-        shade(e._key);
+    void garbage_collected_shade(const BasicHashSetEntry<K>& e) {
+        garbage_collected_shade(e._key);
     }
     
     template<typename K>
@@ -1030,13 +1030,13 @@ namespace wry {
     }
     
     template<typename K>
-    hash_t any_hash(const BasicHashSetEntry<K>& e) {
+    ValueHash any_hash(const BasicHashSetEntry<K>& e) {
         return any_hash(e._key);
     }
     
     template<typename K>
-    void passivate(BasicHashSetEntry<K>& e) {
-        passivate(e._key);
+    void garbage_collected_passivate(BasicHashSetEntry<K>& e) {
+        garbage_collected_passivate(e._key);
     }
     
     template<typename K>
@@ -1104,13 +1104,13 @@ namespace wry {
     };
     
     template<typename K>
-    void trace(const GCHashSet<K>& self) {
-        trace(self._inner);
+    void garbage_collected_scan(const GCHashSet<K>& self) {
+        garbage_collected_scan(self._inner);
     }
     
     template<typename K>
-    void shade(const GCHashSet<K>& self) {
-        return shade(self._inner);
+    void garbage_collected_shade(const GCHashSet<K>& self) {
+        return garbage_collected_shade(self._inner);
     }
 
     

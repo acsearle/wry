@@ -19,6 +19,9 @@ namespace wry {
     
     template<typename T>
     concept Relocatable = is_relocatable_v<T>;
+    
+    template<typename T>
+    concept Arithmetic = std::is_arithmetic_v<T>;
 
 } // namespace wry
 

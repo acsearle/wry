@@ -15,8 +15,8 @@ namespace wry {
     
     using Time = i64;
     
-    inline void trace(const Time&,void*) { }
-    inline void shade(const Time&) { }
+    inline void garbage_collected_scan(const Time&) { }
+    inline void garbage_collected_shade(const Time&) { }
 
     struct World;
     struct Coordinate;
@@ -70,8 +70,8 @@ namespace wry {
         return key.data();
     }
     
-    inline void trace(const Coordinate&,void*) {}
-    inline void shade(const Coordinate&) {}
+    inline void garbage_collected_scan(const Coordinate&) {}
+    inline void garbage_collected_shade(const Coordinate&) {}
     
     struct MortonCoordinate {
         uint64_t data;
@@ -79,8 +79,8 @@ namespace wry {
         constexpr auto operator<=>(const MortonCoordinate&) const = default;
     };
 
-    inline void trace(const MortonCoordinate&,void*) {}
-    inline void shade(const MortonCoordinate&) {}
+    inline void garbage_collected_scan(const MortonCoordinate&) {}
+    inline void garbage_collected_shade(const MortonCoordinate&) {}
 
     
     struct EntityID {
@@ -104,8 +104,8 @@ namespace wry {
     }
 
     
-    inline void trace(const EntityID&,void*) {}
-    inline void shade(const EntityID&) {}
+    inline void garbage_collected_scan(const EntityID&) {}
+    inline void garbage_collected_shade(const EntityID&) {}
     
     struct TransactionContext;
     

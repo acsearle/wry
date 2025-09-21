@@ -198,15 +198,15 @@ namespace wry {
     // Trace for <utility> types
     
     template<typename A, typename B>
-    void trace(const std::pair<A, B>& p, void* context) {
-        trace(p.first, context);
-        trace(p.second, context);
+    void garbage_collected_scan(const std::pair<A, B>& p) {
+        garbage_collected_scan(p.first);
+        garbage_collected_scan(p.second);
     }
 
     template<typename... Args>
-    void trace(const std::tuple<Args...>& p, void* context) {
-        std::apply([context](const auto&... args) {
-            (trace(args, context), ...);
+    void garbage_collected_scan(const std::tuple<Args...>& p) {
+        std::apply([](const auto&... args) {
+            (garbage_collected_scan(args), ...);
         }, p);
     }
     
