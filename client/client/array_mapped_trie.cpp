@@ -9,7 +9,6 @@
 
 #include "array_mapped_trie.hpp"
 
-#include "gc.hpp"
 #include "test.hpp"
 
 #if 0

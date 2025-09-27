@@ -16,7 +16,6 @@
 
 #import "WryDelegate.h"
 
-#include "gc.hpp"
 #include "model.hpp"
 #include "test.hpp"
 

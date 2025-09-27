@@ -6,8 +6,6 @@
 //
 
 #include "persistent_map.hpp"
-
-#include "gc.hpp"
 #include "test.hpp"
 
 namespace wry {
@@ -112,6 +110,7 @@ namespace wry {
                 }
                 mutator_handshake();
                 garbage_collected_shade(p);
+                // printf("PMT %d\n", i);
             }
             for (uint64_t k = 0; k != 65536; ++k) {
                 if (m.count(k)) {
@@ -125,6 +124,7 @@ namespace wry {
                 }
                 mutator_handshake();
                 garbage_collected_shade(p);
+                printf("PMT %llu\n", k);
             }
             
         }

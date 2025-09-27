@@ -18,7 +18,7 @@ namespace wry {
         Value _ = {};
         if (!tx->try_read_value_for_coordinate(this->_location, _))
             tx->try_write_value_for_coordinate(this->_location, this->_of_this);
-        tx->wait_on_value_for_coordinate(this->_location, Transaction::Condition::ALWAYS);
+        tx->wait_on_value_for_coordinate(this->_location, Transaction::Operation::WAIT_ALWAYS);
     }
     
     void Sink::notify(TransactionContext* context) const {
@@ -26,7 +26,7 @@ namespace wry {
         Value x = {};
         if (tx->try_read_value_for_coordinate(this->_location, x))
             tx->try_write_value_for_coordinate(this->_location, value_make_empty());
-        tx->wait_on_value_for_coordinate(this->_location, Transaction::Condition::ALWAYS);
+        tx->wait_on_value_for_coordinate(this->_location, Transaction::Operation::WAIT_ALWAYS);
     }
     
     inline EntityID spawner_new_entity_from_prototype() { return {}; }
@@ -51,7 +51,7 @@ namespace wry {
             tx->write_entity_id_for_coordinate(this->_location, b);
             // tx->wait_on_next(b);
         }
-        tx->wait_on_entity_id_for_coordinate(this->_location, Transaction::Condition::ALWAYS);
+        tx->wait_on_entity_id_for_coordinate(this->_location, Transaction::Operation::WAIT_ALWAYS);
     }
     
     void Counter::notify(TransactionContext* context) const {

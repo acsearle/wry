@@ -7,7 +7,6 @@
 
 #include "HeapArray.hpp"
 
-#include "gc.hpp"
 #include "test.hpp"
 #include "value.hpp"
 

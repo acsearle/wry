@@ -121,6 +121,7 @@ namespace wry {
             Node* node = new((void*) b) Node;
             node->_begin = (void*)a;
             node->_end = (void*)node;
+            node->_next = nullptr;
             return node;
         }
         
@@ -202,25 +203,34 @@ namespace wry {
         }
         
         inline void destroy_list() {
+            print();
             Node* node = std::exchange(_thread_local_head, nullptr);
             _thread_local_cursor = nullptr;
             while (node) {
-                free(std::exchange(node, node->_next));
+                free(std::exchange(node, node->_next)->_begin);
             }
         }
                 
     } // namespace _arena_allocator
     
     struct ArenaAllocator {
-        
-        static void reset() {
-            _arena_allocator::reset();
-        }
-        
+                
         static void* _Nonnull allocate(std::size_t count, std::size_t alignment) {
             return _arena_allocator::allocate(count, alignment);
         }
         
+        static void deallocate(void* _Nullable) {
+            // no-op
+        }
+        
+        static void reset() {
+            _arena_allocator::reset();
+        }
+
+        static void clear() {
+            _arena_allocator::destroy_list();
+        }
+                
     };
         
     struct ArenaAllocated {

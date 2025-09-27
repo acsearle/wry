@@ -13,7 +13,6 @@
 #import <QuartzCore/CAMetalLayer.h>
 
 #include "model.hpp"
-#include "gc.hpp"
 
 @interface WryRenderer : NSObject
 

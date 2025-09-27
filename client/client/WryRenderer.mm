@@ -1297,7 +1297,7 @@
                 {
                     //wry::Value q = _model->_world->_value_for_coordinate.read(wry::Coordinate{i, j});
                     wry::Value q = {};
-                    (void) _model->_world->_value_for_coordinate._map.try_get(wry::Coordinate{i, j}, q);
+                    (void) _model->_world->_value_for_coordinate.valuemap.try_get(wry::Coordinate{i, j}, q);
                     //printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::Coordinate{i, j}.data(), result, q._data);
                     if (q.is_int64_t()) {
                         coordinate = make<float4>((q.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);

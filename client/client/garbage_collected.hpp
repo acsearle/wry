@@ -81,8 +81,19 @@ namespace wry {
     auto garbage_collected_shade(const GarbageCollected* ptr) -> void;
     auto garbage_collected_scan(const GarbageCollected* self) -> void;
     
+    // Collector
     
-}
+    void collector_run_on_this_thread_until(std::chrono::steady_clock::time_point collector_deadline);
+    
+    // Mutator
+    
+    void mutator_become_with_name(const char*);
+    void mutator_handshake();
+    void mutator_resign();
+    void mutator_overwrote(const GarbageCollected* old_ptr);
+    void mutator_mark_root(const GarbageCollected* root_ptr);
+
+} // namespace wry
 
 namespace wry {
     

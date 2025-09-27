@@ -150,18 +150,19 @@ namespace wry {
             : _head(Head::make()) {
             }
             
-            iterator begin() const {
+            [[nodiscard]] iterator begin() const {
                 return iterator{
                     _head->_next[0].load(Ordering::ACQUIRE)
                 };
             }
             
-            iterator end() const {
+            [[nodiscard]] iterator end() const {
                 return iterator{nullptr};
             }
             
-            template<typename Query>
-            iterator find(const Query& query) const {
+            template<typename Query> [[nodiscard]] auto
+            find(const Query& query) const -> iterator
+            {
                 size_t i = _head->_top.load(Ordering::RELAXED) - 1;
                 Atomic<Node*> const* _Nonnull left = _head->_next + i;
                 for (;;) {
@@ -179,10 +180,11 @@ namespace wry {
                 }
             }
             
-            static std::pair<Node* _Nullable, bool> _link_level(size_t i,
-                                                                Atomic<Node*>* _Nonnull left,
-                                                                Node* _Nullable expected,
-                                                                Node* _Nonnull desired) {
+            [[nodiscard]] static auto
+            _link_level(size_t i, Atomic<Node*>* _Nonnull left,
+                        Node* _Nullable expected, Node* _Nonnull desired)
+            -> std::pair<Node* _Nullable, bool>
+            {
             alpha:
                 assert(left && desired);
                 assert(!expected || (Compare()(desired->_key, expected->_key)));
@@ -280,15 +282,15 @@ namespace wry {
             
             S _set;
             
-            iterator begin() const {
+            [[nodiscard]] iterator begin() const {
                 return _set.begin();
             }
             
-            iterator end() const {
+            [[nodiscard]] iterator end() const {
                 return _set.end();
             }
             
-            iterator find(auto&& keylike) const {
+            [[nodiscard]] iterator find(auto&& keylike) const {
                 return _set.find(FORWARD(keylike));
             }
             

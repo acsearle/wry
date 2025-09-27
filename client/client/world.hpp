@@ -31,8 +31,8 @@ namespace wry {
     
     template<typename Key, typename T>
     void garbage_collected_scan(const WaitableMap<Key, T>& x) {
-        garbage_collected_scan(x._map);
-        garbage_collected_scan(x._waiting);
+        garbage_collected_scan(x.valuemap);
+        garbage_collected_scan(x.waitset);
     }
 
     struct World : GarbageCollected {

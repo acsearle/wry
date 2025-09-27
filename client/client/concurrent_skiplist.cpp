@@ -8,7 +8,6 @@
 #include <map>
 #include <set>
 
-#include "gc.hpp"
 #include "concurrent_skiplist.hpp"
 
 #include "test.hpp"
@@ -16,9 +15,7 @@
 namespace wry::concurrent_skiplist {
     
     define_test("skiplist") {
-        
-        mutator_become_with_name("skiplist");
-        
+                
         thread_local_random_number_generator = new std::ranlux24;
 
         {
@@ -40,9 +37,7 @@ namespace wry::concurrent_skiplist {
                 }
             }
         }
-        
-        mutator_handshake();
-        
+                
         {
             
             
@@ -67,10 +62,9 @@ namespace wry::concurrent_skiplist {
                 }
             }
         }
-        
-        
-        mutator_resign();
-        
+                
+        ArenaAllocator::clear();
+
     };
     
 } // namespace wry

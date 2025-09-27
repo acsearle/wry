@@ -51,6 +51,7 @@ namespace wry {
             return *this = clone_and_set(key);
         }
         
+        // TODO: parallel implementation
         
         void parallel_for_each(auto&& action) const {
             if (_inner) {
@@ -62,7 +63,19 @@ namespace wry {
             }
         }
         
-    };
+    }; // PersistentSet
+    
+    template<typename Key> auto
+    merge(PersistentSet<Key> const& left, PersistentSet<Key> const& right) -> PersistentSet<Key> {
+        // TODO: this implementation fails to reuse right subtrees
+        PersistentSet<Key> result = left;
+        for (auto key : right) {
+            result.set(key);
+        }
+        return result;
+    }
+    
+    
     
     template<typename Key>
     void garbage_collected_scan(const PersistentSet<Key>& x) {

@@ -110,11 +110,12 @@ namespace wry {
             ABORTED = 2,
         };
         
-        enum Condition {
-            NEVER = 0,
-            ON_COMMIT = 1,
-            ON_ABORT = 2,
-            ALWAYS = 3
+        enum Operation {
+            WAIT_NEVER = 0,
+            WAIT_ON_COMMIT = 1,
+            WAIT_ON_ABORT = 2,
+            WAIT_ALWAYS = 3,
+            WRITE_ON_COMMIT = 4,
         };
         
         struct Node {
@@ -122,7 +123,7 @@ namespace wry {
             const Transaction* _parent;
             const Atomic<const Transaction::Node*>* _head;
             ExternallyDiscriminatedVariant<> _desired;
-            Condition _condition;
+            Operation _operation;
             
             State resolve() const {
                 return _parent->resolve();
@@ -168,17 +169,17 @@ namespace wry {
         
         const Entity* read_entity_for_entity_id(EntityID);        
         void write_entity_for_entity_id(EntityID, const Entity*);
-        void wait_on_entity_for_entity_id(EntityID, Condition);
+        void wait_on_entity_for_entity_id(EntityID, Operation);
 
         bool try_read_value_for_coordinate(Coordinate xy, Value& victim) const;
         void try_write_value_for_coordinate(Coordinate, Value);
-        void wait_on_value_for_coordinate(Coordinate, Condition);
+        void wait_on_value_for_coordinate(Coordinate, Operation);
 
         EntityID read_entity_id_for_coordinate(Coordinate) { return {}; }
         void write_entity_id_for_coordinate(Coordinate, EntityID);
-        void wait_on_entity_id_for_coordinate(Coordinate, Condition);
+        void wait_on_entity_id_for_coordinate(Coordinate, Operation);
 
-        void wait_on_time(Time, Condition);
+        void wait_on_time(Time, Operation);
 
         void on_commit_sleep_for(uint64_t ticks);
         void on_abort_retry();
@@ -195,7 +196,7 @@ namespace wry {
         
         template<typename Key>
         using Map = ConcurrentMap<Key, Atomic<const Transaction::Node*>>;
-
+        
         // "write" to a map-key is exclusive; at most one transaction will
         // COMMIT and write its value, all others will ABORT.
                 

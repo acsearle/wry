@@ -806,6 +806,38 @@ namespace wry {
             }
         }
         
+        template<typename T> auto
+        merge(Node<T> const* _Nullable left, Node<T> const* _Nullable right) -> Node<T> const* _Nullable {
+            
+            if (!right)
+                return left;
+            
+            if (!left)
+                return right;
+                        
+            // TODO: Non-terrible implementation
+            
+            abort();
+            
+            /*
+            auto [lprefix, lshift] = left->get_prefix_and_shift();
+            auto [rprefix, rshift] = right->get_prefix_and_shift();
+
+            auto max_shift = std::max(lshift, rshift);
+            if ((lprefix ^ rprefix) >> 6 >> max_shift) {
+                // The nodes differ in their prefixes
+                return Node<T>::merge_disjoint(left, right);
+            }
+                        
+            if (lshift == rshift) {
+                // The nodes don't differ in their prefixes and they are at
+                // the same level; we need to fully merge them
+            }
+             */
+            
+            
+        }
+        
     } // namespace array_mapped_trie
         
 } // namespace wry
