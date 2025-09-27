@@ -29,12 +29,6 @@ namespace wry {
     
     Time world_get_time(const World* world);
     
-    template<typename Key, typename T>
-    void garbage_collected_scan(const WaitableMap<Key, T>& x) {
-        garbage_collected_scan(x.valuemap);
-        garbage_collected_scan(x.waitset);
-    }
-
     struct World : GarbageCollected {
         
         Time _time;

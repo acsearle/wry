@@ -35,6 +35,7 @@ namespace wry {
         PersistentSet<EntityID> ready;
         auto new_waiting_on_time = _waiting_on_time.clone_and_try_erase(_time, ready).first;
         
+        // TODO: next_ready needs to be concurrent
         PersistentSet<EntityID> next_ready;
         
         // In parallel, notify each Entity.  Entities will typically examine
@@ -43,7 +44,7 @@ namespace wry {
         
         ready.parallel_for_each([this, &context](EntityID entity_id) {
             const Entity* a = nullptr;
-            (void) _entity_for_entity_id.valuemap.try_get(entity_id, a);
+            (void) _entity_for_entity_id.try_get(entity_id, a);
             assert(a);
             a->notify(&context);
         });
@@ -62,19 +63,21 @@ namespace wry {
        
         WaitableMap<Coordinate, Value> new_value_for_coordinate;
         
-        new_value_for_coordinate.valuemap
-        = parallel_rebuild(_value_for_coordinate.valuemap,
+        new_value_for_coordinate
+        = parallel_rebuild(_value_for_coordinate,
                            context._verb_value_for_coordinate,
-                           [this](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-                           -> ParallelRebuildAction<Value> {
-            const Transaction::Node* winner = nullptr;
+                           [this, &next_ready](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
+                           -> ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>> {
+            const Transaction::Node* writer = nullptr;
+            std::vector<EntityID> waiters;
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
                  candidate != nullptr;
                  candidate = candidate->_next)
             {
-                if (!winner) {
+                /*
+                if (!writer) {
                     if (candidate->resolve() == Transaction::State::COMMITTED) {
-                        winner = candidate;
+                        writer = candidate;
                         // We continue to eagerly resolve all the transactions
                         // or they may never be resolved at all
                     }
@@ -83,47 +86,59 @@ namespace wry {
                     // committed, so this one must abort
                     candidate->abort();
                 }
-            }
-            ParallelRebuildAction<Value> result;
-            if (winner) {
-                result.tag = ParallelRebuildAction<Value>::WRITE_VALUE;
-                // The desired value is type-erased (for now)
-                using std::get;
-                result.value = get<Value>(winner->_desired);
-            } else {
-                result.tag = ParallelRebuildAction<Value>::NONE;
-            }
-            return result;
-        });
-        
-
-        
-        new_value_for_coordinate.waitset
-        = parallel_rebuild(_value_for_coordinate.waitset,
-                           context._verb_value_for_coordinate,
-                           [this, &context](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-                           -> ParallelRebuildAction<PersistentSet<EntityID>> {
-            ParallelRebuildAction<PersistentSet<EntityID>> result;
-            result.tag = ParallelRebuildAction<PersistentSet<EntityID>>::WRITE_VALUE;
-            _value_for_coordinate.waitset.try_get(kv.first, result.value);
-            const Transaction::Node* head = kv.second.load(Ordering::RELAXED);
-            for (; head; head = head->_next) {
-                using std::get;
-                EntityID entity_id = get<EntityID>(head->_desired);
-                // State and Condition are bit-compatible
-                if (head->resolve() & head->_operation)
-                    result.value.set(entity_id);
-            }
-            return result;
-        });
-
+                 */
+                Transaction::State resolution = candidate->resolve();
                 
+                // Write?
+                if ((resolution == Transaction::State::COMMITTED)
+                    && (candidate->_operation & Transaction::Operation::WRITE_ON_COMMIT))
+                {
+                    assert(!writer);
+                    writer = candidate;
+                } else if (candidate->_operation & resolution) {
+                    waiters.push_back(candidate->_parent->_entity->_entity_id);
+                }
+            }
+            using P = std::pair<Value, PersistentSet<EntityID>>;
+            using A = ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>>;
+            A result{};
+            if (writer) {
+                P b;
+                b.first = get<Value>(writer->_desired);
+                if (writer->_operation & Transaction::Operation::WAIT_ON_COMMIT) {
+                    b.second.set(writer->_parent->_entity->_entity_id);
+                }
+                result.tag = A::WRITE_VALUE;
+                result.value = b;
+                // Publish new and old waiters somewhere
+
+                P c{};
+                (void) _value_for_coordinate.inner.try_get(kv.first, c);
+                c.second.for_each([&next_ready](EntityID key) {
+                    next_ready.set(key);
+                });
+                for (EntityID key : waiters)
+                    next_ready.set(key);
+                
+            } else if (!waiters.empty()) {
+                P b{};
+                (void) _value_for_coordinate.inner.try_get(kv.first, b);
+                // b now represents the old state, which may have been nil
+                for (EntityID key : waiters)
+                    b.second.set(key);
+                result.tag = A::WRITE_VALUE;
+                result.value = b;
+            }
+            return result;
+        });
         
         new_waiting_on_time
         = parallel_rebuild(new_waiting_on_time,
                            context._wait_on_time,
                            [this](const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
                            -> ParallelRebuildAction<PersistentSet<EntityID>> {
+            // TODO: We need to special-case waits for new_time
+            assert(kv.first > _time);
             ParallelRebuildAction<PersistentSet<EntityID>> result;
             result.tag = ParallelRebuildAction<PersistentSet<EntityID>>::WRITE_VALUE;
             _waiting_on_time.try_get(kv.first, result.value);
@@ -137,6 +152,21 @@ namespace wry {
             }
             return result;
         });
+        
+        // HACK: We have two separate representations of work for next_time,
+        // we need to merge them and expose them to the next cycle.  This hack
+        // is serial and wasteful; we should direct write all these things into
+        // a concurrent-map-ified next_ready and hold it over to the next step
+        {
+            PersistentSet<EntityID> v{};
+            (void) new_waiting_on_time.try_get(new_time, v);
+            next_ready.for_each([&v](EntityID key) {
+                v.set(key);
+            });
+            new_waiting_on_time.set(new_time, v);
+        }
+        
+        
     
         // -- completion barrier --
 

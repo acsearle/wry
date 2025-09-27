@@ -50,10 +50,8 @@ namespace wry {
         PersistentSet& set(Key key) {
             return *this = clone_and_set(key);
         }
-        
-        // TODO: parallel implementation
-        
-        void parallel_for_each(auto&& action) const {
+                
+        void for_each(auto&& action) const {
             if (_inner) {
                 _inner->parallel_for_each([&action](uint64_t key, uint64_t) {
                     // TODO: we need a better way of mapping the Key type to
@@ -62,6 +60,12 @@ namespace wry {
                 });
             }
         }
+
+        void parallel_for_each(auto&& action) const {
+            // TODO: parallel implementation
+            for_each(std::forward<decltype(action)>(action));
+        }
+
         
     }; // PersistentSet
     
