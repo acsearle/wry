@@ -64,7 +64,7 @@ namespace wry {
         
         new_value_for_coordinate.valuemap
         = parallel_rebuild(_value_for_coordinate.valuemap,
-                           context._write_value_for_coordinate,
+                           context._verb_value_for_coordinate,
                            [this](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
                            -> ParallelRebuildAction<Value> {
             const Transaction::Node* winner = nullptr;
@@ -100,7 +100,7 @@ namespace wry {
         
         new_value_for_coordinate.waitset
         = parallel_rebuild(_value_for_coordinate.waitset,
-                           context._wait_on_value_for_coordinate,
+                           context._verb_value_for_coordinate,
                            [this, &context](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
                            -> ParallelRebuildAction<PersistentSet<EntityID>> {
             ParallelRebuildAction<PersistentSet<EntityID>> result;

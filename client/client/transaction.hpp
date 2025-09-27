@@ -172,7 +172,7 @@ namespace wry {
         void wait_on_entity_for_entity_id(EntityID, Operation);
 
         bool try_read_value_for_coordinate(Coordinate xy, Value& victim) const;
-        void try_write_value_for_coordinate(Coordinate, Value);
+        void write_value_for_coordinate(Coordinate, Value);
         void wait_on_value_for_coordinate(Coordinate, Operation);
 
         EntityID read_entity_id_for_coordinate(Coordinate) { return {}; }
@@ -200,16 +200,16 @@ namespace wry {
         // "write" to a map-key is exclusive; at most one transaction will
         // COMMIT and write its value, all others will ABORT.
                 
-        Map<Coordinate> _write_entity_id_for_coordinate;
-        Map<Coordinate> _write_value_for_coordinate;
-        Map<EntityID> _write_entity_for_entity_id;
+        Map<Coordinate> _verb_entity_id_for_coordinate;
+        Map<Coordinate> _verb_value_for_coordinate;
+        Map<EntityID> _verb_entity_for_entity_id;
         
-        // "wait on" (a write to) a key is nonexclusive.  A transaction can
-        // choose to write if it COMMITs, or ABORTs, or both.
-        
-        Map<Coordinate> _wait_on_value_for_coordinate;
-        Map<Coordinate> _wait_on_entity_id_for_coordinate;
-        Map<EntityID> _wait_on_entity_for_entity_id;
+//        // "wait on" (a write to) a key is nonexclusive.  A transaction can
+//        // choose to write if it COMMITs, or ABORTs, or both.
+//        
+//        Map<Coordinate> _wait_on_value_for_coordinate;
+//        Map<Coordinate> _wait_on_entity_id_for_coordinate;
+//        Map<EntityID> _wait_on_entity_for_entity_id;
         
         // Wait in other ways
         

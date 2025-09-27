@@ -30,14 +30,15 @@ namespace wry {
     }
     
     template<typename Key, typename T>
-    void transaction_write_generic(Transaction* self,
+    void transaction_verb_generic(Transaction* self,
                                    ConcurrentMap<Key, Atomic<const Transaction::Node*>>* map,
                                    Key key,
-                                   T desired) {
+                                   T desired,
+                                   Transaction::Operation operation) {
         Transaction::Node* node = self->_nodes + (self->_size)++;
         node->_parent = self;
         node->_desired = desired;
-        node->_operation = Transaction::Operation::WRITE_ON_COMMIT;
+        node->_operation = operation;
         node->_next = nullptr;
         // Race to initialize the atomic linked list with our desired value
         auto [iterator, flag] = map->try_emplace(key, node);
@@ -64,28 +65,31 @@ namespace wry {
 
     
     void Transaction::write_entity_for_entity_id(EntityID key, const Entity* desired) {
-        transaction_write_generic(this,
-                                  &(_context->_write_entity_for_entity_id),
-                                  key,
-                                  desired);
+        transaction_verb_generic(this,
+                                 &(_context->_verb_entity_for_entity_id),
+                                 key,
+                                 desired,
+                                 Operation::WRITE_ON_COMMIT);
     }
 
-    void Transaction::try_write_value_for_coordinate(Coordinate key, Value desired) {
-       transaction_write_generic(this,
-                                           &(_context->_write_value_for_coordinate),
-                                           key,
-                                           desired);
+    void Transaction::write_value_for_coordinate(Coordinate key, Value desired) {
+        transaction_verb_generic(this,
+                                 &(_context->_verb_value_for_coordinate),
+                                 key,
+                                 desired,
+                                 Operation::WRITE_ON_COMMIT);
     }
 
     void Transaction::write_entity_id_for_coordinate(Coordinate key, EntityID desired) {
-        transaction_write_generic(this,
-                                  &(_context->_write_entity_id_for_coordinate),
+        transaction_verb_generic(this,
+                                  &(_context->_verb_entity_id_for_coordinate),
                                   key,
-                                  desired);
+                                  desired,
+                                  Operation::WRITE_ON_COMMIT);
     }
 
     
-    
+    /*
     template<typename Key>
     void transaction_wait_on_generic(Transaction* self,
                                      ConcurrentMap<Key, Atomic<const Transaction::Node*>>* map,
@@ -118,35 +122,40 @@ namespace wry {
         
         
     }
+     */
 
     
     void Transaction::wait_on_value_for_coordinate(Coordinate key, Transaction::Operation operation) {
-        transaction_wait_on_generic(this,
-                                    &(_context->_wait_on_value_for_coordinate),
-                                    key,
-                                    operation);
+        transaction_verb_generic<Coordinate, Value>(this,
+                                 &(_context->_verb_value_for_coordinate),
+                                 key,
+                                 {},
+                                 operation);
     }
     
     void Transaction::wait_on_entity_id_for_coordinate(Coordinate key, Transaction::Operation operation) {
-        transaction_wait_on_generic(this,
-                                    &(_context->_wait_on_entity_id_for_coordinate),
-                                    key,
-                                    operation);
+        transaction_verb_generic<Coordinate, EntityID>(this,
+                                                       &(_context->_verb_entity_id_for_coordinate),
+                                                       key,
+                                                       {},
+                                                       operation);
     }
     
     void Transaction::wait_on_entity_for_entity_id(EntityID key, Transaction::Operation operation) {
-        transaction_wait_on_generic(this,
-                                    &(_context->_wait_on_entity_for_entity_id),
-                                    key,
-                                    operation);
+        transaction_verb_generic<EntityID, Entity const*>(this,
+                                                          &(_context->_verb_entity_for_entity_id),
+                                                          key,
+                                                          {},
+                                                          operation);
     }
 
     void Transaction::wait_on_time(Time key, Transaction::Operation operation) {
         // Can't schedule things for past or present
         assert(key > _context->_world->_time);
-        transaction_wait_on_generic(this,
+        transaction_verb_generic(this,
                                     &(_context->_wait_on_time),
                                     key,
+                                    _entity->_entity_id,
                                     operation);
     }
 

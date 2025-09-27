@@ -17,7 +17,7 @@ namespace wry {
         Transaction* tx = Transaction::make(context, this, 2);
         Value _ = {};
         if (!tx->try_read_value_for_coordinate(this->_location, _))
-            tx->try_write_value_for_coordinate(this->_location, this->_of_this);
+            tx->write_value_for_coordinate(this->_location, this->_of_this);
         tx->wait_on_value_for_coordinate(this->_location, Transaction::Operation::WAIT_ALWAYS);
     }
     
@@ -25,7 +25,7 @@ namespace wry {
         Transaction* tx = Transaction::make(context, this, 2);
         Value x = {};
         if (tx->try_read_value_for_coordinate(this->_location, x))
-            tx->try_write_value_for_coordinate(this->_location, value_make_empty());
+            tx->write_value_for_coordinate(this->_location, value_make_empty());
         tx->wait_on_value_for_coordinate(this->_location, Transaction::Operation::WAIT_ALWAYS);
     }
     
@@ -69,7 +69,7 @@ namespace wry {
                                                      max_items);
         
         // Propose to write the incremented value back to the location
-        transaction->try_write_value_for_coordinate(this->_location, value + 1);
+        transaction->write_value_for_coordinate(this->_location, value + 1);
         
         // If the transaction succeeds, run again in 120 ticks (= 1 second)
         transaction->on_commit_sleep_for(120);
