@@ -172,7 +172,7 @@ namespace wry {
         void wait_on_entity_for_entity_id(EntityID, Operation);
 
         bool try_read_value_for_coordinate(Coordinate xy, Value& victim) const;
-        void write_value_for_coordinate(Coordinate, Value);
+        void write_value_for_coordinate(Coordinate, Value, Operation = WRITE_ON_COMMIT);
         void wait_on_value_for_coordinate(Coordinate, Operation);
 
         EntityID read_entity_id_for_coordinate(Coordinate) { return {}; }

@@ -15,6 +15,7 @@
 
 #include "algorithm.hpp"
 #include "utility.hpp"
+#include "garbage_collected.hpp"
 
 // A fast allocator for objects with bounded lifetimes
 // ===================================================
@@ -195,7 +196,7 @@ namespace wry {
         }
         
         inline void reset() {
-            print();
+            // print();
             Node* head = _thread_local_head;
             if (head)
                 head->reset();
@@ -248,7 +249,9 @@ namespace wry {
         
     };
     
-
+    inline void garbage_collected_scan(ArenaAllocated const* _Nullable) {
+        // no-op
+    }
         
 } // namespace wry
 #endif /* arena_allocator_hpp */

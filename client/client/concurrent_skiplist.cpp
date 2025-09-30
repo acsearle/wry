@@ -12,7 +12,7 @@
 
 #include "test.hpp"
 
-namespace wry::concurrent_skiplist {
+namespace wry {
     
     define_test("skiplist") {
                 

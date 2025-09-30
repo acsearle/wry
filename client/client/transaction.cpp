@@ -72,12 +72,12 @@ namespace wry {
                                  Operation::WRITE_ON_COMMIT);
     }
 
-    void Transaction::write_value_for_coordinate(Coordinate key, Value desired) {
+    void Transaction::write_value_for_coordinate(Coordinate key, Value desired, Operation operation) {
         transaction_verb_generic(this,
                                  &(_context->_verb_value_for_coordinate),
                                  key,
                                  desired,
-                                 Operation::WRITE_ON_COMMIT);
+                                 operation);
     }
 
     void Transaction::write_entity_id_for_coordinate(Coordinate key, EntityID desired) {

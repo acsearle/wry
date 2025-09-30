@@ -75,11 +75,31 @@ namespace wry {
         virtual void _garbage_collected_shade() const;
         virtual void _garbage_collected_scan() const = 0;
         
+        template<typename T>
+        static void barrier_store(Atomic<T*>& target, T* desired, Ordering) {
+            T* discovered = target.exchange(desired, Ordering::ACQ_REL);
+            garbage_collected_shade(discovered);
+        }
+        
+        template<typename T>
+        static bool barrier_compare_exchange_strong(Atomic<T*>& target,
+                                                    T*& expected,
+                                                    T* desired,
+                                                    Ordering success,
+                                                    Ordering failure) {
+            bool result = target.barrier_compare_exchange_strong(expected,
+                                                                 desired,
+                                                                 Ordering::RELEASE,
+                                                                 Ordering::ACQUIRE);
+            if (result) {
+                garbage_collected_shade(expected);
+            }
+        }
+        
     }; // struct GarbageCollected
-    
-    
-    auto garbage_collected_shade(const GarbageCollected* ptr) -> void;
-    auto garbage_collected_scan(const GarbageCollected* self) -> void;
+        
+    auto garbage_collected_shade(GarbageCollected const* ptr) -> void;
+    auto garbage_collected_scan(GarbageCollected const* self) -> void;
     
     // Collector
     

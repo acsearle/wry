@@ -137,9 +137,15 @@ namespace wry {
                 insert_localized_entity(s);
             }
 
+//            {
+//                // a second counter to contest the transaction
+//                Counter* s = new Counter;
+//                s->_location = Coordinate{-2, 2};
+//                insert_localized_entity(s);
+//            }
+            
             {
-                // a second counter to contest the transaction
-                Counter* s = new Counter;
+                Evenator* s = new Evenator;
                 s->_location = Coordinate{-2, 2};
                 insert_localized_entity(s);
             }

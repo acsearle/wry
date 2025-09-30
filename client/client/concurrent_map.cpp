@@ -16,7 +16,7 @@ namespace wry::concurrent_map {
     
     define_test("ConcurrentMap") {
         
-        concurrent_skiplist::thread_local_random_number_generator = new std::ranlux24;
+        thread_local_random_number_generator = new std::ranlux24;
                 
         {
             ConcurrentMap<int, int> a;

@@ -244,7 +244,7 @@ namespace wry {
                     abort();
             }
         }
-
+        
 #endif // defined(__APPLE__)
 
 #if defined(WIN32)
@@ -337,6 +337,11 @@ namespace wry {
 #endif // defined(__linux__)
         
     }; // template<typename> struct Atomic
+    
+    template<typename T>
+    void garbage_collected_scan(Atomic<T> const& x) {
+        garbage_collected_scan(x.load(Ordering::ACQUIRE));
+    }
     
 } // namespace wry
 

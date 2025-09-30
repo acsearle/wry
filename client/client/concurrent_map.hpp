@@ -13,7 +13,7 @@
 namespace wry {
     
     template<typename Key, typename T>
-    using ConcurrentMap = concurrent_skiplist::ConcurrentSkiplistMap<Key, T>;
+    using ConcurrentMap = ConcurrentSkiplistMap<Key, T>;
     
 } // namespace wry
 

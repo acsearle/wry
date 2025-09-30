@@ -68,14 +68,48 @@ namespace wry {
                                                      this,
                                                      max_items);
         
+        printf("Counter is incrementing\n");
+        
         // Propose to write the incremented value back to the location
         transaction->write_value_for_coordinate(this->_location, value + 1);
         
         // If the transaction succeeds, run again in 120 ticks (= 1 second)
-        transaction->on_commit_sleep_for(120);
+        transaction->on_commit_sleep_for(1);
         
         // If the transaction fails, try again on next tick
         transaction->on_abort_retry();
+        
+    }
+    
+    void Evenator::notify(TransactionContext* context) const {
+        // An evenator reads the value at its loccation, and increments it if it is odd
+        
+        Value value = value_make_zero(); // Unchanged if there is no value at the location yet
+        (void) context->try_read_value_for_coordinate(this->_location, value);
+        
+        // Create a transaction
+        size_t max_items = 3;
+        Transaction* transaction = Transaction::make(context,
+                                                     this,
+                                                     max_items);
+        
+        if (value.as_int64_t() & 1) {
+            printf("Evenator is incrementing\n");
+            transaction->write_value_for_coordinate(this->_location,
+                                                    value + 1,
+                                                    (Transaction::Operation) // WTF
+                                                    (
+                                                     Transaction::Operation::WRITE_ON_COMMIT
+                                                     | Transaction::Operation::WAIT_ON_COMMIT
+                                                     ));
+            transaction->on_abort_retry();
+        } else {
+            printf("Evenator is watching\n");
+            transaction->wait_on_value_for_coordinate(this->_location, Transaction::Operation::WAIT_ALWAYS);
+        }
+
+
+        
         
     }
         

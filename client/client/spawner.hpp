@@ -50,6 +50,12 @@ namespace wry {
         virtual void _garbage_collected_scan() const override {
         }
     };
+    
+    struct Evenator : LocalizedEntity {
+        virtual void notify(TransactionContext*) const override;
+        virtual void _garbage_collected_scan() const override {
+        }
+    };
 
 } // namespace wry::sim
 #endif /* spawner_hpp */
