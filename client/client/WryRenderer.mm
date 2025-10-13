@@ -1006,7 +1006,7 @@
 {
     _model->shade_roots();
     wry::mutator_handshake();
-    wry::ArenaAllocator::reset();
+    // wry::ArenaAllocator::reset();
 
     using namespace ::simd;
     using namespace ::wry;
@@ -1014,7 +1014,11 @@
     // advance the simulation
     
     _model->shade_roots();
+
+    wry::epoch::pin();
     _model->_world = _model->_world->step();
+    wry::epoch::unpin();
+
 
     id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
     

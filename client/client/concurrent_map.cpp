@@ -17,6 +17,7 @@ namespace wry::concurrent_map {
     define_test("ConcurrentMap") {
         
         thread_local_random_number_generator = new std::ranlux24;
+        epoch::pin();
                 
         {
             ConcurrentMap<int, int> a;
@@ -52,7 +53,9 @@ namespace wry::concurrent_map {
 
         // It is safe to clear, but perhaps we should reset and let the test
         // harness clear once before the thread goes down?
-        ArenaAllocator::clear();
+        //ArenaAllocator::clear();
+        
+        epoch::unpin();
 
     }; // define_test("ConcurrentMap")
     

@@ -14,8 +14,7 @@
 #include <random>
 
 #include "garbage_collected.hpp"
-#include "arena_allocator.hpp"
-#include "atomic.hpp"
+#include "epoch_allocator.hpp"
 #include "utility.hpp"
 
 namespace wry {
@@ -32,7 +31,7 @@ namespace wry {
     
     inline constinit thread_local std::ranlux24* _Nullable thread_local_random_number_generator = nullptr;
     
-    template<typename Key, typename Compare = std::less<Key>, typename IntrusiveAllocator = ArenaAllocated>
+    template<typename Key, typename Compare = std::less<Key>, typename IntrusiveAllocator = EpochAllocated>
     struct ConcurrentSkiplistSet {
         
         struct Node : IntrusiveAllocator {

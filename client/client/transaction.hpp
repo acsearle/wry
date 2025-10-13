@@ -123,7 +123,7 @@ namespace wry {
             const Transaction* _parent;
             const Atomic<const Transaction::Node*>* _head;
             ExternallyDiscriminatedVariant<> _desired;
-            Operation _operation;
+            int _operation;
             
             State resolve() const {
                 return _parent->resolve();
@@ -160,30 +160,38 @@ namespace wry {
         , _capacity(capacity) {}
         
         ~Transaction() {
-            //printf("%s\n", __PRETTY_FUNCTION__);
         }
         
         static Transaction* make(TransactionContext* context, const Entity* entity, size_t count) {
             return new(count) Transaction(context, entity, count);
         }
-        
-        const Entity* read_entity_for_entity_id(EntityID);        
-        void write_entity_for_entity_id(EntityID, const Entity*);
-        void wait_on_entity_for_entity_id(EntityID, Operation);
 
         bool try_read_value_for_coordinate(Coordinate xy, Value& victim) const;
-        void write_value_for_coordinate(Coordinate, Value, Operation = WRITE_ON_COMMIT);
-        void wait_on_value_for_coordinate(Coordinate, Operation);
+        void write_value_for_coordinate(Coordinate, Value, int = WRITE_ON_COMMIT);
+        void wait_on_value_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
+        
+        const Entity* read_entity_for_entity_id(EntityID);
+        void write_entity_for_entity_id(EntityID, const Entity*, int = WRITE_ON_COMMIT);
+        void wait_on_entity_for_entity_id(EntityID, int = WAIT_ON_COMMIT);
 
-        EntityID read_entity_id_for_coordinate(Coordinate) { return {}; }
-        void write_entity_id_for_coordinate(Coordinate, EntityID);
-        void wait_on_entity_id_for_coordinate(Coordinate, Operation);
-
-        void wait_on_time(Time, Operation);
+        void wait_on_time(Time, int = WAIT_ON_COMMIT);
 
         void on_commit_sleep_for(uint64_t ticks);
         void on_abort_retry();
 
+        // EntityID for coordinate is not well defined
+        // - Is it a many-to-many map?
+        // - Is it the exclusive reservation of a cell by an entity?
+        // - Is it what area queries use? (for rendering, for AoE?)
+        // - Is it the collider for a layer for a coordinate?        
+        
+        EntityID read_entity_id_for_coordinate(Coordinate) { return {}; }
+        void write_entity_id_for_coordinate(Coordinate, EntityID, int = WRITE_ON_COMMIT);
+        void wait_on_entity_id_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
+
+        
+        
+        
         State resolve() const;
         State abort() const;
         State commit() const;
