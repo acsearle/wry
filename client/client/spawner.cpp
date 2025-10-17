@@ -14,7 +14,7 @@
 namespace wry {
     
     void Source::notify(TransactionContext* context) const {
-        printf("%s\n", __PRETTY_FUNCTION__);
+        // printf("%s\n", __PRETTY_FUNCTION__);
         Transaction* tx = Transaction::make(context, this, 2);
         Value _ = {};
         if (!tx->try_read_value_for_coordinate(this->_location, _))
@@ -34,7 +34,7 @@ namespace wry {
         Transaction* tx = Transaction::make(context, this, 10);
         EntityID a = {};
         (void) tx->try_read_entity_id_for_coordinate(this->_location, a);
-        printf("Read EntityID for Coordinate %lld\n", a.data);
+        // printf("Read EntityID for Coordinate %lld\n", a.data);
         if (!a) {
             Machine* machine = new Machine;
             machine->_old_location = _location;
@@ -42,7 +42,7 @@ namespace wry {
             machine->_old_time = context->_world->_time;
             machine->_new_time = context->_world->_time;
             EntityID b = machine->_entity_id;
-            printf("Made new EntityID for Coordinate %lld\n", b.data);
+            // printf("Made new EntityID for Coordinate %lld\n", b.data);
             tx->write_entity_for_entity_id(b, machine);
             tx->write_entity_id_for_coordinate(this->_location, b);
             tx->write_entity_id_for_time(context->_world->_time + 1, b);
@@ -90,7 +90,7 @@ namespace wry {
                                                      max_items);
         
         if (value.as_int64_t() & 1) {
-            printf("Evenator is incrementing\n");
+            // printf("Evenator is incrementing\n");
             transaction->write_value_for_coordinate(this->_location,
                                                     value + 1,
                                                     Transaction::Operation::WRITE_ON_COMMIT
@@ -98,7 +98,7 @@ namespace wry {
                                                     );
             transaction->on_abort_retry();
         } else {
-            printf("Evenator is watching\n");
+            // printf("Evenator is watching\n");
             transaction->wait_on_value_for_coordinate(this->_location, Transaction::Operation::WAIT_ALWAYS);
         }
 

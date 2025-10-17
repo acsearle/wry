@@ -228,7 +228,7 @@ namespace wry {
         return hash;
     }
     
-    // TODO: hack to fix inconsistency bug where Strings and const char* were
+    // TODO: hacked to fix inconsistency bug where Strings and const char* were
     // hashed differently.  If we want to use fnv1a, we need two slightly
     // different versions that are sized and zero-terminated respectively
     constexpr uint64_t hash(const char* str) {

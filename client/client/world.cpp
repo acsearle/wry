@@ -28,7 +28,7 @@ namespace wry {
         
         Time new_time = _time + 1;
         
-        printf("World step %lld\n", _time);
+        // printf("World step %lld\n", _time);
         
         // Take the set of EntityIDs that are ready to run
         
@@ -122,7 +122,7 @@ namespace wry {
                            context._verb_entity_id_for_coordinate,
                            [this, &next_ready](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
                            -> ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>> {
-            printf("Rebuild entity_id_for_coordinate %d %d\n", kv.first.x, kv.first.y);
+            //printf("Rebuild entity_id_for_coordinate %d %d\n", kv.first.x, kv.first.y);
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
@@ -145,7 +145,7 @@ namespace wry {
             if (writer) {
                 P b;
                 b.first = get<EntityID>(writer->_desired);
-                printf("Writing %lld\n", b.first.data);
+                //printf("Writing %lld\n", b.first.data);
                 if (writer->_operation & Transaction::Operation::WAIT_ON_COMMIT) {
                     b.second.set(writer->_parent->_entity->_entity_id);
                 }

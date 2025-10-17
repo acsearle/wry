@@ -626,19 +626,19 @@
 //            }
             
             for (auto&& [k, v] : wry::OPCODE_NAMES) {
-                printf("\"%s\" <-> %lld\n", v, k);
+                // printf("\"%s\" <-> %lld\n", v, k);
                 _opcode_to_name.emplace(k, v);
                 auto h = _name_to_opcode._inner._hasher.get_hash(v + 7);
-                printf("hash \"%s\" -> %llu\n", v+7, h);
+                // printf("hash \"%s\" -> %llu\n", v+7, h);
                 _name_to_opcode.emplace(v + 7, k);
             }
             
             for (auto&& [k, v] : wry::OPCODE_NAMES) {
-                printf("\"%s\" <-> %lld\n", v, k);
+                // printf("\"%s\" <-> %lld\n", v, k);
                 const String& s = _opcode_to_name[k];
-                printf("    %lld -> %.*s\n", k, (int) s.chars.size(), (char const*) s.chars.data());
+                // printf("    %lld -> %.*s\n", k, (int) s.chars.size(), (char const*) s.chars.data());
                 int64_t i = _name_to_opcode[v + 7];
-                printf("    %s -> %lld\n", v + 7, i);
+                // printf("    %s -> %lld\n", v + 7, i);
             }
 
                 
@@ -648,20 +648,20 @@
                 for (const ContiguousDeque<String>& y : x) {
                     ulong j = 0;
                     for (const String& z : y) {
-                        printf("loading image for %.*s\n", (int) z.chars.size(), (const char*) z.chars.data());
+                        // printf("loading image for %.*s\n", (int) z.chars.size(), (const char*) z.chars.data());
                         simd_float4 coordinate = make<float4>(j / 32.0f, i / 32.0f, 0.0f, 1.0f);
-                        auto h = _name_to_opcode._inner._hasher.get_hash(z);
-                        printf("hash \"%.*s\" -> %llu\n", (int) z.chars.size(), (const char*) z.chars.data(), h);
+                        // auto h = _name_to_opcode._inner._hasher.get_hash(z);
+                        // printf("hash \"%.*s\" -> %llu\n", (int) z.chars.size(), (const char*) z.chars.data(), h);
                         auto p = _name_to_opcode.find(z);
-                        printf("p choice\n");
+                        // printf("p choice\n");
                         if (p == _name_to_opcode.end()) {
-                            printf("p is equal to end\n");
-                            printf("No opcode found for \"%.*s\"\n", (int) z.chars.size(), (const char*) z.chars.data());
-                            auto mq = _name_to_opcode[z];
-                            printf("Forced lookup is %lld\n", mq);
+                            // printf("p is equal to end\n");
+                            // printf("No opcode found for \"%.*s\"\n", (int) z.chars.size(), (const char*) z.chars.data());
+                            // auto mq = _name_to_opcode[z];
+                            // printf("Forced lookup is %lld\n", mq);
                         }
                         else /* if (p != _name_to_opcode.end()) */ {
-                            printf("p is not equal to end\n");
+                            // printf("p is not equal to end\n");
                             _opcode_to_coordinate[p->second] = coordinate;
                             
                             
@@ -719,11 +719,12 @@
                                         
                 } else {
                     auto s = _opcode_to_name[i].chars.as_view();
-                    printf("image not found for %.*s\n", (int) s.size(), (char*) s.data());
+                    if (s.size())
+                        printf("Sprite not found for %.*s\n", (int) s.size(), (char*) s.data());
                 }
             }
             
-            printf("%lld\n", j);
+            // printf("%lld\n", j);
             
             _controls._transform
             =

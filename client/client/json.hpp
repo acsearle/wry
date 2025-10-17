@@ -232,7 +232,7 @@ namespace wry::json {
                     char16_t y[2] = {};
                     if (!_json_string_parse_XXXX(u, y[0]))
                         return false;
-                    printf("Got \\u%0.4X\n", y[0]);
+                    // printf("Got \\u%0.4X\n", y[0]);
                     if (utf16::islowsurrogate(y[0]))
                         return false;
                     if (!utf16::ishighsurrogate(y[0])) {
@@ -249,7 +249,7 @@ namespace wry::json {
                     u.pop_front();
                     if (!_json_string_parse_XXXX(u, y[1]))
                         return false;
-                    printf("Got \\u%0.4X\n", y[1]);
+                    // printf("Got \\u%0.4X\n", y[1]);
                     if (!utf16::islowsurrogate(y[1]))
                         return false;
                     x.chars.push_back(u8'\0');

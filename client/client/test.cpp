@@ -33,7 +33,7 @@ namespace wry {
                 uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
                 bool pass = false;
                 try {
-                    head->print_metadata("running", 0.0);
+                    // head->print_metadata("running", 0.0);
                     head->run();
                     pass = true;
                 } catch (...) {

@@ -88,7 +88,7 @@ namespace wry {
                         
             auto insert_localized_entity = [&](LocalizedEntity const* entity_ptr) {
                 EntityID entity_id = entity_ptr->_entity_id;
-                printf("insert_localized_entity %lld\n", entity_id.data);
+                // printf("insert_localized_entity %lld\n", entity_id.data);
                 _world->_entity_for_entity_id.set(entity_id,
                                                   entity_ptr);
                 //_world->_entity_id_for_coordinate.set(entity_ptr->_location,

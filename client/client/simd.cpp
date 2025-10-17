@@ -56,7 +56,7 @@ namespace wry {
         
         for (simd_float2 y : ys) {
             float a = simd_length_squared(y) - 4.0f;
-            printf("a : %g\n", a);
+            // printf("a : %g\n", a);
             if (a == 0.0f) {
                 // continue;
                 return make<float4>(x0, -y0.y, y0.x);
@@ -72,7 +72,7 @@ namespace wry {
             float d = sqrt(d2);
             float r0 = (- b - d) / (2.0f * a);
             float r1 = (- b + d) / (2.0f * a);
-            printf("r0 : %g, r1 : %g\n", r0, r1);
+            // printf("r0 : %g, r1 : %g\n", r0, r1);
             // these two options seem to correspond to a smooth path, and a
             // one-point turn
             //if (abs(r0) < abs(r1))
@@ -85,14 +85,14 @@ namespace wry {
         simd_float2 z0 = x0 + r * y0;
         simd_float2 z1 = x1 - r * y1;
         simd_float2 mid = (z0 + z1) / 2.0f;
-        printf("distance(z0, z1) : %g vs %g\n", simd_distance(z0, z1), 2.0f * r);
+        // printf("distance(z0, z1) : %g vs %g\n", simd_distance(z0, z1), 2.0f * r);
         
         // find the angles traversed in each arc
         // from x0 to mid around z0
         float w0 = acos(simd_dot(mid - z0, x0 - z0) / (r * r));
         float w1 = acos(simd_dot(x1 - z1, mid - z1) / (r * r));
         
-        printf("w : %g %g\n", w0, w1);
+        // printf("w : %g %g\n", w0, w1);
         
         float4 xdx;
         
@@ -121,7 +121,7 @@ namespace wry {
             };
         }
         
-        printf("xdx : {%g %g %g %g }\n", xdx.x, xdx.y, xdx.z, xdx.w);
+        // printf("xdx : {%g %g %g %g }\n", xdx.x, xdx.y, xdx.z, xdx.w);
 
         return xdx;
     }

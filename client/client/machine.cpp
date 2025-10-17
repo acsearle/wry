@@ -22,7 +22,7 @@ namespace wry {
         Machine* new_this = make_mutable_clone();
         assert(new_this->_entity_id == _entity_id);
         
-        printf("Machine::notify()\n");
+        //printf("Machine::notify()\n");
 
         switch (_phase) {
                 

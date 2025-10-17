@@ -124,7 +124,7 @@ namespace wry {
                 }
                 mutator_handshake();
                 garbage_collected_shade(p);
-                printf("PMT %llu\n", k);
+                // printf("PMT %llu\n", k);
             }
             
         }
