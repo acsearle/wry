@@ -53,10 +53,7 @@ namespace wry {
         
         // All transactions are now described and ready to be resolved in
         // parallel.
-        
-        auto new_entity_id_for_coordinate = _entity_id_for_coordinate;
-        auto new_entity_for_entity_id = _entity_for_entity_id;
-            
+                    
         // Build the new map from the old map by resolving transactions and
         // implementing the resulting mutations
         
@@ -74,22 +71,7 @@ namespace wry {
                  candidate != nullptr;
                  candidate = candidate->_next)
             {
-                /*
-                if (!writer) {
-                    if (candidate->resolve() == Transaction::State::COMMITTED) {
-                        writer = candidate;
-                        // We continue to eagerly resolve all the transactions
-                        // or they may never be resolved at all
-                    }
-                } else {
-                    // We already established that another transaction
-                    // committed, so this one must abort
-                    candidate->abort();
-                }
-                 */
                 Transaction::State resolution = candidate->resolve();
-                
-                // Write?
                 if ((resolution == Transaction::State::COMMITTED)
                     && (candidate->_operation & Transaction::Operation::WRITE_ON_COMMIT))
                 {
@@ -132,6 +114,119 @@ namespace wry {
             return result;
         });
         
+        
+        WaitableMap<Coordinate, EntityID> new_entity_id_for_coordinate;
+        new_entity_id_for_coordinate
+        = parallel_rebuild(_entity_id_for_coordinate,
+                           context._verb_entity_id_for_coordinate,
+                           [this, &next_ready](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
+                           -> ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>> {
+            printf("Rebuild entity_id_for_coordinate %d %d\n", kv.first.x, kv.first.y);
+            const Transaction::Node* writer = nullptr;
+            std::vector<EntityID> waiters;
+            for (auto candidate = kv.second.load(Ordering::ACQUIRE);
+                 candidate != nullptr;
+                 candidate = candidate->_next)
+            {
+                Transaction::State resolution = candidate->resolve();
+                if ((resolution == Transaction::State::COMMITTED)
+                    && (candidate->_operation & Transaction::Operation::WRITE_ON_COMMIT))
+                {
+                    assert(!writer);
+                    writer = candidate;
+                } else if (candidate->_operation & resolution) {
+                    waiters.push_back(candidate->_parent->_entity->_entity_id);
+                }
+            }
+            using P = std::pair<EntityID, PersistentSet<EntityID>>;
+            using A = ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>>;
+            A result{};
+            if (writer) {
+                P b;
+                b.first = get<EntityID>(writer->_desired);
+                printf("Writing %lld\n", b.first.data);
+                if (writer->_operation & Transaction::Operation::WAIT_ON_COMMIT) {
+                    b.second.set(writer->_parent->_entity->_entity_id);
+                }
+                result.tag = A::WRITE_VALUE;
+                result.value = b;
+                // Publish new and old waiters somewhere
+                
+                P c{};
+                (void) _entity_id_for_coordinate.inner.try_get(kv.first, c);
+                c.second.for_each([&next_ready](EntityID key) {
+                    next_ready.set(key);
+                });
+                for (EntityID key : waiters)
+                    next_ready.set(key);
+                
+            } else if (!waiters.empty()) {
+                P b{};
+                (void) _entity_id_for_coordinate.inner.try_get(kv.first, b);
+                // b now represents the old state, which may have been nil
+                for (EntityID key : waiters)
+                    b.second.set(key);
+                result.tag = A::WRITE_VALUE;
+                result.value = b;
+            }
+            return result;
+        });
+        
+        WaitableMap<EntityID, Entity const*> new_entity_for_entity_id;
+        new_entity_for_entity_id
+        = parallel_rebuild(_entity_for_entity_id,
+                           context._verb_entity_for_entity_id,
+                           [this, &next_ready](const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
+                           -> ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID>>> {
+            const Transaction::Node* writer = nullptr;
+            std::vector<EntityID> waiters;
+            for (auto candidate = kv.second.load(Ordering::ACQUIRE);
+                 candidate != nullptr;
+                 candidate = candidate->_next)
+            {
+                Transaction::State resolution = candidate->resolve();
+                if ((resolution == Transaction::State::COMMITTED)
+                    && (candidate->_operation & Transaction::Operation::WRITE_ON_COMMIT))
+                {
+                    assert(!writer);
+                    writer = candidate;
+                } else if (candidate->_operation & resolution) {
+                    waiters.push_back(candidate->_parent->_entity->_entity_id);
+                }
+            }
+            using P = std::pair<Entity const*, PersistentSet<EntityID>>;
+            using A = ParallelRebuildAction<P>;
+            A result{};
+            if (writer) {
+                P b;
+                b.first = get<Entity const*>(writer->_desired);
+                if (writer->_operation & Transaction::Operation::WAIT_ON_COMMIT) {
+                    b.second.set(writer->_parent->_entity->_entity_id);
+                }
+                result.tag = A::WRITE_VALUE;
+                result.value = b;
+                // Publish new and old waiters somewhere
+                
+                P c{};
+                (void) _entity_for_entity_id.inner.try_get(kv.first, c);
+                c.second.for_each([&next_ready](EntityID key) {
+                    next_ready.set(key);
+                });
+                for (EntityID key : waiters)
+                    next_ready.set(key);
+                
+            } else if (!waiters.empty()) {
+                P b{};
+                (void) _entity_for_entity_id.inner.try_get(kv.first, b);
+                // b now represents the old state, which may have been nil
+                for (EntityID key : waiters)
+                    b.second.set(key);
+                result.tag = A::WRITE_VALUE;
+                result.value = b;
+            }
+            return result;
+        });
+        
         new_waiting_on_time
         = parallel_rebuild(new_waiting_on_time,
                            context._wait_on_time,
@@ -165,6 +260,9 @@ namespace wry {
             });
             new_waiting_on_time.set(new_time, v);
         }
+        
+        
+
         
         
     

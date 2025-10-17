@@ -142,7 +142,10 @@ namespace wry {
         TransactionContext* _context = nullptr;
         const Entity* _entity = nullptr;
         mutable Atomic<State> _state{};
-        
+
+        // TODO: layout
+        // If we trust the EpochAllocator's efficiency we can just use an
+        // (unrolled?) linked list of these
         size_t _capacity = 0;
         size_t _size = 0;
         Node _nodes[] __counted_by(_size);
@@ -166,15 +169,19 @@ namespace wry {
             return new(count) Transaction(context, entity, count);
         }
 
-        bool try_read_value_for_coordinate(Coordinate xy, Value& victim) const;
+        bool try_read_value_for_coordinate(Coordinate, Value&) const;
+        bool try_read_entity_id_for_coordinate(Coordinate, EntityID&) const;
+        bool try_read_entity_for_entity_id(EntityID, const Entity*&) const;
+
+        
         void write_value_for_coordinate(Coordinate, Value, int = WRITE_ON_COMMIT);
         void wait_on_value_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
         
-        const Entity* read_entity_for_entity_id(EntityID);
         void write_entity_for_entity_id(EntityID, const Entity*, int = WRITE_ON_COMMIT);
         void wait_on_entity_for_entity_id(EntityID, int = WAIT_ON_COMMIT);
 
         void wait_on_time(Time, int = WAIT_ON_COMMIT);
+        void write_entity_id_for_time(Time, EntityID, int = WAIT_ON_COMMIT);
 
         void on_commit_sleep_for(uint64_t ticks);
         void on_abort_retry();
@@ -185,17 +192,16 @@ namespace wry {
         // - Is it what area queries use? (for rendering, for AoE?)
         // - Is it the collider for a layer for a coordinate?        
         
-        EntityID read_entity_id_for_coordinate(Coordinate) { return {}; }
         void write_entity_id_for_coordinate(Coordinate, EntityID, int = WRITE_ON_COMMIT);
         void wait_on_entity_id_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
 
-        
-        
+        // Resolution
         
         State resolve() const;
         State abort() const;
         State commit() const;
         
+                        
     }; // Transaction
     
     struct TransactionContext {
@@ -231,7 +237,7 @@ namespace wry {
         bool try_read_value_for_coordinate(Coordinate, Value&);
         bool try_read_entity_id_for_coordinate(Coordinate, EntityID&);
         bool try_read_entity_for_entity_id(EntityID, const Entity*&);
-                
+
     };
     
     

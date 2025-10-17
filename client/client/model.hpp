@@ -86,8 +86,9 @@ namespace wry {
             _console.emplace_back("WryApplication");
             _console.emplace_back("");
                         
-            auto insert_localized_entity = [&](const LocalizedEntity* entity_ptr) {
-                EntityID entity_id  = entity_ptr->_entity_id;
+            auto insert_localized_entity = [&](LocalizedEntity const* entity_ptr) {
+                EntityID entity_id = entity_ptr->_entity_id;
+                printf("insert_localized_entity %lld\n", entity_id.data);
                 _world->_entity_for_entity_id.set(entity_id,
                                                   entity_ptr);
                 _world->_entity_id_for_coordinate.set(entity_ptr->_location,
@@ -100,7 +101,6 @@ namespace wry {
                 _world->_waiting_on_time.set(Time{0}, q);
             };
             
-            /*
             {
                 // new machine spawner at origin
                 Spawner* p = new Spawner;
@@ -108,7 +108,6 @@ namespace wry {
                 //_world->_entities.push_back(p);
                 // entity_ready_on_world(p, _world);
                 insert_localized_entity(p);
-                
             }
             
             {
@@ -129,26 +128,25 @@ namespace wry {
                 // entity_ready_on_world(r, _world);
                 insert_localized_entity(r);
             }
-             */
-            
-            {
-                Counter* s = new Counter;
-                s->_location = Coordinate{-2, 2};
-                insert_localized_entity(s);
-            }
 
+//            {
+//                Counter* s = new Counter;
+//                s->_location = Coordinate{-2, 2};
+//                insert_localized_entity(s);
+//            }
+//
 //            {
 //                // a second counter to contest the transaction
 //                Counter* s = new Counter;
 //                s->_location = Coordinate{-2, 2};
 //                insert_localized_entity(s);
 //            }
-            
-            {
-                Evenator* s = new Evenator;
-                s->_location = Coordinate{-2, 2};
-                insert_localized_entity(s);
-            }
+//            
+//            {
+//                Evenator* s = new Evenator;
+//                s->_location = Coordinate{-2, 2};
+//                insert_localized_entity(s);
+//            }
 
             //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_integer_with(7));
             _world->_value_for_coordinate.set(Coordinate{-2, -2},

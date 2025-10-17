@@ -10,9 +10,18 @@
 
 namespace wry {
     
-    bool TransactionContext::try_read_value_for_coordinate(Coordinate xy, Value& v) {
-        return this->_world->_value_for_coordinate.try_get(xy, v);
+    bool TransactionContext::try_read_value_for_coordinate(Coordinate key, Value& victim) {
+        return this->_world->_value_for_coordinate.try_get(key, victim);
     }
+    
+    bool TransactionContext::try_read_entity_id_for_coordinate(Coordinate key, EntityID& victim) {
+        return this->_world->_entity_id_for_coordinate.try_get(key, victim);
+    }
+
+    bool TransactionContext::try_read_entity_for_entity_id(EntityID key, Entity const*& victim) {
+        return this->_world->_entity_for_entity_id.try_get(key, victim);
+    }
+
     
     uint64_t TransactionContext::entity_get_priority(const Entity* entity) {
         uint64_t priority = entity->_entity_id.data ^ this->_world->_time;
@@ -25,10 +34,18 @@ namespace wry {
         return _parent->_context->entity_get_priority(_parent->_entity);
     }
     
-    bool Transaction::try_read_value_for_coordinate(Coordinate xy, Value& victim) const {
-        return _context->try_read_value_for_coordinate(xy, victim);
+    bool Transaction::try_read_value_for_coordinate(Coordinate key, Value& victim) const {
+        return _context->try_read_value_for_coordinate(key, victim);
     }
-    
+
+    bool Transaction::try_read_entity_id_for_coordinate(Coordinate key, EntityID& victim) const {
+        return _context->try_read_entity_id_for_coordinate(key, victim);
+    }
+
+    bool Transaction::try_read_entity_for_entity_id(EntityID key, Entity const*& victim) const {
+        return _context->try_read_entity_for_entity_id(key, victim);
+    }
+
     template<typename Key, typename T>
     void transaction_verb_generic(Transaction* self,
                                    ConcurrentMap<Key, Atomic<const Transaction::Node*>>* map,
@@ -131,6 +148,17 @@ namespace wry {
                                                           operation);
     }
 
+    auto Transaction::
+    write_entity_id_for_time(Time key, EntityID value, int operation) -> void {
+        assert(key > _context->_world->_time);
+        transaction_verb_generic(this,
+                                 &(_context->_wait_on_time),
+                                 key,
+                                 value,
+                                 operation);
+    }
+
+    
     auto Transaction::
     wait_on_time(Time key,
                  int operation) -> void {

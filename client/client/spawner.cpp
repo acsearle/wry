@@ -28,32 +28,23 @@ namespace wry {
             tx->write_value_for_coordinate(this->_location, value_make_empty());
         tx->wait_on_value_for_coordinate(this->_location, Transaction::Operation::WAIT_ALWAYS);
     }
-    
-    EntityID spawner_new_entity_from_prototype() {
-        // TODO: we need to resolve all new entity requests consistently
-        abort();
-    }
-    
+        
     void Spawner::notify(TransactionContext* context) const {
         Transaction* tx = Transaction::make(context, this, 10);
-        EntityID a = tx->read_entity_id_for_coordinate(this->_location);
+        EntityID a = {};
+        tx->try_read_entity_id_for_coordinate(this->_location, a);
+        printf("Read EntityID for Coordinate %lld\n", a.data);
         if (!a) {
             Machine* machine = new Machine;
             machine->_old_location = _location;
             machine->_new_location = _location;
             machine->_old_time = context->_world->_time;
             machine->_new_time = context->_world->_time;
-            /*
-            entity_add_to_world(machine, world);
-            set_world_coordinate_occupant(world, _location, machine);
-            did_write_world_coordinate(world, _location);
-            did_read_world_entity(world, this);
-             */
-            EntityID b = spawner_new_entity_from_prototype();
+            EntityID b = machine->_entity_id;
+            printf("Made new EntityID for Coordinate %lld\n", b.data);
             tx->write_entity_for_entity_id(b, machine);
             tx->write_entity_id_for_coordinate(this->_location, b);
-            // TODO: write the new EntityID into the readylist
-            // We can only fail if somebody else wrote here
+            tx->write_entity_id_for_time(context->_world->_time + 1, b);
         }
         tx->wait_on_entity_id_for_coordinate(this->_location, Transaction::Operation::WAIT_ALWAYS);
     }
