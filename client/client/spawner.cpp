@@ -9,6 +9,7 @@
 #include "spawner.hpp"
 #include "world.hpp"
 #include "transaction.hpp"
+#include "utility.hpp"
 
 namespace wry {
     

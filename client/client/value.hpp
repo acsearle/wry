@@ -44,7 +44,7 @@ namespace wry {
         Value(string_view);
         
         // TODO: call syntax
-        Value operator()(/* args type? */) const;
+        // Value operator()(/* args type? */) const;
         
         // TODO: subscript syntax; probably get/set is the best.  We can't hand
         // out references into the backing array which will be atomic or

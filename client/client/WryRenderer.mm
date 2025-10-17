@@ -612,26 +612,35 @@
             Table<wry::String, i64> _name_to_opcode;
             Table<i64, wry::String> _opcode_to_name;
 
-            /*
-            try {
-                auto x = json::from_file<Array<String>>("opcodes.json");
-                ulong i = 0;
-                for (const String& y : x)
-                    _name_to_opcode[y] = i++;
-                
-                json::serializer s;
-                serialize(x.as_view(), s);
-                printf("%.*s\n", (int) s.s.chars.size(), (char*) s.s.chars.data());
-            } catch (...) {
-                
-            }
-             */
+//            try {
+//                auto x = json::from_file<ContiguousDeque<String>>("opcodes.json");
+//                ulong i = 0;
+//                for (const String& y : x)
+//                    _name_to_opcode[y] = i++;
+//                
+//                //json::serializer s;
+//                //serialize(x.as_view(), s);
+//                //printf("%.*s\n", (int) s.s.chars.size(), (char*) s.s.chars.data());
+//            } catch (...) {
+//                
+//            }
             
             for (auto&& [k, v] : wry::OPCODE_NAMES) {
+                printf("\"%s\" <-> %lld\n", v, k);
                 _opcode_to_name.emplace(k, v);
+                auto h = _name_to_opcode._inner._hasher.get_hash(v + 7);
+                printf("hash \"%s\" -> %llu\n", v+7, h);
                 _name_to_opcode.emplace(v + 7, k);
             }
             
+            for (auto&& [k, v] : wry::OPCODE_NAMES) {
+                printf("\"%s\" <-> %lld\n", v, k);
+                const String& s = _opcode_to_name[k];
+                printf("    %lld -> %.*s\n", k, (int) s.chars.size(), (char const*) s.chars.data());
+                int64_t i = _name_to_opcode[v + 7];
+                printf("    %s -> %lld\n", v + 7, i);
+            }
+
                 
             try {
                 auto x = json::from_file<ContiguousDeque<ContiguousDeque<String>>>("assets.json");
@@ -639,10 +648,20 @@
                 for (const ContiguousDeque<String>& y : x) {
                     ulong j = 0;
                     for (const String& z : y) {
-                        printf("%.*s\n", (int) z.chars.size(), (const char*) z.chars.data());
+                        printf("loading image for %.*s\n", (int) z.chars.size(), (const char*) z.chars.data());
                         simd_float4 coordinate = make<float4>(j / 32.0f, i / 32.0f, 0.0f, 1.0f);
+                        auto h = _name_to_opcode._inner._hasher.get_hash(z);
+                        printf("hash \"%.*s\" -> %llu\n", (int) z.chars.size(), (const char*) z.chars.data(), h);
                         auto p = _name_to_opcode.find(z);
-                        if (p != _name_to_opcode.end()) {
+                        printf("p choice\n");
+                        if (p == _name_to_opcode.end()) {
+                            printf("p is equal to end\n");
+                            printf("No opcode found for \"%.*s\"\n", (int) z.chars.size(), (const char*) z.chars.data());
+                            auto mq = _name_to_opcode[z];
+                            printf("Forced lookup is %lld\n", mq);
+                        }
+                        else /* if (p != _name_to_opcode.end()) */ {
+                            printf("p is not equal to end\n");
                             _opcode_to_coordinate[p->second] = coordinate;
                             
                             
@@ -1194,7 +1213,7 @@
                 
                 // now make the stack
                 location.z += 0.8;
-                for (int i = 0; i != p->_stack.size(); ++i) {
+                for (int i = (int) p->_stack.size(); i--;) {
                     location.z += 0.5;
                     wry::Value value = p->_stack[i];
                     simd_float4 coordinate;
@@ -1314,15 +1333,19 @@
                     //wry::Value q = _model->_world->_value_for_coordinate.read(wry::Coordinate{i, j});
                     wry::Value q = {};
                     (void) _model->_world->_value_for_coordinate.try_get(wry::Coordinate{i, j}, q);
-                    //printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::Coordinate{i, j}.data(), result, q._data);
+                    // printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::Coordinate{i, j}.data(), q._data);
                     if (q.is_int64_t()) {
                         coordinate = make<float4>((q.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                     } else if (q.is_opcode()) {
+                        //printf("q is opcode\n");
                         auto p = _opcode_to_coordinate.find(q.as_opcode());
                         if (p != _opcode_to_coordinate.end()) {
                             coordinate = p->second;
+                        } else {
+                            printf("q is opcode but was not found, %d\n", q.as_opcode());
                         }
                     } else {
+                        //printf("q is mystery\n");
                         coordinate = make<float4>(0.0 / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
                     }
                 }

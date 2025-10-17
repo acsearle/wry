@@ -16,6 +16,7 @@
 #include "debug.hpp"
 #include "HeapArray.hpp"
 #include "opcode.hpp"
+#include "persistent_stack.hpp"
 
 namespace wry {
     
@@ -36,8 +37,10 @@ namespace wry {
         
         // Array<Value> _stack;
         // GCArray<Scan<Value>> _stack;
-        std::vector<Value> _stack;
+        // std::vector<Value> _stack;
         // TODO: What stack implementation?
+        PersistentStack<Value> _stack;
+        
 
         // The _old_* and _new_* states represent the beginning and end states
         // of travelling.  They are used by the visualization as a lerp
@@ -55,25 +58,15 @@ namespace wry {
         
         void push(Value x) {
             if (!value_is_null(x))
-                _stack.push_back(x);
+                _stack.push(x);
         }
         
         Value pop() {
-            if (!_stack.empty()) {
-                Value result{std::move(_stack.back())};
-                _stack.pop_back();
-                return result;
-            } else {
-                return Value{};
-            }
+            return _stack.pop_else(Value{});
         }
         
         Value peek() const {
-            if (!_stack.empty()) {
-                return _stack.back();
-            } else {
-                return Value{};
-            }
+            return _stack.peek_else(Value{});
         }
         
         std::pair<Value, Value> pop2() {
@@ -82,32 +75,20 @@ namespace wry {
             return {y, z};
         }
         
-        std::pair<Value, Value> peek2() {
-            switch (_stack.size()) {
-                case 0:
-                    return std::pair<Value, Value>{Value{}, Value{}};
-                case 1:
-                    return std::pair<Value, Value>{Value{}, _stack.back()};
-                default: {
-                    Value z = pop();
-                    Value y = pop();
-                    push(y);
-                    push(z);
-                    return { y, z};
-                    // return std::pair<Value, Value>{_stack.end()[-2], _stack.end()[-1]};
-                }
+        std::pair<Value, Value> peek2() const {
+            std::pair<Value, Value> result = {};
+            if (_stack._head) {
+                result.second = _stack._head->_payload;
+                if (_stack._head->_next)
+                    result.first = _stack._head->_next->_payload;
             }
+            return result;
         }
         
-        void pop2push1(Value x) {            
-            if (!_stack.empty()) {
-                _stack.pop_back();
-            }
-            if (_stack.empty()) {
-                _stack.push_back(std::move(x));
-            } else {
-                _stack.back() = std::move(x);
-            }
+        void pop2push1(Value x) {
+            _stack.pop();
+            _stack.pop();
+            _stack.push(x);
         }
         
         virtual void notify(TransactionContext* context) const override;

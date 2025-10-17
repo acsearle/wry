@@ -153,8 +153,16 @@ namespace wry {
                                               value_make_integer_with((7)));
             //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_array());
             // _world->_value_for_coordinate.set(Coordinate{-2, -2}, value_make_array());
+            _world->_value_for_coordinate.set(Coordinate{0, +1},
+                                              value_make_integer_with((1)));
+            _world->_value_for_coordinate.set(Coordinate{0, +2},
+                                              value_make_integer_with((2)));
+            _world->_value_for_coordinate.set(Coordinate{0, +3},
+                                              value_make_integer_with((3)));
             _world->_value_for_coordinate.set(Coordinate{0, +4},
                                               value_make_opcode(OPCODE_FLIP_FLOP));
+            _world->_value_for_coordinate.set(Coordinate{0, +5},
+                                              value_make_integer_with((5)));
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();
 

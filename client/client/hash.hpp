@@ -228,8 +228,12 @@ namespace wry {
         return hash;
     }
     
+    // TODO: hack to fix inconsistency bug where Strings and const char* were
+    // hashed differently.  If we want to use fnv1a, we need two slightly
+    // different versions that are sized and zero-terminated respectively
     constexpr uint64_t hash(const char* str) {
-        return fnv1a(str);
+        // return fnv1a(str);
+        return hash_combine(str, strlen(str));
     }
     
     // Hashed strings give us a conventional hash of the string's contents that

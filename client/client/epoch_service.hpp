@@ -54,7 +54,7 @@ namespace wry::epoch {
             if (pins_prior)
                 return *this;
             return GlobalState {
-                pins_prior,
+                pins_current,
                 0,
                 current + 1,
             };
