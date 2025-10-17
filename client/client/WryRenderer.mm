@@ -1107,9 +1107,21 @@
         v.normal = make<float4>(0.0f, 0.0f, 1.0f, 0.0f);
         uint k = 0;
 
-#if 0
-        for (const auto& [qi, q] : entities->data) {
+#if 1
+        
+        // kludge out the contents of the entity mapping
+        std::vector<Entity const*> ptrs;
+        entities.inner.parallel_for_each([&ptrs](auto&& k, auto&& v) {
+            ptrs.push_back(v.first);
+        });
+        // TODO:
+        // Make a new entity-coordinate table that doesn't imply exclusive
+        // ownership
+        // Lookup by region
+                
+        // for (const auto& [qi, q] : entities->data) {
             // Entity* q = entities[qi];
+        for (Entity const* q : ptrs) {
             
             if (auto p = dynamic_cast<const wry::Machine*>(q)) { // ugh
                 

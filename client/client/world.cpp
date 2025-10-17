@@ -85,6 +85,7 @@ namespace wry {
             using A = ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>>;
             A result{};
             if (writer) {
+                assert(writer->_operation & Transaction::Operation::WRITE_ON_COMMIT);
                 P b;
                 b.first = get<Value>(writer->_desired);
                 if (writer->_operation & Transaction::Operation::WAIT_ON_COMMIT) {
@@ -230,13 +231,13 @@ namespace wry {
         new_waiting_on_time
         = parallel_rebuild(new_waiting_on_time,
                            context._wait_on_time,
-                           [this](const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
+                           [&new_waiting_on_time, this](const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
                            -> ParallelRebuildAction<PersistentSet<EntityID>> {
             // TODO: We need to special-case waits for new_time
             assert(kv.first > _time);
             ParallelRebuildAction<PersistentSet<EntityID>> result;
             result.tag = ParallelRebuildAction<PersistentSet<EntityID>>::WRITE_VALUE;
-            _waiting_on_time.try_get(kv.first, result.value);
+            new_waiting_on_time.try_get(kv.first, result.value);
             const Transaction::Node* head = kv.second.load(Ordering::RELAXED);
             for (; head; head = head->_next) {
                 using std::get;

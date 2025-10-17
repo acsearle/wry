@@ -47,10 +47,11 @@ namespace wry {
             }
             
             explicit Node(size_t n, auto&&... args)
-            : _key(FORWARD(args)...)
+            : IntrusiveAllocator()
+            , _key(FORWARD(args)...)
             , _size(n) {
             }
-            
+                        
             static Node* _Nonnull with_size_emplace(size_t n, auto&&... args) {
                 // void* raw = GarbageCollected::operator new(sizeof(Node) + sizeof(Atomic<Node*>) * n);
                 size_t number_of_bytes = sizeof(Node) + sizeof(Atomic<Node*>) * n;

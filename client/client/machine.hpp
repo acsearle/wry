@@ -8,6 +8,8 @@
 #ifndef machine_hpp
 #define machine_hpp
 
+#include <vector>
+
 #include "contiguous_deque.hpp"
 #include "sim.hpp"
 #include "entity.hpp"
@@ -16,6 +18,11 @@
 #include "opcode.hpp"
 
 namespace wry {
+    
+    inline void garbage_collected_scan(std::vector<Value> const& values) {
+        for (Value const& value : values)
+            garbage_collected_scan(value);
+    }
         
     struct Machine : Entity {
         
@@ -26,8 +33,11 @@ namespace wry {
         } _phase = PHASE_WAITING_FOR_NEW;
         
         i64 _on_arrival = OPCODE_NOOP;
+        
         // Array<Value> _stack;
-        GCArray<Scan<Value>> _stack;
+        // GCArray<Scan<Value>> _stack;
+        std::vector<Value> _stack;
+        // TODO: What stack implementation?
 
         // The _old_* and _new_* states represent the beginning and end states
         // of travelling.  They are used by the visualization as a lerp
@@ -38,6 +48,10 @@ namespace wry {
         Coordinate _new_location = { 0, 0 };
         Time _old_time = 0;
         Time _new_time = 0;
+        
+        Machine* make_mutable_clone() const {
+            return new Machine(*this);
+        }
         
         void push(Value x) {
             if (!value_is_null(x))

@@ -91,8 +91,8 @@ namespace wry {
                 printf("insert_localized_entity %lld\n", entity_id.data);
                 _world->_entity_for_entity_id.set(entity_id,
                                                   entity_ptr);
-                _world->_entity_id_for_coordinate.set(entity_ptr->_location,
-                                                      entity_id);
+                //_world->_entity_id_for_coordinate.set(entity_ptr->_location,
+                //                                      entity_id);
                 // _world->_ready.set(entity_id);
                 // TODO: clumsy
                 PersistentSet<EntityID> q;
@@ -153,6 +153,8 @@ namespace wry {
                                               value_make_integer_with((7)));
             //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_array());
             // _world->_value_for_coordinate.set(Coordinate{-2, -2}, value_make_array());
+            _world->_value_for_coordinate.set(Coordinate{0, +4},
+                                              value_make_opcode(OPCODE_FLIP_FLOP));
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();
 

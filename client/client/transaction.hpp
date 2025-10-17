@@ -114,7 +114,7 @@ namespace wry {
             WAIT_NEVER = 0,
             WAIT_ON_COMMIT = 1,
             WAIT_ON_ABORT = 2,
-            WAIT_ALWAYS = 3,
+            WAIT_ALWAYS = WAIT_ON_ABORT | WAIT_ON_COMMIT,
             WRITE_ON_COMMIT = 4,
         };
         
@@ -173,27 +173,26 @@ namespace wry {
         bool try_read_entity_id_for_coordinate(Coordinate, EntityID&) const;
         bool try_read_entity_for_entity_id(EntityID, const Entity*&) const;
 
-        
+    
         void write_value_for_coordinate(Coordinate, Value, int = WRITE_ON_COMMIT);
+        //void erase_value_for_coordinate(Coordinate, int = ERASE_ON_COMMIT);
         void wait_on_value_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
-        
+
         void write_entity_for_entity_id(EntityID, const Entity*, int = WRITE_ON_COMMIT);
+        //void erase_entity_for_entity_id(EntityID, int = ERASE_ON_COMMIT);
         void wait_on_entity_for_entity_id(EntityID, int = WAIT_ON_COMMIT);
 
-        void wait_on_time(Time, int = WAIT_ON_COMMIT);
-        void write_entity_id_for_time(Time, EntityID, int = WAIT_ON_COMMIT);
+        void write_entity_id_for_coordinate(Coordinate, EntityID, int = WRITE_ON_COMMIT);
+        //void erase_entity_id_for_coordinate(Coordinate, int = ERASE_ON_COMMIT);
+        void wait_on_entity_id_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
 
+        
+        void write_entity_id_for_time(Time, EntityID, int = WAIT_ON_COMMIT);
+        void wait_on_time(Time, int = WAIT_ON_COMMIT);
+        
         void on_commit_sleep_for(uint64_t ticks);
         void on_abort_retry();
-
-        // EntityID for coordinate is not well defined
-        // - Is it a many-to-many map?
-        // - Is it the exclusive reservation of a cell by an entity?
-        // - Is it what area queries use? (for rendering, for AoE?)
-        // - Is it the collider for a layer for a coordinate?        
         
-        void write_entity_id_for_coordinate(Coordinate, EntityID, int = WRITE_ON_COMMIT);
-        void wait_on_entity_id_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
 
         // Resolution
         

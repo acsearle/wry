@@ -251,18 +251,19 @@ namespace wry {
     
     
     struct BumpAllocated {
-        
-        static void* _Nonnull operator new(std::size_t size, std::align_val_t align) {
+                
+        void* _Nonnull operator new(std::size_t size, std::align_val_t align) {
             return bump::this_thread_state.allocate(size, (size_t)align);
         }
         
-        static void* _Nonnull operator new(std::size_t size, void* _Nonnull ptr) {
+        void* _Nonnull operator new(std::size_t size, void* _Nonnull ptr) {
             return ptr;
         }
-        
-        static void operator delete(void* _Nullable) {
+
+        void operator delete(void* _Nullable) {
+            abort();
         }
-        
+
     };
     
     inline void garbage_collected_scan(BumpAllocated const* _Nullable) {

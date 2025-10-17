@@ -32,7 +32,7 @@ namespace wry {
     void Spawner::notify(TransactionContext* context) const {
         Transaction* tx = Transaction::make(context, this, 10);
         EntityID a = {};
-        tx->try_read_entity_id_for_coordinate(this->_location, a);
+        (void) tx->try_read_entity_id_for_coordinate(this->_location, a);
         printf("Read EntityID for Coordinate %lld\n", a.data);
         if (!a) {
             Machine* machine = new Machine;
