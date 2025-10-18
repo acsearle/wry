@@ -327,7 +327,9 @@ namespace wry {
         Color _mask_for_deleting = 0;
         Color _mask_for_clearing = 0;
         
-        void loop_until(std::chrono::steady_clock::time_point collector_deadline) {
+        Atomic<bool> _is_canceled;
+        
+        void loop_until_canceled() {
             
             // The collector also registers itself as a mutator:
             
@@ -342,8 +344,7 @@ namespace wry {
             
             printf("C0: go\n");
             
-            // HACK: loop until a time significantly later than the mutator stop time
-            while (std::chrono::steady_clock::now() < collector_deadline) {
+            while (!_is_canceled.load(Ordering::RELAXED)) {
                 
                 // The collector at least knows about itself-as-mutator
                 assert(!_known_mutator_interfaces.empty());
@@ -495,6 +496,8 @@ namespace wry {
                         printf("C0: Waiting for work\n");
                         // _new_mutator_interfaces.hack_wait_until(collector_deadline);
                         _global_new_sessions.wait(expected, Ordering::RELAXED);
+                        if (_is_canceled.load(Ordering::RELAXED))
+                            break;
                         printf("C0: Woke\n");
                     }
                     //while (_new_mutator_interfaces.try_pop(victim)) {
@@ -717,11 +720,15 @@ namespace wry {
     
     
     
-    // TODO: make constinit
-    static Collector collector;
+    static constinit Collector collector = {};
     
-    void collector_run_on_this_thread_until(std::chrono::steady_clock::time_point collector_deadline) {
-        collector.loop_until(collector_deadline);
+    void collector_run_on_this_thread() {
+        collector.loop_until_canceled();
+    }
+    
+    void collector_cancel() {
+        collector._is_canceled.store(true, Ordering::RELAXED);
+        _global_new_sessions.notify_all();
     }
     
     void mutator_handshake() {
@@ -742,7 +749,7 @@ namespace wry {
     
     
     
-}
+} // namespace wry
 
 
 

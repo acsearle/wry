@@ -103,7 +103,8 @@ namespace wry {
     
     // Collector
     
-    void collector_run_on_this_thread_until(std::chrono::steady_clock::time_point collector_deadline);
+    void collector_run_on_this_thread();
+    void collector_cancel();
     
     // Mutator
     

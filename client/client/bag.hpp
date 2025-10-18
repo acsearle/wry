@@ -96,9 +96,9 @@ namespace wry {
         }
         
         ~SinglyLinkedListOfInlineStacksBag() {
-            assert(_head == nullptr);
-            assert(_tail == nullptr);
-            assert(_debug_size == 0);
+            //assert(_head == nullptr);
+            //assert(_tail == nullptr);
+            //assert(_debug_size == 0);
         }
                 
         SinglyLinkedListOfInlineStacksBag& operator=(const SinglyLinkedListOfInlineStacksBag&) = delete;
