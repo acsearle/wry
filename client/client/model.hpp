@@ -25,6 +25,7 @@
 #include "string.hpp"
 #include "table.hpp"
 #include "world.hpp"
+#include "player.hpp"
 
 namespace wry {
     
@@ -45,6 +46,9 @@ namespace wry {
         
         // simulation state
         World* _world;
+        
+        
+        Player* _local_player;
 
         
         // debug state
@@ -85,6 +89,17 @@ namespace wry {
 
             _console.emplace_back("WryApplication");
             _console.emplace_back("");
+            
+            {
+                // new player
+                Player* p = new Player;
+                _world->_entity_for_entity_id.set(p->_entity_id, p);
+                PersistentSet<EntityID> q;
+                _world->_waiting_on_time.try_get(Time{0}, q);
+                q.set(p->_entity_id);
+                _world->_waiting_on_time.set(Time{0}, q);
+                _local_player = p;
+            }
                         
             auto insert_localized_entity = [&](LocalizedEntity const* entity_ptr) {
                 EntityID entity_id = entity_ptr->_entity_id;

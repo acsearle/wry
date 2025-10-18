@@ -75,33 +75,59 @@ namespace wry {
         virtual void _garbage_collected_shade() const;
         virtual void _garbage_collected_scan() const = 0;
         
+        /*
         template<typename T>
-        static void barrier_store(Atomic<T*>& target, T* desired, Ordering) {
+        static void barrier_store(Atomic<T*>& target, T* desired) {
             T* discovered = target.exchange(desired, Ordering::ACQ_REL);
             garbage_collected_shade(discovered);
         }
-        
+
+        template<typename T>
+        static T barrier_exchange(Atomic<T*>& target, T* desired) {
+            T* discovered = target.exchange(desired, Ordering::ACQ_REL);
+            garbage_collected_shade(discovered);
+            return discovered;
+        }
+
         template<typename T>
         static bool barrier_compare_exchange_strong(Atomic<T*>& target,
                                                     T*& expected,
-                                                    T* desired,
-                                                    Ordering success,
-                                                    Ordering failure) {
+                                                    T* desired) {
             bool result = target.barrier_compare_exchange_strong(expected,
                                                                  desired,
-                                                                 Ordering::RELEASE,
+                                                                 Ordering::ACQ_REL,
                                                                  Ordering::ACQUIRE);
             if (result) {
                 garbage_collected_shade(expected);
             }
         }
+         */
         
     }; // struct GarbageCollected
         
+
     auto garbage_collected_shade(GarbageCollected const* ptr) -> void;
+
+    // SHADE can be called by any mutator at any time; it will turn a white
+    // object to grey (with those colors as understood by the mutator) and note
+    // that the thread has performed such an action, but otherwise have no
+    // effect
+
+    // A compound object should ADL-define garbage_collected_shade to
+    // recursively call garbage_collected_shade on each of its members if they are
+    // potentially of interest to the garbage collector.  The intent is to
+    // shade all GarbageCollected pointers within the object, but not to trace
+    // them to other objects; that is the job of the Collector.
+
     auto garbage_collected_scan(GarbageCollected const* self) -> void;
-    
-    // Collector
+
+    // SCAN can only be called by the collector; it will
+
+    // A compound object should ADL-define garbage_collected_scan to recursively
+    // call garbage_collected_scan on each of its members if they are
+    // potentially of interest to the garbage collector.  The intent is to
+    // report all GarbageCollected pointers within the object to the Collector,
+    // but not to trace them to other objects; that is the job of the Collector.
     
     void collector_run_on_this_thread();
     void collector_cancel();
@@ -111,8 +137,15 @@ namespace wry {
     void mutator_become_with_name(const char*);
     void mutator_handshake();
     void mutator_resign();
-    void mutator_overwrote(const GarbageCollected* old_ptr);
-    void mutator_mark_root(const GarbageCollected* root_ptr);
+    void mutator_overwrote(GarbageCollected const* old_ptr);
+    void mutator_mark_root(GarbageCollected const* root_ptr);
+    
+    // TODO:
+    //
+    // Consider maintaining a mutator-local list of the pointers that have been
+    // changed from white to grey by the mutator since the last report.  (This
+    // is done by the collector we most closely resemble).  This lets us scan
+    // less; but since we simultaneously sweep, does it help?
 
 } // namespace wry
 

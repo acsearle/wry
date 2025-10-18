@@ -845,6 +845,16 @@
                 
                 // the_tile.notify_occupant(&_model->_world);
                 // notify_by_world_coordinate(_model->_world, xy);
+                
+                {
+                    Player::Action a;
+                    a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
+                    a.coordinate = xy;
+                    a.value = _model->_holding_value;
+                    std::unique_lock lock{_model->_local_player->_mutex};
+                    _model->_local_player->_queue.push(std::move(a));
+                }
+                
                 printf(" Clicked world (%d, %d)\n", i, j);
             }
             _model->_outstanding_click = false;
