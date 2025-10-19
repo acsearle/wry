@@ -49,10 +49,10 @@ namespace wry {
         
         struct LNode : MainNode {
             
-            Scan<const HeapString*const> sn;
-            Scan<const LNode*const> next;
+            HeapString const* sn;
+            LNode const* next;
             
-            LNode(const HeapString*const s, const LNode*const n);
+            LNode(HeapString const* s, LNode const* n);
             virtual ~LNode() override final;
             
             const AnyNode* find_or_copy_emplace(Query query) const;
@@ -71,15 +71,15 @@ namespace wry {
         
         struct TNode : MainNode {
             
-            Scan<const HeapString*const> sn;
+            HeapString const* sn;
             
-            explicit TNode(const HeapString* sn);
+            explicit TNode(HeapString const* sn);
             virtual ~TNode() override final;
             
             const BranchNode* _ctrie_mn_resurrect(const INode* i) const override;
             virtual bool _ctrie_mn_cleanParent2(const INode* p, const INode* i, size_t hc, int lev,
                                                 const CNode* cn, int pos) const override;
-            virtual const HeapString* _ctrie_mn_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const override;
+            virtual HeapString const* _ctrie_mn_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const override;
             virtual EraseResult _ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const override;
             virtual void _ctrie_mn_erase2(const INode* p, const INode* i, size_t hc, int lev) const override;
             

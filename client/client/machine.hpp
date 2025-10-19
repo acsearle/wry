@@ -14,7 +14,6 @@
 #include "sim.hpp"
 #include "entity.hpp"
 #include "debug.hpp"
-#include "HeapArray.hpp"
 #include "opcode.hpp"
 #include "persistent_stack.hpp"
 
@@ -35,10 +34,6 @@ namespace wry {
         
         i64 _on_arrival = OPCODE_NOOP;
         
-        // Array<Value> _stack;
-        // GCArray<Scan<Value>> _stack;
-        // std::vector<Value> _stack;
-        // TODO: What stack implementation?
         PersistentStack<Value> _stack;
         
 

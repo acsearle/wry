@@ -71,6 +71,17 @@ namespace wry {
         return key.data();
     }
     
+    template<typename Key>
+    Key key_for_persistent_map_index(uint64_t index);
+    
+    template<>
+    inline Coordinate key_for_persistent_map_index<Coordinate>(uint64_t index) {
+        Coordinate key = {};
+        std::memcpy(&key, &index, 8);
+        return key;
+    }
+
+    
     inline void garbage_collected_scan(const Coordinate&) {}
     inline void garbage_collected_shade(const Coordinate&) {}
     

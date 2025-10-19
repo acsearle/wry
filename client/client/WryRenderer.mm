@@ -851,8 +851,7 @@
                     a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
                     a.coordinate = xy;
                     a.value = _model->_holding_value;
-                    std::unique_lock lock{_model->_local_player->_mutex};
-                    _model->_local_player->_queue.push(std::move(a));
+                    _model->_local_player->_queue.push_back(std::move(a));
                 }
                 
                 printf(" Clicked world (%d, %d)\n", i, j);

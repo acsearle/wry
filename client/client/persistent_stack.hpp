@@ -13,6 +13,8 @@
 #include "utility.hpp"
 
 namespace wry {
+    
+    // Persistent stack implemented with a classic functional cons list
 
     template<typename T>
     struct PersistentStack {

@@ -213,11 +213,6 @@ namespace wry {
     
     
     void mutator_shade_root(const GarbageCollected* root);
-    
-
-    inline void garbage_collected_passivate(GarbageCollected*& self) {
-        self = nullptr;
-    }
         
         
     template<typename T> void any_debug(T const& self) {

@@ -31,8 +31,7 @@ namespace wry {
             };
         };
         
-        mutable std::mutex _mutex;
-        mutable Queue<Action> _queue;
+        mutable BlockingDeque<Action> _queue;
                 
         virtual void notify(TransactionContext*) const override;
 

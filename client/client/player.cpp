@@ -25,15 +25,7 @@ namespace wry {
     }
     
     void Player::_garbage_collected_scan() const {
-        std::unique_lock lock{_mutex};
-        // TODO: horrible requeue
-        size_t n = _queue.size();
-        for (size_t i = 0; i != n; ++i) {
-            Action a{std::move(_queue.front())};
-            _queue.pop();
-            garbage_collected_scan(a);
-            _queue.push(std::move(a));
-        }
+        garbage_collected_scan(_queue);
     }
 
     
@@ -44,24 +36,17 @@ namespace wry {
         tx->wait_on_time(context->_world->_time + 1);
         
         Action action = {};
-        {
-            std::unique_lock lock{_mutex};
-            if (!_queue.empty()) {
-                action = std::move(_queue.front());
-                _queue.pop();
-            }
-        }
-        
-        switch (action.tag) {
-            case Player::Action::NONE:
-                break;
-            case Player::Action::WRITE_VALUE_FOR_COORDINATE:
-                tx->write_value_for_coordinate(action.coordinate, action.value);
-                break;
-            default:
-                abort();
-        };
-        
+        if (_queue.pop_front(action)) {
+            switch (action.tag) {
+                case Player::Action::NONE:
+                    break;
+                case Player::Action::WRITE_VALUE_FOR_COORDINATE:
+                    tx->write_value_for_coordinate(action.coordinate, action.value);
+                    break;
+                default:
+                    abort();
+            };
+        }        
     }
     
 } // namespace wry

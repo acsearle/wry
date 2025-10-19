@@ -8,7 +8,6 @@
 #ifndef ctrie_hpp
 #define ctrie_hpp
 
-#include "Scan.hpp"
 #include "value.hpp"
 
 namespace wry {
@@ -70,7 +69,7 @@ namespace wry {
         
         struct INode : BranchNode {
             
-            mutable Scan<Atomic<const MainNode*>> main;
+            mutable Atomic<const MainNode*> main;
             
             explicit INode(const MainNode*);
             virtual ~INode() final = default;
@@ -98,7 +97,7 @@ namespace wry {
     
     struct Ctrie : GarbageCollected {
         
-        Scan<const _ctrie::INode*const> root;
+        _ctrie::INode const* root;
                                 
         Ctrie();
         virtual ~Ctrie() override final;

@@ -32,7 +32,15 @@ namespace wry {
     inline uint64_t persistent_map_index_for_key(EntityID entity_id) {
         return entity_id.data;
     }
-    
+
+    template<typename Key>
+    Key key_for_persistent_map_index(uint64_t index);
+
+    template<>
+    inline EntityID key_for_persistent_map_index<EntityID>(uint64_t index) {
+        return EntityID{index};
+    }
+
     
     inline void garbage_collected_scan(const EntityID&) {}
     inline void garbage_collected_shade(const EntityID&) {}

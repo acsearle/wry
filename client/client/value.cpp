@@ -13,8 +13,6 @@
 #include <random>
 
 #include "hash.hpp"
-#include "HeapArray.hpp"
-#include "HeapTable.hpp"
 #include "utility.hpp"
 #include "value.hpp"
 #include "HeapString.hpp"
@@ -287,7 +285,7 @@ namespace wry {
     
     
     
-    
+#if 0
     Value Scan<Value>::get() const {
         return _atomic_value.load(Ordering::RELAXED);
     }
@@ -319,7 +317,7 @@ namespace wry {
     Scan<Value>::operator Value() const {
         return get();
     }
-    
+#endif
    
     
     bool operator==(const Value& a, const Value& b) {
@@ -485,10 +483,11 @@ namespace wry {
         }
     }
     
+#if 0
     void debug(const Scan<Value>& self) {
         debug(self._atomic_value.load(Ordering::ACQUIRE));
     }
-
+#endif
     
     
     Value _value_make_with(const GarbageCollected* p) {
@@ -498,50 +497,54 @@ namespace wry {
     }
     
     Value value_make_table() {
-        Value result;
-        result._data = (uint64_t)(new HeapHashMap);
-        return result;
+        return Value{};
     }
     
+//    Value value_make_table() {
+//        Value result;
+//        result._data = (uint64_t)(new HeapHashMap);
+//        return result;
+//    }
     
     
-    struct ValueArray : HeapValue {
-        
-        GCArray<Scan<Value>> _inner;
-        
-        virtual void _garbage_collected_scan() const { garbage_collected_scan(_inner); }
-        virtual void _garbage_collected_debug() const { any_debug(_inner); }
-        
-        virtual bool _value_empty() const { return _inner.empty(); }
-        virtual size_t _value_size() const { return _inner.size(); }
-
-        // bad interface for arrays, but bad enough?
-        // Lua notably avoids arrays to provide a table interface for everything
-        // deques without indexing may be what we actually want
-        virtual Value _value_insert_or_assign(Value key, Value value) {
-            int64_t i = key.as_int64_t();
-            Value old = value_make_null();
-            if (0 <= i && i < _inner.size()) {
-                old = _inner[i];
-                _inner[i] = value;
-            } else if (i == _inner.size()) {
-                _inner.push_back(value);
-            }
-            return old;
-        }
-        virtual bool _value_contains(Value key) const { return key.as_int64_t() < _inner.size(); }
-        virtual Value _value_find(Value key) const { abort(); }
-        
-    };
     
-
-    Value value_make_array() {
-        Value result;
-        result._data = (uint64_t)(new ValueArray);
-        return result;
-    }
-    
-    
+//    struct ValueArray : HeapValue {
+//        
+//        GCArray<Scan<Value>> _inner;
+//        
+//        virtual void _garbage_collected_scan() const { garbage_collected_scan(_inner); }
+//        virtual void _garbage_collected_debug() const { any_debug(_inner); }
+//        
+//        virtual bool _value_empty() const { return _inner.empty(); }
+//        virtual size_t _value_size() const { return _inner.size(); }
+//
+//        // bad interface for arrays, but bad enough?
+//        // Lua notably avoids arrays to provide a table interface for everything
+//        // deques without indexing may be what we actually want
+//        virtual Value _value_insert_or_assign(Value key, Value value) {
+//            int64_t i = key.as_int64_t();
+//            Value old = value_make_null();
+//            if (0 <= i && i < _inner.size()) {
+//                old = _inner[i];
+//                _inner[i] = value;
+//            } else if (i == _inner.size()) {
+//                _inner.push_back(value);
+//            }
+//            return old;
+//        }
+//        virtual bool _value_contains(Value key) const { return key.as_int64_t() < _inner.size(); }
+//        virtual Value _value_find(Value key) const { abort(); }
+//        
+//    };
+//    
+//
+//    Value value_make_array() {
+//        Value result;
+//        result._data = (uint64_t)(new ValueArray);
+//        return result;
+//    }
+//    
+//    
     
     
     

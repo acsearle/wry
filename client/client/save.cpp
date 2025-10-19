@@ -21,40 +21,21 @@ World* restart_game() {
 void save_game(World* world) {
         
     const auto& a = world->_value_for_coordinate;
-    const size_t n = 0; // a.size();
+    // const size_t n = 0; // a.size();
+    
+    // Smash down to flat arrays of tuples to save
     
     std::vector<std::pair<Coordinate, Value>> b;
-    b.reserve(n);
+    std::vector<std::pair<Coordinate, EntityID>> c;
+    //b.reserve(n);
     
-    /*
-    for (const auto& e : a._inner._alpha) {
-        if (e.occupied()) {
-            Coordinate k = e._kv.first;
-            Value v = e._kv.second.get();
-            if (!_value_is_object(v)) {
-                b.emplace_back(k, v);
-            } else {
-                
-            }
-        }
-    }
-
-    for (const auto& e : a._inner._beta) {
-        if (e.occupied()) {
-            Coordinate k = e._kv.first;
-            Value v = e._kv.second.get();
-            if (!_value_is_object(v)) {
-                b.emplace_back(k, v);
-            } else {
-                
-            }
-        }
-    }
-     */
-     
-    std::sort(b.begin(), b.end(), [](auto x, auto y) {
-        return x.first < y.first;
+    a.inner.for_each([&b, &c](auto&& k, auto&& v) {
+        v.second.for_each([k, &c](auto&& k2) {
+            c.emplace_back(k, k2);
+        });
+        b.emplace_back(k, v.first);
     });
+    
     
     {
         
@@ -113,7 +94,8 @@ void save_game(World* world) {
 
 
 World* continue_game() {
-        
+    
+    /*
     GCHashMap<Coordinate, Scan<Value>> v;
 
     {
@@ -159,6 +141,8 @@ World* continue_game() {
         ok(sqlite3_close_v2(std::exchange(saves, nullptr)));
         
     }
+     
+     */
     
     World* w = new World;
     
@@ -171,7 +155,7 @@ World* continue_game() {
 
 
 World* load_game(int id) {
-    
+    /*
     GCHashMap<Coordinate, Scan<Value>> v;
     
     {
@@ -217,6 +201,7 @@ World* load_game(int id) {
         ok(sqlite3_close_v2(std::exchange(saves, nullptr)));
         
     }
+     */
     
     World* w = new World;
     

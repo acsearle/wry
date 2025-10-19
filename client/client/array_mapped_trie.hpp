@@ -760,6 +760,21 @@ namespace wry {
                 }
             }
             
+            void for_each(auto&& action) const {
+                if (has_children()) {
+                    int n = popcount(_bitmap);
+                    for (int i = 0; i != n; ++i)
+                        _children[i]->for_each(action);
+                } else {
+                    uint64_t b = _bitmap;
+                    for (int i = 0; b != 0; ++i, (b &= (b-1))) {
+                        int j = ctz(b);
+                        uint64_t key = _prefix_and_shift | j;
+                        action(key, _values[i]);
+                    }
+                }
+            }
+            
             
         }; // Node
         

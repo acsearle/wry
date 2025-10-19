@@ -31,6 +31,9 @@ namespace wry {
         return key;
     }
     
+    template<typename Key>
+    Key key_for_persistent_map_index(uint64_t index);
+    
     // PersistentMap provides key-value mapping backed by an array_mapped_trie
     //
     // Requires the key be mapped to a 64-bit index.  Optimal for blocks of
@@ -100,10 +103,21 @@ namespace wry {
                 _inner->parallel_for_each([&action](uint64_t key, T value) {
                     // TODO: we need a better way of mapping the Key type to
                     // and from the integer type
-                    action(Key{key}, value);
+                    action(key_for_persistent_map_index<Key>(key), value);
                 });
             }
         }
+        
+        void for_each(auto&& action) const {
+            if (_inner) {
+                _inner->for_each([&action](uint64_t key, T value) {
+                    // TODO: we need a better way of mapping the Key type to
+                    // and from the integer type
+                    action(key_for_persistent_map_index<Key>(key), value);
+                });
+            }
+        }
+
 
     };
     

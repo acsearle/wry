@@ -13,7 +13,6 @@
 
 #include "atomic.hpp"
 #include "garbage_collected.hpp"
-#include "Scan.hpp"
 
 namespace wry {
     
@@ -68,43 +67,11 @@ namespace wry {
     
     void garbage_collected_shade(const Value& value);
     void garbage_collected_scan(const Value& value);
+
     
-} // namespace wry
-
-namespace wry {
     
-    template<>
-    struct Atomic<Value> {
-        
-        Atomic<std::uint64_t> _data;
-        
-        constexpr Atomic() = default;
-        constexpr explicit Atomic(Value desired) : _data(desired._data) {}
-        
-        Value load(Ordering order) const {
-            Value v;
-            v._data = _data.load(order);
-            return v;
-        }
-        
-        Value exchange(Value desired, Ordering order) {
-            garbage_collected_shade(desired);
-            desired._data = _data.exchange(desired._data, order);
-            garbage_collected_shade(desired);
-            return desired;
-        }
-        
-        void store(Value desired, Ordering order) {
-            (void) exchange(desired, order);
-        }
-        
-    };
     
-}
-
-
-
-namespace wry {
+    
     
     
     constexpr Value value_make_boolean_with(bool flag);
@@ -197,53 +164,6 @@ namespace wry {
     
     
     
-    template<>
-    struct Scan<Value> {
-        
-        Atomic<Value> _atomic_value;
-        
-        constexpr Scan() = default;
-        Scan(const Scan& other);
-        ~Scan() = default;
-        Scan& operator=(const Scan& other);
-        explicit Scan(const Value& other);
-        Scan& operator=(const Value& other);
-        explicit operator bool() const;
-        operator Value() const;
-        bool operator==(const Scan& other) const;
-        auto operator<=>(const Scan& other) const;
-        Value get() const;
-    };
-    
-    /*
-     size_t object_hash(const Scan<Value>&);
-     void object_debug(const Scan<Value>&);
-     void object_passivate(Scan<Value>&);
-     void garbage_collected_shade(const Scan<Value>&);
-     void object_trace(const Scan<Value>&);
-     void object_trace_weak(const Scan<Value>&);
-     */
-    
-    template<>
-    struct Scan<Atomic<Value>> {
-        
-        Atomic<Value> _atomic_value;
-        
-        constexpr Scan() = default;
-        constexpr explicit Scan(Value);
-        Scan(const Scan&) = delete;
-        Scan& operator=(const Scan&) = delete;
-        
-        Value load(Ordering) const;
-        void store(Value, Ordering);
-        Value exchange(Value, Ordering);
-        bool compare_exchange_weak(Value&, Value, Ordering, Ordering);
-        bool compare_exchange_strong(Value&, Value, Ordering, Ordering);
-        
-    };
-    
-    
-    
     
     
     
@@ -310,15 +230,7 @@ namespace wry {
         if (_value_is_object(self))
             garbage_collected_scan(_value_as_object(self));
     }
-    
-    inline void garbage_collected_shade(const Scan<Value>& self) {
-        garbage_collected_shade(self._atomic_value.load(Ordering::RELAXED));
-    }
-    
-    inline void garbage_collected_scan(const Scan<Value>& self) {
-        garbage_collected_scan(self._atomic_value.load(Ordering::ACQUIRE));
-    }
-    
+        
     size_t hash(const Value& self);
     
     
@@ -354,7 +266,6 @@ namespace wry {
     
     
     
-    void foo();
     
     
     
@@ -364,25 +275,12 @@ namespace wry {
     
     
     
-    
+#if 0
     inline void garbage_collected_scan(const Scan<Atomic<Value>>& self) {
         garbage_collected_scan(self._atomic_value.load(Ordering::ACQUIRE));
     }
-    
-    inline void garbage_collected_passivate(Value& self) {
-        self._data = 0;
-    }
-    
-    inline void garbage_collected_passivate(Scan<Value>& self) {
-        self._atomic_value.exchange(value_make_null(), Ordering::RELAXED);
-    }
-    
-    inline void garbage_collected_passivate(Scan<Atomic<Value>>& self) {
-        // TODO: Is it ever right to call this?
-        __builtin_trap();
-        self.store(value_make_null(), Ordering::ACQUIRE);
-    }
-    
+#endif
+        
     // user defined literals
     
     // String operator""_v(const char* s, std::size_t n);
