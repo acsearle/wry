@@ -19,13 +19,6 @@
 
 namespace wry {
         
-    // TODO: move elsewhere
-    template<typename Key, typename T, typename Compare>
-    void garbage_collected_scan(const std::map<Key, T, Compare>& m) {
-        for (const auto& p : m)
-            garbage_collected_scan(p);
-    }
-
     // TODO: this interface clumsy
     inline uint64_t persistent_map_index_for_key(uint64_t key) {
         return key;

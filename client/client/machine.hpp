@@ -8,22 +8,16 @@
 #ifndef machine_hpp
 #define machine_hpp
 
-#include <vector>
-
 #include "contiguous_deque.hpp"
 #include "sim.hpp"
 #include "entity.hpp"
 #include "debug.hpp"
 #include "opcode.hpp"
 #include "persistent_stack.hpp"
+#include "vector.hpp"
 
 namespace wry {
-    
-    inline void garbage_collected_scan(std::vector<Value> const& values) {
-        for (Value const& value : values)
-            garbage_collected_scan(value);
-    }
-        
+            
     struct Machine : Entity {
         
         enum {

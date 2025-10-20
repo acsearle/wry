@@ -18,43 +18,37 @@ namespace wry {
     
     // TODO: which string view?
     using std::string_view;
-    
-    struct _value_subscript_result_t;
-    
+        
     struct Value {
         
-        uint64_t _data;
-        
-        // implicit construction from vocabulary types
-        
+        uint64_t _data = {};
+                
         constexpr Value() = default;
         constexpr Value(const Value&) = default;
         constexpr Value(Value&) = default;
         constexpr Value(Value&&) = default;
         constexpr Value& operator=(const Value&) = default;
         
-        constexpr Value(nullptr_t);
+        // implicit construction from vocabulary types
+        
+        constexpr Value(std::nullptr_t);
         constexpr Value(bool);
         constexpr Value(int);
         constexpr Value(int64_t);
+        
         constexpr Value(const char*);
-        template<std::size_t N, typename = std::enable_if_t<(N > 0)>>
+        template<std::size_t N> requires (N > 0)
         constexpr Value(const char (&ntbs)[N]);
         Value(string_view);
         
         // TODO: call syntax
         // Value operator()(/* args type? */) const;
         
-        // TODO: subscript syntax; probably get/set is the best.  We can't hand
-        // out references into the backing array which will be atomic or
-        // immutable
         Value operator[](Value) const;
-        _value_subscript_result_t operator[](Value);
         
         // implicit conversion
         constexpr explicit operator bool() const;
         
-        // TODO: make free functions
         constexpr bool is_opcode() const;
         constexpr int as_opcode() const;
         
@@ -68,12 +62,6 @@ namespace wry {
     void garbage_collected_shade(const Value& value);
     void garbage_collected_scan(const Value& value);
 
-    
-    
-    
-    
-    
-    
     constexpr Value value_make_boolean_with(bool flag);
     constexpr Value value_make_character_with(int utf32);
     constexpr Value value_make_enumeration_with(int64_t);
@@ -91,43 +79,36 @@ namespace wry {
     Value value_make_zero();
     Value value_make_one();
     constexpr Value value_make_opcode(int);
+        
+    constexpr bool value_is_boolean(Value);
+    constexpr bool value_is_character(Value);
+    constexpr bool value_is_error(Value);
+    constexpr bool value_is_null(Value);
+    constexpr bool value_is_enum(Value);
     
-    Value value_make_deep_copy(const Value&);
+    constexpr bool value_as_boolean(Value);
+    constexpr bool value_as_boolean_else(Value, bool);
+    constexpr int  value_as_character(Value);
+    constexpr int  value_as_character_else(Value, int);
+    constexpr std::pair<int, int> value_as_enum(Value);
+    constexpr int64_t value_as_int64_t(Value);
+    constexpr int64_t value_as_int64_t_else(Value, int64_t);
+    string_view value_as_string_view(Value);
+    string_view value_as_string_view_else(Value, string_view);
+    constexpr int value_as_opcode(Value);
     
-    constexpr bool value_is_boolean(const Value& self);
-    constexpr bool value_is_character(const Value& self);
-    constexpr bool value_is_error(const Value& self);
-    constexpr bool value_is_null(const Value& self);
-    constexpr bool value_is_enum(const Value& self);
-    
-    constexpr bool value_as_boolean(const Value& self);
-    constexpr bool value_as_boolean_else(const Value& self, bool);
-    constexpr int  value_as_character(const Value& self);
-    constexpr int  value_as_character_else(const Value& self, int);
-    constexpr std::pair<int, int> value_as_enum(const Value& self);
-    constexpr int64_t value_as_int64_t(const Value& self);
-    constexpr int64_t value_as_int64_t_else(const Value& self, int64_t);
-    string_view value_as_string_view(const Value& self);
-    string_view value_as_string_view_else(const Value& self, string_view);
-    constexpr int value_as_opcode(const Value& self);
-    
-    bool value_contains(const Value& self, Value key);
-    void value_resize(Value& self, Value count);
-    Value value_find(const Value& self, Value key);
-    Value value_insert_or_assign(Value& self, Value key, Value value);
-    Value value_erase(Value& self, Value key);
-    size_t value_size(const Value&);
-    void value_push_back(const Value&, Value value);
-    void value_pop_back(const Value&);
-    Value value_back(const Value&);
-    Value value_front(const Value&);
+    bool value_contains(Value, Value key);
+    Value value_find(Value, Value key);
+    Value value_insert_or_assign(Value self, Value key, Value value);
+    Value value_erase(Value self, Value key);
+    size_t value_size(Value);
+    void value_push_back(Value, Value value);
+    void value_pop_back(Value);
+    Value value_back(Value);
+    Value value_front(Value);
     
     // non-member operator overloads
     
-    Value operator++(Value&, int);
-    Value operator--(Value&, int);
-    Value& operator++(Value&);
-    Value& operator--(Value&);
     Value operator+(const Value&) ;
     Value operator-(const Value&) ;
     // bool operator!(const Value&) ;
@@ -150,40 +131,18 @@ namespace wry {
     Value operator&(const Value&, const Value&) ;
     Value operator^(const Value&, const Value&) ;
     Value operator|(const Value&, const Value&) ;
+        
     
-    Value& operator+=(Value&, const Value&);
-    Value& operator-=(Value&, const Value&);
-    Value& operator*=(Value&, const Value&);
-    Value& operator/=(Value&, const Value&);
-    Value& operator%=(Value&, const Value&);
-    Value& operator<<=(Value&, const Value&);
-    Value& operator>>=(Value&, const Value&);
-    Value& operator&=(Value&, const Value&);
-    Value& operator^=(Value&, const Value&);
-    Value& operator|=(Value&, const Value&);
-    
-    
-    
-    
-    
-    
-    
-    
-    using ValueHash = std::size_t;
-    
+        
     struct HeapValue : GarbageCollected {
-        
-        
-        
-        virtual ValueHash _garbage_collected_hash() const { abort(); }
-        
+                
         // TODO: is it useful to have a base class above the Value interface?
-        virtual Value _value_insert_or_assign(Value key, Value value);
+        virtual Value _value_insert_or_assign(Value key, Value value) const;
         virtual bool _value_empty() const;
         virtual size_t _value_size() const;
         virtual bool _value_contains(Value key) const;
         virtual Value _value_find(Value key) const;
-        virtual Value _value_erase(Value key);
+        virtual Value _value_erase(Value key) const;
         virtual Value _value_add(Value right) const;
         virtual Value _value_sub(Value right) const;
         virtual Value _value_mul(Value right) const;
@@ -194,44 +153,42 @@ namespace wry {
         
     };
     
-    inline ValueHash hash(const HeapValue* self) {
-        return self->_garbage_collected_hash();
-    }
+    
+    
+    
+    
+    
+    constexpr int _value_tag(Value);
+    constexpr bool _value_is_small_integer(Value);
+    constexpr bool _value_is_object(Value);
+    constexpr bool _value_is_short_string(Value);
+    constexpr bool _value_is_tombstone(Value);
+    
+    HeapValue* _value_as_object(Value);
+    HeapValue const* _value_as_heap_value_else(Value, HeapValue const*);
+    GarbageCollected const* _value_as_garbage_collected_else(Value, GarbageCollected const*);
+    constexpr int64_t _value_as_small_integer(Value);
+    constexpr int64_t _value_as_small_integer_else(Value, int64_t);
+    Value _value_make_with(const GarbageCollected* object);
+
+    // lifetimebomb
+    [[nodiscard]] std::string_view _value_as_short_string(Value const&);
+    [[nodiscard]] std::string_view _value_as_short_string_else(Value const&, std::string_view);
 
     
     
     
-    
-    
-    constexpr int _value_tag(const Value& self);
-    constexpr bool _value_is_small_integer(const Value& self);
-    constexpr bool _value_is_object(const Value& self);
-    constexpr bool _value_is_short_string(const Value& self);
-    constexpr bool _value_is_tombstone(const Value& self);
-    
-    HeapValue* _value_as_object(const Value& self);
-    HeapValue* _value_as_garbage_collected_else(const Value& self, const HeapValue*);
-    constexpr int64_t _value_as_small_integer(const Value& self);
-    constexpr int64_t _value_as_small_integer_else(const Value& self, int64_t);
-    std::string_view _value_as_short_string(const Value& self);
-    std::string_view _value_as_short_string_else(const Value& self);
-    Value _value_make_with(const GarbageCollected* object);
-    constexpr Value _value_make_tombstone();
-    
-    
-    
-    
-    inline void garbage_collected_shade(const Value& self) {
+    inline void garbage_collected_shade(Value const& self) {
         if (_value_is_object(self))
             garbage_collected_shade(_value_as_object(self));
     }
     
-    inline void garbage_collected_scan(const Value& self) {
+    inline void garbage_collected_scan(Value const& self) {
         if (_value_is_object(self))
             garbage_collected_scan(_value_as_object(self));
     }
         
-    size_t hash(const Value& self);
+    // size_t hash(const Value& self);
     
     
     
@@ -246,51 +203,12 @@ namespace wry {
         explicit HeapInt64(std::int64_t z);
         virtual ~HeapInt64() final = default;
         std::int64_t as_int64_t() const;
-        virtual void _garbage_collected_shade() const override;
         virtual void _garbage_collected_scan() const override;
     };
     
     
     
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-#if 0
-    inline void garbage_collected_scan(const Scan<Atomic<Value>>& self) {
-        garbage_collected_scan(self._atomic_value.load(Ordering::ACQUIRE));
-    }
-#endif
-        
-    // user defined literals
-    
-    // String operator""_v(const char* s, std::size_t n);
-    
-    
-    
-    
-    
-    
-    
+
     
     
     
@@ -339,32 +257,19 @@ namespace wry {
         constexpr std::string_view as_string_view() const {
             return std::string_view(_chars, size());
         }
-        std::size_t hash() const {
-            return std::hash<std::string_view>()(as_string_view());
-        }
+        //std::size_t hash() const {
+        //    return std::hash<std::string_view>()(as_string_view());
+        //}
     };
     
     
     
     
-    constexpr Value::Value(std::nullptr_t) : _data(0) {}
+    constexpr Value::Value(std::nullptr_t) : _data(VALUE_DATA_NULL) {}
     constexpr Value::Value(bool flag) : _data(((uint64_t)flag << VALUE_SHIFT) | VALUE_TAG_BOOLEAN) {}
     constexpr Value::Value(const char* ntbs) { *this = value_make_string_with(ntbs); }
     constexpr Value::Value(int i) : _data(((int64_t)i << VALUE_SHIFT) | VALUE_TAG_SMALL_INTEGER) {}
-    
-    
-    
-    struct _value_subscript_result_t {
-        Value& container;
-        Value key;
-        operator Value() &&;
-        _value_subscript_result_t&& operator=(Value desired) &&;
-        _value_subscript_result_t&& operator=(_value_subscript_result_t&& desired) &&;
-    };
-    
-    
-    
-    
+
     
     constexpr Value value_make_opcode(int code) {
         Value result;
@@ -376,7 +281,7 @@ namespace wry {
     constexpr Value::Value(int64_t x) : _data((x << VALUE_SHIFT) | VALUE_TAG_SMALL_INTEGER) {}
     
     
-    constexpr int value_as_opcode(const Value& self) {
+    constexpr int value_as_opcode(Value self) {
         if (_value_tag(self) != VALUE_TAG_OPCODE)
             abort();
         return (int)((int64_t)(self._data) >> VALUE_SHIFT);
@@ -404,19 +309,19 @@ namespace wry {
     
     
     
-    constexpr bool value_is_enum(const Value& self) { return _value_tag(self) == VALUE_TAG_ENUMERATION; }
-    constexpr bool value_is_null(const Value& self) { return !self._data; }
-    constexpr bool value_is_error(const Value& self) { return _value_tag(self) == VALUE_TAG_ERROR; }
-    constexpr bool value_is_boolean(const Value& self) { return _value_tag(self) == VALUE_TAG_BOOLEAN; }
-    constexpr bool value_is_character(const Value& self) { return _value_tag(self) == VALUE_TAG_CHARACTER; }
+    constexpr bool value_is_enum(Value self) { return _value_tag(self) == VALUE_TAG_ENUMERATION; }
+    constexpr bool value_is_null(Value self) { return !self._data; }
+    constexpr bool value_is_error(Value self) { return _value_tag(self) == VALUE_TAG_ERROR; }
+    constexpr bool value_is_boolean(Value self) { return _value_tag(self) == VALUE_TAG_BOOLEAN; }
+    constexpr bool value_is_character(Value self) { return _value_tag(self) == VALUE_TAG_CHARACTER; }
     
     
-    constexpr bool value_as_boolean(const Value& self) {
+    constexpr bool value_as_boolean(Value self) {
         assert(value_is_boolean(self));
         return self._data >> VALUE_SHIFT;
     }
     
-    constexpr int value_as_character(const Value& self) {
+    constexpr int value_as_character(Value self) {
         assert(value_is_character(self));
         return (int)((int64_t)self._data >> VALUE_SHIFT);
     }
@@ -443,17 +348,16 @@ namespace wry {
     constexpr Value value_make_error() { Value result; result._data = VALUE_TAG_ERROR; return result; }
     constexpr Value value_make_null() { Value result; result._data = 0; return result; }
     constexpr Value value_make_empty() { Value result; result._data = 0; return result; }
-    constexpr Value _value_make_tombstone() { Value result; result._data = VALUE_DATA_TOMBSTONE; return result; }
     
     
     
-    constexpr int _value_tag(const Value& self) { return self._data & VALUE_MASK; }
-    constexpr bool _value_is_small_integer(const Value& self) { return _value_tag(self) == VALUE_TAG_SMALL_INTEGER; }
-    constexpr bool _value_is_object(const Value& self) { return _value_tag(self) == VALUE_TAG_OBJECT; }
-    constexpr bool _value_is_short_string(const Value& self) { return _value_tag(self) == VALUE_TAG_SHORT_STRING; }
-    constexpr bool _vaue_is_tombstone(const Value& self) { return _value_tag(self) == VALUE_DATA_TOMBSTONE; }
+    constexpr int _value_tag(Value self) { return self._data & VALUE_MASK; }
+    constexpr bool _value_is_small_integer(Value self) { return _value_tag(self) == VALUE_TAG_SMALL_INTEGER; }
+    constexpr bool _value_is_object(Value self) { return _value_tag(self) == VALUE_TAG_OBJECT; }
+    constexpr bool _value_is_short_string(Value self) { return _value_tag(self) == VALUE_TAG_SHORT_STRING; }
+    constexpr bool _vaue_is_tombstone(Value self) { return _value_tag(self) == VALUE_DATA_TOMBSTONE; }
     
-    constexpr bool value_is_RESTART(const Value& self) {
+    constexpr bool value_is_RESTART(Value self) {
         return self._data == VALUE_DATA_RESTART;
     }
     
@@ -463,7 +367,7 @@ namespace wry {
         return result;
     }
     
-    constexpr bool value_is_OK(const Value& self) {
+    constexpr bool value_is_OK(Value self) {
         return self._data == VALUE_DATA_OK;
     }
     
@@ -473,7 +377,7 @@ namespace wry {
         return result;
     }
     
-    constexpr bool value_is_NOTFOUND(const Value& self) {
+    constexpr bool value_is_NOTFOUND(Value self) {
         return self._data == VALUE_DATA_NOTFOUND;
     }
     
@@ -483,21 +387,21 @@ namespace wry {
         return result;
     }
     
-    inline HeapValue* _value_as_object(const Value& self) {
+    inline HeapValue* _value_as_object(Value self) {
         assert(_value_is_object(self));
         return (HeapValue*)self._data;
     }
     
-    inline HeapValue* _as_pointer_or_nullptr(const Value& self) {
+    inline HeapValue* _as_pointer_or_nullptr(Value self) {
         return _value_is_object(self) ? _value_as_object(self) : nullptr;
     }
     
-    constexpr int64_t _value_as_small_integer(const Value& self) {
+    constexpr int64_t _value_as_small_integer(Value self) {
         assert(_value_is_small_integer(self));
         return (int64_t)self._data >> VALUE_SHIFT;
     }
     
-    constexpr bool _value_is_tombstone(const Value& self) {
+    constexpr bool _value_is_tombstone(Value self) {
         return self._data == VALUE_DATA_TOMBSTONE;
     }
     
@@ -509,7 +413,7 @@ namespace wry {
         return result;
     }
     
-    constexpr std::pair<int, int> value_as_enum(const Value& self) {
+    constexpr std::pair<int, int> value_as_enum(Value self) {
         assert(value_is_enum(self));
         int code = (int)(self._data >> 32);
         int meta = ((int)self._data) >> VALUE_SHIFT;

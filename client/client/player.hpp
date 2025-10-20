@@ -22,11 +22,11 @@ namespace wry {
                 WRITE_VALUE_FOR_COORDINATE,
                 
             };
-            Tag tag;
+            Tag tag = {};
             union {
                 struct {
                     Coordinate coordinate;
-                    Value value;
+                    Value value = {};
                 };
             };
         };

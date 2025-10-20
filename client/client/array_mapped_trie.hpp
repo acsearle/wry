@@ -12,10 +12,10 @@
 #include <memory>
 
 #include <bit>
-#include <variant> // for std::monostate before C++26
 
-#include "garbage_collected.hpp"
 #include "algorithm.hpp"
+#include "garbage_collected.hpp"
+#include "variant.hpp"
 
 // An array-mapped trie for fixed size integer keys.  The values will be stored
 // in key order.  Most efficient for keys densely packed in a few subregions,
@@ -57,16 +57,7 @@
 
 
 namespace wry {
-    
-    inline void garbage_collected_scan(std::monostate) {
-        // no-op
-    }
-    
-    namespace _detail {
-        
-        
-    }
-    
+            
     namespace array_mapped_trie {
         
 #pragma mark - Binary tools

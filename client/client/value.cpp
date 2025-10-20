@@ -26,6 +26,7 @@ namespace wry {
         return ((const _short_string_t&)self._data).as_string_view();
     }
     
+    /*
     Value& operator++(Value& self) {
         self += 1;
         return self;
@@ -65,6 +66,7 @@ namespace wry {
     X(>>)
     
 #undef X
+     */
     
 #define X(Y)\
     Value operator Y (int64_t left, const Value& right) {\
@@ -98,6 +100,7 @@ namespace wry {
     
 #undef X
     
+    /*
     size_t hash(const Value& self) {
         switch (_value_tag(self)) {
             case VALUE_TAG_OBJECT: {
@@ -118,6 +121,7 @@ namespace wry {
                 abort();
         }
     }
+     */
     
     Value value_make_integer_with(std::int64_t z) {
         Value result;
@@ -240,7 +244,7 @@ namespace wry {
             assert(value_size(t) == i);
             assert(!value_contains(t, v[i]));
             assert(value_is_null(value_find(t, v[i])));
-            assert(hash(v[i]) == hash(Value(v[i])));
+            // assert(hash(v[i]) == hash(Value(v[i])));
             assert(value_is_null(value_insert_or_assign(t, v[i], v[i])));
             assert(value_size(t) == i + 1);
             assert(value_contains(t, v[i]));
@@ -351,7 +355,7 @@ namespace wry {
         return self ? self->_value_size() : 0;
     }
     
-    size_t value_size(const Value& self) {
+    size_t value_size(Value self) {
         switch (_value_tag(self)) {
             case VALUE_TAG_OBJECT:
                 return self._data ? size(_value_as_object(self)) : 0;
@@ -362,7 +366,7 @@ namespace wry {
         }
     }
     
-    bool value_contains(const Value& self, Value key) {
+    bool value_contains(Value self, Value key) {
         switch (_value_tag(self)) {
             case VALUE_TAG_OBJECT:
                 return self._data && contains(_value_as_object(self), key);
@@ -372,8 +376,8 @@ namespace wry {
     }
     
     
-    _value_subscript_result_t Value::operator[](Value key) {
-        return {*this, key};
+    Value Value::operator[](Value key) const {
+        abort();
     }
     
     
@@ -385,6 +389,7 @@ namespace wry {
     
     
     
+    /*
     _value_subscript_result_t::operator Value() && {
         return find(_value_as_object(container), key);
     }
@@ -397,7 +402,7 @@ namespace wry {
     _value_subscript_result_t&& _value_subscript_result_t::operator=(_value_subscript_result_t&& desired) && {
         return std::move(*this).operator=((Value)std::move(desired));
     }
-
+     */
     
 
     
@@ -431,21 +436,21 @@ namespace wry {
     HeapString::HeapString() {
     }
     
-    Value value_insert_or_assign(Value& self, Value key, Value value) {
+    Value value_insert_or_assign(Value self, Value key, Value value) {
         return insert_or_assign(_value_as_object(self), key, value);
     }
 
     
-    Value value_find(const Value& self, Value key) {
+    Value value_find(Value self, Value key) {
         return find(_value_as_object(self), key);
     }
     
-    Value value_erase(Value& self, Value key) {
+    Value value_erase(Value self, Value key) {
         return erase(_value_as_object(self), key);
     }
 
         
-    void debug(const Value& self) {
+    void debug(Value self) {
         switch (_value_tag(self)) {
             case VALUE_TAG_BOOLEAN:
                 return (void)printf("%s\n", value_as_boolean(self) ? "TRUE" : "FALSE");
@@ -552,8 +557,8 @@ namespace wry {
     size_t HeapValue::_value_size() const { return 0; }
     bool HeapValue::_value_contains(Value key) const { return false; }
     Value HeapValue::_value_find(Value key) const { return value_make_error(); }
-    Value HeapValue::_value_insert_or_assign(Value key, Value value) { return value_make_error(); }
-    Value HeapValue::_value_erase(Value key) { return value_make_error(); }
+    Value HeapValue::_value_insert_or_assign(Value key, Value value) const { return value_make_error(); }
+    Value HeapValue::_value_erase(Value key) const { return value_make_error(); }
     
 
     
@@ -565,16 +570,16 @@ namespace wry {
     Value HeapValue::_value_rshift(Value right) const { return value_make_error(); }
     Value HeapValue::_value_lshift(Value right) const { return value_make_error(); }
 
-    void HeapInt64::_garbage_collected_shade() const {
-        abort();
-        //Color expected = Color::WHITE;
-        //(void) color.compare_exchange(expected, Color::BLACK);
-    }
+//    void HeapInt64::_garbage_collected_shade() const {
+//        abort();
+//        //Color expected = Color::WHITE;
+//        //(void) color.compare_exchange(expected, Color::BLACK);
+//    }
     
     void HeapInt64::_garbage_collected_scan() const {
-        fprintf(stderr, "scanned a weak ");
-        _garbage_collected_debug();
-        abort();
+        // fprintf(stderr, "scanned a weak ");
+        // _garbage_collected_debug();
+        // abort();
     }
 
 

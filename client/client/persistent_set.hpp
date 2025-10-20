@@ -16,13 +16,7 @@
 #include "utility.hpp"
 
 namespace wry {
-    
-    template<typename Key, typename Compare>
-    void garbage_collected_scan(const std::set<Key, Compare>& s) {
-        for (const Key& k : s)
-            garbage_collected_scan(k);
-    }
-    
+        
     template<typename Key>
     struct PersistentSet {
         

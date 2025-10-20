@@ -32,7 +32,6 @@ namespace wry {
         
         virtual void _garbage_collected_shade() const override final;
         virtual void _garbage_collected_scan() const override final;
-        virtual size_t _garbage_collected_hash() const override final { return _hash; }
         virtual void _garbage_collected_debug() const override final;
 
         virtual const HeapString* _ctrie_any_find_or_emplace2(const _ctrie::INode* in, const _ctrie::LNode* ln) const override final;
@@ -44,7 +43,7 @@ namespace wry {
     }; // struct HeapString
     
     
-    template<size_t N, typename>
+    template<size_t N> requires (N > 0)
     constexpr Value::Value(const char (&ntbs)[N]) {
         const size_t M = N - 1;
         assert(ntbs[M] == '\0');
