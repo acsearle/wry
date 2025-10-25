@@ -13,7 +13,7 @@ namespace wry::coroutine {
     
     // This is the first stab at a coroutine-based task system.
     
-    BlockingConcurrentQueue<std::coroutine_handle<>> global_work_queue;
+    BlockingDeque<std::coroutine_handle<>> global_work_queue;
     
     // Note that while we wake one waiter when adding one work unit, we don't
     // reserve that work for that waiter; instead another thread might complete
@@ -48,7 +48,7 @@ namespace wry::coroutine {
     }
     
     void schedule_coroutine_handle(std::coroutine_handle<> handle) {
-        global_work_queue.push(handle);
+        global_work_queue.push_back(handle);
     }
         
     void worker_thread_loop() {
@@ -59,7 +59,7 @@ namespace wry::coroutine {
             mutator_become_with_name("Wn");
             epoch::pin_this_thread();
             std::coroutine_handle<> handle = {};
-            while (global_work_queue.try_pop(handle)) {
+            while (global_work_queue.try_pop_front(handle)) {
                 handle.resume();
                 // TODO: We should throttle these to happen infrequently
                 mutator_handshake();

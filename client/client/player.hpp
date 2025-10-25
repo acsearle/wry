@@ -10,7 +10,7 @@
 
 #include "entity.hpp"
 #include "mutex.hpp"
-#include "queue.hpp"
+#include "concurrent_queue.hpp"
 
 namespace wry {
         

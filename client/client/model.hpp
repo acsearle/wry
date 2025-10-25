@@ -45,7 +45,9 @@ namespace wry {
         // new states that have been computed but not yet displayed
         
         // simulation state
-        World* _world;
+        // World* _world;
+        BlockingDeque<World const*> _worlds;
+        
         
         
         Player* _local_player;
@@ -85,7 +87,7 @@ namespace wry {
 
         model() {
             
-            _world = new World;
+            World* world = new World;
 
             _console.emplace_back("WryApplication");
             _console.emplace_back("");
@@ -93,27 +95,27 @@ namespace wry {
             {
                 // new player
                 Player* p = new Player;
-                _world->_entity_for_entity_id.set(p->_entity_id, p);
+                world->_entity_for_entity_id.set(p->_entity_id, p);
                 PersistentSet<EntityID> q;
-                _world->_waiting_on_time.try_get(Time{0}, q);
+                world->_waiting_on_time.try_get(Time{0}, q);
                 q.set(p->_entity_id);
-                _world->_waiting_on_time.set(Time{0}, q);
+                world->_waiting_on_time.set(Time{0}, q);
                 _local_player = p;
             }
                         
             auto insert_localized_entity = [&](LocalizedEntity const* entity_ptr) {
                 EntityID entity_id = entity_ptr->_entity_id;
                 // printf("insert_localized_entity %lld\n", entity_id.data);
-                _world->_entity_for_entity_id.set(entity_id,
+                world->_entity_for_entity_id.set(entity_id,
                                                   entity_ptr);
                 //_world->_entity_id_for_coordinate.set(entity_ptr->_location,
                 //                                      entity_id);
                 // _world->_ready.set(entity_id);
                 // TODO: clumsy
                 PersistentSet<EntityID> q;
-                _world->_waiting_on_time.try_get(Time{0}, q);
+                world->_waiting_on_time.try_get(Time{0}, q);
                 q.set(entity_id);
-                _world->_waiting_on_time.set(Time{0}, q);
+                world->_waiting_on_time.set(Time{0}, q);
             };
             
             {
@@ -164,20 +166,23 @@ namespace wry {
 //            }
 
             //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_integer_with(7));
-            _world->_value_for_coordinate.set(Coordinate{-2, -2},
+            world->_value_for_coordinate.set(Coordinate{-2, -2},
                                               value_make_integer_with((7)));
             //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_array());
             // _world->_value_for_coordinate.set(Coordinate{-2, -2}, value_make_array());
-            _world->_value_for_coordinate.set(Coordinate{0, +1},
+            world->_value_for_coordinate.set(Coordinate{0, +1},
                                               value_make_integer_with((1)));
-            _world->_value_for_coordinate.set(Coordinate{0, +2},
+            world->_value_for_coordinate.set(Coordinate{0, +2},
                                               value_make_integer_with((2)));
-            _world->_value_for_coordinate.set(Coordinate{0, +3},
+            world->_value_for_coordinate.set(Coordinate{0, +3},
                                               value_make_integer_with((3)));
-            _world->_value_for_coordinate.set(Coordinate{0, +4},
+            world->_value_for_coordinate.set(Coordinate{0, +4},
                                               value_make_opcode(OPCODE_FLIP_FLOP));
-            _world->_value_for_coordinate.set(Coordinate{0, +5},
+            world->_value_for_coordinate.set(Coordinate{0, +5},
                                               value_make_integer_with((5)));
+            
+            _worlds.push_back(world);
+            
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();
 

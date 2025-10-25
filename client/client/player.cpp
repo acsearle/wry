@@ -36,7 +36,7 @@ namespace wry {
         tx->wait_on_time(context->_world->_time + 1);
         
         Action action = {};
-        if (_queue.pop_front(action)) {
+        if (_queue.try_pop_front(action)) {
             switch (action.tag) {
                 case Player::Action::NONE:
                     break;

@@ -712,9 +712,9 @@ namespace wry {
             
             //auto t1 = std::chrono::steady_clock::now();
             //
-            //printf("C0:     marked %zd\n", trace_count + mark_count);
-            //printf("C0:     deleted %zd\n", delete_count);
-            //printf("C0:     in %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+            // printf("C0:     marked %zd\n", trace_count + mark_count);
+            // printf("C0:     deleted %zd\n", delete_count);
+            // printf("C0:     in %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
             
             total_deleted.fetch_add(delete_count, Ordering::RELAXED);
             

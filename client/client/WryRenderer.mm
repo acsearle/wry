@@ -836,15 +836,15 @@
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
                 Coordinate xy{i, j};
-                // auto& the_tile = _model->_world->_value_for_coordinate[xy];
+                // auto& the_tile = new_world->_value_for_coordinate[xy];
                 // the_tile = _model->_holding_value;
-                // _model->_world->_value_for_coordinate.write(xy, _model->_holding_value);
+                // new_world->_value_for_coordinate.write(xy, _model->_holding_value);
                 
                 // these notifications happen logically between steps and are
                 // excused from transactions (hopefully)
                 
-                // the_tile.notify_occupant(&_model->_world);
-                // notify_by_world_coordinate(_model->_world, xy);
+                // the_tile.notify_occupant(&new_world);
+                // notify_by_world_coordinate(new_world, xy);
                 
                 {
                     Player::Action a;
@@ -867,11 +867,11 @@
                 int i = round(_model->_mouse4.x);
                 int j = round(_model->_mouse4.y);
                 Coordinate xy{i, j};
-                // auto& the_tile = _model->_world->_value_for_coordinate[xy];
+                // auto& the_tile = new_world->_value_for_coordinate[xy];
                 // the_tile = k;
-                //_model->_world->_value_for_coordinate.write(xy, k);
-                // the_tile.notify_occupant(&_model->_world);
-                // notify_by_world_coordinate(_model->_world, xy);
+                //new_world->_value_for_coordinate.write(xy, k);
+                // the_tile.notify_occupant(&new_world);
+                // notify_by_world_coordinate(new_world, xy);
             }
         }
         
@@ -1043,10 +1043,19 @@
 
     // Advance the world state
     wry::epoch::pin_this_thread();
-    World* old_world = std::exchange(_model->_world, _model->_world->step());
-    // Write barrier
-    garbage_collected_shade(old_world);
+    World* new_world = {};
+    {
+        World const* old_world = {};
+        (void) _model->_worlds.try_pop_front(old_world);
+        assert(old_world);
+        garbage_collected_shade(old_world);
+        new_world = old_world->step();
+        _model->_worlds.push_back(new_world);
+        // World* old_world = std::exchange(new_world, new_world->step());
+        // Write barrier
+    }
     wry::epoch::unpin_this_thread();
+    assert(new_world);
 
 
     id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
@@ -1119,8 +1128,8 @@
 
     {
 
-        auto tnow = world_get_time(_model->_world);
-        auto&& entities = _model->_world->_entity_for_entity_id;
+        auto tnow = world_get_time(new_world);
+        auto&& entities = new_world->_entity_for_entity_id;
         
         NSUInteger quad_count = /*entities->data.size()*/ 10 * 4 + 1000 + 2;
         NSUInteger vertex_count = quad_count * 4;
@@ -1340,9 +1349,9 @@
                 simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
-                    //wry::Value q = _model->_world->_value_for_coordinate.read(wry::Coordinate{i, j});
+                    //wry::Value q = new_world->_value_for_coordinate.read(wry::Coordinate{i, j});
                     wry::Value q = {};
-                    (void) _model->_world->_value_for_coordinate.try_get(wry::Coordinate{i, j}, q);
+                    (void) new_world->_value_for_coordinate.try_get(wry::Coordinate{i, j}, q);
                     // printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::Coordinate{i, j}.data(), q._data);
                     if (q.is_int64_t()) {
                         coordinate = make<float4>((q.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
@@ -1444,9 +1453,9 @@
             xy.y = round(_model->_mouse4.z);
             ulong z = 0;
             memcpy(&z, &xy, 8);
-            //ulong value = _model->_world->get(z);
+            //ulong value = new_world->get(z);
             //++value;
-            //_model->_world->set(z, value);
+            //new_world->set(z, value);
             
         }
         
