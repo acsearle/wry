@@ -132,7 +132,7 @@ namespace wry {
         void release() {
             if (!_reference_count_minus_one.fetch_sub(1, Ordering::RELEASE)) {
                 _reference_count_minus_one.load(Ordering::ACQUIRE);
-                printf("%s(interface): goodbye\n", _name.c_str());
+                printf("%s: garbage collection session ends\n", _name.c_str());
                 delete this;
             }
         }
@@ -181,6 +181,8 @@ namespace wry {
         
         
         void resign() {
+            
+            printf("%s: garbage collection session resigns\n", _name.c_str());
             
             TaggedPtr<Session::Node, Session::Tag> desired{
                 new Session::Node{
@@ -254,6 +256,9 @@ namespace wry {
         
         _thread_local_session = session;
         _thread_local_color_for_allocation = get_global_color_for_allocation();
+        
+        printf("%s: garbage collection session begins\n", name);
+
         
     }
     
@@ -761,7 +766,7 @@ namespace wry {
 
 namespace wry {
     
-    const HeapString* HeapString::make(size_t hash, string_view view) {
+    const HeapString* HeapString::make(size_t hash, std::string_view view) {
         abort();
 #if 0
         return global_collector->string_ctrie->find_or_emplace(_ctrie::Query{hash, view});

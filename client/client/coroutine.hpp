@@ -14,8 +14,32 @@
 #include "atomic.hpp"
 #include "utility.hpp"
 
+#include "epoch_allocator.hpp"
+
 namespace wry::coroutine {
     
+    // Work until canceled
+    void worker_thread_loop();
+    
+    void cancel_global_work_queue();
+
+
+    // The variables held by a coroutine are inaccessible to us and thus cannot
+    // be traced by the garbage collector.
+    //
+    // TODO: Coroutines can be desugared mechanically down to ordinary
+    // structures.
+    //
+    // Coroutines use the epoch allocator for their own storage, and rely on
+    // the garbage collector epoch to keep persistent objects alive while
+    // working with them.
+    //
+    // TODO: The bump allocator epoch and the garbage collector epoch are
+    // essentially the same concept, and we can probably unify them fruitfully.
+    //
+    // TODO: Advancing the epoch is a per-frame operation, we might as well
+    // do so explicitly.
+        
     /*
      
      C++ coroutine_handle support:
@@ -73,19 +97,19 @@ namespace wry::coroutine {
         /* variables-spanning-suspend-point */
     };
     
-    std::coroutine_handle<> coroutine_handle_from(Header* header) {
+    inline std::coroutine_handle<> coroutine_handle_from(Header* header) {
         return std::coroutine_handle<>::from_address((void*)header);
     }
     
-    void resume_by_address(void* address) {
+    inline void resume_by_address(void* address) {
         __builtin_coro_resume(address);
     }
 
-    void destroy_by_address(void* address) {
+    inline void destroy_by_address(void* address) {
         __builtin_coro_destroy(address);
     }
     
-    bool is_done_by_address(void* address) {
+    inline bool is_done_by_address(void* address) {
         return __builtin_coro_done(address);
     }
     
@@ -104,17 +128,100 @@ namespace wry::coroutine {
     }
 
     
-
-    
-    
-    
-    
     void schedule_coroutine_handle_from_address(void* address);
     void schedule_coroutine_handle(std::coroutine_handle<>);
 
     constexpr inline struct _self_promise_t {} self_promise;
     
     
+    // Windows-style Events are a good fit for coroutines
+    // Credit: Lewis Baker's cppcoro
+    
+    // A manual reset event supporting a single waiter is perhaps the most
+    // simple useful coroutine primitive
+    //
+    // Stores NONSIGNALED, SIGNALED, or the address of the awaiting coroutine
+    
+    struct SingleConsumerEvent {
+        
+        enum : intptr_t {
+            NONSIGNALED = 0,
+            SIGNALED = 1,
+        };
+        Atomic<intptr_t> _state{NONSIGNALED};
+                
+        // atomically set the event and schedule any waiting coroutine
+        
+        void set() {
+            intptr_t was = _state.exchange(SIGNALED, Ordering::ACQ_REL);
+            switch (was) {
+                case NONSIGNALED:
+                    return;
+                case SIGNALED:
+                    // Don't allow this unless a compelling use case is
+                    // discovered
+                    abort();
+                    return;
+                default:
+                    // The state encodes a coroutine
+                    schedule_coroutine_handle_from_address((void*)was);
+                    return;
+            }
+        }
+               
+        // reset the event
+        void reset() {
+            intptr_t expected = SIGNALED;
+            (void) _state.compare_exchange_strong(expected, NONSIGNALED, Ordering::RELAXED, Ordering::RELAXED);
+            // Don't allow this unless a compelling use case is
+            // discovered
+            assert(expected == SIGNALED);
+        }
+        
+        struct Awaitable {
+            Atomic<intptr_t>& _state;
+            intptr_t _expected;
+            
+            bool await_ready() noexcept {
+                _expected = _state.load(Ordering::ACQUIRE);
+                // If the event is already set, just continue without suspending
+                return _expected == SIGNALED;
+            }
+            
+            bool await_suspend(std::coroutine_handle<> handle) noexcept {
+                intptr_t desired = (intptr_t)handle.address();
+                assert((desired != NONSIGNALED) && (desired != SIGNALED));
+                for (;;) switch (_expected) {
+                    case NONSIGNALED:
+                        // Atomically install the current coroutine as the awaiter
+                        if (_state.compare_exchange_weak(_expected,
+                                                         desired,
+                                                         Ordering::RELEASE,
+                                                         Ordering::ACQUIRE))
+                            return true;
+                        break;
+                    case SIGNALED:
+                        // (rare) The event was signaled before we could install
+                        // ourself, resume immediately
+                        return false;
+                    default:
+                        // (forbidden) The event is already awaited by another coroutine
+                        abort();
+                }
+            }
+            
+            void await_resume() noexcept {
+            };
+            
+        };
+        
+        // atomically wait until the event is set
+        Awaitable operator co_await() {
+            return Awaitable{_state};
+        }
+        
+    };
+
     struct Latch {
         
         enum : intptr_t {
@@ -213,14 +320,10 @@ namespace wry::coroutine {
                 
                 // match all arguments
                 static void* operator new(std::size_t count, Latch&, auto&&...) {
-                    // TODO: call latch._service etc
-                    // return arena_allocate(count);
-                    return calloc(count, 1);
+                    return bump::this_thread_state.allocate(count);
                 }
                 
                 static void operator delete(void* ptr) {
-                    // no-op
-                    free(ptr);
                 }
                 
                 Latch& _latch;
@@ -304,6 +407,93 @@ namespace wry::coroutine {
         }; // struct Latch::WillDecrement
         
     }; // struct Latch
+    
+    
+    
+    struct Mutex {
+        
+        struct Awaitable;
+
+        enum : intptr_t {
+            LOCKED = 0,
+            UNLOCKED = 1,
+        };
+                
+        Atomic<intptr_t> _state{UNLOCKED};
+        Awaitable* _awaiters = nullptr;
+        
+        struct Awaitable {
+            Atomic<intptr_t>& _state;
+            intptr_t _expected;
+            std::coroutine_handle<> _handle;
+
+            bool await_ready() noexcept {
+                _expected = UNLOCKED;
+                return _state.compare_exchange_weak(_expected,
+                                                    LOCKED,
+                                                    Ordering::ACQUIRE,
+                                                    Ordering::RELAXED);
+            }
+            
+            bool await_suspend(std::coroutine_handle<> handle) noexcept {
+                _handle = handle;
+                for (;;) {
+                    switch (_expected) {
+                        case UNLOCKED:
+                            if (_state.compare_exchange_weak(_expected, LOCKED, Ordering::ACQUIRE, Ordering::RELAXED))
+                                return false;
+                            break;
+                        default:
+                            if (_state.compare_exchange_weak(_expected,
+                                                             (intptr_t)this,
+                                                             Ordering::RELEASE,
+                                                             Ordering::RELAXED))
+                                return true;
+                            break;
+                    }
+                }
+            }
+            
+            void await_resume() noexcept {
+                // We wake up owning the mutex
+            }
+        };
+        
+        Awaitable operator co_await() {
+            return Awaitable{_state};
+        }
+              
+                
+        void unlock() {
+            for (intptr_t expected = _state.load(Ordering::RELAXED); !_awaiters;) {
+                switch (expected) {
+                    case UNLOCKED:
+                        abort();
+                    case LOCKED:
+                        if (_state.compare_exchange_strong(expected, UNLOCKED, Ordering::RELEASE, Ordering::RELAXED))
+                            return;
+                        break;
+                    default:
+                        if (_state.compare_exchange_strong(expected, LOCKED, Ordering::ACQUIRE, Ordering::RELAXED)) {
+                            // We could reverse the list here for fairness
+                            _awaiters = (Awaitable*)expected;
+                        }
+                        break;
+                }
+            }
+            assert(_awaiters);
+            Awaitable* head = _awaiters;
+            _awaiters = (Awaitable*)(_awaiters->_expected);
+            // SAFETY: Coroutine scheduling here establishes happens-before?
+            schedule_coroutine_handle(head->_handle);
+            return;
+        }
+        
+        
+    };
+    
+    
+    
     
 } // namespace wry::coroutine
 

@@ -39,66 +39,105 @@ namespace wry::epoch {
     
     // We steal the pinning notation from crossbeam.
     
-    struct alignas(8) GlobalState {
+    struct Service {
         
-        uint16_t pins_current; // Pins in the current epoch
-        uint16_t pins_prior;   // Pins the previous epoch
-        Epoch current;         // The current epoch
-        
-        // The epoch can ADVANCE only if the previous epoch has zero pins.
-        // On advancement, existing pins move from current to previous epoch.
-        // The epoch can only advance again once all threads have unpinned or
-        // repinned into the next epoch.
-        
-        GlobalState try_advance() const {
-            if (pins_prior)
-                return *this;
-            return GlobalState {
-                0,
-                pins_current,
-                current + 1,
-            };
-        }
-        
-        GlobalState pin() const {
-            assert((uint16_t)(pins_current + 1)); // wrapping not allowed
-            return GlobalState {
-                (uint16_t)(pins_current + 1),
-                pins_prior,
-                current
-            };
-        }
-        
-        GlobalState unpin(Epoch occupied) const {
-            if (current == occupied) {
-                assert(pins_current);
-                return GlobalState {
-                    (uint16_t)(pins_current - 1),
-                    pins_prior,
-                    current
-                };
-            } else {
-                assert(current == occupied + 1);
-                assert(pins_prior);
-                return GlobalState {
-                    pins_current,
-                    (uint16_t)(pins_prior - 1),
-                    current
+        struct alignas(8) State {
+            
+            uint16_t pins_current; // Pins in the current epoch
+            uint16_t pins_prior;   // Pins the previous epoch
+            Epoch current;         // The current epoch
+            
+            // The epoch can ADVANCE only if the previous epoch has zero pins.
+            // On advancement, existing pins move from current to previous epoch.
+            // The epoch can only advance again once all threads have unpinned or
+            // repinned into the next epoch.
+            
+            [[nodiscard]] State try_advance() const {
+                if (pins_prior)
+                    return *this;
+                return State {
+                    .pins_current = 0,
+                    .pins_prior = pins_current,
+                    .current = current + 1,
                 };
             }
-            return *this;
-        }
-                
-    };
+            
+            [[nodiscard]] State pin() const {
+                assert((uint16_t)(pins_current + 1)); // wrapping not allowed
+                return State {
+                    .pins_current = (uint16_t)(pins_current + 1),
+                    .pins_prior = pins_prior,
+                    .current = current
+                };
+            }
+            
+            [[nodiscard]] State pin_explicit(Epoch known) const {
+                if (known == current) {
+                    assert(pins_current);
+                    assert((uint16_t)(pins_current + 1)); // wrapping not allowed
+                    return State {
+                        .pins_current = (uint16_t)(pins_current + 1),
+                        .pins_prior = pins_prior,
+                        .current = current
+                    };
+                } else if (known + 1 == current) {
+                    assert(pins_prior); // must be occupied to increment
+                    assert((uint16_t)(pins_prior + 1)); // wrapping not allowed
+                    return State {
+                        .pins_current = pins_current,
+                        .pins_prior = (uint16_t)(pins_prior + 1),
+                        .current = current
+                    };
+                } else {
+                    abort();
+                }
+            }
+            
+            State unpin(Epoch occupied) const {
+                if (occupied == current) {
+                    assert(pins_current);
+                    return State {
+                        (uint16_t)(pins_current - 1),
+                        pins_prior,
+                        current
+                    };
+                } else if (occupied + 1 == current) {
+                    assert(pins_prior);
+                    return State {
+                        pins_current,
+                        (uint16_t)(pins_prior - 1),
+                        current
+                    };
+                } else {
+                    abort();
+                }
+            }
+            
+            bool validate(Epoch occupied) const {
+                return ((occupied == current) && pins_current)
+                       || ((occupied + 1 == current) && pins_prior);
+            }
+            
+        };
     
-    struct Service {
-    
-        Atomic<GlobalState> state;
+        Atomic<State> state;
         
-        Epoch pin() {
-            GlobalState expected = state.load(Ordering::RELAXED);
+        [[nodiscard]] Epoch pin() {
+            State expected = state.load(Ordering::RELAXED);
             for (;;) {
-                GlobalState desired = expected.try_advance().pin();
+                State desired = expected.try_advance().pin();
+                if (state.compare_exchange_weak(expected,
+                                                desired,
+                                                Ordering::ACQUIRE,
+                                                Ordering::RELAXED))
+                    return desired.current;
+            }
+        }
+        
+        [[nodiscard]] Epoch pin_explicit(Epoch occupied) {
+            State expected = state.load(Ordering::RELAXED);
+            for (;;) {
+                State desired = expected.try_advance().pin_explicit(occupied);
                 if (state.compare_exchange_weak(expected,
                                                 desired,
                                                 Ordering::ACQUIRE,
@@ -108,9 +147,9 @@ namespace wry::epoch {
         }
         
         Epoch unpin(Epoch occupied) {
-            GlobalState expected = state.load(Ordering::RELAXED);
+            State expected = state.load(Ordering::RELAXED);
             for (;;) {
-                GlobalState desired = expected.unpin(occupied).try_advance();
+                State desired = expected.unpin(occupied).try_advance();
                 if (state.compare_exchange_weak(expected,
                                                 desired,
                                                 Ordering::RELEASE,
@@ -119,18 +158,32 @@ namespace wry::epoch {
             }
         }
         
-        Epoch repin(Epoch occupied) {
-            GlobalState expected = state.load(Ordering::RELAXED);
+        [[nodiscard]] Epoch repin(Epoch occupied) {
+            State expected = state.load(Ordering::RELAXED);
             for (;;) {
-                GlobalState desired = expected.unpin(occupied).try_advance().pin();
+                State desired = expected.unpin(occupied).try_advance().pin();
                 if (state.compare_exchange_weak(expected,
                                                 desired,
                                                 Ordering::ACQ_REL,
                                                 Ordering::RELAXED))
                     return desired.current;
             }
-            
         }
+
+        [[nodiscard]] Epoch repin_explicit(Epoch occupied) {
+            State expected = state.load(Ordering::RELAXED);
+            for (;;) {
+                assert(expected.validate(occupied));
+                State desired = expected.try_advance();
+                if (state.compare_exchange_weak(expected,
+                                                desired,
+                                                Ordering::ACQ_REL,
+                                                Ordering::RELAXED))
+                    return desired.current;
+            }
+        }
+
+        
         
     }; // struct Service
     

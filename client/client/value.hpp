@@ -16,9 +16,6 @@
 
 namespace wry {
     
-    // TODO: which string view?
-    using std::string_view;
-        
     struct Value {
         
         uint64_t _data = {};
@@ -39,7 +36,7 @@ namespace wry {
         constexpr Value(const char*);
         template<std::size_t N> requires (N > 0)
         constexpr Value(const char (&ntbs)[N]);
-        Value(string_view);
+        Value(std::string_view);
         
         // TODO: call syntax
         // Value operator()(/* args type? */) const;
@@ -72,7 +69,7 @@ namespace wry {
     constexpr Value value_make_null();
     constexpr Value value_make_empty();
     Value value_make_string_with(const char* ntbs);
-    Value value_make_string_with(string_view);
+    Value value_make_string_with(std::string_view);
     Value value_make_array();
     Value value_make_table();
     constexpr Value value_make_true();
@@ -93,8 +90,8 @@ namespace wry {
     constexpr std::pair<int, int> value_as_enum(Value);
     constexpr int64_t value_as_int64_t(Value);
     constexpr int64_t value_as_int64_t_else(Value, int64_t);
-    string_view value_as_string_view(Value);
-    string_view value_as_string_view_else(Value, string_view);
+    std::string_view value_as_string_view(Value);
+    std::string_view value_as_string_view_else(Value, std::string_view);
     constexpr int value_as_opcode(Value);
     
     bool value_contains(Value, Value key);
@@ -111,7 +108,7 @@ namespace wry {
     
     Value operator+(const Value&) ;
     Value operator-(const Value&) ;
-    // bool operator!(const Value&) ;
+    bool operator!(const Value&) ;
     Value operator~(const Value&) ;
     
     Value operator*(const Value&, const Value&) ;

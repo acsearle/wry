@@ -1033,20 +1033,20 @@
 
 - (void)render
 {
-    _model->shade_roots();
-    wry::mutator_handshake();
-    // wry::ArenaAllocator::reset();
 
     using namespace ::simd;
     using namespace ::wry;
 
-    // advance the simulation
-    
+    // Service the garbage collector
     _model->shade_roots();
+    wry::mutator_handshake();
 
-    wry::epoch::pin();
-    _model->_world = _model->_world->step();
-    wry::epoch::unpin();
+    // Advance the world state
+    wry::epoch::pin_this_thread();
+    World* old_world = std::exchange(_model->_world, _model->_world->step());
+    // Write barrier
+    garbage_collected_shade(old_world);
+    wry::epoch::unpin_this_thread();
 
 
     id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];

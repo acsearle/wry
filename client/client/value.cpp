@@ -26,6 +26,10 @@ namespace wry {
         return ((const _short_string_t&)self._data).as_string_view();
     }
     
+    bool operator!(Value const&) {
+        abort();
+    }
+    
     /*
     Value& operator++(Value& self) {
         self += 1;

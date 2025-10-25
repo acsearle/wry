@@ -11,13 +11,16 @@
 #include <filesystem>
 
 #import <AppKit/AppKit.h>
-
 #include <sqlite3.h>
 
-#import "WryDelegate.h"
+#include "atomic.hpp"
+#include "vector.hpp"
 
 #include "model.hpp"
 #include "test.hpp"
+#include "coroutine.hpp"
+
+#import "WryDelegate.h"
 
 
 int main(int argc, const char** argv) {
@@ -37,11 +40,16 @@ int main(int argc, const char** argv) {
         wry::collector_run_on_this_thread();
     });
     wry::mutator_become_with_name("main thread");
-    
-    
+        
     // execute unit tests on a background thread
     
     std::thread tests(wry::run_tests);
+    
+    
+    std::vector<std::thread> workers;
+    for (int i = 0; i != 4; ++i) {
+        workers.emplace_back(&wry::coroutine::worker_thread_loop);
+    }
     
     @autoreleasepool {
         
@@ -68,10 +76,18 @@ int main(int argc, const char** argv) {
         
     } // @autoreleasepool
     
-    tests.join();
+    wry::coroutine::cancel_global_work_queue();
+    while (!workers.empty()) {
+        printf("main waiting to join a worker thread\n");
+        workers.back().join();
+        workers.pop_back();
+    }
     
+    printf("main waiting to join unit tests thread\n");
+    tests.join();
     wry::mutator_resign();
     wry::collector_cancel();
+    printf("main waiting to join the collector thread\n");
     collector_thread.join();
     
     return EXIT_SUCCESS;

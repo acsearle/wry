@@ -37,6 +37,7 @@ namespace wry {
         struct LocalState {
             bump::Slab* _Nullable bump_alternate;
             Epoch known;
+            bool is_pinned;
             
             // The epoch allocator wraps the bump allocator with management
             // that
@@ -48,14 +49,20 @@ namespace wry {
             }
             
             void pin() {
+                assert(!is_pinned);
                 _update_with(allocator_global_service.pin());
+                is_pinned = true;
+                
             }
             
             void unpin() {
+                assert(is_pinned);
                 _update_with(allocator_global_service.unpin(known));
+                is_pinned = false;
             }
             
             void repin() {
+                assert(is_pinned);
                 _update_with(allocator_global_service.repin(known));
             }
             
@@ -63,21 +70,58 @@ namespace wry {
         
         inline constinit thread_local LocalState allocator_local_state = {};
         
-        inline void pin() {
+        // Keep the epoch pinned while a thread is awake
+        
+        inline void pin_this_thread() {
             allocator_local_state.pin();
         }
         
-        inline void unpin() {
+        inline void unpin_this_thread() {
             allocator_local_state.unpin();
         }
         
-        inline void repin() {
+        inline void repin_this_thread() {
             allocator_local_state.repin();
+        }
+        
+        // Pin the local thread's known epoch again.  The returned epoch can
+        // be used to unpin that epoch on a different thread.
+        //
+        // This is used to tie the epoch to a non-thread scope, such as the
+        // lifetime of the root of a tree of jobs.
+        
+        [[nodiscard]] inline auto
+        pin_explicit() -> Epoch {
+            assert(allocator_local_state.is_pinned);
+            return allocator_global_service.pin_explicit(allocator_local_state.known);
+        }
+
+        inline auto
+        unpin_explicit(Epoch pinned) -> Epoch {
+            assert(allocator_local_state.is_pinned);
+            return allocator_global_service.unpin(pinned);
+        }
+
+        [[nodiscard]] inline auto
+        repin_explicit(Epoch pinned) -> Epoch {
+            assert(allocator_local_state.is_pinned);
+            return allocator_global_service.repin_explicit(pinned);
+        }
+
+        inline void* _Nonnull allocate(size_t count) {
+            assert(allocator_local_state.is_pinned);
+            return bump::allocate(count);
+        }
+        
+        inline void deallocate(void* _Nullable) {
+            assert(allocator_local_state.is_pinned);
+            // no op
         }
         
     } // nampespace wry::epoch
     
     using EpochAllocated = BumpAllocated;
+    template<typename T> using EpochAllocator = BumpAllocator<T>;
     
 } // namespace wry
 #endif /* epoch_allocator_hpp */

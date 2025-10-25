@@ -104,6 +104,17 @@ namespace wry {
             return PersistentStack{ new Node(nullptr, FWD(args)...) };
         }
         
+        [[nodiscard]] auto
+        drop(size_t n) const -> PersistentStack {
+            auto a = _head;
+            for (;;) {
+                if (!a || !n)
+                    return PersistentStack{a};
+                --n;
+                a = a->_next;                
+            }
+        }
+        
         // some gross debugging methods
         
         size_t size() const {

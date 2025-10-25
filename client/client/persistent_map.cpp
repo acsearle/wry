@@ -96,6 +96,7 @@ namespace wry {
                 
                 
                 m.insert_or_assign(k, v);
+                garbage_collected_shade(p);
                 p.set(k, v);
                 
                 
@@ -108,11 +109,12 @@ namespace wry {
                     printf("expected to find {%llx, %x}, found {%llx, %x}\n", k, v, k, u);
                     abort();
                 }
-                mutator_handshake();
-                garbage_collected_shade(p);
+                if (!(i & 255))
+                    mutator_handshake();
                 // printf("PMT %d\n", i);
             }
             for (uint64_t k = 0; k != 65536; ++k) {
+                garbage_collected_shade(p);
                 if (m.count(k)) {
                     int v = {};
                     bool result = p.try_get(k, v);
@@ -122,8 +124,8 @@ namespace wry {
                     int v = {};
                     assert(!p.try_get(k, v));
                 }
-                mutator_handshake();
-                garbage_collected_shade(p);
+                if (!(k & 255))
+                    mutator_handshake();
                 // printf("PMT %llu\n", k);
             }
             

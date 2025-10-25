@@ -190,8 +190,8 @@ namespace wry {
                 }
             }
             
-            void* _Nonnull allocate(size_t count, size_t
-                                    alignment = alignof(std::max_align_t))
+            void* _Nonnull allocate(size_t count,
+                                    size_t alignment = alignof(std::max_align_t))
             {
                 intptr_t new_end = bump_down(_begin, _end, count, alignment);
                 if (new_end) [[likely]] {
@@ -247,11 +247,20 @@ namespace wry {
         
         inline constinit thread_local State this_thread_state = {};
         
+        inline void* _Nonnull allocate(std::size_t count, size_t alignment = alignof(std::max_align_t)) {
+            return this_thread_state.allocate(count, alignment);
+        }
+
     } // namespace wry::bump
     
     
+    // Base class for BumpAllocated objects
     struct BumpAllocated {
-                
+
+        void* _Nonnull operator new(std::size_t size) {
+            return bump::this_thread_state.allocate(size);
+        }
+
         void* _Nonnull operator new(std::size_t size, std::align_val_t align) {
             return bump::this_thread_state.allocate(size, (size_t)align);
         }
@@ -264,6 +273,21 @@ namespace wry {
             abort();
         }
 
+    };
+    
+    // STL-compatible allocator
+    template<typename T>
+    struct BumpAllocator {
+        
+        typedef T value_type;
+        
+        [[nodiscard]] T* _Nonnull allocate(size_t count) const {
+            return bump::allocate(count * sizeof(T), alignof(T));
+        }
+        
+        void deallocate(T* _Nullable, size_t) const {
+            // no-op
+        }
     };
     
     inline void garbage_collected_scan(BumpAllocated const* _Nullable) {
