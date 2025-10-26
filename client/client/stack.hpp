@@ -35,6 +35,10 @@ namespace wry {
             return result;
         }
         
+        bool debug_is_empty() const {
+            return c.empty();
+        }
+        
     };
     
     template<typename T>

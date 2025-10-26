@@ -10,11 +10,13 @@
 
 #include <cassert>
 #include <coroutine>
+#include <deque>
 
 #include "atomic.hpp"
 #include "utility.hpp"
 
 #include "epoch_allocator.hpp"
+#include "mutex.hpp"
 
 namespace wry::coroutine {
     
@@ -491,6 +493,147 @@ namespace wry::coroutine {
         
         
     };
+    
+    
+    
+
+    template<typename T>
+    struct CoroutineBlockingDeque {
+        
+        struct Awaitable;
+        
+        mutable std::mutex _mutex;
+        std::deque<T, EpochAllocator<T>> _deque;
+        bool _is_canceled;
+        std::deque<Awaitable*, EpochAllocator<Awaitable*>> _waiting;
+        
+        void push_back(T item) {
+            std::unique_lock guard(_mutex);
+            if (_waiting.empty()) {
+                _deque.push_back(std::move(item));
+            } else {
+                assert(_deque.empty());
+                Awaitable* awaitable = _waiting.front();
+                _waiting.pop_front();
+                *(awaitable->_victim) = std::move(item);
+                awaitable->_result = true;
+                schedule_coroutine_handle(awaitable->_coroutine_handle);
+            }
+        }
+
+        void push_front(T item) {
+            std::unique_lock guard(_mutex);
+            if (_waiting.empty()) {
+                _deque.push_front(std::move(item));
+            } else {
+                assert(_deque.empty());
+                Awaitable* awaitable = _waiting.front();
+                _waiting.pop_front();
+                *(awaitable->_victim) = std::move(item);
+                awaitable->_result = true;
+                schedule_coroutine_handle(awaitable->_coroutine_handle);
+            }
+        }
+        
+        bool try_pop_front(T& victim) {
+            std::unique_lock guard(_mutex);
+            bool result = !_deque.empty();
+            if (result) {
+                victim = std::move(_deque.front());
+                _deque.pop_front();
+            }
+            return result;
+        }
+
+        bool try_pop_back(T& victim) {
+            std::unique_lock guard(_mutex);
+            bool result = !_deque.empty();
+            if (result) {
+                victim = std::move(_deque.back());
+                _deque.pop_back();
+            }
+            return result;
+        }
+
+        void cancel() {
+            std::deque<Awaitable*> waiting;
+            {
+                std::unique_lock guard(_mutex);
+                _is_canceled = true;
+                using std::swap;
+                swap(waiting, _waiting);
+                assert(_waiting.empty());
+            }
+            for (Awaitable* awaitable : waiting)
+                schedule_coroutine_handle(awaitable->_coroutine_handle);
+        }
+        
+        struct Awaitable {
+            CoroutineBlockingDeque* _context;
+            T* _victim;
+            bool _result;
+            std::coroutine_handle<> _coroutine_handle;
+            
+            void await_suspend(std::coroutine_handle<> handle) noexcept {
+                // We still hold the mutex
+                // Therefore the queue is still empty
+                _coroutine_handle = handle;
+                assert(!_context->_is_canceled);
+                _context->_waiting.push_back(this);
+                _context->_mutex.unlock();
+            }
+            
+            bool await_resume() const noexcept {
+                return _result;
+            }
+            
+        };
+        
+        auto pop_front_wait(T& victim) {
+            struct PopFrontAwaitable : Awaitable {
+                
+                bool await_ready() noexcept {
+                    this->_context->_mutex.lock();
+                    if (!this->_context->_deque.empty()) {
+                        if (!this->_context->_is_canceled)
+                            return false;
+                        assert(this->_result == false);
+                    } else {
+                        *this->_victim = std::move(this->_context->_deque.front());
+                        this->_context->_deque.pop_front();
+                        this->_result = true;
+                    }
+                    this->_context->_mutex.unlock();
+                    return true;
+                }
+                
+            };
+            return PopFrontAwaitable{{this, &victim, false}};
+        };
+        
+        auto pop_back_wait(T& victim) {
+            struct PopBackAwaitable : Awaitable {
+                
+                bool await_ready() noexcept {
+                    this->_context->_mutex.lock();
+                    if (!this->_context->_deque.empty()) {
+                        if (!this->_context->_is_canceled)
+                            return false;
+                        assert(this->_result == false);
+                    } else {
+                        *this->_victim = std::move(this->_context->_deque.back());
+                        this->_context->_deque.pop_back();
+                        this->_result = true;
+                    }
+                    this->_context->_mutex.unlock();
+                    return true;
+                }
+                
+            };
+            return PopBackAwaitable{{this, &victim, false}};
+        };
+        
+    }; // CoroutineBlockingDeque
     
     
     

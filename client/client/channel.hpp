@@ -17,6 +17,9 @@
 namespace wry {
     
     // Basic blocking multi-producer multi-consumer channel
+    //
+    // Cancelation wakes all waiters and prevents further waiting, but does not
+    // interfere with push or try_pop.
     
     template<typename T>
     struct Channel {
@@ -34,18 +37,26 @@ namespace wry {
             };
         };
         
-        std::mutex _mutex;
+        mutable std::mutex _mutex;
         std::condition_variable _condition_variable;
         std::queue<T> _queue;
         ptrdiff_t _waiting = 0;
+        bool _is_canceled;
         
         bool was_empty() const {
-            bool result;
+            std::unique_lock lock{_mutex};
+            return _queue.empty();
+        }
+        
+        void cancel() {
+            ptrdiff_t waiting;
             {
                 std::unique_lock lock{_mutex};
-                result = _queue.empty();
+                waiting = _waiting;
+                _waiting = 0;
+                _is_canceled = true;
             }
-            return result;
+            _condition_variable.notify_all();
         }
         
         void push(T x) {
@@ -54,9 +65,11 @@ namespace wry {
                 std::unique_lock lock{_mutex};
                 _queue.push(std::move(x));
                 waiting = _waiting;
+                if (_waiting)
+                    --_waiting;
             }
             if (waiting) {
-                _condition_variable.notify_all();
+                _condition_variable.notify_one();
             }
         }
         
@@ -70,56 +83,41 @@ namespace wry {
             return result;
         }
         
-        void pop_wait(T& victim) {
+        // pop_wait is not fair; the longest-waiting thread is not necessarily
+        // the one awoken by push, and the thread that is awoken does not
+        // necessarily win the race to pop that (or any) element
+        bool pop_wait(T& victim) {
             std::unique_lock lock{_mutex};
             for (;;) {
-                if (_queue.empty()) {
-                    ++_waiting;
-                    _condition_variable.wait(lock);
-                    --_waiting;
-                } else {
-                    victim = std::move(_queue.front());
-                    _queue.pop();
-                    return;
-                }
-            }
-        }
-        
-        void hack_wait_until(auto absolute_time) {
-            std::unique_lock lock{_mutex};
-            while (_queue.empty()) {
-                ++_waiting;
-                auto t0 = std::chrono::high_resolution_clock::now();
-                printf("hack_wait_nonempty: waiting\n");
-                std::cv_status result = _condition_variable.wait_until(lock, std::move(absolute_time));
-                auto t1 = std::chrono::high_resolution_clock::now();
-                --_waiting;
-                printf("hack_wait_nonempty: waited %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
-                if (result == std::cv_status::timeout) {
-                    return;
-                }
-            }
-        }
-        
-        bool pop_wait_until(T& victim, auto absolute_time) {
-            std::unique_lock lock{_mutex};
-            for (;;) {
-                if (_queue.empty()) {
-                    ++_waiting;
-                    auto t0 = std::chrono::high_resolution_clock::now();
-                    std::cv_status result = _condition_variable.wait_until(lock, absolute_time);
-                    auto t1 = std::chrono::high_resolution_clock::now();
-                    --_waiting;
-                    printf("%s: waited %.3gs\n", __PRETTY_FUNCTION__, std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
-                    if (result == std::cv_status::timeout)
-                        return false;
-                } else {
+                if (!_queue.empty()) {
                     victim = std::move(_queue.front());
                     _queue.pop();
                     return true;
                 }
+                if (_is_canceled)
+                    return false;
+                ++_waiting;
+                _condition_variable.wait(lock);
             }
         }
+                
+        bool pop_wait_until(T& victim, auto absolute_time) {
+            std::unique_lock lock{_mutex};
+            for (;;) {
+                if (!_queue.empty()) {
+                    victim = std::move(_queue.front());
+                    _queue.pop();
+                    return true;
+                }
+                if (_is_canceled)
+                    return false;
+                ++_waiting;
+                std::cv_status result = _condition_variable.wait_until(lock, absolute_time);
+                if (result == std::cv_status::timeout)
+                    return false;
+            }
+        }
+
         
     }; // Channel
     

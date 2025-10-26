@@ -48,12 +48,6 @@ namespace wry {
     
 #pragma mark - Global and thread_local variables
     
-    // Globals are unfashionable but passing a context pointer to every
-    // function is worse.  Think of the thread local storage register as an
-    // implicit monadic argument if you wish.
-    //
-    // They are constinit to avoid the static initialization order fiasco
-    
     constinit static Atomic<Session*> _global_new_sessions;
     constinit static Atomic<Color> _global_atomic_color_for_allocation;
     
@@ -61,8 +55,6 @@ namespace wry {
     constinit thread_local Color _thread_local_color_did_shade;
     constinit thread_local Session* _thread_local_session;
     constinit thread_local Bag<const GarbageCollected*> _thread_local_new_objects;
-    // TODO: Bag destructor at thread exit?  Should be empty when there is no
-    // Session in progress.
     
     Color get_global_color_for_allocation() {
         return _global_atomic_color_for_allocation.load(Ordering::RELAXED);
@@ -81,8 +73,6 @@ namespace wry {
     // thread_local pointer, to a heap allocated struct of counters, that is
     // itself part of a global intrusive linked list?
     static constinit Atomic<ptrdiff_t> total_deleted;
-    
-    
     
     // A session exists between a thread becoming a mutator, multiple handshakes,
     // and resiging mutator status.  Name it Mutator?
@@ -227,14 +217,38 @@ namespace wry {
             
         } // void Session::resign()
         
+        
+        
+        auto wait_for_report() -> TaggedPtr<Node, Tag> {
+            TaggedPtr<Node, Tag> expected = _atomic_tagged_head.load(Ordering::RELAXED);
+            TaggedPtr<Node, Tag> desired = {};
+            for (;;) switch (expected.tag) {
+                case Tag::COLLECTOR_SHOULD_CONSUME:
+                case Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
+                    desired = { nullptr, expected.tag };
+                    return _atomic_tagged_head.exchange(desired,
+                                                        Ordering::ACQUIRE);
+                case Tag::MUTATOR_SHOULD_PUBLISH: {
+                    desired = { nullptr, Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY };
+                    if (!_atomic_tagged_head.compare_exchange_weak(expected,
+                                                                   desired,
+                                                                   Ordering::RELAXED,
+                                                                   Ordering::RELAXED))
+                        break;
+                    expected = desired;
+                } [[fallthrough]];
+                case Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
+                    _atomic_tagged_head.wait(expected, Ordering::RELAXED);
+                    break;
+            } // for (;;) switch (expected.tag)
+        } // get_report
+        
     }; // struct Session
     
     
-    using Tracer = Stack<const GarbageCollected*>;
-    
     void record_child(void* tracer, const GarbageCollected* child) {
         assert(child);
-        ((Tracer*)tracer)->push(child);
+        ((Stack<const GarbageCollected*>*)tracer)->push(child);
     }
     
     
@@ -252,7 +266,8 @@ namespace wry {
         session->_next = _global_new_sessions.load(Ordering::RELAXED);
         while (!_global_new_sessions.compare_exchange_weak(session->_next, session, Ordering::RELEASE, Ordering::RELAXED))
             ;
-        _global_new_sessions.notify_one();
+        if (!session->_next)
+            _global_new_sessions.notify_one();
         
         _thread_local_session = session;
         _thread_local_color_for_allocation = get_global_color_for_allocation();
@@ -282,15 +297,15 @@ namespace wry {
     }
     
     
-    constinit Stack<const GarbageCollected*> global_children;
+    constinit Stack<GarbageCollected const*> global_children;
     
-    void garbage_collected_scan(const GarbageCollected* child) {
+    void garbage_collected_scan(GarbageCollected const* child) {
         if (child) {
             global_children.push(child);
         }
     }
     
-    void garbage_collected_scan_weak(const GarbageCollected* child) {
+    void garbage_collected_scan_weak(GarbageCollected const* child) {
         abort();
         // if (child) {
         //     global_children.push(child);
@@ -319,7 +334,7 @@ namespace wry {
             
         }; // struct RingBuffer<T, N, MASK>
         
-        std::vector<Session*> _known_mutator_interfaces;
+        std::vector<Session*> _sessions;
         
         RingBuffer<Color, 4> _color_history;
         RingBuffer<Color, 4> _shade_history;
@@ -334,6 +349,8 @@ namespace wry {
         
         Atomic<bool> _is_canceled;
         
+        Stack<const GarbageCollected*> _greystack;
+        
         void loop_until_canceled() {
             
             // The collector also registers itself as a mutator:
@@ -344,15 +361,15 @@ namespace wry {
                 };
                 _thread_local_session = session;
                 _thread_local_color_for_allocation = get_global_color_for_allocation();
-                _known_mutator_interfaces.push_back(session);
+                _sessions.push_back(session);
             }
             
-            printf("C0: go\n");
+            printf("C0: garbage collector starts\n");
             
             while (!_is_canceled.load(Ordering::RELAXED)) {
                 
                 // The collector at least knows about itself-as-mutator
-                assert(!_known_mutator_interfaces.empty());
+                assert(!_sessions.empty());
                 
                 if (_known_objects.debug_is_empty()) {
                     printf("C0: No known objects!\n");
@@ -363,73 +380,29 @@ namespace wry {
                 // A thread report covers events in a given interval
                 
                 {
-                    //printf("C0: There are %zd known mutators\n", _known_mutator_interfaces.size());
-                    size_t number_of_new_objects = 0;
-                    size_t number_of_resignations = 0;
                     Color did_shade = 0;
-                    
-                    // TODO: keep the Sessions in a linked list?
-                    // Delete them on the fly?
-                    for (auto& u : _known_mutator_interfaces) {
+                    for (auto& u : _sessions) {
                         auto& v = u->collector_state;
-                        //printf("C0: try_pop \"%s\"\n", u->_name.c_str());
-                        TaggedPtr<Session::Node, Session::Tag> expected = {};
-                        expected = u->_atomic_tagged_head.load(Ordering::RELAXED);
-                    SWITCH_ON_EXPECTED_TAG:
-                        switch (expected.tag) {
-                            case Session::Tag::COLLECTOR_SHOULD_CONSUME:
-                            case Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
-                                expected = u->_atomic_tagged_head.exchange(TaggedPtr<Session::Node, Session::Tag>{
-                                    nullptr,
-                                    expected.tag
-                                },
-                                                                           Ordering::ACQUIRE);
-                                break;
-                            case Session::Tag::MUTATOR_SHOULD_PUBLISH: {
-                                TaggedPtr<Session::Node, Session::Tag> desired{
-                                    nullptr,
-                                    Session::Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY
-                                };
-                                if (u->_atomic_tagged_head.compare_exchange_weak(expected,
-                                                                                 desired,
-                                                                                 Ordering::RELAXED,
-                                                                                 Ordering::RELAXED)) {
-                                    expected = desired;
-                                } else {
-                                    goto SWITCH_ON_EXPECTED_TAG;
-                                }
-                            } [[fallthrough]];
-                            case Session::Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
-                                // TODO: timeout ?
-                                u->_atomic_tagged_head.wait(expected, Ordering::RELAXED);
-                                goto SWITCH_ON_EXPECTED_TAG;
-                        } // switch (expected.tag)
-                        Session::Node* node = expected.ptr;
+                        // TODO: This is blocking
+                        TaggedPtr<Session::Node, Session::Tag> report = u->wait_for_report();
+                        Session::Node* node = report.ptr;
                         while (node) {
                             did_shade |= node->color_did_shade;
-                            v.is_done = v.is_done || (expected.tag == Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE);
-                            number_of_new_objects += node->allocations.debug_size();
+                            v.is_done = v.is_done || (report.tag == Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE);
                             _known_objects.splice(std::move(node->allocations));
                             delete std::exchange(node, node->_next);
-                        }
-                        if (v.is_done) {
-                            ++number_of_resignations;
                         }
                     }
                     // We only care about the combined shading history of all
                     // threads in the era
                     _shade_history.push_front(did_shade);
-                    
-                    //printf("C0: ack %zd resignations\n", number_of_resignations);
-                    //printf("C0: ack %zd new objects\n", number_of_new_objects);
                 }
                 
 #pragma mark Process resignations from mutator status
                 
-                std::erase_if(_known_mutator_interfaces, [](Session* x) -> bool {
+                std::erase_if(_sessions, [](Session* x) -> bool {
                     bool is_done = x->collector_state.is_done;
                     if (is_done) {
-                        printf("C0: forgetting a mutator\n");
                         x->release();
                     }
                     return is_done;
@@ -437,11 +410,8 @@ namespace wry {
                 
 #pragma mark Compute new state
                 
-                //Color old_color_for_allocation = _color_for_allocation;
-                //Color old_mask_for_tracing = _mask_for_tracing;
                 Color old_mask_for_deleting = _mask_for_deleting;
                 Color old_mask_for_clearing = _mask_for_clearing;
-                
                 
                 {
                     // When all threads have acknowledged k-grey, publish k-black
@@ -490,38 +460,26 @@ namespace wry {
                     _color_in_use |= new_grey << 32;
                 }
                 
-#pragma mark Publish the color for allocation and timestamp
+#pragma mark Publish the new color for allocation
                 
                 _color_history.push_front(_color_for_allocation);
                 _global_atomic_color_for_allocation.store(_color_for_allocation, Ordering::RELAXED);
                 
                 {
                     Session* expected = nullptr;
-                    if ((_known_mutator_interfaces.size() == 1) && _known_objects.debug_is_empty()) {
-                        printf("C0: Waiting for work\n");
-                        // _new_mutator_interfaces.hack_wait_until(collector_deadline);
+                    if ((_sessions.size() == 1) && _known_objects.debug_is_empty()) {
                         _global_new_sessions.wait(expected, Ordering::RELAXED);
                         if (_is_canceled.load(Ordering::RELAXED))
                             break;
-                        printf("C0: Woke\n");
                     }
-                    //while (_new_mutator_interfaces.try_pop(victim)) {
-                    //_known_mutator_interfaces.push_back(std::move(victim));
-                    //printf("C0: A mutator enrolled\n");
-                    //}
                     expected = _global_new_sessions.exchange(nullptr, Ordering::ACQUIRE);
                     while (expected) {
-                        _known_mutator_interfaces.push_back(expected);
-                        //printf("C0: A mutator enrolled\n");
+                        _sessions.push_back(expected);
                         expected = expected->_next;
                     }
                 }
                 
-                for (Session* p : _known_mutator_interfaces) {
-                    //MessageFromCollectorToMutator incoming = {
-                    // .color_for_allocation = _color_for_allocation,
-                    //};
-                    // p->_channel_from_collector_to_mutator.push(std::move(incoming));
+                for (Session* p : _sessions) {
                     auto expected = p->_atomic_tagged_head.load(Ordering::RELAXED);
                     // We don't care about any publications the mutator has made
                     // since we consumed them
@@ -540,7 +498,8 @@ namespace wry {
                             }
                         } break;
                         case Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
-                            // The thread is done, leave it alone
+                            // The resignation will be processed when we get the
+                            // next report
                             break;
                         case Session::Tag::MUTATOR_SHOULD_PUBLISH:
                         case Session::Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
@@ -563,11 +522,12 @@ namespace wry {
             
         } // Collector::loop
         
+        
+        
         void scan() {
             
 #pragma mark Scan all known objects
-            
-            Stack<const GarbageCollected*> greystack;
+
             Bag<const GarbageCollected*> survivors;
             
             size_t trace_count = 0;
@@ -575,7 +535,7 @@ namespace wry {
             size_t delete_count = 0;
             // auto t0 = std::chrono::steady_clock::now();
             
-            assert(greystack.c.empty());
+            assert(_greystack.debug_is_empty());
             assert(survivors.debug_is_empty());
             assert(global_children.c.empty());
             
@@ -622,7 +582,7 @@ namespace wry {
 #pragma mark Depth-first recusively trace all children
                 
                 const GarbageCollected* parent = nullptr;
-                while (greystack.try_pop(parent)) {
+                while (_greystack.try_pop(parent)) {
                     assert(parent);
                     Color parent_color = parent->_color.load(Ordering::RELAXED);
                     parent->_garbage_collected_scan();
@@ -644,7 +604,7 @@ namespace wry {
                         Color did_set = ((~before) & after);
                         if (did_set) {
                             ++mark_count;
-                            greystack.push(child);
+                            _greystack.push(child);
                         }
                     }
                 }
@@ -673,7 +633,7 @@ namespace wry {
                 bool must_trace = did_set & HIGH_MASK;
                 if (must_trace) {
                     ++trace_count;
-                    greystack.push(object);
+                    _greystack.push(object);
                 }
                 bool is_not_grey = (((before >> 32) & _mask_for_deleting) == (before & _mask_for_deleting));
                 if ((_mask_for_deleting == 0) || (before & _mask_for_deleting)) {
@@ -705,7 +665,7 @@ namespace wry {
                 
             } // loop until no objects
             
-            assert(greystack.c.empty());
+            assert(_greystack.debug_is_empty());
             assert(_known_objects.debug_is_empty());
             assert(global_children.c.empty());
             _known_objects = std::move(survivors);
@@ -719,11 +679,9 @@ namespace wry {
             total_deleted.fetch_add(delete_count, Ordering::RELAXED);
             
             
-        }
+        } // void scan()
         
-    };
-    
-    
+    }; // struct Collector
     
     static constinit Collector collector = {};
     

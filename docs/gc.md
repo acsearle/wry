@@ -1,3 +1,65 @@
+Garbage Collection
+
+
+Global state is
+- the current epoch
+- things pinning the current epoch
+- things pinning the previous epoch
+
+The global current epoch can advance when we can prove that nothing is pinning 
+the previous epoch.  We increment the epoch, and move the list of things
+that were pinning that epoch to the empty list of things pinning the previous
+epoch.
+
+We can implement pinning as a count to detect emptiness, or we can implement it
+as a list with one node per thing, and its current epoch (if any).  If we then
+observe that the list contains only the current epoch, we can advance.
+When an epoch has gone from current to prior to prior^2 we can destroy its
+objects.
+
+This requires that once there is nobody in the previous epoch, it stays that
+way.  We can accomplish this by allowing things to pin the current epoch, or to
+pin the epoch associated with another current pin.
+
+Threads pin the current epoch, note that epoch, create objects, publish them to
+other threads, and unpin the same epoch (which may now be the previous epoch).  
+Such objects will live long enough beyond the unpinning to allow other threads
+to finish accessing them, but ownership cannot be transfered to another thread
+because that other thread may be pinning the next epoch.
+
+On an already pinned thread, we can pin the epoch again, note it, transfer the
+pin and the noted epoch to another thread, and unpin it there.  This
+extends the epoch of the original thread and makes an explicit lifetime or
+scope.  For example, we can pin a thread, create the root of a tree of work,
+take a transferrable pin+epoch, and then unpin it only when the work is
+completed and all of the associated items may be collected.  In the limit of
+pinning each item individually, we are effectively reference counting the
+allocator.  Note that we can't use RAII for this since epoch allocation does
+not destroy individual objects.
+
+Taking transferrable pins from the thread epoch rather than the current epoch
+can increase the prior count but never increases it from zero.
+
+When a thread discovers that an epoch has advanced, it can discard last-but-one
+thread local resources.
+
+
+The overlapping epochs, advancing when consensus is reached, is very similar to
+the tracing collector.  Each mutator likewise enters and leaves states, and we
+defer destruction until we have consensus on the past.  The tracing collector
+does not have an incrementing epoch, but does have the color vector advancing.
+
+
+In the tracing collector, each thread allocates a Session (pin).
+
+
+
+
+
+
+
+
+
 #  Garbage Collection
 
 ## Todo

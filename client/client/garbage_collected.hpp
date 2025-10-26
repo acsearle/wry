@@ -15,6 +15,27 @@
 
 namespace wry {
     
+    // basic interface
+        
+    struct GarbageCollected;
+    
+    void garbage_collected_shade(GarbageCollected const*);
+    void garbage_collected_scan(GarbageCollected const*);
+    
+    void collector_run_on_this_thread();
+    void collector_cancel();
+
+    void mutator_become_with_name(const char*);
+    void mutator_handshake();
+    void mutator_resign();
+    void mutator_overwrote(GarbageCollected const* old_ptr);
+    void mutator_mark_root(GarbageCollected const* root_ptr);
+    
+    
+    
+    
+    
+    
     // bit operations
     
     constexpr uint64_t rotate_left(uint64_t x, int y) {
@@ -106,7 +127,6 @@ namespace wry {
     }; // struct GarbageCollected
         
 
-    auto garbage_collected_shade(GarbageCollected const* ptr) -> void;
 
     // SHADE can be called by any mutator at any time; it will turn a white
     // object to grey (with those colors as understood by the mutator) and note
@@ -119,8 +139,6 @@ namespace wry {
     // shade all GarbageCollected pointers within the object, but not to trace
     // them to other objects; that is the job of the Collector.
 
-    auto garbage_collected_scan(GarbageCollected const* self) -> void;
-
     // SCAN can only be called by the collector; it will
 
     // A compound object should ADL-define garbage_collected_scan to recursively
@@ -129,16 +147,7 @@ namespace wry {
     // report all GarbageCollected pointers within the object to the Collector,
     // but not to trace them to other objects; that is the job of the Collector.
     
-    void collector_run_on_this_thread();
-    void collector_cancel();
-    
-    // Mutator
-    
-    void mutator_become_with_name(const char*);
-    void mutator_handshake();
-    void mutator_resign();
-    void mutator_overwrote(GarbageCollected const* old_ptr);
-    void mutator_mark_root(GarbageCollected const* root_ptr);
+   
     
     // TODO:
     //
@@ -152,44 +161,44 @@ namespace wry {
 namespace wry {
     
         
-    inline auto
-    GarbageCollected::operator new(std::size_t count) -> void* {
+    inline auto GarbageCollected::
+    operator new(std::size_t count) -> void* {
         return calloc(count, 1);
     }
     
-    inline auto
-    GarbageCollected::operator delete(void* pointer) -> void{
+    inline auto GarbageCollected::
+    operator delete(void* pointer) -> void{
         free(pointer);
     }
     
-    inline
-    GarbageCollected::GarbageCollected(const GarbageCollected&)
+    inline GarbageCollected::
+    GarbageCollected(const GarbageCollected&)
     : GarbageCollected() {
     }
     
-    inline
-    GarbageCollected::GarbageCollected(GarbageCollected&&)
+    inline GarbageCollected::
+    GarbageCollected(GarbageCollected&&)
     : GarbageCollected() {
     }
 
-    inline auto
-    GarbageCollected::operator=(const GarbageCollected&) -> GarbageCollected& {
+    inline auto GarbageCollected::
+    operator=(const GarbageCollected&) -> GarbageCollected& {
         return *this;
     }
     
-    inline auto
-    GarbageCollected::operator=(GarbageCollected&&) -> GarbageCollected& {
+    inline auto GarbageCollected::
+    operator=(GarbageCollected&&) -> GarbageCollected& {
         return *this;
     }
 
     
-    inline constexpr auto
-    GarbageCollected::operator<=>(const GarbageCollected&) -> std::strong_ordering {
+    inline constexpr auto GarbageCollected::
+    operator<=>(const GarbageCollected&) -> std::strong_ordering {
         return std::strong_ordering::equivalent;
     }
     
-    inline constexpr auto
-    GarbageCollected::operator==(const GarbageCollected&) -> bool {
+    inline constexpr auto GarbageCollected::
+    operator==(const GarbageCollected&) -> bool {
         return true;
     }
 
@@ -198,45 +207,16 @@ namespace wry {
         if (ptr)
             ptr->_garbage_collected_shade();
     }
-
-
-
-    
-    
-    
-    
-    
     
     inline void debug(const GarbageCollected* self) {
         self->_garbage_collected_debug();
     }
-    
-    
-    void mutator_shade_root(const GarbageCollected* root);
         
-        
-    template<typename T> void any_debug(T const& self) {
-        std::string_view sv = name_of<T>;
-        printf("(%.*s)\n", (int) sv.size(), sv.data());
-    }
-    
-    template<typename T> auto any_read(T const& self) {
-        return self;
-    }
-    
     template<Arithmetic T>
-    void garbage_collected_scan(const T& self) {
+    void garbage_collected_scan(T const&) {
     }
     
-    void garbage_collected_scan_weak(const GarbageCollected* child);
-
-    
-    template<typename T>
-    T any_none;
-    
-    template<typename T>
-    inline constexpr T* any_none<T*> = nullptr;
-
+    void garbage_collected_scan_weak(const GarbageCollected*);
     
         
 } // namespace wry
