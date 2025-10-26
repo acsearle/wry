@@ -1,5 +1,16 @@
 Garbage Collection
 
+Epoch pinning == Session entry
+
+Epoch unpinng == Session resign
+
+
+
+
+
+
+
+
 
 Global state is
 - the current epoch
