@@ -169,6 +169,34 @@ namespace wry {
             
         } // void Session::handshake()
         
+        void collector_requests_report() {
+            auto expected = _atomic_tagged_head.load(Ordering::RELAXED);
+            for (;;) switch (expected.tag) {
+                case Session::Tag::COLLECTOR_SHOULD_CONSUME: {
+                    TaggedPtr<Session::Node, Session::Tag> desired{
+                        expected.ptr,
+                        Session::Tag::MUTATOR_SHOULD_PUBLISH
+                    };
+                    if (_atomic_tagged_head.compare_exchange_weak(expected,
+                                                                  desired,
+                                                                  Ordering::RELEASE,
+                                                                  Ordering::RELAXED))
+                        return;
+                    // Start over
+                    break;
+                }
+                case Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
+                    // The mutator has resigned and this session is ending; we
+                    // don't request any more reports
+                    return;
+                case Session::Tag::MUTATOR_SHOULD_PUBLISH:
+                case Session::Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
+                default:
+                    // Disallowed states
+                    abort();
+            }
+        }
+        
         
         void resign() {
             
@@ -334,7 +362,7 @@ namespace wry {
             
         }; // struct RingBuffer<T, N, MASK>
         
-        // std::vector<Session*> _sessions;
+        
         Session* _sessions_head = nullptr;
         
         RingBuffer<Color, 4> _color_history;
@@ -352,6 +380,8 @@ namespace wry {
         
         Stack<const GarbageCollected*> _greystack;
         
+        
+        
         void loop_until_canceled() {
             
             // The collector also registers itself as a mutator:
@@ -362,7 +392,6 @@ namespace wry {
                 };
                 _thread_local_session = session;
                 _thread_local_color_for_allocation = get_global_color_for_allocation();
-                // _sessions.push_back(session);
                 _sessions_head = session;
             }
             
@@ -370,29 +399,18 @@ namespace wry {
             
             while (!_is_canceled.load(Ordering::RELAXED)) {
                 
-                // The collector at least knows about itself-as-mutator
-                // assert(!_sessions.empty());
-                assert(_sessions_head);
-                
-                if (_known_objects.debug_is_empty()) {
-                    printf("C0: No known objects!\n");
-                }
-                
-#pragma mark Receive all mutator messages
-                
-                // A thread report covers events in a given interval
-                
+                // Receive reports from all sessions
+                // TODO: This is blocking
+
                 {
-                    Color did_shade = 0;
+                    Color did_shade = {};
                     Session** a = &_sessions_head;
-                    // for (auto& u : _sessions) {
                     for (;;) {
                         Session* b = *a;
                         if (!b)
                             break;
-                        auto& v = b->collector_state;
-                        // TODO: This is blocking
-                        TaggedPtr<Session::Node, Session::Tag> report = b->wait_for_report();
+                        TaggedPtr<Session::Node, Session::Tag> report
+                            = b->wait_for_report();
                         Session::Node* node = report.ptr;
                         bool should_release = false;
                         while (node) {
@@ -411,66 +429,15 @@ namespace wry {
                     // threads in the era
                     _shade_history.push_front(did_shade);
                 }
+            
+                try_advance_collection_phases();
                 
-#pragma mark Compute new state
-                
-                Color old_mask_for_deleting = _mask_for_deleting;
-                Color old_mask_for_clearing = _mask_for_clearing;
-                
-                {
-                    // When all threads have acknowledged k-grey, publish k-black
-                    _color_for_allocation |= (_color_history[0] & ~_color_history[1]) << 32;
-                }
-                
-                {
-                    // When all threads have acknowledged k-black, start tracing
-                    _mask_for_tracing |= (_color_history[0] & ~_color_history[1]) >> 32;
-                }
-                
-                {
-                    // When we can prove all threads have made no new k-grey
-                    // during a whole sweep
-                    Color color_is_stable = _mask_for_tracing;
-                    color_is_stable &= ~_shade_history[0];
-                    color_is_stable &= ~_shade_history[1];
-                    color_is_stable &= ~_shade_history[2];
-                    _mask_for_tracing &= ~color_is_stable;
-                    _mask_for_deleting = color_is_stable;
-                }
-                
-                {
-                    // When we have deleted k-white, unpublish k-grey and k-black
-                    assert(is_subset_of(old_mask_for_deleting, _color_for_allocation));
-                    _color_for_allocation &= ~(old_mask_for_deleting | (old_mask_for_deleting << 32));
-                }
-                
-                {
-                    // When all threads stop using k-grey and k-black, clear all k-bits
-                    _mask_for_clearing = (~_color_history[1] & _color_history[2]);
-                    // We need to wait two cycles so that the collector
-                    // has received objects allocated k-white by a leading
-                    // mutator but shaded grey by a trailing mutator
-                    // This means that we will clear objects in all k-states:
-                    // recently allocated white, old allocated black, and
-                    // recently allocated white and shaded black by leading and
-                    // trailling mutators
-                }
-                
-                {
-                    _color_in_use &= ~old_mask_for_clearing;
-                    Color new_grey = (_color_in_use + 1) & ~_color_in_use & LOW_MASK;
-                    _color_for_allocation |= new_grey;
-                    _color_in_use |= new_grey;
-                    _color_in_use |= new_grey << 32;
-                }
-                
-#pragma mark Publish the new color for allocation
-                
+                // Publish the new colors
                 _color_history.push_front(_color_for_allocation);
                 _global_atomic_color_for_allocation.store(_color_for_allocation, Ordering::RELAXED);
                 
-#pragma mark Accept new sessions
-                
+
+                // Accept new sessions
                 {
                     Session* expected = nullptr;
                     if (!_sessions_head->_next && _known_objects.debug_is_empty()) {
@@ -486,52 +453,82 @@ namespace wry {
                         _sessions_head = a;
                     }
                 }
+
+                // Request a report from each session
+                for (Session* p = _sessions_head; p; p = p->_next)
+                    p->collector_requests_report();
                 
-#pragma mark Request mutator updates
-                
-                for (Session* p = _sessions_head; p; p = p->_next) {
-                    auto expected = p->_atomic_tagged_head.load(Ordering::RELAXED);
-                    // We don't care about any publications the mutator has made
-                    // since we consumed them
-                GAMMA:
-                    switch (expected.tag) {
-                        case Session::Tag::COLLECTOR_SHOULD_CONSUME: {
-                            TaggedPtr<Session::Node, Session::Tag> desired{
-                                expected.ptr,
-                                Session::Tag::MUTATOR_SHOULD_PUBLISH
-                            };
-                            if (!p->_atomic_tagged_head.compare_exchange_weak(expected,
-                                                                              desired,
-                                                                              Ordering::RELEASE,
-                                                                              Ordering::RELAXED)) {
-                                goto GAMMA;
-                            }
-                        } break;
-                        case Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
-                            // The resignation will be processed when we get the
-                            // next report
-                            break;
-                        case Session::Tag::MUTATOR_SHOULD_PUBLISH:
-                        case Session::Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
-                        default:
-                            // Not allowed
-                            abort();
-                    }
-                    
-                }
-                
+                // Provide our own such report
                 _thread_local_session->handshake();
-                
-#pragma mark Receive new mutators
-                
-#pragma mark Visit every object to trace, garbage_collected_shade, sweep and clean
-                
+
+                // Visit every object to trace and sweep them.
                 scan();
                 
-            } // loop until killed
+            } // while (!_is_cancelled.load(Ordering::RELAXED))
             
-        } // Collector::loop
+        } // void Collector::loop_until_canceled()
         
+        
+        void try_advance_collection_phases() {
+            
+            // All threads have now report shading up to the last(?) epoch
+            //
+            // We can now try to advance the state of each of the collections
+            // through their several phases
+                        
+            Color old_mask_for_deleting = _mask_for_deleting;
+            Color old_mask_for_clearing = _mask_for_clearing;
+            
+            {
+                // When all threads have acknowledged k-grey, publish k-black
+                _color_for_allocation |= (_color_history[0] & ~_color_history[1]) << 32;
+            }
+            
+            {
+                // When all threads have acknowledged k-black, start tracing
+                _mask_for_tracing |= (_color_history[0] & ~_color_history[1]) >> 32;
+            }
+            
+            {
+                // When we can prove all threads have made no new k-grey
+                // during a whole sweep
+                Color color_is_stable = _mask_for_tracing;
+                color_is_stable &= ~_shade_history[0];
+                color_is_stable &= ~_shade_history[1];
+                color_is_stable &= ~_shade_history[2];
+                // Stop tracing these colors
+                _mask_for_tracing &= ~color_is_stable;
+                // Start deleting these whites
+                _mask_for_deleting = color_is_stable;
+            }
+            
+            {
+                // When we have deleted k-white, unpublish k-grey and k-black
+                assert(is_subset_of(old_mask_for_deleting, _color_for_allocation));
+                _color_for_allocation &= ~(old_mask_for_deleting | (old_mask_for_deleting << 32));
+            }
+            
+            {
+                // When all threads stop using k-grey and k-black, clear all k-bits
+                _mask_for_clearing = (~_color_history[1] & _color_history[2]);
+                // We need to wait two cycles so that the collector
+                // has received objects allocated k-white by a leading
+                // mutator but shaded grey by a trailing mutator
+                // This means that we will clear objects in all k-states:
+                // recently allocated white, old allocated black, and
+                // recently allocated white and shaded black by leading and
+                // trailling mutators
+            }
+            
+            {
+                _color_in_use &= ~old_mask_for_clearing;
+                Color new_grey = (_color_in_use + 1) & ~_color_in_use & LOW_MASK;
+                _color_for_allocation |= new_grey;
+                _color_in_use |= new_grey;
+                _color_in_use |= new_grey << 32;
+            }
+            
+        } // void Collector::advance_state()
         
         
         void scan() {
@@ -589,7 +586,7 @@ namespace wry {
             // While any objects are unprocessed
             for (;;) {
                 
-#pragma mark Depth-first recusively trace all children
+                // Depth-first recusively trace all the known children
                 
                 const GarbageCollected* parent = nullptr;
                 while (_greystack.try_pop(parent)) {
@@ -619,28 +616,39 @@ namespace wry {
                     }
                 }
                 
-#pragma mark Process each object
+                // Resume scanning each object in turn.
+                // (Many will have already been processed by tracing)
                 
                 const GarbageCollected* object = nullptr;
                 if (!_known_objects.try_pop(object))
                     break;
                 assert(object);
-                // process the object
+                // Process the object.
+                // Depending on phase, change the k-coloration
+                // - k-mark: k-grey -> k-black, and enqueue for tracing
+                // - k-clear: k-* -> k-white
                 Color after = 0;
                 Color before = object->_color.load(Ordering::RELAXED);
-                do {
+                for (;;) {
                     assert(is_subset_of(before, _color_in_use));
                     Color mark = (before & _mask_for_tracing) << 32;
                     after = (before | mark) & ~_mask_for_clearing;
                     assert(is_subset_of(after, _color_in_use));
-                } while ((after != before) &&
-                         !object->_color.compare_exchange_weak(before,
-                                                               after,
-                                                               Ordering::RELAXED,
-                                                               Ordering::RELAXED));
+                    if (after == before)
+                        // No change to write
+                        // TODO: Is this actually an optimization?
+                        break;
+                    if (object->_color.compare_exchange_weak(before,
+                                                             after,
+                                                             Ordering::RELAXED,
+                                                             Ordering::RELAXED))
+                        // Changed the color
+                        break;
+                    // Compare exchange failed, start over
+                }
                 Color did_set = (~before) & after;
-                assert((did_set & LOW_MASK) == 0);
-                bool must_trace = did_set & HIGH_MASK;
+                assert((did_set & LOW_MASK) == 0); // Never k-white -> k-grey
+                bool must_trace = did_set & HIGH_MASK; // If k-grey -> k->black
                 if (must_trace) {
                     ++trace_count;
                     _greystack.push(object);
@@ -667,7 +675,7 @@ namespace wry {
                         dump(before & _mask_for_deleting);
                         abort();
                     }
-                    // must not be grey; grey would imply not k-stable
+                    // Must not be k-grey; k-grey would imply not k-stable
                     assert(are_grey(before & (_mask_for_deleting | (_mask_for_deleting << 32))) == 0);
                     delete object;
                     ++delete_count;
@@ -688,8 +696,7 @@ namespace wry {
             
             total_deleted.fetch_add(delete_count, Ordering::RELAXED);
             
-            
-        } // void scan()
+        } // void Collector::scan()
         
     }; // struct Collector
     
