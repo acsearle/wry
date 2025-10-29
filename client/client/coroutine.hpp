@@ -19,10 +19,12 @@
 #include "mutex.hpp"
 
 namespace wry::coroutine {
-    
+
+    void schedule_coroutine_handle_from_address(void* address);
+    void schedule_coroutine_handle(std::coroutine_handle<>);
+
     // Work until canceled
-    void worker_thread_loop();
-    
+    void worker_thread_loop();    
     void cancel_global_work_queue();
 
 
@@ -129,10 +131,6 @@ namespace wry::coroutine {
                                       /*from-promise=*/true);
     }
 
-    
-    void schedule_coroutine_handle_from_address(void* address);
-    void schedule_coroutine_handle(std::coroutine_handle<>);
-
     constexpr inline struct _self_promise_t {} self_promise;
     
     
@@ -223,8 +221,8 @@ namespace wry::coroutine {
         }
         
     };
-
-    struct Latch {
+    
+    struct SingleConsumerLatch {
         
         enum : intptr_t {
             NONSIGNALED = 0,
@@ -233,18 +231,13 @@ namespace wry::coroutine {
         
         Atomic<ptrdiff_t> _count;
         Atomic<intptr_t> _continuation;
-        
-        // TODO: This is a bad(fragile? incorrect?) way of organizing an
-        // unknown-in-advance number of jobs
-        ptrdiff_t _dependents;
                 
-        Latch()
-        : _count(0)
-        , _continuation(NONSIGNALED)
-        , _dependents(0) {
+        explicit SingleConsumerLatch(ptrdiff_t initial_count)
+        : _count(initial_count)
+        , _continuation(NONSIGNALED) {
         }
         
-        ~Latch() {
+        ~SingleConsumerLatch() {
             assert(_count.load(Ordering::RELAXED) == 0);
         }
         
@@ -287,10 +280,7 @@ namespace wry::coroutine {
         // as Awaitable
         
         bool await_ready() noexcept {
-            if (_dependents == 0)
-                // there were never any jobs to wait for
-                return true;
-            ptrdiff_t n = _count.add_fetch(_dependents, Ordering::RELAXED);
+            ptrdiff_t n = _count.load(Ordering::RELAXED);
             // TODO: verify this is actually an optimization
             if (n == 0)
                 // all the jobs already finished
@@ -321,20 +311,17 @@ namespace wry::coroutine {
             struct promise_type {
                 
                 // match all arguments
-                static void* operator new(std::size_t count, Latch&, auto&&...) {
+                static void* operator new(std::size_t count, SingleConsumerLatch&, auto&&...) {
                     return bump::this_thread_state.allocate(count);
                 }
                 
                 static void operator delete(void* ptr) {
                 }
                 
-                Latch& _latch;
+                SingleConsumerLatch* _latch;
                 promise_type() = delete;
-                explicit promise_type(Latch& p, auto&&...)
+                explicit promise_type(SingleConsumerLatch* p, auto&&...)
                 : _latch(p) {
-                    // this is invoked immediately on the spawning thread and
-                    // thus does not need to be atomic **for the intended use case**
-                    ++(p._dependents);
                 }
                 
                 constexpr WillDecrement get_return_object() const noexcept {
@@ -356,14 +343,14 @@ namespace wry::coroutine {
                 
                 auto final_suspend() noexcept {
                     struct Awaitable {
-                        Latch& _latch;
+                        SingleConsumerLatch* _latch;
                         bool await_ready() noexcept {
-                            return !(_latch._signalling_coroutine_decrement());
+                            return !(_latch->_signalling_coroutine_decrement());
                         }
                         std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
                             // The latch has counted down to zero
                             // Copy from the coroutine frame to the stack frame
-                            Latch& target = _latch;
+                            SingleConsumerLatch& target = *_latch;
                             // Destroy the coroutine frame
                             handle.destroy();
                             // Signal the latch and resume a waiting coroutine
@@ -404,11 +391,11 @@ namespace wry::coroutine {
                     }
                 }
                 
-            }; // struct Latch::WillDecrement::promise_type
+            }; // struct SingleConsumerLatch::WillDecrement::promise_type
             
-        }; // struct Latch::WillDecrement
+        }; // struct SingleConsumerLatch::WillDecrement
         
-    }; // struct Latch
+    }; // struct SingleConsumerLatch
     
     
     
@@ -425,16 +412,16 @@ namespace wry::coroutine {
         Awaitable* _awaiters = nullptr;
         
         struct Awaitable {
-            Atomic<intptr_t>& _state;
+            Mutex* _context;
             intptr_t _expected;
             std::coroutine_handle<> _handle;
 
             bool await_ready() noexcept {
                 _expected = UNLOCKED;
-                return _state.compare_exchange_weak(_expected,
-                                                    LOCKED,
-                                                    Ordering::ACQUIRE,
-                                                    Ordering::RELAXED);
+                return _context->_state.compare_exchange_weak(_expected,
+                                                              LOCKED,
+                                                              Ordering::ACQUIRE,
+                                                              Ordering::RELAXED);
             }
             
             bool await_suspend(std::coroutine_handle<> handle) noexcept {
@@ -442,30 +429,33 @@ namespace wry::coroutine {
                 for (;;) {
                     switch (_expected) {
                         case UNLOCKED:
-                            if (_state.compare_exchange_weak(_expected, LOCKED, Ordering::ACQUIRE, Ordering::RELAXED))
+                            if (_context->_state.compare_exchange_weak(_expected,
+                                                                       LOCKED,
+                                                                       Ordering::ACQUIRE,
+                                                                       Ordering::RELAXED))
                                 return false;
                             break;
                         default:
-                            if (_state.compare_exchange_weak(_expected,
-                                                             (intptr_t)this,
-                                                             Ordering::RELEASE,
-                                                             Ordering::RELAXED))
+                            if (_context->_state.compare_exchange_weak(_expected,
+                                                                       (intptr_t)this,
+                                                                       Ordering::RELEASE,
+                                                                       Ordering::RELAXED))
                                 return true;
                             break;
                     }
                 }
             }
             
-            void await_resume() noexcept {
+            [[nodiscard]] std::unique_lock<Mutex> await_resume() noexcept {
                 // We wake up owning the mutex
+                return std::unique_lock<Mutex>(*_context, std::adopt_lock);
             }
         };
         
         Awaitable operator co_await() {
-            return Awaitable{_state};
+            return Awaitable{this};
         }
-              
-                
+                              
         void unlock() {
             for (intptr_t expected = _state.load(Ordering::RELAXED); !_awaiters;) {
                 switch (expected) {
@@ -497,15 +487,15 @@ namespace wry::coroutine {
     
     
 
-    template<typename T>
+    template<typename T, template<typename> typename A = EpochAllocator>
     struct CoroutineBlockingDeque {
         
         struct Awaitable;
         
         mutable std::mutex _mutex;
-        std::deque<T, EpochAllocator<T>> _deque;
+        std::deque<T, A<T>> _deque;
         bool _is_canceled;
-        std::deque<Awaitable*, EpochAllocator<Awaitable*>> _waiting;
+        std::deque<Awaitable*, A<Awaitable*>> _waiting;
         
         void push_back(T item) {
             std::unique_lock guard(_mutex);
