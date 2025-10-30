@@ -332,10 +332,13 @@ namespace wry {
             ._name = name
         };
         
-        session->_next = _global_new_sessions.load(Ordering::RELAXED);
-        while (!_global_new_sessions.compare_exchange_weak(session->_next, session, Ordering::RELEASE, Ordering::RELAXED))
-            ;
-        if (!session->_next)
+        Session* expected = _global_new_sessions.load(Ordering::RELAXED);
+        for (;;) {
+            session->_next = expected;
+            if (_global_new_sessions.compare_exchange_weak(expected, session, Ordering::RELEASE, Ordering::RELAXED))
+                break;
+        }
+        if (!expected)
             _global_new_sessions.notify_one();
         
         _thread_local_session = session;
@@ -389,16 +392,20 @@ namespace wry {
             
             static_assert(std::has_single_bit(N), "RingBuffer capacity must be a power of two");
             
-            size_t offset = 0;
+            size_t _offset = 0;
             T _array[N] = {};
             
             void push_front(T value) {
-                _array[--offset &= MASK] = value;
+                _array[--_offset &= MASK] = value;
             }
             
             const T& operator[](ptrdiff_t i) const {
                 assert((0 <= i) && (i < N));
-                return _array[(offset + i) & MASK];
+                return _array[(_offset + i) & MASK];
+            }
+            
+            T& front() {
+                return _array[_offset & MASK];
             }
             
         }; // struct RingBuffer<T, N, MASK>
@@ -445,13 +452,27 @@ namespace wry {
             
             while (!_is_canceled.load(Ordering::RELAXED)) {
                 
-                // Receive reports from all sessions
-                // TODO: This is blocking
+                // Provide our own report and repin the thread
+                _thread_local_session->mutator_performs_epochal_handshake();
                 
-                // Instead of waiting for reports, we wait for the epoch to change
+                // Accept new sessions
+                {
+                    Session* expected = nullptr;
+                    if (!_sessions_head->_next && _known_objects.debug_is_empty()) {
+                        _global_new_sessions.wait(expected, Ordering::RELAXED);
+                        if (_is_canceled.load(Ordering::RELAXED))
+                            break;
+                    }
+                    expected = _global_new_sessions.exchange(nullptr, Ordering::ACQUIRE);
+                    while (expected) {
+                        Session* a = expected;
+                        expected = expected->_next;
+                        a->_next = _sessions_head;
+                        _sessions_head = a;
+                    }
+                }
                 
-                epoch::repin_this_thread_and_wait_for_advancement();
-
+                // Always read all reports
                 {
                     Color did_shade = {};
                     Session** a = &_sessions_head;
@@ -475,12 +496,53 @@ namespace wry {
                         else
                             a = &(b->_next);
                     }
-                    // We only care about the combined shading history of all
-                    // threads in the era
-                    _shade_history.push_front(did_shade);
+                    // _shade_history.push_front(did_shade);
+                    _shade_history.front() |= did_shade;
                 }
+
+                // All of the above ops are benign information gathering.
+                
+                // We check if the epoch has changed enough that we can prove
+                // that every (active) mutator has adopted the last colors
+                // we published.
+                
+                if (epoch::allocator_local_state.known.data - epoch_at_last_change.data < 2) {
+                    // TODO: It's possible for the collector to be faster than
+                    // the mutators (this is a great problem to have!).  Is there
+                    // a sensible way to sleep here without imposing costs on the
+                    // case when the system is working hard?
+                    // Exponential backoff?
+                    std::this_thread::yield();
+                    continue;
+                }
+                
+                // The epoch has advanced by at least two since we published
+                //
+                // This means every mutator has repinned and then loaded the
+                // color at least once
+                //
+                // Every (active) mutator has now seen the latest color we
+                // published, so we can proceed to advance the collection
+                
+                // write the tricolor state
+                // release-acquire epoch
+                // note the epoch
+                
+                // write a report on the old state
+                // release-acquire epoch
+                // read the trcolor state
+                
+                // release-acquire epoch
+                // read the report state
+                
+                // This establishes a release sequence.  The epoch properties
+                // guarantee advancement only when nobody is in the old epoch,
+                // which means that when the epoch has advanced by two we have
+                // everybody agreeing that the original epoch is in the past                
             
                 try_advance_collection_phases();
+                
+                _shade_history.push_front(0);
                 
                 // Publish the new colors
                 _color_history.push_front(_color_for_allocation);
@@ -496,30 +558,8 @@ namespace wry {
                     // auto new_epoch = epoch::allocator_local_state.known;
                     // printf("GC observes Epoch %u -> %u\n", old_epoch.data, new_epoch.data);
                 }
-
-                // Accept new sessions
-                {
-                    Session* expected = nullptr;
-                    if (!_sessions_head->_next && _known_objects.debug_is_empty()) {
-                        _global_new_sessions.wait(expected, Ordering::RELAXED);
-                        if (_is_canceled.load(Ordering::RELAXED))
-                            break;
-                    }
-                    expected = _global_new_sessions.exchange(nullptr, Ordering::ACQUIRE);
-                    while (expected) {
-                        Session* a = expected;
-                        expected = expected->_next;
-                        a->_next = _sessions_head;
-                        _sessions_head = a;
-                    }
-                }
-
-                // Request a report from each session
-                for (Session* p = _sessions_head; p; p = p->_next)
-                    p->collector_requests_report();
                 
-                // Provide our own such report
-                _thread_local_session->mutator_performs_handshake();
+                epoch_at_last_change = epoch::allocator_local_state.known;
 
                 // Visit every object to trace and sweep them.
                 scan();
