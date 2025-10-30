@@ -1042,7 +1042,6 @@
     wry::mutator_handshake();
 
     // Advance the world state
-    wry::epoch::pin_this_thread();
     World* new_world = {};
     {
         World const* old_world = {};
@@ -1054,7 +1053,7 @@
         // World* old_world = std::exchange(new_world, new_world->step());
         // Write barrier
     }
-    wry::epoch::unpin_this_thread();
+    // wry::epoch::pin_this_thread();
     assert(new_world);
 
 

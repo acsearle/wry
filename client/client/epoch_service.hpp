@@ -129,20 +129,25 @@ namespace wry::epoch {
                 if (state.compare_exchange_weak(expected,
                                                 desired,
                                                 Ordering::ACQUIRE,
-                                                Ordering::RELAXED))
+                                                Ordering::RELAXED)) {
+                    if (expected.current != desired.current)
+                        state.notify_all();
                     return desired.current;
+                }
             }
         }
         
-        [[nodiscard]] Epoch pin_explicit(Epoch occupied) {
+        void pin_explicit(Epoch occupied) {
             State expected = state.load(Ordering::RELAXED);
             for (;;) {
                 State desired = expected.try_advance().pin_explicit(occupied);
                 if (state.compare_exchange_weak(expected,
                                                 desired,
                                                 Ordering::ACQUIRE,
-                                                Ordering::RELAXED))
-                    return desired.current;
+                                                Ordering::RELAXED)) {
+                    if (expected.current != desired.current)
+                        state.notify_all();
+                }
             }
         }
         
@@ -153,20 +158,28 @@ namespace wry::epoch {
                 if (state.compare_exchange_weak(expected,
                                                 desired,
                                                 Ordering::RELEASE,
-                                                Ordering::RELAXED))
+                                                Ordering::RELAXED)) {
+                    if (expected.current != desired.current)
+                        state.notify_all();
                     return desired.current;
+                }
             }
         }
-        
+
         [[nodiscard]] Epoch repin(Epoch occupied) {
+            // NOTE: Even when desired == expected, it is still important to
+            // perform the write to establish memory orderings
             State expected = state.load(Ordering::RELAXED);
             for (;;) {
                 State desired = expected.unpin(occupied).try_advance().pin();
                 if (state.compare_exchange_weak(expected,
                                                 desired,
                                                 Ordering::ACQ_REL,
-                                                Ordering::RELAXED))
+                                                Ordering::RELAXED)) {
+                    if (expected.current != desired.current)
+                        state.notify_all();
                     return desired.current;
+                }
             }
         }
 
@@ -178,8 +191,30 @@ namespace wry::epoch {
                 if (state.compare_exchange_weak(expected,
                                                 desired,
                                                 Ordering::ACQ_REL,
-                                                Ordering::RELAXED))
+                                                Ordering::RELAXED)) {
+                    if (expected.current != desired.current)
+                        state.notify_all();
                     return desired.current;
+                }
+            }
+        }
+        
+        [[nodiscard]] Epoch repin_and_wait(Epoch occupied) {
+            State expected = state.load(Ordering::RELAXED);
+            for (;;) {
+                assert(expected.validate(occupied));
+                State desired = expected.try_advance();
+                if (state.compare_exchange_weak(expected,
+                                                desired,
+                                                Ordering::ACQ_REL,
+                                                Ordering::RELAXED)) {
+                    if (expected.current != desired.current) {
+                        state.notify_all();
+                    } else {
+                        state.wait(desired, Ordering::ACQUIRE);
+                    }
+                    return desired.current;
+                }
             }
         }
 

@@ -16,6 +16,7 @@
 
 #include "bag.hpp"
 #include "channel.hpp"
+#include "epoch_allocator.hpp"
 #include "garbage_collected.hpp"
 #include "HeapString.hpp"
 #include "stack.hpp"
@@ -103,14 +104,7 @@ namespace wry {
             }
         };
         
-        // Stuff the collector needs to track for each mutator
-        struct State {
-            bool is_done = false;
-        };
-        State collector_state;
-        
         std::string _name;
-        
         
         // We use reference counting to manage the Session lifetime
         Atomic<ptrdiff_t> _reference_count_minus_one{1};
@@ -127,11 +121,46 @@ namespace wry {
             }
         }
         
-        
-        
-        
-        void handshake() {
+        void mutator_performs_epochal_handshake() {
             
+            // ONE: publish report
+            
+            // TWO: repin
+            
+            // THREE: read _thread_local_color_for_allocation
+
+            TaggedPtr<Node, Tag> expected = _atomic_tagged_head.load(Ordering::RELAXED);
+            auto desired = TaggedPtr<Node, Tag>{
+                new Node{
+                    expected.ptr,
+                    std::exchange(_thread_local_color_did_shade, 0),
+                    std::move(_thread_local_new_objects)
+                },
+                Tag::COLLECTOR_SHOULD_CONSUME
+            };
+            for (;;) switch (expected.tag) {
+                case Tag::COLLECTOR_SHOULD_CONSUME:
+                case Tag::MUTATOR_SHOULD_PUBLISH:
+                case Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
+                    if (_atomic_tagged_head.compare_exchange_weak(expected,
+                                                                  desired,
+                                                                  Ordering::RELEASE,
+                                                                  Ordering::RELAXED)) {
+                        epoch::repin_this_thread();
+                        _thread_local_color_for_allocation = get_global_color_for_allocation();
+                        _atomic_tagged_head.notify_one();
+                        return;
+                    }
+                    desired->_next = expected.ptr;
+                    break;
+                case Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
+                    // We should not be handshaking after we have called release
+                default:
+                    abort();
+            }
+        }
+        
+        void mutator_performs_handshake() {            
             TaggedPtr<Node, Tag> expected = _atomic_tagged_head.load(Ordering::RELAXED);
             switch (expected.tag) {
                     
@@ -170,6 +199,7 @@ namespace wry {
         } // void Session::handshake()
         
         void collector_requests_report() {
+            /*
             auto expected = _atomic_tagged_head.load(Ordering::RELAXED);
             for (;;) switch (expected.tag) {
                 case Session::Tag::COLLECTOR_SHOULD_CONSUME: {
@@ -195,6 +225,7 @@ namespace wry {
                     // Disallowed states
                     abort();
             }
+             */
         }
         
         
@@ -238,16 +269,22 @@ namespace wry {
                     if (expected.tag == Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY)
                         _atomic_tagged_head.notify_one();
                     
+                    epoch::unpin_this_thread();
+                    
                     return;
                 }
                 
             } // for (;;)
-            
+                        
         } // void Session::resign()
         
         
         
-        auto wait_for_report() -> TaggedPtr<Node, Tag> {
+        auto collector_waits_for_report() -> TaggedPtr<Node, Tag> {
+            TaggedPtr<Node, Tag> desired = { nullptr, Tag::MUTATOR_SHOULD_PUBLISH};
+            return _atomic_tagged_head.exchange(desired,
+                                                Ordering::ACQUIRE);
+            /*
             TaggedPtr<Node, Tag> expected = _atomic_tagged_head.load(Ordering::RELAXED);
             TaggedPtr<Node, Tag> desired = {};
             for (;;) switch (expected.tag) {
@@ -266,9 +303,11 @@ namespace wry {
                     expected = desired;
                 } [[fallthrough]];
                 case Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
+                    printf("C0: Waits for report\n");
                     _atomic_tagged_head.wait(expected, Ordering::RELAXED);
                     break;
             } // for (;;) switch (expected.tag)
+             */
         } // get_report
         
     }; // struct Session
@@ -286,6 +325,8 @@ namespace wry {
     
     
     void mutator_become_with_name(const char* name) {
+        
+        epoch::pin_this_thread();
         
         Session* session = new Session{
             ._name = name
@@ -395,12 +436,21 @@ namespace wry {
                 _sessions_head = session;
             }
             
+            // And as an epoch participant
+
+            epoch::pin_this_thread();
+            epoch::Epoch epoch_at_last_change = epoch::allocator_local_state.known;
+            
             printf("C0: garbage collector starts\n");
             
             while (!_is_canceled.load(Ordering::RELAXED)) {
                 
                 // Receive reports from all sessions
                 // TODO: This is blocking
+                
+                // Instead of waiting for reports, we wait for the epoch to change
+                
+                epoch::repin_this_thread_and_wait_for_advancement();
 
                 {
                     Color did_shade = {};
@@ -410,7 +460,7 @@ namespace wry {
                         if (!b)
                             break;
                         TaggedPtr<Session::Node, Session::Tag> report
-                            = b->wait_for_report();
+                            = b->collector_waits_for_report();
                         Session::Node* node = report.ptr;
                         bool should_release = false;
                         while (node) {
@@ -435,7 +485,17 @@ namespace wry {
                 // Publish the new colors
                 _color_history.push_front(_color_for_allocation);
                 _global_atomic_color_for_allocation.store(_color_for_allocation, Ordering::RELAXED);
-                
+
+                {
+                    // This repin establishes that the write to
+                    // _global_atomic_color_for_allocation
+                    // happens-before the next epoch advance, even if it does
+                    // not itself perform that advance.
+                    epoch::repin_this_thread();
+                    // auto old_epoch = epoch::allocator_local_state.known;
+                    // auto new_epoch = epoch::allocator_local_state.known;
+                    // printf("GC observes Epoch %u -> %u\n", old_epoch.data, new_epoch.data);
+                }
 
                 // Accept new sessions
                 {
@@ -459,12 +519,14 @@ namespace wry {
                     p->collector_requests_report();
                 
                 // Provide our own such report
-                _thread_local_session->handshake();
+                _thread_local_session->mutator_performs_handshake();
 
                 // Visit every object to trace and sweep them.
                 scan();
                 
             } // while (!_is_cancelled.load(Ordering::RELAXED))
+            
+            epoch::unpin_this_thread();
             
         } // void Collector::loop_until_canceled()
         
@@ -712,7 +774,8 @@ namespace wry {
     }
     
     void mutator_handshake() {
-        _thread_local_session->handshake();
+        // _thread_local_session->mutator_performs_handshake();
+        _thread_local_session->mutator_performs_epochal_handshake();
     }
     
     void mutator_resign() {

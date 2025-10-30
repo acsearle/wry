@@ -15,29 +15,21 @@ namespace wry {
     
     namespace epoch {
         
-        // Threads cooperatively advance the epoch by calling
-        // epoch::pin(), epoch::unpin() and epoch::repin()
+        // Usage:
+        //
+        // pin();
+        // void* buffer = epoch::allocate(count);
+        // ...
+        // unpin();
+        // ...
+        // < buffer reclaimed >
         
-        // An EpochAllocated object will survive at least as long as the
-        // current Epoch, and the current Epoch will endure at least as long
-        // as any thread is pinned.
-        
-        // We pin each frame, and each worker.
-        
-        // TODO: If a thread takes multiple pins, we can't know how many
-        // are in prior or in current.
-        // - Only allow one per thread?
-        // - Count per thread and only have one actual?
-        // - Pins yield a token that unpins consume?
-        //   - This has the advantage of decoupling pins from threads
-        
-        // Instantitate a singleton epoch service for the epoch allocator
-        inline static constinit Service allocator_global_service = {};
+        inline constinit Service allocator_global_service = {};
         
         struct LocalState {
-            bump::Slab* _Nullable bump_alternate;
-            Epoch known;
-            bool is_pinned;
+            bump::Slab* _Nullable bump_alternate = {};
+            Epoch known = {};
+            bool is_pinned = {};
             
             // The epoch allocator wraps the bump allocator with management
             // that
@@ -66,6 +58,11 @@ namespace wry {
                 _update_with(allocator_global_service.repin(known));
             }
             
+            void repin_and_wait() {
+                assert(is_pinned);
+                _update_with(allocator_global_service.repin_and_wait(known));
+            }
+            
         };
         
         inline constinit thread_local LocalState allocator_local_state = {};
@@ -83,6 +80,10 @@ namespace wry {
         inline void repin_this_thread() {
             allocator_local_state.repin();
         }
+
+        inline void repin_this_thread_and_wait_for_advancement() {
+            allocator_local_state.repin_and_wait();
+        }
         
         // Pin the local thread's known epoch again.  The returned epoch can
         // be used to unpin that epoch on a different thread.
@@ -90,10 +91,10 @@ namespace wry {
         // This is used to tie the epoch to a non-thread scope, such as the
         // lifetime of the root of a tree of jobs.
         
-        [[nodiscard]] inline auto
-        pin_explicit() -> Epoch {
+        inline void
+        pin_explicit() {
             assert(allocator_local_state.is_pinned);
-            return allocator_global_service.pin_explicit(allocator_local_state.known);
+            allocator_global_service.pin_explicit(allocator_local_state.known);
         }
 
         inline auto
