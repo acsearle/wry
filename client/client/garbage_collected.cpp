@@ -92,9 +92,7 @@ namespace wry {
         
         enum struct Tag : intptr_t {
             COLLECTOR_SHOULD_CONSUME = 0,
-            MUTATOR_SHOULD_PUBLISH = 1,
-            COLLECTOR_SHOULD_CONSUME_AND_RELEASE = 2,
-            MUTATOR_SHOULD_PUBLISH_AND_NOTIFY = 3,
+            COLLECTOR_SHOULD_CONSUME_AND_RELEASE = 1,
         };
         
         Atomic<TaggedPtr<Node, Tag>> _atomic_tagged_head{
@@ -121,115 +119,31 @@ namespace wry {
             }
         }
         
-        void mutator_performs_epochal_handshake() {
-            
-            // ONE: publish report
-            
-            // TWO: repin
-            
-            // THREE: read _thread_local_color_for_allocation
-
-            TaggedPtr<Node, Tag> expected = _atomic_tagged_head.load(Ordering::RELAXED);
+        void mutator_handshakes() {
             auto desired = TaggedPtr<Node, Tag>{
                 new Node{
-                    expected.ptr,
+                    nullptr,
                     std::exchange(_thread_local_color_did_shade, 0),
                     std::move(_thread_local_new_objects)
                 },
                 Tag::COLLECTOR_SHOULD_CONSUME
             };
-            for (;;) switch (expected.tag) {
-                case Tag::COLLECTOR_SHOULD_CONSUME:
-                case Tag::MUTATOR_SHOULD_PUBLISH:
-                case Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
-                    if (_atomic_tagged_head.compare_exchange_weak(expected,
-                                                                  desired,
-                                                                  Ordering::RELEASE,
-                                                                  Ordering::RELAXED)) {
-                        epoch::repin_this_thread();
-                        _thread_local_color_for_allocation = get_global_color_for_allocation();
-                        _atomic_tagged_head.notify_one();
-                        return;
-                    }
-                    desired->_next = expected.ptr;
-                    break;
-                case Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
-                    // We should not be handshaking after we have called release
-                default:
-                    abort();
-            }
-        }
-        
-        void mutator_performs_handshake() {            
             TaggedPtr<Node, Tag> expected = _atomic_tagged_head.load(Ordering::RELAXED);
-            switch (expected.tag) {
-                    
-                case Tag::COLLECTOR_SHOULD_CONSUME: {
-                    // The collector doesn't need anything from us at this time
-                } break;
-                    
-                case Tag::MUTATOR_SHOULD_PUBLISH:
-                    [[fallthrough]];
-                case Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY: {
-                    // The collector needs us to publish what we have and
-                    // refresh our color_for_allocation.  It may not have
-                    // consumed our last report, so we always respect the
-                    // pointer and maintain the chain
-                    auto desired = TaggedPtr<Node, Tag>{
-                        new Node{
-                            expected.ptr,
-                            std::exchange(_thread_local_color_did_shade, 0),
-                            std::move(_thread_local_new_objects)
-                        },
-                        Tag::COLLECTOR_SHOULD_CONSUME
-                    };
-                    expected = _atomic_tagged_head.exchange(desired, Ordering::ACQ_REL);
-                    if (expected.tag == Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY)
-                        _atomic_tagged_head.notify_one();
+            for (;;) {
+                assert(expected.tag == Tag::COLLECTOR_SHOULD_CONSUME);
+                desired->_next = expected.ptr;
+                if (_atomic_tagged_head.compare_exchange_weak(expected,
+                                                              desired,
+                                                              Ordering::RELEASE,
+                                                              Ordering::RELAXED)) {
+                    epoch::repin_this_thread();
                     _thread_local_color_for_allocation = get_global_color_for_allocation();
-                } break;
-                    
-                case Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE: {
-                    // We should not be handshaking after we have called release
-                    abort();
-                }
-                    
-            } // switch (expected.tag)
-            
-        } // void Session::handshake()
-        
-        void collector_requests_report() {
-            /*
-            auto expected = _atomic_tagged_head.load(Ordering::RELAXED);
-            for (;;) switch (expected.tag) {
-                case Session::Tag::COLLECTOR_SHOULD_CONSUME: {
-                    TaggedPtr<Session::Node, Session::Tag> desired{
-                        expected.ptr,
-                        Session::Tag::MUTATOR_SHOULD_PUBLISH
-                    };
-                    if (_atomic_tagged_head.compare_exchange_weak(expected,
-                                                                  desired,
-                                                                  Ordering::RELEASE,
-                                                                  Ordering::RELAXED))
-                        return;
-                    // Start over
-                    break;
-                }
-                case Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
-                    // The mutator has resigned and this session is ending; we
-                    // don't request any more reports
                     return;
-                case Session::Tag::MUTATOR_SHOULD_PUBLISH:
-                case Session::Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
-                default:
-                    // Disallowed states
-                    abort();
+                }
             }
-             */
         }
         
-        
-        void resign() {
+        void mutator_resigns() {
             
             printf("%s: garbage collection session resigns\n", _name.c_str());
             
@@ -241,74 +155,28 @@ namespace wry {
                 },
                 Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE
             };
-            
             TaggedPtr<Node, Tag> expected = _atomic_tagged_head.load(Ordering::RELAXED);
             for (;;) {
-                
-                switch (expected.tag) {
-                        
-                    case Tag::COLLECTOR_SHOULD_CONSUME:
-                    case Tag::MUTATOR_SHOULD_PUBLISH:
-                    case Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
-                        // Permitted states
-                        break;
-                        
-                    case Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
-                        // We should not call release twice
-                    default:
-                        abort();
-                        
-                } // switch (expected.tag)
-                
+                assert(expected.tag == Tag::COLLECTOR_SHOULD_CONSUME);
                 desired->_next = expected.ptr;
                 if (_atomic_tagged_head.compare_exchange_weak(expected,
                                                               desired,
                                                               Ordering::RELEASE,
                                                               Ordering::RELAXED)) {
-                    
-                    if (expected.tag == Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY)
-                        _atomic_tagged_head.notify_one();
-                    
                     epoch::unpin_this_thread();
-                    
                     return;
                 }
-                
-            } // for (;;)
+            }
                         
         } // void Session::resign()
         
         
         
-        auto collector_waits_for_report() -> TaggedPtr<Node, Tag> {
-            TaggedPtr<Node, Tag> desired = { nullptr, Tag::MUTATOR_SHOULD_PUBLISH};
+        auto collector_gets_reports() -> TaggedPtr<Node, Tag> {
+            TaggedPtr<Node, Tag> desired = { nullptr, Tag::COLLECTOR_SHOULD_CONSUME};
             return _atomic_tagged_head.exchange(desired,
                                                 Ordering::ACQUIRE);
-            /*
-            TaggedPtr<Node, Tag> expected = _atomic_tagged_head.load(Ordering::RELAXED);
-            TaggedPtr<Node, Tag> desired = {};
-            for (;;) switch (expected.tag) {
-                case Tag::COLLECTOR_SHOULD_CONSUME:
-                case Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE:
-                    desired = { nullptr, expected.tag };
-                    return _atomic_tagged_head.exchange(desired,
-                                                        Ordering::ACQUIRE);
-                case Tag::MUTATOR_SHOULD_PUBLISH: {
-                    desired = { nullptr, Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY };
-                    if (!_atomic_tagged_head.compare_exchange_weak(expected,
-                                                                   desired,
-                                                                   Ordering::RELAXED,
-                                                                   Ordering::RELAXED))
-                        break;
-                    expected = desired;
-                } [[fallthrough]];
-                case Tag::MUTATOR_SHOULD_PUBLISH_AND_NOTIFY:
-                    printf("C0: Waits for report\n");
-                    _atomic_tagged_head.wait(expected, Ordering::RELAXED);
-                    break;
-            } // for (;;) switch (expected.tag)
-             */
-        } // get_report
+        }
         
     }; // struct Session
     
@@ -332,14 +200,14 @@ namespace wry {
             ._name = name
         };
         
-        Session* expected = _global_new_sessions.load(Ordering::RELAXED);
+        session->_next = _global_new_sessions.load(Ordering::RELAXED);
         for (;;) {
-            session->_next = expected;
-            if (_global_new_sessions.compare_exchange_weak(expected, session, Ordering::RELEASE, Ordering::RELAXED))
+            if (_global_new_sessions.compare_exchange_weak(session->_next,
+                                                           session,
+                                                           Ordering::RELEASE,
+                                                           Ordering::RELAXED))
                 break;
         }
-        if (!expected)
-            _global_new_sessions.notify_one();
         
         _thread_local_session = session;
         _thread_local_color_for_allocation = get_global_color_for_allocation();
@@ -432,18 +300,10 @@ namespace wry {
         
         void loop_until_canceled() {
             
-            // The collector also registers itself as a mutator:
-            
-            {
-                Session* session = new Session{
-                    ._name = "C0",
-                };
-                _thread_local_session = session;
-                _thread_local_color_for_allocation = get_global_color_for_allocation();
-                _sessions_head = session;
-            }
-            
-            // And as an epoch participant
+            _sessions_head = nullptr;
+
+            // Does the collector need to pin?
+            // Or just to spy on the epoch?
 
             epoch::pin_this_thread();
             epoch::Epoch epoch_at_last_change = epoch::allocator_local_state.known;
@@ -453,17 +313,12 @@ namespace wry {
             while (!_is_canceled.load(Ordering::RELAXED)) {
                 
                 // Provide our own report and repin the thread
-                _thread_local_session->mutator_performs_epochal_handshake();
+                // _thread_local_session->mutator_handshakes();
+                epoch::repin_this_thread();
                 
                 // Accept new sessions
                 {
-                    Session* expected = nullptr;
-                    if (!_sessions_head->_next && _known_objects.debug_is_empty()) {
-                        _global_new_sessions.wait(expected, Ordering::RELAXED);
-                        if (_is_canceled.load(Ordering::RELAXED))
-                            break;
-                    }
-                    expected = _global_new_sessions.exchange(nullptr, Ordering::ACQUIRE);
+                    Session* expected = _global_new_sessions.exchange(nullptr, Ordering::ACQUIRE);
                     while (expected) {
                         Session* a = expected;
                         expected = expected->_next;
@@ -480,23 +335,19 @@ namespace wry {
                         Session* b = *a;
                         if (!b)
                             break;
-                        TaggedPtr<Session::Node, Session::Tag> report
-                            = b->collector_waits_for_report();
-                        Session::Node* node = report.ptr;
-                        bool should_release = false;
+                        TaggedPtr<Session::Node, Session::Tag> reports
+                            = b->collector_gets_reports();
+                        Session::Node* node = reports.ptr;
                         while (node) {
                             did_shade |= node->color_did_shade;
-                            if (report.tag == Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE)
-                                should_release = true;
                             _known_objects.splice(std::move(node->allocations));
                             delete std::exchange(node, node->_next);
                         }
-                        if (should_release)
+                        if (reports.tag == Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE)
                             std::exchange(*a, b->_next)->release();
                         else
                             a = &(b->_next);
                     }
-                    // _shade_history.push_front(did_shade);
                     _shade_history.front() |= did_shade;
                 }
 
@@ -538,7 +389,7 @@ namespace wry {
                 // This establishes a release sequence.  The epoch properties
                 // guarantee advancement only when nobody is in the old epoch,
                 // which means that when the epoch has advanced by two we have
-                // everybody agreeing that the original epoch is in the past                
+                // everybody agreeing that the original epoch is in the past
             
                 try_advance_collection_phases();
                 
@@ -548,16 +399,7 @@ namespace wry {
                 _color_history.push_front(_color_for_allocation);
                 _global_atomic_color_for_allocation.store(_color_for_allocation, Ordering::RELAXED);
 
-                {
-                    // This repin establishes that the write to
-                    // _global_atomic_color_for_allocation
-                    // happens-before the next epoch advance, even if it does
-                    // not itself perform that advance.
-                    epoch::repin_this_thread();
-                    // auto old_epoch = epoch::allocator_local_state.known;
-                    // auto new_epoch = epoch::allocator_local_state.known;
-                    // printf("GC observes Epoch %u -> %u\n", old_epoch.data, new_epoch.data);
-                }
+                epoch::repin_this_thread();
                 
                 epoch_at_last_change = epoch::allocator_local_state.known;
 
@@ -814,12 +656,11 @@ namespace wry {
     }
     
     void mutator_handshake() {
-        // _thread_local_session->mutator_performs_handshake();
-        _thread_local_session->mutator_performs_epochal_handshake();
+        _thread_local_session->mutator_handshakes();
     }
     
     void mutator_resign() {
-        _thread_local_session->resign();
+        _thread_local_session->mutator_resigns();
         std::exchange(_thread_local_session, nullptr)->release();
     }
     
