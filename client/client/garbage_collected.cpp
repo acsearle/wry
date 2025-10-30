@@ -42,184 +42,29 @@ namespace wry {
 namespace wry {
     
 #pragma mark - Forward declarations
-    
-    struct Session;
-    
+        
     using namespace detail;
     
 #pragma mark - Global and thread_local variables
     
-    constinit static Atomic<Session*> _global_new_sessions;
-    constinit static Atomic<Color> _global_atomic_color_for_allocation;
+    constinit Atomic<Color> _global_atomic_color_for_allocation;
     
     constinit thread_local Color _thread_local_color_for_allocation;
     constinit thread_local Color _thread_local_color_did_shade;
-    constinit thread_local Session* _thread_local_session;
     constinit thread_local Bag<const GarbageCollected*> _thread_local_new_objects;
     
     Color get_global_color_for_allocation() {
         return _global_atomic_color_for_allocation.load(Ordering::RELAXED);
     }
     
-    inline Color get_thread_local_color_for_allocation() {
+    Color get_thread_local_color_for_allocation() {
         return _thread_local_color_for_allocation;
     }
     
-    inline Color get_thread_local_color_for_shade() {
+    Color get_thread_local_color_for_shade() {
         return _thread_local_color_for_allocation & LOW_MASK;
     }
-    
-    // TODO: statistics
-    //
-    // thread_local pointer, to a heap allocated struct of counters, that is
-    // itself part of a global intrusive linked list?
-    static constinit Atomic<ptrdiff_t> total_deleted;
-    
-    // A session exists between a thread becoming a mutator, multiple handshakes,
-    // and resiging mutator status.  Name it Mutator?
-    
-    struct Session {
         
-        Session* _next = nullptr;
-        
-        struct Node {
-            
-            Node* _next = nullptr;
-            Color color_did_shade = 0;
-            Bag<const GarbageCollected*> allocations;
-            
-        }; // struct Node
-        
-        enum struct Tag : intptr_t {
-            COLLECTOR_SHOULD_CONSUME = 0,
-            COLLECTOR_SHOULD_CONSUME_AND_RELEASE = 1,
-        };
-        
-        Atomic<TaggedPtr<Node, Tag>> _atomic_tagged_head{
-            TaggedPtr<Node, Tag>{
-                nullptr,
-                Tag::COLLECTOR_SHOULD_CONSUME
-            }
-        };
-        
-        std::string _name;
-        
-        // We use reference counting to manage the Session lifetime
-        Atomic<ptrdiff_t> _reference_count_minus_one{1};
-        
-        void acquire() {
-            _reference_count_minus_one.fetch_add(1, Ordering::RELAXED);
-        }
-        
-        void release() {
-            if (!_reference_count_minus_one.fetch_sub(1, Ordering::RELEASE)) {
-                _reference_count_minus_one.load(Ordering::ACQUIRE);
-                printf("%s: garbage collection session ends\n", _name.c_str());
-                delete this;
-            }
-        }
-        
-        void mutator_handshakes() {
-            auto desired = TaggedPtr<Node, Tag>{
-                new Node{
-                    nullptr,
-                    std::exchange(_thread_local_color_did_shade, 0),
-                    std::move(_thread_local_new_objects)
-                },
-                Tag::COLLECTOR_SHOULD_CONSUME
-            };
-            TaggedPtr<Node, Tag> expected = _atomic_tagged_head.load(Ordering::RELAXED);
-            for (;;) {
-                assert(expected.tag == Tag::COLLECTOR_SHOULD_CONSUME);
-                desired->_next = expected.ptr;
-                if (_atomic_tagged_head.compare_exchange_weak(expected,
-                                                              desired,
-                                                              Ordering::RELEASE,
-                                                              Ordering::RELAXED)) {
-                    epoch::repin_this_thread();
-                    _thread_local_color_for_allocation = get_global_color_for_allocation();
-                    return;
-                }
-            }
-        }
-        
-        void mutator_resigns() {
-            
-            printf("%s: garbage collection session resigns\n", _name.c_str());
-            
-            TaggedPtr<Session::Node, Session::Tag> desired{
-                new Session::Node{
-                    nullptr,
-                    std::exchange(_thread_local_color_did_shade, 0),
-                    std::move(_thread_local_new_objects)
-                },
-                Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE
-            };
-            TaggedPtr<Node, Tag> expected = _atomic_tagged_head.load(Ordering::RELAXED);
-            for (;;) {
-                assert(expected.tag == Tag::COLLECTOR_SHOULD_CONSUME);
-                desired->_next = expected.ptr;
-                if (_atomic_tagged_head.compare_exchange_weak(expected,
-                                                              desired,
-                                                              Ordering::RELEASE,
-                                                              Ordering::RELAXED)) {
-                    epoch::unpin_this_thread();
-                    return;
-                }
-            }
-                        
-        } // void Session::resign()
-        
-        
-        
-        auto collector_gets_reports() -> TaggedPtr<Node, Tag> {
-            TaggedPtr<Node, Tag> desired = { nullptr, Tag::COLLECTOR_SHOULD_CONSUME};
-            return _atomic_tagged_head.exchange(desired,
-                                                Ordering::ACQUIRE);
-        }
-        
-    }; // struct Session
-    
-    
-    void record_child(void* tracer, const GarbageCollected* child) {
-        assert(child);
-        ((Stack<const GarbageCollected*>*)tracer)->push(child);
-    }
-    
-    
-    
-    
-    
-    
-    
-    void mutator_become_with_name(const char* name) {
-        
-        epoch::pin_this_thread();
-        
-        Session* session = new Session{
-            ._name = name
-        };
-        
-        session->_next = _global_new_sessions.load(Ordering::RELAXED);
-        for (;;) {
-            if (_global_new_sessions.compare_exchange_weak(session->_next,
-                                                           session,
-                                                           Ordering::RELEASE,
-                                                           Ordering::RELAXED))
-                break;
-        }
-        
-        _thread_local_session = session;
-        _thread_local_color_for_allocation = get_global_color_for_allocation();
-        
-        printf("%s: garbage collection session begins\n", name);
-
-        
-    }
-    
-    
-    
-    
     GarbageCollected::GarbageCollected()
     : _color(get_thread_local_color_for_allocation()) {
         // SAFETY: pointer to a partially constructed object escapes.  These
@@ -235,8 +80,7 @@ namespace wry {
         const Color did_shade = (~before) & after;
         _thread_local_color_did_shade |= did_shade;
     }
-    
-    
+        
     constinit Stack<GarbageCollected const*> global_children;
     
     void garbage_collected_scan(GarbageCollected const* child) {
@@ -247,16 +91,67 @@ namespace wry {
     
     void garbage_collected_scan_weak(GarbageCollected const* child) {
         abort();
-        // if (child) {
-        //     global_children.push(child);
-        // }
     }
+    
+
+
+    struct Report {
+        
+        Report* _next = nullptr;
+        Color color_did_shade = 0;
+        Bag<const GarbageCollected*> allocations;
+        
+    }; // struct Report
+            
+    constinit static Atomic<Report*> _global_atomic_reports_head = {};
+                
+    void _mutator_publishes_report() {
+        Report* desired = new Report{
+            nullptr,
+            std::exchange(_thread_local_color_did_shade, 0),
+            std::move(_thread_local_new_objects)
+        };
+        desired->_next = _global_atomic_reports_head.load(Ordering::RELAXED);
+        while (!_global_atomic_reports_head.compare_exchange_weak(desired->_next,
+                                                                  desired,
+                                                                  Ordering::RELEASE,
+                                                                  Ordering::RELAXED))
+            ;
+    }
+        
+    void mutator_become_with_name(const char* name) {
+        epoch::pin_this_thread();
+        _thread_local_color_for_allocation = get_global_color_for_allocation();
+    }
+
+    void mutator_handshake() {
+        _mutator_publishes_report();
+        epoch::repin_this_thread();
+        _thread_local_color_for_allocation = get_global_color_for_allocation();
+    }
+    
+    void mutator_resign() {
+        _mutator_publishes_report();
+        epoch::unpin_this_thread();
+    }
+    
+    Report* collector_takes_reports(){
+        return _global_atomic_reports_head.exchange(nullptr,
+                                                    Ordering::ACQUIRE);
+    }
+
+        
+        
+
+    
+    
+
     
     
     struct Collector {
         
         template<typename T, size_t N, size_t MASK = N-1>
-        struct RingBuffer {
+        struct InlineRingBuffer {
             
             static_assert(std::has_single_bit(N), "RingBuffer capacity must be a power of two");
             
@@ -278,11 +173,9 @@ namespace wry {
             
         }; // struct RingBuffer<T, N, MASK>
         
-        
-        Session* _sessions_head = nullptr;
-        
-        RingBuffer<Color, 4> _color_history;
-        RingBuffer<Color, 4> _shade_history;
+                
+        InlineRingBuffer<Color, 4> _color_history;
+        InlineRingBuffer<Color, 4> _shade_history;
         
         Bag<const GarbageCollected*> _known_objects;
         
@@ -300,8 +193,6 @@ namespace wry {
         
         void loop_until_canceled() {
             
-            _sessions_head = nullptr;
-
             // Does the collector need to pin?
             // Or just to spy on the epoch?
 
@@ -312,41 +203,17 @@ namespace wry {
             
             while (!_is_canceled.load(Ordering::RELAXED)) {
                 
-                // Provide our own report and repin the thread
-                // _thread_local_session->mutator_handshakes();
                 epoch::repin_this_thread();
                 
-                // Accept new sessions
-                {
-                    Session* expected = _global_new_sessions.exchange(nullptr, Ordering::ACQUIRE);
-                    while (expected) {
-                        Session* a = expected;
-                        expected = expected->_next;
-                        a->_next = _sessions_head;
-                        _sessions_head = a;
-                    }
-                }
                 
                 // Always read all reports
                 {
                     Color did_shade = {};
-                    Session** a = &_sessions_head;
-                    for (;;) {
-                        Session* b = *a;
-                        if (!b)
-                            break;
-                        TaggedPtr<Session::Node, Session::Tag> reports
-                            = b->collector_gets_reports();
-                        Session::Node* node = reports.ptr;
-                        while (node) {
-                            did_shade |= node->color_did_shade;
-                            _known_objects.splice(std::move(node->allocations));
-                            delete std::exchange(node, node->_next);
-                        }
-                        if (reports.tag == Session::Tag::COLLECTOR_SHOULD_CONSUME_AND_RELEASE)
-                            std::exchange(*a, b->_next)->release();
-                        else
-                            a = &(b->_next);
+                    Report* head = collector_takes_reports();
+                    while (head) {
+                        did_shade |= head->color_did_shade;
+                        _known_objects.splice(std::move(head->allocations));
+                        delete std::exchange(head, head->_next);
                     }
                     _shade_history.front() |= did_shade;
                 }
@@ -363,7 +230,11 @@ namespace wry {
                     // a sensible way to sleep here without imposing costs on the
                     // case when the system is working hard?
                     // Exponential backoff?
-                    std::this_thread::yield();
+                    // std::this_thread::yield();
+                    printf("C0:\tsleeps\n");
+                    epoch::unpin_this_thread();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    epoch::pin_this_thread();
                     continue;
                 }
                 
@@ -634,12 +505,10 @@ namespace wry {
             
             // auto t1 = std::chrono::steady_clock::now();
             //
-            // printf("C0:     marked %zd\n", trace_count + mark_count);
-            // printf("C0:     deleted %zd\n", delete_count);
+            printf("C0:     marked %zd\n", trace_count + mark_count);
+            printf("C0:     deleted %zd\n", delete_count);
             // printf("C0:     in %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
-            
-            total_deleted.fetch_add(delete_count, Ordering::RELAXED);
-            
+                        
         } // void Collector::scan()
         
     }; // struct Collector
@@ -652,18 +521,8 @@ namespace wry {
     
     void collector_cancel() {
         collector._is_canceled.store(true, Ordering::RELAXED);
-        _global_new_sessions.notify_all();
     }
-    
-    void mutator_handshake() {
-        _thread_local_session->mutator_handshakes();
-    }
-    
-    void mutator_resign() {
-        _thread_local_session->mutator_resigns();
-        std::exchange(_thread_local_session, nullptr)->release();
-    }
-    
+        
     void mutator_overwrote(const GarbageCollected* a) {
         if (a) {
             a->_garbage_collected_shade();

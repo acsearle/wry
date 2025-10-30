@@ -217,6 +217,18 @@ namespace wry::epoch {
                 }
             }
         }
+        
+        Epoch pin_and_unpin() {
+            State expected = state.load(Ordering::RELAXED);
+            for (;;) {
+                State desired = expected.try_advance();
+                if (state.compare_exchange_weak(expected, desired, Ordering::ACQ_REL, Ordering::RELAXED)) {
+                    if (expected.current != desired.current)
+                        state.notify_all();
+                    return desired.current;
+                }
+            }
+        }
 
         
         
