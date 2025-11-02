@@ -13,6 +13,7 @@
 #include "algorithm.hpp"
 #include "mutex.hpp"
 #include "stdint.hpp"
+#include "utility.hpp"
 
 namespace wry {
     
@@ -127,33 +128,37 @@ namespace wry {
         };
         
         void apply(uint64_t priority) {
-            std::unique_lock lock{mutex};
-            assert(!processed);
-            priorities.push_back(priority);
+            WITH(std::unique_lock guard(mutex)) {
+                assert(!processed);
+                priorities.push_back(priority);
+            }
         };
         
-        void _assign() {
+        void _assign(std::unique_lock<FastBasicLockable>& guard) {
+            assert(guard.owns_lock());
             std::sort(priorities.begin(), priorities.end());
             auto partition = std::unique(priorities.begin(), priorities.end());
             priorities.erase(partition, priorities.end());
         }
         
         uint64_t collect(uint64_t priority) {
-            std::unique_lock lock{mutex};
-            if (!processed) {
-                _assign();
-                processed = true;
+            WITH(std::unique_lock guard(mutex)) {
+                if (!processed) {
+                    _assign(guard);
+                    processed = true;
+                }
+                auto a = std::lower_bound(priorities.begin(), priorities.end(), priority);
+                assert(a != priorities.end());
+                assert(*a == priority);
+                return count + std::distance(priorities.begin(), a);
             }
-            auto a = std::lower_bound(priorities.begin(), priorities.end(), priority);
-            assert(a != priorities.end());
-            assert(*a == priority);
-            return count + std::distance(priorities.begin(), a);
         };
         
         void close() {
-            std::unique_lock lock{mutex};
-            count += priorities.size();
-            priorities.clear();
+            WITH(std::unique_lock guard(mutex)) {
+                count += priorities.size();
+                priorities.clear();
+            }
         }
         
     }; // BlockingOfficeState

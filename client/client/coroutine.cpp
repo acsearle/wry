@@ -56,17 +56,12 @@ namespace wry::coroutine {
             global_work_queue.wait_not_empty();
             if (global_work_queue.is_canceled())
                 break;
-            mutator_become_with_name("Wn");
-            epoch::pin_this_thread();
+            mutator_pin();
             std::coroutine_handle<> handle = {};
             while (global_work_queue.try_pop_front(handle)) {
                 handle.resume();
-                // TODO: We should throttle these to happen infrequently
-                mutator_handshake();
-                epoch::repin_this_thread();
             }
-            epoch::unpin_this_thread();
-            mutator_resign();
+            mutator_unpin();
         }
     }
     

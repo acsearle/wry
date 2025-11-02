@@ -498,57 +498,60 @@ namespace wry::coroutine {
         std::deque<Awaitable*, A<Awaitable*>> _waiting;
         
         void push_back(T item) {
-            std::unique_lock guard(_mutex);
-            if (_waiting.empty()) {
-                _deque.push_back(std::move(item));
-            } else {
-                assert(_deque.empty());
-                Awaitable* awaitable = _waiting.front();
-                _waiting.pop_front();
-                *(awaitable->_victim) = std::move(item);
-                awaitable->_result = true;
-                schedule_coroutine_handle(awaitable->_coroutine_handle);
+            WITH(std::unique_lock lock{_mutex}) {
+                if (_waiting.empty()) {
+                    _deque.push_back(std::move(item));
+                } else {
+                    assert(_deque.empty());
+                    Awaitable* awaitable = _waiting.front();
+                    _waiting.pop_front();
+                    *(awaitable->_victim) = std::move(item);
+                    awaitable->_result = true;
+                    schedule_coroutine_handle(awaitable->_coroutine_handle);
+                }
             }
         }
 
         void push_front(T item) {
-            std::unique_lock guard(_mutex);
-            if (_waiting.empty()) {
-                _deque.push_front(std::move(item));
-            } else {
-                assert(_deque.empty());
-                Awaitable* awaitable = _waiting.front();
-                _waiting.pop_front();
-                *(awaitable->_victim) = std::move(item);
-                awaitable->_result = true;
-                schedule_coroutine_handle(awaitable->_coroutine_handle);
+            WITH(std::unique_lock lock{_mutex}) {
+                if (_waiting.empty()) {
+                    _deque.push_front(std::move(item));
+                } else {
+                    assert(_deque.empty());
+                    Awaitable* awaitable = _waiting.front();
+                    _waiting.pop_front();
+                    *(awaitable->_victim) = std::move(item);
+                    awaitable->_result = true;
+                    schedule_coroutine_handle(awaitable->_coroutine_handle);
+                }
             }
         }
         
         bool try_pop_front(T& victim) {
-            std::unique_lock guard(_mutex);
-            bool result = !_deque.empty();
-            if (result) {
-                victim = std::move(_deque.front());
-                _deque.pop_front();
+            WITH(std::unique_lock lock{_mutex}) {
+                bool result = !_deque.empty();
+                if (result) {
+                    victim = std::move(_deque.front());
+                    _deque.pop_front();
+                }
+                return result;
             }
-            return result;
         }
 
         bool try_pop_back(T& victim) {
-            std::unique_lock guard(_mutex);
-            bool result = !_deque.empty();
-            if (result) {
-                victim = std::move(_deque.back());
-                _deque.pop_back();
+            WITH(std::unique_lock lock{_mutex}) {
+                bool result = !_deque.empty();
+                if (result) {
+                    victim = std::move(_deque.back());
+                    _deque.pop_back();
+                }
+                return result;
             }
-            return result;
         }
 
         void cancel() {
             std::deque<Awaitable*> waiting;
-            {
-                std::unique_lock guard(_mutex);
+            WITH(std::unique_lock lock{_mutex}) {
                 _is_canceled = true;
                 using std::swap;
                 swap(waiting, _waiting);
@@ -565,12 +568,12 @@ namespace wry::coroutine {
             std::coroutine_handle<> _coroutine_handle;
             
             void await_suspend(std::coroutine_handle<> handle) noexcept {
-                // We still hold the mutex
-                // Therefore the queue is still empty
-                _coroutine_handle = handle;
-                assert(!_context->_is_canceled);
-                _context->_waiting.push_back(this);
-                _context->_mutex.unlock();
+                // Lock transfers from await_ready() -> false
+                WITH(std::unique_lock guard(_context->_mutex, std::adopt_lock)) {
+                    _coroutine_handle = handle;
+                    assert(!_context->_is_canceled);
+                    _context->_waiting.push_back(this);
+                }
             }
             
             bool await_resume() const noexcept {
@@ -583,18 +586,21 @@ namespace wry::coroutine {
             struct PopFrontAwaitable : Awaitable {
                 
                 bool await_ready() noexcept {
-                    this->_context->_mutex.lock();
-                    if (!this->_context->_deque.empty()) {
-                        if (!this->_context->_is_canceled)
-                            return false;
-                        assert(this->_result == false);
-                    } else {
-                        *this->_victim = std::move(this->_context->_deque.front());
-                        this->_context->_deque.pop_front();
-                        this->_result = true;
+                    WITH(std::unique_lock guard(this->_context->_mutex)) {
+                        if (!this->_context->_deque.empty()) {
+                            if (!this->_context->_is_canceled) {
+                                // Lock transfers into await_suspend(...)
+                                guard.release();
+                                return false;
+                            }
+                            assert(this->_result == false);
+                        } else {
+                            *this->_victim = std::move(this->_context->_deque.front());
+                            this->_context->_deque.pop_front();
+                            this->_result = true;
+                        }
+                        return true;
                     }
-                    this->_context->_mutex.unlock();
-                    return true;
                 }
                 
             };
@@ -605,18 +611,21 @@ namespace wry::coroutine {
             struct PopBackAwaitable : Awaitable {
                 
                 bool await_ready() noexcept {
-                    this->_context->_mutex.lock();
-                    if (!this->_context->_deque.empty()) {
-                        if (!this->_context->_is_canceled)
-                            return false;
-                        assert(this->_result == false);
-                    } else {
-                        *this->_victim = std::move(this->_context->_deque.back());
-                        this->_context->_deque.pop_back();
-                        this->_result = true;
+                    WITH(std::unique_lock guard{this->_context->_mutex}) {
+                        if (!this->_context->_deque.empty()) {
+                            if (!this->_context->_is_canceled) {
+                                // Lock transfers into await_suspend(...)
+                                guard.release();
+                                return false;
+                            }
+                            assert(this->_result == false);
+                        } else {
+                            *this->_victim = std::move(this->_context->_deque.back());
+                            this->_context->_deque.pop_back();
+                            this->_result = true;
+                        }
+                        return true;
                     }
-                    this->_context->_mutex.unlock();
-                    return true;
                 }
                 
             };
@@ -625,6 +634,193 @@ namespace wry::coroutine {
         
     }; // CoroutineBlockingDeque
     
+    
+    
+    
+    // Worked example of a manual coroutine mostly compatible with the Promise
+    // interface.
+    
+    // Manual coroutines at least have the potential to be garbage collected
+    
+    template<typename Promise>
+    struct Example {
+        
+        using ReturnObjectType = decltype(std::declval<Promise&>().get_return_object());
+        using AwaitableTypeInitial = decltype(std::declval<Promise&>().initial_suspend());
+        using AwaitableTypeFinal = decltype(std::declval<Promise&>().initial_suspend());
+
+        Header _header;
+        Promise _promise;
+        
+        enum StateTag {
+            INITIAL,
+            FINAL,
+        };
+        
+        StateTag _state_tag;
+
+        // Tagged union of the current awaitable
+        enum AwaitableTag {
+            AWAITABLE_TAG_NONE,
+            AWAITABLE_TAG_INITIAL,
+            AWAITABLE_TAG_FINAL,
+        } _awaitable_tag;
+        union {
+            char _awaitable_none;
+            AwaitableTypeInitial _awaitable_initial;
+            AwaitableTypeFinal _awaitable_final;
+        };
+        
+        Example(/* args */)
+        : _header{
+            .resume = [](void* a) -> void { ((Example*)a)->_resume(); },
+            .destroy = [](void* a) -> void { ((Example*)a)->_destroy(); },
+        }, _promise(/* args */)
+        , _state_tag{INITIAL} {
+        }
+                    
+        static ReturnObjectType execute() {
+            Example* self = new Example;
+            return self->execute();
+        }
+        
+        ReturnObjectType _execute() {
+            ReturnObjectType return_object = _promise.get_return_object();
+            _initial_suspend();
+            return return_object;
+        }
+        
+        void _initial_suspend() {
+            assert(_awaitable_tag == AWAITABLE_TAG_NONE);
+            new(&_awaitable_initial) AwaitableTypeInitial(_promise.initial_suspend());
+            _awaitable_tag = AWAITABLE_TAG_INITIAL;
+            if (_awaitable_initial.await_ready()) {
+                _resume();
+            } else {
+                std::coroutine_handle<> continuation
+                = _awaitable_initial.await_suspend(std::coroutine_handle<Promise>::from_address(&(_header)));
+                // TODO: tail call vs structured code
+                if (continuation)
+                    continuation.resume();
+            }
+        }
+        
+        auto _initial_resume() {
+            assert(_awaitable_tag == AWAITABLE_TAG_INITIAL);
+            auto result = _awaitable_initial.await_resume();
+            std::destroy_at(&_awaitable_initial);
+            _awaitable_tag = AWAITABLE_TAG_NONE;
+            return result;
+        }
+        
+        void _final_suspend() {
+            _header.resume = nullptr; // mark coroutine as done
+            assert(_awaitable_tag == AWAITABLE_TAG_NONE);
+            new (&_awaitable_final) AwaitableTypeFinal(_promise.final_suspend());
+            _awaitable_tag = AWAITABLE_TAG_FINAL;
+            if (!_awaitable_final.await_ready()) {
+                std::coroutine_handle<> continuation
+                = _awaitable_final.await_suspend(std::coroutine_handle<Promise>::from_address(&(_header)));
+                // TODO: tail call vs structured code
+                if (continuation)
+                    continuation.resume();
+            }
+        }
+
+        void _resume() {
+            switch (_state_tag) {
+                case INITIAL: {
+                    (void) _initial_resume();
+                    
+                    // do some work
+                    
+                    _promise.return_void();
+                    _final_suspend();
+                    return;
+                }
+                case FINAL:
+                    abort(); // resumed a done coroutine
+                default:
+                    abort(); // invalid state tag
+            }
+        }
+        
+        void _destroy() {
+            switch (_awaitable_tag) {
+                case AWAITABLE_TAG_NONE:
+                    break;
+                case AWAITABLE_TAG_INITIAL:
+                    std::destroy_at(_awaitable_initial);
+                    break;
+                case AWAITABLE_TAG_FINAL:
+                    std::destroy_at(_awaitable_final);
+                    break;
+                default:
+                    abort(); // invalid awaitable_tag
+            }
+            switch (_state_tag) {
+                default:
+                    break;
+            }
+            delete this;
+        }
+        
+    };
+    
+    
+    // Simple manual coroutine example that doesn't use the Promise machinery
+    
+    struct Example2 {
+        
+        void (*_resume)(void*);
+        void (*_destroy)(void*);
+        
+        Example2()
+        : _resume(&_static_resume)
+        , _destroy(&_static_destroy) {
+        }
+        
+        // Tagged union holds necessary state that crosses suspension points
+        enum Tag {
+            INITIAL,
+            FINAL,
+        } _tag;
+        union {
+            char _dummy;
+        };
+        
+        
+        
+        static void _static_resume(void* context) {
+            Example2* self = (Example2*)context;
+            switch (self->_tag) {
+                case INITIAL:
+                    // some work
+                    
+                    // [[clang::musttail]] continuation->resume(continuation);
+                    
+                    self->_tag = FINAL;
+                    self->_resume = nullptr;
+                    return;
+                case FINAL:
+                default:
+                    abort();
+            }
+        };
+
+        static void _static_destroy(void* context) {
+            Example2* self = (Example2*)context;
+            switch (self->_tag) {
+                case INITIAL:
+                    break;
+                case FINAL:
+                    break;
+            }
+            delete self;
+        };
+        
+    };
+
     
     
     

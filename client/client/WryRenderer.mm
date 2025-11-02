@@ -1039,7 +1039,7 @@
 
     // Service the garbage collector
     _model->shade_roots();
-    wry::mutator_handshake();
+    wry::mutator_repin();
 
     // Advance the world state
     World* new_world = {};
@@ -1047,13 +1047,10 @@
         World const* old_world = {};
         (void) _model->_worlds.try_pop_front(old_world);
         assert(old_world);
-        garbage_collected_shade(old_world);
+        mutator_overwrote(old_world);
         new_world = old_world->step();
         _model->_worlds.push_back(new_world);
-        // World* old_world = std::exchange(new_world, new_world->step());
-        // Write barrier
     }
-    // wry::epoch::pin_this_thread();
     assert(new_world);
 
 

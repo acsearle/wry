@@ -28,8 +28,7 @@ namespace wry {
         
         void push_front(T item) {
             bool notify = false;
-            {
-                std::unique_lock lock{_mutex};
+            WITH(std::unique_lock lock{_mutex}) {
                 _deque.push_front(item);
                 if (_waiting) {
                     notify = true;
@@ -42,8 +41,7 @@ namespace wry {
         
         void push_back(T item) {
             bool notify = false;
-            {
-                std::unique_lock lock{_mutex};
+            WITH(std::unique_lock lock{_mutex}) {
                 _deque.push_back(item);
                 if (_waiting) {
                     notify = true;
@@ -55,37 +53,39 @@ namespace wry {
         }
         
         [[nodiscard]] bool try_pop_front(T& item) {
-            std::unique_lock lock{_mutex};
-            bool result = !_deque.empty();
-            if (result) {
-                item = _deque.front();
-                _deque.pop_front();
+            WITH(std::unique_lock lock{_mutex}) {
+                bool result = !_deque.empty();
+                if (result) {
+                    item = _deque.front();
+                    _deque.pop_front();
+                }
+                return result;
             }
-            return result;
         }
 
         [[nodiscard]] bool try_pop_back(T& item) {
-            std::unique_lock lock{_mutex};
-            bool result = !_deque.empty();
-            if (result) {
-                item = _deque.back();
-                _deque.pop_back();
+            WITH(std::unique_lock lock{_mutex}) {
+                bool result = !_deque.empty();
+                if (result) {
+                    item = _deque.back();
+                    _deque.pop_back();
+                }
+                return result;
             }
-            return result;
         }
 
         // spurious wakes are permitted
         void wait_not_empty() {
-            std::unique_lock lock{_mutex};
-            if (_deque.empty() && !_is_canceled) {
-                ++_waiting;
-                _condition_variable.wait(lock);
+            WITH(std::unique_lock lock{_mutex}) {
+                if (_deque.empty() && !_is_canceled) {
+                    ++_waiting;
+                    _condition_variable.wait(lock);
+                }
             }
         }
         
         void cancel() {
-            {
-                std::unique_lock lock{_mutex};
+            WITH(std::unique_lock lock{_mutex}) {
                 _is_canceled = true;
                 _waiting = 0;
             }
@@ -93,24 +93,24 @@ namespace wry {
         }
         
         [[nodiscard]] bool is_canceled() {
-            std::unique_lock lock{_mutex};
-            return _is_canceled;
+            WITH(std::unique_lock lock{_mutex})
+                return _is_canceled;
         }
         
     };
     
     template<typename T>
     void garbage_collected_scan(BlockingDeque<T> const& x) {
-        std::unique_lock guard{x._mutex};
-        for (auto const& y : x._deque)
-            garbage_collected_scan(y);
+        WITH(std::unique_lock lock{x._mutex})
+            for (auto const& y : x._deque)
+                garbage_collected_scan(y);
     }
         
     template<typename T>
-    void garbage_collected_shade(BlockingDeque<T> const& a) {
-        std::unique_lock lock{a._mutex};
-        for (T const& b : a._deque)
-            garbage_collected_shade(b);
+    void garbage_collected_shade(BlockingDeque<T> const& x) {
+        WITH(std::unique_lock lock{x._mutex})
+            for (T const& y : x._deque)
+                garbage_collected_shade(y);
     }
     
     

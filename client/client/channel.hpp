@@ -14,6 +14,8 @@
 #include <condition_variable>
 #include <queue>
 
+#include "utility.hpp"
+
 namespace wry {
     
     // Basic blocking multi-producer multi-consumer channel

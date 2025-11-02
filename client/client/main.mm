@@ -39,17 +39,19 @@ int main(int argc, const char** argv) {
     std::thread collector_thread([](){
         wry::collector_run_on_this_thread();
     });
-    wry::mutator_become_with_name("main thread");
+    wry::mutator_pin();
         
-    // execute unit tests on a background thread
-    
-    std::thread tests(wry::run_tests);
-    
     
     std::vector<std::thread> workers;
     for (int i = 0; i != 4; ++i) {
         workers.emplace_back(&wry::coroutine::worker_thread_loop);
     }
+    
+    
+    
+    // execute unit tests on a background thread
+    // TODO: ... on the worker pool?
+    std::thread tests(wry::run_tests);
     
     @autoreleasepool {
         
@@ -85,7 +87,7 @@ int main(int argc, const char** argv) {
     
     printf("main waiting to join unit tests thread\n");
     tests.join();
-    wry::mutator_resign();
+    wry::mutator_unpin();
     wry::collector_cancel();
     printf("main waiting to join the collector thread\n");
     collector_thread.join();

@@ -18,12 +18,13 @@
 #include "atomic.hpp"
 #include "garbage_collected.hpp"
 #include "mutex.hpp"
+#include "utility.hpp"
 
 namespace wry {
     
     constexpr size_t CACHE_LINE_BYTES = 64;
     
-    namespace _work_stealing_queue_blocking {
+    namespace _blocking_work_stealing_queue {
         
         template<Relocatable T>
         struct CircularDeque {
@@ -91,60 +92,70 @@ namespace wry {
             }
             
             void push(T item) {
-                std::unique_lock lock{_mutex};
-                if (_end - _begin == _mask) {
-                    size_t new_mask = (_mask << 1) + 1;
-                    T* new_data = malloc(sizeof(T) * (new_mask + 1));
-                    for (size_t i = _begin; i != _end; ++i)
-                        new_data[i & new_mask] = _data[i & _mask];
-                    free(_data);
-                    _data = new_data;
-                    _mask = new_mask;
+                WITH(std::unique_lock guard(_mutex)) {
+                    if (_end - _begin == _mask) {
+                        size_t new_mask = (_mask << 1) + 1;
+                        T* new_data = malloc(sizeof(T) * (new_mask + 1));
+                        for (size_t i = _begin; i != _end; ++i)
+                            new_data[i & new_mask] = _data[i & _mask];
+                        free(_data);
+                        _data = new_data;
+                        _mask = new_mask;
+                    }
+                    _data[(_end++) & _mask] = item;
                 }
-                _data[(_end++) & _mask] = item;
             }
             
-            bool pop(T& victim) {
-                std::unique_lock lock{_mutex};
-                bool result = _end != _begin;
-                if (result)
-                    victim = _data[(--_end) & _mask];
-                return result;
+            bool try_pop(T& victim) {
+                WITH(std::unique_lock guard(_mutex)) {
+                    bool result = _end != _begin;
+                    if (result)
+                        victim = std::move(_data[(--_end) & _mask]);
+                    return result;
+                }
             }
             
-            bool steal(T& victim) {
+            bool try_steal(T& victim) {
+                WITH(std::unique_lock guard(_mutex)) {
+                    bool result = _end != _begin;
+                    if (result)
+                        victim = std::move(_data[(_begin++) & _mask]);
+                    return result;
+                }
             }
                         
                         
-        };
+        }; // WorkStealingQueue
         
-    }
+    } // namespace _blocking_work_stealing_queue
     
-    namespace _work_stealing_queue {
+    namespace _lockfree_work_stealing_queue {
                 
         template<AlwaysLockFreeAtomic T>
-        struct CircularArray : GarbageCollected {
+        struct CircularWeakArray : GarbageCollected {
             
             size_t _mask;
             mutable Atomic<T> _data[0];
             
             size_t capacity() const { return _mask + 1; }
             
-            explicit CircularArray(size_t mask) : _mask(mask) {
+            explicit CircularWeakArray(size_t mask) : _mask(mask) {
                 assert(std::has_single_bit(_mask + 1));
             }
             
-            static CircularArray* make(size_t capacity) {
-                void* raw = calloc(sizeof(CircularArray) + sizeof(T) * capacity, 1);
+            static CircularWeakArray* make(size_t capacity) {
+                void* raw = calloc(sizeof(CircularWeakArray) + sizeof(T) * capacity, 1);
                 size_t mask = capacity - 1;
-                return new(raw) CircularArray(mask);
+                return new(raw) CircularWeakArray(mask);
             }
             
             Atomic<T>& operator[](size_t i) const {
                 return _data[i & _mask];
             }
             
-        }; // struct CircularArray<AlwaysLockFreeAtomic T>
+            virtual void _garbage_collected_scan() const override { /* weak */ }
+            
+        }; // struct CircularWeakArray<AlwaysLockFreeAtomic T>
         
         
         // Nhat Minh Lê, Antoniu Pop, Albert Cohen, Francesco Zappa Nardelli.
@@ -157,7 +168,7 @@ namespace wry {
         struct WorkStealingQueue {
             
             alignas(CACHE_LINE_BYTES) struct {
-                mutable Atomic<const CircularArray<T>*> _array;
+                mutable Atomic<CircularWeakArray<T> const*> _array;
                 mutable Atomic<ptrdiff_t> _bottom;
                 mutable ptrdiff_t _cached_top;
             };
@@ -166,7 +177,7 @@ namespace wry {
                 mutable Atomic<ptrdiff_t> _top;
             };
             
-            explicit WorkStealingQueue(const CircularArray<T>* array)
+            explicit WorkStealingQueue(const CircularWeakArray<T>* array)
             : _array(array)
             , _bottom(0)
             , _cached_top(0)
@@ -174,7 +185,7 @@ namespace wry {
             }
             
             explicit WorkStealingQueue(size_t capacity)
-            : WorkStealingQueue(CircularArray<T>::make(capacity)) {
+            : WorkStealingQueue(CircularWeakArray<T>::make(capacity)) {
             }
             
             WorkStealingQueue()
@@ -182,7 +193,7 @@ namespace wry {
             }
             
             void push(T item) const {
-                const CircularArray<T>* array = this->_array.load(Ordering::RELAXED);
+                CircularWeakArray<T> const* array = this->_array.load(Ordering::RELAXED);
                 ptrdiff_t bottom = this->_bottom.load(Ordering::RELAXED);
                 ptrdiff_t capacity = array->capacity();
                 assert(bottom - _cached_top <= capacity);
@@ -192,11 +203,9 @@ namespace wry {
                     assert(bottom - _cached_top <= capacity);
                     if (bottom - _cached_top == capacity) {
                         // we are out of space; expand the array
-                        CircularArray<T>* new_array = CircularArray<T>::make(capacity << 1);
+                        CircularWeakArray<T>* new_array = CircularWeakArray<T>::make(capacity << 1);
                         for (ptrdiff_t i = _cached_top; i != bottom; ++i)
                             (*new_array)[i].store((*array)[i].load(Ordering::RELAXED), Ordering::RELAXED);
-                        array->garbage_collected_shade();
-                        new_array->garbage_collected_shade();
                         _array.store(new_array, Ordering::RELEASE);
                         array = new_array;
                     }
@@ -205,7 +214,7 @@ namespace wry {
                 _bottom.store(bottom + 1, Ordering::RELEASE);
             }
             
-            bool pop(T& item) const {
+            bool try_pop(T& item) const {
                 ptrdiff_t bottom = this->_bottom.load(Ordering::RELAXED);
                 ptrdiff_t new_bottom = bottom - 1;
                 
@@ -220,7 +229,7 @@ namespace wry {
                     _bottom.store(bottom, Ordering::RELAXED);
                     return false;
                 }
-                const CircularArray<T>* array = this->_array.load(Ordering::RELAXED);
+                CircularWeakArray<T> const* array = this->_array.load(Ordering::RELAXED);
                 // speculative load
                 item = (*array)[new_bottom].load(Ordering::RELAXED);
                 if (new_size > 0) {
@@ -239,12 +248,12 @@ namespace wry {
                 return success;
             }
             
-            bool steal(T& item) const {
+            bool try_steal(T& item) const {
                 ptrdiff_t top = _top.load(Ordering::SEQ_CST);
                 ptrdiff_t bottom = _bottom.load(Ordering::ACQUIRE);
                 if (!(top < bottom))
                     return false;
-                const CircularArray<T>* array = _array.load(Ordering::ACQUIRE);
+                CircularWeakArray<T> const* array = _array.load(Ordering::ACQUIRE);
                 // speculative load
                 item = (*array)[top].load(Ordering::RELAXED);
                 ptrdiff_t new_top = top + 1;
@@ -259,10 +268,9 @@ namespace wry {
             
         }; // struct WorkStealingQueue<AlwaysLockFreeAtomic T>
         
-        
-    } // namespace _work_stealing_queue
+    } // namespace _locking_work_stealing_queue
     
-    using _work_stealing_queue::WorkStealingQueue;
+    using _lockfree_work_stealing_queue::WorkStealingQueue;
     
 } // namespace wry
 

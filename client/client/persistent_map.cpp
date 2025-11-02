@@ -11,7 +11,7 @@
 namespace wry {
     
     define_test("PersistentMap") {
-        mutator_become_with_name("test.PersistentMap");
+        mutator_pin();
         
         /*
          {
@@ -23,7 +23,7 @@ namespace wry {
          }
          */
         
-        mutator_handshake();
+        mutator_repin();
         
         {
             uint64_t k = 6435475;
@@ -60,7 +60,7 @@ namespace wry {
              */
         }
         
-        mutator_handshake();
+        mutator_repin();
         
         // stress test
         /*
@@ -110,7 +110,7 @@ namespace wry {
                     abort();
                 }
                 if (!(i & 255))
-                    mutator_handshake();
+                    mutator_repin();
                 // printf("PMT %d\n", i);
             }
             for (uint64_t k = 0; k != 65536; ++k) {
@@ -125,14 +125,14 @@ namespace wry {
                     assert(!p.try_get(k, v));
                 }
                 if (!(k & 255))
-                    mutator_handshake();
+                    mutator_repin();
                 // printf("PMT %llu\n", k);
             }
             
         }
         
         
-        mutator_resign();
+        mutator_unpin();
     };
 }
 

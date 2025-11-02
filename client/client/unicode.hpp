@@ -120,7 +120,7 @@ namespace wry {
             #define UTF8_ACCEPT 0
             #define UTF8_REJECT 12
             
-            static const uint8_t utf8d[] = {
+            inline constexpr uint8_t utf8d[] = {
                 // The first part of the table maps bytes to character classes that
                 // to reduce the size of the transition table and create bitmasks.
                 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,

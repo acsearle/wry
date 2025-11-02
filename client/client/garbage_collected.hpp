@@ -25,9 +25,9 @@ namespace wry {
     void collector_run_on_this_thread();
     void collector_cancel();
 
-    void mutator_become_with_name(const char*);
-    void mutator_handshake();
-    void mutator_resign();
+    void mutator_pin();
+    void mutator_repin();
+    void mutator_unpin();
     void mutator_overwrote(GarbageCollected const* old_ptr);
     void mutator_mark_root(GarbageCollected const* root_ptr);
     
@@ -88,6 +88,10 @@ namespace wry {
         virtual ~GarbageCollected() = default;
         GarbageCollected& operator=(const GarbageCollected&);
         GarbageCollected& operator=(GarbageCollected&&);
+        
+        struct DeferRegistrationTag {};
+        explicit GarbageCollected(DeferRegistrationTag);
+        void _garbage_collected_complete_deferred_registration() const;
         
         constexpr std::strong_ordering operator<=>(const GarbageCollected&);
         constexpr bool operator==(const GarbageCollected&);

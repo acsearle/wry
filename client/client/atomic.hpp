@@ -317,21 +317,21 @@ namespace wry {
 #if defined(__linux__)
         
         // TODO: This code sketch is untested
+        // TODO: Support sizes other than 4 bytes (indirectly?)
         
         void wait(T& expected, Ordering order) {
             static_assert(sizeof(T) == 4);
-            syscall(SYS_FUTEX, &value, FUTEX_WAIT_PRIVATE, &expected, nullptr, nullptr, 0);
-            
+            (void) syscall(SYS_futex, &value, FUTEX_WAIT_PRIVATE, &expected, nullptr, nullptr, 0);
         }
         
         void notify_one() {
             static_assert(sizeof(T) == 4);
-            syscall(SYS_FUTEX, &value, FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
+            (void) syscall(SYS_futex, &value, FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
         }
 
         void notify_all() {
             static_assert(sizeof(T) == 4);
-            syscall(SYS_FUTEX, &value, FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
+            (void) syscall(SYS_futex, &value, FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
         }
 
 #endif // defined(__linux__)

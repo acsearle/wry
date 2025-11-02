@@ -46,35 +46,30 @@ namespace wry {
     using namespace detail;
     
 #pragma mark - Global and thread_local variables
-    
-    constinit Atomic<Color> _global_atomic_color_for_allocation;
-    
+        
     constinit thread_local Color _thread_local_color_for_allocation;
     constinit thread_local Color _thread_local_color_did_shade;
     constinit thread_local Bag<const GarbageCollected*> _thread_local_new_objects;
     
-    Color get_global_color_for_allocation() {
-        return _global_atomic_color_for_allocation.load(Ordering::RELAXED);
-    }
-    
-    Color get_thread_local_color_for_allocation() {
-        return _thread_local_color_for_allocation;
-    }
-    
-    Color get_thread_local_color_for_shade() {
-        return _thread_local_color_for_allocation & LOW_MASK;
-    }
-        
     GarbageCollected::GarbageCollected()
-    : _color(get_thread_local_color_for_allocation()) {
+    : _color(_thread_local_color_for_allocation) {
         // SAFETY: pointer to a partially constructed object escapes.  These
         // pointers are only published to the collector thread after the
         // constructor has completed.
         _thread_local_new_objects.push(this);
     }
     
+    GarbageCollected::GarbageCollected(GarbageCollected::DeferRegistrationTag)
+    : _color{} {
+    }
+    
+    void GarbageCollected::_garbage_collected_complete_deferred_registration() const {
+        _color.store(_thread_local_color_for_allocation, Ordering::RELAXED);
+        _thread_local_new_objects.push(this);
+    }
+    
     void GarbageCollected::_garbage_collected_shade() const {
-        const Color color_for_shade = get_thread_local_color_for_shade();
+        const Color color_for_shade = _thread_local_color_for_allocation & LOW_MASK;
         const Color before = _color.fetch_or(color_for_shade, Ordering::RELAXED);
         const Color after  =  before | color_for_shade;
         const Color did_shade = (~before) & after;
@@ -102,8 +97,13 @@ namespace wry {
         Bag<const GarbageCollected*> allocations;
         
     }; // struct Report
-            
-    constinit static Atomic<Report*> _global_atomic_reports_head = {};
+
+    
+    // We expect that these are accessed by each thread on each quiescence,
+    // which is a relatively low rate of contention
+    
+    constinit Atomic<Color> _global_atomic_color_for_allocation = {};
+    constinit Atomic<Report*> _global_atomic_reports_head = {};
                 
     void _mutator_publishes_report() {
         Report* desired = new Report{
@@ -119,18 +119,18 @@ namespace wry {
             ;
     }
         
-    void mutator_become_with_name(const char* name) {
+    void mutator_pin() {
         epoch::pin_this_thread();
-        _thread_local_color_for_allocation = get_global_color_for_allocation();
+        _thread_local_color_for_allocation = _global_atomic_color_for_allocation.load(Ordering::RELAXED);
     }
 
-    void mutator_handshake() {
+    void mutator_repin() {
         _mutator_publishes_report();
         epoch::repin_this_thread();
-        _thread_local_color_for_allocation = get_global_color_for_allocation();
+        _thread_local_color_for_allocation = _global_atomic_color_for_allocation.load(Ordering::RELAXED);
     }
     
-    void mutator_resign() {
+    void mutator_unpin() {
         _mutator_publishes_report();
         epoch::unpin_this_thread();
     }
@@ -143,6 +143,28 @@ namespace wry {
         
         
 
+    template<typename T, size_t N, size_t MASK = N-1>
+    struct InlineRingBuffer {
+        
+        static_assert(std::has_single_bit(N), "InlineRingBuffer capacity must be a power of two");
+        
+        size_t _offset = 0;
+        T _array[N] = {};
+        
+        void push_front(T value) {
+            _array[--_offset &= MASK] = value;
+        }
+        
+        const T& operator[](ptrdiff_t i) const {
+            assert((0 <= i) && (i < N));
+            return _array[(_offset + i) & MASK];
+        }
+        
+        T& front() {
+            return _array[_offset & MASK];
+        }
+        
+    }; // struct InlineRingBuffer<T, N, MASK>
     
     
 
@@ -150,30 +172,6 @@ namespace wry {
     
     struct Collector {
         
-        template<typename T, size_t N, size_t MASK = N-1>
-        struct InlineRingBuffer {
-            
-            static_assert(std::has_single_bit(N), "RingBuffer capacity must be a power of two");
-            
-            size_t _offset = 0;
-            T _array[N] = {};
-            
-            void push_front(T value) {
-                _array[--_offset &= MASK] = value;
-            }
-            
-            const T& operator[](ptrdiff_t i) const {
-                assert((0 <= i) && (i < N));
-                return _array[(_offset + i) & MASK];
-            }
-            
-            T& front() {
-                return _array[_offset & MASK];
-            }
-            
-        }; // struct RingBuffer<T, N, MASK>
-        
-                
         InlineRingBuffer<Color, 4> _color_history;
         InlineRingBuffer<Color, 4> _shade_history;
         
@@ -231,7 +229,7 @@ namespace wry {
                     // case when the system is working hard?
                     // Exponential backoff?
                     // std::this_thread::yield();
-                    printf("C0:\tsleeps\n");
+                    // printf("C0:\tsleeps\n");
                     epoch::unpin_this_thread();
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
                     epoch::pin_this_thread();
@@ -505,8 +503,8 @@ namespace wry {
             
             // auto t1 = std::chrono::steady_clock::now();
             //
-            printf("C0:     marked %zd\n", trace_count + mark_count);
-            printf("C0:     deleted %zd\n", delete_count);
+            // printf("C0:     marked %zd\n", trace_count + mark_count);
+            // printf("C0:     deleted %zd\n", delete_count);
             // printf("C0:     in %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
                         
         } // void Collector::scan()

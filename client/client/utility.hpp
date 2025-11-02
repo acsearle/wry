@@ -24,6 +24,8 @@ namespace wry {
     
 #define FORWARD( X ) std::forward<decltype( X )>( X )
     
+#define WITH( X ) if ( X ; true )
+    
     // # heterogenous reduce
     //
     // Performs reduce over parameter packs, enabling variadic extensions to
