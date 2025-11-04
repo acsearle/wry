@@ -20,22 +20,7 @@ namespace wry {
         // Bibliography:
         //
         // Crossbeam https://github.com/crossbeam-rs/crossbeam
-        
-        
-        
-        struct Epoch {
-            
-            uint32_t data;
-            
-            bool operator==(Epoch const&) const = default;
-            
-            // Wrapping permitted
-            Epoch operator+(uint32_t y) const { return Epoch{data + y}; }
-            Epoch operator-(uint32_t y) const { return Epoch{data - y}; }
-            uint32_t operator-(Epoch const& y) const { return data - y.data; }
-            
-        };
-        
+                                        
         // We steal the pinning notation from Rust's Crossbeam.
         
         // We pack all the state into a single word.  This simplifies atomicity
@@ -51,6 +36,8 @@ namespace wry {
         // that worthwhile.  If it proves to be an issue, a half-measure would be
         // to have a fixed sized list that threads spread over.
         
+        using Epoch = uint32_t;
+
         struct Service {
             
             // wrapping not allowed
@@ -84,9 +71,9 @@ namespace wry {
                 // TODO: If we want to wait on epoch, the layout may matter to
                 // Linux 32-bit futex.
                 
+                Epoch current;         // The current epoch
                 uint16_t pins_current; // Pins in the current epoch
                 uint16_t pins_prior;   // Pins in the prior epoch
-                Epoch current;         // The current epoch
                 
                 // Compute the prior epoch
                 Epoch prior() const { return current - 1; }
@@ -112,9 +99,9 @@ namespace wry {
                     else
                         // Prior epoch is not pinned; we can advance the epoch
                         return State {
+                            .current = current + 1, // Wrapping permitted
                             .pins_current = 0,
                             .pins_prior = pins_current,
-                            .current = current + 1, // Wrapping permitted
                         };
                 }
                 
@@ -124,9 +111,9 @@ namespace wry {
                 
                 [[nodiscard]] State pin() const {
                     return State {
+                        .current = current,
                         .pins_current = _increment_no_overflow(pins_current),
                         .pins_prior = pins_prior,
-                        .current = current
                     };
                 }
                 
@@ -137,15 +124,15 @@ namespace wry {
                 State unpin(Epoch occupied) const {
                     if (occupied == current) {
                         return State {
-                            _decrement_no_overflow(pins_current),
-                            pins_prior,
-                            current
+                            .current = current,
+                            .pins_current = _decrement_no_overflow(pins_current),
+                            .pins_prior = pins_prior,
                         };
                     } else if (occupied == prior()) {
                         return State {
-                            pins_current,
-                            _decrement_no_overflow(pins_prior),
-                            current
+                            .current = current,
+                            .pins_current = pins_current,
+                            .pins_prior = _decrement_no_overflow(pins_prior),
                         };
                     } else [[unlikely]] {
                         abort();
@@ -160,15 +147,15 @@ namespace wry {
                 [[nodiscard]] State pin_explicit(Epoch occupied) const {
                     if (occupied == current) {
                         return State {
+                            .current = current,
                             .pins_current = _nonzero_increment_no_overflow(pins_current),
                             .pins_prior = pins_prior,
-                            .current = current
                         };
                     } else if (occupied == prior()) {
                         return State {
+                            .current = current,
                             .pins_current = pins_current,
                             .pins_prior = _nonzero_increment_no_overflow(pins_prior),
-                            .current = current
                         };
                     } else [[unlikely]] {
                         abort();

@@ -222,14 +222,10 @@ namespace wry {
                 // that every (active) mutator has adopted the last colors
                 // we published.
                 
-                if (epoch::allocator_local_state.known.data - epoch_at_last_change.data < 2) {
-                    // TODO: It's possible for the collector to be faster than
-                    // the mutators (this is a great problem to have!).  Is there
-                    // a sensible way to sleep here without imposing costs on the
-                    // case when the system is working hard?
-                    // Exponential backoff?
-                    // std::this_thread::yield();
-                    // printf("C0:\tsleeps\n");
+                // It's important to structure the comparison to work when
+                // wrapping occurs
+                if (epoch::allocator_local_state.known - epoch_at_last_change < 2) {
+                    // TODO: Best way to sleep or wait here
                     epoch::unpin_this_thread();
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
                     epoch::pin_this_thread();

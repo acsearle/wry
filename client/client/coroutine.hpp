@@ -20,12 +20,528 @@
 
 namespace wry::coroutine {
 
-    void schedule_coroutine_handle_from_address(void* address);
-    void schedule_coroutine_handle(std::coroutine_handle<>);
 
-    // Work until canceled
-    void worker_thread_loop();    
-    void cancel_global_work_queue();
+    // Global work queue
+    
+    void global_work_queue_schedule(std::coroutine_handle<>);
+    
+    void global_work_queue_service();
+    void global_work_queue_cancel();
+    
+    // Basic functions
+    
+    inline std::coroutine_handle<> null_to_noop(std::coroutine_handle<> handle) {
+        return handle ? handle : std::noop_coroutine();
+    }
+
+    // Basic awaitables
+    
+    using std::suspend_always;
+    using std::suspend_never;
+    
+    struct suspend_and_schedule : suspend_always {
+        void await_suspend(std::coroutine_handle<> handle) const noexcept {
+            global_work_queue_schedule(handle);
+        }
+    };
+    
+    struct suspend_and_destroy : suspend_always {
+        void await_suspend(std::coroutine_handle<> handle) const noexcept {
+            handle.destroy();
+        }
+        void await_resume() const noexcept {
+            abort();
+        }
+    };
+    
+    struct debug_suspend_and_leak : suspend_always {
+        void await_suspend(std::coroutine_handle<> handle) const noexcept {
+        }
+    };
+
+    // TODO:
+    //
+    // Prefer parent stealing:
+    // - Callee coroutines initial suspend always.
+    // - Caller coroutine suspends, schedules itself, and resumes callee.
+    // Advantages: depth-first limits state size--asymptotic win log N vs N
+    // Disadvantages: per-fork overhead, slow startup, cache friendliness?
+    
+    // Implementation:
+    //
+    // co_fork foo(); -> co_await foo();
+    // co_join
+    //
+    // foo initial suspends callee
+    // co_await fork_awaitable suspends caller.
+    // caller installs itself in foo's promise
+    
+    
+    
+    /*
+    template<typename Promise, typename Awaitable>
+    Awaitable await_transform(Promise& promise, Awaitable&& awaitable) {
+        return std::move(awaitable);
+    }
+     */
+        
+    
+    
+    
+    
+    // fork-join a coroutine from a non-coroutine
+    // must eventually call join explicitly
+    
+    // consider unifying with co_eager<T>
+    
+    struct co_fork {
+        struct promise_type {
+            enum {
+                INITIAL,
+                FINAL,
+                AWAITED,
+            };
+            Atomic<int> _state{};
+            ~promise_type() {
+                printf("co_fork::promise_type::~promise_type()\n");
+            }
+            constexpr co_fork get_return_object() noexcept {
+                return co_fork{this};
+            }
+            constexpr suspend_and_schedule initial_suspend() const noexcept { return {}; }
+            constexpr auto final_suspend() const noexcept {
+                struct awaitable : suspend_always {
+                    void await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
+                        Atomic<int>* state = &handle.promise()._state;
+                        int was = state->exchange(FINAL, Ordering::RELEASE);
+                        // The promise may now have been deleted under us.
+                        switch (was) {
+                            case INITIAL:
+                                break;
+                            case FINAL:
+                                abort();
+                            case AWAITED:
+                                // Even if the promise is deleted, we can still
+                                // notify on the address; worst case ABA causes
+                                // a spurious wakeup on the new object
+                                state->notify_one();
+                                break;
+                            default:
+                                abort();
+                        }
+                    }
+                };
+                return awaitable{};
+            }
+            void join() {
+                int was = _state.exchange(AWAITED, Ordering::ACQUIRE);
+                for (;;) switch (was) {
+                    case AWAITED:
+                        // spurious wake?
+                        [[fallthrough]];
+                    case INITIAL:
+                        _state.wait(was, Ordering::ACQUIRE);
+                        break;
+                    case FINAL:
+                        std::coroutine_handle<promise_type>::from_promise(*this).destroy();
+                        return;
+                }
+            }
+            void return_void() const noexcept {}
+            void unhandled_exception() const noexcept { abort(); }
+            
+            // auto await_transform(auto&& awaitable) {
+            //     return coroutine::await_transform(*this, FORWARD(awaitable));
+            // }
+            
+        };
+        
+        promise_type* _promise;
+        
+        explicit co_fork(promise_type* promise) : _promise(promise) {}
+        
+        co_fork() = delete;
+        co_fork(co_fork const& other) = delete;
+        co_fork(co_fork&& other)
+        : _promise(std::exchange(other._promise, nullptr)) {
+        }
+        ~co_fork() {
+            if (_promise)
+                abort();
+        }
+        
+        co_fork& operator=(co_fork const&) = delete;
+        co_fork& operator=(co_fork&& other) {
+            co_fork local(std::move(other));
+            using std::swap;
+            swap(_promise, local._promise);
+            return *this;
+        }
+        
+        void join() {
+            std::exchange(_promise, nullptr)->join();
+        }
+        
+    };
+    
+    
+    
+    
+    
+    
+    
+    
+    // Credit: Lewis Baker's cppcoro
+    
+    
+    struct SingleConsumerEvent {
+        
+        Atomic<intptr_t> _state{0};
+        
+        // atomically set the event and schedule any waiting coroutine
+        
+        void set_and_schedule_continuation() {
+            intptr_t was = _state.exchange(1, Ordering::ACQ_REL);
+            switch (was) {
+                case 0:
+                    break;
+                case 1:
+                    // Don't allow this unless a compelling use case is
+                    // discovered
+                    abort();
+                default:
+                    // The state encodes a coroutine
+                    global_work_queue_schedule(std::coroutine_handle<>::from_address((void*)was));
+                    break;
+            }
+        }
+        
+        [[nodiscard]] std::coroutine_handle<> /* Nullable */ set_and_return_continuation() {
+            intptr_t was = _state.exchange(1, Ordering::ACQ_REL);
+            switch (was) {
+                case 0:
+                    return nullptr;
+                case 1:
+                    abort();
+                default:
+                    return std::coroutine_handle<>::from_address((void*)was);
+            }
+        }
+        
+        // reset the event
+        void reset() {
+            intptr_t expected = 1;
+            (void) _state.compare_exchange_strong(expected, 0, Ordering::RELAXED, Ordering::RELAXED);
+            switch (expected) {
+                case 0:
+                    // The event was not signaled anyway
+                case 1:
+                    // The event was signaled
+                default:
+                    // The even was not signaled anyway, and had a continuation
+                    break;
+            }
+        }
+        
+        struct awaitable_type {
+            
+            SingleConsumerEvent* _context = nullptr;
+            intptr_t _expected = 0;
+            
+            bool await_ready() noexcept {
+                _expected = _context->_state.load(Ordering::ACQUIRE);
+                // If the event is already set, just continue without suspending
+                return _expected == 1;
+            }
+            
+            bool await_suspend(std::coroutine_handle<> handle) noexcept {
+                intptr_t desired = (intptr_t)handle.address();
+                assert((desired != 0) && (desired != 1));
+                for (;;) switch (_expected) {
+                    case 0:
+                        // Atomically install the current coroutine as the awaiter
+                        if (_context->_state.compare_exchange_weak(_expected,
+                                                                   desired,
+                                                                   Ordering::RELEASE,
+                                                                   Ordering::ACQUIRE))
+                            return true;
+                        break;
+                    case 1:
+                        // (rare) The event was signaled before we could install
+                        // ourself, resume immediately
+                        return false;
+                    default:
+                        // (forbidden) The event is already awaited by another coroutine
+                        abort();
+                }
+            }
+            
+            void await_resume() noexcept {
+            };
+            
+        };
+        
+        // atomically wait until the event is set
+        awaitable_type operator co_await() {
+            return awaitable_type{this};
+        }
+        
+    };
+    
+    
+    
+    struct SingleConsumerLatch {
+        
+        // We can't store both a continuation address and an arbitrary count
+        // in a single atomic
+        
+        Atomic<ptrdiff_t> _counter;
+        SingleConsumerEvent _event;
+        
+        explicit SingleConsumerLatch(ptrdiff_t initial_count)
+        : _counter(initial_count) {
+        }
+        
+        ~SingleConsumerLatch() {
+            assert(_counter.load(Ordering::RELAXED) == 0);
+        }
+                
+        bool _count_down_common(ptrdiff_t n) {
+            assert(n > 0);
+            ptrdiff_t count = _counter.sub_fetch(n, Ordering::RELEASE);
+            bool result = (count == 0);
+            if (result)
+                (void) _counter.load(Ordering::ACQUIRE);
+            return result;
+        }
+        
+        void count_down(ptrdiff_t n = 1) {
+            if (_count_down_common(n))
+                _event.set_and_schedule_continuation();
+        }
+        
+        [[nodiscard]] std::coroutine_handle<> count_down_and_return_continuation(ptrdiff_t n = 1) {
+            if (_count_down_common(n))
+                return _event.set_and_return_continuation();
+            else
+                return nullptr;
+        }
+        
+        using awaitable_type = SingleConsumerEvent::awaitable_type;
+        
+        awaitable_type operator co_await() {
+            return _event.operator co_await();
+        }
+        
+        bool try_wait() const {
+            return _counter.load(Ordering::ACQUIRE) == 0;
+        }
+        
+        
+        
+        
+        
+        // TODO: Rename this co_notify or something, and call notify on a
+        // generic first argument
+        
+        // usage: Latch::WillDecrement my_coroutine(&my_latch, my_arguments...) { ... }
+        //
+        // on completion of the coroutine, it will signal the latch and, if
+        // complete, transfer control to the latch's continuation
+        struct WillDecrement {
+            
+            struct promise_type {
+                
+                //                // match all arguments
+                //                static void* operator new(std::size_t count, SingleConsumerLatch*, auto&&...) {
+                //                    return bump::this_thread_state.allocate(count);
+                //                }
+                //
+                //                static void operator delete(void* ptr) {
+                //                }
+                
+                SingleConsumerLatch* _latch;
+                promise_type() = delete;
+                explicit promise_type(SingleConsumerLatch* p, auto&&...)
+                : _latch(p) {
+                }
+                
+                ~promise_type() {
+                    printf("WillDecrement::promise_type was deleted\n");
+                }
+                
+                constexpr WillDecrement get_return_object() const noexcept {
+                    return {};
+                }
+                
+                suspend_and_schedule initial_suspend() noexcept { return {}; }
+                
+                auto final_suspend() noexcept {
+                    
+                    struct Awaitable {
+                        
+                        SingleConsumerLatch* _context;
+                        constexpr bool await_ready() const noexcept {
+                            return false;
+                        }
+                        std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
+                            // Save the context
+                            SingleConsumerLatch* context = _context;
+                            handle.destroy();
+                            return null_to_noop(context->count_down_and_return_continuation(1));
+                        }
+                        void await_resume() noexcept {
+                            abort();
+                        }
+                    };
+                    return Awaitable{_latch};
+                }
+                
+                constexpr void return_void() noexcept {
+                    // normal return
+                }
+                
+                void unhandled_exception() noexcept {
+                    __builtin_trap();
+                }
+                
+                /*
+                 decltype(auto) await_transform(auto&& awaitable) {
+                 if constexpr (!std::is_same_v<std::decay_t<decltype(awaitable)>, _self_promise_t>) {
+                 return FORWARD(awaitable);
+                 } else {
+                 struct Awaitable {
+                 promise_type* _promise;
+                 constexpr bool await_ready() const noexcept {
+                 return true;
+                 }
+                 constexpr void await_suspend(std::coroutine_handle<>) const noexcept {
+                 __builtin_trap();
+                 };
+                 promise_type& await_resume() const noexcept {
+                 return *_promise;
+                 }
+                 };
+                 return Awaitable{this};
+                 }
+                 }
+                 */
+                
+            }; // struct SingleConsumerLatch::WillDecrement::promise_type
+            
+        }; // struct SingleConsumerLatch::WillDecrement
+        
+    }; // struct SingleConsumerLatch
+    
+    
+    
+    
+    
+    
+    struct MultipleConsumerEvent {
+
+        enum {
+            SET_NO  = 0,
+            SET_YES = 1,
+        };
+        Atomic<intptr_t> _state{SET_NO};
+        
+        struct awaitable_type {
+            MultipleConsumerEvent* context;
+            intptr_t _next;
+            std::coroutine_handle<> _continuation;
+            
+            bool await_ready() noexcept {
+                _next = context->_state.load(Ordering::ACQUIRE);
+                return _next == SET_YES;
+            }
+            
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<> handle) noexcept {
+                _continuation = handle;
+                for (;;) switch (_next) {
+                    case SET_YES:
+                        return handle;
+                    case SET_NO:
+                    default:
+                        if (context-> _state.compare_exchange_weak(_next,
+                                                                   (intptr_t)this,
+                                                                   Ordering::RELEASE,
+                                                                   Ordering::ACQUIRE))
+                            return std::noop_coroutine();
+                }
+            }
+            
+            void await_resume() const noexcept {
+            }
+            
+        };
+        
+        awaitable_type operator co_await() {
+            return awaitable_type{this};
+        }
+
+        void set() {
+            intptr_t was = _state.exchange(SET_YES, Ordering::ACQUIRE);
+            switch (was) {
+                case SET_YES:
+                    break;
+                case SET_NO:
+                default: {
+                    auto p = (awaitable_type*)was;
+                    while (p) {
+                        // Thundering herd
+                        global_work_queue_schedule(p->_continuation);
+                        p = (awaitable_type*)(p->_next);
+                    }
+                    break;
+                }
+            }
+        }
+        
+        void reset() {
+            intptr_t expected = _state.load(Ordering::RELAXED);
+            for (;;) switch (expected) {
+                case SET_YES:
+                    if (_state.compare_exchange_weak(expected,
+                                                     SET_NO,
+                                                     Ordering::RELAXED,
+                                                     Ordering::RELAXED))
+                        return;
+                    break;
+                default:
+                    return;
+            }
+        }
+        
+    }; // MultipleConsumerEvent
+    
+    
+    
+    
+    struct Barrier {
+        
+        Atomic<ptrdiff_t> _counter;
+        MultipleConsumerEvent _event;
+        
+        explicit Barrier(ptrdiff_t n) : _counter(n) {}
+        
+        MultipleConsumerEvent::awaitable_type operator co_await() {
+            // TODO: Can we rely on the MultipleConsumerEvent to enforce memory ordering?
+            ptrdiff_t n = _counter.sub_fetch(1, Ordering::RELEASE);
+            if (n < 0)
+                abort();
+            if (n == 0) {
+                (void) _counter.load(Ordering::ACQUIRE);
+                _event.set();
+            }
+            return _event.operator co_await();
+        }
+        
+    };
+    
+    
+    
+    
 
 
     // The variables held by a coroutine are inaccessible to us and thus cannot
@@ -133,270 +649,170 @@ namespace wry::coroutine {
 
     constexpr inline struct _self_promise_t {} self_promise;
     
-    
-    // Windows-style Events are a good fit for coroutines
-    // Credit: Lewis Baker's cppcoro
-    
-    // A manual reset event supporting a single waiter is perhaps the most
-    // simple useful coroutine primitive
-    //
-    // Stores NONSIGNALED, SIGNALED, or the address of the awaiting coroutine
-    
-    struct SingleConsumerEvent {
         
-        enum : intptr_t {
-            NONSIGNALED = 0,
-            SIGNALED = 1,
-        };
-        Atomic<intptr_t> _state{NONSIGNALED};
-                
-        // atomically set the event and schedule any waiting coroutine
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+
+    
+    
+    
+    // TODO: Are tasks actually useful?
+    // vs write multiple results into an array and count down a latch?
+    
+    // Eager task returning T
+    template<typename T>
+    struct co_future_eager {
         
-        void set() {
-            intptr_t was = _state.exchange(SIGNALED, Ordering::ACQ_REL);
-            switch (was) {
-                case NONSIGNALED:
-                    return;
-                case SIGNALED:
-                    // Don't allow this unless a compelling use case is
-                    // discovered
-                    abort();
-                    return;
-                default:
-                    // The state encodes a coroutine
-                    schedule_coroutine_handle_from_address((void*)was);
-                    return;
-            }
-        }
-               
-        // reset the event
-        void reset() {
-            intptr_t expected = SIGNALED;
-            (void) _state.compare_exchange_strong(expected, NONSIGNALED, Ordering::RELAXED, Ordering::RELAXED);
-            // Don't allow this unless a compelling use case is
-            // discovered
-            assert(expected == SIGNALED);
-        }
-        
-        struct Awaitable {
-            Atomic<intptr_t>& _state;
-            intptr_t _expected;
+        struct promise_type {
             
-            bool await_ready() noexcept {
-                _expected = _state.load(Ordering::ACQUIRE);
-                // If the event is already set, just continue without suspending
-                return _expected == SIGNALED;
+            enum {
+                INITIAL = 0,
+                READY,
+                ABANDONED,
+            };
+            
+            Atomic<intptr_t> _state;
+            union {
+                char _initial;
+                T _ready;
+            };
+            
+            constexpr co_future_eager get_return_object() const noexcept {
+                return co_future_eager{this};
             }
             
-            bool await_suspend(std::coroutine_handle<> handle) noexcept {
-                intptr_t desired = (intptr_t)handle.address();
-                assert((desired != NONSIGNALED) && (desired != SIGNALED));
-                for (;;) switch (_expected) {
-                    case NONSIGNALED:
-                        // Atomically install the current coroutine as the awaiter
-                        if (_state.compare_exchange_weak(_expected,
-                                                         desired,
-                                                         Ordering::RELEASE,
-                                                         Ordering::ACQUIRE))
-                            return true;
-                        break;
-                    case SIGNALED:
-                        // (rare) The event was signaled before we could install
-                        // ourself, resume immediately
+            constexpr std::suspend_never initial_suspend() const noexcept {
+                return {};
+            }
+            
+            void unhandled_exception() const noexcept { abort(); }
+            
+            void return_value(auto&& x) noexcept {
+                new(&_ready) T(FORWARD(x));
+            }
+            
+            constexpr auto final_suspend() const noexcept {
+                struct awaitable {
+                    constexpr bool await_ready() const noexcept {
                         return false;
+                    }
+                    std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) {
+                        intptr_t was = handle.promise()._state.exchange(READY, Ordering::RELEASE);
+                        switch (was) {
+                            case INITIAL:
+                                return std::noop_coroutine();
+                            case READY:
+                                abort();
+                            case ABANDONED:
+                                std::destroy(handle.promise()._ready);
+                                handle.destroy();
+                                return std::noop_coroutine();
+                            default: // AWAITED
+                                handle.promise().load(Ordering::ACQUIRE);
+                                return std::coroutine_handle<>::from_address((void*)was);
+                        }
+                    }
+                };
+            }
+            
+        };
+        
+        promise_type* _promise;
+        
+        co_future_eager() = delete;
+
+        co_future_eager(co_future_eager const& other) = delete;
+
+        co_future_eager(co_future_eager&& other)
+        : _promise(std::exchange(other._promise, nullptr)) {
+        }
+        
+        ~co_future_eager() {
+            if (_promise) {
+                intptr_t was = _promise->_state.exchange(promise_type::ABANDONED, Ordering::RELEASE);
+                switch (was) {
+                    case promise_type::INITIAL:
+                        // running; will destroy itself
+                        break;
+                    case promise_type::READY:
+                        // finished; we must destroy it
+                        (void) _promise->_state.load(Ordering::ACQUIRE);
+                        std::destroy(_promise->_ready);
+                        std::coroutine_handle<promise_type>::from_promise(*(_promise)).destroy();
+                        break;
+                    case promise_type::ABANDONED:
+                        // disallowed; already abandoned
+                        abort();
                     default:
-                        // (forbidden) The event is already awaited by another coroutine
+                        // disallowed; awaited
                         abort();
                 }
             }
-            
-            void await_resume() noexcept {
-            };
-            
-        };
+        }
         
-        // atomically wait until the event is set
-        Awaitable operator co_await() {
-            return Awaitable{_state};
+        co_future_eager& operator=(co_future_eager const&) = delete;
+        co_future_eager& operator=(co_future_eager&& other) {
+            co_future_eager local(std::move(other));
+            using std::swap;
+            swap(_promise, local._promise);
+            return *this;
+        }
+        
+        
+        auto operator co_await() {
+            struct awaitable {
+                co_future_eager* _context;
+                constexpr bool await_ready() const noexcept {
+                    return false;
+                }
+                std::coroutine_handle<> await_suspend(std::coroutine_handle<> handle) const noexcept {
+                    intptr_t was = _context->_promise->_state.exchange((intptr_t)handle.address(), Ordering::RELEASE);
+                    switch (was) {
+                        case promise_type::INITIAL:
+                            return std::noop_coroutine();
+                        case promise_type::READY:
+                            (void) _context->_promise->_state.load(Ordering::ACQUIRE);
+                            return handle;
+                        case promise_type::ABANDONED:
+                            // disallowed: already abandoned
+                            abort();
+                        default:
+                            //disallowed: already awaited
+                            abort();
+                    }
+                }
+                T await_resume() const noexcept {
+                    T result{std::move(_context->_promise->_ready)};
+                    std::destroy(_context->_promise->_ready);
+                    std::coroutine_handle<promise_type>::from_promise(*(_context->_promise)).destroy();
+                    _context->_promise = nullptr;
+                    return result;
+                }
+            };
+            return awaitable{this};
         }
         
     };
     
-    struct SingleConsumerLatch {
-        
-        enum : intptr_t {
-            NONSIGNALED = 0,
-            SIGNALED = 1,
-        };
-        
-        Atomic<ptrdiff_t> _count;
-        Atomic<intptr_t> _continuation;
-                
-        explicit SingleConsumerLatch(ptrdiff_t initial_count)
-        : _count(initial_count)
-        , _continuation(NONSIGNALED) {
-        }
-        
-        ~SingleConsumerLatch() {
-            assert(_count.load(Ordering::RELAXED) == 0);
-        }
-        
-        void decrement() {
-            subtract(1);
-        }
-        
-        void subtract(ptrdiff_t count) {
-            assert(count > 0);
-            ptrdiff_t n = _count.sub_fetch((ptrdiff_t)count, Ordering::RELEASE);
-            if (n != 0)
-                return;
-            (void) _count.load(Ordering::ACQUIRE);
-            intptr_t observed = _continuation.exchange(SIGNALED, Ordering::RELEASE);
-            assert(observed != SIGNALED);
-            if (observed == NONSIGNALED)
-                return;
-            (void) _continuation.load(Ordering::ACQUIRE);
-            schedule_coroutine_handle_from_address((void*)observed);
-        }
-        
-        bool _signalling_coroutine_decrement() {
-            ptrdiff_t n = _count.sub_fetch((ptrdiff_t)1, Ordering::RELEASE);
-            bool result = (n == 0);
-            if (result)
-                (void) _count.load(Ordering::ACQUIRE);
-            return result;
-        }
-        
-        std::coroutine_handle<> _signal_and_get_continuation() {
-            intptr_t observed = _continuation.exchange(SIGNALED, Ordering::RELEASE);
-            if (observed != NONSIGNALED) {
-                (void) _continuation.load(Ordering::ACQUIRE);
-                return std::coroutine_handle<>::from_address((void*)observed);
-            } else {
-                return std::noop_coroutine();
-            }
-        }
-
-        // as Awaitable
-        
-        bool await_ready() noexcept {
-            ptrdiff_t n = _count.load(Ordering::RELAXED);
-            // TODO: verify this is actually an optimization
-            if (n == 0)
-                // all the jobs already finished
-                (void) _count.load(Ordering::ACQUIRE);
-            // some jobs were not yet finished
-            return n == 0;
-        }
-        
-        bool await_suspend(std::coroutine_handle<> handle) noexcept {
-            intptr_t expected = NONSIGNALED;
-            // install the handler; failure means jobs completed and we resume immediately
-            return _continuation.compare_exchange_strong(expected,
-                                                         (intptr_t)handle.address(),
-                                                         Ordering::RELEASE,
-                                                         Ordering::ACQUIRE);
-        }
-        
-        void await_resume() {
-            // this_thread::local_gc_log_node = _services->_log_nodes[this_thread::id];
-        }
-        
-        // usage: Latch::WillDecrement my_coroutine(&my_latch, my_arguments...) { ... }
-        //
-        // on completion of the coroutine, it will signal the latch and, if
-        // complete, transfer control to the latch's continuation
-        struct WillDecrement {
-            
-            struct promise_type {
-                
-                // match all arguments
-                static void* operator new(std::size_t count, SingleConsumerLatch&, auto&&...) {
-                    return bump::this_thread_state.allocate(count);
-                }
-                
-                static void operator delete(void* ptr) {
-                }
-                
-                SingleConsumerLatch* _latch;
-                promise_type() = delete;
-                explicit promise_type(SingleConsumerLatch* p, auto&&...)
-                : _latch(p) {
-                }
-                
-                constexpr WillDecrement get_return_object() const noexcept {
-                    return {};
-                }
-                
-                auto initial_suspend() noexcept {
-                    struct Awaitable {
-                        constexpr bool await_ready() noexcept {
-                            return false;
-                        }
-                        void await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
-                            schedule_coroutine_handle(handle);
-                        }
-                        void await_resume() noexcept {}
-                    }; // struct Awaitable
-                    return Awaitable{};
-                }
-                
-                auto final_suspend() noexcept {
-                    struct Awaitable {
-                        SingleConsumerLatch* _latch;
-                        bool await_ready() noexcept {
-                            return !(_latch->_signalling_coroutine_decrement());
-                        }
-                        std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
-                            // The latch has counted down to zero
-                            // Copy from the coroutine frame to the stack frame
-                            SingleConsumerLatch& target = *_latch;
-                            // Destroy the coroutine frame
-                            handle.destroy();
-                            // Signal the latch and resume a waiting coroutine
-                            return target._signal_and_get_continuation();
-                        }
-                        void await_resume() noexcept {
-                            // Latch is not ready
-                        }
-                    };
-                    return Awaitable{_latch};
-                }
-                
-                constexpr void return_void() noexcept {
-                    // normal return
-                }
-                
-                void unhandled_exception() noexcept {
-                    __builtin_trap();
-                }
-                
-                decltype(auto) await_transform(auto&& awaitable) {
-                    if constexpr (!std::is_same_v<std::decay_t<decltype(awaitable)>, _self_promise_t>) {
-                        return FORWARD(awaitable);
-                    } else {
-                        struct Awaitable {
-                            promise_type* _promise;
-                            constexpr bool await_ready() const noexcept {
-                                return true;
-                            }
-                            constexpr void await_suspend(std::coroutine_handle<>) const noexcept {
-                                __builtin_trap();
-                            };
-                            promise_type& await_resume() const noexcept {
-                                return *_promise;
-                            }
-                        };
-                        return Awaitable{this};
-                    }
-                }
-                
-            }; // struct SingleConsumerLatch::WillDecrement::promise_type
-            
-        }; // struct SingleConsumerLatch::WillDecrement
-        
-    }; // struct SingleConsumerLatch
     
+    
+
     
     
     struct Mutex {
@@ -477,7 +893,7 @@ namespace wry::coroutine {
             Awaitable* head = _awaiters;
             _awaiters = (Awaitable*)(_awaiters->_expected);
             // SAFETY: Coroutine scheduling here establishes happens-before?
-            schedule_coroutine_handle(head->_handle);
+            global_work_queue_schedule(head->_handle);
             return;
         }
         
@@ -507,7 +923,7 @@ namespace wry::coroutine {
                     _waiting.pop_front();
                     *(awaitable->_victim) = std::move(item);
                     awaitable->_result = true;
-                    schedule_coroutine_handle(awaitable->_coroutine_handle);
+                    global_work_queue_schedule(awaitable->_coroutine_handle);
                 }
             }
         }
@@ -522,7 +938,7 @@ namespace wry::coroutine {
                     _waiting.pop_front();
                     *(awaitable->_victim) = std::move(item);
                     awaitable->_result = true;
-                    schedule_coroutine_handle(awaitable->_coroutine_handle);
+                    global_work_queue_schedule(awaitable->_coroutine_handle);
                 }
             }
         }
@@ -558,7 +974,7 @@ namespace wry::coroutine {
                 assert(_waiting.empty());
             }
             for (Awaitable* awaitable : waiting)
-                schedule_coroutine_handle(awaitable->_coroutine_handle);
+                global_work_queue_schedule(awaitable->_coroutine_handle);
         }
         
         struct Awaitable {

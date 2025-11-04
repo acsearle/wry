@@ -164,6 +164,10 @@ namespace wry {
         return result;
     }
     
+    
+    
+    
+    
 } // namespace wry
 
 #endif /* persistent_map_hpp */

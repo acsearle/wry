@@ -20,19 +20,18 @@
 namespace wry {
     
     // Concurrent skiplist without erasure
-    
-    // Currently used with the arena allocator
-    //
-    // Can we genericize it on the allocator to allow longer-lived garbage
-    // collected versions?
-    //
-    // Does it not need write barriers if it is only mutated before being
-    // published to the collector?
-    
+        
     inline constinit thread_local std::ranlux24* _Nullable thread_local_random_number_generator = nullptr;
     
     template<typename Key, typename Compare = std::less<Key>, typename IntrusiveAllocator = EpochAllocated>
     struct ConcurrentSkiplistSet {
+        
+        struct Node;
+        
+        struct FrozenSizeAtomicSkips {
+            size_t _size;
+            Atomic<Node* _Nullable> _next[0] __counted_by(_size);
+        };
         
         struct Node : IntrusiveAllocator {
             
@@ -40,7 +39,7 @@ namespace wry {
             
             Key _key;
             size_t _size;
-            Atomic<Node* _Nullable> _next[] __counted_by(_size);
+            Atomic<Node* _Nullable> _next[0] __counted_by(_size);
             
             static void* _Nonnull operator new(size_t count, void* _Nonnull ptr) {
                 return ptr;
@@ -155,8 +154,59 @@ namespace wry {
             }
             
         }; // struct iterator
-        
+
+        struct FrozenNexts {
+            size_t _size;
+            Node const* _Nullable _next[0];
+        };
+
+        struct FrozenCursor {
+            FrozenNexts const* _Nullable _pointer;
+            size_t _level;
+            
+            bool bottom() const {
+                return _level == 0;
+            }
+            
+            FrozenCursor down() const {
+                assert(_level);
+                return FrozenCursor {
+                    _pointer,
+                    _level - 1,
+                };
+            }
+            
+            bool end() const {
+                return _pointer == nullptr;
+            }
+            
+            FrozenCursor right() const {
+                assert(_pointer);
+                Node const* a = _pointer->_next[_level];
+                size_t const* b = a ? &a->_size : nullptr;
+                assert(!b || *b >= _level);
+                return FrozenCursor{
+                    (FrozenNexts const*)b,
+                    _level,
+                };
+            }
+            
+            Key const* _Nullable key() const {
+                Node const* a = _pointer->_next[_level];
+                return a ? &(a->_key) : nullptr;
+            }
+            
+        };
+                
         Head* _Nonnull _head;
+        
+        FrozenCursor make_cursor() const {
+            return FrozenCursor{
+                (FrozenNexts const*)(&_head->_top),
+                _head->_top.load(Ordering::RELAXED) - 1,
+            };
+        }
+
         
         ConcurrentSkiplistSet()
         : _head(Head::make()) {

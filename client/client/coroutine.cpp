@@ -39,19 +39,16 @@ namespace wry::coroutine {
     // estimate of the workload.
     
     
-    void cancel_global_work_queue() {
+    void global_work_queue_cancel() {
         global_work_queue.cancel();
     }
-    
-    void schedule_coroutine_handle_from_address(void* address) {
-        schedule_coroutine_handle(std::coroutine_handle<>::from_address(address));
-    }
-    
-    void schedule_coroutine_handle(std::coroutine_handle<> handle) {
+        
+    void global_work_queue_schedule(std::coroutine_handle<> handle) {
+        assert(handle);
         global_work_queue.push_back(handle);
     }
         
-    void worker_thread_loop() {
+    void global_work_queue_service() {
         for (;;) {
             global_work_queue.wait_not_empty();
             if (global_work_queue.is_canceled())
@@ -59,6 +56,7 @@ namespace wry::coroutine {
             mutator_pin();
             std::coroutine_handle<> handle = {};
             while (global_work_queue.try_pop_front(handle)) {
+                assert(handle);
                 handle.resume();
             }
             mutator_unpin();

@@ -23,6 +23,37 @@
 #import "WryDelegate.h"
 
 
+namespace wry::coroutine {
+
+    SingleConsumerLatch::WillDecrement workyworky(SingleConsumerLatch*, int* p) {
+        co_await suspend_and_schedule{};
+        *p = 1;
+    }
+    
+    co_fork spawning_coroutine_example(int n) {
+                
+        SingleConsumerLatch latch{64};
+        
+        int results[64] = {};
+        
+        for (int i = 0; i != 64; ++i)
+            workyworky(&latch, results + i);
+
+        printf("about to wait on latch\n");
+        
+        co_await latch;
+        
+        printf("resumed after latch\n");
+        for (int i = 0; i != 64; ++i)
+            assert(results[i] == 1);
+
+        co_return;
+    }
+
+    
+}
+
+
 int main(int argc, const char** argv) {
     
     std::filesystem::current_path("/Users/antony/Desktop/assets/");
@@ -44,8 +75,11 @@ int main(int argc, const char** argv) {
     
     std::vector<std::thread> workers;
     for (int i = 0; i != 4; ++i) {
-        workers.emplace_back(&wry::coroutine::worker_thread_loop);
+        workers.emplace_back(&wry::coroutine::global_work_queue_service);
     }
+    
+    auto cx = wry::coroutine::spawning_coroutine_example(1000);
+    
     
     
     
@@ -78,7 +112,10 @@ int main(int argc, const char** argv) {
         
     } // @autoreleasepool
     
-    wry::coroutine::cancel_global_work_queue();
+    // join forked coroutines before canceling the queue
+    cx.join();
+    
+    wry::coroutine::global_work_queue_cancel();
     while (!workers.empty()) {
         printf("main waiting to join a worker thread\n");
         workers.back().join();
