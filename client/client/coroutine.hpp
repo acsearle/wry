@@ -55,137 +55,116 @@ namespace wry::coroutine {
     };
     
     struct debug_suspend_and_leak : suspend_always {
-        void await_suspend(std::coroutine_handle<> handle) const noexcept {
-        }
+        void await_suspend(std::coroutine_handle<> handle) const noexcept {}
     };
 
-    // TODO:
-    //
-    // Prefer parent stealing:
-    // - Callee coroutines initial suspend always.
-    // - Caller coroutine suspends, schedules itself, and resumes callee.
-    // Advantages: depth-first limits state size--asymptotic win log N vs N
-    // Disadvantages: per-fork overhead, slow startup, cache friendliness?
-    
-    // Implementation:
-    //
-    // co_fork foo(); -> co_await foo();
-    // co_join
-    //
-    // foo initial suspends callee
-    // co_await fork_awaitable suspends caller.
-    // caller installs itself in foo's promise
-    
-    
-    
-    /*
-    template<typename Promise, typename Awaitable>
-    Awaitable await_transform(Promise& promise, Awaitable&& awaitable) {
-        return std::move(awaitable);
-    }
-     */
+    struct co_task {
         
-    
-    
-    
-    
-    // fork-join a coroutine from a non-coroutine
-    // must eventually call join explicitly
-    
-    // consider unifying with co_eager<T>
-    
-    struct co_fork {
         struct promise_type {
-            enum {
-                INITIAL,
-                FINAL,
-                AWAITED,
-            };
-            Atomic<int> _state{};
+            
+            promise_type* _parent = nullptr;
+            ptrdiff_t _children = 0;
+            Atomic<ptrdiff_t> _countdown{0};
+            
             ~promise_type() {
-                printf("co_fork::promise_type::~promise_type()\n");
+                assert(_children == 0);
             }
-            constexpr co_fork get_return_object() noexcept {
-                return co_fork{this};
+                        
+            co_task get_return_object() {
+                return co_task{this};
             }
-            constexpr suspend_and_schedule initial_suspend() const noexcept { return {}; }
-            constexpr auto final_suspend() const noexcept {
-                struct awaitable : suspend_always {
-                    void await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
-                        Atomic<int>* state = &handle.promise()._state;
-                        int was = state->exchange(FINAL, Ordering::RELEASE);
-                        // The promise may now have been deleted under us.
-                        switch (was) {
-                            case INITIAL:
-                                break;
-                            case FINAL:
-                                abort();
-                            case AWAITED:
-                                // Even if the promise is deleted, we can still
-                                // notify on the address; worst case ABA causes
-                                // a spurious wakeup on the new object
-                                state->notify_one();
-                                break;
-                            default:
-                                abort();
+            
+            constexpr suspend_always initial_suspend() const noexcept {
+                return suspend_always{};
+            }
+            
+            void unhandled_exception() const noexcept { abort(); }
+            void return_void() const noexcept {}
+            
+            auto final_suspend() const noexcept {
+                struct awaitable : suspend_and_destroy {
+                    std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) const noexcept {
+                        promise_type* child = &handle.promise();
+                        promise_type* parent = child->_parent;
+                        if (parent) {
+                            handle.destroy();
+                            ptrdiff_t count = parent->_countdown.sub_fetch(1, Ordering::RELEASE);
+                            if (count == 0) {
+                                parent->_countdown.load(Ordering::ACQUIRE);
+                                return std::coroutine_handle<promise_type>::from_promise(*parent);
+                            }
+                        } else {
+                            ptrdiff_t count = child->_countdown.load(Ordering::RELAXED);
+                            assert(count == 0);
+                            child->_countdown.notify_one();
                         }
+                        return std::noop_coroutine();
                     }
                 };
                 return awaitable{};
             }
-            void join() {
-                int was = _state.exchange(AWAITED, Ordering::ACQUIRE);
-                for (;;) switch (was) {
-                    case AWAITED:
-                        // spurious wake?
-                        [[fallthrough]];
-                    case INITIAL:
-                        _state.wait(was, Ordering::ACQUIRE);
-                        break;
-                    case FINAL:
-                        std::coroutine_handle<promise_type>::from_promise(*this).destroy();
-                        return;
-                }
-            }
-            void return_void() const noexcept {}
-            void unhandled_exception() const noexcept { abort(); }
-            
-            // auto await_transform(auto&& awaitable) {
-            //     return coroutine::await_transform(*this, FORWARD(awaitable));
-            // }
-            
+                        
         };
         
         promise_type* _promise;
         
-        explicit co_fork(promise_type* promise) : _promise(promise) {}
+        co_task() = delete;
+        explicit co_task(promise_type* p) : _promise(p) {}
+        co_task(co_task const&) = delete;
+        ~co_task() { if (_promise) abort(); }
+        co_task& operator=(co_task const&) = delete;
+                
+        auto operator co_await() {
+            struct awaitable : suspend_always {
+                promise_type* _child;
+                std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
+                    promise_type* child = _child;
+                    child->_parent = &(handle.promise());
+                    ++(child->_parent->_children);
+                    global_work_queue_schedule(handle);
+                    // we can no longer use *this
+                    return std::coroutine_handle<promise_type>::from_promise(*child);
+                }
+            };
+            return awaitable{{}, std::exchange(_promise, nullptr)};
+        }
         
-        co_fork() = delete;
-        co_fork(co_fork const& other) = delete;
-        co_fork(co_fork&& other)
-        : _promise(std::exchange(other._promise, nullptr)) {
-        }
-        ~co_fork() {
-            if (_promise)
-                abort();
-        }
+        struct join_awaitable : suspend_always {
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
+                promise_type* self = &handle.promise();
+                ptrdiff_t count = self->_countdown.add_fetch(std::exchange(self->_children, 0), Ordering::ACQ_REL);
+                if (count > 0) {
+                    return std::noop_coroutine();
+                } else if (count == 0) {
+                    (void) self->_countdown.load(Ordering::ACQUIRE);
+                    return handle;
+                } else {
+                    abort();
+                }
+            }
+        };
         
-        co_fork& operator=(co_fork const&) = delete;
-        co_fork& operator=(co_fork&& other) {
-            co_fork local(std::move(other));
-            using std::swap;
-            swap(_promise, local._promise);
-            return *this;
-        }
+        
+        void start() {
+            global_work_queue_schedule(std::coroutine_handle<promise_type>::from_promise(*_promise));
+        };
         
         void join() {
-            std::exchange(_promise, nullptr)->join();
+            ptrdiff_t expected = _promise->_countdown.load(Ordering::RELAXED);
+            while (expected) {
+                _promise->_countdown.wait(expected, Ordering::RELAXED);
+            }
+            (void) _promise->_countdown.load(Ordering::ACQUIRE);
+            _promise = nullptr;
         }
-        
+                
     };
+        
+    // Questionable
     
-    
-    
+#define co_fork co_await
+#define co_join co_await ::wry::coroutine::co_task::join_awaitable{};
+
     
     
     

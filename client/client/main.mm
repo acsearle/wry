@@ -25,29 +25,23 @@
 
 namespace wry::coroutine {
 
-    SingleConsumerLatch::WillDecrement workyworky(SingleConsumerLatch*, int* p) {
-        co_await suspend_and_schedule{};
+    co_task some_work(uintptr_t* p) {
         *p = 1;
+        co_return;
     }
     
-    co_fork spawning_coroutine_example(int n) {
-                
-        SingleConsumerLatch latch{64};
-        
-        int results[64] = {};
+    co_task spawning_coroutine_example(int n) {
+                        
+        uintptr_t results[64] = {};
         
         for (int i = 0; i != 64; ++i)
-            workyworky(&latch, results + i);
+            co_fork some_work(results + i);
 
-        printf("about to wait on latch\n");
+        co_join;
         
-        co_await latch;
-        
-        printf("resumed after latch\n");
         for (int i = 0; i != 64; ++i)
             assert(results[i] == 1);
 
-        co_return;
     }
 
     
@@ -79,6 +73,8 @@ int main(int argc, const char** argv) {
     }
     
     auto cx = wry::coroutine::spawning_coroutine_example(1000);
+    // std::coroutine_handle<wry::coroutine::task::promise_type>::from_promise(*(cx._promise)).resume();
+    cx.start();
     
     
     
@@ -113,6 +109,7 @@ int main(int argc, const char** argv) {
     } // @autoreleasepool
     
     // join forked coroutines before canceling the queue
+    printf("Waiting to join coroutine::task\n");
     cx.join();
     
     wry::coroutine::global_work_queue_cancel();

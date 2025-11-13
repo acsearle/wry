@@ -59,31 +59,26 @@ namespace wry::array_mapped_trie {
     
     
     
-    // TODO: Naming
-    //
-    // Immutable and persistent integer map
-    //
-    // Implemented as an array-mapped-trie with a branching factor of 64.
-    //
-    // "Modifying" operations produce a new object that shares much of the
-    // structure of the old map.  Nodes on the path to the modifcation
-    // are cloned-with-modifications.  There are O(log N) such nodes.
-    //
-    // It is possible to bulk-modify the map efficiently by rebuilding up
-    // from the leaf nodes, in parallel.
-    //
-    // Unlike a hash map, this structure is efficient for densely populated
-    // regions of key space.  The key should be chosen, or transformed,
-    // such that the low bits exhibit high entropy.
-    //
-    // For example, to encode a (int32_t, int32_t) coordinate, the bits
-    // should be interleaved in Morton or Z-order.  The integer map then
-    // encodes a quadtree. Spatial regions map to subtrees with a
-    // particular prefix.  Chances of a common prefix can be maximized by
-    // using or offsetting coordinates to be around INT_MAX / 3 = 0101010101...
-    // where the alternating bit pattern stops the carries and borrows
-    // produced by small coordinate differences from propagating all the
-    // way up the prefix.
+    template<typename T>
+    struct Common : GarbageCollected {
+        std::pair<uint64_t, uint64_t> prefix() const;
+        virtual bool lookup(uint64_t key, T& victim) const = 0;
+                
+    };
+    
+    template<typename T>
+    struct Branch : Common<T> {
+        Common<T> const* _Nonnull _children[0] __counted_by(_debug_count);
+        virtual bool lookup(uint64_t key, T& victim) const override;
+    };
+    
+    template<typename T>
+    struct Leaf : GarbageCollected {
+        T _values[0] __counted_by(_debug_count);
+        virtual bool lookup(uint64_t key, T& victim) const override;
+    };
+    
+    
     
     template<typename T>
     struct Node : GarbageCollected {
@@ -100,9 +95,8 @@ namespace wry::array_mapped_trie {
         uint64_t _bitmap; // bitmap of which items are present
         union {
             // compressed flexible member array of children or values
-            // problem: we don't have a member representing the count directly
-            Node const* _Nonnull _children[] __counted_by(_debug_count);
-            T _values[] __counted_by(_debug_count);
+            Node const* _Nonnull _children[0] __counted_by(_debug_count);
+            T _values[0] __counted_by(_debug_count);
         };
         
         bool has_children() const {
@@ -624,5 +618,32 @@ namespace wry::array_mapped_trie {
 // 56 child[3]
 //
 //
+
+
+// TODO: Naming
+//
+// Immutable and persistent integer map
+//
+// Implemented as an array-mapped-trie with a branching factor of 64.
+//
+// "Modifying" operations produce a new object that shares much of the
+// structure of the old map.  Nodes on the path to the modifcation
+// are cloned-with-modifications.  There are O(log N) such nodes.
+//
+// It is possible to bulk-modify the map efficiently by rebuilding up
+// from the leaf nodes, in parallel.
+//
+// Unlike a hash map, this structure is efficient for densely populated
+// regions of key space.  The key should be chosen, or transformed,
+// such that the low bits exhibit high entropy.
+//
+// For example, to encode a (int32_t, int32_t) coordinate, the bits
+// should be interleaved in Morton or Z-order.  The integer map then
+// encodes a quadtree. Spatial regions map to subtrees with a
+// particular prefix.  Chances of a common prefix can be maximized by
+// using or offsetting coordinates to be around INT_MAX / 3 = 0101010101...
+// where the alternating bit pattern stops the carries and borrows
+// produced by small coordinate differences from propagating all the
+// way up the prefix.
 
 #endif /* array_mapped_trie_hpp */

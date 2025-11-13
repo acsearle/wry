@@ -27,58 +27,6 @@ namespace wry {
     namespace _blocking_work_stealing_queue {
         
         template<Relocatable T>
-        struct CircularDeque {
-            T* _data = nullptr;
-            size_t _mask = 0;
-            ptrdiff_t _begin = 0;
-            ptrdiff_t _end = 0;
-            
-            /*
-            void _expand() {
-                if (_end - _begin == _size) {
-                    size_t new_mask = (_mask << 1) + 1;
-                    T* new_data = malloc(sizeof(T) * (new_mask + 1));
-                    size_t a = _begin & _mask;
-                    size_t b = _mask + 1;
-                    size_t c = a + (_end - _begin);
-                    memcpy(_begin & new_mask, <#const void *src#>, <#size_t n#>)
-                    
-                    
-                    for (ptrdiff_t i = _begin; i != _end; ++i)
-                        
-                    free(_data);
-                    _data = new_data;
-                    _mask = new_mask;
-                }
-            }*/
-            
-            void push(T item) {
-                // if (_end + 1 == _begin + _size)
-                if (_end + 1 == _begin + _mask + 1) {
-                    
-                }
-                if (((_end + 1) & _mask) == (_begin & _mask)) {
-                }
-                _data[_end++ & _mask] = item;
-            }
-            
-            bool pop(T& victim) {
-                bool result = _end != _begin;
-                if (result)
-                    victim = _data[--_end & _mask];
-                return result;
-            }
-            
-            bool steal(T& victim) {
-                bool result = _end != _begin;
-                if (result)
-                    victim = _data[_begin++ & _mask];
-                return result;
-            }
-
-        };
-        
-        template<Relocatable T>
         struct WorkStealingQueue {
             
             std::mutex _mutex;

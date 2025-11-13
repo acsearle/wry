@@ -8,6 +8,205 @@
 
 
 
+
+
+// Coroutine of many features:
+//
+//
+//
+//    template<typename T>
+//    struct Future {
+//
+//        struct Promise {
+//
+//            enum : uintptr_t {
+//                INITIAL,
+//                FINAL,
+//                RELEASED,
+//                /* CONTINUATION, */
+//            };
+//
+//            Atomic<uintptr_t> _state;
+//            std::variant<std::monostate, T, std::exception_ptr> _result;
+//
+//            Future get_return_object() {
+//                return Future{this};
+//            }
+//
+//            suspend_always initial_suspend() noexcept {
+//                return suspend_always{};
+//            }
+//
+//            void release() {
+//                uintptr_t was = _state.exchange(RELEASE, Ordering::RELAXED);
+//                switch (was) {
+//                    case INITIAL:
+//                        break;
+//                    case FINAL:
+//                        std::coroutine_handle<Promise>::from_promise(*this).destroy();
+//                        break;
+//                    default:
+//                        abort();
+//                }
+//            }
+//
+//            void unhandled_exception() {
+//                assert(_result.index() == 0);
+//                _result.emplace<2>(std::current_exception());
+//            }
+//
+//            void return_value(auto&& expr) {
+//                assert(_result.index() == 0);
+//                _result.emplace<1>(FORWARD(expr));
+//            }
+//
+//            auto final_suspend() noexcept {
+//                struct Awaitable {
+//                    constexpr bool await_ready() const noexcept { return false; }
+//                    std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> handle) noexcept {
+//                        auto was = handle.promise()._state.exchange(FINAL, Ordering::RELEASE);
+//                        switch (was) {
+//                            case INITIAL:
+//                                return std::noop_coroutine();
+//                            case FINAL:
+//                                abort();
+//                            case RELEASED:
+//                                handle.destroy();
+//                                return std::noop_coroutine();
+//                            default: /* CONTINUATION */
+//                                (void) handle.promise()._state.load(Ordering::ACQUIRE);
+//                                return std::coroutine_handle<>::from_address((void*)was);
+//                        }
+//                    }
+//                    void await_resume() const noexcept {
+//                        abort();
+//                    }
+//                };
+//            }
+//
+//            decltype(auto) await_transform(auto&& expr) {
+//                return FORWARD(expr).co_await_with_promise(this);
+//            }
+//
+//        };
+//
+//        using promise_type = Promise;
+//
+//        Promise* _promise;
+//
+//
+//        // co_await Future<T> runs and eventually resumes caller with a T
+//        // co_fork Future<T> runs and schedules the caller to resume ASAP
+//        // co_join suspends the caller until all forks have completed
+//
+//
+//    };
+//
+
+
+
+
+
+// fork-join a coroutine from a non-coroutine
+// must eventually call join explicitly
+
+// consider unifying with co_eager<T>
+
+struct co_fork {
+    struct promise_type {
+        enum {
+            INITIAL,
+            FINAL,
+            AWAITED,
+        };
+        Atomic<int> _state{};
+        ~promise_type() {
+            printf("co_fork::promise_type::~promise_type()\n");
+        }
+        constexpr co_fork get_return_object() noexcept {
+            return co_fork{this};
+        }
+        constexpr suspend_and_schedule initial_suspend() const noexcept { return {}; }
+        constexpr auto final_suspend() const noexcept {
+            struct awaitable : suspend_always {
+                void await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
+                    Atomic<int>* state = &handle.promise()._state;
+                    int was = state->exchange(FINAL, Ordering::RELEASE);
+                    // The promise may now have been deleted under us.
+                    switch (was) {
+                        case INITIAL:
+                            break;
+                        case FINAL:
+                            abort();
+                        case AWAITED:
+                            // Even if the promise is deleted, we can still
+                            // notify on the address; worst case ABA causes
+                            // a spurious wakeup on the new object
+                            state->notify_one();
+                            break;
+                        default:
+                            abort();
+                    }
+                }
+            };
+            return awaitable{};
+        }
+        void join() {
+            int was = _state.exchange(AWAITED, Ordering::ACQUIRE);
+            for (;;) switch (was) {
+                case AWAITED:
+                    // spurious wake?
+                    [[fallthrough]];
+                case INITIAL:
+                    _state.wait(was, Ordering::ACQUIRE);
+                    break;
+                case FINAL:
+                    std::coroutine_handle<promise_type>::from_promise(*this).destroy();
+                    return;
+            }
+        }
+        void return_void() const noexcept {}
+        void unhandled_exception() const noexcept { abort(); }
+        
+        // auto await_transform(auto&& awaitable) {
+        //     return coroutine::await_transform(*this, FORWARD(awaitable));
+        // }
+        
+    };
+    
+    promise_type* _promise;
+    
+    explicit co_fork(promise_type* promise) : _promise(promise) {}
+    
+    co_fork() = delete;
+    co_fork(co_fork const& other) = delete;
+    co_fork(co_fork&& other)
+    : _promise(std::exchange(other._promise, nullptr)) {
+    }
+    ~co_fork() {
+        if (_promise)
+            abort();
+    }
+    
+    co_fork& operator=(co_fork const&) = delete;
+    co_fork& operator=(co_fork&& other) {
+        co_fork local(std::move(other));
+        using std::swap;
+        swap(_promise, local._promise);
+        return *this;
+    }
+    
+    void join() {
+        std::exchange(_promise, nullptr)->join();
+    }
+    
+};
+
+
+
+
+
+
 // Given the complexity of minerals etc., can we reasonably simplify
 // chemistry down to any scheme that roughly matches real industrial
 // processes?  Or should we just have arbitrary IDs and recipes?
