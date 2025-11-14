@@ -12,6 +12,7 @@
 
 #include "assert.hpp"
 #include "preprocessor.hpp"
+#include "coroutine.hpp"
 
 namespace wry {
     
@@ -25,17 +26,8 @@ namespace wry {
                 explicit base(std::vector<const char*> metadata)
                 : _metadata(std::move(metadata)) {}
                 virtual ~base() = default;
-                virtual void run() = 0;
-                void print_metadata(const char* suffix, double tau) {
-                    printf("[");
-                    if (!_metadata.empty()) for (size_t i = 0;;) {
-                        printf("%s", _metadata[i]);
-                        if (++i == _metadata.size())
-                            break;
-                        printf(",");
-                    }
-                    printf("] %s (%g seconds)\n", suffix, tau);
-                }
+                virtual wry::coroutine::co_task run() = 0;
+                void print_metadata(const char* suffix, double tau);
             };
             
             template<typename X>
@@ -45,8 +37,8 @@ namespace wry {
                 : base(std::move(metadata))
                 , _x(std::forward<Y>(y)) {}
                 virtual ~derived() override = default;
-                virtual void run() override {
-                    _x();
+                virtual wry::coroutine::co_task run() override {
+                    return _x();
                 }
             };
             
@@ -60,7 +52,7 @@ namespace wry {
                 head = p;
             }
             
-            static void run_all();
+            static wry::coroutine::co_task run_all();
             
         };
         
@@ -82,10 +74,10 @@ namespace wry {
         
     }
     
-    void run_tests();
+    wry::coroutine::co_task run_tests();
     
 } // namespace wry
 
-#define define_test(...) static ::wry::detail::test_t WRY_CONCATENATE_TOKENS(_wry_detail_test_, __LINE__) = ::wry::detail::test_metadata_t{__VA_ARGS__} % []()
+#define define_test(...) static ::wry::detail::test_t WRY_CONCATENATE_TOKENS(_wry_detail_test_, __LINE__) = ::wry::detail::test_metadata_t{__VA_ARGS__} % []() -> wry::coroutine::co_task
 
 #endif /* test_hpp */

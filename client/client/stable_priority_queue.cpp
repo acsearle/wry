@@ -29,7 +29,7 @@ namespace wry {
     int LessFirst::_ops = 0;
     
     define_test("StablePriorityQueue") {
-        return;
+        co_return;
         
         std::random_device rd;
         std::default_random_engine rne(rd());

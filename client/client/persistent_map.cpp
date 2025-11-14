@@ -11,20 +11,7 @@
 namespace wry {
     
     define_test("PersistentMap") {
-        mutator_pin();
-        
-        /*
-         {
-         for (int i = 0; i != 63; ++i) {
-         assert(decode(i) == ((uint64_t)1 << i));
-         assert(shift_for_keylike_difference(decode(i)) == (i / 6) * 6);
-         assert(encode(decode(i)) == i);
-         }
-         }
-         */
-        
-        mutator_repin();
-        
+                       
         {
             uint64_t k = 6435475;
             int v = 4568;
@@ -91,10 +78,10 @@ namespace wry {
                 
                 uint64_t h = rand() & (64 * 1024 - 1);
                 m.erase(h);
-                int _;
+                int _ = {};
+                garbage_collected_shade(p);
                 (void) p.try_erase(h, _);
-                
-                
+                                
                 m.insert_or_assign(k, v);
                 garbage_collected_shade(p);
                 p.set(k, v);
@@ -109,6 +96,13 @@ namespace wry {
                     printf("expected to find {%llx, %x}, found {%llx, %x}\n", k, v, k, u);
                     abort();
                 }
+                
+                // transshipment of this_coroutine
+                // auto epoch = epoch::pin_explicit();
+                // co_await coroutine::suspend_and_schedule{};
+                // epoch::unpin_explicit(epoch);
+                
+                
                 if (!(i & 255))
                     mutator_repin();
                 // printf("PMT %d\n", i);
@@ -130,9 +124,8 @@ namespace wry {
             }
             
         }
-        
-        
-        mutator_unpin();
+        co_return;
+                
     };
 }
 

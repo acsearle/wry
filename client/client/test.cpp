@@ -13,43 +13,55 @@
 namespace wry {
     
     namespace detail {
+        
+        void test_t::base::print_metadata(const char* suffix, double tau) {
+            printf("[");
+            if (!_metadata.empty()) for (size_t i = 0;;) {
+                printf("%s", _metadata[i]);
+                if (++i == _metadata.size())
+                    break;
+                printf(",");
+            }
+            printf("] %s (%g seconds)\n", suffix, tau);
+        }
 
-        constinit static test_t::base* _head = nullptr;
+
+        // Head of intrusive list of tests constructed at startup on the main
+        // thread.
+        constinit test_t::base* _head = nullptr;
+        
 
         test_t::base*& test_t::get_head() {
             return _head;
         }
         
-        void test_t::run_all() {
+        wry::coroutine::co_task test_t::run_all() {
             base* head = exchange(get_head(), nullptr);
-            {
-                // reverse intrusive list
-                base* p = nullptr;
-                while (head)
-                    rotate_args_left(p, head, head->next);
-                std::swap(head, p);
-            }
             while (head) {
-                uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-                bool pass = false;
-                try {
-                    // head->print_metadata("running", 0.0);
-                    head->run();
-                    pass = true;
-                } catch (...) {
-                }
-                uint64_t t1 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-                head->print_metadata(pass ? ": pass" : " fail", (t1 - t0) * 1e-9);
-                delete exchange(head, head->next);
+                co_fork [](base* head) -> wry::coroutine::co_task {
+                    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+                    bool pass = false;
+                    try {
+                        head->print_metadata("running", 0.0);
+                        co_fork head->run();
+                        co_join;
+                        pass = true;
+                    } catch (...) {
+                    }
+                    uint64_t t1 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+                    head->print_metadata(pass ? ": pass" : " fail", (t1 - t0) * 1e-9);
+                    delete head;
+                    co_return;
+                } (exchange(head, head->next));
             }
-            printf("[all] : pass\n");
-            // std::quick_exit(EXIT_SUCCESS);
+            co_join;
+            printf("[all] : unit tests complete\n");
         }
         
     } // namespace detail
     
-    void run_tests() {
-        detail::test_t::run_all();
+    wry::coroutine::co_task run_tests() {
+        return detail::test_t::run_all();
     }
     
 } // namespace wry

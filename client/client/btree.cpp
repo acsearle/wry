@@ -136,7 +136,7 @@ namespace wry {
         
         assert(b.size() == 0);
         assert(b.empty());
-
+        co_return;
     };
     
 } // namespace wry

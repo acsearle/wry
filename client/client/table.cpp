@@ -152,6 +152,8 @@ namespace wry {
             assert(t.empty());
         }
         
+        co_return;
+        
     };
     
 } // namespace wry

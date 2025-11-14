@@ -15,9 +15,7 @@
 namespace wry {
     
     define_test("skiplist") {
-        
-        epoch::pin_this_thread();
-                
+                        
         thread_local_random_number_generator = new std::ranlux24;
 
         {
@@ -64,9 +62,9 @@ namespace wry {
                 }
             }
         }
+        
+        co_return;
                 
-        epoch::unpin_this_thread();
-
     };
     
 } // namespace wry

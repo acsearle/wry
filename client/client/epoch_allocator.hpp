@@ -365,10 +365,12 @@ namespace wry {
         // This is used to tie the epoch to a non-thread scope, such as the
         // lifetime of the root of a tree of jobs.
         
-        inline void
-        pin_explicit() {
+        [[nodiscard]] inline auto
+        pin_explicit() -> Epoch {
             assert(allocator_local_state.is_pinned);
-            allocator_global_service.pin_explicit(allocator_local_state.known);
+            Epoch pinned = allocator_local_state.known;
+            allocator_global_service.pin_explicit(pinned);
+            return pinned;
         }
 
         inline auto

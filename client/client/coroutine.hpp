@@ -19,8 +19,8 @@
 #include "mutex.hpp"
 
 namespace wry::coroutine {
-
-
+    
+    
     // Global work queue
     
     void global_work_queue_schedule(std::coroutine_handle<>);
@@ -33,7 +33,7 @@ namespace wry::coroutine {
     inline std::coroutine_handle<> null_to_noop(std::coroutine_handle<> handle) {
         return handle ? handle : std::noop_coroutine();
     }
-
+    
     // Basic awaitables
     
     using std::suspend_always;
@@ -57,7 +57,59 @@ namespace wry::coroutine {
     struct debug_suspend_and_leak : suspend_always {
         void await_suspend(std::coroutine_handle<> handle) const noexcept {}
     };
-
+    
+    // we want to:
+    //
+    // co_fork foo();
+    // ...
+    // co_join;
+    //
+    // x = co_await foo();
+    //
+    // x = sync_wait foo();
+    //
+    // in the first case:
+    // - the caller suspends and reschedules itself, and informs callee of
+    //   something before starting it
+    // - the callee must count down something and signal the join
+    // - the caller must eventually wait at the join
+    //
+    // in the second case:
+    // - the caller suspends and installs itself in the callee as a continuation
+    //
+    // in the third case:
+    // - the callee schedules itself and the caller thread blocks on a future-type thing
+    //
+    // from the callee perspective, all of these can be accomplished by resuming
+    // a continuation given before starting
+    //
+    // when directly awaiting, we can manufacture this coroutine easily enough
+    //
+    // when forking, this coroutine needs to be faked somehow, and its state
+    // needs to live somewhere
+    //
+    // in an object:
+    // for (_fork_state_t _fork_state; _fork_state.is_finished(); co_await _fork_state.join()) {
+    //    co_await _fork_state_ % stuff();
+    // }
+    //
+    // in the body, a fauxroutine of:
+    //     _resume
+    //     _destroy = null
+    //     _atomic_count
+    //     _self_continuation
+    //     _forked_count
+    //
+    //
+    // co_fork boo() = co_await _fork % boo()
+    // _fork % co_task -> {
+    //     await_ready() -> false
+    //     std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) {
+    //         context = handle.promise()
+    //
+    //     }
+    // }
+    
     struct co_task {
         
         struct promise_type {
@@ -107,13 +159,21 @@ namespace wry::coroutine {
         };
         
         promise_type* _promise;
-        
-        co_task() = delete;
+
         explicit co_task(promise_type* p) : _promise(p) {}
+
+        co_task() = delete;
         co_task(co_task const&) = delete;
+        co_task(co_task&& other) : _promise(exchange(other._promise, nullptr)) {}
         ~co_task() { if (_promise) abort(); }
         co_task& operator=(co_task const&) = delete;
-                
+        co_task& operator=(co_task&& other) {
+            co_task a(std::move(other));
+            using std::swap;
+            swap(_promise, a._promise);
+            return *this;
+        }
+
         auto operator co_await() {
             struct awaitable : suspend_always {
                 promise_type* _child;
@@ -145,17 +205,19 @@ namespace wry::coroutine {
         };
         
         
-        void start() {
-            global_work_queue_schedule(std::coroutine_handle<promise_type>::from_promise(*_promise));
+        decltype(auto) start(this auto&& self) {
+            global_work_queue_schedule(std::coroutine_handle<promise_type>::from_promise(*self._promise));
+            return FORWARD(self);
         };
         
-        void join() {
-            ptrdiff_t expected = _promise->_countdown.load(Ordering::RELAXED);
+        decltype(auto) join(this auto&& self) {
+            ptrdiff_t expected = self._promise->_countdown.load(Ordering::RELAXED);
             while (expected) {
-                _promise->_countdown.wait(expected, Ordering::RELAXED);
+                self._promise->_countdown.wait(expected, Ordering::RELAXED);
             }
-            (void) _promise->_countdown.load(Ordering::ACQUIRE);
-            _promise = nullptr;
+            (void) self._promise->_countdown.load(Ordering::ACQUIRE);
+            self._promise = nullptr;
+            return FORWARD(self);
         }
                 
     };

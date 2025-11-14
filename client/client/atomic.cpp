@@ -17,6 +17,7 @@ namespace wry {
         int x = 99;
         b.wait(x, Ordering::RELAXED);
         b.notify_one();
+        co_return;
     };
     
 }

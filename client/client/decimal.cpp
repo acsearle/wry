@@ -23,5 +23,6 @@ namespace wry::decimal {
         Decimal{a.chars}.try_as(z);
         printf("%g\n", z);
         */
+        co_return;
     };
 }

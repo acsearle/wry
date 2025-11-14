@@ -186,7 +186,7 @@ namespace wry {
 
 
         interpolate_wheeled_vehicle(x0, make<float2>(dx0.y, -dx0.x), x1, make<float2>(dx1.y, -dx1.x), 0.5f);
-        
+        co_return;
     };
     
 }

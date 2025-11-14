@@ -39,7 +39,7 @@ namespace wry {
         
         a.clear();
         assert(a.is_empty());
-        
+        co_return;
     };
     
     
