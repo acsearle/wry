@@ -11,6 +11,8 @@
 #include <cassert>
 #include <coroutine>
 #include <deque>
+#include <exception>
+#include <variant>
 
 #include "atomic.hpp"
 #include "utility.hpp"
@@ -18,16 +20,243 @@
 #include "epoch_allocator.hpp"
 #include "mutex.hpp"
 
+#include "global_work_queue.hpp"
+
+namespace wry {
+
+    void global_work_queue_schedule(std::coroutine_handle<>);
+
+}
+
 namespace wry::coroutine {
     
     
-    // Global work queue
     
-    void global_work_queue_schedule(std::coroutine_handle<>);
+    template<typename... Args>
+    struct receiver_of {
+        virtual void set_value(Args...) = 0;
+    };
     
-    void global_work_queue_service();
-    void global_work_queue_cancel();
     
+    template<typename T>
+    struct sender_traits {
+    };
+    
+    template<typename T>
+    using sender_traits_t = typename sender_traits<T>::type;
+
+
+    
+    template<typename...>
+    struct _coroutine_handle_receiver;
+    
+    template<>
+    struct _coroutine_handle_receiver<> {
+        std::coroutine_handle<> _handle;
+        void set_value() {
+            _handle.resume();
+        }
+    };
+    
+    template<typename T>
+    struct _coroutine_handle_receiver<T> {
+        std::coroutine_handle<> _handle;
+        T* _value;
+        void set_value(T value) {
+            *_value = value;
+            _handle.resume();
+        }
+    };
+    
+    template<typename...>
+    struct _co_sender_promise;
+    
+    template<typename... Args>
+    struct co_sender {
+        using promise_type = _co_sender_promise<Args...>;
+        promise_type* _promise;
+        template<typename Receiver> auto connect(Receiver receiver);
+    };
+    
+    
+    template<typename Sender>
+    auto _common_await_transform(Sender sender) {
+        using T = sender_traits_t<Sender>;
+        using U = decltype(std::move(sender).connect());
+        struct awaitable {
+            Sender _sender;
+            T _value;
+            U _operation;
+            constexpr bool await_ready() const noexcept { return false; }
+            void await_suspend(std::coroutine_handle<> handle) {
+                _operation = std::move(_sender).connect(_coroutine_handle_receiver<T>{std::move(handle), &_value});
+                _operation.start();
+            }
+            T await_resume() {
+                return std::move(_value);
+            }
+        };
+        return awaitable{std::move(sender)};
+    }
+    
+    auto _common_await_transform(co_sender<> sender);
+    
+    template<typename T>
+    auto _common_await_transform(co_sender<T> sender) {
+        struct awaitable : receiver_of<T> {
+            std::coroutine_handle<> _handle;
+            T _value;
+            explicit awaitable(std::coroutine_handle<> handle)
+            : _handle(std::move(handle)) {
+            }
+            constexpr bool await_ready() const noexcept { return false; }
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<> handle) noexcept {
+                std::coroutine_handle<typename co_sender<T>::promise_type>::from_address(_handle.address()).promise()._receiver = this;
+                return std::exchange(_handle, handle);
+            }
+            T await_resume() {
+                return std::move(_value);
+            }
+            virtual void set_value(T value) override {
+                _value = std::move(value);
+            }
+        };
+        return awaitable{std::coroutine_handle<typename co_sender<T>::promise_type>::from_promise(*sender._promise)};
+
+    }
+    
+    
+    template<>
+    struct _co_sender_promise<> {
+        receiver_of<>* _receiver = nullptr;
+        co_sender<> get_return_object() { return co_sender<>{this}; }
+        auto initial_suspend() noexcept { return std::suspend_always{}; }
+        void return_void() noexcept {}
+        void unhandled_exception() noexcept { abort(); }
+        
+        auto final_suspend() noexcept {
+            struct awaitable {
+                constexpr bool await_ready() const noexcept { return false; }
+                void await_suspend(std::coroutine_handle<_co_sender_promise<>> handle) noexcept {
+                    receiver_of<>* receiver = handle.promise()._receiver;
+                    handle.destroy();
+                    receiver->set_value();
+                }
+                void await_resume() const noexcept { abort(); }
+            };
+            return awaitable{};
+        }
+        template<typename Sender>
+        auto await_transform(Sender sender) {
+            return _common_await_transform(std::move(sender));
+        }
+    };
+    
+    
+    template<typename T>
+    struct _co_sender_promise<T> {
+        receiver_of<T>* _receiver = nullptr;
+        T _value;
+        co_sender<T> get_return_object() { return co_sender<T>{this}; }
+        auto initial_suspend() noexcept { return std::suspend_always{}; }
+        void return_value(auto&& expr) noexcept {
+            _value = std::forward<decltype(expr)>(expr);
+        }
+        void unhandled_exception() noexcept { abort(); }
+        auto final_suspend() noexcept {
+            struct awaitable {
+                constexpr bool await_ready() const noexcept { return false; }
+                void await_suspend(std::coroutine_handle<_co_sender_promise> handle) noexcept {
+                    T value = std::move(handle.promise()._value);
+                    receiver_of<T>* receiver = handle.promise()._receiver;
+                    handle.destroy();
+                    receiver->set_value(std::move(value));
+                }
+                void await_resume() const noexcept { abort(); }
+            };
+            return awaitable{};
+        }
+        template<typename Sender>
+        auto await_transform(Sender sender) {
+            return _common_await_transform(std::move(sender));
+        }
+    };
+    
+    
+    
+    template<typename...>
+    struct _co_sender_operation;
+    
+    template<typename T, typename Receiver>
+    struct _co_sender_operation<T, Receiver> : receiver_of<T> {
+        co_sender<T> _sender;
+        Receiver _receiver;
+        _co_sender_operation(co_sender<T> sender, Receiver receiver)
+        : _sender(std::move(sender))
+        , _receiver(std::move(receiver)) {
+        }
+        void start() {
+            _sender._promise->_receiver = this;
+            std::coroutine_handle<typename co_sender<T>::promise_type>::from_promise(*_sender._promise).resume();
+        }
+        virtual void set_value(T value) override {
+            _receiver.set_value(std::move(value));
+        }
+    };
+    
+    template<typename Receiver>
+    struct _co_sender_operation<Receiver> : receiver_of<> {
+        co_sender<> _sender;
+        Receiver _receiver;
+        _co_sender_operation(co_sender<> sender, Receiver receiver)
+        : _sender(std::move(sender))
+        , _receiver(std::move(receiver)) {
+        }
+        void start() {
+            _sender._promise->_receiver = this;
+            std::coroutine_handle<typename co_sender<>::promise_type>::from_promise(*_sender._promise).resume();
+        }
+        virtual void set_value() override {
+            _receiver.set_value();
+        }
+    };
+    
+    
+    template<typename... Args> template<typename Receiver>
+    auto co_sender<Args...>::connect(Receiver receiver) {
+        return _co_sender_operation<Args..., Receiver>{
+            std::move(*this),
+            std::move(receiver)
+        };
+    }
+    
+    
+   
+    inline auto _common_await_transform(co_sender<> sender) {
+        struct awaitable : receiver_of<> {
+            std::coroutine_handle<> _handle;
+            explicit awaitable(std::coroutine_handle<> handle) : _handle(handle) {}
+            constexpr bool await_ready() const noexcept { return false; }
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<> handle) noexcept {
+                std::coroutine_handle<typename co_sender<>::promise_type>::from_address(_handle.address()).promise()._receiver = this;
+                return std::exchange(_handle, handle);
+            }
+            void await_resume() const noexcept {}
+            virtual void set_value() {
+                _handle.resume();
+            }
+        };
+        return awaitable{std::coroutine_handle<co_sender<>::promise_type>::from_promise(*sender._promise)};
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+        
     // Basic functions
     
     inline std::coroutine_handle<> null_to_noop(std::coroutine_handle<> handle) {
@@ -110,13 +339,23 @@ namespace wry::coroutine {
     //     }
     // }
     
+    // a coroutine that is a sender:
+    //
+    //
+    
     struct co_task {
         
         struct promise_type {
-            
+            // void (*_co_resume)(void*);
+            // std::coroutine_handle<> _final_continuation;
+            // std::coroutine_handle<> _self_continution;
+
             promise_type* _parent = nullptr;
-            ptrdiff_t _children = 0;
             Atomic<ptrdiff_t> _countdown{0};
+            ptrdiff_t _children = 0;
+
+            
+            
             
             ~promise_type() {
                 assert(_children == 0);
@@ -228,7 +467,207 @@ namespace wry::coroutine {
 #define co_join co_await ::wry::coroutine::co_task::join_awaitable{};
 
     
+    struct flow;
+    template<typename T> struct co_future;
     
+    // Another attempt:
+    
+    struct Flow {
+        
+        void (*_resume)(void*);
+        ptrdiff_t _forks;
+        Atomic<ptrdiff_t> _count;
+        Atomic<uintptr_t> _continuation;
+        
+        static void _fork_action(void* address) {
+            Flow* self = (Flow*)address;
+            if (self->_count.sub_fetch(1, Ordering::RELEASE) == 0) {
+                (void) self->_count.load(Ordering::ACQUIRE);
+                uintptr_t was = self->_continuation.exchange(0, Ordering::ACQUIRE);
+                if (was) {
+                    auto p = (void (**)(void*))(was);
+                    [[clang::musttail]] return (*p)(p);
+                }
+                return;
+            }
+        }
+        
+        Flow()
+        : _resume{&_fork_action}
+        , _forks{0}
+        , _count{0}
+        , _continuation{0}
+        {}
+        
+        ~Flow() {
+            assert(_forks == 0);
+        }
+        
+        // co_await flow.fork(foo())
+        
+        
+        template<typename T>
+        struct PendingFork {
+            Flow* _flow;
+            co_future<T> _future;
+        };
+        
+        template<typename T>
+        PendingFork<T> fork(co_future<T>&& x) {
+            return PendingFork<T>{ this, std::move(x) };
+        }
+        
+        
+        
+        
+        //
+        //        // when joining
+        //
+        //        bool await_ready() noexcept {
+        //            return false;
+        //        }
+        //
+        //        bool await_suspend(std::coroutine_handle<> continuation) noexcept {
+        //            _continuation.store((uintptr_t)(continuation.address()), Ordering::RELAXED);
+        //            auto count = _count.add_fetch(exchange(_forks, 0), Ordering::RELEASE);
+        //            if (count == 0) {
+        //                // forks have already finished, unpublish the continuation and
+        //                // abort the suspension
+        //                _continuation.store(0, Ordering::RELAXED);
+        //                return false; // abort suspension and continue
+        //            } else {
+        //                return true; // suspend
+        //            }
+        //        }
+        //
+        //        void await_resume() {
+        //        }
+        //
+        //        // when forking something
+        //
+        //        // co_await my_flow << foo();
+        //        // co_fork(my_flow) foo();
+        //
+        //        auto operator<<(auto&& other) {
+        //            struct pending_fork {
+        //                flow* _context;
+        //                decltype(other.operator co_await()) _inner;
+        //                bool await_ready() noexcept {
+        //                    assert(!_inner.await_ready());
+        //                    return false;
+        //                }
+        //                std::coroutine_handle<> await_suspend(std::coroutine_handle<> outer) noexcept {
+        //                    ++(_context->_forks);
+        //                    // set the countdown as the continuation of the fork
+        //                    // send the outer coroutine to the work queue to be continued soon
+        //                    // start the fork on this thread
+        //                    std::coroutine_handle handle = _inner.await_suspend(std::coroutine_handle<>::from_address(_context));
+        //                    global_work_queue_schedule(outer);
+        //                    return handle;
+        //                }
+        //            };
+        //            return pending_fork{this, FORWARD(other)};
+        //        }
+        
+        
+        
+    };
+    
+    
+    
+    
+    template<typename T>
+    struct co_future {
+        struct promise_type {
+            std::coroutine_handle<> _continuation;
+            std::variant<std::monostate, T, std::exception_ptr> _value;
+            co_future get_return_object() { return co_future{this}; }
+            std::coroutine_handle<promise_type> get_handle() {
+                return std::coroutine_handle<promise_type>::from_promise(*this);
+                
+            }
+            void set_continuation(std::coroutine_handle<> continuation) noexcept {
+                _continuation = std::move(continuation);
+            }
+            T get_result() {
+                using std::get;
+                switch (_value.index()) {
+                    case 1:
+                        return std::move(get<1>(_value));
+                    case 2:
+                        std::rethrow_exception(std::move(get<2>(_value)));
+                    default:
+                        abort();
+                }
+            }
+            auto initial_suspend() noexcept { return suspend_always{}; }
+            void return_value(auto&& expr) { _value.template emplace<1>(FORWARD(expr)); }
+            void unhandled_exception() noexcept { _value.template emplace<2>(std::current_exception()); }
+            auto final_suspend() noexcept {
+                struct awaitable : suspend_always {
+                    std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> self) noexcept {
+                        return self.promise()._continuation;
+                    }
+                };
+                return awaitable{};
+            }
+            
+            template<typename U>
+            auto await_transform(co_future<U>&& right) {
+                struct awaitable : suspend_always {
+                    co_future<U>::promise_type* _right;
+                    auto await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
+                        _right->set_continuation(std::move(handle));
+                        return _right->get_handle();
+                    }
+                    T await_resume() const { return _right->get_result(); }
+                    // the co_future destroys the handle
+                };
+                return awaitable{{}, exchange(right._promise, nullptr)};
+            }
+            
+            template<typename U>
+            auto await_transform(Flow::PendingFork<U>&& right) {
+                struct awaitable : suspend_always {
+                    Flow::PendingFork<U> _right;
+                    promise_type* _left;
+                    auto await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
+                        ++(_right._flow->_forks);
+                        _right._future._promise->set_continuation(std::coroutine_handle<>::from_address(_right._flow));
+                        auto result = _right._future._promise->get_handle();
+                        _right._future = nullptr;
+                        global_work_queue_schedule(handle);
+                        return result;
+                    }
+                    // resumption
+                };
+                return awaitable{{}, std::move(right), this};
+            }
+            
+        };
+        promise_type* _promise;
+        co_future() : _promise(nullptr) {}
+        explicit co_future(promise_type* promise) : _promise(promise) {}
+        co_future(co_future const&) = delete;
+        co_future(co_future&& other) : _promise(std::exchange(other._promise, nullptr)) {}
+        ~co_future() {
+            if (_promise)
+                _promise->get_handle().destroy();
+        }
+        co_future& operator=(co_future const&) = delete;
+        co_future& operator=(co_future&& other) {
+            co_future temporary{std::move(other)};
+            using std::swap;
+            swap(_promise, temporary._promise);
+            return *this;
+        }
+    };
+        
+
+
+
+
+
     
     
     

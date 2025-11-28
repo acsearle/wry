@@ -44,7 +44,7 @@ int main(int argc, const char** argv) {
     
     std::vector<std::thread> workers;
     for (int i = 0; i != 4; ++i) {
-        workers.emplace_back(&wry::coroutine::global_work_queue_service);
+        workers.emplace_back(&wry::global_work_queue_service);
     }
     
     auto unit_tests = wry::run_tests().start();
@@ -82,7 +82,7 @@ int main(int argc, const char** argv) {
     wry::mutator_pin();
 
     
-    wry::coroutine::global_work_queue_cancel();
+    wry::global_work_queue_cancel();
     while (!workers.empty()) {
         printf("main waiting to join a worker thread\n");
         workers.back().join();
