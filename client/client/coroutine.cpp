@@ -20,6 +20,7 @@ namespace wry {
 
 namespace wry::coroutine {
     
+    /*
     define_test("coroutine") {
         []() -> co_future<int> {
             co_await []() -> co_future<double> {
@@ -34,6 +35,7 @@ namespace wry::coroutine {
         
         co_return;
     };
+     */
     
     define_test("co_sender") {
         

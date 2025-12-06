@@ -36,19 +36,18 @@ int main(int argc, const char** argv) {
         printf("    hex     : %016" PRIX64  "\n", std::uniform_int_distribution<uint64_t>(0)(rd));
     }
     
-    std::thread collector_thread([](){
-        wry::collector_run_on_this_thread();
-    });
-    wry::mutator_pin();
-        
-    
+    std::thread collector_thread(&wry::collector_run_on_this_thread);
     std::vector<std::thread> workers;
     for (int i = 0; i != 4; ++i) {
         workers.emplace_back(&wry::global_work_queue_service);
     }
     
-    auto unit_tests = wry::run_tests().start();
+    // auto unit_tests = wry::run_tests().start();
+    wry::coroutine::Nursery nursery;
+    nursery.spawn(wry::run_tests());
     
+    
+    wry::mutator_pin();
     @autoreleasepool {
         
         // create AppKit application
@@ -73,26 +72,26 @@ int main(int argc, const char** argv) {
         }
         
     } // @autoreleasepool
-
-    
     wry::mutator_unpin();
+    
+    printf("main is terminal\n");
+    
     // Blocking join unit test job
-    printf("main waiting for unit tests\n");
-    unit_tests.join();
+    printf("main is joining unit tests\n");
+    nursery.sync_join();
     wry::mutator_pin();
 
-    
+    printf("main is joining worker threads\n");
     wry::global_work_queue_cancel();
     while (!workers.empty()) {
-        printf("main waiting to join a worker thread\n");
         workers.back().join();
         workers.pop_back();
     }
     
+    printf("main is joining collector thread\n");
     wry::collector_cancel();
-    printf("main waiting to join the collector thread\n");
     collector_thread.join();
-    printf("main done\n");
+    printf("main is done\n");
     return EXIT_SUCCESS;
     
 } // int main(int argc, char** argv)

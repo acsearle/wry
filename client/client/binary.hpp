@@ -33,7 +33,9 @@ namespace wry {
     
     // NOTE: Serde (and JSON) serializes trees.  For more general graphs we
     // must accept duplication, or perform some kind of processing to represent
-    // pointers, or use an entirely different strategy
+    // pointers, or use an entirely different strategy.
+    
+    // NOTE: CSV serializes an array of arrays, without row width consistency
     
     // NOTE: Processing the graph to handle pointers is related to what sqlite
     // would have to do to build a relational database representation.

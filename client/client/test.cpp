@@ -37,24 +37,18 @@ namespace wry {
         
         wry::coroutine::co_task test_t::run_all() {
             base* head = exchange(get_head(), nullptr);
+            coroutine::Nursery nursery;
             while (head) {
-                co_fork [](base* head) -> wry::coroutine::co_task {
+                co_await nursery.fork([](base* head) -> wry::coroutine::co_task {
                     uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-                    bool pass = false;
-                    try {
-                        head->print_metadata("running", 0.0);
-                        co_fork head->run();
-                        co_join;
-                        pass = true;
-                    } catch (...) {
-                    }
+                    co_await (head->run());
                     uint64_t t1 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-                    head->print_metadata(pass ? ": pass" : " fail", (t1 - t0) * 1e-9);
+                    head->print_metadata("", (t1 - t0) * 1e-9);
                     delete head;
                     co_return;
-                } (exchange(head, head->next));
+                } (exchange(head, head->next)));
             }
-            co_join;
+            co_await nursery.join();
             printf("[all] : unit tests complete\n");
         }
         
