@@ -181,21 +181,6 @@ namespace wry {
         };
         
         
-        nursery.spawn(coroutine_parallel_rebuild(new_value_for_coordinate,
-                                                 _value_for_coordinate,
-                                                 context._verb_value_for_coordinate,
-                                                 value_for_coordinate_action));
-
-        
-        nursery.spawn(coroutine_parallel_rebuild(new_entity_id_for_coordinate,
-                           _entity_id_for_coordinate,
-                           context._verb_entity_id_for_coordinate,
-                           action_for_entity_id_for_coordinate));
-
-        nursery.sync_join();
-
-        
-        
         auto action_for_entity_for_entity_id = [this, &next_ready, &next_ready_mutex](const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
         -> ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID>>> {
             const Transaction::Node* writer = nullptr;
@@ -250,11 +235,22 @@ namespace wry {
             return result;
         };
         
-        new_entity_for_entity_id
-        = parallel_rebuild(_entity_for_entity_id,
-                           context._verb_entity_for_entity_id,
-                           action_for_entity_for_entity_id);
+        nursery.spawn(coroutine_parallel_rebuild(new_value_for_coordinate,
+                                                 _value_for_coordinate,
+                                                 context._verb_value_for_coordinate,
+                                                 value_for_coordinate_action));
         
+        nursery.spawn(coroutine_parallel_rebuild(new_entity_id_for_coordinate,
+                                                 _entity_id_for_coordinate,
+                                                 context._verb_entity_id_for_coordinate,
+                                                 action_for_entity_id_for_coordinate));
+        
+        nursery.spawn(coroutine_parallel_rebuild(new_entity_for_entity_id, _entity_for_entity_id,
+                                                 context._verb_entity_for_entity_id,
+                                                 action_for_entity_for_entity_id));
+        
+        nursery.sync_join();
+                
         auto action_for_waiting_on_time = [&new_waiting_on_time, this](const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
         -> ParallelRebuildAction<PersistentSet<EntityID>> {
             // TODO: We need to special-case waits for new_time
