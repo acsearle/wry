@@ -235,8 +235,8 @@ namespace wry {
         assert(prior != State::COMMITTED);
 //        if (prior != State::ABORTED)
 //            printf("ABORTED transaction for EntityID %llu\n", _entity->_entity_id.data);
-         if (prior == State::ABORTED)
-             printf("    Redundant ABORT for EntityID %llu\n", _entity->_entity_id.data);
+//        if (prior == State::ABORTED)
+//            printf("    Redundant ABORT for EntityID %llu\n", _entity->_entity_id.data);
         return ABORTED;
     }
 
@@ -245,8 +245,8 @@ namespace wry {
         assert(prior != State::ABORTED);
 //        if (prior != State::COMMITTED)
 //            printf("COMMITTED transaction for EntityID %llu\n", _entity->_entity_id.data);
-         if (prior == State::COMMITTED)
-             printf("    Redundant COMMIT for EntityID %llu\n", _entity->_entity_id.data);
+//        if (prior == State::COMMITTED)
+//            printf("    Redundant COMMIT for EntityID %llu\n", _entity->_entity_id.data);
         return COMMITTED;
     }
 

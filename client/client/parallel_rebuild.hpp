@@ -14,14 +14,14 @@
 
 namespace wry {
     
-    template<typename T, typename K, typename U, typename Compare>
-    void parallel_rebuild3(array_mapped_trie::Node<T> const* source,
-                           typename ConcurrentSkiplistSet<std::pair<K, U>, Compare>::FrozenCursor cursor) {
-        
-        void const* results[64];
-        
-        
-    }
+//    template<typename T, typename K, typename U, typename Compare>
+//    void parallel_rebuild3(array_mapped_trie::Node<T> const* source,
+//                           typename ConcurrentSkiplistSet<std::pair<K, U>, Compare>::FrozenCursor cursor) {
+//        
+//        void const* results[64];
+//        
+//        
+//    }
     
     
     /*

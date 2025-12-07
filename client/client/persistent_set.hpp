@@ -67,7 +67,6 @@ namespace wry {
                     action(Key{key});
                 });
             }
-            co_return;
         }
 
         
