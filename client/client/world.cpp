@@ -36,6 +36,7 @@ namespace wry {
         auto new_waiting_on_time = _waiting_on_time.clone_and_try_erase(_time, ready).first;
         
         // TODO: next_ready needs to be concurrent
+        std::mutex next_ready_mutex;
         PersistentSet<EntityID> next_ready;
         
         // In parallel, notify each Entity.  Entities will typically examine
@@ -67,7 +68,7 @@ namespace wry {
         WaitableMap<EntityID, Entity const*> new_entity_for_entity_id;
 
                 
-        auto value_for_coordinate_action = [this, &next_ready](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
+        auto value_for_coordinate_action = [this, &next_ready, &next_ready_mutex](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
         -> ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>> {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
@@ -101,11 +102,14 @@ namespace wry {
                 
                 P c{};
                 (void) _value_for_coordinate.inner.try_get(kv.first, c);
-                c.second.for_each([&next_ready](EntityID key) {
+                c.second.for_each([&next_ready, &next_ready_mutex](EntityID key) {
+                    std::unique_lock guard{next_ready_mutex};
                     next_ready.set(key);
                 });
-                for (EntityID key : waiters)
+                for (EntityID key : waiters) {
+                    std::unique_lock guard{next_ready_mutex};
                     next_ready.set(key);
+                }
                 
             } else if (!waiters.empty()) {
                 P b{};
@@ -118,15 +122,9 @@ namespace wry {
             }
             return result;
         };
+                
         
-        nursery.spawn(coroutine_parallel_rebuild(new_value_for_coordinate,
-                                                 _value_for_coordinate,
-                                                 context._verb_value_for_coordinate,
-                                                 value_for_coordinate_action));
-        nursery.sync_join();
-        
-        
-        auto action_for_entity_id_for_coordinate = [this, &next_ready](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
+        auto action_for_entity_id_for_coordinate = [this, &next_ready, &next_ready_mutex](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
         -> ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>> {
             //printf("Rebuild entity_id_for_coordinate %d %d\n", kv.first.x, kv.first.y);
             const Transaction::Node* writer = nullptr;
@@ -161,11 +159,14 @@ namespace wry {
                 
                 P c{};
                 (void) _entity_id_for_coordinate.inner.try_get(kv.first, c);
-                c.second.for_each([&next_ready](EntityID key) {
+                c.second.for_each([&next_ready, &next_ready_mutex](EntityID key) {
+                    std::unique_lock guard{next_ready_mutex};
                     next_ready.set(key);
                 });
-                for (EntityID key : waiters)
+                for (EntityID key : waiters) {
+                    std::unique_lock guard{next_ready_mutex};
                     next_ready.set(key);
+                }
                 
             } else if (!waiters.empty()) {
                 P b{};
@@ -179,12 +180,23 @@ namespace wry {
             return result;
         };
         
-        new_entity_id_for_coordinate
-        = parallel_rebuild(_entity_id_for_coordinate,
-                           context._verb_entity_id_for_coordinate,
-                           action_for_entity_id_for_coordinate);
         
-        auto action_for_entity_for_entity_id = [this, &next_ready](const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
+        nursery.spawn(coroutine_parallel_rebuild(new_value_for_coordinate,
+                                                 _value_for_coordinate,
+                                                 context._verb_value_for_coordinate,
+                                                 value_for_coordinate_action));
+
+        
+        nursery.spawn(coroutine_parallel_rebuild(new_entity_id_for_coordinate,
+                           _entity_id_for_coordinate,
+                           context._verb_entity_id_for_coordinate,
+                           action_for_entity_id_for_coordinate));
+
+        nursery.sync_join();
+
+        
+        
+        auto action_for_entity_for_entity_id = [this, &next_ready, &next_ready_mutex](const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
         -> ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID>>> {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
@@ -217,11 +229,14 @@ namespace wry {
                 
                 P c{};
                 (void) _entity_for_entity_id.inner.try_get(kv.first, c);
-                c.second.for_each([&next_ready](EntityID key) {
+                c.second.for_each([&next_ready, &next_ready_mutex](EntityID key) {
+                    std::unique_lock guard{next_ready_mutex};
                     next_ready.set(key);
                 });
-                for (EntityID key : waiters)
+                for (EntityID key : waiters) {
+                    std::unique_lock guard{next_ready_mutex};
                     next_ready.set(key);
+                }
                 
             } else if (!waiters.empty()) {
                 P b{};
