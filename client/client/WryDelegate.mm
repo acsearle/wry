@@ -77,7 +77,7 @@
                                                    model:_model
                                                     view:_metalView];
     
-    _audio = [[WryAudio alloc] init];
+    // _audio = [[WryAudio alloc] init];
 
     _window.contentView = _metalView;
     // insert this delegate into the responder chain above the metalview

@@ -95,6 +95,19 @@ namespace wry {
         };
     }
 
+    template<typename Key, typename T, typename U, typename F>
+    coroutine::Task coroutine_parallel_rebuild(WaitableMap<Key, T>& new_,
+                                               const WaitableMap<Key, T>& w,
+                                               const ConcurrentMap<Key, U>& value_modifications,
+                                               F&& action_for_key) {
+        co_await
+        coroutine_parallel_rebuild(new_.inner,
+                                   w.inner,
+                                   value_modifications,
+                                   std::forward<F>(action_for_key)
+                                   );
+    }
+
     
 }
 

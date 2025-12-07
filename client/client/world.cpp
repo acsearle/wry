@@ -40,14 +40,18 @@ namespace wry {
         
         // In parallel, notify each Entity.  Entities will typically examine
         // the World and may propose a Transaction to change it.
-        
-        
-        ready.parallel_for_each([this, &context](EntityID entity_id) {
-            const Entity* a = nullptr;
-            (void) _entity_for_entity_id.try_get(entity_id, a);
-            assert(a);
-            a->notify(&context);
-        });
+
+        coroutine::Nursery nursery;
+        {
+            auto action = [this, &context](EntityID entity_id) {
+                const Entity* a = nullptr;
+                (void) _entity_for_entity_id.try_get(entity_id, a);
+                assert(a);
+                a->notify(&context);
+            };
+            nursery.spawn(ready.coroutine_parallel_for_each(action));
+            nursery.sync_join();
+        }
         
         // -- completion barrier --
         
@@ -59,12 +63,12 @@ namespace wry {
         
        
         WaitableMap<Coordinate, Value> new_value_for_coordinate;
-        
-        new_value_for_coordinate
-        = parallel_rebuild(_value_for_coordinate,
-                           context._verb_value_for_coordinate,
-                           [this, &next_ready](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-                           -> ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>> {
+        WaitableMap<Coordinate, EntityID> new_entity_id_for_coordinate;
+        WaitableMap<EntityID, Entity const*> new_entity_for_entity_id;
+
+                
+        auto value_for_coordinate_action = [this, &next_ready](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
+        -> ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>> {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
@@ -94,7 +98,7 @@ namespace wry {
                 result.tag = A::WRITE_VALUE;
                 result.value = b;
                 // Publish new and old waiters somewhere
-
+                
                 P c{};
                 (void) _value_for_coordinate.inner.try_get(kv.first, c);
                 c.second.for_each([&next_ready](EntityID key) {
@@ -113,15 +117,17 @@ namespace wry {
                 result.value = b;
             }
             return result;
-        });
+        };
+        
+        nursery.spawn(coroutine_parallel_rebuild(new_value_for_coordinate,
+                                                 _value_for_coordinate,
+                                                 context._verb_value_for_coordinate,
+                                                 value_for_coordinate_action));
+        nursery.sync_join();
         
         
-        WaitableMap<Coordinate, EntityID> new_entity_id_for_coordinate;
-        new_entity_id_for_coordinate
-        = parallel_rebuild(_entity_id_for_coordinate,
-                           context._verb_entity_id_for_coordinate,
-                           [this, &next_ready](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-                           -> ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>> {
+        auto action_for_entity_id_for_coordinate = [this, &next_ready](const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
+        -> ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>> {
             //printf("Rebuild entity_id_for_coordinate %d %d\n", kv.first.x, kv.first.y);
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
@@ -171,14 +177,15 @@ namespace wry {
                 result.value = b;
             }
             return result;
-        });
+        };
         
-        WaitableMap<EntityID, Entity const*> new_entity_for_entity_id;
-        new_entity_for_entity_id
-        = parallel_rebuild(_entity_for_entity_id,
-                           context._verb_entity_for_entity_id,
-                           [this, &next_ready](const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
-                           -> ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID>>> {
+        new_entity_id_for_coordinate
+        = parallel_rebuild(_entity_id_for_coordinate,
+                           context._verb_entity_id_for_coordinate,
+                           action_for_entity_id_for_coordinate);
+        
+        auto action_for_entity_for_entity_id = [this, &next_ready](const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
+        -> ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID>>> {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
@@ -226,13 +233,15 @@ namespace wry {
                 result.value = b;
             }
             return result;
-        });
+        };
         
-        new_waiting_on_time
-        = parallel_rebuild(new_waiting_on_time,
-                           context._wait_on_time,
-                           [&new_waiting_on_time, this](const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
-                           -> ParallelRebuildAction<PersistentSet<EntityID>> {
+        new_entity_for_entity_id
+        = parallel_rebuild(_entity_for_entity_id,
+                           context._verb_entity_for_entity_id,
+                           action_for_entity_for_entity_id);
+        
+        auto action_for_waiting_on_time = [&new_waiting_on_time, this](const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
+        -> ParallelRebuildAction<PersistentSet<EntityID>> {
             // TODO: We need to special-case waits for new_time
             assert(kv.first > _time);
             ParallelRebuildAction<PersistentSet<EntityID>> result;
@@ -247,7 +256,12 @@ namespace wry {
                     result.value.set(entity_id);
             }
             return result;
-        });
+        };
+        
+        new_waiting_on_time
+        = parallel_rebuild(new_waiting_on_time,
+                           context._wait_on_time,
+                           action_for_waiting_on_time);
         
         // HACK: We have two separate representations of work for next_time,
         // we need to merge them and expose them to the next cycle.  This hack

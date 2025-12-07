@@ -14,6 +14,7 @@
 
 #include "array_mapped_trie.hpp"
 #include "utility.hpp"
+#include "coroutine.hpp"
 
 namespace wry {
         
@@ -58,6 +59,15 @@ namespace wry {
         void parallel_for_each(auto&& action) const {
             // TODO: parallel implementation
             for_each(std::forward<decltype(action)>(action));
+        }
+        
+        coroutine::Task coroutine_parallel_for_each(auto&& action) const {
+            if (_inner) {
+                co_await _inner->coroutine_parallel_for_each([&action](uint64_t key, uint64_t) {
+                    action(Key{key});
+                });
+            }
+            co_return;
         }
 
         

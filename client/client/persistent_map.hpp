@@ -16,6 +16,7 @@
 #include "array_mapped_trie.hpp"
 #include "concurrent_map.hpp"
 #include "utility.hpp"
+#include "coroutine.hpp"
 
 namespace wry {
         
@@ -164,6 +165,39 @@ namespace wry {
         return result;
     }
     
+    
+    
+    template<typename Key, typename T, typename U, typename F>
+    coroutine::Task coroutine_parallel_rebuild(PersistentMap<Key, T>& target,
+                                const PersistentMap<Key, T>& source,
+                                const ConcurrentMap<Key, U>& modifier,
+                                F&& action_for_key) {
+        
+        
+        // TODO: Descend the two trees and rebuild up from the leaves.
+        // This can be made highly parallel.
+        
+        PersistentMap<Key, T> result{source};
+        // SAFETY: We can iterate the concurrent map here because it is
+        // immutable in this phase
+        auto first = modifier.begin();
+        auto last = modifier.end();
+        for (; first != last; ++first) {
+            ParallelRebuildAction<T> action = action_for_key(*first);
+            switch (action.tag) {
+                case ParallelRebuildAction<T>::NONE:
+                    break;
+                case ParallelRebuildAction<T>::WRITE_VALUE:
+                    result.set(first->first, action.value);
+                    break;
+                case ParallelRebuildAction<T>::CLEAR_VALUE:
+                    (void) result.try_erase(first->first, action.value);
+                    break;
+            }
+        }
+        target = result;
+        co_return;
+    }
     
     
     

@@ -39,26 +39,23 @@ namespace wry::coroutine {
     
     // Basic awaitables
     
-    using std::suspend_always;
-    using std::suspend_never;
-    
-    struct resume_never : suspend_always {
+    struct ResumeNever : std::suspend_always {
         void await_resume() const noexcept {
             abort();
         }
     };
     
-    struct suspend_and_destroy : resume_never {
+    struct SuspendAndDestroy : ResumeNever {
         void await_suspend(std::coroutine_handle<> handle) const noexcept {
             handle.destroy();
         }
     };
     
-    struct debug_suspend_and_leak : resume_never {
+    struct DebugSuspendAndLeak : ResumeNever {
         void await_suspend(std::coroutine_handle<> handle) const noexcept {}
     };
     
-    struct suspend_and_schedule : suspend_always {
+    struct SuspendAndSchedule : std::suspend_always {
         void await_suspend(std::coroutine_handle<> handle) const noexcept {
             global_work_queue_schedule(handle);
         }
@@ -66,363 +63,68 @@ namespace wry::coroutine {
     
     
     
+    // Basic coroutine
     
-    template<typename>
-    struct callback_handle;
-    
-    template<typename R, typename... Args>
-    struct callback_handle<R(Args...)> {
-        R _callback(void*, Args...);
-        R operator()(Args... args) {
-            return _callback((void*)this, std::forward<Args>(args)...);
-        };
-    };
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    template<typename... Args>
-    struct receiver_of {
-        virtual void set_value(Args...) = 0;
-    };
-    
-    
-    template<typename>
-    struct sender_traits {};
-    
-    template<typename T>
-    using sender_traits_t = typename sender_traits<T>::type;
-    
-    template<typename...>
-    struct receiver_traits {};
-    
-    template<typename T>
-    using receiver_traits_t = typename receiver_traits<T>::type;
-    
-    
-    
-    
-    
-    template<typename...>
-    struct _coroutine_handle_receiver;
-    
-    template<>
-    struct _coroutine_handle_receiver<> {
-        std::coroutine_handle<> _handle;
-        void set_value() {
-            _handle.resume();
-        }
-    };
-    
-    template<typename T>
-    struct _coroutine_handle_receiver<T> {
-        std::coroutine_handle<> _handle;
-        T* _value;
-        void set_value(T value) {
-            *_value = value;
-            _handle.resume();
-        }
-    };
-    
-    template<typename...>
-    struct _co_sender_promise;
-    
-    template<typename... Args>
-    struct co_sender {
-        using promise_type = _co_sender_promise<Args...>;
-        promise_type* _promise;
-        template<typename Receiver> auto connect(Receiver receiver);
-    };
-    
-    
-    template<typename Sender>
-    auto _common_await_transform(Sender sender) {
-        using T = sender_traits_t<Sender>;
-        using U = decltype(std::move(sender).connect());
-        struct awaitable {
-            Sender _sender;
-            T _value;
-            U _operation;
-            constexpr bool await_ready() const noexcept { return false; }
-            void await_suspend(std::coroutine_handle<> handle) {
-                _operation = std::move(_sender).connect(_coroutine_handle_receiver<T>{std::move(handle), &_value});
-                _operation.start();
-            }
-            T await_resume() {
-                return std::move(_value);
-            }
-        };
-        return awaitable{std::move(sender)};
-    }
-    
-    auto _common_await_transform(co_sender<> sender);
-    
-    template<typename T>
-    auto _common_await_transform(co_sender<T> sender) {
-        struct awaitable : receiver_of<T> {
-            std::coroutine_handle<> _handle;
-            T _value;
-            explicit awaitable(std::coroutine_handle<> handle)
-            : _handle(std::move(handle)) {
-            }
-            constexpr bool await_ready() const noexcept { return false; }
-            std::coroutine_handle<> await_suspend(std::coroutine_handle<> handle) noexcept {
-                std::coroutine_handle<typename co_sender<T>::promise_type>::from_address(_handle.address()).promise()._receiver = this;
-                return std::exchange(_handle, handle);
-            }
-            T await_resume() {
-                return std::move(_value);
-            }
-            virtual void set_value(T value) override {
-                _value = std::move(value);
-            }
-        };
-        return awaitable{std::coroutine_handle<typename co_sender<T>::promise_type>::from_promise(*sender._promise)};
+    struct Task {
         
-    }
-    
-    
-    template<>
-    struct _co_sender_promise<> {
-        receiver_of<>* _receiver = nullptr;
-        co_sender<> get_return_object() { return co_sender<>{this}; }
-        auto initial_suspend() noexcept { return std::suspend_always{}; }
-        void return_void() noexcept {}
-        void unhandled_exception() noexcept { abort(); }
-        
-        auto final_suspend() noexcept {
-            struct awaitable : resume_never {
-                void await_suspend(std::coroutine_handle<_co_sender_promise<>> handle) noexcept {
-                    receiver_of<>* receiver = handle.promise()._receiver;
-                    handle.destroy();
-                    receiver->set_value();
-                }
-            };
-            return awaitable{};
-        }
-        template<typename Sender>
-        auto await_transform(Sender sender) {
-            return _common_await_transform(std::move(sender));
-        }
-    };
-    
-    
-    template<typename T>
-    struct _co_sender_promise<T> {
-        receiver_of<T>* _receiver = nullptr;
-        T _value;
-        co_sender<T> get_return_object() { return co_sender<T>{this}; }
-        auto initial_suspend() noexcept { return std::suspend_always{}; }
-        void return_value(auto&& expr) noexcept {
-            _value = std::forward<decltype(expr)>(expr);
-        }
-        void unhandled_exception() noexcept { abort(); }
-        auto final_suspend() noexcept {
-            struct awaitable : resume_never {
-                void await_suspend(std::coroutine_handle<_co_sender_promise> handle) noexcept {
-                    T value = std::move(handle.promise()._value);
-                    receiver_of<T>* receiver = handle.promise()._receiver;
-                    handle.destroy();
-                    receiver->set_value(std::move(value));
-                }
-            };
-            return awaitable{};
-        }
-        template<typename Sender>
-        auto await_transform(Sender sender) {
-            return _common_await_transform(std::move(sender));
-        }
-    };
-    
-    
-    
-    template<typename...>
-    struct _co_sender_operation;
-    
-    template<typename T, typename Receiver>
-    struct _co_sender_operation<T, Receiver> : receiver_of<T> {
-        co_sender<T> _sender;
-        Receiver _receiver;
-        _co_sender_operation(co_sender<T> sender, Receiver receiver)
-        : _sender(std::move(sender))
-        , _receiver(std::move(receiver)) {
-        }
-        void start() {
-            _sender._promise->_receiver = this;
-            std::coroutine_handle<typename co_sender<T>::promise_type>::from_promise(*_sender._promise).resume();
-        }
-        virtual void set_value(T value) override {
-            _receiver.set_value(std::move(value));
-        }
-    };
-    
-    template<typename Receiver>
-    struct _co_sender_operation<Receiver> : receiver_of<> {
-        co_sender<> _sender;
-        Receiver _receiver;
-        _co_sender_operation(co_sender<> sender, Receiver receiver)
-        : _sender(std::move(sender))
-        , _receiver(std::move(receiver)) {
-        }
-        void start() {
-            _sender._promise->_receiver = this;
-            std::coroutine_handle<typename co_sender<>::promise_type>::from_promise(*_sender._promise).resume();
-        }
-        virtual void set_value() override {
-            _receiver.set_value();
-        }
-    };
-    
-    
-    template<typename... Args> template<typename Receiver>
-    auto co_sender<Args...>::connect(Receiver receiver) {
-        return _co_sender_operation<Args..., Receiver>{
-            std::move(*this),
-            std::move(receiver)
-        };
-    }
-    
-    
-    
-    inline auto _common_await_transform(co_sender<> sender) {
-        struct awaitable : receiver_of<> {
-            std::coroutine_handle<> _handle;
-            explicit awaitable(std::coroutine_handle<> handle) : _handle(handle) {}
-            constexpr bool await_ready() const noexcept { return false; }
-            std::coroutine_handle<> await_suspend(std::coroutine_handle<> handle) noexcept {
-                std::coroutine_handle<typename co_sender<>::promise_type>::from_address(_handle.address()).promise()._receiver = this;
-                return std::exchange(_handle, handle);
-            }
-            void await_resume() const noexcept {}
-            virtual void set_value() {
-                _handle.resume();
-            }
-        };
-        return awaitable{std::coroutine_handle<co_sender<>::promise_type>::from_promise(*sender._promise)};
-    }
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    // we want to:
-    //
-    // co_fork foo();
-    // ...
-    // co_join;
-    //
-    // x = co_await foo();
-    //
-    // x = sync_wait foo();
-    //
-    // in the first case:
-    // - the caller suspends and reschedules itself, and informs callee of
-    //   something before starting it
-    // - the callee must count down something and signal the join
-    // - the caller must eventually wait at the join
-    //
-    // in the second case:
-    // - the caller suspends and installs itself in the callee as a continuation
-    //
-    // in the third case:
-    // - the callee schedules itself and the caller thread blocks on a future-type thing
-    //
-    // from the callee perspective, all of these can be accomplished by resuming
-    // a continuation given before starting
-    //
-    // when directly awaiting, we can manufacture this coroutine easily enough
-    //
-    // when forking, this coroutine needs to be faked somehow, and its state
-    // needs to live somewhere
-    //
-    // in an object:
-    // for (_fork_state_t _fork_state; _fork_state.is_finished(); co_await _fork_state.join()) {
-    //    co_await _fork_state_ % stuff();
-    // }
-    //
-    // in the body, a fauxroutine of:
-    //     _resume
-    //     _destroy = null
-    //     _atomic_count
-    //     _self_continuation
-    //     _forked_count
-    //
-    //
-    // co_fork boo() = co_await _fork % boo()
-    // _fork % co_task -> {
-    //     await_ready() -> false
-    //     std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) {
-    //         context = handle.promise()
-    //
-    //     }
-    // }
-    
-    // a coroutine that is a sender:
-    //
-    //
-    
-    
-    
-    
-
-    
-    
-    
-    struct co_task {
-        
-        struct promise_type {
+        struct Promise {
             
             std::coroutine_handle<> _continuation;
                                     
-            co_task get_return_object() {
-                return co_task{this};
+            Task get_return_object() {
+                return Task{this};
             }
             
-            constexpr suspend_always initial_suspend() const noexcept {
-                return suspend_always{};
+            constexpr std::suspend_always initial_suspend() const noexcept {
+                return std::suspend_always{};
             }
             
             void unhandled_exception() const noexcept { abort(); }
             void return_void() const noexcept {}
             
             auto final_suspend() const noexcept {
-                struct awaitable : suspend_and_destroy {
-                    std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) const noexcept {
+                struct Awaitable : SuspendAndDestroy {
+                    std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> handle) const noexcept {
                         std::coroutine_handle<> continuation = std::move(handle.promise()._continuation);
                         handle.destroy();
                         return continuation;
                     }
                 };
-                return awaitable{};
+                return Awaitable{};
+            }
+            
+            std::coroutine_handle<Promise> get_handle() {
+                return std::coroutine_handle<Promise>::from_promise(*this);
+            }
+            
+            void set_continuation(std::coroutine_handle<> continuation) {
+                assert(!_continuation);
+                _continuation = std::move(continuation);
+            }
+            
+            void set_continuation(void* ptr) {
+                _continuation = std::coroutine_handle<>::from_address(ptr);
+            }
+            
+            std::coroutine_handle<> take_continuation() {
+                return std::exchange(_continuation, nullptr);
             }
                         
         };
         
-        promise_type* _promise;
+        using promise_type = Promise;
+        
+        Promise* _promise;
 
-        explicit co_task(promise_type* p) : _promise(p) {}
+        explicit Task(Promise* p) : _promise(p) {}
 
-        co_task() = delete;
-        co_task(co_task const&) = delete;
-        co_task(co_task&& other) : _promise(exchange(other._promise, nullptr)) {}
-        ~co_task() { if (_promise) abort(); }
-        co_task& operator=(co_task const&) = delete;
-        co_task& operator=(co_task&& other) {
-            co_task a{std::move(other)};
+        Task() = delete;
+        Task(Task const&) = delete;
+        Task(Task&& other) : _promise(exchange(other._promise, nullptr)) {}
+        ~Task() { if (_promise) abort(); }
+        Task& operator=(Task const&) = delete;
+        Task& operator=(Task&& other) {
+            Task a{std::move(other)};
             using std::swap;
             swap(_promise, a._promise);
             return *this;
@@ -430,23 +132,21 @@ namespace wry::coroutine {
 
         
         auto operator co_await() {
-            struct awaitable : suspend_always {
+            struct Awaitable : std::suspend_always {
                 promise_type* _promise;
-                explicit awaitable(promise_type* promise) : _promise(promise) {}
-                ~awaitable() { if (_promise) abort(); }
-                std::coroutine_handle<promise_type> await_suspend(std::coroutine_handle<> handle) noexcept {
-                    assert(_promise && !_promise->_continuation);
-                    _promise->_continuation = std::move(handle);
-                    return std::coroutine_handle<promise_type>::from_promise(*std::exchange(_promise, nullptr));
+                explicit Awaitable(Promise* promise) : _promise(promise) {}
+                ~Awaitable() { if (_promise) abort(); }
+                std::coroutine_handle<Promise> await_suspend(std::coroutine_handle<> continuation) noexcept {
+                    _promise->set_continuation(std::move(continuation));
+                    return std::exchange(_promise, nullptr)->get_handle();
                 }
             };
-            return awaitable{std::exchange(_promise, nullptr)};
+            return Awaitable{std::exchange(_promise, nullptr)};
         }
         
     };
         
     
-    struct Nursery;
 
     struct Nursery {
         
@@ -467,28 +167,34 @@ namespace wry::coroutine {
             }
         }
                 
-        auto fork(co_task&& task) {
-            struct awaitable : suspend_always {
+        auto fork(Task&& task) {
+            struct Awaitable : std::suspend_always {
                 Nursery* _nursery;
-                co_task _task;
-                std::coroutine_handle<co_task::promise_type> await_suspend(std::coroutine_handle<> continuation) noexcept {
+                Task _task;
+                std::coroutine_handle<Task::Promise> await_suspend(std::coroutine_handle<> continuation) noexcept {
                     _nursery->_children++;
+                    _task._promise->set_continuation(_nursery);
+                    auto result = std::exchange(_task._promise, nullptr)->get_handle();
                     global_work_queue_schedule(std::move(continuation));
-                    _task._promise->_continuation = std::coroutine_handle<>::from_address(_nursery);
-                    return std::coroutine_handle<co_task::promise_type>::from_promise(*std::exchange(_task._promise, nullptr));
+                    return result;
                 }
             };
-            return awaitable{{}, this, std::move(task)};
+            return Awaitable{{}, this, std::move(task)};
         }
         
         auto join() {
-            struct awaitable {
+            struct Awaitable {
                 Nursery* _nursery;
-                bool await_ready() {
-                    auto count = _nursery->_counter.load(Ordering::ACQUIRE);
-                    return count == -_nursery->_children;
+                bool await_ready() const noexcept {
+                    auto count = _nursery->_counter.load(Ordering::RELAXED);
+                    bool result = (count == -_nursery->_children);
+                    if (result) {
+                        _nursery->_counter.exchange(0, Ordering::ACQUIRE);
+                        _nursery->_children = 0;
+                    }
+                    return result;
                 }
-                std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) {
+                std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) const noexcept {
                     _nursery->_continuation = std::move(continuation);
                     auto count = _nursery->_counter.add_fetch(std::exchange(_nursery->_children, 0), Ordering::RELEASE);
                     if (count == 0) {
@@ -498,34 +204,33 @@ namespace wry::coroutine {
                         return std::noop_coroutine();
                     }
                 }
-                void await_resume() {}
+                void await_resume() const noexcept {}
             };
-            return awaitable{this};
+            return Awaitable{this};
         }
         
-        void spawn(co_task&& task) {
+        void spawn(Task&& task) {
             _children++;
-            task._promise->_continuation = std::coroutine_handle<>::from_address(this);
-            global_work_queue_schedule(std::coroutine_handle<co_task::promise_type>
-                                       ::from_promise(*std::exchange(task._promise, nullptr)));
+            task._promise->set_continuation(this);
+            global_work_queue_schedule(std::exchange(task._promise, nullptr)->get_handle());
         }
         
         void sync_join() {
-            struct continuation {
+            struct Frame {
                 void (*_resume)(void*) = &static_resume;
                 std::binary_semaphore _semaphore{0}; // start unavailable
                 static void static_resume(void* ptr) {
-                    auto self = (continuation*)ptr;
+                    auto self = (Frame*)ptr;
                     self->_semaphore.release();
                 }
             };
-            continuation x;
-            _continuation = std::coroutine_handle<void>::from_address(&x);
+            Frame frame;
+            _continuation = std::coroutine_handle<void>::from_address(&frame);
             auto count = _counter.add_fetch(std::exchange(_children, 0), Ordering::RELEASE);
             if (count == 0) {
                 (void) _counter.load(Ordering::ACQUIRE);
             } else {
-                x._semaphore.acquire();
+                frame._semaphore.acquire();
             }
         }
         
@@ -727,11 +432,11 @@ namespace wry::coroutine {
                     return {};
                 }
                 
-                suspend_and_schedule initial_suspend() noexcept { return {}; }
+                SuspendAndSchedule initial_suspend() noexcept { return {}; }
                 
                 auto final_suspend() noexcept {
                     
-                    struct Awaitable : resume_never {
+                    struct Awaitable : ResumeNever {
                         
                         SingleConsumerLatch* _context;
                         std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
@@ -751,28 +456,6 @@ namespace wry::coroutine {
                 void unhandled_exception() noexcept {
                     __builtin_trap();
                 }
-                
-                /*
-                 decltype(auto) await_transform(auto&& awaitable) {
-                 if constexpr (!std::is_same_v<std::decay_t<decltype(awaitable)>, _self_promise_t>) {
-                 return FORWARD(awaitable);
-                 } else {
-                 struct Awaitable {
-                 promise_type* _promise;
-                 constexpr bool await_ready() const noexcept {
-                 return true;
-                 }
-                 constexpr void await_suspend(std::coroutine_handle<>) const noexcept {
-                 __builtin_trap();
-                 };
-                 promise_type& await_resume() const noexcept {
-                 return *_promise;
-                 }
-                 };
-                 return Awaitable{this};
-                 }
-                 }
-                 */
                 
             }; // struct SingleConsumerLatch::WillDecrement::promise_type
             
@@ -1016,147 +699,6 @@ namespace wry::coroutine {
     
     
 
-    
-    
-    
-    // TODO: Are tasks actually useful?
-    // vs write multiple results into an array and count down a latch?
-    
-    // Eager task returning T
-    template<typename T>
-    struct co_future_eager {
-        
-        struct promise_type {
-            
-            enum {
-                INITIAL = 0,
-                READY,
-                ABANDONED,
-            };
-            
-            Atomic<intptr_t> _state;
-            union {
-                char _initial;
-                T _ready;
-            };
-            
-            constexpr co_future_eager get_return_object() const noexcept {
-                return co_future_eager{this};
-            }
-            
-            constexpr std::suspend_never initial_suspend() const noexcept {
-                return {};
-            }
-            
-            void unhandled_exception() const noexcept { abort(); }
-            
-            void return_value(auto&& x) noexcept {
-                new(&_ready) T(FORWARD(x));
-            }
-            
-            constexpr auto final_suspend() const noexcept {
-                struct awaitable {
-                    constexpr bool await_ready() const noexcept {
-                        return false;
-                    }
-                    std::coroutine_handle<> await_suspend(std::coroutine_handle<promise_type> handle) {
-                        intptr_t was = handle.promise()._state.exchange(READY, Ordering::RELEASE);
-                        switch (was) {
-                            case INITIAL:
-                                return std::noop_coroutine();
-                            case READY:
-                                abort();
-                            case ABANDONED:
-                                std::destroy(handle.promise()._ready);
-                                handle.destroy();
-                                return std::noop_coroutine();
-                            default: // AWAITED
-                                handle.promise().load(Ordering::ACQUIRE);
-                                return std::coroutine_handle<>::from_address((void*)was);
-                        }
-                    }
-                };
-            }
-            
-        };
-        
-        promise_type* _promise;
-        
-        co_future_eager() = delete;
-
-        co_future_eager(co_future_eager const& other) = delete;
-
-        co_future_eager(co_future_eager&& other)
-        : _promise(std::exchange(other._promise, nullptr)) {
-        }
-        
-        ~co_future_eager() {
-            if (_promise) {
-                intptr_t was = _promise->_state.exchange(promise_type::ABANDONED, Ordering::RELEASE);
-                switch (was) {
-                    case promise_type::INITIAL:
-                        // running; will destroy itself
-                        break;
-                    case promise_type::READY:
-                        // finished; we must destroy it
-                        (void) _promise->_state.load(Ordering::ACQUIRE);
-                        std::destroy(_promise->_ready);
-                        std::coroutine_handle<promise_type>::from_promise(*(_promise)).destroy();
-                        break;
-                    case promise_type::ABANDONED:
-                        // disallowed; already abandoned
-                        abort();
-                    default:
-                        // disallowed; awaited
-                        abort();
-                }
-            }
-        }
-        
-        co_future_eager& operator=(co_future_eager const&) = delete;
-        co_future_eager& operator=(co_future_eager&& other) {
-            co_future_eager local(std::move(other));
-            using std::swap;
-            swap(_promise, local._promise);
-            return *this;
-        }
-        
-        
-        auto operator co_await() {
-            struct awaitable {
-                co_future_eager* _context;
-                constexpr bool await_ready() const noexcept {
-                    return false;
-                }
-                std::coroutine_handle<> await_suspend(std::coroutine_handle<> handle) const noexcept {
-                    intptr_t was = _context->_promise->_state.exchange((intptr_t)handle.address(), Ordering::RELEASE);
-                    switch (was) {
-                        case promise_type::INITIAL:
-                            return std::noop_coroutine();
-                        case promise_type::READY:
-                            (void) _context->_promise->_state.load(Ordering::ACQUIRE);
-                            return handle;
-                        case promise_type::ABANDONED:
-                            // disallowed: already abandoned
-                            abort();
-                        default:
-                            //disallowed: already awaited
-                            abort();
-                    }
-                }
-                T await_resume() const noexcept {
-                    T result{std::move(_context->_promise->_ready)};
-                    std::destroy(_context->_promise->_ready);
-                    std::coroutine_handle<promise_type>::from_promise(*(_context->_promise)).destroy();
-                    _context->_promise = nullptr;
-                    return result;
-                }
-            };
-            return awaitable{this};
-        }
-        
-    };
-    
     
     
 

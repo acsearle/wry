@@ -13,6 +13,7 @@
 #include "compressed_array.hpp"
 #include "garbage_collected.hpp"
 #include "variant.hpp"
+#include "coroutine.hpp"
 
 namespace wry::array_mapped_trie {
     
@@ -501,6 +502,22 @@ namespace wry::array_mapped_trie {
             }
         }
         
+        coroutine::Task coroutine_parallel_for_each(auto&& action) const {
+            if (has_children()) {
+                int n = popcount(_bitmap);
+                coroutine::Nursery nursery;
+                for (int i = 0; i != n; ++i)
+                    co_await nursery.fork(_children[i]->coroutine_parallel_for_each(action));
+                co_await nursery.join();
+            } else {
+                uint64_t b = _bitmap;
+                for (int i = 0; b != 0; ++i, (b &= (b-1))) {
+                    int j = bit::ctz(b);
+                    uint64_t key = _prefix_and_shift | j;
+                    action(key, _values[i]);
+                }
+            }
+        }
         
     }; // Node
     

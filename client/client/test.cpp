@@ -35,11 +35,11 @@ namespace wry {
             return _head;
         }
         
-        wry::coroutine::co_task test_t::run_all() {
+        wry::coroutine::Task test_t::run_all() {
             base* head = exchange(get_head(), nullptr);
             coroutine::Nursery nursery;
             while (head) {
-                co_await nursery.fork([](base* head) -> wry::coroutine::co_task {
+                co_await nursery.fork([](base* head) -> wry::coroutine::Task {
                     uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
                     co_await (head->run());
                     uint64_t t1 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
@@ -54,7 +54,7 @@ namespace wry {
         
     } // namespace detail
     
-    wry::coroutine::co_task run_tests() {
+    wry::coroutine::Task run_tests() {
         return detail::test_t::run_all();
     }
     
