@@ -285,7 +285,7 @@ namespace wry {
                 Node* _Nonnull p = Node::with_random_size_emplace(FORWARD(keylike), FORWARD(args)...);
                 auto result = _link_level(0, left, candidate, p);
                 if (!result.second)
-                    free(p);
+                    delete p; // <-- Uses custom operator delete
                 return result;
             } else {
                 auto result = _try_emplace(i - 1, left - 1, FORWARD(keylike), FORWARD(args)...);
