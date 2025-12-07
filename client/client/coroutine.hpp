@@ -718,12 +718,12 @@ namespace wry::coroutine {
         
         struct Awaitable {
             Mutex* _context;
-            intptr_t _expected;
+            intptr_t _state;
             std::coroutine_handle<> _handle;
 
             bool await_ready() noexcept {
-                _expected = UNLOCKED;
-                return _context->_state.compare_exchange_weak(_expected,
+                _state = UNLOCKED;
+                return _context->_state.compare_exchange_weak(_state,
                                                               LOCKED,
                                                               Ordering::ACQUIRE,
                                                               Ordering::RELAXED);
@@ -732,16 +732,16 @@ namespace wry::coroutine {
             bool await_suspend(std::coroutine_handle<> handle) noexcept {
                 _handle = handle;
                 for (;;) {
-                    switch (_expected) {
+                    switch (_state) {
                         case UNLOCKED:
-                            if (_context->_state.compare_exchange_weak(_expected,
+                            if (_context->_state.compare_exchange_weak(_state,
                                                                        LOCKED,
                                                                        Ordering::ACQUIRE,
                                                                        Ordering::RELAXED))
                                 return false;
                             break;
                         default:
-                            if (_context->_state.compare_exchange_weak(_expected,
+                            if (_context->_state.compare_exchange_weak(_state,
                                                                        (intptr_t)this,
                                                                        Ordering::RELEASE,
                                                                        Ordering::RELAXED))
@@ -762,28 +762,26 @@ namespace wry::coroutine {
         }
                               
         void unlock() {
-            for (intptr_t expected = _state.load(Ordering::RELAXED); !_awaiters;) {
-                switch (expected) {
-                    case UNLOCKED:
-                        abort();
-                    case LOCKED:
-                        if (_state.compare_exchange_strong(expected, UNLOCKED, Ordering::RELEASE, Ordering::RELAXED))
-                            return;
-                        break;
-                    default:
-                        if (_state.compare_exchange_strong(expected, LOCKED, Ordering::ACQUIRE, Ordering::RELAXED)) {
-                            // We could reverse the list here for fairness
-                            _awaiters = (Awaitable*)expected;
-                        }
-                        break;
-                }
+            intptr_t expected = {};
+            if (_awaiters)
+                goto ALPHA;
+            expected = _state.load(Ordering::RELAXED);
+            for (;;) switch (expected) {
+                case UNLOCKED:
+                    abort();
+                case LOCKED:
+                    if (_state.compare_exchange_strong(expected, UNLOCKED, Ordering::RELEASE, Ordering::RELAXED))
+                        return;
+                    break;
+                default:
+                    if (_state.compare_exchange_strong(expected, LOCKED, Ordering::ACQUIRE, Ordering::RELAXED)) {
+                        _awaiters = (Awaitable*)expected;
+                    ALPHA:
+                        global_work_queue_schedule(std::exchange(_awaiters, (Awaitable*)_awaiters->_state)->_handle);
+                        return;
+                    }
+                    break;                    
             }
-            assert(_awaiters);
-            Awaitable* head = _awaiters;
-            _awaiters = (Awaitable*)(_awaiters->_expected);
-            // SAFETY: Coroutine scheduling here establishes happens-before?
-            global_work_queue_schedule(head->_handle);
-            return;
         }
         
         

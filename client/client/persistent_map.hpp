@@ -150,7 +150,8 @@ namespace wry {
         auto first = modifier.begin();
         auto last = modifier.end();
         for (; first != last; ++first) {
-            ParallelRebuildAction<T> action = action_for_key(*first);
+            ParallelRebuildAction<T> action;
+            action_for_key(action, *first);
             switch (action.tag) {
                 case ParallelRebuildAction<T>::NONE:
                     break;
@@ -183,7 +184,8 @@ namespace wry {
         auto first = modifier.begin();
         auto last = modifier.end();
         for (; first != last; ++first) {
-            ParallelRebuildAction<T> action = action_for_key(*first);
+            ParallelRebuildAction<T> action;
+            co_await action_for_key(action, *first);
             switch (action.tag) {
                 case ParallelRebuildAction<T>::NONE:
                     break;

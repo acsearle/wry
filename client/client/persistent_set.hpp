@@ -69,6 +69,14 @@ namespace wry {
             }
         }
 
+        coroutine::Task coroutine_parallel_for_each_coroutine(auto&& action) const {
+            if (_inner) {
+                co_await _inner->coroutine_parallel_for_each_coroutine([&action](uint64_t key, uint64_t) -> coroutine::Task {
+                    co_await action(Key{key});
+                });
+            }
+        }
+
         
     }; // PersistentSet
     
