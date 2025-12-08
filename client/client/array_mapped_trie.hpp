@@ -80,6 +80,7 @@ namespace wry::array_mapped_trie {
     };
     
     
+    using coroutine::Task;
     
     template<typename T>
     struct Node : GarbageCollected {
@@ -502,7 +503,7 @@ namespace wry::array_mapped_trie {
             }
         }
         
-        coroutine::Task coroutine_parallel_for_each(auto&& action) const {
+        Task coroutine_parallel_for_each(auto&& action) const {
             if (has_children()) {
                 int n = popcount(_bitmap);
                 coroutine::Nursery nursery;
@@ -519,7 +520,7 @@ namespace wry::array_mapped_trie {
             }
         }
         
-        coroutine::Task coroutine_parallel_for_each_coroutine(auto&& action) const {
+        Task coroutine_parallel_for_each_coroutine(auto&& action) const {
             if (has_children()) {
                 int n = popcount(_bitmap);
                 coroutine::Nursery nursery;

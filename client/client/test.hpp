@@ -18,6 +18,8 @@ namespace wry {
     
     namespace detail {
         
+        using coroutine::Task;
+        
         struct test_t {
             
             struct base {
@@ -26,7 +28,7 @@ namespace wry {
                 explicit base(std::vector<const char*> metadata)
                 : _metadata(std::move(metadata)) {}
                 virtual ~base() = default;
-                virtual wry::coroutine::Task run() = 0;
+                virtual Task run() = 0;
                 void print_metadata(const char* suffix, double tau);
             };
             
@@ -37,7 +39,7 @@ namespace wry {
                 : base(std::move(metadata))
                 , _x(std::forward<Y>(y)) {}
                 virtual ~derived() override = default;
-                virtual wry::coroutine::Task run() override {
+                virtual Task run() override {
                     return _x();
                 }
             };
@@ -52,7 +54,7 @@ namespace wry {
                 head = p;
             }
             
-            static wry::coroutine::Task run_all();
+            static Task run_all();
             
         };
         
@@ -74,10 +76,12 @@ namespace wry {
         
     }
     
-    wry::coroutine::Task run_tests();
+    using coroutine::Task;
+
+    Task run_tests();
     
 } // namespace wry
 
-#define define_test(...) static ::wry::detail::test_t WRY_CONCATENATE_TOKENS(_wry_detail_test_, __LINE__) = ::wry::detail::test_metadata_t{__VA_ARGS__} % []() -> wry::coroutine::Task
+#define define_test(...) static ::wry::detail::test_t WRY_CONCATENATE_TOKENS(_wry_detail_test_, __LINE__) = ::wry::detail::test_metadata_t{__VA_ARGS__} % []() -> wry::Task
 
 #endif /* test_hpp */

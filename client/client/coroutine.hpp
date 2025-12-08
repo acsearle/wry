@@ -65,14 +65,20 @@ namespace wry::coroutine {
     
     // Basic coroutine
     
-    struct Task {
+    template<typename T>
+    struct Future;
+    
+    using Task = Future<void>;
+    
+    template<>
+    struct Future<void> {
         
         struct Promise {
             
             std::coroutine_handle<> _continuation;
                                     
-            Task get_return_object() {
-                return Task{this};
+            Future get_return_object() {
+                return Future{this};
             }
             
             constexpr std::suspend_always initial_suspend() const noexcept {
@@ -116,15 +122,15 @@ namespace wry::coroutine {
         
         Promise* _promise;
 
-        explicit Task(Promise* p) : _promise(p) {}
+        explicit Future(Promise* p) : _promise(p) {}
 
-        Task() = delete;
-        Task(Task const&) = delete;
-        Task(Task&& other) : _promise(exchange(other._promise, nullptr)) {}
-        ~Task() { if (_promise) abort(); }
-        Task& operator=(Task const&) = delete;
-        Task& operator=(Task&& other) {
-            Task a{std::move(other)};
+        Future() = delete;
+        Future(Future const&) = delete;
+        Future(Future&& other) : _promise(exchange(other._promise, nullptr)) {}
+        ~Future() { if (_promise) abort(); }
+        Future& operator=(Future const&) = delete;
+        Future& operator=(Future&& other) {
+            Future a{std::move(other)};
             using std::swap;
             swap(_promise, a._promise);
             return *this;
@@ -147,6 +153,97 @@ namespace wry::coroutine {
     };
         
     
+    
+    
+    template<typename T>
+    struct Future {
+        
+        struct Promise {
+            
+            std::coroutine_handle<> _continuation;
+            T* _target;
+            
+            Future get_return_object() {
+                return Future{this};
+            }
+            
+            constexpr std::suspend_always initial_suspend() const noexcept {
+                return std::suspend_always{};
+            }
+            
+            void unhandled_exception() const noexcept { abort(); }
+            void return_value(auto&& expression) const noexcept {
+                *_target = FORWARD(expression);
+            }
+            
+            auto final_suspend() const noexcept {
+                struct Awaitable : SuspendAndDestroy {
+                    std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> handle) const noexcept {
+                        std::coroutine_handle<> continuation = std::move(handle.promise()._continuation);
+                        handle.destroy();
+                        return continuation;
+                    }
+                };
+                return Awaitable{};
+            }
+            
+            std::coroutine_handle<Promise> get_handle() {
+                return std::coroutine_handle<Promise>::from_promise(*this);
+            }
+            
+            void set_continuation(std::coroutine_handle<> continuation) {
+                assert(!_continuation);
+                _continuation = std::move(continuation);
+            }
+            
+            void set_continuation(void* ptr) {
+                _continuation = std::coroutine_handle<>::from_address(ptr);
+            }
+            
+            std::coroutine_handle<> take_continuation() {
+                return std::exchange(_continuation, nullptr);
+            }
+            
+        };
+        
+        using promise_type = Promise;
+        
+        Promise* _promise;
+        
+        explicit Future(Promise* p) : _promise(p) {}
+        
+        Future() = delete;
+        Future(Future const&) = delete;
+        Future(Future&& other) : _promise(exchange(other._promise, nullptr)) {}
+        ~Future() { if (_promise) abort(); }
+        Future& operator=(Future const&) = delete;
+        Future& operator=(Future&& other) {
+            Future a{std::move(other)};
+            using std::swap;
+            swap(_promise, a._promise);
+            return *this;
+        }
+        
+        
+        auto operator co_await() {
+            struct Awaitable : std::suspend_always {
+                promise_type* _promise;
+                T _result;
+                explicit Awaitable(Promise* promise) : _promise(promise) {}
+                ~Awaitable() { if (_promise) abort(); }
+                std::coroutine_handle<Promise> await_suspend(std::coroutine_handle<> continuation) noexcept {
+                    _promise->set_continuation(std::move(continuation));
+                    _promise->_target = &_result;
+                    return std::exchange(_promise, nullptr)->get_handle();
+                }
+                T await_resume() {
+                    return std::move(_result);
+                }
+            };
+            return Awaitable{std::exchange(_promise, nullptr)};
+        }
+        
+    };
 
     struct Nursery {
         
@@ -780,7 +877,7 @@ namespace wry::coroutine {
                         global_work_queue_schedule(std::exchange(_awaiters, (Awaitable*)_awaiters->_state)->_handle);
                         return;
                     }
-                    break;                    
+                    break;
             }
         }
         

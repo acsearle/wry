@@ -17,6 +17,8 @@
 #include "coroutine.hpp"
 
 namespace wry {
+    
+    using coroutine::Task;
         
     template<typename Key>
     struct PersistentSet {
@@ -61,7 +63,7 @@ namespace wry {
             for_each(std::forward<decltype(action)>(action));
         }
         
-        coroutine::Task coroutine_parallel_for_each(auto&& action) const {
+        Task coroutine_parallel_for_each(auto&& action) const {
             if (_inner) {
                 co_await _inner->coroutine_parallel_for_each([&action](uint64_t key, uint64_t) {
                     action(Key{key});
@@ -69,9 +71,9 @@ namespace wry {
             }
         }
 
-        coroutine::Task coroutine_parallel_for_each_coroutine(auto&& action) const {
+        Task coroutine_parallel_for_each_coroutine(auto&& action) const {
             if (_inner) {
-                co_await _inner->coroutine_parallel_for_each_coroutine([&action](uint64_t key, uint64_t) -> coroutine::Task {
+                co_await _inner->coroutine_parallel_for_each_coroutine([&action](uint64_t key, uint64_t) -> Task {
                     co_await action(Key{key});
                 });
             }

@@ -71,9 +71,8 @@ namespace wry {
                 
         auto value_for_coordinate_action
         = [this, &next_ready, &next_ready_mutex]
-        (ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>>& result,
-         const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> coroutine::Task {
+        (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
+        -> coroutine::Future<ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>>> {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
@@ -92,6 +91,7 @@ namespace wry {
             }
             using P = std::pair<Value, PersistentSet<EntityID>>;
             using A = ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>>;
+            A result = {};
             if (writer) {
                 assert(writer->_operation & Transaction::Operation::WRITE_ON_COMMIT);
                 P b;
@@ -105,7 +105,7 @@ namespace wry {
                 
                 P c{};
                 (void) _value_for_coordinate.inner.try_get(kv.first, c);
-                co_await c.second.coroutine_parallel_for_each_coroutine([&next_ready, &next_ready_mutex](EntityID key) -> coroutine::Task {
+                co_await c.second.coroutine_parallel_for_each_coroutine([&next_ready, &next_ready_mutex](EntityID key) -> Task {
                     auto guard{co_await next_ready_mutex};
                     next_ready.set(key);
                     
@@ -124,14 +124,14 @@ namespace wry {
                 result.tag = A::WRITE_VALUE;
                 result.value = b;
             }
+            co_return result;
         };
                 
         
         auto action_for_entity_id_for_coordinate
         = [this, &next_ready, &next_ready_mutex]
-        (ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>>& result,
-         const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> coroutine::Task {
+        (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
+        -> coroutine::Future<ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>>> {
             //printf("Rebuild entity_id_for_coordinate %d %d\n", kv.first.x, kv.first.y);
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
@@ -151,6 +151,7 @@ namespace wry {
             }
             using P = std::pair<EntityID, PersistentSet<EntityID>>;
             using A = ParallelRebuildAction<P>;
+            A result = {};
             if (writer) {
                 P b;
                 b.first = get<EntityID>(writer->_desired);
@@ -164,7 +165,7 @@ namespace wry {
                 
                 P c{};
                 (void) _entity_id_for_coordinate.inner.try_get(kv.first, c);
-                co_await c.second.coroutine_parallel_for_each_coroutine([&next_ready, &next_ready_mutex](EntityID key) -> coroutine::Task {
+                co_await c.second.coroutine_parallel_for_each_coroutine([&next_ready, &next_ready_mutex](EntityID key) -> Task {
                     auto guard{co_await next_ready_mutex};
                     next_ready.set(key);
                     
@@ -184,14 +185,14 @@ namespace wry {
                 result.tag = A::WRITE_VALUE;
                 result.value = b;
             }
+            co_return result;
         };
         
         
         auto action_for_entity_for_entity_id
         = [this, &next_ready, &next_ready_mutex]
-        (ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID>>>& result,
-         const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
-        -> coroutine::Task {
+        (const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
+        -> coroutine::Future<ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID>>>> {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
@@ -210,6 +211,7 @@ namespace wry {
             }
             using P = std::pair<Entity const*, PersistentSet<EntityID>>;
             using A = ParallelRebuildAction<P>;
+            A result{};
             if (writer) {
                 P b;
                 b.first = get<Entity const*>(writer->_desired);
@@ -222,7 +224,7 @@ namespace wry {
                 
                 P c{};
                 (void) _entity_for_entity_id.inner.try_get(kv.first, c);
-                co_await c.second.coroutine_parallel_for_each_coroutine([&next_ready, &next_ready_mutex](EntityID key) -> coroutine::Task {
+                co_await c.second.coroutine_parallel_for_each_coroutine([&next_ready, &next_ready_mutex](EntityID key) -> Task {
                     auto guard{co_await next_ready_mutex};
                     next_ready.set(key);
                     
@@ -242,6 +244,7 @@ namespace wry {
                 result.tag = A::WRITE_VALUE;
                 result.value = b;
             }
+            co_return result;
         };
         
         nursery.spawn(coroutine_parallel_rebuild(new_value_for_coordinate,

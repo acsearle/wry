@@ -169,7 +169,7 @@ namespace wry {
     
     
     template<typename Key, typename T, typename U, typename F>
-    coroutine::Task coroutine_parallel_rebuild(PersistentMap<Key, T>& target,
+    coroutine::Future<PersistentMap<Key, T>> coroutine_parallel_rebuild(
                                 const PersistentMap<Key, T>& source,
                                 const ConcurrentMap<Key, U>& modifier,
                                 F&& action_for_key) {
@@ -184,8 +184,7 @@ namespace wry {
         auto first = modifier.begin();
         auto last = modifier.end();
         for (; first != last; ++first) {
-            ParallelRebuildAction<T> action;
-            co_await action_for_key(action, *first);
+            ParallelRebuildAction<T> action = co_await action_for_key(*first);
             switch (action.tag) {
                 case ParallelRebuildAction<T>::NONE:
                     break;
@@ -197,8 +196,7 @@ namespace wry {
                     break;
             }
         }
-        target = result;
-        co_return;
+        co_return result;
     }
     
     

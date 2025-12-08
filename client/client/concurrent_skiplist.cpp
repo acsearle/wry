@@ -14,6 +14,8 @@
 
 namespace wry {
     
+    using coroutine::Task;
+
     define_test("skiplist") {
                         
         thread_local_random_number_generator = new std::ranlux24;
