@@ -18,7 +18,7 @@
 
 namespace wry {
     
-    using coroutine::Task;
+    using Coroutine::Task;
         
     template<typename Key>
     struct PersistentSet {

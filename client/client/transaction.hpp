@@ -36,7 +36,7 @@ namespace wry {
         return result;
     }
     
-    struct Transaction : GarbageCollected {
+    struct Transaction : EpochAllocated {
         
         // A ready entity is notfied
         // In the notification, it can read from the current world state and
@@ -150,10 +150,10 @@ namespace wry {
         size_t _size = 0;
         Node _nodes[] __counted_by(_size);
                 
-        virtual void _garbage_collected_scan() const override {}
+        // virtual void _garbage_collected_scan() const {}
         
         static void* operator new(size_t basic, size_t extra) {
-            return GarbageCollected::operator new(basic + extra * sizeof(Node));
+            return EpochAllocated::operator new(basic + extra * sizeof(Node));
         }
         
         Transaction(TransactionContext* context, const Entity* entity, size_t capacity)

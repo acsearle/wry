@@ -1048,7 +1048,7 @@
         (void) _model->_worlds.try_pop_front(old_world);
         assert(old_world);
         mutator_overwrote(old_world);
-        coroutine::Nursery nursery;
+        Coroutine::Nursery nursery;
         nursery.spawn(new_world, old_world->step());
         nursery.sync_join();
         _model->_worlds.push_back(new_world);

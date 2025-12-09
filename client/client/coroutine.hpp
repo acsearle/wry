@@ -29,7 +29,7 @@ namespace wry {
 
 }
 
-namespace wry::coroutine {
+namespace wry::Coroutine {
     
     // Basic functions
     
@@ -1250,6 +1250,6 @@ namespace wry::coroutine {
     
     
     
-} // namespace wry::coroutine
+} // namespace wry::Coroutine
 
 #endif /* coroutine_hpp */

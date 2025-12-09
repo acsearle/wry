@@ -96,7 +96,7 @@ namespace wry {
     }
 
     template<typename Key, typename T, typename U, typename F>
-    coroutine::Future<WaitableMap<Key, T>>
+    Coroutine::Future<WaitableMap<Key, T>>
     coroutine_parallel_rebuild(const WaitableMap<Key, T>& w,
                                const ConcurrentMap<Key, U>& value_modifications,
                                F&& action_for_key) {

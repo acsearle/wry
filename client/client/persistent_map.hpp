@@ -171,7 +171,7 @@ namespace wry {
     
     
     template<typename Key, typename T, typename U, typename F>
-    coroutine::Future<PersistentMap<Key, T>> coroutine_parallel_rebuild(
+    Coroutine::Future<PersistentMap<Key, T>> coroutine_parallel_rebuild(
                                 const PersistentMap<Key, T>& source,
                                 const ConcurrentMap<Key, U>& modifier,
                                 F&& action_for_key) {

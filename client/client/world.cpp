@@ -10,9 +10,7 @@
 
 namespace wry {
     
-    auto
-    World::_garbage_collected_scan() const -> void {
-        
+    void World::_garbage_collected_scan() const {
         // printf("%s\n", __PRETTY_FUNCTION__);
         garbage_collected_scan(_entity_id_for_coordinate);
         garbage_collected_scan(_entity_for_entity_id);
@@ -22,18 +20,16 @@ namespace wry {
     } // World::_garbage_collected_scan
     
     template<typename Key>
-    struct BlockingPersistentSet {
+    struct AwaitablePersistentSet {
         PersistentSet<Key> _inner;
-        coroutine::Mutex _mutex;
-        
-        coroutine::Task set(Key key) {
+        Coroutine::Mutex _mutex;
+        Coroutine::Task set(Key key) {
             auto guard{co_await _mutex};
             _inner.set(key);
         }
-        
     };
             
-    coroutine::Future<World*> World::step() const {
+    Coroutine::Future<World*> World::step() const {
         
         TransactionContext context{._world = this};
         
@@ -45,13 +41,9 @@ namespace wry {
         
         PersistentSet<EntityID> ready;
         PersistentMap<Time, PersistentSet<EntityID>> new_waiting_on_time = _waiting_on_time.clone_and_try_erase(_time, ready).first;
-        
-        // TODO: next_ready needs to be concurrent
-        // std::mutex next_ready_mutex;
-        // BlockingPersistentSet<EntityID> next_ready;
         ConcurrentSkiplistSet<EntityID> next_ready;
 
-        coroutine::Nursery nursery;
+        Coroutine::Nursery nursery;
 
         // In parallel, notify each Entity.  Entities will typically examine
         // the World and may propose a Transaction to change it.
@@ -82,7 +74,7 @@ namespace wry {
         auto value_for_coordinate_action
         = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> coroutine::Future<ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>>> {
+        -> Coroutine::Future<ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>>> {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
@@ -138,7 +130,7 @@ namespace wry {
         auto action_for_entity_id_for_coordinate
         = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> coroutine::Future<ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>>> {
+        -> Coroutine::Future<ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>>> {
             //printf("Rebuild entity_id_for_coordinate %d %d\n", kv.first.x, kv.first.y);
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
@@ -196,7 +188,7 @@ namespace wry {
         auto action_for_entity_for_entity_id
         = [this, &next_ready]
         (const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
-        -> coroutine::Future<ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID>>>> {
+        -> Coroutine::Future<ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID>>>> {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
@@ -252,7 +244,7 @@ namespace wry {
         auto action_for_waiting_on_time
         = [new_waiting_on_time, this]
         (const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
-        -> coroutine::Future<ParallelRebuildAction<PersistentSet<EntityID>>> {
+        -> Coroutine::Future<ParallelRebuildAction<PersistentSet<EntityID>>> {
             // TODO: We need to special-case waits for new_time
             assert(kv.first > _time);
             ParallelRebuildAction<PersistentSet<EntityID>> result{};

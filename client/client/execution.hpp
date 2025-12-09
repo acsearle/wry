@@ -227,7 +227,7 @@ namespace wry {
     } // namespace execution
     
     
-    namespace coroutine {
+    namespace Coroutine {
         
         template<typename>
         struct callback_handle;

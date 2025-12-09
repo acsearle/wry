@@ -37,7 +37,7 @@ namespace wry {
         
         wry::Task test_t::run_all() {
             base* head = exchange(get_head(), nullptr);
-            coroutine::Nursery nursery;
+            Coroutine::Nursery nursery;
             while (head) {
                 co_await nursery.fork([](base* head) -> wry::Task {
                     uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);

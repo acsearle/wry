@@ -35,7 +35,9 @@ namespace wry {
         
         struct Node : IntrusiveAllocator {
             
-            // TODO: do we need the size member?
+            // size member is not essential to the major operations
+            // - needed for memory debug
+            // - needed for GC scanning
             
             Key _key;
             size_t _size;
@@ -52,7 +54,6 @@ namespace wry {
             }
                         
             static Node* _Nonnull with_size_emplace(size_t n, auto&&... args) {
-                // void* raw = GarbageCollected::operator new(sizeof(Node) + sizeof(Atomic<Node*>) * n);
                 size_t number_of_bytes = sizeof(Node) + sizeof(Atomic<Node*>) * n;
                 void* _Nonnull raw = IntrusiveAllocator::operator new(number_of_bytes,
                                                                       std::align_val_t{alignof(Node)});
@@ -75,7 +76,7 @@ namespace wry {
             }
             
             // This is called only when the allocator is GC
-            virtual void _garbage_collected_scan() const {
+            virtual void _garbage_collected_scan() const /* override */ {
                 garbage_collected_scan(_key);
                 for (size_t i = 0; i != _size; ++i) {
                     garbage_collected_scan(_next[i].load(Ordering::ACQUIRE));
@@ -99,7 +100,6 @@ namespace wry {
             
             static Head* _Nonnull make() {
                 size_t n = 33;
-                // void* raw =  GarbageCollected::operator new(sizeof(Head) + sizeof(Atomic<Node*>) * n);
                 size_t number_of_bytes = sizeof(Head) + sizeof(Atomic<Node*>) * n;
                 void* _Nonnull raw = IntrusiveAllocator::operator new(number_of_bytes,
                                                                   std::align_val_t{alignof(Head)});

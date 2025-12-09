@@ -27,7 +27,7 @@ namespace wry {
     /*
     
     template<typename Key, typename T, typename U, typename F>
-    coroutine::co_fork parallel_rebuild2(const PersistentMap<Key, T>& source,
+    Coroutine::co_fork parallel_rebuild2(const PersistentMap<Key, T>& source,
                                          const ConcurrentMap<Key, U>& modifier,
                                          F&& action_for_key) {
         

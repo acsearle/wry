@@ -14,7 +14,7 @@
 
 namespace wry {
     
-    using coroutine::Task;
+    using Coroutine::Task;
 
     define_test("skiplist") {
                         

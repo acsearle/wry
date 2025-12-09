@@ -18,7 +18,7 @@ namespace wry {
     
     namespace detail {
         
-        using coroutine::Task;
+        using Coroutine::Task;
         
         struct test_t {
             
@@ -76,7 +76,7 @@ namespace wry {
         
     }
     
-    using coroutine::Task;
+    using Coroutine::Task;
 
     Task run_tests();
     

@@ -101,7 +101,7 @@ namespace wry {
                 
                 // transshipment of this_coroutine
                 // auto epoch = epoch::pin_explicit();
-                // co_await coroutine::suspend_and_schedule{};
+                // co_await Coroutine::suspend_and_schedule{};
                 // epoch::unpin_explicit(epoch);
                 
                 

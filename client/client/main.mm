@@ -43,7 +43,7 @@ int main(int argc, const char** argv) {
     }
     
     // auto unit_tests = wry::run_tests().start();
-    wry::coroutine::Nursery nursery;
+    wry::Coroutine::Nursery nursery;
     nursery.spawn(wry::run_tests());
     
     
