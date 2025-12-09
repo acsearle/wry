@@ -65,13 +65,13 @@ namespace wry::Coroutine {
     
     // Basic coroutine
     
-    template<typename T>
+    template<typename...>
     struct Future;
     
-    using Task = Future<void>;
+    using Task = Future<>;
     
     template<>
-    struct Future<void> {
+    struct Future<> {
         
         struct Promise {
             
@@ -139,15 +139,25 @@ namespace wry::Coroutine {
         
         auto operator co_await() {
             struct Awaitable : std::suspend_always {
-                promise_type* _promise;
-                explicit Awaitable(Promise* promise) : _promise(promise) {}
-                ~Awaitable() { if (_promise) abort(); }
+                Future _future;
                 std::coroutine_handle<Promise> await_suspend(std::coroutine_handle<> continuation) noexcept {
-                    _promise->set_continuation(std::move(continuation));
-                    return std::exchange(_promise, nullptr)->get_handle();
+                    _future._set_continuation(std::move(continuation));
+                    return std::move(_future)._into_handle();
                 }
             };
-            return Awaitable{std::exchange(_promise, nullptr)};
+            return Awaitable{{}, std::move(*this)};
+        }
+        
+        void _set_continuation(std::coroutine_handle<> continuation) {
+            _promise->set_continuation(continuation);
+        }
+
+        void _set_continuation(void* continuation) {
+            _promise->set_continuation(continuation);
+        }
+        
+        std::coroutine_handle<Promise> _into_handle() && {
+            return std::exchange(_promise, nullptr)->get_handle();
         }
         
     };
@@ -156,12 +166,12 @@ namespace wry::Coroutine {
     
     
     template<typename T>
-    struct Future {
+    struct Future<T> {
         
         struct Promise {
             
-            std::coroutine_handle<> _continuation;
-            T* _target;
+            std::coroutine_handle<> _continuation{};
+            T* _target{};
             
             Future get_return_object() {
                 return Future{this};
@@ -200,6 +210,11 @@ namespace wry::Coroutine {
                 _continuation = std::coroutine_handle<>::from_address(ptr);
             }
             
+            void set_target(T* target) {
+                assert(!_target);
+                _target = target;
+            }
+            
             std::coroutine_handle<> take_continuation() {
                 return std::exchange(_continuation, nullptr);
             }
@@ -208,7 +223,7 @@ namespace wry::Coroutine {
         
         using promise_type = Promise;
         
-        Promise* _promise;
+        Promise* _promise{};
         
         explicit Future(Promise* p) : _promise(p) {}
         
@@ -227,20 +242,34 @@ namespace wry::Coroutine {
         
         auto operator co_await() {
             struct Awaitable : std::suspend_always {
-                promise_type* _promise;
+                Future _future;
                 T _result;
-                explicit Awaitable(Promise* promise) : _promise(promise) {}
-                ~Awaitable() { if (_promise) abort(); }
                 std::coroutine_handle<Promise> await_suspend(std::coroutine_handle<> continuation) noexcept {
-                    _promise->set_continuation(std::move(continuation));
-                    _promise->_target = &_result;
-                    return std::exchange(_promise, nullptr)->get_handle();
+                    _future._set_continuation(std::move(continuation));
+                    _future._set_target(&_result);
+                    return std::move(_future)._into_handle();
                 }
                 T await_resume() {
                     return std::move(_result);
                 }
             };
-            return Awaitable{std::exchange(_promise, nullptr)};
+            return Awaitable{{}, std::move(*this)};
+        }
+        
+        void _set_continuation(std::coroutine_handle<> continuation) {
+            _promise->set_continuation(continuation);
+        }
+        
+        void _set_continuation(void* continuation) {
+            _promise->set_continuation(continuation);
+        }
+        
+        void _set_target(T* target) {
+            _promise->set_target(target);
+        }
+        
+        std::coroutine_handle<Promise> _into_handle() && {
+            return std::exchange(_promise, nullptr)->get_handle();
         }
         
     };
@@ -266,22 +295,28 @@ namespace wry::Coroutine {
                 // as a trampoline
             }
         }
-                
-        auto fork(Task&& task) {
+         
+        // co_await nursery.fork(foo(x)) immediately starts foo on the current thread
+        // and schedules the caller to execute soon
+        auto fork(Future<>&& future) {
             struct Awaitable : std::suspend_always {
                 Nursery* _nursery;
-                Task _task;
-                std::coroutine_handle<Task::Promise> await_suspend(std::coroutine_handle<> continuation) noexcept {
-                    _nursery->_children++;
-                    _task._promise->set_continuation(_nursery);
-                    auto result = std::exchange(_task._promise, nullptr)->get_handle();
+                Future<> _future;
+                std::coroutine_handle<Future<>::Promise> await_suspend(std::coroutine_handle<> continuation) noexcept {
+                    ++(_nursery->_children);
+                    _future._set_continuation(_nursery);
+                    auto result = std::move(_future)._into_handle();
                     global_work_queue_schedule(std::move(continuation));
                     return result;
                 }
             };
-            return Awaitable{{}, this, std::move(task)};
+            return Awaitable{{}, this, std::move(future)};
         }
         
+        // co_await nursery.fork(y, bar(x)) immediately starts bar on the current
+        // thread and schedules the caller to execute soon.  When bar completes
+        // it assigns to y; it is racy to access y until the fork has been
+        // joined
         template<typename T>
         auto fork(T& target, Future<T>&& future) {
             struct Awaitable : std::suspend_always {
@@ -289,10 +324,10 @@ namespace wry::Coroutine {
                 Future<T> _future;
                 T* _target;
                 std::coroutine_handle<typename Future<T>::Promise> await_suspend(std::coroutine_handle<> continuation) noexcept {
-                    _nursery->_children++;
-                    _future._promise->set_continuation(_nursery);
-                    _future._promise->_target = _target;
-                    auto result = std::exchange(_future._promise, nullptr)->get_handle();
+                    ++(_nursery->_children);
+                    _future._set_continuation(_nursery);
+                    _future._set_target(_target);
+                    auto result = std::move(_future)._into_handle();
                     global_work_queue_schedule(std::move(continuation));
                     return result;
                 }
@@ -300,6 +335,8 @@ namespace wry::Coroutine {
             return Awaitable{{}, this, std::move(future), &target};
         }
         
+        // co await nursery.join() suspends the caller and resumes it after
+        // all forks are complete.  The nursery may then be resued.
         auto join() {
             struct Awaitable {
                 Nursery* _nursery;
@@ -327,22 +364,27 @@ namespace wry::Coroutine {
             return Awaitable{this};
         }
         
-        void soon(Task&& task) {
-            _children++;
-            task._promise->set_continuation(this);
-            global_work_queue_schedule(std::exchange(task._promise, nullptr)->get_handle());
+        // nursery.soon(foo(x)) schedules foo to execute soon and continues
+        // the calling context normally.  The calling context does not have to
+        // be a coroutine
+        void soon(Future<>&& future) {
+            ++_children;
+            future._set_continuation(this);
+            global_work_queue_schedule(std::move(future)._into_handle());
         }
         
         template<typename T>
-        void soon(T& victim, Future<T>&& future) {
+        void soon(T& target, Future<T>&& future) {
             _children++;
-            future._promise->set_continuation(this);
-            future._promise->_target = &victim;
-            global_work_queue_schedule(std::exchange(future._promise, nullptr)->get_handle());
+            future._set_continuation(this);
+            future._set_target(&target);
+            global_work_queue_schedule(std::move(future)._into_handle());
         }
                         
     }; // struct Nursery
 
+
+    // Block the current thread until the awaitable completes.
     
     template<typename T>
     auto sync_wait(T&& awaitable) {
@@ -361,6 +403,7 @@ namespace wry::Coroutine {
         }
         return awaitable.await_resume();
     }
+    
     
    
     
@@ -847,6 +890,10 @@ namespace wry::Coroutine {
 
             bool await_ready() noexcept {
                 _state = UNLOCKED;
+                // TODO: We could optimistically exchange(LOCK) and then
+                // fixup in await_suspend... except that in doing so we have
+                // taken the existing queue, and we need to traverse it to
+                // reinstall it... and this destroys the ordering
                 return _context->_state.compare_exchange_weak(_state,
                                                               LOCKED,
                                                               Ordering::ACQUIRE,
@@ -854,6 +901,7 @@ namespace wry::Coroutine {
             }
             
             bool await_suspend(std::coroutine_handle<> handle) noexcept {
+                printf("Coroutine::Mutex was locked\n");
                 _handle = handle;
                 for (;;) {
                     switch (_state) {

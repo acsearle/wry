@@ -49,6 +49,13 @@ namespace wry {
     }
         
     void global_work_queue_service() {
+        {
+            constinit static Atomic<int> thread_identifier{};
+            size_t size = 256;
+            char str[256];
+            snprintf(str, size, "W%d", thread_identifier.fetch_add(1, Ordering::RELAXED));
+            pthread_setname_np(str);
+        }
         for (;;) {
             global_work_queue.wait_not_empty();
             if (global_work_queue.is_canceled())

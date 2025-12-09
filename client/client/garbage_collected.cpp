@@ -510,6 +510,7 @@ namespace wry {
     static constinit Collector collector = {};
     
     void collector_run_on_this_thread() {
+        pthread_setname_np("C0");
         collector.loop_until_canceled();
     }
     
