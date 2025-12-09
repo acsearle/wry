@@ -1049,8 +1049,8 @@
         assert(old_world);
         mutator_overwrote(old_world);
         Coroutine::Nursery nursery;
-        nursery.spawn(new_world, old_world->step());
-        nursery.sync_join();
+        nursery.soon(new_world, old_world->step());
+        sync_wait(nursery.join());
         _model->_worlds.push_back(new_world);
         _model->shade_roots();
     }

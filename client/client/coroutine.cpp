@@ -18,7 +18,7 @@ namespace wry {
 
 }
 
-namespace wry::Coroutine {
+namespace wry::execution {
     
     /*
     define_test("coroutine") {

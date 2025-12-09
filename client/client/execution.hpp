@@ -55,7 +55,7 @@ namespace wry {
             auto connect(Receiver receiver) && {
                 return _trivial_operation<Receiver> { std::move(receiver) };
             }
-        };        
+        };
         
 #pragma mark - Type erasure
         
@@ -106,10 +106,10 @@ namespace wry {
         
         
         // fundamental receivers
-                
+        
         // template<typename Sender>
         // void debug_detach(Sender sender) {
-            // using Operation = decltype(std::move(sender).connect(_detached_receiver{}));
+        // using Operation = decltype(std::move(sender).connect(_detached_receiver{}));
         // }
         
         
@@ -123,7 +123,7 @@ namespace wry {
         // Partial implementation of the sender-receiver ideas from P2300
         
         
-
+        
         
         template<typename R, typename... Args>
         struct _just_operation {
@@ -176,13 +176,13 @@ namespace wry {
         
         
         
-
         
         
         
         
         
-
+        
+        
         
         
         
@@ -224,10 +224,7 @@ namespace wry {
             return _continues_on_sender<Sender, Scheduler>(std::move(input), std::move(scheduler));
         }
         
-    } // namespace execution
-    
-    
-    namespace Coroutine {
+        
         
         template<typename>
         struct callback_handle;
@@ -350,7 +347,7 @@ namespace wry {
             void unhandled_exception() noexcept { abort(); }
             
             auto final_suspend() noexcept {
-                struct awaitable : ResumeNever {
+                struct awaitable : Coroutine::ResumeNever {
                     void await_suspend(std::coroutine_handle<_co_sender_promise<>> handle) noexcept {
                         receiver_of<>* receiver = handle.promise()._receiver;
                         handle.destroy();
@@ -377,7 +374,7 @@ namespace wry {
             }
             void unhandled_exception() noexcept { abort(); }
             auto final_suspend() noexcept {
-                struct awaitable : ResumeNever {
+                struct awaitable : Coroutine::ResumeNever {
                     void await_suspend(std::coroutine_handle<_co_sender_promise> handle) noexcept {
                         T value = std::move(handle.promise()._value);
                         receiver_of<T>* receiver = handle.promise()._receiver;
@@ -464,7 +461,8 @@ namespace wry {
         
         
         
-    }
+    } // namespace execution
+    
     
 } // namespace wry
 

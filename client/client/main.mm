@@ -44,7 +44,7 @@ int main(int argc, const char** argv) {
     
     // auto unit_tests = wry::run_tests().start();
     wry::Coroutine::Nursery nursery;
-    nursery.spawn(wry::run_tests());
+    nursery.soon(wry::run_tests());
     
     
     wry::mutator_pin();
@@ -78,7 +78,7 @@ int main(int argc, const char** argv) {
     
     // Blocking join unit test job
     printf("main is joining unit tests\n");
-    nursery.sync_join();
+    sync_wait(nursery.join());
     wry::mutator_pin();
 
     printf("main is joining worker threads\n");

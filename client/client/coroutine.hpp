@@ -244,6 +244,9 @@ namespace wry::Coroutine {
         }
         
     };
+    
+    template<typename T> constexpr bool is_coroutine(T const&) { return false; }
+    template<typename T> constexpr bool is_coroutine(Future<T> const&) { return true; }
 
     struct Nursery {
         
@@ -324,42 +327,40 @@ namespace wry::Coroutine {
             return Awaitable{this};
         }
         
-        void spawn(Task&& task) {
+        void soon(Task&& task) {
             _children++;
             task._promise->set_continuation(this);
             global_work_queue_schedule(std::exchange(task._promise, nullptr)->get_handle());
         }
         
         template<typename T>
-        void spawn(T& victim, Future<T>&& future) {
+        void soon(T& victim, Future<T>&& future) {
             _children++;
             future._promise->set_continuation(this);
             future._promise->_target = &victim;
             global_work_queue_schedule(std::exchange(future._promise, nullptr)->get_handle());
         }
-        
-        void sync_join() {
-            struct Frame {
-                void (*_resume)(void*) = &static_resume;
-                std::binary_semaphore _semaphore{0}; // start unavailable
-                static void static_resume(void* ptr) {
-                    auto self = (Frame*)ptr;
-                    self->_semaphore.release();
-                }
-            };
-            Frame frame;
-            _continuation = std::coroutine_handle<void>::from_address(&frame);
-            auto count = _counter.add_fetch(std::exchange(_children, 0), Ordering::RELEASE);
-            if (count == 0) {
-                (void) _counter.load(Ordering::ACQUIRE);
-            } else {
-                frame._semaphore.acquire();
-            }
-        }
-        
+                        
     }; // struct Nursery
 
     
+    template<typename T>
+    auto sync_wait(T&& awaitable) {
+        struct Frame {
+            void (*_resume)(void*) = &static_resume;
+            std::binary_semaphore _semaphore{0}; // start in unavailable state
+            static void static_resume(void* ptr) {
+                auto self = (Frame*)ptr;
+                self->_semaphore.release();
+            }
+        };
+        Frame frame;
+        if (!awaitable.await_ready()) {
+            global_work_queue_schedule(awaitable.await_suspend(std::coroutine_handle<>::from_address(&frame)));
+            frame._semaphore.acquire();
+        }
+        return awaitable.await_resume();
+    }
     
    
     
