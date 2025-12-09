@@ -65,7 +65,7 @@ namespace wry {
         
         virtual void _garbage_collected_scan() const override;
 
-        World* step() const;
+        coroutine::Future<World*> step() const;
                                             
     }; // World
         

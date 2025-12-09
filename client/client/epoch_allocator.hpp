@@ -188,8 +188,10 @@ namespace wry {
             }
             
             void pin_explicit(Epoch occupied) {
+                printf("epoch::Service::pin_explicit(%u)\n", occupied);
                 State expected = state.load(Ordering::RELAXED);
                 for (;;) {
+                    printf("expected {current %u, pins_current %u, pins_prior %u}\n", expected.current, expected.pins_current, expected.pins_prior);
                     State desired = expected.try_advance().pin_explicit(occupied);
                     if (state.compare_exchange_weak(expected,
                                                     desired,
@@ -197,6 +199,7 @@ namespace wry {
                                                     Ordering::RELAXED)) {
                         if (expected.current != desired.current)
                             state.notify_all();
+                        return;
                     }
                 }
             }
@@ -367,7 +370,10 @@ namespace wry {
         
         [[nodiscard]] inline auto
         pin_explicit() -> Epoch {
+            printf("pin_explicit\n");
+            printf("allocator_local_state.is_pinned %d", allocator_local_state.is_pinned);
             assert(allocator_local_state.is_pinned);
+            printf("allocator_local_state.known %u\n", allocator_local_state.known);
             Epoch pinned = allocator_local_state.known;
             allocator_global_service.pin_explicit(pinned);
             return pinned;

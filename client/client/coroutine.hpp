@@ -279,6 +279,24 @@ namespace wry::coroutine {
             return Awaitable{{}, this, std::move(task)};
         }
         
+        template<typename T>
+        auto fork(T& target, Future<T>&& future) {
+            struct Awaitable : std::suspend_always {
+                Nursery* _nursery;
+                Future<T> _future;
+                T* _target;
+                std::coroutine_handle<typename Future<T>::Promise> await_suspend(std::coroutine_handle<> continuation) noexcept {
+                    _nursery->_children++;
+                    _future._promise->set_continuation(_nursery);
+                    _future._promise->_target = _target;
+                    auto result = std::exchange(_future._promise, nullptr)->get_handle();
+                    global_work_queue_schedule(std::move(continuation));
+                    return result;
+                }
+            };
+            return Awaitable{{}, this, std::move(future), &target};
+        }
+        
         auto join() {
             struct Awaitable {
                 Nursery* _nursery;
@@ -310,6 +328,14 @@ namespace wry::coroutine {
             _children++;
             task._promise->set_continuation(this);
             global_work_queue_schedule(std::exchange(task._promise, nullptr)->get_handle());
+        }
+        
+        template<typename T>
+        void spawn(T& victim, Future<T>&& future) {
+            _children++;
+            future._promise->set_continuation(this);
+            future._promise->_target = &victim;
+            global_work_queue_schedule(std::exchange(future._promise, nullptr)->get_handle());
         }
         
         void sync_join() {

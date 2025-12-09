@@ -60,6 +60,7 @@ namespace wry {
         auto
         pop() -> T {
             assert(_head);
+            mutator_overwrote(_head);
             return std::exchange(_head, _head->_next)->_payload;
         }
         
@@ -75,6 +76,7 @@ namespace wry {
         
         auto
         push(auto&& desired) -> void {
+            mutator_overwrote(_head);
             _head = new Node(_head, FORWARD(desired));
         }
                         

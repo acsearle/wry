@@ -372,23 +372,25 @@ namespace wry::array_mapped_trie {
             uint64_t key = new_child->get_prefix();
             assert(prefix_covers_key(key));
             Node* _Nonnull new_node = clone_with_capacity(popcount(_bitmap));
-            (void) compressed_array_exchange_for_index(new_node->_bitmap,
-                                                       new_node->_children,
-                                                       get_index_for_key(key),
-                                                       new_child);
+            Node const* old_child = compressed_array_exchange_for_index(new_node->_bitmap,
+                                                                        new_node->_children,
+                                                                        get_index_for_key(key),
+                                                                        new_child);
+            mutator_overwrote(old_child);
             return new_node;
         }
         
         Node* _Nonnull clone_and_erase_child_containing_key(uint64_t key) const {
             assert(has_children());
             Node* new_node = clone_with_capacity(popcount(_bitmap));
-            const Node* _ = nullptr;
+            const Node* old_child = nullptr;
             bool did_erase = compressed_array_erase_for_index(new_node->_debug_capacity,
                                                               new_node->_bitmap,
                                                               new_node->_children,
                                                               get_index_for_key(key),
-                                                              _);
+                                                              old_child);
             assert(did_erase);
+            mutator_overwrote(old_child);
             --(new_node->_debug_count);
             return new_node;
         }

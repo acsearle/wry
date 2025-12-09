@@ -25,11 +25,16 @@ namespace wry {
         std::deque<T> _deque;
         ptrdiff_t _waiting = 0;
         bool _is_canceled = false;
+        size_t _record_size = 0;
         
         void push_front(T item) {
             bool notify = false;
             WITH(std::unique_lock lock{_mutex}) {
                 _deque.push_front(item);
+                if (_deque.size() > _record_size) {
+                    _record_size = _deque.size();
+                    printf("New record work queue size: %zu\n", _deque.size());
+                }
                 if (_waiting) {
                     notify = true;
                     --_waiting;
@@ -43,6 +48,10 @@ namespace wry {
             bool notify = false;
             WITH(std::unique_lock lock{_mutex}) {
                 _deque.push_back(item);
+                if (_deque.size() > _record_size) {
+                    _record_size = _deque.size();
+                    printf("New record work queue size: %zu\n", _deque.size());
+                }
                 if (_waiting) {
                     notify = true;
                     --_waiting;

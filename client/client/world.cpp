@@ -20,9 +20,20 @@ namespace wry {
         garbage_collected_scan(_waiting_on_time);
         
     } // World::_garbage_collected_scan
+    
+    template<typename Key>
+    struct BlockingPersistentSet {
+        PersistentSet<Key> _inner;
+        coroutine::Mutex _mutex;
         
-    auto
-    World::step() const -> World* {
+        coroutine::Task set(Key key) {
+            auto guard{co_await _mutex};
+            _inner.set(key);
+        }
+        
+    };
+            
+    coroutine::Future<World*> World::step() const {
         
         TransactionContext context{._world = this};
         
@@ -33,30 +44,29 @@ namespace wry {
         // Take the set of EntityIDs that are ready to run
         
         PersistentSet<EntityID> ready;
-        auto new_waiting_on_time = _waiting_on_time.clone_and_try_erase(_time, ready).first;
+        PersistentMap<Time, PersistentSet<EntityID>> new_waiting_on_time = _waiting_on_time.clone_and_try_erase(_time, ready).first;
         
         // TODO: next_ready needs to be concurrent
         // std::mutex next_ready_mutex;
-        coroutine::Mutex next_ready_mutex;
-        PersistentSet<EntityID> next_ready;
-        
+        // BlockingPersistentSet<EntityID> next_ready;
+        ConcurrentSkiplistSet<EntityID> next_ready;
+
+        coroutine::Nursery nursery;
+
         // In parallel, notify each Entity.  Entities will typically examine
         // the World and may propose a Transaction to change it.
 
-        coroutine::Nursery nursery;
-        {
-            auto action = [this, &context](EntityID entity_id) {
-                const Entity* a = nullptr;
-                (void) _entity_for_entity_id.try_get(entity_id, a);
-                assert(a);
-                a->notify(&context);
-            };
-            nursery.spawn(ready.coroutine_parallel_for_each(action));
-            nursery.sync_join();
-        }
+        auto action_for_ready = [this, &context](EntityID entity_id) {
+            const Entity* a = nullptr;
+            (void) _entity_for_entity_id.try_get(entity_id, a);
+            assert(a);
+            a->notify(&context);
+        };
+        co_await nursery.fork(ready.coroutine_parallel_for_each(action_for_ready));
         
         // -- completion barrier --
-        
+        co_await nursery.join();
+
         // All transactions are now described and ready to be resolved in
         // parallel.
                     
@@ -70,7 +80,7 @@ namespace wry {
 
                 
         auto value_for_coordinate_action
-        = [this, &next_ready, &next_ready_mutex]
+        = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
         -> coroutine::Future<ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>>> {
             const Transaction::Node* writer = nullptr;
@@ -105,14 +115,11 @@ namespace wry {
                 
                 P c{};
                 (void) _value_for_coordinate.inner.try_get(kv.first, c);
-                co_await c.second.coroutine_parallel_for_each_coroutine([&next_ready, &next_ready_mutex](EntityID key) -> Task {
-                    auto guard{co_await next_ready_mutex};
-                    next_ready.set(key);
-                    
+                co_await c.second.coroutine_parallel_for_each([&next_ready](EntityID key) {
+                    next_ready.try_emplace(key);
                 });
                 for (EntityID key : waiters) {
-                    auto guard{co_await next_ready_mutex};
-                    next_ready.set(key);
+                    next_ready.try_emplace(key);
                 }
                 
             } else if (!waiters.empty()) {
@@ -129,7 +136,7 @@ namespace wry {
                 
         
         auto action_for_entity_id_for_coordinate
-        = [this, &next_ready, &next_ready_mutex]
+        = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
         -> coroutine::Future<ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>>> {
             //printf("Rebuild entity_id_for_coordinate %d %d\n", kv.first.x, kv.first.y);
@@ -165,14 +172,11 @@ namespace wry {
                 
                 P c{};
                 (void) _entity_id_for_coordinate.inner.try_get(kv.first, c);
-                co_await c.second.coroutine_parallel_for_each_coroutine([&next_ready, &next_ready_mutex](EntityID key) -> Task {
-                    auto guard{co_await next_ready_mutex};
-                    next_ready.set(key);
-                    
+                co_await c.second.coroutine_parallel_for_each([&next_ready](EntityID key) {
+                    next_ready.try_emplace(key);
                 });
                 for (EntityID key : waiters) {
-                    auto guard{co_await next_ready_mutex};
-                    next_ready.set(key);
+                    next_ready.try_emplace(key);
                 }
 
                 
@@ -190,7 +194,7 @@ namespace wry {
         
         
         auto action_for_entity_for_entity_id
-        = [this, &next_ready, &next_ready_mutex]
+        = [this, &next_ready]
         (const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
         -> coroutine::Future<ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID>>>> {
             const Transaction::Node* writer = nullptr;
@@ -224,15 +228,13 @@ namespace wry {
                 
                 P c{};
                 (void) _entity_for_entity_id.inner.try_get(kv.first, c);
-                co_await c.second.coroutine_parallel_for_each_coroutine([&next_ready, &next_ready_mutex](EntityID key) -> Task {
-                    auto guard{co_await next_ready_mutex};
-                    next_ready.set(key);
-                    
+                co_await c.second.coroutine_parallel_for_each([&next_ready](EntityID key) {
+                    next_ready.try_emplace(key);
                 });
                 for (EntityID key : waiters) {
-                    auto guard{co_await next_ready_mutex};
-                    next_ready.set(key);
+                    next_ready.try_emplace(key);
                 }
+
 
                 
             } else if (!waiters.empty()) {
@@ -247,29 +249,13 @@ namespace wry {
             co_return result;
         };
         
-        nursery.spawn(coroutine_parallel_rebuild(new_value_for_coordinate,
-                                                 _value_for_coordinate,
-                                                 context._verb_value_for_coordinate,
-                                                 value_for_coordinate_action));
-        
-        nursery.spawn(coroutine_parallel_rebuild(new_entity_id_for_coordinate,
-                                                 _entity_id_for_coordinate,
-                                                 context._verb_entity_id_for_coordinate,
-                                                 action_for_entity_id_for_coordinate));
-        
-        nursery.spawn(coroutine_parallel_rebuild(new_entity_for_entity_id, _entity_for_entity_id,
-                                                 context._verb_entity_for_entity_id,
-                                                 action_for_entity_for_entity_id));
-                
-        nursery.sync_join();
-        
-        
         auto action_for_waiting_on_time
-        = [&new_waiting_on_time, this]
-        (ParallelRebuildAction<PersistentSet<EntityID>>& result, const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
-        -> void {
+        = [new_waiting_on_time, this]
+        (const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
+        -> coroutine::Future<ParallelRebuildAction<PersistentSet<EntityID>>> {
             // TODO: We need to special-case waits for new_time
             assert(kv.first > _time);
+            ParallelRebuildAction<PersistentSet<EntityID>> result{};
             result.tag = ParallelRebuildAction<PersistentSet<EntityID>>::WRITE_VALUE;
             new_waiting_on_time.try_get(kv.first, result.value);
             const Transaction::Node* head = kv.second.load(Ordering::RELAXED);
@@ -280,11 +266,37 @@ namespace wry {
                 if (head->resolve() & head->_operation)
                     result.value.set(entity_id);
             }
+            co_return result;
         };
-        new_waiting_on_time
-        = parallel_rebuild(new_waiting_on_time,
-                           context._wait_on_time,
-                           action_for_waiting_on_time);
+        
+        
+        co_await nursery.fork(new_value_for_coordinate,
+                              coroutine_parallel_rebuild(_value_for_coordinate,
+                                                         context._verb_value_for_coordinate,
+                                                         value_for_coordinate_action));
+        
+        co_await nursery.fork(new_entity_id_for_coordinate,
+                              coroutine_parallel_rebuild(_entity_id_for_coordinate,
+                                                         context._verb_entity_id_for_coordinate,
+                                                         action_for_entity_id_for_coordinate));
+        
+        co_await nursery.fork(new_entity_for_entity_id,
+                              coroutine_parallel_rebuild(_entity_for_entity_id,
+                                                         context._verb_entity_for_entity_id,
+                                                         action_for_entity_for_entity_id));
+        
+        mutator_overwrote(new_waiting_on_time._inner);
+        co_await nursery.fork(new_waiting_on_time,
+                              coroutine_parallel_rebuild(new_waiting_on_time,
+                                                         context._wait_on_time,
+                                                         action_for_waiting_on_time));
+        
+        
+        // TODO: Unlike the overwrites above, we have multiple winners and we
+        // want to merge them into the target value
+                
+                
+        co_await nursery.join();
         
         // HACK: We have two separate representations of work for next_time,
         // we need to merge them and expose them to the next cycle.  This hack
@@ -293,20 +305,16 @@ namespace wry {
         {
             PersistentSet<EntityID> v{};
             (void) new_waiting_on_time.try_get(new_time, v);
-            next_ready.for_each([&v](EntityID key) {
+            for (auto key : next_ready) {
                 v.set(key);
-            });
+            }
             new_waiting_on_time.set(new_time, v);
         }
         
         
 
-        
-        
-    
         // -- completion barrier --
-
-        return new World{
+        co_return new World{
             new_time,
             new_entity_id_for_coordinate,
             new_entity_for_entity_id,

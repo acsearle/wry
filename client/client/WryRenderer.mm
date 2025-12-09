@@ -1048,8 +1048,11 @@
         (void) _model->_worlds.try_pop_front(old_world);
         assert(old_world);
         mutator_overwrote(old_world);
-        new_world = old_world->step();
+        coroutine::Nursery nursery;
+        nursery.spawn(new_world, old_world->step());
+        nursery.sync_join();
         _model->_worlds.push_back(new_world);
+        _model->shade_roots();
     }
     assert(new_world);
 
@@ -1784,6 +1787,8 @@
         // available
         // id<CAMetalDrawable> currentDrawable = [update drawable];
         id<CAMetalDrawable> currentDrawable = [(CAMetalLayer*)(_view.layer) nextDrawable];
+        
+        // TODO: Release pin while thing?
         
         id<MTLBlitCommandEncoder> encoder =  [command_buffer blitCommandEncoder];
         [encoder copyFromTexture:_addedTexture toTexture:currentDrawable.texture];
