@@ -20,23 +20,17 @@ namespace wry {
     
     template<typename BITMAP>
     BITMAP bitmask_for_index(int index) {
-        assert(0 <= index);
-        assert(index < 64);
-        return (BITMAP)1 << (index & 63);
+        return (BITMAP)1 << index;
     }
     
     template<typename BITMAP>
     BITMAP bitmask_below_index(int index) {
-        assert(0 <= index);
-        assert(index < 64);
-        return ~(~(BITMAP)0 << (index & 63));
+        return ~(~(BITMAP)0 << index);
     }
     
     template<typename BITMAP>
     BITMAP bitmask_above_index(int index) {
-        assert(0 <= index);
-        assert(index < 64);
-        return ~(BITMAP)1 << (index & 63);
+        return ~(BITMAP)1 << index;
     }
     
     template<typename BITMAP>

@@ -22,7 +22,7 @@ namespace wry::array_mapped_trie {
     
     using Coroutine::Task;
     
-    template<typename T, unsigned LOG2M = 5, typename BITMAP = uint32_t, typename KEY = uint64_t>
+    template<typename T, unsigned LOG2M = 5, typename BITMAP = uint32_t, typename KEY = __uint128_t>
     struct Node : GarbageCollected {
         
         static const unsigned LOG2N = (unsigned)(sizeof(KEY) * CHAR_BIT);
