@@ -90,8 +90,7 @@ namespace wry {
         return WaitableMap<Key, T>{
             parallel_rebuild(w.inner,
                              value_modifications,
-                             std::forward<F>(action_for_key)
-                             )
+                             std::forward<F>(action_for_key))
         };
     }
 
@@ -100,10 +99,11 @@ namespace wry {
     coroutine_parallel_rebuild(const WaitableMap<Key, T>& w,
                                const ConcurrentMap<Key, U>& value_modifications,
                                F&& action_for_key) {
-        co_return WaitableMap<Key, T>{co_await coroutine_parallel_rebuild(w.inner,
-                                                       value_modifications,
-                                                       std::forward<F>(action_for_key)
-                                                       )};
+        co_return WaitableMap<Key, T>{
+            co_await coroutine_parallel_rebuild(w.inner,
+                                                value_modifications,
+                                                std::forward<F>(action_for_key))
+        };
     }
 
     

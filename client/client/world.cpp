@@ -43,8 +43,6 @@ namespace wry {
         PersistentMap<Time, PersistentSet<EntityID>> new_waiting_on_time = _waiting_on_time.clone_and_try_erase(_time, ready).first;
         ConcurrentSkiplistSet<EntityID> next_ready;
 
-        Coroutine::Nursery nursery;
-
         // In parallel, notify each Entity.  Entities will typically examine
         // the World and may propose a Transaction to change it.
 
@@ -54,11 +52,8 @@ namespace wry {
             assert(a);
             a->notify(&context);
         };
-        co_await nursery.fork(ready.coroutine_parallel_for_each(action_for_ready));
+        co_await ready.coroutine_parallel_for_each(action_for_ready);
         
-        // -- completion barrier --
-        co_await nursery.join();
-
         // All transactions are now described and ready to be resolved in
         // parallel.
                     
@@ -261,6 +256,7 @@ namespace wry {
             co_return result;
         };
         
+        Coroutine::Nursery nursery;
         
         co_await nursery.fork(new_value_for_coordinate,
                               coroutine_parallel_rebuild(_value_for_coordinate,

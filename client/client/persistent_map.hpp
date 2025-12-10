@@ -171,10 +171,10 @@ namespace wry {
     
     
     template<typename Key, typename T, typename U, typename F>
-    Coroutine::Future<PersistentMap<Key, T>> coroutine_parallel_rebuild(
-                                const PersistentMap<Key, T>& source,
-                                const ConcurrentMap<Key, U>& modifier,
-                                F&& action_for_key) {
+    Coroutine::Future<PersistentMap<Key, T>>
+    coroutine_parallel_rebuild(const PersistentMap<Key, T>& source,
+                               const ConcurrentMap<Key, U>& modifier,
+                               F&& action_for_key) {
         
         
         // TODO: Descend the two trees and rebuild up from the leaves.
@@ -199,6 +199,20 @@ namespace wry {
             }
         }
         co_return result;
+    }
+    
+    
+    template<typename Key, typename T, typename U, typename F>
+    Coroutine::Future<PersistentMap<Key, T>>
+    coroutine_parallel_rebuild2(const PersistentMap<Key, T>& source,
+                                const ConcurrentMap<Key, U>& modifier,
+                                F&& action_for_key) {
+        
+        co_return PersistentMap<Key, T>{
+            coroutine_parallel_rebuild2(source.inner,
+                                        modifier,
+                                        std::move(action_for_key))
+        };
     }
     
 } // namespace wry

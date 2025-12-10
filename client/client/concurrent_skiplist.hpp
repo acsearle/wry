@@ -364,6 +364,12 @@ namespace wry {
             return _set.try_emplace(FORWARD(keylike), FORWARD(args)...);
         }
         
+        using Cursor = S::FrozenCursor;
+        Cursor make_cursor() const {
+            return _set.make_cursor();
+        }
+
+        
         /*
          const T& operator[](auto&& keylike) const {
          return _set.try_emplace(FORWARD(keylike), T{}).first->second;

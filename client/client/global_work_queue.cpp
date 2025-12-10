@@ -38,6 +38,12 @@ namespace wry {
     // rather than waking every single push.  We need some medium-term
     // estimate of the workload.
     
+    // TODO: Work queue and fork order
+    //
+    // If we have a single thread and it pops the most recent job, we get
+    // depth-first exploration of trees and a bound on the amount of jobs
+    // waiting.
+    
     
     void global_work_queue_cancel() {
         global_work_queue.cancel();
@@ -62,7 +68,7 @@ namespace wry {
                 break;
             mutator_pin();
             void* callback = {};
-            while (global_work_queue.try_pop_front(callback)) {
+            while (global_work_queue.try_pop_back(callback)) {
                 assert(callback);
                 (*(void(**)(void*))callback)(callback);
             }
