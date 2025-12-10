@@ -20,51 +20,37 @@ namespace wry::array_mapped_trie {
     
 #pragma mark - Tools for packed prefix and shift
     
-    inline void assert_valid_shift(int shift) {
-        assert(0 <= shift);
-        assert(shift < 64);
-        assert(!(shift % 6));
-    }
-    
-    inline void assert_valid_prefix_and_shift(uint64_t prefix, int shift) {
-        assert_valid_shift(shift);
-        assert((prefix & ~(~(uint64_t)63 << shift)) == 0);
-    }
-    
-    inline void _assert_valid_prefix_and_shift(uint64_t prefix_and_shift) {
-        uint64_t prefix = ~(uint64_t)63 & prefix_and_shift;
-        int shift = (int)((uint64_t)63 & prefix_and_shift);
-        assert(!(shift % 6));
-        assert((prefix & ~(~(uint64_t)63 << shift)) == 0);
-    }
-    
-    inline uint64_t prefix_for_keylike_and_shift(uint64_t keylike, int shift) {
-        assert_valid_shift(shift);
-        return keylike & (~(uint64_t)63 << shift);
-    }
-    
-    inline uint64_t prefix_and_shift_for_keylike_and_shift(uint64_t keylike, int shift) {
-        assert_valid_shift(shift);
-        return (keylike & ((~(uint64_t)63) << shift)) | (uint64_t)shift;
-    };
-    
-    // work out the shift required to bring the 6-aligned block of 6 bits that
-    // contains the msb into the least significant 6 bits
-    inline int shift_for_keylike_difference(uint64_t keylike_difference) {
-        assert(keylike_difference != 0);
-        int shift = ((63 - bit::clz(keylike_difference)) / 6) * 6;
-        assert_valid_shift(shift);
-        // The (a >> shift) >> 6 saves us from shifting by (60 + 6) = 66 > 63
-        assert((keylike_difference >> shift) && !((keylike_difference >> shift) >> 6));
-        return shift;
-    }
-    
-    
-    
     using Coroutine::Task;
     
     template<typename T>
     struct Node : GarbageCollected {
+        
+        static void assert_valid_shift(int shift) {
+            assert(0 <= shift);
+            assert(shift < 64);
+            assert(!(shift % 6));
+        }
+        
+        static void assert_valid_prefix_and_shift(uint64_t prefix, int shift) {
+            assert_valid_shift(shift);
+            assert((prefix & ~(~(uint64_t)63 << shift)) == 0);
+        }
+        
+        static uint64_t prefix_for_keylike_and_shift(uint64_t keylike, int shift) {
+            assert_valid_shift(shift);
+            return keylike & (~(uint64_t)63 << shift);
+        }
+        
+        // work out the shift required to bring the 6-aligned block of 6 bits that
+        // contains the msb into the least significant 6 bits
+        static int shift_for_keylike_difference(uint64_t keylike_difference) {
+            assert(keylike_difference != 0);
+            int shift = ((63 - bit::clz(keylike_difference)) / 6) * 6;
+            assert_valid_shift(shift);
+            // The (a >> shift) >> 6 saves us from shifting by (60 + 6) = 66 > 63
+            assert((keylike_difference >> shift) && !((keylike_difference >> shift) >> 6));
+            return shift;
+        }
         
         static void* _Nonnull operator new(size_t count, void* _Nonnull ptr) {
             return ptr;
@@ -540,31 +526,7 @@ namespace wry::array_mapped_trie {
         }
     }
     
-    template<typename T>
-    bool equality(Node<T> const* _Nonnull a, Node<T> const* _Nonnull b) {
-        if (a == b)
-            // by identity
-            return true;
-        if (a->_prefix_and_shift != b->_prefix_and_shift)
-            // by prefix and level
-            return false;
-        if (a->_bitmap != b->_bitmap)
-            // by contents
-            return false;
-        int compressed_size = popcount(a->_bitmap);
-        if (a->has_children()) {
-            // by recursion
-            for (int i = 0; i != compressed_size; ++i)
-                if (!equality(a->_children[i], b->_children[i]))
-                    return false;
-            return true;
-        } else {
-            for (int i = 0; i != compressed_size; ++i)
-                if (a->_values[i] != b->_values[i])
-                    return false;
-            return true;
-        }
-    }
+    
     
     template<typename T> auto
     merge(Node<T> const* _Nullable left, Node<T> const* _Nullable right) -> Node<T> const* _Nullable {
@@ -579,21 +541,7 @@ namespace wry::array_mapped_trie {
         
         abort();
         
-        /*
-         auto [lprefix, lshift] = left->get_prefix_and_shift();
-         auto [rprefix, rshift] = right->get_prefix_and_shift();
-         
-         auto max_shift = std::max(lshift, rshift);
-         if ((lprefix ^ rprefix) >> 6 >> max_shift) {
-         // The nodes differ in their prefixes
-         return Node<T>::merge_disjoint(left, right);
-         }
-         
-         if (lshift == rshift) {
-         // The nodes don't differ in their prefixes and they are at
-         // the same level; we need to fully merge them
-         }
-         */
+      
         
         
     }
