@@ -18,34 +18,41 @@ namespace wry {
     
 #pragma mark Mutable compressed array tools
     
-    inline uint64_t bitmask_for_index(int index) {
+    template<typename BITMAP>
+    BITMAP bitmask_for_index(int index) {
         assert(0 <= index);
         assert(index < 64);
-        return (uint64_t)1 << (index & 63);
+        return (BITMAP)1 << (index & 63);
     }
     
-    inline uint64_t bitmask_below_index(int index) {
+    template<typename BITMAP>
+    BITMAP bitmask_below_index(int index) {
         assert(0 <= index);
         assert(index < 64);
-        return ~(~(uint64_t)0 << (index & 63));
+        return ~(~(BITMAP)0 << (index & 63));
     }
     
-    inline uint64_t bitmask_above_index(int index) {
+    template<typename BITMAP>
+    BITMAP bitmask_above_index(int index) {
         assert(0 <= index);
         assert(index < 64);
-        return ~(uint64_t)1 << (index & 63);
+        return ~(BITMAP)1 << (index & 63);
     }
     
-    inline bool bitmap_get_for_index(uint64_t bitmap, int index) {
-        return bitmap & bitmask_for_index(index);
+    template<typename BITMAP>
+    bool bitmap_get_for_index(BITMAP bitmap, int index) {
+        return bitmap & bitmask_for_index<BITMAP>(index);
     }
     
-    inline void bitmap_set_for_index(uint64_t& bitmap, int index) {
-        bitmap |= bitmask_for_index(index);
+    
+    template<typename BITMAP>
+    void bitmap_set_for_index(BITMAP& bitmap, int index) {
+        bitmap |= bitmask_for_index<BITMAP>(index);
     }
     
-    inline void bitmap_clear_for_index(uint64_t& bitmap, int index) {
-        bitmap &= ~bitmask_for_index(index);
+    template<typename BITMAP>
+    void bitmap_clear_for_index(BITMAP& bitmap, int index) {
+        bitmap &= ~bitmask_for_index<BITMAP>(index);
     }
     
     // A compressed array is a bitmap and an array of T that compactly
@@ -63,16 +70,18 @@ namespace wry {
     // constructed nodes through intermediate states.  Internal methods
     // often follow a pattern of clone-and-modify.
     
-    inline bool compressed_array_contains_for_index(uint64_t bitmap, int index) {
+    template<typename BITMAP>
+    bool compressed_array_contains_for_index(BITMAP bitmap, int index) {
         return bitmap_get_for_index(bitmap, index);
     }
     
-    inline int compressed_array_get_compressed_index_for_index(uint64_t bitmap, int index) {
-        return popcount(bitmap & bitmask_below_index(index));
+    template<typename BITMAP>
+    int compressed_array_get_compressed_index_for_index(BITMAP bitmap, int index) {
+        return popcount(bitmap & bitmask_below_index<BITMAP>(index));
     }
     
-    template<typename T>
-    bool compressed_array_try_get_for_index(uint64_t bitmap,
+    template<typename BITMAP, typename T>
+    bool compressed_array_try_get_for_index(BITMAP bitmap,
                                             T* _Nonnull array,
                                             int index,
                                             std::remove_const_t<T>& victim) {
@@ -84,13 +93,14 @@ namespace wry {
         return result;
     }
     
-    inline int compressed_array_get_compressed_size(uint64_t bitmap) {
+    template<typename BITMAP>
+    int compressed_array_get_compressed_size(BITMAP bitmap) {
         return popcount(bitmap);
     }
     
-    template<typename T>
+    template<typename BITMAP, typename T>
     void compressed_array_insert_for_index(size_t debug_capacity,
-                                           uint64_t& bitmap,
+                                           BITMAP& bitmap,
                                            T* _Nonnull array,
                                            int index,
                                            std::type_identity_t<T> value) {
@@ -105,8 +115,8 @@ namespace wry {
         array[compressed_index] = std::move(value);
     }
     
-    template<typename T>
-    T compressed_array_exchange_for_index(uint64_t& bitmap,
+    template<typename BITMAP, typename T>
+    T compressed_array_exchange_for_index(BITMAP& bitmap,
                                           T* _Nonnull array,
                                           int index,
                                           std::type_identity_t<T> value) {
@@ -115,9 +125,9 @@ namespace wry {
         return std::exchange(array[compressed_index], std::move(value));
     }
     
-    template<typename T>
+    template<typename BITMAP, typename T>
     bool compressed_array_insert_or_exchange_for_index(size_t debug_capacity,
-                                                       uint64_t& bitmap,
+                                                       BITMAP& bitmap,
                                                        T* _Nonnull array,
                                                        int index,
                                                        std::type_identity_t<T> value,
@@ -140,8 +150,8 @@ namespace wry {
         return was_found;
     }
     
-    template<typename T>
-    void compressed_array_erase_for_index(uint64_t& bitmap,
+    template<typename BITMAP, typename T>
+    void compressed_array_erase_for_index(BITMAP& bitmap,
                                           T* _Nonnull array,
                                           int index,
                                           std::type_identity_t<T>& victim) {
@@ -155,8 +165,8 @@ namespace wry {
     }
     
     
-    template<typename T>
-    bool compressed_array_try_erase_for_index(uint64_t& bitmap,
+    template<typename BITMAP, typename T>
+    bool compressed_array_try_erase_for_index(BITMAP& bitmap,
                                               T* _Nonnull array,
                                               int index,
                                               std::type_identity_t<T>& victim) {
@@ -173,9 +183,9 @@ namespace wry {
         return was_found;
     }
     
-    template<typename T, typename U, typename V, typename F>
-    void transform_compressed_arrays(uint64_t b1,
-                                     uint64_t b2,
+    template<typename BITMAP, typename T, typename U, typename V, typename F>
+    void transform_compressed_arrays(BITMAP b1,
+                                     BITMAP b2,
                                      T const* _Nonnull v1,
                                      U const* _Nonnull v2,
                                      V* _Nonnull v3,

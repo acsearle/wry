@@ -20,7 +20,7 @@ namespace wry::bit {
 
     using std::has_single_bit;
     
-    constexpr int popcount(uint64_t x) {
+    constexpr int popcount(auto x) {
         return __builtin_popcountg(x);
     }
     
