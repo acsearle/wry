@@ -22,33 +22,36 @@ namespace wry::array_mapped_trie {
     
     using Coroutine::Task;
     
-    template<typename T, unsigned LOG2M = 5, typename BITMAP = uint32_t>
+    template<typename T, unsigned LOG2M = 5, typename BITMAP = uint32_t, typename KEY = uint64_t>
     struct Node : GarbageCollected {
         
+        static const unsigned LOG2N = (unsigned)(sizeof(KEY) * CHAR_BIT);
         static const unsigned M = 1 << LOG2M;
-        static const uint64_t INDEX_MASK = ~(~(uint64_t)0 << LOG2M);
+        static const KEY INDEX_MASK = ~(~(KEY)0 << LOG2M);
+        
+        static_assert(sizeof(BITMAP) * CHAR_BIT >= M);
                 
         static void assert_valid_shift(int shift) {
             assert(0 <= shift); // non-negative
-            assert(shift < 64); // non-wrapping
+            assert(shift < LOG2N); // non-wrapping
             assert(!(shift % LOG2M)); // a multiple of log2(M)
         }
         
-        static void assert_valid_prefix_and_shift(uint64_t prefix, int shift) {
+        static void assert_valid_prefix_and_shift(KEY prefix, int shift) {
             assert_valid_shift(shift);
             assert((prefix & ~(~INDEX_MASK << shift)) == 0);
         }
         
-        static uint64_t prefix_for_keylike_and_shift(uint64_t keylike, int shift) {
+        static KEY prefix_for_keylike_and_shift(KEY keylike, int shift) {
             assert_valid_shift(shift);
             return keylike & (~INDEX_MASK << shift);
         }
         
         // work out the shift required to bring the 6-aligned block of 6 bits that
         // contains the msb into the least significant 6 bits
-        static int shift_for_keylike_difference(uint64_t keylike_difference) {
+        static int shift_for_keylike_difference(KEY keylike_difference) {
             assert(keylike_difference != 0);
-            int shift = ((63 - bit::clz(keylike_difference)) / LOG2M) * LOG2M;
+            int shift = ((LOG2N - 1 - __builtin_clzg(keylike_difference)) / LOG2M) * LOG2M;
             assert_valid_shift(shift);
             assert((keylike_difference >> shift) && !((keylike_difference >> shift) >> LOG2M));
             return shift;
@@ -58,10 +61,10 @@ namespace wry::array_mapped_trie {
             return ptr;
         }
         
-        uint64_t _prefix;
+        KEY _prefix;
         int _shift;
-        uint32_t _debug_capacity;
-        uint32_t _debug_count;
+        unsigned _debug_capacity;
+        unsigned _debug_count;
         BITMAP _bitmap; // bitmap of which items are present
         union {
             // compressed flexible member array of children or values
@@ -82,30 +85,28 @@ namespace wry::array_mapped_trie {
             return _shift;
         }
         
-        uint64_t get_prefix() const {
+        KEY get_prefix() const {
             assert(!(_prefix & ~(~INDEX_MASK << _shift)));
             return _prefix;
         }
         
-        std::pair<uint64_t, int> get_prefix_and_shift() const {
+        std::pair<KEY, int> get_prefix_and_shift() const {
             return {
                 get_prefix(),
                 get_shift()
             };
         }
         
-        bool prefix_covers_key(uint64_t key) const {
-            auto [prefix, shift] = get_prefix_and_shift();
-            return prefix == (key & (~INDEX_MASK << shift));
+        bool prefix_covers_key(KEY key) const {
+            return _prefix == (key & (~INDEX_MASK << _shift));
         }
         
-        int get_index_for_key(uint64_t key) const {
-            [[maybe_unused]] int shift = get_shift();
-            assert(!((key ^ _prefix) >> shift >> LOG2M));
-            return (int)((key >> get_shift()) & INDEX_MASK);
+        int get_index_for_key(KEY key) const {
+            assert(!((key ^ _prefix) >> _shift >> LOG2M));
+            return (int)((key >> _shift) & INDEX_MASK);
         }
         
-        bool bitmap_covers_key(uint64_t key) const {
+        bool bitmap_covers_key(KEY key) const {
             int index = get_index_for_key(key);
             return bitmap_get_for_index(_bitmap, index);
         }
@@ -114,7 +115,7 @@ namespace wry::array_mapped_trie {
             return compressed_array_get_compressed_index_for_index(_bitmap, index);
         }
         
-        int get_compressed_index_for_key(uint64_t key) const {
+        int get_compressed_index_for_key(KEY key) const {
             int index = get_index_for_key(key);
             return get_compressed_index_for_index(index);
         }
@@ -127,7 +128,7 @@ namespace wry::array_mapped_trie {
             assert(count <= _debug_capacity);
             assert(count == _debug_count);
             if (has_children()) {
-                uint64_t prefix_mask = ~INDEX_MASK << shift;
+                KEY prefix_mask = ~INDEX_MASK << shift;
                 for (int j = 0; j != count; ++j) {
                     const Node* child = _children[j];
                     auto [child_prefix, child_shift] = child->get_prefix_and_shift();
@@ -138,7 +139,7 @@ namespace wry::array_mapped_trie {
                     }
                     assert((child_prefix & prefix_mask) == prefix);
                     int child_index = get_index_for_key(child_prefix);
-                    uint64_t select = (uint64_t)1 << child_index;
+                    KEY select = (KEY)1 << child_index;
                     assert(_bitmap & select);
                     if (popcount(_bitmap & (select - 1)) != j) {
                         printf("%llx : %d\n", prefix, shift);
@@ -157,10 +158,10 @@ namespace wry::array_mapped_trie {
         
         
         
-        Node(uint64_t prefix,
+        Node(KEY prefix,
              int shift,
-             uint32_t debug_capacity,
-             uint32_t debug_count,
+             unsigned debug_capacity,
+             unsigned debug_count,
              BITMAP bitmap)
         : _prefix(prefix)
         , _shift(shift)
@@ -170,22 +171,22 @@ namespace wry::array_mapped_trie {
         }
         
         virtual void _garbage_collected_scan() const override {
-            size_t compressed_size = popcount(_bitmap);
+            int compressed_size = popcount(_bitmap);
             if (has_children()) {
                 assert(compressed_size <= _debug_capacity);
                 // trace_n(_children, compressed_size);
-                for (size_t i = 0; i != compressed_size; ++i)
+                for (int i = 0; i != compressed_size; ++i)
                     garbage_collected_scan(_children[i]);
             } else {
                 // trace_n(_values, compressed_size);
-                for (size_t i = 0; i != compressed_size; ++i)
+                for (int i = 0; i != compressed_size; ++i)
                     garbage_collected_scan(_values[i]);
             }
         }
         
-        [[nodiscard]] static Node* _Nonnull make(uint64_t prefix,
+        [[nodiscard]] static Node* _Nonnull make(KEY prefix,
                                                  int shift,
-                                                 uint32_t capacity,
+                                                 unsigned capacity,
                                                  BITMAP bitmap) {
             size_t item_bytes = shift ? sizeof(const Node*) : sizeof(T);
             void* _Nonnull pointer = GarbageCollected::operator new(sizeof(Node) + (capacity * item_bytes));
@@ -196,11 +197,11 @@ namespace wry::array_mapped_trie {
                                      bitmap);
         }
         
-        [[nodiscard]] static Node* _Nonnull make_with_key_value(uint64_t key, T value) {
+        [[nodiscard]] static Node* _Nonnull make_with_key_value(KEY key, T value) {
             int shift = 0;
             BITMAP bitmap = (BITMAP)1 << (int)(key & INDEX_MASK);
             Node* _Nonnull new_node = Node::make(prefix_for_keylike_and_shift(key,
-                                                                                        shift),
+                                                                              shift),
                                                  shift,
                                                  /* capacity = */ 1,
                                                  bitmap);
@@ -221,7 +222,7 @@ namespace wry::array_mapped_trie {
             return clone_with_capacity(popcount(_bitmap));
         }
         
-        bool contains(uint64_t key) const {
+        bool contains(KEY key) const {
             if (!prefix_covers_key(key)) {
                 // prefix excludes key
                 return false;
@@ -240,7 +241,7 @@ namespace wry::array_mapped_trie {
             return child && child->contains(key);
         }
         
-        [[nodiscard]] bool try_get(uint64_t key, T& victim) const {
+        [[nodiscard]] bool try_get(KEY key, T& victim) const {
             if (!prefix_covers_key(key)) {
                 return false;
             }
@@ -262,7 +263,7 @@ namespace wry::array_mapped_trie {
         
         void insert_child(Node const* _Nonnull new_child) {
             assert(has_children());
-            uint64_t key = new_child->get_prefix();
+            KEY key = new_child->get_prefix();
             assert(prefix_covers_key(key));
             ++_debug_count;
             compressed_array_insert_for_index(_debug_capacity,
@@ -274,7 +275,7 @@ namespace wry::array_mapped_trie {
         
         Node const* _Nonnull exchange_child(Node const* _Nonnull new_child) {
             assert(has_children());
-            uint64_t key = new_child->get_prefix();
+            KEY key = new_child->get_prefix();
             assert(prefix_covers_key(key));
             return compressed_array_exchange_for_index(_bitmap,
                                                        _children,
@@ -282,7 +283,7 @@ namespace wry::array_mapped_trie {
                                                        new_child);
         }
         
-        void insert_key_value(uint64_t key, T value) {
+        void insert_key_value(KEY key, T value) {
             assert(has_values());
             assert(prefix_covers_key(key));
             ++_debug_count;
@@ -293,7 +294,7 @@ namespace wry::array_mapped_trie {
                                               value);
         }
         
-        T exchange_key_value(uint64_t key, T value) {
+        T exchange_key_value(KEY key, T value) {
             assert(has_values());
             assert(prefix_covers_key(key));
             return compressed_array_insert_for_index(_bitmap,
@@ -308,7 +309,7 @@ namespace wry::array_mapped_trie {
         // level node
         [[nodiscard]] static Node* _Nonnull merge_disjoint(Node const* _Nonnull a, Node const* _Nonnull b) {
             assert(a && b);
-            uint64_t prefix_difference = a->_prefix ^ b->_prefix;
+            KEY prefix_difference = a->_prefix ^ b->_prefix;
             int shift = shift_for_keylike_difference(prefix_difference);
             Node* new_node = make(prefix_for_keylike_and_shift(a->_prefix, shift),
                                   shift,
@@ -322,7 +323,7 @@ namespace wry::array_mapped_trie {
         
         [[nodiscard]] Node* _Nonnull clone_and_insert_child(const Node* _Nonnull new_child) const {
             assert(has_children());
-            uint64_t key = new_child->get_prefix();
+            KEY key = new_child->get_prefix();
             assert(prefix_covers_key(key));
             Node* _Nonnull new_node = clone_with_capacity(popcount(_bitmap) + 1);
             Node const* _Nullable _ = nullptr;
@@ -339,7 +340,7 @@ namespace wry::array_mapped_trie {
         
         [[nodiscard]] Node* _Nonnull clone_and_assign_child(Node const* _Nonnull new_child) const {
             assert(has_children());
-            uint64_t key = new_child->get_prefix();
+            KEY key = new_child->get_prefix();
             assert(prefix_covers_key(key));
             Node* _Nonnull new_node = clone_with_capacity(popcount(_bitmap));
             Node const* old_child = compressed_array_exchange_for_index(new_node->_bitmap,
@@ -350,7 +351,7 @@ namespace wry::array_mapped_trie {
             return new_node;
         }
         
-        Node* _Nonnull clone_and_erase_child_containing_key(uint64_t key) const {
+        Node* _Nonnull clone_and_erase_child_containing_key(KEY key) const {
             assert(has_children());
             Node* new_node = clone_with_capacity(popcount(_bitmap));
             const Node* old_child = nullptr;
@@ -368,7 +369,7 @@ namespace wry::array_mapped_trie {
         
         
         
-        [[nodiscard]] std::pair<Node* _Nonnull, bool> clone_and_insert_or_assign_key_value(uint64_t key, T value, T& victim) const {
+        [[nodiscard]] std::pair<Node* _Nonnull, bool> clone_and_insert_or_assign_key_value(KEY key, T value, T& victim) const {
             if (!prefix_covers_key(key)) {
                 return {
                     merge_disjoint(this,
@@ -378,7 +379,7 @@ namespace wry::array_mapped_trie {
                 };
             }
             int index = get_index_for_key(key);
-            uint64_t select = bitmask_for_index<BITMAP>(index);
+            KEY select = bitmask_for_index<BITMAP>(index);
             int compressed_index = get_compressed_index_for_index(index);
             Node* _Nonnull new_node = clone_with_capacity(popcount(_bitmap | select));
             new_node->_debug_count = popcount(_bitmap | select);
@@ -410,7 +411,7 @@ namespace wry::array_mapped_trie {
             return { new_node, leaf_did_assign };
         }
         
-        [[nodiscard]] std::pair<Node const* _Nullable, bool> clone_and_erase_key(uint64_t key, T& victim) const {
+        [[nodiscard]] std::pair<Node const* _Nullable, bool> clone_and_erase_key(KEY key, T& victim) const {
             // TODO: Do we handle all cases correctly?
             // - Replacing a count one node with nullptr
             // - Replacing a count two node with surviving child
@@ -451,10 +452,10 @@ namespace wry::array_mapped_trie {
                 for (int i = 0; i != n; ++i)
                     _children[i]->parallel_for_each(action);
             } else {
-                uint64_t b = _bitmap;
+                BITMAP b = _bitmap;
                 for (int i = 0; b != 0; ++i, (b &= (b-1))) {
                     int j = bit::ctz(b);
-                    uint64_t key = _prefix | j;
+                    KEY key = _prefix | j;
                     action(key, _values[i]);
                 }
             }
@@ -466,10 +467,10 @@ namespace wry::array_mapped_trie {
                 for (int i = 0; i != n; ++i)
                     _children[i]->for_each(action);
             } else {
-                uint64_t b = _bitmap;
+                BITMAP b = _bitmap;
                 for (int i = 0; b != 0; ++i, (b &= (b-1))) {
                     int j = bit::ctz(b);
-                    uint64_t key = _prefix | j;
+                    KEY key = _prefix | j;
                     action(key, _values[i]);
                 }
             }
@@ -483,10 +484,10 @@ namespace wry::array_mapped_trie {
                     co_await nursery.fork(_children[i]->coroutine_parallel_for_each(action));
                 co_await nursery.join();
             } else {
-                uint64_t b = _bitmap;
+                BITMAP b = _bitmap;
                 for (int i = 0; b != 0; ++i, (b &= (b-1))) {
                     int j = bit::ctz(b);
-                    uint64_t key = _prefix | j;
+                    KEY key = _prefix | j;
                     action(key, _values[i]);
                 }
             }
@@ -499,10 +500,10 @@ namespace wry::array_mapped_trie {
                 for (int i = 0; i != n; ++i)
                     co_await nursery.fork(_children[i]->coroutine_parallel_for_each_coroutine(action));
             } else {
-                uint64_t b = _bitmap;
+                BITMAP b = _bitmap;
                 for (int i = 0; b != 0; ++i, (b &= (b-1))) {
                     int j = bit::ctz(b);
-                    uint64_t key = _prefix | j;
+                    KEY key = _prefix | j;
                     co_await nursery.fork(action(key, _values[i]));
                 }
             }
