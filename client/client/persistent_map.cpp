@@ -11,9 +11,7 @@
 namespace wry {
     
     define_test("PersistentMap") {
-        
-        co_return;
-                       
+                               
         {
             uint64_t k = 6435475;
             int v = 4568;

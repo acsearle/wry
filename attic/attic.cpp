@@ -7,6 +7,70 @@
 
 
 
+// An array-mapped trie for fixed size integer keys.  The values will be stored
+// in key order.  Most efficient for keys densely packed in a few subregions,
+// i.e. the opposite of a good hash.
+//
+// The trie branches by a power of two each level.  Empty slots are compressed
+// using a bitmapped array.  Each node knows its own prefix.  Singleton nodes
+// can occur only at the leafs.
+//
+// TODO: it could make more sense to pack sparse levels into a btree style
+// structure.  Note that many plausible distributions of keys will produce nodes
+// that are almost full or almost empty.  We could be better served by other
+// kinds of nodes: Node const* _Nullable children[64] ; N
+//
+// We have two parameters of interest, the key length and the bitmap length.
+//
+// The bitmap length is the branching factor.  The key is considered in
+// blocks of that size.  The branching factor is going to control the
+// performance of various operations on the data structure.
+//
+// When the bitmap and key lengths are equal, we can pack the shift into the
+// low bits of the prefix.  But we can't always do this.
+//
+// We read the node metadata, and then index into the flexible array member.
+// For lookup performance, we want the index to read memory that has already
+// been loaded along with the metadata.  If we consider the block size to be
+// 64 bytes, we have
+//
+//  0 __vtbl
+//  8 gc_color
+// 16 prefix_and_shift
+// 24 bitmap
+// 32 child[0]
+// 40 child[1]
+// 48 child[2]
+// 56 child[3]
+//
+//
+
+
+// TODO: Naming
+//
+// Immutable and persistent integer map
+//
+// Implemented as an array-mapped-trie with a branching factor of 64.
+//
+// "Modifying" operations produce a new object that shares much of the
+// structure of the old map.  Nodes on the path to the modifcation
+// are cloned-with-modifications.  There are O(log N) such nodes.
+//
+// It is possible to bulk-modify the map efficiently by rebuilding up
+// from the leaf nodes, in parallel.
+//
+// Unlike a hash map, this structure is efficient for densely populated
+// regions of key space.  The key should be chosen, or transformed,
+// such that the low bits exhibit high entropy.
+//
+// For example, to encode a (int32_t, int32_t) coordinate, the bits
+// should be interleaved in Morton or Z-order.  The integer map then
+// encodes a quadtree. Spatial regions map to subtrees with a
+// particular prefix.  Chances of a common prefix can be maximized by
+// using or offsetting coordinates to be around INT_MAX / 3 = 0101010101...
+// where the alternating bit pattern stops the carries and borrows
+// produced by small coordinate differences from propagating all the
+// way up the prefix.
 
 #if 0 // Legacy
 
