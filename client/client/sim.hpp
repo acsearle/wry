@@ -67,19 +67,32 @@ namespace wry {
         return hash_combine(&x, sizeof(x));
     }
     
-    inline uint64_t persistent_map_index_for_key(Coordinate key) {
-        return key.data();
-    }
+//    inline uint64_t persistent_map_index_for_key(Coordinate key) {
+//        return key.data();
+//    }
+//    
+//    template<typename Key>
+//    Key key_for_persistent_map_index(uint64_t index);
+//    
+//    template<>
+//    inline Coordinate key_for_persistent_map_index<Coordinate>(uint64_t index) {
+//        Coordinate key = {};
+//        std::memcpy(&key, &index, 8);
+//        return key;
+//    }
     
-    template<typename Key>
-    Key key_for_persistent_map_index(uint64_t index);
-    
-    template<>
-    inline Coordinate key_for_persistent_map_index<Coordinate>(uint64_t index) {
-        Coordinate key = {};
-        std::memcpy(&key, &index, 8);
-        return key;
-    }
+    struct CoordinateHasher {
+        using key_type = Coordinate;
+        using hash_type = uint64_t;
+        constexpr hash_type hash(key_type xy) {
+            return xy.data();
+        }
+        constexpr key_type unhash(hash_type h) {
+            Coordinate key = {};
+            __builtin_memcpy(&key, &h, 8); // constexpr
+            return key;
+        }
+    };
 
     
     inline void garbage_collected_scan(const Coordinate&) {}

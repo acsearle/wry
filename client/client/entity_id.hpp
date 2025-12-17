@@ -29,18 +29,20 @@ namespace wry {
         return hash_combine(&x, sizeof(x));
     }
     
-    inline uint64_t persistent_map_index_for_key(EntityID entity_id) {
-        return entity_id.data;
-    }
+    
+    struct EntityIDHasher {
+        using key_type = EntityID;
+        using hash_type = uint64_t;
+        constexpr hash_type hash(key_type key) const {
+            return key.data;
+        }
+        constexpr key_type unhash(hash_type h) const {
+            return EntityID{.data = h};
+        }
 
-    template<typename Key>
-    Key key_for_persistent_map_index(uint64_t index);
-
-    template<>
-    inline EntityID key_for_persistent_map_index<EntityID>(uint64_t index) {
-        return EntityID{index};
-    }
-
+        
+    };
+    
     
     inline void garbage_collected_scan(const EntityID&) {}
     inline void garbage_collected_shade(const EntityID&) {}

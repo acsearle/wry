@@ -19,6 +19,7 @@
 namespace wry::array_mapped_trie {
     
 #pragma mark - Tools for packed prefix and shift
+   
     
     using Coroutine::Task;
     
@@ -36,7 +37,19 @@ namespace wry::array_mapped_trie {
         static constexpr KEY_TYPE INDEX_MASK = ~PREFIX_MASK;
         
         static_assert(BITMAP_WIDTH >= ((size_t)1 << SYMBOL_WIDTH));
-                
+        
+        struct Prefix {
+            KEY_TYPE _data;
+            KEY_TYPE mask() const {
+                return _data ^ (-_data);
+            }
+            KEY_TYPE prefix() const {
+                return _data & mask();
+            }
+            int shift() const {
+                return __builtin_ctzg(_data) + 1;
+            }
+        };
         
         static void assert_valid_shift(int shift) {
             assert(0 <= shift); // non-negative
@@ -184,7 +197,7 @@ namespace wry::array_mapped_trie {
                                      bitmap);
         }
         
-        [[nodiscard]] static Node* _Nonnull make_with_key_value(KEY_TYPE key, T value) {
+        [[nodiscard]] static Node* _Nonnull make_singleton(KEY_TYPE key, T value) {
             int shift = 0;
             BITMAP_TYPE bitmap = (BITMAP_TYPE)1 << (int)(key & INDEX_MASK);
             Node* _Nonnull new_node = Node::make(prefix_for_keylike_and_shift(key,
@@ -194,6 +207,45 @@ namespace wry::array_mapped_trie {
                                                  bitmap);
             new_node->_values[0] = std::move(value);
             return new_node;
+        }
+        
+        [[nodiscard]] static Node* _Nullable make_leaf_with_leading_pairs(auto& first, auto last) {
+            if (first == last)
+                return nullptr;
+            auto first2 = first;
+            KEY_TYPE prefix = {};
+            int shift = 0;
+            size_t count;
+            BITMAP_TYPE bitmap = {};
+            KEY_TYPE key = first2->first & ~INDEX_MASK;
+            prefix = key & ~INDEX_MASK;
+            for (;;) {
+                ++count;
+                auto index = key & INDEX_MASK;
+                auto mask = (BITMAP_TYPE)1 << (key & INDEX_MASK);
+                assert(mask > bitmap); // i.e. sorted
+                bitmap |= mask;
+                ++first2;
+                if (first2 == last)
+                    break;
+                key = first2->first;
+                if ((prefix ^ key) & ~INDEX_MASK)
+                    break;
+            }
+            assert(popcount(bitmap) == count);
+            auto result = make(prefix, shift, count, bitmap);
+            auto d_first = result->_values;
+            for (;first != first2; ++first, ++d_first) {
+                d_first = first->second;
+            }
+            return result;
+        }
+        
+        [[nodiscard]] static Node* _Nullable make_with_pairs(auto first, auto last) {
+            std::vector<Node* const> leafs;
+            while (first != last)
+                leafs.push_back(make_leaf_with_leading_pairs(first, last));
+            
         }
 
         bool contains(KEY_TYPE key) const {
@@ -232,7 +284,7 @@ namespace wry::array_mapped_trie {
                 return true;
             }
         }
-        
+                
         
         
 
@@ -372,7 +424,7 @@ namespace wry::array_mapped_trie {
             if (!prefix_covers_key(key)) {
                 return {
                     merge_disjoint(this,
-                                   make_with_key_value(key,
+                                   make_singleton(key,
                                                        value)),
                     true
                 };
@@ -397,7 +449,7 @@ namespace wry::array_mapped_trie {
                     const Node* _Nonnull child = _children[compressed_index];
                     std::tie(new_child, leaf_did_assign) = child->clone_and_insert_or_assign_key_value(key, value, victim);
                 } else {
-                    new_child = make_with_key_value(key, value);
+                    new_child = make_singleton(key, value);
                 }
                 Node const* _Nullable _ = nullptr;
                 (void) compressed_array_insert_or_exchange_for_index(new_node->_debug_capacity,
@@ -508,6 +560,44 @@ namespace wry::array_mapped_trie {
             }
             co_await nursery.join();
         }
+        
+        
+        template<typename Iterator> [[nodiscard]] static
+        Node const* _Nullable
+        _batch_insert(Node const* _Nullable root, KEY_TYPE prefix, int shift, Iterator first, Iterator last) {
+            if (first == last)
+                return root;
+            auto [key, value] = *first;
+            assert(key > prefix);
+            
+            
+        }
+        
+        
+        
+        // Given a trie, return two tries, partition according to prefix
+        std::pair<Node const* _Nullable, Node const* _Nullable> static
+        partition(Node const* _Nullable node, KEY_TYPE key, int shift) {
+            if (!node)
+                return { nullptr, nullptr };
+            
+            if ((node->_prefix ^ key) >> (max(node->_shift, shift))) {
+                // The prefixes are disjoint
+                return { nullptr, node };
+            }
+            
+            if (node->_shift < shift) {
+                // Node is entirely within the filter
+                return {node, nullptr};
+            }
+            
+            
+            
+            
+        }
+        
+        
+        
         
     }; // Node
     

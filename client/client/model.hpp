@@ -96,7 +96,7 @@ namespace wry {
                 // new player
                 Player* p = new Player;
                 world->_entity_for_entity_id.set(p->_entity_id, p);
-                PersistentSet<EntityID> q;
+                PersistentSet<EntityID, EntityIDHasher> q;
                 world->_waiting_on_time.try_get(Time{0}, q);
                 q.set(p->_entity_id);
                 world->_waiting_on_time.set(Time{0}, q);
@@ -112,7 +112,7 @@ namespace wry {
                 //                                      entity_id);
                 // _world->_ready.set(entity_id);
                 // TODO: clumsy
-                PersistentSet<EntityID> q;
+                PersistentSet<EntityID, EntityIDHasher> q;
                 world->_waiting_on_time.try_get(Time{0}, q);
                 q.set(entity_id);
                 world->_waiting_on_time.set(Time{0}, q);

@@ -14,7 +14,7 @@
 
 namespace wry {
     
-    template<typename Key, typename T>
+    template<typename Key, typename T, typename H>
     struct WaitableMap {
         
         // TODO: We are bloating WaitableMap by allocating a waitset pointer
@@ -24,10 +24,10 @@ namespace wry {
         PersistentMap<Key, T> valuemap;
         PersistentMap<Key, PersistentSet<EntityID>> waitset;
          */
-        PersistentMap<Key, std::pair<T, PersistentSet<EntityID>>> inner;
+        PersistentMap<Key, std::pair<T, PersistentSet<EntityID, EntityIDHasher>>, H> inner;
         
         bool try_get(Key key, T& victim) const {
-            std::pair<T, PersistentSet<EntityID>> a{};
+            std::pair<T, PersistentSet<EntityID, EntityIDHasher>> a{};
             bool b = inner.try_get(key, a);
             if (b)
                 victim = std::move(a.first);
@@ -35,7 +35,7 @@ namespace wry {
         }
         
         void set(Key key, T desired) {
-            std::pair<T, PersistentSet<EntityID>> a{};
+            std::pair<T, PersistentSet<EntityID, EntityIDHasher>> a{};
             a.first = desired;
             inner.set(key, a);
         }
@@ -78,28 +78,28 @@ namespace wry {
         
     };
     
-    template<typename Key, typename T>
-    void garbage_collected_scan(const WaitableMap<Key, T>& x) {
+    template<typename Key, typename T, typename H>
+    void garbage_collected_scan(const WaitableMap<Key, T, H>& x) {
         garbage_collected_scan(x.inner);
     }
     
-    template<typename Key, typename T, typename U, typename F>
-    WaitableMap<Key, T> parallel_rebuild(const WaitableMap<Key, T>& w,
+    template<typename Key, typename T, typename H, typename U, typename F>
+    WaitableMap<Key, T, H> parallel_rebuild(const WaitableMap<Key, T, H>& w,
                                          const ConcurrentMap<Key, U>& value_modifications,
                                          F&& action_for_key) {
-        return WaitableMap<Key, T>{
+        return WaitableMap<Key, T, H>{
             parallel_rebuild(w.inner,
                              value_modifications,
                              std::forward<F>(action_for_key))
         };
     }
 
-    template<typename Key, typename T, typename U, typename F>
-    Coroutine::Future<WaitableMap<Key, T>>
-    coroutine_parallel_rebuild(const WaitableMap<Key, T>& w,
+    template<typename Key, typename T, typename H, typename U, typename F>
+    Coroutine::Future<WaitableMap<Key, T, H>>
+    coroutine_parallel_rebuild(const WaitableMap<Key, T, H>& w,
                                const ConcurrentMap<Key, U>& value_modifications,
                                F&& action_for_key) {
-        co_return WaitableMap<Key, T>{
+        co_return WaitableMap<Key, T, H>{
             co_await coroutine_parallel_rebuild(w.inner,
                                                 value_modifications,
                                                 std::forward<F>(action_for_key))
