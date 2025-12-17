@@ -29,8 +29,11 @@ namespace wry {
         return hash_combine(&x, sizeof(x));
     }
     
+    template<typename> struct DefaultHasher;
     
-    struct EntityIDHasher {
+    
+    template<>
+    struct DefaultHasher<EntityID> {
         using key_type = EntityID;
         using hash_type = uint64_t;
         constexpr hash_type hash(key_type key) const {

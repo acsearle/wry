@@ -5,6 +5,8 @@
 //  Created by Antony Searle on 24/11/2024.
 //
 
+#include <cstdlib>
+
 #include "persistent_map.hpp"
 #include "test.hpp"
 
@@ -73,10 +75,10 @@ namespace wry {
             PersistentMap<uint64_t, int> p;
             std::map<uint64_t, int> m;
             for (int i = 0; i != 65536; ++i) {
-                uint64_t k = rand() & (64 * 1024 - 1);
-                int v = rand();
+                uint64_t k = std::rand() & (64 * 1024 - 1);
+                int v = std::rand();
                 
-                uint64_t h = rand() & (64 * 1024 - 1);
+                uint64_t h = std::rand() & (64 * 1024 - 1);
                 m.erase(h);
                 int _ = {};
                 garbage_collected_shade(p);

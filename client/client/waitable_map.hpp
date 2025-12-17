@@ -14,7 +14,7 @@
 
 namespace wry {
     
-    template<typename Key, typename T, typename H>
+    template<typename Key, typename T, typename H = DefaultHasher<Key>>
     struct WaitableMap {
         
         // TODO: We are bloating WaitableMap by allocating a waitset pointer
@@ -24,10 +24,10 @@ namespace wry {
         PersistentMap<Key, T> valuemap;
         PersistentMap<Key, PersistentSet<EntityID>> waitset;
          */
-        PersistentMap<Key, std::pair<T, PersistentSet<EntityID, EntityIDHasher>>, H> inner;
+        PersistentMap<Key, std::pair<T, PersistentSet<EntityID>>, H> inner;
         
         bool try_get(Key key, T& victim) const {
-            std::pair<T, PersistentSet<EntityID, EntityIDHasher>> a{};
+            std::pair<T, PersistentSet<EntityID>> a{};
             bool b = inner.try_get(key, a);
             if (b)
                 victim = std::move(a.first);
@@ -35,7 +35,7 @@ namespace wry {
         }
         
         void set(Key key, T desired) {
-            std::pair<T, PersistentSet<EntityID, EntityIDHasher>> a{};
+            std::pair<T, PersistentSet<EntityID>> a{};
             a.first = desired;
             inner.set(key, a);
         }

@@ -33,12 +33,12 @@ namespace wry {
         
         Time _time;
 
-        WaitableMap<Coordinate, EntityID, CoordinateHasher> _entity_id_for_coordinate;
-        WaitableMap<EntityID, const Entity*, EntityIDHasher> _entity_for_entity_id;
-        WaitableMap<Coordinate, Value, CoordinateHasher> _value_for_coordinate;
+        WaitableMap<Coordinate, EntityID> _entity_id_for_coordinate;
+        WaitableMap<EntityID, const Entity*> _entity_for_entity_id;
+        WaitableMap<Coordinate, Value> _value_for_coordinate;
         
 
-        PersistentMap<Time, PersistentSet<EntityID, EntityIDHasher>> _waiting_on_time;
+        PersistentMap<Time, PersistentSet<EntityID>> _waiting_on_time;
         
         World()
         : _time{0}
@@ -50,10 +50,10 @@ namespace wry {
         }
         
         World(Time time,
-              WaitableMap<Coordinate, EntityID, CoordinateHasher> entity_id_for_coordinate,
-              WaitableMap<EntityID, const Entity*, EntityIDHasher> entity_for_entity_id,
-              WaitableMap<Coordinate, Value, CoordinateHasher> value_for_coordinate,
-              PersistentMap<Time, PersistentSet<EntityID, EntityIDHasher>> waiting_on_time)
+              WaitableMap<Coordinate, EntityID> entity_id_for_coordinate,
+              WaitableMap<EntityID, const Entity*> entity_for_entity_id,
+              WaitableMap<Coordinate, Value> value_for_coordinate,
+              PersistentMap<Time, PersistentSet<EntityID>> waiting_on_time)
         : _time(time)
         , _entity_id_for_coordinate(entity_id_for_coordinate)
         , _entity_for_entity_id(entity_for_entity_id)

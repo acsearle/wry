@@ -17,6 +17,7 @@
 #include "concurrent_map.hpp"
 #include "utility.hpp"
 #include "coroutine.hpp"
+#include "hash.hpp"
 
 namespace wry {
         
@@ -37,16 +38,7 @@ namespace wry {
     // TODO: bottom-up rebuild
     
     
-    template<typename Key>
-    struct TrivialHasher {
-        using key_type = Key;
-        using hash_type = std::make_unsigned_t<Key>;
-        hash_type hash(key_type key) const { return key; }
-        key_type unhash(hash_type z) const { return z; }
-    };
-    
-    
-    template<typename Key, typename T, typename H = TrivialHasher<Key>>
+    template<typename Key, typename T, typename H = DefaultHasher<Key>>
     struct PersistentMap {
         
         using U = typename H::hash_type;

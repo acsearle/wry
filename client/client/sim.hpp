@@ -81,7 +81,8 @@ namespace wry {
 //        return key;
 //    }
     
-    struct CoordinateHasher {
+    template<>
+    struct DefaultHasher<Coordinate> {
         using key_type = Coordinate;
         using hash_type = uint64_t;
         constexpr hash_type hash(key_type xy) {

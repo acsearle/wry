@@ -15,12 +15,13 @@
 #include "array_mapped_trie.hpp"
 #include "utility.hpp"
 #include "coroutine.hpp"
+#include "hash.hpp"
 
 namespace wry {
     
     using Coroutine::Task;
         
-    template<typename Key, typename H>
+    template<typename Key, typename H = DefaultHasher<Key>>
     struct PersistentSet {
         
         using U = typename H::hash_type;

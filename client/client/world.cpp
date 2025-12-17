@@ -39,8 +39,8 @@ namespace wry {
         
         // Take the set of EntityIDs that are ready to run
         
-        PersistentSet<EntityID, EntityIDHasher> ready;
-        PersistentMap<Time, PersistentSet<EntityID, EntityIDHasher>> new_waiting_on_time = _waiting_on_time.clone_and_try_erase(_time, ready).first;
+        PersistentSet<EntityID> ready;
+        PersistentMap<Time, PersistentSet<EntityID>> new_waiting_on_time = _waiting_on_time.clone_and_try_erase(_time, ready).first;
         ConcurrentSkiplistSet<EntityID> next_ready;
 
         // In parallel, notify each Entity.  Entities will typically examine
@@ -61,15 +61,15 @@ namespace wry {
         // implementing the resulting mutations
         
        
-        WaitableMap<Coordinate, Value, CoordinateHasher> new_value_for_coordinate;
-        WaitableMap<Coordinate, EntityID, CoordinateHasher> new_entity_id_for_coordinate;
-        WaitableMap<EntityID, Entity const*, EntityIDHasher> new_entity_for_entity_id;
+        WaitableMap<Coordinate, Value> new_value_for_coordinate;
+        WaitableMap<Coordinate, EntityID> new_entity_id_for_coordinate;
+        WaitableMap<EntityID, Entity const*> new_entity_for_entity_id;
 
                 
         auto value_for_coordinate_action
         = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID, EntityIDHasher>>>> {
+        -> Coroutine::Future<ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>>> {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
@@ -86,8 +86,8 @@ namespace wry {
                     waiters.push_back(candidate->_parent->_entity->_entity_id);
                 }
             }
-            using P = std::pair<Value, PersistentSet<EntityID, EntityIDHasher>>;
-            using A = ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID, EntityIDHasher>>>;
+            using P = std::pair<Value, PersistentSet<EntityID>>;
+            using A = ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>>;
             A result = {};
             if (writer) {
                 assert(writer->_operation & Transaction::Operation::WRITE_ON_COMMIT);
@@ -125,7 +125,7 @@ namespace wry {
         auto action_for_entity_id_for_coordinate
         = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID, EntityIDHasher>>>> {
+        -> Coroutine::Future<ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>>> {
             //printf("Rebuild entity_id_for_coordinate %d %d\n", kv.first.x, kv.first.y);
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
@@ -143,7 +143,7 @@ namespace wry {
                     waiters.push_back(candidate->_parent->_entity->_entity_id);
                 }
             }
-            using P = std::pair<EntityID, PersistentSet<EntityID, EntityIDHasher>>;
+            using P = std::pair<EntityID, PersistentSet<EntityID>>;
             using A = ParallelRebuildAction<P>;
             A result = {};
             if (writer) {
@@ -183,7 +183,7 @@ namespace wry {
         auto action_for_entity_for_entity_id
         = [this, &next_ready]
         (const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID, EntityIDHasher>>>> {
+        -> Coroutine::Future<ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID>>>> {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
@@ -200,7 +200,7 @@ namespace wry {
                     waiters.push_back(candidate->_parent->_entity->_entity_id);
                 }
             }
-            using P = std::pair<Entity const*, PersistentSet<EntityID, EntityIDHasher>>;
+            using P = std::pair<Entity const*, PersistentSet<EntityID>>;
             using A = ParallelRebuildAction<P>;
             A result{};
             if (writer) {
@@ -239,11 +239,11 @@ namespace wry {
         auto action_for_waiting_on_time
         = [new_waiting_on_time, this]
         (const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<ParallelRebuildAction<PersistentSet<EntityID, EntityIDHasher>>> {
+        -> Coroutine::Future<ParallelRebuildAction<PersistentSet<EntityID>>> {
             // TODO: We need to special-case waits for new_time
             assert(kv.first > _time);
-            ParallelRebuildAction<PersistentSet<EntityID, EntityIDHasher>> result{};
-            result.tag = ParallelRebuildAction<PersistentSet<EntityID, EntityIDHasher>>::WRITE_VALUE;
+            ParallelRebuildAction<PersistentSet<EntityID>> result{};
+            result.tag = ParallelRebuildAction<PersistentSet<EntityID>>::WRITE_VALUE;
             new_waiting_on_time.try_get(kv.first, result.value);
             const Transaction::Node* head = kv.second.load(Ordering::RELAXED);
             for (; head; head = head->_next) {
@@ -291,7 +291,7 @@ namespace wry {
         // is serial and wasteful; we should direct write all these things into
         // a concurrent-map-ified next_ready and hold it over to the next step
         {
-            PersistentSet<EntityID, EntityIDHasher> v{};
+            PersistentSet<EntityID> v{};
             (void) new_waiting_on_time.try_get(new_time, v);
             for (auto key : next_ready) {
                 v.set(key);

@@ -279,13 +279,20 @@ namespace wry {
         return hashed_str(str);
     }
     
-    // TODO: reversible hash
-    // - For hash tables whose members are (nonnull) pointers, we could
-    //   - store only the pointers and hash on demand
-    //   - store only a reversible hash of the pointers and reverse on demand
-    //   - work entirely with the hash as an ID with high entropy, only reversing
-    //     it when we need to load through the pointer
         
+    
+    
+    template<typename>
+    struct DefaultHasher;
+    
+    template<std::integral T>
+    struct DefaultHasher<T> {
+        using key_type = T;
+        using hash_type = std::make_unsigned_t<T>;
+        hash_type hash(key_type key) const { return key; }
+        key_type unhash(hash_type z) const { return z; }
+    };    
+    
 } // namespace wry
 
 #endif /* hash_hpp */
