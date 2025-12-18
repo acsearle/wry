@@ -39,6 +39,14 @@ namespace wry {
         
 
         PersistentMap<Time, PersistentSet<EntityID>> _waiting_on_time;
+        // PersistentSet<std::pair<Time, EntityID>>
+        // PersistentSet<std::pair<Coordinate, EntityID>>
+        
+        // TODO: We need a PersistentMultiMap
+        // A waitable MultiMap
+        
+        // Converting keys to integers must be endian-savvy
+        
         
         World()
         : _time{0}

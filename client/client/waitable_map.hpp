@@ -14,7 +14,7 @@
 
 namespace wry {
     
-    template<typename Key, typename T, typename H = DefaultHasher<Key>>
+    template<typename Key, typename T, typename H = DefaultKeyService<Key>>
     struct WaitableMap {
         
         // TODO: We are bloating WaitableMap by allocating a waitset pointer
@@ -25,6 +25,7 @@ namespace wry {
         PersistentMap<Key, PersistentSet<EntityID>> waitset;
          */
         PersistentMap<Key, std::pair<T, PersistentSet<EntityID>>, H> inner;
+        // PersistentSet<std::pair<Key, EntityID>>
         
         bool try_get(Key key, T& victim) const {
             std::pair<T, PersistentSet<EntityID>> a{};

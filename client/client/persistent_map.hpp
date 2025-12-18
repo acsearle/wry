@@ -38,7 +38,7 @@ namespace wry {
     // TODO: bottom-up rebuild
     
     
-    template<typename Key, typename T, typename H = DefaultHasher<Key>>
+    template<typename Key, typename T, typename H = DefaultKeyService<Key>>
     struct PersistentMap {
         
         using U = typename H::hash_type;

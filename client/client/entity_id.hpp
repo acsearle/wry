@@ -29,21 +29,27 @@ namespace wry {
         return hash_combine(&x, sizeof(x));
     }
     
-    template<typename> struct DefaultHasher;
+    template<typename> struct DefaultKeyService;
     
     
     template<>
-    struct DefaultHasher<EntityID> {
+    struct DefaultKeyService<EntityID> {
         using key_type = EntityID;
         using hash_type = uint64_t;
+        
         constexpr hash_type hash(key_type key) const {
             return key.data;
         }
+        
         constexpr key_type unhash(hash_type h) const {
             return EntityID{.data = h};
         }
-
         
+        constexpr bool compare(key_type a, key_type b) const {
+            return hash(a) < hash(b);
+        }
+
+    
     };
     
     

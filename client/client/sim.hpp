@@ -82,17 +82,25 @@ namespace wry {
 //    }
     
     template<>
-    struct DefaultHasher<Coordinate> {
+    struct DefaultKeyService<Coordinate> {
+        
         using key_type = Coordinate;
         using hash_type = uint64_t;
-        constexpr hash_type hash(key_type xy) {
+        
+        constexpr hash_type hash(key_type xy) const {
             return xy.data();
         }
-        constexpr key_type unhash(hash_type h) {
+        
+        constexpr key_type unhash(hash_type h) const {
             Coordinate key = {};
             __builtin_memcpy(&key, &h, 8); // constexpr
             return key;
         }
+        
+        constexpr bool compare(key_type a, key_type b) const {
+            return hash(a) < hash(b);
+        }
+        
     };
 
     

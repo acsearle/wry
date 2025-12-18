@@ -16,6 +16,7 @@
 #include "garbage_collected.hpp"
 #include "epoch_allocator.hpp"
 #include "utility.hpp"
+#include "key_service.hpp"
 
 namespace wry {
     
@@ -23,7 +24,7 @@ namespace wry {
         
     inline constinit thread_local std::ranlux24* _Nullable thread_local_random_number_generator = nullptr;
     
-    template<typename Key, typename Compare = std::less<Key>, typename IntrusiveAllocator = EpochAllocated>
+    template<typename Key, typename H = DefaultKeyService<Key>, typename IntrusiveAllocator = EpochAllocated>
     struct ConcurrentSkiplistSet {
         
         struct Node;
@@ -229,12 +230,12 @@ namespace wry {
             Atomic<Node*> const* _Nonnull left = _head->_next + i;
             for (;;) {
                 Node* candidate = left->load(Ordering::ACQUIRE);
-                if (!candidate || Compare()(query, candidate->_key)) {
+                if (!candidate || H{}.compare(query, candidate->_key)) {
                     if (i == 0)
                         return iterator{nullptr};
                     --i;
                     --left;
-                } else if (Compare()(candidate->_key, query)) {
+                } else if (H{}.compare(candidate->_key, query)) {
                     left = candidate->_next + i;
                 } else {
                     return iterator{candidate};
@@ -250,7 +251,7 @@ namespace wry {
         alpha:
             // TODO: this is the only place we need to implement a write barrier
             assert(left && desired);
-            assert(!expected || (Compare()(desired->_key, expected->_key)));
+            assert(!expected || (H{}.compare(desired->_key, expected->_key)));
             desired->_next[i].store(expected, Ordering::RELEASE);
             if (left->compare_exchange_strong(expected,
                                               desired,
@@ -258,9 +259,9 @@ namespace wry {
                                               Ordering::ACQUIRE))
                 return { desired, true };
         beta:
-            if (!expected || (Compare()(desired->_key, expected->_key)))
+            if (!expected || (H{}.compare(desired->_key, expected->_key)))
                 goto alpha;
-            if (!(Compare()(expected->_key, desired->_key)))
+            if (!(H{}.compare(expected->_key, desired->_key)))
                 return std::pair(expected, false);
             left = expected->_next + i;
             expected = left->load(Ordering::ACQUIRE);
@@ -273,14 +274,14 @@ namespace wry {
                                                              auto&&... args) {
         alpha:
             Node* _Nullable candidate = left->load(Ordering::ACQUIRE);
-            if (!candidate || Compare()(keylike, candidate->_key))
+            if (!candidate || H{}.compare(keylike, candidate->_key))
                 goto beta;
-            if (!(Compare()(candidate->_key, keylike)))
+            if (!(H{}.compare(candidate->_key, keylike)))
                 return {candidate, false};
             left = candidate->_next + i;
             goto alpha;
         beta:
-            assert(!candidate || Compare()(keylike, candidate->_key));
+            assert(!candidate || H{}.compare(keylike, candidate->_key));
             if (i == 0) {
                 Node* _Nonnull p = Node::with_random_size_emplace(FORWARD(keylike), FORWARD(args)...);
                 auto result = _link_level(0, left, candidate, p);
@@ -321,12 +322,12 @@ namespace wry {
     }; // concurrent_skiplist<Key, Compare>
     
     
-    template<typename Key, typename T, typename Compare = std::less<Key>>
+    template<typename Key, typename T, typename H = DefaultKeyService<Key>>
     struct ConcurrentSkiplistMap {
         
         using P = std::pair<Key, T>;
         
-        struct ComparePair {
+        struct ComparePair : H {
             
             static decltype(auto) key_if_pair(auto&& keylike) {
                 if constexpr (std::is_same_v<std::decay_t<decltype(keylike)>, P>) {
@@ -336,8 +337,8 @@ namespace wry {
                 }
             }
             
-            bool operator()(auto&& a, auto&& b) const {
-                return Compare()(key_if_pair(FORWARD(a)),
+            bool compare(auto&& a, auto&& b) const {
+                return H{}.compare(key_if_pair(FORWARD(a)),
                                  key_if_pair(FORWARD(b)));
             }
             

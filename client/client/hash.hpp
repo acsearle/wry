@@ -279,20 +279,6 @@ namespace wry {
         return hashed_str(str);
     }
     
-        
-    
-    
-    template<typename>
-    struct DefaultHasher;
-    
-    template<std::integral T>
-    struct DefaultHasher<T> {
-        using key_type = T;
-        using hash_type = std::make_unsigned_t<T>;
-        hash_type hash(key_type key) const { return key; }
-        key_type unhash(hash_type z) const { return z; }
-    };    
-    
 } // namespace wry
 
 #endif /* hash_hpp */
