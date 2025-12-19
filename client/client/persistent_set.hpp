@@ -96,6 +96,7 @@ namespace wry {
         
     }; // PersistentSet
     
+    /*
     template<typename Key, typename H> auto
     merge(PersistentSet<Key, H> const& left, PersistentSet<Key, H> const& right) -> PersistentSet<Key, H> {
         // TODO: this implementation fails to reuse right subtrees
@@ -105,6 +106,7 @@ namespace wry {
         }
         return result;
     }
+     */
     
     
     
@@ -151,6 +153,8 @@ namespace wry {
                 case P::MERGE_VALUE:
                     result.merge(action.value);
                     break;
+                default:
+                    abort();
             }
         }
         co_return result;

@@ -275,7 +275,7 @@ namespace wry {
 
     };
     
-    // STL-compatible allocator
+    // STL-compatible-ish allocator
     template<typename T>
     struct BumpAllocator {
         

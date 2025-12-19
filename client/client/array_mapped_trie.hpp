@@ -377,25 +377,38 @@ namespace wry::array_mapped_trie {
             return new_node;
         }
         
+        KEY_TYPE prefix_mask() const {
+            return PREFIX_MASK << _shift;
+        }
+        
+        static bool prefixes_are_disjoint(Node const* _Nullable a,
+                                          Node const* _Nullable b) {
+            return (a->_prefix ^ b->_prefix) & (a->prefix_mask() & b->prefix_mask());
+        }
+        
+        
         [[nodiscard]] static Node const* _Nullable merge(Node const* _Nullable a, Node const* _Nullable b) {
+            
             if (!b)
                 return a;
+            
             if (!a)
                 return b;
-            KEY_TYPE a_mask = PREFIX_MASK << a->_shift;
-            KEY_TYPE b_mask = PREFIX_MASK << b->_shift;
-            KEY_TYPE delta = a->_prefix ^ b->_prefix;
-            if (delta & (a_mask & b_mask)) {
+            
+            if (prefixes_are_disjoint(a, b)) {
                 // key sets are disjoint
-                int shift = shift_for_keylike_difference(delta);
+                int shift = shift_for_keylike_difference(a->_prefix ^ b->_prefix);
                 assert(shift > a->_shift);
                 assert(shift > b->_shift);
                 Node* c = make(prefix_for_keylike_and_shift(a->_prefix, shift),
-                                      shift, 2, 0);
+                               shift,
+                               2,
+                               0);
                 c->insert_child(a);
                 c->insert_child(b);
                 return c;
             }
+            
             // prefix is common (siblings)
             if ((a->_shift == 0) && (b->_shift == 0)) {
                 assert(a->_prefix == b->_prefix);
@@ -403,21 +416,19 @@ namespace wry::array_mapped_trie {
                 Node* c = make(a->_prefix,
                                0,
                                popcount(c_bitmap),
-                               0);
+                               c_bitmap);
+                auto q = c->_values;
                 while (c_bitmap) {
                     int i = bit::ctz(c_bitmap);
                     BITMAP_TYPE j = (BITMAP_TYPE)1 << i;
-                    T new_value = {};
                     if (a->_bitmap & j) {
                         int k = popcount((j-1) & a->_bitmap);
-                        new_value = a->_values[k];
+                        *q++ = a->_values[k];
                     } else {
                         assert(b->_bitmap & j);
                         int k = popcount((j-1) & b->_bitmap);
-                        new_value = b->_values[k];
+                        *q++ = b->_values[k];
                     }
-                    mutator_overwrote(c);
-                    c->insert_key_value(a->_prefix | i, new_value);
                     c_bitmap ^= j;
                 }
                 return c;
@@ -428,7 +439,8 @@ namespace wry::array_mapped_trie {
                 Node* c = make(a->_prefix,
                                a->_shift,
                                popcount(c_bitmap),
-                               0);
+                               c_bitmap);
+                auto q = c->_children;
                 while (c_bitmap) {
                     int i = bit::ctz(c_bitmap);
                     BITMAP_TYPE j = (BITMAP_TYPE)1 << i;
@@ -443,8 +455,7 @@ namespace wry::array_mapped_trie {
                                      ? merge(new_child, b->_children[k])
                                      : b->_children[k]);
                     }
-                    mutator_overwrote(c);
-                    c->insert_child(new_child);
+                    *q++ = new_child;
                     c_bitmap ^= j;
                 }
                 return c;
@@ -506,7 +517,7 @@ namespace wry::array_mapped_trie {
                                                                         new_node->_children,
                                                                         get_index_for_key(key),
                                                                         new_child);
-            mutator_overwrote(old_child);
+            // mutator_overwrote(old_child);
             return new_node;
         }
         
@@ -520,7 +531,7 @@ namespace wry::array_mapped_trie {
                                                               get_index_for_key(key),
                                                               old_child);
             assert(did_erase);
-            mutator_overwrote(old_child);
+            // mutator_overwrote(old_child);
             --(new_node->_debug_count);
             return new_node;
         }
