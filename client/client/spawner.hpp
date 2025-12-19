@@ -14,6 +14,11 @@ namespace wry {
 
     struct LocalizedEntity : Entity {
         
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
+        }
+
+        
         Coordinate _location = {};
         virtual void _garbage_collected_scan() const override {
         }
@@ -21,12 +26,22 @@ namespace wry {
     };
     
     struct Spawner : LocalizedEntity {
+        
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
+        }
+
                 
         virtual void notify(TransactionContext*) const override;
         
     };
 
     struct Source : LocalizedEntity {
+        
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
+        }
+
         
         Value _of_this;
         
@@ -38,6 +53,11 @@ namespace wry {
     };
 
     struct Sink : LocalizedEntity {
+        
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
+        }
+
                 
         virtual void notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {
@@ -46,12 +66,23 @@ namespace wry {
     };
     
     struct Counter : LocalizedEntity {
+        
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
+        }
+
+        
         virtual void notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {
         }
     };
     
     struct Evenator : LocalizedEntity {
+        
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
+        }
+
         virtual void notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {
         }

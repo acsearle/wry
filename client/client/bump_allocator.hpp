@@ -270,7 +270,7 @@ namespace wry {
         }
 
         void operator delete(void* _Nullable) {
-            abort();
+            // no-op
         }
 
     };

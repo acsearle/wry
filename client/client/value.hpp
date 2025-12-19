@@ -201,6 +201,9 @@ namespace wry {
         virtual ~HeapInt64() final = default;
         std::int64_t as_int64_t() const;
         virtual void _garbage_collected_scan() const override;
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
+        }
     };
     
     

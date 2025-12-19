@@ -20,6 +20,11 @@ namespace wry {
             
     struct Machine : Entity {
         
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
+        }
+
+        
         enum {
             PHASE_TRAVELLING,
             PHASE_WAITING_FOR_OLD,

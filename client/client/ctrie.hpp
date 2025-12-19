@@ -46,6 +46,11 @@ namespace wry {
         };
         
         struct BranchNode : AnyNode {
+            
+            virtual void _garbage_collected_debug() const override {
+                printf("%s\n", __PRETTY_FUNCTION__);
+            }
+
             virtual EraseResult
             _ctrie_bn_erase(const HeapString* key, int level, const INode* in,
                             const CNode* cn, int pos, uint64_t flag) const = 0;
@@ -58,6 +63,11 @@ namespace wry {
         };
         
         struct MainNode : AnyNode {
+            
+            virtual void _garbage_collected_debug() const override {
+                printf("%s\n", __PRETTY_FUNCTION__);
+            }
+
             virtual void _ctrie_mn_clean(int level, const INode* parent) const;
             virtual bool _ctrie_mn_cleanParent(const INode* p, const INode* i, size_t hc, int lev, const MainNode* m) const;
             virtual bool _ctrie_mn_cleanParent2(const INode* p, const INode* i, size_t hc, int lev, const CNode* cn, int pos) const;
@@ -68,6 +78,11 @@ namespace wry {
         };
         
         struct INode : BranchNode {
+            
+            virtual void _garbage_collected_debug() const override {
+                printf("%s\n", __PRETTY_FUNCTION__);
+            }
+
             
             mutable Atomic<const MainNode*> main;
             

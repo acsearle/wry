@@ -127,6 +127,7 @@ namespace wry {
             NONE = 0,
             WRITE_VALUE,
             CLEAR_VALUE,
+            MERGE_VALUE,
         } tag;
         T value;
     };

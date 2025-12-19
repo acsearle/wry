@@ -31,6 +31,11 @@ namespace wry {
     
     struct World : GarbageCollected {
         
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
+        }
+
+        
         Time _time;
 
         WaitableMap<Coordinate, EntityID> _entity_id_for_coordinate;
@@ -38,8 +43,8 @@ namespace wry {
         WaitableMap<Coordinate, Value> _value_for_coordinate;
         
 
-        PersistentMap<Time, PersistentSet<EntityID>> _waiting_on_time;
-        // PersistentSet<std::pair<Time, EntityID>>
+        // PersistentMap<Time, PersistentSet<EntityID>> _waiting_on_time;
+        PersistentSet<std::pair<Time, EntityID>> _waiting_on_time;
         // PersistentSet<std::pair<Coordinate, EntityID>>
         
         // TODO: We need a PersistentMultiMap
@@ -61,7 +66,7 @@ namespace wry {
               WaitableMap<Coordinate, EntityID> entity_id_for_coordinate,
               WaitableMap<EntityID, const Entity*> entity_for_entity_id,
               WaitableMap<Coordinate, Value> value_for_coordinate,
-              PersistentMap<Time, PersistentSet<EntityID>> waiting_on_time)
+              PersistentSet<std::pair<Time, EntityID>> waiting_on_time)
         : _time(time)
         , _entity_id_for_coordinate(entity_id_for_coordinate)
         , _entity_for_entity_id(entity_for_entity_id)

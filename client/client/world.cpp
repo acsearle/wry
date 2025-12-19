@@ -39,16 +39,17 @@ namespace wry {
         
         // Take the set of EntityIDs that are ready to run
         
-        PersistentSet<EntityID> ready;
-        PersistentMap<Time, PersistentSet<EntityID>> new_waiting_on_time = _waiting_on_time.clone_and_try_erase(_time, ready).first;
+        PersistentSet<std::pair<Time, EntityID>> ready ;
+        PersistentSet<std::pair<Time, EntityID>> new_waiting_on_time;
+        std::tie(ready, new_waiting_on_time) = partition_first(_waiting_on_time, _time);
         ConcurrentSkiplistSet<EntityID> next_ready;
 
         // In parallel, notify each Entity.  Entities will typically examine
         // the World and may propose a Transaction to change it.
 
-        auto action_for_ready = [this, &context](EntityID entity_id) {
+        auto action_for_ready = [this, &context](std::pair<Time, EntityID> kv) {
             const Entity* a = nullptr;
-            (void) _entity_for_entity_id.try_get(entity_id, a);
+            (void) _entity_for_entity_id.try_get(kv.second, a);
             assert(a);
             a->notify(&context);
         };
@@ -239,19 +240,19 @@ namespace wry {
         auto action_for_waiting_on_time
         = [new_waiting_on_time, this]
         (const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<ParallelRebuildAction<PersistentSet<EntityID>>> {
+        -> Coroutine::Future<ParallelRebuildAction<PersistentSet<std::pair<Time, EntityID>>>> {
             // TODO: We need to special-case waits for new_time
             assert(kv.first > _time);
-            ParallelRebuildAction<PersistentSet<EntityID>> result{};
-            result.tag = ParallelRebuildAction<PersistentSet<EntityID>>::WRITE_VALUE;
-            new_waiting_on_time.try_get(kv.first, result.value);
+            ParallelRebuildAction<PersistentSet<std::pair<Time, EntityID>>> result{};
+            result.tag = ParallelRebuildAction<PersistentSet<std::pair<Time, EntityID>>>::MERGE_VALUE;
+            // new_waiting_on_time.try_get(kv.first, result.value);
             const Transaction::Node* head = kv.second.load(Ordering::RELAXED);
             for (; head; head = head->_next) {
                 using std::get;
                 EntityID entity_id = get<EntityID>(head->_desired);
                 // State and Condition are bit-compatible
                 if (head->resolve() & head->_operation)
-                    result.value.set(entity_id);
+                    result.value.set({kv.first, entity_id});
             }
             co_return result;
         };
@@ -291,12 +292,13 @@ namespace wry {
         // is serial and wasteful; we should direct write all these things into
         // a concurrent-map-ified next_ready and hold it over to the next step
         {
-            PersistentSet<EntityID> v{};
-            (void) new_waiting_on_time.try_get(new_time, v);
+            // PersistentSet<EntityID> v{};
+            // (void) new_waiting_on_time.try_get(new_time, v);
             for (auto key : next_ready) {
-                v.set(key);
+                // v.set(key);
+                new_waiting_on_time.set({new_time, key});
             }
-            new_waiting_on_time.set(new_time, v);
+            // new_waiting_on_time.set(new_time, v);
         }
         
         

@@ -16,6 +16,11 @@ namespace wry {
         
     struct Player : Entity {
         
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
+        }
+
+        
         struct Action {
             enum Tag {
                 NONE,

@@ -14,6 +14,7 @@
 #include "garbage_collected.hpp"
 #include "variant.hpp"
 #include "coroutine.hpp"
+#include "bit.hpp"
 
 
 namespace wry::array_mapped_trie {
@@ -29,6 +30,11 @@ namespace wry::array_mapped_trie {
     typename BITMAP_TYPE = uint64_t,
     uint32_t SYMBOL_WIDTH = 4>
     struct Node : GarbageCollected {
+        
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
+        }
+
         
         static constexpr size_t KEY_WIDTH = sizeof(KEY_TYPE) * CHAR_BIT;
         static constexpr size_t BITMAP_WIDTH = sizeof(BITMAP_TYPE) * CHAR_BIT;
@@ -371,6 +377,110 @@ namespace wry::array_mapped_trie {
             return new_node;
         }
         
+        [[nodiscard]] static Node const* _Nullable merge(Node const* _Nullable a, Node const* _Nullable b) {
+            if (!b)
+                return a;
+            if (!a)
+                return b;
+            KEY_TYPE a_mask = PREFIX_MASK << a->_shift;
+            KEY_TYPE b_mask = PREFIX_MASK << b->_shift;
+            KEY_TYPE delta = a->_prefix ^ b->_prefix;
+            if (delta & (a_mask & b_mask)) {
+                // key sets are disjoint
+                int shift = shift_for_keylike_difference(delta);
+                assert(shift > a->_shift);
+                assert(shift > b->_shift);
+                Node* c = make(prefix_for_keylike_and_shift(a->_prefix, shift),
+                                      shift, 2, 0);
+                c->insert_child(a);
+                c->insert_child(b);
+                return c;
+            }
+            // prefix is common (siblings)
+            if ((a->_shift == 0) && (b->_shift == 0)) {
+                assert(a->_prefix == b->_prefix);
+                BITMAP_TYPE c_bitmap = a->_bitmap | b->_bitmap;
+                Node* c = make(a->_prefix,
+                               0,
+                               popcount(c_bitmap),
+                               0);
+                while (c_bitmap) {
+                    int i = bit::ctz(c_bitmap);
+                    BITMAP_TYPE j = (BITMAP_TYPE)1 << i;
+                    T new_value = {};
+                    if (a->_bitmap & j) {
+                        int k = popcount((j-1) & a->_bitmap);
+                        new_value = a->_values[k];
+                    } else {
+                        assert(b->_bitmap & j);
+                        int k = popcount((j-1) & b->_bitmap);
+                        new_value = b->_values[k];
+                    }
+                    mutator_overwrote(c);
+                    c->insert_key_value(a->_prefix | i, new_value);
+                    c_bitmap ^= j;
+                }
+                return c;
+            }
+            if (a->_shift == b->_shift) {
+                assert(a->_prefix == b->_prefix);
+                BITMAP_TYPE c_bitmap = a->_bitmap | b->_bitmap;
+                Node* c = make(a->_prefix,
+                               a->_shift,
+                               popcount(c_bitmap),
+                               0);
+                while (c_bitmap) {
+                    int i = bit::ctz(c_bitmap);
+                    BITMAP_TYPE j = (BITMAP_TYPE)1 << i;
+                    Node const* _Nullable new_child = nullptr;
+                    if (a->_bitmap & j) {
+                        int k = popcount((j-1) & a->_bitmap);
+                        new_child = a->_children[k];
+                    }
+                    if (b->_bitmap & j) {
+                        int k = popcount((j-1) & b->_bitmap);
+                        new_child = (new_child
+                                     ? merge(new_child, b->_children[k])
+                                     : b->_children[k]);
+                    }
+                    mutator_overwrote(c);
+                    c->insert_child(new_child);
+                    c_bitmap ^= j;
+                }
+                return c;
+            }
+            // prefix is common but level is not
+            if (a->_shift > b->_shift) {
+                Node* _Nullable c = a->clone_with_capacity(popcount(a->_bitmap) + 1);
+                auto i = (b->_prefix >> a->_shift) & INDEX_MASK;
+                auto j = (BITMAP_TYPE)1 << i;
+                if (a->_bitmap & j) {
+                    int k = popcount((j-1) & a->_bitmap);
+                    c->exchange_child(merge(a->_children[k], b));
+                } else {
+                    c->insert_child(b);
+                }
+                return c;
+            }
+
+            if (a->_shift < b->_shift) {
+                Node* _Nullable c = b->clone_with_capacity(popcount(b->_bitmap) + 1);
+                auto i = (a->_prefix >> b->_shift) & INDEX_MASK;
+                auto j = (BITMAP_TYPE)1 << i;
+                if (b->_bitmap & j) {
+                    int k = popcount((j-1) & b->_bitmap);
+                    c->exchange_child(merge(a, b->_children[k]));
+                } else {
+                    c->insert_child(a);
+                }
+                return c;
+            }
+
+            assert(false);
+
+        }
+
+        
         
         [[nodiscard]] Node* _Nonnull clone_and_insert_child(const Node* _Nonnull new_child) const {
             assert(has_children());
@@ -379,13 +489,11 @@ namespace wry::array_mapped_trie {
             Node* _Nonnull new_node = clone_with_capacity(popcount(_bitmap) + 1);
             Node const* _Nullable _ = nullptr;
             ++(new_node->_debug_count);
-            bool did_assign = compressed_array_insert_or_assign_for_index(new_node->_debug_capacity,
-                                                                          new_node->_bitmap,
-                                                                          new_node->_children,
-                                                                          get_index_for_key(key),
-                                                                          new_child,
-                                                                          _);
-            assert(!did_assign);
+            compressed_array_insert_for_index(new_node->_debug_capacity,
+                                              new_node->_bitmap,
+                                              new_node->_children,
+                                              get_index_for_key(key),
+                                              new_child);
             return new_node;
         }
         
@@ -561,42 +669,57 @@ namespace wry::array_mapped_trie {
             co_await nursery.join();
         }
         
-        
-        template<typename Iterator> [[nodiscard]] static
-        Node const* _Nullable
-        _batch_insert(Node const* _Nullable root, KEY_TYPE prefix, int shift, Iterator first, Iterator last) {
-            if (first == last)
-                return root;
-            auto [key, value] = *first;
-            assert(key > prefix);
-            
-            
-        }
+      
         
         
         
-        // Given a trie, return two tries, partition according to prefix
-        std::pair<Node const* _Nullable, Node const* _Nullable> static
-        partition(Node const* _Nullable node, KEY_TYPE key, int shift) {
+        static std::pair<Node const* _Nullable, Node const* _Nullable>
+        partition_mask(Node const* _Nullable node,
+                                   KEY_TYPE key,
+                                   KEY_TYPE mask) {
             if (!node)
-                return { nullptr, nullptr };
+                return {nullptr, nullptr};
             
-            if ((node->_prefix ^ key) >> (max(node->_shift, shift))) {
-                // The prefixes are disjoint
+            auto mask2 = PREFIX_MASK << node->_shift;
+            if ((node->_prefix ^ key) & mask2 & mask) {
+                // The prefix is incompatible
                 return { nullptr, node };
             }
-            
-            if (node->_shift < shift) {
-                // Node is entirely within the filter
-                return {node, nullptr};
+
+            if (!(~mask2 & mask)) {
+                // The prefix is compatible and no other bits are considered
+                return { node, nullptr };
             }
             
-            
-            
-            
+            // Build the output:
+            std::pair<Node const* _Nullable, Node const* _Nullable> result{};
+
+            assert(node->has_children());
+            auto n = __builtin_popcountg(node->_bitmap);
+            auto p = node->_children;
+            for (; n--; ++p) {
+                auto [a, b] = partition_mask(*p, key, mask);
+                if (a) {
+                    if (result.first) {
+                        mutator_overwrote(result.first);
+                        result.first = merge(result.first, a);
+                    } else {
+                        result.first = a;
+                    }
+                }
+                if (b) {
+                    if (result.second) {
+                        mutator_overwrote(result.second);
+                        result.second = merge(result.second, b);
+                    } else {
+                        result.second = b;
+                    }
+                }
+            }
+            return result;
+
         }
-        
-        
+                
         
         
     }; // Node
@@ -616,6 +739,9 @@ namespace wry::array_mapped_trie {
                 print(s->_children[i]);
         }
     }
+    
+    
+    
     
 } // namespace wry::array_mapped_trie
 

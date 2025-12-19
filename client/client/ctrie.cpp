@@ -18,6 +18,11 @@ namespace wry {
         
         struct CNode : MainNode {
             
+            virtual void _garbage_collected_debug() const override {
+                printf("%s\n", __PRETTY_FUNCTION__);
+            }
+
+            
             static void* operator new(size_t fixed, size_t variable);
             
             static const CNode* make(int num);
@@ -49,6 +54,11 @@ namespace wry {
         
         struct LNode : MainNode {
             
+            virtual void _garbage_collected_debug() const override {
+                printf("%s\n", __PRETTY_FUNCTION__);
+            }
+
+            
             HeapString const* sn;
             LNode const* next;
             
@@ -70,6 +80,11 @@ namespace wry {
         
         
         struct TNode : MainNode {
+            
+            virtual void _garbage_collected_debug() const override {
+                printf("%s\n", __PRETTY_FUNCTION__);
+            }
+
             
             HeapString const* sn;
             

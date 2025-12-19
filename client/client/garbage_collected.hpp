@@ -96,7 +96,7 @@ namespace wry {
         constexpr std::strong_ordering operator<=>(const GarbageCollected&);
         constexpr bool operator==(const GarbageCollected&);
         
-        virtual void _garbage_collected_debug() const;
+        virtual void _garbage_collected_debug() const = 0;
         virtual void _garbage_collected_shade() const;
         virtual void _garbage_collected_scan() const = 0;
         

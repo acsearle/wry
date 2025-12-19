@@ -21,6 +21,11 @@ namespace wry {
         
         struct Node : GarbageCollected {
             
+            virtual void _garbage_collected_debug() const override {
+                printf("%s\n", __PRETTY_FUNCTION__);
+            }
+
+            
             Node const* _Nullable _next;
             T _payload;
             

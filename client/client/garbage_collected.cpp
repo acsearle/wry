@@ -27,17 +27,6 @@
 #include "test.hpp"
 
 #define dump(X) printf("C0.%d: %016llx = " #X "\n", __LINE__, (X));
-namespace wry {
-    
-    // TODO: are these methods better off being abstract?
-        
-    void GarbageCollected::_garbage_collected_debug() const {
-        abort();
-    }
-                
-} // namespace wry
-
-
 
 namespace wry {
     
@@ -471,6 +460,7 @@ namespace wry {
                         dump(did_set);
                         dump(did_set & HIGH_MASK);
                         dump(before & _mask_for_deleting);
+                        object->_garbage_collected_debug();
                         abort();
                     }
                     survivors.push(std::move(object));
