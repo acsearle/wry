@@ -1148,8 +1148,8 @@
         
         // kludge out the contents of the entity mapping
         std::vector<Entity const*> ptrs;
-        entities.inner.parallel_for_each([&ptrs](auto&& k, auto&& v) {
-            ptrs.push_back(v.first);
+        entities.kv.parallel_for_each([&ptrs](auto&& k, auto&& v) {
+            ptrs.push_back(v);
         });
         // TODO:
         // Make a new entity-coordinate table that doesn't imply exclusive

@@ -70,9 +70,14 @@ namespace wry {
         auto value_for_coordinate_action
         = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>>> {
+        -> Coroutine::Future<std::pair<ParallelRebuildAction<Value>, ParallelRebuildAction<std::vector<EntityID>>>> {
+            
+            using A = std::pair<ParallelRebuildAction<Value>, ParallelRebuildAction<std::vector<EntityID>>>;
+            
+            A result = {};
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
+            
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
                  candidate != nullptr;
                  candidate = candidate->_next)
@@ -87,37 +92,30 @@ namespace wry {
                     waiters.push_back(candidate->_parent->_entity->_entity_id);
                 }
             }
-            using P = std::pair<Value, PersistentSet<EntityID>>;
-            using A = ParallelRebuildAction<std::pair<Value, PersistentSet<EntityID>>>;
-            A result = {};
+            
             if (writer) {
                 assert(writer->_operation & Transaction::Operation::WRITE_ON_COMMIT);
-                P b;
-                b.first = get<Value>(writer->_desired);
+                result.first.value = get<Value>(writer->_desired);
+                result.first.tag = ParallelRebuildAction<Value>::WRITE_VALUE;
                 if (writer->_operation & Transaction::Operation::WAIT_ON_COMMIT) {
-                    b.second.set(writer->_parent->_entity->_entity_id);
+                    result.second.value.push_back(writer->_parent->_entity->_entity_id);
+                    result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::WRITE_VALUE;
+                } else {
+                    result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::CLEAR_VALUE;
                 }
-                result.tag = A::WRITE_VALUE;
-                result.value = b;
-                // Publish new and old waiters somewhere
-                
-                P c{};
-                (void) _value_for_coordinate.inner.try_get(kv.first, c);
-                co_await c.second.coroutine_parallel_for_each([&next_ready](EntityID key) {
-                    next_ready.try_emplace(key);
+                for_each_if_first(_value_for_coordinate.ki,
+                                  kv.first,
+                                  [coordinate=kv.first, &next_ready](std::pair<Coordinate, EntityID> key) {
+                    assert(key.first == coordinate);
+                    next_ready.try_emplace(key.second);
                 });
                 for (EntityID key : waiters) {
                     next_ready.try_emplace(key);
                 }
                 
             } else if (!waiters.empty()) {
-                P b{};
-                (void) _value_for_coordinate.inner.try_get(kv.first, b);
-                // b now represents the old state, which may have been nil
-                for (EntityID key : waiters)
-                    b.second.set(key);
-                result.tag = A::WRITE_VALUE;
-                result.value = b;
+                result.second.value = std::move(waiters);
+                result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::MERGE_VALUE;
             }
             co_return result;
         };
@@ -126,10 +124,14 @@ namespace wry {
         auto action_for_entity_id_for_coordinate
         = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<ParallelRebuildAction<std::pair<EntityID, PersistentSet<EntityID>>>> {
-            //printf("Rebuild entity_id_for_coordinate %d %d\n", kv.first.x, kv.first.y);
+        -> Coroutine::Future<std::pair<ParallelRebuildAction<EntityID>, ParallelRebuildAction<std::vector<EntityID>>>> {
+            
+            using A = std::pair<ParallelRebuildAction<EntityID>, ParallelRebuildAction<std::vector<EntityID>>>;
+            
+            A result = {};
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
+            
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
                  candidate != nullptr;
                  candidate = candidate->_next)
@@ -144,38 +146,30 @@ namespace wry {
                     waiters.push_back(candidate->_parent->_entity->_entity_id);
                 }
             }
-            using P = std::pair<EntityID, PersistentSet<EntityID>>;
-            using A = ParallelRebuildAction<P>;
-            A result = {};
+            
             if (writer) {
-                P b;
-                b.first = get<EntityID>(writer->_desired);
-                //printf("Writing %lld\n", b.first.data);
+                assert(writer->_operation & Transaction::Operation::WRITE_ON_COMMIT);
+                result.first.value = get<EntityID>(writer->_desired);
+                result.first.tag = ParallelRebuildAction<EntityID>::WRITE_VALUE;
                 if (writer->_operation & Transaction::Operation::WAIT_ON_COMMIT) {
-                    b.second.set(writer->_parent->_entity->_entity_id);
+                    result.second.value.push_back(writer->_parent->_entity->_entity_id);
+                    result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::WRITE_VALUE;
+                } else {
+                    result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::CLEAR_VALUE;
                 }
-                result.tag = A::WRITE_VALUE;
-                result.value = b;
-                // Publish new and old waiters somewhere
-                
-                P c{};
-                (void) _entity_id_for_coordinate.inner.try_get(kv.first, c);
-                co_await c.second.coroutine_parallel_for_each([&next_ready](EntityID key) {
-                    next_ready.try_emplace(key);
+                for_each_if_first(_entity_id_for_coordinate.ki,
+                                  kv.first,
+                                  [coordinate=kv.first, &next_ready](std::pair<Coordinate, EntityID> key) {
+                    assert(key.first == coordinate);
+                    next_ready.try_emplace(key.second);
                 });
                 for (EntityID key : waiters) {
                     next_ready.try_emplace(key);
                 }
-
                 
             } else if (!waiters.empty()) {
-                P b{};
-                (void) _entity_id_for_coordinate.inner.try_get(kv.first, b);
-                // b now represents the old state, which may have been nil
-                for (EntityID key : waiters)
-                    b.second.set(key);
-                result.tag = A::WRITE_VALUE;
-                result.value = b;
+                result.second.value = std::move(waiters);
+                result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::MERGE_VALUE;
             }
             co_return result;
         };
@@ -184,9 +178,14 @@ namespace wry {
         auto action_for_entity_for_entity_id
         = [this, &next_ready]
         (const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<ParallelRebuildAction<std::pair<Entity const*, PersistentSet<EntityID>>>> {
+        -> Coroutine::Future<std::pair<ParallelRebuildAction<Entity const*>, ParallelRebuildAction<std::vector<EntityID>>>> {
+            
+            using A = std::pair<ParallelRebuildAction<Entity const*>, ParallelRebuildAction<std::vector<EntityID>>>;
+            
+            A result = {};
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
+            
             for (auto candidate = kv.second.load(Ordering::ACQUIRE);
                  candidate != nullptr;
                  candidate = candidate->_next)
@@ -201,38 +200,30 @@ namespace wry {
                     waiters.push_back(candidate->_parent->_entity->_entity_id);
                 }
             }
-            using P = std::pair<Entity const*, PersistentSet<EntityID>>;
-            using A = ParallelRebuildAction<P>;
-            A result{};
+            
             if (writer) {
-                P b;
-                b.first = get<Entity const*>(writer->_desired);
+                assert(writer->_operation & Transaction::Operation::WRITE_ON_COMMIT);
+                result.first.value = get<Entity const*>(writer->_desired);
+                result.first.tag = ParallelRebuildAction<Entity const*>::WRITE_VALUE;
                 if (writer->_operation & Transaction::Operation::WAIT_ON_COMMIT) {
-                    b.second.set(writer->_parent->_entity->_entity_id);
+                    result.second.value.push_back(writer->_parent->_entity->_entity_id);
+                    result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::WRITE_VALUE;
+                } else {
+                    result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::CLEAR_VALUE;
                 }
-                result.tag = A::WRITE_VALUE;
-                result.value = b;
-                // Publish new and old waiters somewhere
-                
-                P c{};
-                (void) _entity_for_entity_id.inner.try_get(kv.first, c);
-                co_await c.second.coroutine_parallel_for_each([&next_ready](EntityID key) {
-                    next_ready.try_emplace(key);
+                for_each_if_first(_entity_for_entity_id.ki,
+                                  kv.first,
+                                  [coordinate=kv.first, &next_ready](std::pair<EntityID, EntityID> key) {
+                    assert(key.first == coordinate);
+                    next_ready.try_emplace(key.second);
                 });
                 for (EntityID key : waiters) {
                     next_ready.try_emplace(key);
                 }
-
-
                 
             } else if (!waiters.empty()) {
-                P b{};
-                (void) _entity_for_entity_id.inner.try_get(kv.first, b);
-                // b now represents the old state, which may have been nil
-                for (EntityID key : waiters)
-                    b.second.set(key);
-                result.tag = A::WRITE_VALUE;
-                result.value = b;
+                result.second.value = std::move(waiters);
+                result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::MERGE_VALUE;
             }
             co_return result;
         };
@@ -260,17 +251,17 @@ namespace wry {
         Coroutine::Nursery nursery;
         
         co_await nursery.fork(new_value_for_coordinate,
-                              coroutine_parallel_rebuild(_value_for_coordinate,
+                              coroutine_parallel_rebuild2(_value_for_coordinate,
                                                          context._verb_value_for_coordinate,
                                                          value_for_coordinate_action));
         
         co_await nursery.fork(new_entity_id_for_coordinate,
-                              coroutine_parallel_rebuild(_entity_id_for_coordinate,
+                              coroutine_parallel_rebuild2(_entity_id_for_coordinate,
                                                          context._verb_entity_id_for_coordinate,
                                                          action_for_entity_id_for_coordinate));
         
         co_await nursery.fork(new_entity_for_entity_id,
-                              coroutine_parallel_rebuild(_entity_for_entity_id,
+                              coroutine_parallel_rebuild2(_entity_for_entity_id,
                                                          context._verb_entity_for_entity_id,
                                                          action_for_entity_for_entity_id));
         

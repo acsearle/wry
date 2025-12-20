@@ -92,7 +92,6 @@ namespace wry {
             mutator_overwrote(_inner);
             _inner = N::merge(_inner, other._inner);
         }
-
         
     }; // PersistentSet
     
@@ -129,6 +128,47 @@ namespace wry {
         result.second._inner = c.second;
         return result;
     };
+    
+    template<typename A, typename B, typename H, typename F>
+    void for_each_if_first(PersistentSet<std::pair<A, B>, H> const& x, A a, F&& action) {
+        using Key = std::pair<A, B>;
+        using S = PersistentSet<Key, H>;
+        auto z = H{}.hash(Key{a, B{}});
+        auto mask = H{}.mask_first();
+        x._inner->for_each_mask(x._inner, z, mask, [action=std::move(action)](H::hash_type key, int dummy) {
+            return action(H{}.unhash(key));
+        });
+    }
+    
+    template<typename A, typename B, typename H>
+    PersistentSet<std::pair<A, B>, H>
+    as_multimap_erase(PersistentSet<std::pair<A, B>, H> const& x, A a) {
+        using Key = std::pair<A, B>;
+        using S = PersistentSet<Key, H>;
+        auto z = H{}.hash(Key{a, B{}});
+        auto mask = H{}.mask_first();
+        auto c = x._inner->partition_mask(x._inner, z, mask);
+        return S{c.second};
+    };
+
+    template<typename A, typename B, typename H>
+    PersistentSet<std::pair<A, B>, H>
+    as_multimap_merge(PersistentSet<std::pair<A, B>, H> const& x, A a, std::vector<B> values) {
+        auto y = x;
+        for (auto v : values) {
+            y.set({a, v});
+        }
+        return y;
+    };
+
+    template<typename A, typename B, typename H>
+    PersistentSet<std::pair<A, B>, H>
+    as_multimap_replace(PersistentSet<std::pair<A, B>, H> const& x, A a, std::vector<B> values) {
+        return as_multimap_merge(as_multimap_erase(x, a), a, std::move(values));
+    };
+
+    
+    
     
     template<typename Key, typename H, typename Key2, typename U, typename F>
     Coroutine::Future<PersistentSet<Key, H>>

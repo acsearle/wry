@@ -681,6 +681,28 @@ namespace wry::array_mapped_trie {
         }
         
       
+        template<typename Action>
+        static void for_each_mask(Node const* _Nullable node, KEY_TYPE key, KEY_TYPE mask, Action&& action) {
+            if (!node)
+                return;
+            if ((node->_prefix ^ key) & (node->prefix_mask() & mask))
+                return;
+            BITMAP_TYPE a = node->_bitmap;
+            KEY_TYPE m = (INDEX_MASK << node->_shift) & mask;
+            for (; a; a &= (a-1)) {
+                int i = bit::ctz(a);
+                auto key2 = ((KEY_TYPE)i << node->_shift) | node->_prefix;
+                if ((key2 ^ key) & m)
+                    continue;
+                BITMAP_TYPE j = (BITMAP_TYPE)1 << i;
+                int k = popcount(node->_bitmap & (j-1));
+                if (node->has_children()) {
+                    for_each_mask(node->_children[k], key, mask, action);
+                } else {
+                    action(key2, node->_values[k]);
+                }
+            }
+        }
         
         
         
@@ -730,6 +752,8 @@ namespace wry::array_mapped_trie {
             return result;
 
         }
+        
+        
                 
         
         

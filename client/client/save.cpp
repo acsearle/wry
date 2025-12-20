@@ -29,13 +29,14 @@ void save_game(World* world) {
     std::vector<std::pair<Coordinate, EntityID>> c;
     //b.reserve(n);
     
-    a.inner.for_each([&b, &c](auto&& k, auto&& v) {
-        v.second.for_each([k, &c](auto&& k2) {
-            c.emplace_back(k, k2);
-        });
-        b.emplace_back(k, v.first);
+    a.kv.for_each([&b](auto&& k, auto&& v) {
+        b.emplace_back(k, v);
     });
-    
+
+    a.ki.for_each([&c](auto&& kv) {
+        c.emplace_back(kv);
+    });
+
     
     {
         
