@@ -13,8 +13,6 @@
 #include "type_traits.hpp"
 
 namespace wry {
-
-    using bit::popcount;
     
 #pragma mark Mutable compressed array tools
     
@@ -71,7 +69,8 @@ namespace wry {
     
     template<typename BITMAP_TYPE>
     int compressed_array_get_compressed_index_for_index(BITMAP_TYPE bitmap, int index) {
-        return popcount(bitmap & bitmask_below_index<BITMAP_TYPE>(index));
+        using bit::popcount;
+        return popcount((bitmap & bitmask_below_index<BITMAP_TYPE>(index)));
     }
     
     template<typename BITMAP_TYPE, typename T>
@@ -89,6 +88,7 @@ namespace wry {
     
     template<typename BITMAP_TYPE>
     int compressed_array_get_compressed_size(BITMAP_TYPE bitmap) {
+        using bit::popcount;
         return popcount(bitmap);
     }
     

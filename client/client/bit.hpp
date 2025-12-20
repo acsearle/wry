@@ -11,6 +11,7 @@
 #include <climits>
 #include <cstdio>
 #include <bit>
+#include <concepts>
 
 #include "assert.hpp"
 
@@ -20,16 +21,17 @@ namespace wry::bit {
 
     using std::has_single_bit;
     
-    constexpr int popcount(auto x) {
+    template<std::unsigned_integral T>
+    constexpr int popcount(T x) {
         return __builtin_popcountg(x);
     }
     
-    constexpr int clz(uint64_t x) {
+    constexpr int clz(auto x) {
         assert(x);
         return __builtin_clzg(x);
     }
     
-    constexpr int ctz(uint64_t x) {
+    constexpr int ctz(auto x) {
         assert(x);
         return __builtin_ctzg(x);
     }
