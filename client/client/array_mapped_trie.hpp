@@ -90,8 +90,16 @@ namespace wry::array_mapped_trie {
             return !has_children();
         }
         
+        KEY_TYPE get_prefix_mask() const {
+            return PREFIX_MASK << _shift;
+        }
+        
+        KEY_TYPE get_index_mask() const {
+            return INDEX_MASK << _shift;
+        }
+        
         bool prefix_includes_key(KEY_TYPE key) const {
-            return _prefix == (key & (~INDEX_MASK << _shift));
+            return _prefix == (key & get_prefix_mask());
         }
         
         int get_index_for_key(KEY_TYPE key) const {
@@ -112,7 +120,12 @@ namespace wry::array_mapped_trie {
             int index = get_index_for_key(key);
             return get_compressed_index_for_index(index);
         }
-        
+                
+        static bool prefixes_are_disjoint(Node const* _Nullable a,
+                                          Node const* _Nullable b) {
+            return (a->_prefix ^ b->_prefix) & (a->get_prefix_mask() & b->get_prefix_mask());
+        }
+
        
         
         
@@ -191,149 +204,84 @@ namespace wry::array_mapped_trie {
 
         bool contains(KEY_TYPE key) const {
             if (!prefix_includes_key(key)) {
-                // prefix excludes key
-                return false;
+                return false; // key is excluded by the prefix
             }
             if (!bitmap_includes_key(key)) {
-                // bitmap excludes key
-                return false;
+                return false; // key is excluded by the bitmap
             }
-            if (has_values()) {
-                // bitmap is authoritative for values
-                return true;
+            if (!has_children()) {
+                return true;  // bitmap is authoritative for leaves
             }
-            // recurse into children
-            int compressed_index = get_compressed_index_for_key(key);
-            const Node* child = _children[compressed_index];
-            return child && child->contains(key);
+            return _children[get_compressed_index_for_key(key)]->contains(key);
         }
         
         [[nodiscard]] bool try_get(KEY_TYPE key, T& victim) const {
             if (!prefix_includes_key(key)) {
-                return false;
+                return false; // key is excluded by the prefix
             }
             if (!bitmap_includes_key(key)) {
-                // bitmap excludes key
-                return false;
+                return false; // key is excluded by the bitmap
             }
             int compressed_index = get_compressed_index_for_key(key);
-            if (has_children()) {
-                const Node* child = _children[compressed_index];
-                return child && child->try_get(key, victim);
-            } else {
+            if (!has_children()) {
                 victim = _values[compressed_index];
-                return true;
+                return true; // bitmap is authoritative for leaves
             }
+            return _children[compressed_index]->try_get(key, victim);
+        }
+        
+        bool contains_any(KEY_TYPE key, KEY_TYPE mask) const {
+            if ((_prefix ^ key) & get_prefix_mask() & mask) {
+                return false; // masked key is excluded by the masked prefix
+            }
+            abort();
+            // TODO: bit hacking
         }
                 
         
+        // Merge is a fundamental and non-trivial operation
         
-
-        // TODO: Mutation must not escape the context (whatever that means),
-        // making this way of constructing new objects quite brittle.
-        //
-        // However, stitching new objects out of parts of existing arrays is
-        // also rather horrible!
-
-        
-        // Make a mutable clone.
-        
-        [[nodiscard]] Node* _Nonnull clone_with_capacity(size_t capacity) const {
-            int count = popcount(_bitmap);
-            assert((int)capacity >= count);
-            Node* _Nonnull node = make(_prefix, _shift, (uint32_t)capacity, count, _bitmap);
-            size_t item_size = has_children() ? sizeof(const Node*) : sizeof(T);
-            memcpy(node->_children, _children, count * item_size);
-            return node;
-        }
-        
-        [[nodiscard]] Node* _Nonnull clone() const {
-            return clone_with_capacity(popcount(_bitmap));
-        }
-        
-        // Modify mutable; must be before publication
-        
-        void insert_child(Node const* _Nonnull new_child) {
-            assert(has_children());
-            KEY_TYPE key = new_child->_prefix;
-            assert(prefix_includes_key(key));
-            ++_debug_count;
-            compressed_array_insert_for_index(_debug_capacity,
-                                              _bitmap,
-                                              _children,
-                                              get_index_for_key(key),
-                                              new_child);
-        }
-        
-        Node const* _Nonnull exchange_child(Node const* _Nonnull new_child) {
-            assert(has_children());
-            KEY_TYPE key = new_child->_prefix;
-            assert(prefix_includes_key(key));
-            return compressed_array_exchange_for_index(_bitmap,
-                                                       _children,
-                                                       get_index_for_key(key),
-                                                       new_child);
-        }
-        
-        void insert_key_value(KEY_TYPE key, T value) {
-            assert(has_values());
-            assert(prefix_includes_key(key));
-            ++_debug_count;
-            compressed_array_insert_for_index(_debug_capacity,
-                                              _bitmap,
-                                              _values,
-                                              get_index_for_key(key),
-                                              value);
-        }
-        
-        T exchange_key_value(KEY_TYPE key, T value) {
-            assert(has_values());
-            assert(prefix_includes_key(key));
-            return compressed_array_insert_for_index(_bitmap,
-                                                     _values,
-                                                     get_index_for_key(key),
-                                                     value);
-        }
-        
-        
-        
-        
-        
-        KEY_TYPE prefix_mask() const {
-            return PREFIX_MASK << _shift;
-        }
-        
-        static bool prefixes_are_disjoint(Node const* _Nullable a,
-                                          Node const* _Nullable b) {
-            return (a->_prefix ^ b->_prefix) & (a->prefix_mask() & b->prefix_mask());
-        }
-        
-        
-        [[nodiscard]] static Node const* _Nullable merge(Node const* _Nullable a, Node const* _Nullable b) {
+        [[nodiscard]] static Node const* _Nullable
+        merge(Node const* _Nullable a,
+              Node const* _Nullable b)
+        {
             
             if (!b)
-                return a;
+                return a; // b is empty
             
             if (!a)
-                return b;
+                return b; // a is empty
             
             if (prefixes_are_disjoint(a, b)) {
-                // key sets are disjoint
+                // make a new node at a higher level
+                // highest level nodes have no prefix bits at all, and are thus
+                // never disjoint any node of any level
                 int shift = shift_for_keylike_difference(a->_prefix ^ b->_prefix);
                 assert(shift > a->_shift);
                 assert(shift > b->_shift);
-                Node* c = make(prefix_for_keylike_and_shift(a->_prefix, shift),
+                KEY_TYPE prefix = prefix_for_keylike_and_shift(a->_prefix, shift);
+                size_t capacity = 2;
+                size_t count = 2;
+                BITMAP_TYPE bitmap = (((BITMAP_TYPE)1 << (BITMAP_TYPE)((a->_prefix >> shift) & INDEX_MASK))
+                                      |
+                                      ((BITMAP_TYPE)1 << (BITMAP_TYPE)((b->_prefix >> shift) & INDEX_MASK))
+                                      );
+                assert(popcount(bitmap) == 2);
+                Node* c = make(prefix,
                                shift,
-                               2,
-                               0,
-                               0);
-                c->insert_child(a);
-                c->insert_child(b);
+                               capacity,
+                               count,
+                               bitmap);
+                c->_children[a->_prefix > b->_prefix] = a;
+                c->_children[b->_prefix > a->_prefix] = b;
                 return c;
             }
+            // else the nodes have a common prefix
             
-            // prefix is common (siblings)
             if ((a->_shift == 0) && (b->_shift == 0)) {
+                // both nodes are leafs, and since they share the same prefix
+                // they are the same leaf in their respective trees;
+                // we must combine the stored values, which may conflict
                 assert(a->_prefix == b->_prefix);
                 BITMAP_TYPE c_bitmap = a->_bitmap | b->_bitmap;
                 int count = popcount(c_bitmap);
@@ -346,6 +294,8 @@ namespace wry::array_mapped_trie {
                 while (c_bitmap) {
                     int i = bit::ctz(c_bitmap);
                     BITMAP_TYPE j = (BITMAP_TYPE)1 << i;
+                    // TODO: Merge favors left in collisions.
+                    // Combining values should be caller defined.
                     if (a->_bitmap & j) {
                         int k = popcount((j-1) & a->_bitmap);
                         *q++ = a->_values[k];
@@ -358,7 +308,12 @@ namespace wry::array_mapped_trie {
                 }
                 return c;
             }
+            
             if (a->_shift == b->_shift) {
+                // both nodes are branches, and since they share the same
+                // prefix they are the same branch in their respective trees;
+                // we must combine the children, recursively merging any which
+                // conflict
                 assert(a->_prefix == b->_prefix);
                 BITMAP_TYPE c_bitmap = a->_bitmap | b->_bitmap;
                 int count = popcount(c_bitmap);
@@ -387,7 +342,14 @@ namespace wry::array_mapped_trie {
                 }
                 return c;
             }
-            // prefix is common but level is not
+            
+            // else the nodes must be at different levels;
+            // one is within the range of keys covered by the other
+            
+            // we must maintain the argument ordering since the value
+            // resolution (e.g. "merge left") depends on it;
+            // we implement twice
+
             if (a->_shift > b->_shift) {
                 Node* _Nullable c = a->clone_with_capacity(popcount(a->_bitmap) + 1);
                 auto i = (b->_prefix >> a->_shift) & INDEX_MASK;
@@ -413,8 +375,10 @@ namespace wry::array_mapped_trie {
                 }
                 return c;
             }
+            
+            // should be unreachable
 
-            assert(false);
+            abort();
 
         }
 
@@ -612,7 +576,7 @@ namespace wry::array_mapped_trie {
         static void for_each_mask(Node const* _Nullable node, KEY_TYPE key, KEY_TYPE mask, Action&& action) {
             if (!node)
                 return;
-            if ((node->_prefix ^ key) & (node->prefix_mask() & mask))
+            if ((node->_prefix ^ key) & (node->get_prefix_mask() & mask))
                 return;
             BITMAP_TYPE a = node->_bitmap;
             KEY_TYPE m = (INDEX_MASK << node->_shift) & mask;
@@ -747,15 +711,15 @@ namespace wry::array_mapped_trie {
             assert(count <= _debug_capacity);
             assert(count == _debug_count);
             if (has_children()) {
-                KEY_TYPE prefix_mask = ~INDEX_MASK << _shift;
+                KEY_TYPE get_prefix_mask = ~INDEX_MASK << _shift;
                 for (int j = 0; j != count; ++j) {
                     const Node* child = _children[j];
                     assert(child->_shift < _shift);
-                    if ((child->_prefix & prefix_mask) != _prefix) {
+                    if ((child->_prefix & get_prefix_mask) != _prefix) {
                         printf("%llx : %d\n", _prefix, _shift);
                         printf("%llx : %d\n", child->_prefix, child->_shift);
                     }
-                    assert((child->_prefix & prefix_mask) == _prefix);
+                    assert((child->_prefix & get_prefix_mask) == _prefix);
                     int child_index = get_index_for_key(child->_prefix);
                     KEY_TYPE select = (KEY_TYPE)1 << child_index;
                     assert(_bitmap & select);
@@ -771,6 +735,76 @@ namespace wry::array_mapped_trie {
                 }
             }
         }
+        
+        
+        
+        // TODO: Mutation must not escape the context (whatever that means),
+        // making this way of constructing new objects quite brittle.
+        //
+        // However, stitching new objects out of parts of existing arrays is
+        // also rather horrible!
+        
+        
+        // Make a mutable clone.
+        
+        [[nodiscard]] Node* _Nonnull clone_with_capacity(size_t capacity) const {
+            int count = popcount(_bitmap);
+            assert((int)capacity >= count);
+            Node* _Nonnull node = make(_prefix, _shift, (uint32_t)capacity, count, _bitmap);
+            size_t item_size = has_children() ? sizeof(const Node*) : sizeof(T);
+            memcpy(node->_children, _children, count * item_size);
+            return node;
+        }
+        
+        [[nodiscard]] Node* _Nonnull clone() const {
+            return clone_with_capacity(popcount(_bitmap));
+        }
+        
+        // Modify mutable; must be before publication
+        
+        void insert_child(Node const* _Nonnull new_child) {
+            assert(has_children());
+            KEY_TYPE key = new_child->_prefix;
+            assert(prefix_includes_key(key));
+            ++_debug_count;
+            compressed_array_insert_for_index(_debug_capacity,
+                                              _bitmap,
+                                              _children,
+                                              get_index_for_key(key),
+                                              new_child);
+        }
+        
+        Node const* _Nonnull exchange_child(Node const* _Nonnull new_child) {
+            assert(has_children());
+            KEY_TYPE key = new_child->_prefix;
+            assert(prefix_includes_key(key));
+            return compressed_array_exchange_for_index(_bitmap,
+                                                       _children,
+                                                       get_index_for_key(key),
+                                                       new_child);
+        }
+        
+        void insert_key_value(KEY_TYPE key, T value) {
+            assert(has_values());
+            assert(prefix_includes_key(key));
+            ++_debug_count;
+            compressed_array_insert_for_index(_debug_capacity,
+                                              _bitmap,
+                                              _values,
+                                              get_index_for_key(key),
+                                              value);
+        }
+        
+        T exchange_key_value(KEY_TYPE key, T value) {
+            assert(has_values());
+            assert(prefix_includes_key(key));
+            return compressed_array_insert_for_index(_bitmap,
+                                                     _values,
+                                                     get_index_for_key(key),
+                                                     value);
+        }
+        
+        
         
     }; // Node
     
