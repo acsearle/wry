@@ -241,9 +241,11 @@ namespace wry::array_mapped_trie {
         
         // Merge is a fundamental and non-trivial operation
         
+        template<typename F>
         [[nodiscard]] static Node const* _Nullable
         merge(Node const* _Nullable a,
-              Node const* _Nullable b)
+              Node const* _Nullable b,
+              F&& resolver)
         {
             
             if (!b)
@@ -297,12 +299,17 @@ namespace wry::array_mapped_trie {
                     // TODO: Merge favors left in collisions.
                     // Combining values should be caller defined.
                     if (a->_bitmap & j) {
-                        int k = popcount((j-1) & a->_bitmap);
-                        *q++ = a->_values[k];
+                        int ka = popcount((j-1) & a->_bitmap);
+                        if (b->_bitmap & j) {
+                            int kb = popcount((j-1) & b->_bitmap);
+                            *q++ = resolver(a->_values[ka], b->_values[kb]);
+                        } else {
+                            *q++ = a->_values[ka];
+                        }
                     } else {
                         assert(b->_bitmap & j);
-                        int k = popcount((j-1) & b->_bitmap);
-                        *q++ = b->_values[k];
+                        int kb = popcount((j-1) & b->_bitmap);
+                        *q++ = b->_values[kb];
                     }
                     c_bitmap ^= j;
                 }
@@ -334,7 +341,7 @@ namespace wry::array_mapped_trie {
                     if (b->_bitmap & j) {
                         int k = popcount((j-1) & b->_bitmap);
                         new_child = (new_child
-                                     ? merge(new_child, b->_children[k])
+                                     ? merge(new_child, b->_children[k], resolver)
                                      : b->_children[k]);
                     }
                     *q++ = new_child;
@@ -356,7 +363,7 @@ namespace wry::array_mapped_trie {
                 auto j = (BITMAP_TYPE)1 << i;
                 if (a->_bitmap & j) {
                     int k = popcount((j-1) & a->_bitmap);
-                    c->exchange_child(merge(a->_children[k], b));
+                    c->exchange_child(merge(a->_children[k], b, resolver));
                 } else {
                     c->insert_child(b);
                 }
@@ -369,7 +376,7 @@ namespace wry::array_mapped_trie {
                 auto j = (BITMAP_TYPE)1 << i;
                 if (b->_bitmap & j) {
                     int k = popcount((j-1) & b->_bitmap);
-                    c->exchange_child(merge(a, b->_children[k]));
+                    c->exchange_child(merge(a, b->_children[k], resolver));
                 } else {
                     c->insert_child(a);
                 }
@@ -380,6 +387,13 @@ namespace wry::array_mapped_trie {
 
             abort();
 
+        } // merge(a, b, f)
+        
+        
+        [[nodiscard]] static Node const* _Nullable
+        merge(Node const* _Nullable a,
+              Node const* _Nullable b) {
+            return merge(a, b, [](T left, T) { return left; });
         }
 
         
@@ -404,10 +418,11 @@ namespace wry::array_mapped_trie {
             KEY_TYPE key = new_child->_prefix;
             assert(prefix_includes_key(key));
             Node* _Nonnull new_node = clone_with_capacity(popcount(_bitmap));
-            Node const* old_child = compressed_array_exchange_for_index(new_node->_bitmap,
-                                                                        new_node->_children,
-                                                                        get_index_for_key(key),
-                                                                        new_child);
+            // Node const* old_child =
+            (void) compressed_array_exchange_for_index(new_node->_bitmap,
+                                                       new_node->_children,
+                                                       get_index_for_key(key),
+                                                       new_child);
             // mutator_overwrote(old_child);
             return new_node;
         }
