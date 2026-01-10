@@ -128,6 +128,7 @@
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
+// TODO: All of these creation functions can and should be asynchronous
 -(id<MTLFunction>) newFunctionWithName:(NSString*)name
 {
     id <MTLFunction> function = [_library newFunctionWithName:name];
@@ -628,18 +629,18 @@
             for (auto&& [k, v] : wry::OPCODE_NAMES) {
                 // printf("\"%s\" <-> %lld\n", v, k);
                 _opcode_to_name.emplace(k, v);
-                auto h = _name_to_opcode._inner._hasher.get_hash(v + 7);
+                // auto h = _name_to_opcode._inner._hasher.get_hash(v + 7);
                 // printf("hash \"%s\" -> %llu\n", v+7, h);
                 _name_to_opcode.emplace(v + 7, k);
             }
             
-            for (auto&& [k, v] : wry::OPCODE_NAMES) {
-                // printf("\"%s\" <-> %lld\n", v, k);
-                const String& s = _opcode_to_name[k];
-                // printf("    %lld -> %.*s\n", k, (int) s.chars.size(), (char const*) s.chars.data());
-                int64_t i = _name_to_opcode[v + 7];
-                // printf("    %s -> %lld\n", v + 7, i);
-            }
+//            for (auto&& [k, v] : wry::OPCODE_NAMES) {
+//                // printf("\"%s\" <-> %lld\n", v, k);
+//                const String& s = _opcode_to_name[k];
+//                // printf("    %lld -> %.*s\n", k, (int) s.chars.size(), (char const*) s.chars.data());
+//                int64_t i = _name_to_opcode[v + 7];
+//                // printf("    %s -> %lld\n", v + 7, i);
+//            }
 
                 
             try {

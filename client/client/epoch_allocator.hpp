@@ -304,15 +304,23 @@ namespace wry {
         inline constinit Service allocator_global_service = {};
         
         struct LocalState {
-            bump::Slab* _Nullable bump_alternate = {};
+            // TODO: Analysis suggests we need to have four buffers in flight to
+            // handle worst case interleavings, one is not enough
             Epoch known = {};
             bool is_pinned = {};
             
+            // cyclic queue of Epochs to reuse once we have advanced epochs
+            // enough
+            bump::Slab* _Nullable alternates[3] = {};
+            
+            
             // The epoch allocator wraps the bump allocator with management
-            // that
+            // that reuses slabs only when enough epochs have passed
+            // TODO: rotate more
             void _update_with(Epoch observed) {
                 if (observed != known) {
-                    bump_alternate = bump::this_thread_state.exchange_head_and_restart(bump_alternate);
+                    alternates[0] = bump::this_thread_state.exchange_head_and_restart(alternates[0]);
+                    std::rotate(alternates + 0, alternates + 1, alternates + 3);
                     known = observed;
                 }
             }

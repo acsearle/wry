@@ -17,7 +17,7 @@ namespace wry {
     // implemented as an unrolled linked list.  Push and pop are usually
     // trivial, and in the worst case still O(1), so this data structure is
     // suitable for real-time contexts.
-    //
+
     // Used by the garbage collector to receive and manage pointers.  The
     // bag nodes are not themselves garbage collected.
         
@@ -71,20 +71,26 @@ namespace wry {
         
         Node* _head = nullptr;
         Node* _tail = nullptr;
+#ifndef NDEBUG
         size_t _debug_size = 0;
-        
+#endif // NDEBUG
+
         void swap(SinglyLinkedListOfInlineStacksBag& other) {
             using std::swap;
             swap(_head, other._head);
             swap(_tail, other._tail);
+#ifndef NDEBUG
             swap(_debug_size, other._debug_size);
+#endif // NDEBUG
         }
 
         // constexpr constructor permits use as a constinit thread_local
         constexpr SinglyLinkedListOfInlineStacksBag()
         : _head(nullptr)
         , _tail(nullptr)
+#ifndef NDEBUG
         , _debug_size(0) {
+#endif // NDEBUG
         }
         
         SinglyLinkedListOfInlineStacksBag(const SinglyLinkedListOfInlineStacksBag&) = delete;
@@ -92,13 +98,18 @@ namespace wry {
         SinglyLinkedListOfInlineStacksBag(SinglyLinkedListOfInlineStacksBag&& other)
         : _head(std::exchange(other._head, nullptr))
         , _tail(std::exchange(other._tail, nullptr))
-        , _debug_size(std::exchange(other._debug_size, 0)) {
+#ifndef NDEBUG
+        , _debug_size(std::exchange(other._debug_size, 0))
+#endif // NDEBUG
+        {
         }
         
         ~SinglyLinkedListOfInlineStacksBag() {
-            //assert(_head == nullptr);
-            //assert(_tail == nullptr);
-            //assert(_debug_size == 0);
+            assert(_head == nullptr);
+            assert(_tail == nullptr);
+#ifndef NDEBUG
+            assert(_debug_size == 0);
+#endif // NDEBUG
         }
                 
         SinglyLinkedListOfInlineStacksBag& operator=(const SinglyLinkedListOfInlineStacksBag&) = delete;
@@ -108,6 +119,7 @@ namespace wry {
             return *this;
         }
         
+#ifndef NDEBUG
         bool debug_is_empty() const {
             return !_debug_size;
         }
@@ -115,9 +127,12 @@ namespace wry {
         size_t debug_size() const {
             return _debug_size;
         }
+#endif // NDEBUG
 
         void push(T value) {
+#ifndef NDEBUG
             ++_debug_size;
+#endif // NDEBUG
             while (!_head || !_head->try_push(value)) {
                 Node* node = new Node;
                 node->_next = _head;
@@ -133,7 +148,9 @@ namespace wry {
                 if (!_head)
                     return false;
                 if (_head->try_pop(victim)) {
+#ifndef NDEBUG
                     --_debug_size;
+#endif // NDEBUG
                     return true;
                 }
                 delete std::exchange(_head, _head->_next);
@@ -152,8 +169,18 @@ namespace wry {
                     _head = exchange(other._head, nullptr);
                 }
                 _tail = exchange(other._tail, nullptr);
+#ifndef NDEBUG
                 _debug_size += exchange(other._debug_size, 0);
+#endif // NDEBUG
             }
+        }
+        
+        void leak() {
+            _head = nullptr;
+            _tail = nullptr;
+#ifndef NDEBUG
+            _debug_size = 0;
+#endif // NDEBUG
         }
         
     }; // struct SinglyLinkedListOfInlineStacksBag<T>

@@ -21,7 +21,7 @@ namespace wry {
     // compare span, slice, range
     //
     // ContiguousView models a reference; assignment assigns to the elements, not
-    // the bounds.  ContiguousView<const T>::operator= is an error.  use ::reset to
+    // the bounds.  ContiguousView<const T>::operator= is an error.  use .reset to
     // change what the ContiguousView points into
     
     // ContiguousView is always a contiguous true pointer; compare vector_view which

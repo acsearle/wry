@@ -39,14 +39,11 @@ namespace wry {
             // size member is not essential to the major operations
             // - needed for memory debug
             // - needed for GC scanning
+            //   - which is itself not needed for ephemeral operation
             
             Key _key;
             size_t _size;
             Atomic<Node* _Nullable> _next[0] __counted_by(_size);
-            
-            static void* _Nonnull operator new(size_t count, void* _Nonnull ptr) {
-                return ptr;
-            }
             
             explicit Node(size_t n, auto&&... args)
             : IntrusiveAllocator()

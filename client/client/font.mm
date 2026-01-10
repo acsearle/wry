@@ -40,6 +40,8 @@ namespace wry {
     
     // Apply a simple pixel-scale drop-shadow to existing artwork
     
+    // TODO: This seems like a bad idea vs a shader?
+    
     matrix<RGBA8Unorm_sRGB> apply_shadow(matrix_view<R8Unorm> x) {
 
         // We get an alpha map.

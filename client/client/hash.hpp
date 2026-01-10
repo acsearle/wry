@@ -8,6 +8,8 @@
 #ifndef hash_hpp
 #define hash_hpp
 
+#include <arm_neon.h>
+
 #include <cstddef>
 #include <cstring>
 #include <cmath>
@@ -140,9 +142,17 @@ namespace wry {
         x = (x | (x >> 16)) & 0x00000000FFFFFFFF;
         return x;
     }
-    
+
     constexpr uint64_t morton(uint64_t x, uint64_t y) noexcept {
         return _morton_expand(x) | (_morton_expand(y) << 1);
+    }
+    
+    inline uint64_t _morton_expand_neon(uint64_t x) {
+        return vmull_p64(x, x);
+    }
+
+    inline uint64_t _morton_from_xy_neon(int64_t x, int64_t y) {
+        return vmull_p64(x, (int64_t)x << 1) | vmull_p64(y, y);
     }
     
     constexpr uint64_t morton2(uint64_t x) noexcept {
@@ -176,6 +186,9 @@ namespace wry {
         x ^= b | (b << 16);
         return x;
     }
+    
+    
+    
     
     // hash bytes
     

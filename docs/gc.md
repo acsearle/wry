@@ -1,3 +1,107 @@
+Crossbeam epoch analysis:
+
+To PIN:
+
+RELAXED load from global epoch
+RELAXED store to thread epoch    ---
+SEQ_CST fence 
+
+To UNPIN:
+
+RELEASE store to thread epoch     ---
+
+TO ADVANCE:
+
+RELAXED load from global epoch
+SEQ_CST fence 
+RELAXED load from all thread epochs
+ACQUIRE fence
+RELEASE store to global epoch    ----
+
+
+
+
+The RELAXED store in PIN establishes no ordering
+Because it is not a RELEASE store
+Because it is before, not after the SEQ_CST fence
+
+
+RELEASE store in UNPIN
+RELAXED load in ADVANCE
+ACQUIRE fence in ADVANCE
+
+
+RELEASE store in ADVANCE
+RELAXED read in PIN
+SEQ_CST fence in PIN
+
+And:
+SEQ_CST fence in ADVANCE
+RELEASE store in ADVANCE
+RELAXED read in PIN
+SEQ_CST fence in PIN
+
+
+And
+SEQ_CST fence in ADVANCE
+RELEASE store in ADVANCE
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+Relationships established:
+
+(Unpin) 
+RELEASE thread epoch
+(Advance)
+RELAXED load thread epoch
+ACQUIRE fence 
+
+(Advance)
+SEQ_CST fence
+RELEASE store to global epoch
+(Pin)
+RELAXED load from global epoch
+SEQ_CST fence
+
+
+(Advance)
+RELEASE store to global epoch
+(Pin)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Garbage Collection
 
 Epoch pinning == Session entry

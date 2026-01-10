@@ -15,14 +15,12 @@
 #include "garbage_collected.hpp"
 
 #include "bag.hpp"
-#include "channel.hpp"
 #include "epoch_allocator.hpp"
-#include "garbage_collected.hpp"
 #include "HeapString.hpp"
 #include "stack.hpp"
-#include "tagged_ptr.hpp"
 #include "utility.hpp"
 #include "value.hpp"
+#include "inline_ring_buffer.hpp"
 
 #include "test.hpp"
 
@@ -132,30 +130,6 @@ namespace wry {
         
         
 
-    template<typename T, size_t N, size_t MASK = N-1>
-    struct InlineRingBuffer {
-        
-        static_assert(std::has_single_bit(N), "InlineRingBuffer capacity must be a power of two");
-        
-        size_t _offset = 0;
-        T _array[N] = {};
-        
-        void push_front(T value) {
-            _array[--_offset &= MASK] = value;
-        }
-        
-        const T& operator[](ptrdiff_t i) const {
-            assert((0 <= i) && (i < N));
-            return _array[(_offset + i) & MASK];
-        }
-        
-        T& front() {
-            return _array[_offset & MASK];
-        }
-        
-    }; // struct InlineRingBuffer<T, N, MASK>
-    
-    
 
     
     
@@ -175,6 +149,10 @@ namespace wry {
         Atomic<bool> _is_canceled;
         
         Stack<const GarbageCollected*> _greystack;
+        
+        ~Collector() {
+            _known_objects.leak();
+        }
         
         
         

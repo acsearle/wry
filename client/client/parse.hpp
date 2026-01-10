@@ -54,7 +54,7 @@ namespace wry {
             [&x](StringView& v) -> bool {
                 auto first = reinterpret_cast<const char*>(v.chars.begin());
                 auto last = reinterpret_cast<const char*>(v.chars.end());
-                std::from_chars_result result = wry::from_chars(first, last, x);
+                std::from_chars_result result = std::from_chars(first, last, x);
                 if (result.ptr == first)
                     return false;
                 v.chars._begin += (result.ptr - first);
@@ -63,7 +63,7 @@ namespace wry {
             [&x](ContiguousView<const char8_t>& v) -> bool {
                 auto first = reinterpret_cast<const char*>(v.begin());
                 auto last = reinterpret_cast<const char*>(v.end());
-                std::from_chars_result result = wry::from_chars(first, last, x);
+                std::from_chars_result result = std::from_chars(first, last, x);
                 if (result.ptr == first)
                     return false;
                 v._begin += (result.ptr - first);

@@ -9,20 +9,14 @@
 
 namespace wry {
     
-    // It's not obvious how to let transactions create new unique EntityIDs
-    // in a way that is consistent across different machines and different
-    // thread interleavings.  The implementation below is not consistent, but
-    // it is at least unique.
-    //
-    // If we propose new EntityIDs that are some hash of time and transaction
-    // then we have to handle rare collisions.  Can we use placeholders until
-    // the transactions are resolved, and serially replace them?
-    // What about max id + parent's id?  This explodes.  
-    //
-    // Do they need to be consistent across machines, or just unique?  If they
-    // aren't unique, we end up needing to get consistent unique priorities
-    // somehow, etc.
-
+    // When new entities are spawned, they need consistent identifiers across
+    // different computers.  It's not obvious how to do this elegantly.
+    // - Serially resolve in priority order?
+    // - Shard the above into independent parts?
+    
+    // This placeholder implementation is unique but nondeterministic and
+    // thus unsuitable for multiplayer
+    
     static constinit Atomic<uint64_t> _entity_id_oracle_state{0};
 
     EntityID EntityID::oracle() {

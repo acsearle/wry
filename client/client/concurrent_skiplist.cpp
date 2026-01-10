@@ -17,7 +17,8 @@ namespace wry {
     using Coroutine::Task;
 
     define_test("skiplist") {
-                        
+                   
+        // TODO: Competes with ConcurrentMap test
         thread_local_random_number_generator = new std::ranlux24;
 
         {

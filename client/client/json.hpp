@@ -163,7 +163,7 @@ namespace wry::json {
         if (last - first < 4)
             return false;
         last = first + 4;
-        std::from_chars_result result = from_chars(first, last, x, 16);
+        std::from_chars_result result = std::from_chars(first, last, x, 16);
         if (result.ptr != last)
             return false;
         v._begin += 4;

@@ -22,7 +22,9 @@ namespace wry {
         // defer the difficult problem to getting new unique EntityIDs in a way
         // that is independent of thread scheduling across different machines
         static EntityID oracle();
-        
+        // IDs are never reused, setting a hard scaling limit
+        // TODO: We can compact IDs and times when loading, reducing this limit
+        // to a per-session limit
     };
     
     inline u64 hash(const EntityID& x) {

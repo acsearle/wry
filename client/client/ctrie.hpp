@@ -12,6 +12,11 @@
 
 namespace wry {
     
+    // Concurrent hash array mapped trie is now out of date with recent garbage
+    // collector changes but it may be needed when fleshing out the Value type
+    // and its interned strings.  The garbage collector does not currently
+    // support the weak references needed for a weak dictionary.
+    
     struct HeapString;
     
     namespace _ctrie {

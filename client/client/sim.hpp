@@ -11,6 +11,7 @@
 #include "stdint.hpp"
 #include "hash.hpp"
 #include "entity_id.hpp"
+#include "coordinate.hpp"
 
 namespace wry {
     
@@ -45,77 +46,6 @@ namespace wry {
         TRANSACTION_STATE_FORBIDDEN = 3,
         
     };
-    
-    
-    struct Coordinate {
-        
-        i32 x;
-        i32 y;
-        
-        constexpr bool operator==(const Coordinate&) const = default;
-        constexpr auto operator<=>(const Coordinate&) const = default;
-        
-        uint64_t data() const {
-            uint64_t a = {};
-            std::memcpy(&a, &x, 8);
-            return a;
-        }
-        
-    }; // struct Coordinate
-    
-    inline u64 hash(const Coordinate& x) {
-        return hash_combine(&x, sizeof(x));
-    }
-    
-//    inline uint64_t persistent_map_index_for_key(Coordinate key) {
-//        return key.data();
-//    }
-//    
-//    template<typename Key>
-//    Key key_for_persistent_map_index(uint64_t index);
-//    
-//    template<>
-//    inline Coordinate key_for_persistent_map_index<Coordinate>(uint64_t index) {
-//        Coordinate key = {};
-//        std::memcpy(&key, &index, 8);
-//        return key;
-//    }
-    
-    template<>
-    struct DefaultKeyService<Coordinate> {
-        
-        using key_type = Coordinate;
-        using hash_type = uint64_t;
-        
-        constexpr hash_type hash(key_type xy) const {
-            return xy.data();
-        }
-        
-        constexpr key_type unhash(hash_type h) const {
-            Coordinate key = {};
-            __builtin_memcpy(&key, &h, 8); // constexpr
-            return key;
-        }
-        
-        constexpr bool compare(key_type a, key_type b) const {
-            return hash(a) < hash(b);
-        }
-        
-    };
-
-    
-    inline void garbage_collected_scan(const Coordinate&) {}
-    inline void garbage_collected_shade(const Coordinate&) {}
-    
-    struct MortonCoordinate {
-        uint64_t data;
-        constexpr bool operator==(const MortonCoordinate&) const = default;
-        constexpr auto operator<=>(const MortonCoordinate&) const = default;
-    };
-
-    inline void garbage_collected_scan(const MortonCoordinate&) {}
-    inline void garbage_collected_shade(const MortonCoordinate&) {}
-
     
     struct TransactionContext;
     

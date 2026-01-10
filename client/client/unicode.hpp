@@ -56,7 +56,12 @@ namespace wry {
     // types unsigned char, uint_least16_t and uint_least32_t.  They provide
     // a type system marker for the encoding.  They should only be used for
     // valid sequences of valid code units.  For example, untrusted input
-    // should be represented as unisgned char until validated.
+    // should be represented as char until validated.
+    //
+    // Many text-based formats like JSON, CSV, OBJ, MTL have their delimiting
+    // characters entirely within the ASCII character set and can thus be
+    // parsed as bytes without reconstruction of multibyte characters; the
+    // resulting substrings will be valid UTF8 iff the source was.
 
     
     namespace utf32 {
@@ -121,7 +126,7 @@ namespace wry {
             #define UTF8_REJECT 12
             
             inline constexpr uint8_t utf8d[] = {
-                // The first part of the table maps bytes to character classes that
+                // The first part of the table maps bytes to character classes
                 // to reduce the size of the transition table and create bitmasks.
                 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
                 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,

@@ -345,7 +345,7 @@ namespace wry::decimal {
         const char* first = (const char*) data.begin();
         const char* last = (const char*) data.end();
         std::from_chars_result result =
-        wry::from_chars(first,
+        std::from_chars(first,
                         last,
                         value);
         return result.ptr == last;

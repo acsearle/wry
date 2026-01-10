@@ -31,6 +31,7 @@ namespace wry {
         }
     };
     
+    // TODO: This should use a DefaultKeyService for A and B individually
     template<typename A, typename B>
     struct DefaultKeyService<std::pair<A, B>> {
         using key_type = std::pair<A, B>;

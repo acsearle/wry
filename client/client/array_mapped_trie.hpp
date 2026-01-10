@@ -51,7 +51,7 @@ namespace wry::array_mapped_trie {
             assert((prefix & ~(PREFIX_MASK << shift)) == 0);
         }
         
-        constexpr static Key prefix_mask_for_shift(int shift) {
+        static Key prefix_mask_for_shift(int shift) {
             return PREFIX_MASK << shift;
         }
         
@@ -74,11 +74,10 @@ namespace wry::array_mapped_trie {
             return shift;
         }
         
-        // placement new
-        static void* _Nonnull operator new(size_t count, void* _Nonnull ptr) {
+        static void* _Nonnull operator new(std::size_t count, void* _Nonnull ptr) {
             return ptr;
         }
-        
+                
         Key _prefix;
         int _shift;
         size_t _debug_capacity;
@@ -92,6 +91,11 @@ namespace wry::array_mapped_trie {
                         
         Key get_prefix_mask() const {
             return PREFIX_MASK << _shift;
+        }
+        
+        static bool prefixes_are_disjoint(Node const* _Nullable a,
+                                          Node const* _Nullable b) {
+            return (a->_prefix ^ b->_prefix) & (a->get_prefix_mask() & b->get_prefix_mask());
         }
         
         bool prefix_includes_key(Key key) const {
@@ -116,7 +120,6 @@ namespace wry::array_mapped_trie {
             int index = get_index_for_key(key);
             return get_compressed_index_for_index(index);
         }
-
         
         bool has_children() const {
             return _shift;
@@ -126,11 +129,7 @@ namespace wry::array_mapped_trie {
             return !has_children();
         }
 
-                
-        static bool prefixes_are_disjoint(Node const* _Nullable a,
-                                          Node const* _Nullable b) {
-            return (a->_prefix ^ b->_prefix) & (a->get_prefix_mask() & b->get_prefix_mask());
-        }
+
 
        
         

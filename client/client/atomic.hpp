@@ -14,25 +14,18 @@
 #if defined(__APPLE__)
 #include <errno.h>
 #include <mach/mach_time.h>
-// os_sync_wait_on_address
-// os_sync_wait_on_address_dealine
-// os_sync_wake_by_address_any
-// os_sync_wake_by_address_all
 #include <os/os_sync_wait_on_address.h>
 #endif  // defined(__APPLE__)
 
 #if defined(WIN32)
 #include <synchapi.h>
-// WaitOnAddress
-// WakeByAddressSingle
-// WakeByAddressAll
-#endif
+#endif // defined(WIN32)
 
 #if defined(LINUX)
-#include <linux/futex.h>      /* Definition of FUTEX_* constants */
-#include <sys/syscall.h>      /* Definition of SYS_* constants */
+#include <linux/futex.h>
+#include <sys/syscall.h>
 #include <unistd.h>
-#endif
+#endif // defined(LINUX)
 
 #include <atomic>
 
@@ -315,21 +308,17 @@ namespace wry {
 #endif // defined(WIN32)
         
 #if defined(__linux__)
-        
-        // TODO: This code sketch is untested
-        // TODO: Support sizes other than 4 bytes (indirectly?)
-        
-        void wait(T& expected, Ordering order) {
-            static_assert(sizeof(T) == 4);
+
+        void wait(T& expected, Ordering order) requires { sizeof(T) == 4 } {
             (void) syscall(SYS_futex, &value, FUTEX_WAIT_PRIVATE, &expected, nullptr, nullptr, 0);
         }
         
-        void notify_one() {
+        void notify_one() requires { sizeof(T) == 4 } {
             static_assert(sizeof(T) == 4);
             (void) syscall(SYS_futex, &value, FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
         }
 
-        void notify_all() {
+        void notify_all() requires { sizeof(T) == 4 } {
             static_assert(sizeof(T) == 4);
             (void) syscall(SYS_futex, &value, FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
         }

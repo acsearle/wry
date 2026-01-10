@@ -1511,7 +1511,7 @@ namespace wry {
 
 
 /*
- void extrude(vector_float4 delta = vector4(0.0f, 1.0f, 0.0f, 0.0f)) {
+ void extrude(simd_float4 delta = vector4(0.0f, 1.0f, 0.0f, 0.0f)) {
  // step one, copy existing vertices
  size_t offset = vertices.size();
  for (int i = 0; i != vertices.size(); ++i) {

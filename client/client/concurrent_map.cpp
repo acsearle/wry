@@ -16,6 +16,7 @@ namespace wry::concurrent_map {
     
     define_test("ConcurrentMap") {
         
+        // TODO: This needs to be done as part of worker thread entry
         thread_local_random_number_generator = new std::ranlux24;
                 
         {

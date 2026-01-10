@@ -42,6 +42,18 @@ int main(int argc, const char** argv) {
         workers.emplace_back(&wry::global_work_queue_service);
     }
     
+    // TODO: At this point, optionally run a stress test of the garbage
+    // collector and epoch system itself.
+    
+    // TODO: Does it make sense to nest lifetime regions?  I think the epoch is
+    // already implementing this
+    
+    
+    // TODO: We rely on the epoch system to keep the hidden stack variables of
+    // coroutines alive, idiomatically pinning the epoch in the root of a
+    // tree of work.
+    
+    
     // auto unit_tests = wry::run_tests().start();
     wry::Coroutine::Nursery nursery;
     nursery.soon(wry::run_tests());

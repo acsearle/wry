@@ -12,9 +12,7 @@
 #include "parse.hpp"
 
 namespace wry::csv::de {
-    
-    // Serde may be a bad fit for CSV, it simply isn't general enough a format
-    
+        
     using rust::usize;
     using rust::option::Option;
     using rust::option::None;
@@ -27,6 +25,8 @@ namespace wry::csv::de {
                 return true;
             auto ch = u.front();
             if (ch != u8'\"') {
+                
+                // TODO: Permit whitespaces before escaped field?
                 
                 // is a non-escaped field
                 for (;;) {
@@ -78,6 +78,8 @@ namespace wry::csv::de {
         };
     }
     
+
+    // Serde may be a bad fit for CSV, it simply isn't general enough a format
 
     
     template<typename Deserializer, typename Matcher>

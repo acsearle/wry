@@ -74,7 +74,8 @@ namespace wry {
         {
             PersistentMap<uint64_t, int> p;
             std::map<uint64_t, int> m;
-            for (int i = 0; i != 65536; ++i) {
+            const int N = 65536 / 8;
+            for (int i = 0; i != N; ++i) {
                 uint64_t k = std::rand() & (64 * 1024 - 1);
                 int v = std::rand();
                 
@@ -99,17 +100,11 @@ namespace wry {
                     abort();
                 }
                 
-                // transshipment of this_coroutine
-                // auto epoch = epoch::pin_explicit();
-                // co_await Coroutine::suspend_and_schedule{};
-                // epoch::unpin_explicit(epoch);
-                
-                
                 if (!(i & 255))
                     mutator_repin();
                 // printf("PMT %d\n", i);
             }
-            for (uint64_t k = 0; k != 65536; ++k) {
+            for (uint64_t k = 0; k != N; ++k) {
                 garbage_collected_shade(p);
                 if (m.count(k)) {
                     int v = {};

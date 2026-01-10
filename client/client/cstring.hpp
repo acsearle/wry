@@ -30,6 +30,9 @@ namespace wry {
     //
     // Swaps the bytes of two disjoint regions.  Compilers seem to do a decent
     // job of optimizing the inner loop.
+    //
+    // TODO: Memswap is a repeated temptation but never ends up being the right
+    // solution in the long term
     
     inline void memswap(void* __restrict__ lhs,
                         void* __restrict__ rhs,

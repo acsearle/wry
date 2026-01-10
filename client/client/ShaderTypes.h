@@ -114,7 +114,7 @@ struct MeshUniforms {
     // tangent space -> model space -> world space -> eye space -> clip space
     //           normal           model            view        projection
     
-    vector_float4 camera_position_world;
+    simd_float4 camera_position_world;
     
     matrix_float4x4 view_transform;
     matrix_float4x4 inverse_view_transform;
@@ -128,16 +128,16 @@ struct MeshUniforms {
     // light-specifc
     
     matrix_float4x4 light_viewprojection_transform;
-    vector_float3 radiance;
+    simd_float3 radiance;
 
     // for the sun
-    vector_float3 light_direction;
+    simd_float3 light_direction;
     matrix_float4x4 light_viewprojectiontexture_transform; // shadow
     // for point lights
-    vector_float4 light_position;
+    simd_float4 light_position;
     
     // for image-based lights
-    vector_float4 ibl_scale;
+    simd_float4 ibl_scale;
     matrix_float3x3 ibl_transform;
     
 };
@@ -165,9 +165,9 @@ struct CubeFilterUniforms {
 typedef struct
 {
     // Positions in pixel space (i.e. a value of 100 indicates 100 pixels from the origin/center)
-    vector_float2 position; // 8
+    simd_float2 position; // 8
     
-    vector_float2 texCoord; // 8
+    simd_float2 texCoord; // 8
     
     // vector_uchar4 color;
     // srgba8unorm
@@ -179,9 +179,9 @@ typedef struct
 {
     // Positions in pixel space (i.e. a value of 100 indicates 100 pixels from the origin/center)
     struct {
-        vector_float4 position; // 16
+        simd_float4 position; // 16
         
-        vector_float2 texCoord; // 8
+        simd_float2 texCoord; // 8
         
         // 8 bytes wasted, fixme
     };
