@@ -25,6 +25,12 @@
 
 int main(int argc, const char** argv) {
     
+    // TODO: arguments
+    //
+    // - unit tests
+    // - path
+    // - immediate load savegame
+    
     std::filesystem::current_path("/Users/antony/Desktop/assets/");
     
     {

@@ -65,5 +65,4 @@
     [super updateTrackingAreas];
 }
 
-
 @end

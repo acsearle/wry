@@ -43,7 +43,7 @@
             instanceBuffer = [_instanceBuffers lastObject];
             [_instanceBuffers removeLastObject];
         } else {
-            size_t length = sizeof(MeshInstanced) * 100;
+            size_t length = sizeof(MeshInstanced) * 1000;
             instanceBuffer = [_device newBufferWithLength:length options:MTLStorageModeShared];
         }
     }
@@ -54,7 +54,7 @@
         }
     }];
     
-    assert(_instanceCount < 100);
+    assert(_instanceCount < 1000);
     size_t length = sizeof(MeshInstanced) * _instanceCount;
 
     memcpy([instanceBuffer contents], _instances, length);

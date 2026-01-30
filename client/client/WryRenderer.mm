@@ -82,7 +82,7 @@
         
     // conventional compositing for overlay
     
-    id <MTLRenderPipelineState> _overlayRenderPipelineState;
+    id<MTLRenderPipelineState> _overlayRenderPipelineState;
         
     wry::SpriteAtlas* _atlas;
     wry::Font* _font;
@@ -188,10 +188,7 @@
     id<MTLBlitCommandEncoder> encoder = [buffer blitCommandEncoder];
     [encoder generateMipmapsForTexture:texture];
     [encoder optimizeContentsForGPUAccess:texture];
-    [encoder endEncoding];
-    
-    [buffer commit];
-    
+    [encoder endEncoding];    
     return texture;
 }
 
@@ -873,6 +870,11 @@
                 //new_world->_value_for_coordinate.write(xy, k);
                 // the_tile.notify_occupant(&new_world);
                 // notify_by_world_coordinate(new_world, xy);
+                Player::Action a;
+                a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
+                a.coordinate = xy;
+                a.value = k;
+                _model->_local_player->_queue.push_back(std::move(a));
             }
         }
         

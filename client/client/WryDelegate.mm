@@ -18,6 +18,9 @@
 // single class as a responder and as a delegate for application, window and
 // view to handle all external events on the main thread.
 
+// Computation, network and render are (or will be) async; the main thread
+// will be lightly loaded and spend its time waiting for messages and vsync
+
 @implementation WryDelegate
 {
     std::shared_ptr<wry::model> _model;
@@ -54,10 +57,17 @@
                                                      | NSWindowStyleMaskResizable
                                                      | NSWindowStyleMaskTitled)
                                             backing:NSBackingStoreBuffered
-                                              defer:YES];
+                                              defer:YES
+                                             screen:screen];
     _window.delegate = self;
     _window.title = @"WryApplication";
     _window.acceptsMouseMovedEvents = YES;
+
+    // TODO: The window delegate is supposed to automatically be in the
+    // responder chain, so why do we need to explicitly set it as the
+    // nextResponder?
+    _window.nextResponder = self;
+    
     [_window center];
     
     _metalView = [[WryMetalView alloc]
@@ -80,8 +90,6 @@
     // _audio = [[WryAudio alloc] init];
 
     _window.contentView = _metalView;
-    // insert this delegate into the responder chain above the metalview
-    _metalView.nextResponder = self;
 
 }
 
