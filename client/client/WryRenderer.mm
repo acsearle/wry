@@ -1789,8 +1789,11 @@
         // we should only be here because the display link expects it to be
         // available
         // id<CAMetalDrawable> currentDrawable = [update drawable];
+        //auto a = std::chrono::high_resolution_clock::now();
         id<CAMetalDrawable> currentDrawable = [(CAMetalLayer*)(_view.layer) nextDrawable];
-        
+        //auto b = std::chrono::high_resolution_clock::now();
+        //printf("Waited %lld us for nextDrawable\n", std::chrono::duration_cast<std::chrono::microseconds>(b - a).count());
+
         // TODO: Release pin while thing?
         
         id<MTLBlitCommandEncoder> encoder =  [command_buffer blitCommandEncoder];

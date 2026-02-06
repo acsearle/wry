@@ -24,8 +24,10 @@ namespace wry {
 
     
     uint64_t TransactionContext::entity_get_priority(const Entity* entity) {
-        uint64_t priority = entity->_entity_id.data ^ this->_world->_time;
-        // printf("looked up priority %llu\n", priority);
+        uint64_t priority = 0;
+        priority = hash_combine(&entity->_entity_id.data, 8);
+        priority = hash_combine(&this->_world->_time, 8, priority);
+        // printf("looked up priority %llu for entity %llu\n", priority, entity->_entity_id.data);
         return priority;
     }
 
@@ -233,10 +235,10 @@ namespace wry {
     Transaction::State Transaction::abort() const {
         State prior = _state.exchange(State::ABORTED, Ordering::RELAXED);
         assert(prior != State::COMMITTED);
-//        if (prior != State::ABORTED)
-//            printf("ABORTED transaction for EntityID %llu\n", _entity->_entity_id.data);
-//        if (prior == State::ABORTED)
-//            printf("    Redundant ABORT for EntityID %llu\n", _entity->_entity_id.data);
+        if (prior != State::ABORTED)
+            printf("EntityID %llu ABORTED\n", _entity->_entity_id.data);
+        if (prior == State::ABORTED)
+            printf("EntityID %llu REDUNDANT ABORTED\n", _entity->_entity_id.data);
         return ABORTED;
     }
 
@@ -245,9 +247,26 @@ namespace wry {
         assert(prior != State::ABORTED);
 //        if (prior != State::COMMITTED)
 //            printf("COMMITTED transaction for EntityID %llu\n", _entity->_entity_id.data);
-//        if (prior == State::COMMITTED)
-//            printf("    Redundant COMMIT for EntityID %llu\n", _entity->_entity_id.data);
+        if (prior == State::COMMITTED)
+            printf("EntityID %llu REDUNDANT COMMIT\n", _entity->_entity_id.data);
         return COMMITTED;
+    }
+    
+    void Transaction::describe() const {
+        if (_entity) {
+            printf("EntityID %llu {", _entity->_entity_id.data);
+            for (std::size_t i = 0; i != _size; ++i) {
+                static char const* str[] = {
+                    "WAIT_NEVER",
+                    "WAIT_ON_COMMIT",
+                    "WAIT_ON_ABORT",
+                    "WAIT_ALWAYS",
+                    "WRITE_ON_COMMIT",
+                };
+                printf("\n    %s,", str[_nodes[i]._operation]);
+            }
+            printf("}\n");
+        }
     }
 
 } // namespace wry::sim

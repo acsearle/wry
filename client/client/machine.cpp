@@ -29,9 +29,11 @@ namespace wry {
             case PHASE_TRAVELLING: {
                 // Machine is travelling from old location to new location
                 assert(_old_location != _new_location);
-                if ((context->_world->_time - _new_time) < 0)
+                if ((context->_world->_time - _new_time) < 0) {
                     // This was a spurious wakeup
+                    printf("EntityID %lld experienced spurious wakeup\n", _entity_id.data);
                     return;
+                }
                 new_this->_phase = PHASE_WAITING_FOR_OLD;
             } [[fallthrough]];
                 
@@ -93,6 +95,7 @@ namespace wry {
                     new_this->_on_arrival = OPCODE_NOOP;
                     tx->write_entity_for_entity_id(this->_entity_id, new_this);
                     tx->wait_on_value_for_coordinate(new_this->_new_location);
+                    printf("EntityID %lld proposes to HALT\n", _entity_id.data);
                     return;
                 }
                 // work out where we will go next
@@ -163,15 +166,15 @@ namespace wry {
                 
                 occupant = {};
                 (void) tx->try_read_entity_id_for_coordinate(next_location, occupant);
+                tx->write_entity_for_entity_id(this->_entity_id, new_this);
                 if (occupant) {
                     assert(occupant != _entity_id);
                     // occupied; wait
-                    tx->write_entity_for_entity_id(this->_entity_id, new_this);
                     tx->wait_on_entity_id_for_coordinate(next_location);
+                    printf("EntityID %lld proposes to WAIT on next_location\n", _entity_id.data);
+                    tx->describe();
                     return;
                 }
-                                
-                tx->write_entity_for_entity_id(this->_entity_id, new_this);
                 tx->write_entity_id_for_coordinate(next_location, this->_entity_id);
                 
                                 
@@ -451,6 +454,9 @@ namespace wry {
                 new_this->_new_time = context->_world->_time + 64;
                 new_this->_phase = PHASE_TRAVELLING;
                 tx->wait_on_time(new_this->_new_time);
+                tx->on_abort_retry();
+                printf("EntityID %lld proposes to WAIT on new time\n", _entity_id.data);
+                tx->describe();
                 return;
             }
                 

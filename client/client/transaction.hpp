@@ -193,6 +193,10 @@ namespace wry {
         void on_commit_sleep_for(uint64_t ticks);
         void on_abort_retry();
         
+        // Describe
+        
+        void describe() const;
+        
 
         // Resolution
         
