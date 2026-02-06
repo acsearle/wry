@@ -169,9 +169,18 @@ namespace wry {
                 tx->write_entity_for_entity_id(this->_entity_id, new_this);
                 if (occupant) {
                     assert(occupant != _entity_id);
-                    // occupied; wait
+                    // occupied; wait for our destination to clear
                     tx->wait_on_entity_id_for_coordinate(next_location);
-                    printf("EntityID %lld proposes to WAIT on next_location\n", _entity_id.data);
+                    // or wait for the instruction under us to change
+                    tx->wait_on_value_for_coordinate(_new_location);
+                    // waiting can't fail
+                    // clearing our own previous location shouldn't fail
+                    // writing our next state can fail though if somebody is
+                    // messing with us
+                    // if our own state gets written by somebody else, they are
+                    // responsible for scheduling us
+                    printf("EntityID %lld proposes to WAIT on next_location (or new instructions)\n", _entity_id.data);
+                    tx->on_abort_retry();
                     tx->describe();
                     return;
                 }
