@@ -12,6 +12,304 @@ using namespace metal;
 
 #include "ShaderTypes.h"
 
+# pragma mark - Vector graphics rendeting functionality
+
+namespace stroked {
+    
+    float2 bezier_xy_for_t(float t, float2 a, float2 b, float2 c) {
+        float2 ab = mix(a, b, t);
+        float2 bc = mix(b, c, t);
+        float2 abc = mix(ab, bc, t);
+        return abc;
+    }
+    
+    float quadratic_root(float a, float b, float c, float t0, float t1) {
+        // When the root becomes invalid we want continuity
+
+        float d = b*b - 4.0*a*c;
+        // if (d < 0.0)
+        //    return t0;
+        float q = -0.5 * (b + copysign(sqrt(max(d, 0.0)), b));
+        float r0 = clamp(q / a, t0, t1); // (a != 0.0 ? q / a : -1.0);
+        float r1 = clamp(c / q, t0, t1); // (q != 0.0 ? c / q : -1.0);
+        float tmid = (t0 + t1) * 0.5;
+        if (abs(r0 - tmid) <= abs(r1 - tmid)) {
+            return r0;
+        } else {
+            return r1;
+        }
+    }
+
+    float bezier_t_for_x(float x, float t0, float t1, float2 a, float2 b, float2 c) {
+        float r = quadratic_root(a.x - 2.0*b.x + c.x,
+                                 -2.0*a.x + 2.0*b.x,
+                                 a.x - x,
+                                 t0,
+                                 t1);
+        return r;
+    }
+
+    float bezier_t_for_y(float y, float t0, float t1, float2 a, float2 b, float2 c) {
+        float r = quadratic_root(a.y - 2.0*b.y + c.y,
+                      -2.0*a.y + 2.0*b.y,
+                      a.y - y,
+                      t0,
+                      t1);
+        return r;
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    struct BezierUniforms {
+        float4x4 transformation;
+    };
+    
+    struct BezierPerVertex {
+        float4 position [[position]];
+        float4 coordinate;
+    };
+
+    struct BezierPerPrimitive {
+        uint begin, end;
+    };
+
+    
+    using MeshOut = metal::mesh<BezierPerVertex,
+        BezierPerPrimitive, 4, 2, metal::topology::triangle>;
+
+    
+    static constexpr constant uint32_t AAPLMaxTotalThreadsPerObjectThreadgroup = 1;
+    static constexpr constant uint32_t AAPLMaxTotalThreadsPerMeshThreadgroup = 2;
+    static constexpr constant uint32_t AAPLMaxThreadgroupsPerMeshGrid = 8;
+
+//    struct BezierPayload
+//    {
+//        // AAPLVertex vertices[AAPLMaxMeshletVertexCount];
+//        
+//        // these are not uniforms; in the sample they are constant across one
+//        // meshlet, of which there are many
+//        float4x4 transform;
+//        float3 color;
+//        uint8_t lod;
+//        uint32_t primitiveCount;
+//        uint8_t vertexCount;
+//        
+//        /// The array of vertex indices for the meshlet into the vertices array.
+//        ///
+//        /// The object stage uses this to copy indices into the payload.
+//        /// The mesh stage uses this to set the indices for the geometry.
+//        uint8_t indices[1024];
+//    };
+
+    
+    // In the sample code, the object function is run once per compute grid cell?
+    // It uses its XYZ coordinate to look up work in a linear buffer, and
+    // then seems to launch a fixed number of
+    
+//    [[object,
+//      max_total_threads_per_threadgroup(AAPLMaxTotalThreadsPerObjectThreadgroup),
+//      max_total_threadgroups_per_mesh_grid(AAPLMaxThreadgroupsPerMeshGrid)]]
+//    void bezierObjectFunction(object_data BezierPayload& payload [[payload]],
+//                                         mesh_grid_properties meshGridProperties,
+//                                         uint3 positionInGrid [[threadgroup_position_in_grid]]
+//                                         ) {
+//        // uint threadIndex = positionInGrid.x;
+//        
+//        meshGridProperties.set_threadgroups_per_grid(uint3(1, 1, 1));
+//    }
+    
+    
+    // In the sample code, the mesh stage function does one vertex (or none)
+    // and one primitive (or none), and always sets the primitive_count.
+    // Presumably it is safe for every thread to clobber the primitive_count.
+    // And they otherwise write different locations.
+    
+    
+    [[mesh,
+      max_total_threads_per_threadgroup(AAPLMaxTotalThreadsPerMeshThreadgroup)]]
+    void bezierMeshFunction(MeshOut output,
+                            // const object_data BezierPayload& payload [[payload]],
+                            const device bezier::GlyphInformation* buf_gi [[buffer(0)]],
+                            const device bezier::Character* buf_ch [[buffer(1)]],
+                            uint lid [[thread_index_in_threadgroup]],
+                            uint tid [[threadgroup_position_in_grid]]) {
+
+        output.set_primitive_count(2);
+        
+        bezier::Character ch = buf_ch[tid];
+        bezier::GlyphInformation gi = buf_gi[ch.glyph_id];
+
+        {
+            BezierPerPrimitive p{};
+            p.begin = gi.bezier_begin;
+            p.end = gi.bezier_end;
+            output.set_primitive(0, p);
+            output.set_primitive(1, p);
+            output.set_index(0, 0);
+            output.set_index(1, 1);
+            output.set_index(2, 2);
+            output.set_index(3, 3);
+            output.set_index(4, 2);
+            output.set_index(5, 1);
+        }
+
+        {
+            BezierPerVertex v{};
+            v.coordinate = float4(gi.a.x, gi.a.y, 0.0, 1.0);
+            v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
+            output.set_vertex(0, v);
+            v.coordinate = float4(gi.a.x, gi.b.y, 0.0, 1.0);
+            v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
+            output.set_vertex(1, v);
+            v.coordinate = float4(gi.b.x, gi.a.y, 0.0, 1.0);
+            v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
+            output.set_vertex(2, v);
+            v.coordinate = float4(gi.b.x, gi.b.y, 0.0, 1.0);
+            v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
+            output.set_vertex(3, v);
+        }
+
+    }
+
+    
+
+
+    
+    
+    struct BezierFragmentIn {
+        BezierPerVertex    v;
+        BezierPerPrimitive p;
+    };
+    
+    struct BezierFragmentOut {
+        half4 color [[color(AAPLColorIndexColor),
+                      raster_order_group(AAPLRasterOrderGroupLighting) ]];
+    };
+    
+    
+    
+//    [[vertex]] BezierVertexShaderOut bezierVertexShader(uint vertex_id [[vertex_id]],
+//                                                  constant BezierUniforms &uniforms  [[buffer(AAPLBufferIndexUniforms)]],
+//                                                  const device BezierVertex *vertexArray [[buffer(AAPLBufferIndexVertices)]]) {
+//        BezierVertexShaderOut result{};
+//        return result;
+//    }
+    
+    
+    
+    struct BezierControlPoints {
+        float2 a;
+        float2 b;
+        float2 c;
+        float2 _padding;
+    };
+    
+    
+    //  Copyright (C) 2014 TroggleMonkey
+    //
+    //  Permission is hereby granted, free of charge, to any person obtaining a copy
+    //  of this software and associated documentation files (the "Software"), to
+    //  deal in the Software without restriction, including without limitation the
+    //  rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+    //  sell copies of the Software, and to permit persons to whom the Software is
+    //  furnished to do so, subject to the following conditions:
+    //
+    //  The above copyright notice and this permission notice shall be included in
+    //  all copies or substantial portions of the Software.
+    //
+    //  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    //  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    //  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    //  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    //  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    //  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+    //  IN THE SOFTWARE.
+    
+    float2 erf_tanh_approx(float2 x) {
+        // This approximation produces visible problems
+        return tanh(1.202760580 * x);
+    }
+    
+    float2 erf6(const float2 x)
+    {
+        //  Float2 version:
+        const float2 one = float2(1.0);
+        const float2 sign_x = sign(x);
+        const float2 t = one/(one + 0.47047*abs(x));
+        const float2 result = one - t*(0.3480242 + t*(-0.0958798 + t*0.7478556))*
+        exp(-(x*x));
+        return result * sign_x;
+    }
+    
+    float2 erf_shadertoy(float2 x) {
+        return sign(x) * sqrt(1.0 - exp2(-1.787776 * x * x)); // likely faster version by @spalmer
+    }
+
+    float2 erfc_approx(float2 x) {
+        return 1.0 - erf6(x);
+    }
+
+    
+    [[fragment]] BezierFragmentOut
+    bezierFragmentFunction(BezierFragmentIn input [[stage_in]],
+                           const device bezier::BezierControlPoints* bez [[buffer(0)]]) {
+        
+        float2 coordinate = input.v.coordinate.xy;
+    
+        BezierFragmentOut result{};
+        
+        float cumulant = 0.0;
+        for (uint j = input.p.begin; j != input.p.end; ++j) {
+            BezierControlPoints curve;
+            curve.a = coordinate.xy - bez[j].a;
+            curve.b = coordinate.xy - bez[j].b;
+            curve.c = coordinate.xy - bez[j].c;
+            
+            float ts[7];
+            ts[0] = 0.0;
+            ts[2] = bezier_t_for_x(0.0, 0.0, 1.0, curve.a, curve.b, curve.c);
+            ts[4] = bezier_t_for_y(0.0, 0.0, 1.0, curve.a, curve.b, curve.c);
+            ts[6] = 1.0;
+            if (ts[2] > ts[4]) {
+                float tmp = ts[2];
+                ts[2] = ts[4];
+                ts[4] = tmp;
+            }
+            ts[1] = (ts[0] + ts[2]) * 0.5;
+            ts[3] = (ts[2] + ts[4]) * 0.5;
+            ts[5] = (ts[4] + ts[6]) * 0.5;
+            float2 points[7];
+            for (int i = 0; i != 7; ++i) {
+                points[i] = erfc_approx(bezier_xy_for_t(ts[i], curve.a, curve.b, curve.c)*float2(300.0,150.0));
+            }
+            for (int i = 0; i != 6; ++i) {
+                cumulant -= (points[i+1].y - points[i].y) * (points[i].x + points[i+1].x);
+            }
+        }
+            
+        // cumulant = ts[3];
+    
+        cumulant = clamp(cumulant * 0.125, 0.0, 1.0);
+        
+        // result.color = half4(cumulant, cumulant, cumulant, 1.0);
+        result.color.r = cumulant;
+        result.color.g = cumulant;
+        result.color.b = cumulant;
+        result.color.a = 1.0;
+        // result.color.r = ts[2];
+        // result.color.g = ts[4];
+        return result;
+    }
+    
+} // namespace
+
 # pragma mark - Physically-based rendering functionaliy
 
 // Physically-based rendering functionality

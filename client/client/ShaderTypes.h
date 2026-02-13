@@ -200,4 +200,39 @@ typedef struct
 } MyUniforms;
 
 
+
+//static constexpr constant uint32_t AAPLMaxTotalThreadsPerObjectThreadgroup = 1;
+//static constexpr constant uint32_t AAPLMaxTotalThreadsPerMeshThreadgroup = 2;
+//static constexpr constant uint32_t AAPLMaxThreadgroupsPerMeshGrid = 8;
+
+
+struct BezierPayload {
+    int something;
+};
+
+namespace bezier {
+    
+    struct Character {
+        simd_float2 position;
+        unsigned int glyph_id;
+        unsigned int _padding[1];
+    };
+    
+    struct GlyphInformation {
+        simd_float2 a;
+        simd_float2 b;
+        unsigned int bezier_begin;
+        unsigned int bezier_end;
+        unsigned int _padding[2];
+    };
+    
+    struct BezierControlPoints {
+        simd_float2 a;
+        simd_float2 b;
+        simd_float2 c;
+        simd_float2 _padding[1];
+    };
+
+}
+
 #endif /* ShaderTypes_h */

@@ -86,6 +86,10 @@
         
     wry::SpriteAtlas* _atlas;
     wry::Font* _font;
+    
+    // Bezier font
+    
+    id<MTLRenderPipelineState> _bezierRenderPipelineState;
                     
     
     // bloom
@@ -134,7 +138,7 @@
     id <MTLFunction> function = [_library newFunctionWithName:name];
     if (!function) {
         NSLog(@"ERROR: newFunctionWithName:@\"%@\"", name);
-        exit(EXIT_FAILURE);
+        abort();
     }
     function.label = name;
     return function;
@@ -148,11 +152,28 @@
                                                     error:&error];
     if (!state) {
         NSLog(@"ERROR: Failed aquiring pipeline state: %@", error);
-        exit(EXIT_FAILURE);
+        abort();
     }
     return state;
 }
 
+-(id<MTLRenderPipelineState>) newRenderPipelineStateWithMeshDescriptor:(MTLMeshRenderPipelineDescriptor*)descriptor
+{
+    id<MTLRenderPipelineState> state = nil;
+    NSError* error = nil;
+//    state = [_device newRenderPipelineStateWithMeshDescriptor:descriptor
+//                                                    error:&error];
+    state =  [_device newRenderPipelineStateWithMeshDescriptor:descriptor
+                                                       options:MTLPipelineOptionNone
+                                                    reflection:nil
+                                                         error:&error];
+                                        
+    if (!state) {
+        NSLog(@"ERROR: Failed aquiring pipeline state: %@", error);
+        abort();
+    }
+    return state;
+}
 -(id<MTLTexture>)newTextureFromResource:(NSString*)name
                                  ofType:(NSString*)ext
 {
@@ -554,6 +575,53 @@
             _atlas = new wry::SpriteAtlas(2048, device);
             _font = new wry::Font(build_font(*_atlas));
         }
+        
+        {
+            // Create a pipeline state descriptor to create a compiled pipeline state object
+            MTLMeshRenderPipelineDescriptor *renderPipelineDescriptor = [[MTLMeshRenderPipelineDescriptor alloc] init];
+            
+            renderPipelineDescriptor.label = @"BezierRenderPipeline";
+
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].pixelFormat = drawablePixelFormat;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].blendingEnabled = YES;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].rgbBlendOperation = MTLBlendOperationAdd;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].alphaBlendOperation = MTLBlendOperationAdd;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].sourceRGBBlendFactor = MTLBlendFactorOne;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].sourceAlphaBlendFactor = MTLBlendFactorOne;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+            
+            renderPipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+
+            renderPipelineDescriptor.fragmentBuffers[0].mutability = MTLMutabilityImmutable;
+            renderPipelineDescriptor.fragmentFunction  =  [self newFunctionWithName:@"stroked::bezierFragmentFunction"];
+
+
+            // ?
+            // renderPipelineDescriptor.maxTotalThreadgroupsPerMeshGrid = AAPLMaxTotalThreadsPerMeshThreadgroup;
+            // renderPipelineDescriptor.maxTotalThreadsPerMeshThreadgroup
+            // renderPipelineDescriptor.maxTotalThreadsPerObjectThreadgroup
+            
+            renderPipelineDescriptor.meshBuffers[0].mutability = MTLMutabilityImmutable;
+            renderPipelineDescriptor.meshFunction =  [self newFunctionWithName:@"stroked::bezierMeshFunction"];
+            // renderPipelineDescriptor.meshThreadgroupSizeIsMultipleOfThreadExecutionWidth = YES;
+
+            // renderPipelineDescriptor.objectBuffers[0].mutability = MTLMutabilityImmutable;
+            // renderPipelineDescriptor.objectFunction =  [self newFunctionWithName:@"stroked::bezierObjectFunction"];
+            // renderPipelineDescriptor.objectThreadgroupSizeIsMultipleOfThreadExecutionWidth = YES;
+            
+            renderPipelineDescriptor.payloadMemoryLength = sizeof(BezierPayload);
+            // renderPipelineDescriptor.rasterSampleCount;
+            
+            renderPipelineDescriptor.shaderValidation = MTLShaderValidationEnabled;
+            
+
+            _bezierRenderPipelineState = [self newRenderPipelineStateWithMeshDescriptor:renderPipelineDescriptor];
+
+            NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
+            
+            
+        }
 
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
         
@@ -752,6 +820,89 @@
     NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
 
     return self;
+}
+
+- (void) drawBezier:(id<MTLRenderCommandEncoder>)encoder {
+
+    using namespace simd;
+    using namespace wry;
+    
+    [encoder setRenderPipelineState:_bezierRenderPipelineState];
+        
+    // These can be constants
+    std::vector<bezier::BezierControlPoints> curves;
+    curves.push_back({{0.0f, 0.0f},{0.5f, 0.0f},{0.5f, 0.5f},});
+    curves.push_back({{0.6f, 0.5f},{0.5f, 0.0f},{0.0f, -0.1f},});
+    id<MTLBuffer> buf_curves = [_device newBufferWithBytes:curves.data()
+                                             length:curves.size()*sizeof(bezier::BezierControlPoints)
+                                            options:MTLStorageModeShared];
+    
+    std::vector<bezier::GlyphInformation> gi;
+    gi.push_back({{-0.2, -0.2}, {0.7, 0.6}, 0, 2});
+    id<MTLBuffer> buf_gi = [_device newBufferWithBytes:gi.data()
+                                             length:gi.size()*sizeof(bezier::GlyphInformation)
+                                            options:MTLStorageModeShared];
+
+    // This is per draw
+    std::vector<bezier::Character> characters;
+    characters.push_back({{0.0, 0.0}, 0});
+    id<MTLBuffer> buf_ch = [_device newBufferWithBytes:characters.data()
+                                               length:characters.size()*sizeof(bezier::Character)
+                                              options:MTLStorageModeShared];
+
+    [encoder setMeshBuffer:buf_gi offset:0 atIndex:0];
+    [encoder setMeshBuffer:buf_ch offset:0 atIndex:1];
+    
+    [encoder setFragmentBuffer:buf_curves offset:0 atIndex:0];
+    
+    [encoder drawMeshThreadgroups:MTLSizeMake(1,1,1)
+      threadsPerObjectThreadgroup:MTLSizeMake(1,1,1)
+        threadsPerMeshThreadgroup:MTLSizeMake(1,1,1)];
+    
+    /*
+
+    id<MTLBuffer> vb = [_device newBufferWithLength:v.size_in_bytes() options:MTLStorageModeShared];
+    memcpy(vb.contents, v.data(), v.size_in_bytes());
+    
+    
+    [encoder setVertexBytes:&uniforms
+                     length:sizeof(uniforms)
+                    atIndex:AAPLBufferIndexUniforms ];
+    [encoder setVertexBuffer:vb
+                      offset:0
+                     atIndex:AAPLBufferIndexVertices];
+    [encoder setFragmentTexture:_symbols
+                        atIndex:AAPLTextureIndexColor];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                vertexStart:0
+                vertexCount:v.size()];
+    
+    uniforms.position_transform = matrix_float4x4{{
+        {2.0f / _model->_viewport_size.x, 0.0f, 0.0f},
+        {0.0f, -2.0f / _model->_viewport_size.y, 0.0f, 0.0f},
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        {-1.0f, +1.0f, 0.0f, 1.0f},
+    }};
+    [encoder setVertexBytes:&uniforms
+                     length:sizeof(uniforms)
+                    atIndex:AAPLBufferIndexUniforms ];
+    
+    assert(_buffers[0].length >= _vertices.size() * sizeof(SpriteVertex));
+    std::memcpy(_buffers[0].contents,
+                _vertices.data(),
+                _vertices.size() * sizeof(SpriteVertex));
+    [renderEncoder setVertexBuffer:_buffers[0]
+                            offset:0
+                           atIndex:AAPLBufferIndexVertices];
+    [renderEncoder setFragmentTexture:_texture
+                              atIndex:AAPLTextureIndexColor];
+    [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                      vertexStart:0
+                      vertexCount:_vertices.size()];
+    _vertices.clear();
+    std::rotate(_buffers, _buffers + 1, _buffers + 4);
+     */
+    
 }
 
 - (void) drawOverlay:(id<MTLRenderCommandEncoder>)encoder {
@@ -1748,6 +1899,7 @@
         
         {
             [self drawOverlay:encoder];
+            [self drawBezier:encoder];
         }
          
         [encoder endEncoding];
@@ -1797,7 +1949,8 @@
         // TODO: Release pin while thing?
         
         id<MTLBlitCommandEncoder> encoder =  [command_buffer blitCommandEncoder];
-        [encoder copyFromTexture:_addedTexture toTexture:currentDrawable.texture];
+        // [encoder copyFromTexture:_addedTexture toTexture:currentDrawable.texture];
+        [encoder copyFromTexture:_deferredLightColorAttachmentTexture toTexture:currentDrawable.texture];
         [encoder endEncoding];
         [command_buffer presentDrawable:currentDrawable];
     }
