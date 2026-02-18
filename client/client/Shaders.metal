@@ -14,7 +14,7 @@ using namespace metal;
 
 # pragma mark - Vector graphics rendeting functionality
 
-namespace stroked {
+namespace otf {
     
     float2 bezier_xy_for_t(float t, float2 a, float2 b, float2 c) {
         float2 ab = mix(a, b, t);
@@ -136,15 +136,15 @@ namespace stroked {
       max_total_threads_per_threadgroup(AAPLMaxTotalThreadsPerMeshThreadgroup)]]
     void bezierMeshFunction(MeshOut output,
                             // const object_data BezierPayload& payload [[payload]],
-                            const device bezier::GlyphInformation* buf_gi [[buffer(0)]],
-                            const device bezier::Character* buf_ch [[buffer(1)]],
+                            const device otf::GlyphData* buf_gi [[buffer(0)]],
+                            const device otf::PlacedGlyph* buf_ch [[buffer(1)]],
                             uint lid [[thread_index_in_threadgroup]],
                             uint tid [[threadgroup_position_in_grid]]) {
 
         output.set_primitive_count(2);
         
-        bezier::Character ch = buf_ch[tid];
-        bezier::GlyphInformation gi = buf_gi[ch.glyph_id];
+        otf::PlacedGlyph ch = buf_ch[tid];
+        otf::GlyphData gi = buf_gi[ch.glyph_index];
 
         {
             BezierPerPrimitive p{};
@@ -164,15 +164,19 @@ namespace stroked {
             BezierPerVertex v{};
             v.coordinate = float4(gi.a.x, gi.a.y, 0.0, 1.0);
             v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
+            v.position.xyz /= float3(1920.0,1080.0,1080.0);
             output.set_vertex(0, v);
             v.coordinate = float4(gi.a.x, gi.b.y, 0.0, 1.0);
             v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
+            v.position.xyz /= float3(1920.0,1080.0,1080.0);
             output.set_vertex(1, v);
             v.coordinate = float4(gi.b.x, gi.a.y, 0.0, 1.0);
             v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
+            v.position.xyz /= float3(1920.0,1080.0,1080.0);
             output.set_vertex(2, v);
             v.coordinate = float4(gi.b.x, gi.b.y, 0.0, 1.0);
             v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
+            v.position.xyz /= float3(1920.0,1080.0,1080.0);
             output.set_vertex(3, v);
         }
 
@@ -204,12 +208,12 @@ namespace stroked {
     
     
     
-    struct BezierControlPoints {
-        float2 a;
-        float2 b;
-        float2 c;
-        float2 _padding;
-    };
+//    struct QuadraticBezier {
+//        float2 a;
+//        float2 b;
+//        float2 c;
+//        float2 _padding;
+//    };
     
     
     //  Copyright (C) 2014 TroggleMonkey
@@ -259,7 +263,7 @@ namespace stroked {
     
     [[fragment]] BezierFragmentOut
     bezierFragmentFunction(BezierFragmentIn input [[stage_in]],
-                           const device bezier::BezierControlPoints* bez [[buffer(0)]]) {
+                           const device otf::QuadraticBezier* bez [[buffer(0)]]) {
         
         float2 coordinate = input.v.coordinate.xy;
     
@@ -267,10 +271,10 @@ namespace stroked {
         
         float cumulant = 0.0;
         for (uint j = input.p.begin; j != input.p.end; ++j) {
-            BezierControlPoints curve;
-            curve.a = coordinate.xy - bez[j].a;
-            curve.b = coordinate.xy - bez[j].b;
-            curve.c = coordinate.xy - bez[j].c;
+            QuadraticBezier curve;
+            curve.a = bez[j].a - coordinate.xy;
+            curve.b = bez[j].b - coordinate.xy;
+            curve.c = bez[j].c - coordinate.xy;
             
             float ts[7];
             ts[0] = 0.0;
@@ -287,11 +291,14 @@ namespace stroked {
             ts[5] = (ts[4] + ts[6]) * 0.5;
             float2 points[7];
             for (int i = 0; i != 7; ++i) {
-                points[i] = erfc_approx(bezier_xy_for_t(ts[i], curve.a, curve.b, curve.c)*float2(300.0,150.0));
+                points[i] = erfc_approx(bezier_xy_for_t(ts[i], curve.a, curve.b, curve.c)
+                                        /float2(2,2));
             }
             for (int i = 0; i != 6; ++i) {
-                cumulant -= (points[i+1].y - points[i].y) * (points[i].x + points[i+1].x);
+                cumulant += (points[i+1].y - points[i].y) * (points[i].x + points[i+1].x);
             }
+            // cumulant +=
+            // break;
         }
             
         // cumulant = ts[3];

@@ -11,6 +11,7 @@
 #include "SpriteAtlas.hpp"
 #include "string.hpp"
 #include "table.hpp"
+#include "ShaderTypes.h"
 
 namespace wry {
     
@@ -30,7 +31,8 @@ namespace wry {
     };
     
     Font build_font(SpriteAtlas&);
-    
+    std::pair<std::vector<otf::GlyphData>, std::vector<otf::QuadraticBezier>> build_font2();
+
     
     std::tuple<float2, matrix_view<R8Unorm>, float2> get_glyph(char32_t);
     

@@ -90,6 +90,8 @@
     // Bezier font
     
     id<MTLRenderPipelineState> _bezierRenderPipelineState;
+    std::vector<otf::GlyphData> _otf_glyph_data;
+    std::vector<otf::QuadraticBezier> _otf_quadratic_bezier;
                     
     
     // bloom
@@ -574,6 +576,14 @@
             
             _atlas = new wry::SpriteAtlas(2048, device);
             _font = new wry::Font(build_font(*_atlas));
+            
+            
+            std::tie(
+                     _otf_glyph_data,
+                     _otf_quadratic_bezier
+                     ) = build_font2();
+            
+            
         }
         
         {
@@ -594,7 +604,7 @@
             renderPipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
             renderPipelineDescriptor.fragmentBuffers[0].mutability = MTLMutabilityImmutable;
-            renderPipelineDescriptor.fragmentFunction  =  [self newFunctionWithName:@"stroked::bezierFragmentFunction"];
+            renderPipelineDescriptor.fragmentFunction  =  [self newFunctionWithName:@"otf::bezierFragmentFunction"];
 
 
             // ?
@@ -603,14 +613,18 @@
             // renderPipelineDescriptor.maxTotalThreadsPerObjectThreadgroup
             
             renderPipelineDescriptor.meshBuffers[0].mutability = MTLMutabilityImmutable;
-            renderPipelineDescriptor.meshFunction =  [self newFunctionWithName:@"stroked::bezierMeshFunction"];
+            renderPipelineDescriptor.meshFunction =  [self newFunctionWithName:@"otf::bezierMeshFunction"];
             // renderPipelineDescriptor.meshThreadgroupSizeIsMultipleOfThreadExecutionWidth = YES;
+            
+            // TODO: Profiling is not available on mesh shaders.  We should also
+            // provide an alternative implementation of the mesh shader using a
+            // conventional vector shader and more CPU processing.
 
             // renderPipelineDescriptor.objectBuffers[0].mutability = MTLMutabilityImmutable;
             // renderPipelineDescriptor.objectFunction =  [self newFunctionWithName:@"stroked::bezierObjectFunction"];
             // renderPipelineDescriptor.objectThreadgroupSizeIsMultipleOfThreadExecutionWidth = YES;
             
-            renderPipelineDescriptor.payloadMemoryLength = sizeof(BezierPayload);
+            // renderPipelineDescriptor.payloadMemoryLength = sizeof(BezierPayload);
             // renderPipelineDescriptor.rasterSampleCount;
             
             renderPipelineDescriptor.shaderValidation = MTLShaderValidationEnabled;
@@ -830,24 +844,26 @@
     [encoder setRenderPipelineState:_bezierRenderPipelineState];
         
     // These can be constants
-    std::vector<bezier::BezierControlPoints> curves;
-    curves.push_back({{0.0f, 0.0f},{0.5f, 0.0f},{0.5f, 0.5f},});
-    curves.push_back({{0.6f, 0.5f},{0.5f, 0.0f},{0.0f, -0.1f},});
+    std::vector<otf::QuadraticBezier> curves = _otf_quadratic_bezier;
+    //curves.push_back({{0.0f, 0.0f},{0.5f, 0.0f},{0.5f, 0.5f},});
+    //curves.push_back({{0.6f, 0.5f},{0.5f, 0.0f},{0.0f, -0.1f},});
     id<MTLBuffer> buf_curves = [_device newBufferWithBytes:curves.data()
-                                             length:curves.size()*sizeof(bezier::BezierControlPoints)
+                                             length:curves.size()*sizeof(otf::QuadraticBezier)
                                             options:MTLStorageModeShared];
     
-    std::vector<bezier::GlyphInformation> gi;
-    gi.push_back({{-0.2, -0.2}, {0.7, 0.6}, 0, 2});
+    std::vector<otf::GlyphData> gi = _otf_glyph_data;
+    // gi.push_back({{-0.2, -0.2}, {0.7, 0.6}, 0, 2});
     id<MTLBuffer> buf_gi = [_device newBufferWithBytes:gi.data()
-                                             length:gi.size()*sizeof(bezier::GlyphInformation)
+                                             length:gi.size()*sizeof(otf::GlyphData)
                                             options:MTLStorageModeShared];
 
     // This is per draw
-    std::vector<bezier::Character> characters;
-    characters.push_back({{0.0, 0.0}, 0});
+    std::vector<otf::PlacedGlyph> characters;
+    static unsigned int oof = 0;
+    characters.push_back({{0.0, 0.0}, oof});
+    ++oof; if (oof >= gi.size()) oof = 0;
     id<MTLBuffer> buf_ch = [_device newBufferWithBytes:characters.data()
-                                               length:characters.size()*sizeof(bezier::Character)
+                                               length:characters.size()*sizeof(otf::PlacedGlyph)
                                               options:MTLStorageModeShared];
 
     [encoder setMeshBuffer:buf_gi offset:0 atIndex:0];

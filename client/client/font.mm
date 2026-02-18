@@ -9,6 +9,8 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_OUTLINE_H
+
 
 #include <iostream>
 
@@ -213,6 +215,182 @@ namespace wry {
         
         return result;
     }
+    
+//    float3x2 a;
+//    
+//    otf::QuadraticBezier bcpFrom(float2 a, float2 b) {
+//        return otf::QuadraticBezier(a, mix(a, b, float2{0.5f, 0.5f}), b);
+//    }
+//    otf::QuadraticBezier bcpFrom(float2 a, float2 b, float2 c) {
+//        return otf::QuadraticBezier(a, b, c);
+//    }
+//    
+//    otf::QuadraticBezier bcpFrom(float2 a, float2 b, float2 c, float2 d) {
+//        return otf::QuadraticBezier(a, b, d);
+//    }
+    
+    /*
+    std::pair<Bezier2, Bezier2> reduce_parametric_continuity(Bezier3 q) {
+        // Match dx/dt at the endpoints
+        // dt' = 2.0 dt
+        // 3.0 * (b - a)dt == 2.0 * (b' - a')dt'
+        // (b' - a') == 0.75 * (b - a)
+        simd_double2 b2 = simd_mix(q.a, q.b, 0.75);
+        simd_double2 b3 = simd_mix(q.c, q.d, 0.25);
+        simd_double2 c2a3 = simd_mix(b2, b3, 0.5);
+        return {
+            Bezier2{q.a, b2, c2a3},
+            Bezier2{c2a3, b3, q.d},
+        };
+    }
+     */
+    
+    std::pair<std::vector<otf::GlyphData>, std::vector<otf::QuadraticBezier>>
+    build_font2() {
+        
+        FT_Library ft;
+        FT_Error e = FT_Init_FreeType(&ft);
+        assert(!e);
+        
+        FT_Face face;
+        e = FT_New_Face(ft,
+                        path_for_resource(u8"Futura Medium Condensed", u8"otf").c_str(),
+                        0,
+                        &face);
+        assert(!e);
+        
+        FT_UInt gindex = 0;
+        FT_ULong charcode = FT_Get_First_Char(face, &gindex);
+        
+        // constexpr float k = 1.0f / 64.0f; // metrics are in 26.6 fixed point
+        
+        std::vector<otf::GlyphData> gi;
+        std::vector<otf::QuadraticBezier> cp;
+
+        FT_Outline& outline = face->glyph->outline;
+//
+//        auto foo = [&](int k) -> float2 {
+//            return float2{(float)outline.points[k].x, (float)outline.points[k].y};
+//        };
+//        
+//        auto bar = [&](auto... ks) {
+//            return bcpFrom(foo(ks)...);
+//        };
+
+        // render all glyphs
+        
+        std::vector<float2> p;
+        auto push = [&](int k) {
+            {
+                FT_Vector a = outline.points[k];
+                p.push_back(float2{(float)a.x, (float)a.y});
+            }
+            // printf("%d ", outline.tags[k] & 3);
+            if (outline.tags[k] & 1) {
+                // On-curve point
+                switch (p.size()) {
+                    case 1: {
+                    } break;
+                    case 2: {
+                        // Line
+                        cp.push_back(otf::QuadraticBezier{
+                            p[0],
+                            mix(p[0], p[1], float2{0.5f, 0.5f}),
+                            p[1],
+                        });
+                        p[0] = p[1];
+                        p.resize(1);
+                    } break;
+                    case 3: {
+                        // Quadratic Bezier curve
+                        cp.push_back(otf::QuadraticBezier{
+                            p[0],
+                            p[1],
+                            p[2],
+                        });
+                        p[0] = p[2];
+                        p.resize(1);
+                    }
+                    case 4: {
+                        // Cubic Bezier curve
+                        simd_float2 ab = mix(p[0], p[1], float2{0.75f, 0.75f});
+                        simd_float2 cd = mix(p[2], p[3], float2{0.25f, 0.25f});
+                        simd_float2 abcd = mix(ab, cd, float2{0.5f, 0.5f});
+                        cp.push_back(otf::QuadraticBezier{
+                            p[0],
+                            ab,
+                            abcd
+                        });
+                        cp.push_back(otf::QuadraticBezier{
+                            abcd,
+                            cd,
+                            p[3],
+                        });
+                        p[0] = p[3];
+                        p.resize(1);
+                    } break;
+                    default:
+                        abort();
+                }
+            }
+        };
+        
+        // For each glyph
+        while (gindex) {
+            printf("%lu -> %d\n", charcode, gindex);
+            
+            // Load outline but do not scale, hint or rasterize it
+            FT_Load_Glyph(face, gindex, FT_LOAD_NO_SCALE);
+            assert(face->glyph->format == FT_GLYPH_FORMAT_OUTLINE);
+
+            unsigned int cp_a = (int) cp.size();
+
+            int j0 = 0;
+            for (int i = 0; i != outline.n_contours; ++i) {
+                int j = j0;
+                for (; j != outline.contours[i] + 1; ++j) {
+                    push(j);
+                }
+                push(j0);
+                j0 = j;
+                // printf("\n");
+                p.clear();
+            }
+            
+            {
+                FT_BBox cb = {};
+                FT_Outline_Get_CBox(&outline, &cb);
+                unsigned int cp_b = (int) cp.size();
+                
+                if (gi.size() < gindex + 1) {
+                    gi.resize(gindex + 1);
+                }
+                
+                gi[gindex] = otf::GlyphData{
+                    float2{(float)cb.xMin, (float)cb.yMin},
+                    float2{(float)cb.xMax, (float)cb.yMax},
+                    cp_a,
+                    cp_b,
+                };
+            }
+            
+  
+            charcode = FT_Get_Next_Char(face, charcode, &gindex);
+        }
+        
+//        result.height = face->size->metrics.height * k;
+//        result.ascender = face->size->metrics.ascender * k;
+//        result.descender = face->size->metrics.descender * k;
+//        
+        FT_Done_Face(face);
+        FT_Done_FreeType(ft);
+        
+        //return result;
+        
+        return { gi, cp };
+    }
+    
+    
     
 } // namespace wry
 

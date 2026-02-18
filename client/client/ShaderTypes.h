@@ -206,19 +206,15 @@ typedef struct
 //static constexpr constant uint32_t AAPLMaxThreadgroupsPerMeshGrid = 8;
 
 
-struct BezierPayload {
-    int something;
-};
-
-namespace bezier {
+namespace otf {
     
-    struct Character {
+    struct PlacedGlyph {
         simd_float2 position;
-        unsigned int glyph_id;
+        unsigned int glyph_index;
         unsigned int _padding[1];
     };
     
-    struct GlyphInformation {
+    struct GlyphData {
         simd_float2 a;
         simd_float2 b;
         unsigned int bezier_begin;
@@ -226,7 +222,7 @@ namespace bezier {
         unsigned int _padding[2];
     };
     
-    struct BezierControlPoints {
+    struct QuadraticBezier {
         simd_float2 a;
         simd_float2 b;
         simd_float2 c;
