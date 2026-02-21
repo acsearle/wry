@@ -40,8 +40,41 @@ namespace otf {
         }
     }
 
+    float quadratic_root_best(float a, float b, float c, float t0, float t1) {
+        // When the root becomes invalid we want continuity
+        
+        float d = b*b - 4.0*a*c;
+        // if (d < 0.0)
+        //    return t0;
+        float q = -0.5 * (b + copysign(sqrt(max(d, 0.0)), b));
+        float r0 = clamp(q / a, t0, t1); // (a != 0.0 ? q / a : -1.0);
+        float r1 = clamp(c / q, t0, t1); // (q != 0.0 ? c / q : -1.0);
+        float tmid = (t0 + t1) * 0.5;
+        if (abs(r0 - tmid) <= abs(r1 - tmid)) {
+            return r0;
+        } else {
+            return r1;
+        }
+    }
+    
+    float2 quadratic_root_both(float a, float b, float c, float t0, float t1) {
+        float d = b*b - 4.0*a*c;
+        float q = -0.5 * (b + copysign(sqrt(max(d, 0.0)), b));
+        return clamp(float2{q / a, c / q}, t0, t1);
+    }
+
+    
     float bezier_t_for_x(float x, float t0, float t1, float2 a, float2 b, float2 c) {
         float r = quadratic_root(a.x - 2.0*b.x + c.x,
+                                 -2.0*a.x + 2.0*b.x,
+                                 a.x - x,
+                                 t0,
+                                 t1);
+        return r;
+    }
+    
+    float2 bezier_ts_for_x(float x, float t0, float t1, float2 a, float2 b, float2 c) {
+        float2 r = quadratic_root_both(a.x - 2.0*b.x + c.x,
                                  -2.0*a.x + 2.0*b.x,
                                  a.x - x,
                                  t0,
@@ -58,6 +91,19 @@ namespace otf {
         return r;
     }
     
+    // newton step...?
+    float cubic_root_1nms(float t0, float t1, float a, float b, float c, float d) {
+        // solve a*t**3 + b*t**2 + c*t+d = 0
+        float t2 = (t0 + t1) * 0.5;
+        float y_t2 = ((a*t2 + b)*t2 + c)*t2 + d;
+        float dydt_t2 = ((3*a*t2) + 2*b)*t2 + c;
+        float q = y_t2 / dydt_t2;
+        // clamp or bisect
+        float t3 = clamp(t2 - y_t2 / dydt_t2,
+                         q > 0.0 ? t0 : t2,
+                         q > 0.0 ? t2 : t1);
+        return t3;
+    }
     
     
     
@@ -88,56 +134,21 @@ namespace otf {
     static constexpr constant uint32_t AAPLMaxTotalThreadsPerObjectThreadgroup = 1;
     static constexpr constant uint32_t AAPLMaxTotalThreadsPerMeshThreadgroup = 2;
     static constexpr constant uint32_t AAPLMaxThreadgroupsPerMeshGrid = 8;
-
-//    struct BezierPayload
-//    {
-//        // AAPLVertex vertices[AAPLMaxMeshletVertexCount];
-//        
-//        // these are not uniforms; in the sample they are constant across one
-//        // meshlet, of which there are many
-//        float4x4 transform;
-//        float3 color;
-//        uint8_t lod;
-//        uint32_t primitiveCount;
-//        uint8_t vertexCount;
-//        
-//        /// The array of vertex indices for the meshlet into the vertices array.
-//        ///
-//        /// The object stage uses this to copy indices into the payload.
-//        /// The mesh stage uses this to set the indices for the geometry.
-//        uint8_t indices[1024];
-//    };
-
     
-    // In the sample code, the object function is run once per compute grid cell?
-    // It uses its XYZ coordinate to look up work in a linear buffer, and
-    // then seems to launch a fixed number of
+    // The mesh output is shared across the threadgroup
     
-//    [[object,
-//      max_total_threads_per_threadgroup(AAPLMaxTotalThreadsPerObjectThreadgroup),
-//      max_total_threadgroups_per_mesh_grid(AAPLMaxThreadgroupsPerMeshGrid)]]
-//    void bezierObjectFunction(object_data BezierPayload& payload [[payload]],
-//                                         mesh_grid_properties meshGridProperties,
-//                                         uint3 positionInGrid [[threadgroup_position_in_grid]]
-//                                         ) {
-//        // uint threadIndex = positionInGrid.x;
-//        
-//        meshGridProperties.set_threadgroups_per_grid(uint3(1, 1, 1));
-//    }
+    // We currently have on thread per threadgroup that produces the vertices
+    // for one character's quad
     
-    
-    // In the sample code, the mesh stage function does one vertex (or none)
-    // and one primitive (or none), and always sets the primitive_count.
-    // Presumably it is safe for every thread to clobber the primitive_count.
-    // And they otherwise write different locations.
-    
+    // We currently spread characters across the grid, but we could
     
     [[mesh,
-      max_total_threads_per_threadgroup(AAPLMaxTotalThreadsPerMeshThreadgroup)]]
+      max_total_threads_per_threadgroup(1024)]]
     void bezierMeshFunction(MeshOut output,
                             // const object_data BezierPayload& payload [[payload]],
                             const device otf::GlyphData* buf_gi [[buffer(0)]],
                             const device otf::PlacedGlyph* buf_ch [[buffer(1)]],
+                            const device otf::PerParagraph* buf_pp [[buffer(2)]],
                             uint lid [[thread_index_in_threadgroup]],
                             uint tid [[threadgroup_position_in_grid]]) {
 
@@ -162,21 +173,31 @@ namespace otf {
 
         {
             BezierPerVertex v{};
-            v.coordinate = float4(gi.a.x, gi.a.y, 0.0, 1.0);
+
+            // We need to inflate the quads to allow the antialiasing to spread
+            // out a few extra pixels.  Ideally this would be done in, or with
+            // knowledge of, screen space.
+            float d = 1.0 / 32.0;
+            
+            v.coordinate = float4(gi.a.x - d, gi.a.y - d, 1.0, 1.0);
             v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
-            v.position.xyz /= float3(1920.0,1080.0,1080.0);
+            v.position.w += (v.position.x + v.position.y) / 4.0;
+            v.position.xyz /= float3(19.2,10.8,10.8) * 0.5;
             output.set_vertex(0, v);
-            v.coordinate = float4(gi.a.x, gi.b.y, 0.0, 1.0);
+            v.coordinate = float4(gi.a.x - d, gi.b.y + d, 1.0, 1.0);
             v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
-            v.position.xyz /= float3(1920.0,1080.0,1080.0);
+            v.position.w += (v.position.x + v.position.y) / 4.0;
+            v.position.xyz /= float3(19.2,10.8,10.8) * 0.5;
             output.set_vertex(1, v);
-            v.coordinate = float4(gi.b.x, gi.a.y, 0.0, 1.0);
+            v.coordinate = float4(gi.b.x + d, gi.a.y - d, 1.0, 1.0);
             v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
-            v.position.xyz /= float3(1920.0,1080.0,1080.0);
+            v.position.w += (v.position.x + v.position.y) / 4.0;
+            v.position.xyz /= float3(19.2,10.8,10.8) * 0.5;
             output.set_vertex(2, v);
-            v.coordinate = float4(gi.b.x, gi.b.y, 0.0, 1.0);
+            v.coordinate = float4(gi.b.x + d, gi.b.y + d, 1.0, 1.0);
             v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
-            v.position.xyz /= float3(1920.0,1080.0,1080.0);
+            v.position.w += (v.position.x + v.position.y) / 4.0;
+            v.position.xyz /= float3(19.2,10.8,10.8) * 0.5;
             output.set_vertex(3, v);
         }
 
@@ -255,10 +276,28 @@ namespace otf {
     float2 erf_shadertoy(float2 x) {
         return sign(x) * sqrt(1.0 - exp2(-1.787776 * x * x)); // likely faster version by @spalmer
     }
+        
+    float2 erfc_via_smoothstep(float2 x) {
+        return 2.0*smoothstep(x, -1.5, +1.5);
+    }
 
     float2 erfc_approx(float2 x) {
         return 1.0 - erf6(x);
     }
+    
+    
+    float2x2 inverse(float2x2 m) {
+        float determinant = m[0][0] * m[1][1] - m[0][1] * m[1][0];
+        return float2x2{
+            {m[1][1], -m[0][1]},
+            {-m[1][0],  m[0][0]}
+        } / determinant;
+    }
+    
+    // TODO: Smoothstep vs erfc
+    
+    // TODO: We don't actually want to find the exact x and y crossings, we
+    // just want to sample sufficiently in the region where erfc is changing
 
     
     [[fragment]] BezierFragmentOut
@@ -266,52 +305,162 @@ namespace otf {
                            const device otf::QuadraticBezier* bez [[buffer(0)]]) {
         
         float2 coordinate = input.v.coordinate.xy;
+        
+        // float2 ddpx = fwidth(coordinate);
+        float2x2 C = {{1.0, 0.0}, {1.0, 0.0}};
+        
+        {
+            // Compute the coordinate system (u, v') in which a circle in x, y
+            // is an becomes an axis-aligned ellipse
+            
+            // Transformation dxy -> duv
+            float2x2 A = float2x2{dfdx(coordinate), dfdy(coordinate)} * sqrt(0.5);
+            // Transformation duv -> dxy
+            float2x2 B = inverse(A);
+            
+            // Unit vector u
+            float2 u = float2{1.0, 0.0};
+            // Image of u in xy
+            float2 u2 = B * u;
+            // Normalize it to unit circle
+            float2 u3 = normalize(u2);
+            // Perpendicular
+            // - in general differs from the image of v
+            // - is also normalized
+            // - choice of sign determines handedness
+            float2 v3 = float2{u3[1], -u3[0]};
+            // Transform back to uv space
+            float2 u4 = A * u3;
+            float2 v4 = A * v3;
+            // u4.y will be (approximately) zero
+            float2x2 D = { u4, v4 };
+            C = inverse(D);
+            
+            
+            
+            
+
+            
+            
+        }
     
         BezierFragmentOut result{};
         
         float cumulant = 0.0;
+        
+        // Every pixel in the glyph's quad walks this same region, hopefully
+        // with linear and coherent memory access, and with no divergence of
+        // control flow
         for (uint j = input.p.begin; j != input.p.end; ++j) {
             QuadraticBezier curve;
-            curve.a = bez[j].a - coordinate.xy;
-            curve.b = bez[j].b - coordinate.xy;
-            curve.c = bez[j].c - coordinate.xy;
+            curve.a = C*(bez[j].a - coordinate.xy);
+            curve.b = C*(bez[j].b - coordinate.xy);
+            curve.c = C*(bez[j].c - coordinate.xy);
+
+            // The curve is now transformed into something approximating screen
+            // space.  The curve xy(t) was formerly constrained to be monotonic
+            // and single-valued with respect to both x and y, but the shear
+            // part of the transform has broken this for x and curves like
+            // x = (t-0.5)**2 are now permitted. y remains monotonic and x(y)
+            // is single valued.
             
-            float ts[7];
+            // Note that the control points still bound the curve so it is
+            // valid to early-out on the hull failing to intersect the
+            // kernel.
+            
+            // To integrate the area to the right of the curve, weighted by
+            // the 2d unit normal distribution, further transform the curve
+            // by compacting x,y -> erfc((x,y)); the area to the right of
+            // this curve is the desired quanitity.   This transformation is
+            // itself monotonic for each coordinate.
+            
+            // We can now integrate \int_0^2 x(y)dy = \int_0^1 x(t) dydt(t) dt
+            
+            // Via the trapezoid rule, for (x,y) samples on the curve
+            
+            // If we sample at fixed points, our sampling becomes too coarse at
+            // large magnficiations
+            
+            // We nominate 5 critical points for the integral:
+            //     t = 0
+            //     t = 1
+            //     y = 0 (may not exist)
+            //     x = 0 (zero, one or two solutions)
+            // These are the endpoints, and the points where the derivative of
+            // erfc is maximized.  A different point of interest might be the
+            // closest approach.  Notably we don't need to exactly find these
+            // points, we just need to get samples somewhere in the middle
+            // of the x and y erfcs.
+            //
+            // We also sample midway (in t) between these points.  In
+            // particular, this captures the inflection between the x=0
+            // crossings
+            
+            // Finding the roots in t for x=0 and y=0 is somewhat awkward and
+            // doesn't scale well to cubics.  An alternative approach would be
+            // some kind of direct bisection or even Newton-Raphson inspired
+            // unequal bisection, to progressively refine the trapezoids with
+            // the worst error bounds.  We know, a priori, a great deal about
+            // the curve and integral even after the shearing.
+            
+            // We could early-out aggressively on the basis of y.
+            
+            // Bisection and early-out may not be an optimization, however if it
+            // forces the threadgroup(simdgroup?) control flow to diverge?
+            
+            // If we use a polynomial approximation for erfc, the integral
+            // itself becomes a (piecewise)polynomial, in high powers of t.
+            // However we would still need to root-find the patch boundaries,
+            // equivalent to finding where the curve crosses the boundary of some
+            // square region.
+            
+            
+            float ts[9];
             ts[0] = 0.0;
-            ts[2] = bezier_t_for_x(0.0, 0.0, 1.0, curve.a, curve.b, curve.c);
-            ts[4] = bezier_t_for_y(0.0, 0.0, 1.0, curve.a, curve.b, curve.c);
-            ts[6] = 1.0;
+            ts[2] = bezier_t_for_y(0.0, 0.0, 1.0, curve.a, curve.b, curve.c);
+            float2 tsx0 = bezier_ts_for_x(0.0, 0.0, 1.0, curve.a, curve.b, curve.c);
+            ts[4] = tsx0[0];
+            ts[6] = tsx0[1];
+            ts[8] = 1.0;
+            // clumsy sort
             if (ts[2] > ts[4]) {
                 float tmp = ts[2];
                 ts[2] = ts[4];
                 ts[4] = tmp;
             }
+            if (ts[2] > ts[6]) {
+                float tmp = ts[2];
+                ts[2] = ts[6];
+                ts[6] = tmp;
+            }
+            if (ts[4] > ts[6]) {
+                float tmp = ts[4];
+                ts[4] = ts[6];
+                ts[6] = tmp;
+            }
             ts[1] = (ts[0] + ts[2]) * 0.5;
             ts[3] = (ts[2] + ts[4]) * 0.5;
             ts[5] = (ts[4] + ts[6]) * 0.5;
-            float2 points[7];
-            for (int i = 0; i != 7; ++i) {
-                points[i] = erfc_approx(bezier_xy_for_t(ts[i], curve.a, curve.b, curve.c)
-                                        /float2(2,2));
+            ts[7] = (ts[6] + ts[8]) * 0.5;
+            float2 points[9];
+            
+            // float scale_hack = input.v.position.z;
+//            
+
+            for (int i = 0; i != 9; ++i) {
+                points[i] = erfc_approx(bezier_xy_for_t(ts[i], curve.a, curve.b, curve.c));
             }
-            for (int i = 0; i != 6; ++i) {
+            for (int i = 0; i != 8; ++i) {
                 cumulant += (points[i+1].y - points[i].y) * (points[i].x + points[i+1].x);
             }
-            // cumulant +=
-            // break;
         }
-            
-        // cumulant = ts[3];
-    
+                
         cumulant = clamp(cumulant * 0.125, 0.0, 1.0);
-        
-        // result.color = half4(cumulant, cumulant, cumulant, 1.0);
-        result.color.r = cumulant;
-        result.color.g = cumulant;
-        result.color.b = cumulant;
-        result.color.a = 1.0;
-        // result.color.r = ts[2];
-        // result.color.g = ts[4];
+
+        result.color.r = 0.0;//C[0][0] * 0.001;
+        result.color.g = 0.0;//C[1][1] * 0.001; //C[1][1] * 0.001;
+        result.color.b = 0.0; //abs(C[1][0]) * 0.01;//0.0; //C[1][1] * 0.001;
+        result.color.a = cumulant;
         return result;
     }
     

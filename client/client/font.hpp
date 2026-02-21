@@ -31,7 +31,28 @@ namespace wry {
     };
     
     Font build_font(SpriteAtlas&);
-    std::pair<std::vector<otf::GlyphData>, std::vector<otf::QuadraticBezier>> build_font2();
+
+    
+    
+    struct Font2 {
+        
+        struct Glyph {
+            uint glyph_index;
+            float advance;
+        };
+        
+        Table<char32_t, Glyph> charmap;
+        
+        float ascender;
+        float descender;
+        float height;
+        
+        std::vector<otf::GlyphData> glyph_data;
+        std::vector<otf::QuadraticBezier> quadratic_bezier;
+        
+    };
+    
+    Font2 build_font2();
 
     
     std::tuple<float2, matrix_view<R8Unorm>, float2> get_glyph(char32_t);

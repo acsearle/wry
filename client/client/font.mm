@@ -245,8 +245,9 @@ namespace wry {
     }
      */
     
-    std::pair<std::vector<otf::GlyphData>, std::vector<otf::QuadraticBezier>>
-    build_font2() {
+    Font2 build_font2() {
+        
+        Font2 result;
         
         FT_Library ft;
         FT_Error e = FT_Init_FreeType(&ft);
@@ -264,8 +265,8 @@ namespace wry {
         
         // constexpr float k = 1.0f / 64.0f; // metrics are in 26.6 fixed point
         
-        std::vector<otf::GlyphData> gi;
-        std::vector<otf::QuadraticBezier> cp;
+        auto& gi = result.glyph_data;
+        auto& cp = result.quadratic_bezier;
 
         FT_Outline& outline = face->glyph->outline;
 //
@@ -283,7 +284,7 @@ namespace wry {
         auto push = [&](int k) {
             {
                 FT_Vector a = outline.points[k];
-                p.push_back(float2{(float)a.x, (float)a.y});
+                p.push_back(float2{(float)a.x / 1000.0f, (float)a.y / 1000.0f});
             }
             // printf("%d ", outline.tags[k] & 3);
             if (outline.tags[k] & 1) {
@@ -367,14 +368,17 @@ namespace wry {
                 }
                 
                 gi[gindex] = otf::GlyphData{
-                    float2{(float)cb.xMin, (float)cb.yMin},
-                    float2{(float)cb.xMax, (float)cb.yMax},
+                    float2{(float)cb.xMin / 1000.0f, (float)cb.yMin / 1000.0f},
+                    float2{(float)cb.xMax / 1000.0f, (float)cb.yMax / 1000.0f},
                     cp_a,
                     cp_b,
                 };
             }
             
   
+            float advance = face->glyph->advance.x / 1000.0f;
+            result.charmap.insert(std::make_pair((uint) charcode, Font2::Glyph{gindex, advance}));
+
             charcode = FT_Get_Next_Char(face, charcode, &gindex);
         }
         
@@ -387,7 +391,7 @@ namespace wry {
         
         //return result;
         
-        return { gi, cp };
+        return result;
     }
     
     
@@ -400,12 +404,12 @@ namespace wry {
     
     // source of glyph coverage maps or signed distance fields
     
-    struct Font2 {
+    struct Font3 {
         
         FT_Library library;
         FT_Face face;
                 
-        Font2() {
+        Font3() {
             
             FT_Error e;
             
@@ -434,7 +438,7 @@ namespace wry {
             
         }
         
-        ~Font2() {
+        ~Font3() {
             FT_Done_FreeType(library);
         }
         
@@ -466,7 +470,7 @@ namespace wry {
     }; // struct Font2
     
     std::tuple<float2, matrix_view<R8Unorm>, float2> get_glyph(char32_t charcode) {
-        static auto* f = new Font2();
+        static auto* f = new Font3();
         
         return (*f)[charcode];
         

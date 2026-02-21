@@ -228,6 +228,11 @@ namespace otf {
         simd_float2 c;
         simd_float2 _padding[1];
     };
+    
+    struct PerParagraph {
+        // Holonomic transformation from (u,v,0,1) to screen
+        simd_float4x4 transform;
+    };
 
 }
 

@@ -86,12 +86,13 @@
         
     wry::SpriteAtlas* _atlas;
     wry::Font* _font;
-    
+    wry::Font2 _font2;
+
     // Bezier font
     
     id<MTLRenderPipelineState> _bezierRenderPipelineState;
-    std::vector<otf::GlyphData> _otf_glyph_data;
-    std::vector<otf::QuadraticBezier> _otf_quadratic_bezier;
+    //std::vector<otf::GlyphData> _otf_glyph_data;
+    //std::vector<otf::QuadraticBezier> _otf_quadratic_bezier;
                     
     
     // bloom
@@ -578,10 +579,7 @@
             _font = new wry::Font(build_font(*_atlas));
             
             
-            std::tie(
-                     _otf_glyph_data,
-                     _otf_quadratic_bezier
-                     ) = build_font2();
+            _font2 = build_font2();
             
             
         }
@@ -844,14 +842,14 @@
     [encoder setRenderPipelineState:_bezierRenderPipelineState];
         
     // These can be constants
-    std::vector<otf::QuadraticBezier> curves = _otf_quadratic_bezier;
+    std::vector<otf::QuadraticBezier> curves = _font2.quadratic_bezier;
     //curves.push_back({{0.0f, 0.0f},{0.5f, 0.0f},{0.5f, 0.5f},});
     //curves.push_back({{0.6f, 0.5f},{0.5f, 0.0f},{0.0f, -0.1f},});
     id<MTLBuffer> buf_curves = [_device newBufferWithBytes:curves.data()
                                              length:curves.size()*sizeof(otf::QuadraticBezier)
                                             options:MTLStorageModeShared];
     
-    std::vector<otf::GlyphData> gi = _otf_glyph_data;
+    std::vector<otf::GlyphData> gi = _font2.glyph_data;
     // gi.push_back({{-0.2, -0.2}, {0.7, 0.6}, 0, 2});
     id<MTLBuffer> buf_gi = [_device newBufferWithBytes:gi.data()
                                              length:gi.size()*sizeof(otf::GlyphData)
@@ -859,9 +857,19 @@
 
     // This is per draw
     std::vector<otf::PlacedGlyph> characters;
-    static unsigned int oof = 0;
-    characters.push_back({{0.0, 0.0}, oof});
-    ++oof; if (oof >= gi.size()) oof = 0;
+    //static unsigned int oof = 0;
+    // characters.push_back({{0.0, 0.0}, 33});
+    //++oof; if (oof >= gi.size()) oof = 0;
+    auto str = "Sphinx of black quartz, judge my vow.";
+    simd_float2 pos = {-4.0, -1.0};
+    for (auto a = str; *a; ++a) {
+        // auto q = _font->charmap.find(*a);
+        auto q = _font2.charmap.find(*a);
+        characters.push_back({pos, q->second.glyph_index});
+        //pos.x += q->second.advance * 0.01;
+        pos.x += q->second.advance;
+    }
+    
     id<MTLBuffer> buf_ch = [_device newBufferWithBytes:characters.data()
                                                length:characters.size()*sizeof(otf::PlacedGlyph)
                                               options:MTLStorageModeShared];
@@ -871,7 +879,7 @@
     
     [encoder setFragmentBuffer:buf_curves offset:0 atIndex:0];
     
-    [encoder drawMeshThreadgroups:MTLSizeMake(1,1,1)
+    [encoder drawMeshThreadgroups:MTLSizeMake(characters.size(),1,1)
       threadsPerObjectThreadgroup:MTLSizeMake(1,1,1)
         threadsPerMeshThreadgroup:MTLSizeMake(1,1,1)];
     
