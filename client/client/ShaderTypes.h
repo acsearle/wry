@@ -208,6 +208,12 @@ typedef struct
 
 namespace otf {
     
+    struct BezierUniforms {
+        matrix_float4x4 transformation;
+        matrix_float4x4 inverse_transformation;
+        simd_float2 pixel_size;
+    };
+    
     struct PlacedGlyph {
         simd_float2 position;
         unsigned int glyph_index;

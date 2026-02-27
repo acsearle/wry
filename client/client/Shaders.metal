@@ -113,9 +113,7 @@ namespace otf {
     
     
     
-    struct BezierUniforms {
-        float4x4 transformation;
-    };
+   
     
     struct BezierPerVertex {
         float4 position [[position]];
@@ -146,12 +144,13 @@ namespace otf {
       max_total_threads_per_threadgroup(1024)]]
     void bezierMeshFunction(MeshOut output,
                             // const object_data BezierPayload& payload [[payload]],
+                            constant otf::BezierUniforms& uniforms [[buffer(3)]],
                             const device otf::GlyphData* buf_gi [[buffer(0)]],
                             const device otf::PlacedGlyph* buf_ch [[buffer(1)]],
                             const device otf::PerParagraph* buf_pp [[buffer(2)]],
                             uint lid [[thread_index_in_threadgroup]],
                             uint tid [[threadgroup_position_in_grid]]) {
-
+        
         output.set_primitive_count(2);
         
         otf::PlacedGlyph ch = buf_ch[tid];
@@ -172,33 +171,115 @@ namespace otf {
         }
 
         {
-            BezierPerVertex v{};
+            float2 a[4];
 
-            // We need to inflate the quads to allow the antialiasing to spread
-            // out a few extra pixels.  Ideally this would be done in, or with
-            // knowledge of, screen space.
-            float d = 1.0 / 32.0;
+            // construct quad in texture coordinate space
+            a[0] = float2(gi.a.x, gi.a.y);
+            a[1] = float2(gi.a.x, gi.b.y);
+            a[2] = float2(gi.b.x, gi.a.y);
+            a[3] = float2(gi.b.x, gi.b.y);
             
-            v.coordinate = float4(gi.a.x - d, gi.a.y - d, 1.0, 1.0);
-            v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
-            v.position.w += (v.position.x + v.position.y) / 4.0;
-            v.position.xyz /= float3(19.2,10.8,10.8) * 0.5;
-            output.set_vertex(0, v);
-            v.coordinate = float4(gi.a.x - d, gi.b.y + d, 1.0, 1.0);
-            v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
-            v.position.w += (v.position.x + v.position.y) / 4.0;
-            v.position.xyz /= float3(19.2,10.8,10.8) * 0.5;
-            output.set_vertex(1, v);
-            v.coordinate = float4(gi.b.x + d, gi.a.y - d, 1.0, 1.0);
-            v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
-            v.position.w += (v.position.x + v.position.y) / 4.0;
-            v.position.xyz /= float3(19.2,10.8,10.8) * 0.5;
-            output.set_vertex(2, v);
-            v.coordinate = float4(gi.b.x + d, gi.b.y + d, 1.0, 1.0);
-            v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
-            v.position.w += (v.position.x + v.position.y) / 4.0;
-            v.position.xyz /= float3(19.2,10.8,10.8) * 0.5;
-            output.set_vertex(3, v);
+            
+            
+            
+            
+            float2 b[4];
+            for (int i = 0; i != 4; ++i) {
+                // apply positioning in texture space
+                // transform vertices to screen space
+                float4 c = uniforms.transformation * float4(a[i] + ch.position, 0, 1);
+                b[i] = c.xy / c.w;
+            }
+            
+            // b is a screen-space quad
+            // find the axis-aligned bounding box of b, and pad it by some
+            // number of pixels
+            
+            // pixel_size is 2.0 / (viewport width, viewport height)
+            
+            // TODO: This is an AABB of a transformed AABB; supply hull instead?
+            
+            float2 c[4];
+            c[0] = min(min(b[0], b[1]), min(b[2], b[3])) - uniforms.pixel_size * 2;
+            c[3] = max(max(b[0], b[1]), max(b[2], b[3])) + uniforms.pixel_size * 2;
+            c[1] = float2(c[0].x, c[3].y);
+            c[2] = float2(c[3].x, c[0].y);
+
+            // TODO: Under extreme transformations, this AABB might cross the
+            // horizon of the perspective projection.
+
+            // The corners of the box define rays we need to project back to
+            // texture space
+            
+            // First, we have c.xyzw where we know xy, w = 1, and z is unknown
+            // We undo the homogneous transformation: d.xyzw = c.xyzw * d.w
+            // We apply the inverse transform: e = B * d
+            // We solve for e.z = 0 and e.w = 1
+            // e = B * (c.xy01 * d.w + c.0010 * d.w * d.z)
+            // 0 = (B * (c.xy01 + c.0010 * d.z)).z
+            //
+            for (int i = 0; i != 4; ++i) {
+                float4 f = uniforms.inverse_transformation * float4(c[i].xy, 0, 1);
+                float4 g = uniforms.inverse_transformation * float4(0, 0, 1, 0);
+                // These divisions can be singular if the points lie on the
+                // horizon of a perspective projection (or the matrix itself is
+                // singular)
+                float h = - f.z / g.z;
+                float4 p = f + g * h;
+                p /= p.w;
+                // Now p.z = 0 and p.w = 1
+                
+                BezierPerVertex v;
+                v.position = uniforms.transformation * p;
+                v.coordinate = float4(p.xy - ch.position, 0, 1);
+                output.set_vertex(i, v);
+            }
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+
+            
+            
+//                
+//            BezierPerVertex v;
+//            
+//
+//            // We need to inflate the quads to allow the antialiasing to spread
+//            // out a few extra pixels.  Ideally this would be done in, or with
+//            // knowledge of, screen space.
+//            float d = 1.0 / 32.0;
+//            
+//            v.coordinate = float4(gi.a.x - d, gi.a.y - d, 1.0, 1.0);
+//            v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
+//            v.position.w += (v.position.x + v.position.y) / 4.0;
+//            v.position.xyz /= float3(19.2,10.8,10.8) * 0.5;
+//            output.set_vertex(0, v);
+//            v.coordinate = float4(gi.a.x - d, gi.b.y + d, 1.0, 1.0);
+//            v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
+//            v.position.w += (v.position.x + v.position.y) / 4.0;
+//            v.position.xyz /= float3(19.2,10.8,10.8) * 0.5;
+//            output.set_vertex(1, v);
+//            v.coordinate = float4(gi.b.x + d, gi.a.y - d, 1.0, 1.0);
+//            v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
+//            v.position.w += (v.position.x + v.position.y) / 4.0;
+//            v.position.xyz /= float3(19.2,10.8,10.8) * 0.5;
+//            output.set_vertex(2, v);
+//            v.coordinate = float4(gi.b.x + d, gi.b.y + d, 1.0, 1.0);
+//            v.position = v.coordinate + float4(ch.position.xy, 0.0, 0.0);
+//            v.position.w += (v.position.x + v.position.y) / 4.0;
+//            v.position.xyz /= float3(19.2,10.8,10.8) * 0.5;
+//            output.set_vertex(3, v);
         }
 
     }
@@ -258,13 +339,18 @@ namespace otf {
     //  IN THE SOFTWARE.
     
     float2 erf_tanh_approx(float2 x) {
-        // This approximation produces visible problems
+        // tanh(2.0/sqrt(pi) * x)
         return tanh(1.202760580 * x);
     }
-    
+
+    float2 erf_tanh_approx2(float2 x) {
+        // tanh(2.0/sqrt(pi) * x + 11/123 x*x*x)
+        return tanh(1.202760580 * x + 0.0894308943*x*x*x);
+    }
+
     float2 erf6(const float2 x)
     {
-        //  Float2 version:
+        // Abramowitz and Stegun #2
         const float2 one = float2(1.0);
         const float2 sign_x = sign(x);
         const float2 t = one/(one + 0.47047*abs(x));
@@ -274,6 +360,8 @@ namespace otf {
     }
     
     float2 erf_shadertoy(float2 x) {
+        // destroys precision around 0.0?
+        // Reduced Sergei Winitzki global Padé approximant?
         return sign(x) * sqrt(1.0 - exp2(-1.787776 * x * x)); // likely faster version by @spalmer
     }
         
@@ -459,7 +547,7 @@ namespace otf {
 
         result.color.r = 0.0;//C[0][0] * 0.001;
         result.color.g = 0.0;//C[1][1] * 0.001; //C[1][1] * 0.001;
-        result.color.b = 0.0; //abs(C[1][0]) * 0.01;//0.0; //C[1][1] * 0.001;
+        result.color.b = 1.0 - cumulant; //abs(C[1][0]) * 0.01;//0.0; //C[1][1] * 0.001;
         result.color.a = cumulant;
         return result;
     }

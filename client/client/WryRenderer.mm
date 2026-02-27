@@ -873,11 +873,26 @@
     id<MTLBuffer> buf_ch = [_device newBufferWithBytes:characters.data()
                                                length:characters.size()*sizeof(otf::PlacedGlyph)
                                               options:MTLStorageModeShared];
+    
+    otf::BezierUniforms un;
+    
+    float aspect_ratio = _model->_viewport_size.x / _model->_viewport_size.y;
+    un.transformation = matrix_float4x4{{
+        { 0.1f, 0.0f * aspect_ratio, 0.0f, 0.1f },
+        {-0.0f, 0.1f * aspect_ratio, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 0.1f, 0.0f },
+        { 0.0f, 0.0f, 0.5f, 1.0f },
+    }};
+    
+    
+    un.inverse_transformation = inverse(un.transformation);
+    un.pixel_size = 4.0 / _model->_viewport_size;
 
     [encoder setMeshBuffer:buf_gi offset:0 atIndex:0];
     [encoder setMeshBuffer:buf_ch offset:0 atIndex:1];
     
     [encoder setFragmentBuffer:buf_curves offset:0 atIndex:0];
+    [encoder setMeshBytes:&un length:sizeof(un) atIndex:3];
     
     [encoder drawMeshThreadgroups:MTLSizeMake(characters.size(),1,1)
       threadsPerObjectThreadgroup:MTLSizeMake(1,1,1)
