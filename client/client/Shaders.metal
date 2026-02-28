@@ -23,6 +23,16 @@ namespace otf {
         return abc;
     }
     
+    float2 bezier_xy_for_t(float t, float2 a, float2 b, float2 c, float2 d) {
+        float2 ab = mix(a, b, t);
+        float2 bc = mix(b, c, t);
+        float2 cd = mix(c, d, t);
+        float2 abc = mix(ab, bc, t);
+        float2 bcd = mix(bc, cd, t);
+        float2 abcd = mix(abc, bcd, t);
+        return abcd;
+    }
+    
     float quadratic_root(float a, float b, float c, float t0, float t1) {
         // When the root becomes invalid we want continuity
 
@@ -104,6 +114,53 @@ namespace otf {
                          q > 0.0 ? t2 : t1);
         return t3;
     }
+    
+    
+    float cbrt(float x) {
+        return sign(x) * pow(abs(x), 1.0 / 3.0);
+    }
+    
+    
+    float solve_cubic(float a, float b, float c, float d) {
+        // normalize
+        a /= d;
+        b /= d;
+        c /= d;
+        
+        float p = (3.0*b - a*a)/3.0;
+        float p3 = p/3.0;
+        float q = (2.0*a*a*a - 9.0*a*b + 27.0 * c)/27.0;
+        float q2 = q/2;
+        float discriminant = q2*q2 + p3*p3*p3;
+        float sd = sqrt(discriminant);
+        float u1 = cbrt(sd - q2);
+        float v1 = cbrt(sd + q2);
+        float root1 = u1 - v1 - a/3.0;
+        return root1;
+    }
+    
+    float bezier_t_for_y(float y, float t0, float t1, float2 a, float2 b, float2 c, float2 d) {
+//        float r = quadratic_root(a.x - 2.0*b.x + c.x,
+//                                 -2.0*a.x + 2.0*b.x,
+//                                 a.x - x,
+//                                 t0,
+//                                 t1);
+//        return r;
+        
+        a.y -= y;
+        b.y -= y;
+        c.y -= y;
+        d.y -= y;
+        float r = solve_cubic(3.0*a.y - 6.0*b.y + 3.0*c.y,
+                              -3.0*a.y + 3.0*b.y,
+                              a.y,
+                              -a.y+ 3.0*b.y -3.0*c.y+d.y);
+        return clamp(r, t0, t1);
+        
+    }
+    
+    
+    
     
     
     
@@ -390,7 +447,7 @@ namespace otf {
     
     [[fragment]] BezierFragmentOut
     bezierFragmentFunction(BezierFragmentIn input [[stage_in]],
-                           const device otf::QuadraticBezier* bez [[buffer(0)]]) {
+                           const device otf::CubicBezier* bez [[buffer(0)]]) {
         
         float2 coordinate = input.v.coordinate.xy;
         
@@ -440,10 +497,11 @@ namespace otf {
         // with linear and coherent memory access, and with no divergence of
         // control flow
         for (uint j = input.p.begin; j != input.p.end; ++j) {
-            QuadraticBezier curve;
+            CubicBezier curve;
             curve.a = C*(bez[j].a - coordinate.xy);
             curve.b = C*(bez[j].b - coordinate.xy);
             curve.c = C*(bez[j].c - coordinate.xy);
+            curve.d = C*(bez[j].d - coordinate.xy);
 
             // The curve is now transformed into something approximating screen
             // space.  The curve xy(t) was formerly constrained to be monotonic
@@ -501,14 +559,18 @@ namespace otf {
             // However we would still need to root-find the patch boundaries,
             // equivalent to finding where the curve crosses the boundary of some
             // square region.
-            
+            /*
             
             float ts[9];
             ts[0] = 0.0;
-            ts[2] = bezier_t_for_y(0.0, 0.0, 1.0, curve.a, curve.b, curve.c);
-            float2 tsx0 = bezier_ts_for_x(0.0, 0.0, 1.0, curve.a, curve.b, curve.c);
-            ts[4] = tsx0[0];
-            ts[6] = tsx0[1];
+            ts[2] = 0.25;
+            ts[4] = 0.50;
+            ts[6] = 0.75;
+            //ts[2] = bezier_t_for_y(0.0, 0.0, 1.0, curve.a, curve.b, curve.c);
+            //float2 tsx0 = bezier_ts_for_x(0.0, 0.0, 1.0, curve.a, curve.b, curve.c);
+            //ts[4] = tsx0[0];
+            //ts[6] = tsx0[1];
+            ts[4] = bezier_t_for_y(0.0, 0.0, 1.0, curve.a, curve.b, curve.c, curve.d);
             ts[8] = 1.0;
             // clumsy sort
             if (ts[2] > ts[4]) {
@@ -533,17 +595,55 @@ namespace otf {
             float2 points[9];
             
             // float scale_hack = input.v.position.z;
-//            
+//
+             
+             */
+            
+            // Now we have to solve an integral
+            
+            // Solve by bisection
+            // Ideally we would have a stack and be able to recurse into problem
+            // areas.  What about amoeba to do this in a principled way?
+            // Early out likely stalls the group until the worst case is done
+            float t0 = 0.0;
+            float t1 = 1.0;
+            float2 p0 = erfc_approx(curve.a);
+            float2 p1 = erfc_approx(curve.d);
+            // Ironically, this hard limit will pixelate extreme zooms.
+            for (int i = 0; i != 7; ++i) {
+                float t2 = (t0 + t1) * 0.5;
+                float2 p2 = erfc_approx(bezier_xy_for_t(t2, curve.a, curve.b, curve.c, curve.d));
+                float2 dy0 = p2 - p0;
+                float2 dy1 = p1 - p2;
+                // Decide which interval to accept and which to recurse into
+                // based on the area of the curve's bounding box.
+                // Can the compiler implement the below branchfree?
+                // When we greedily decide to subdivide, we are giving up any
+                // chance to improve the other interval
+                if (abs(dy0.x * dy0.y) < abs(dy1.x * dy1.y)) {
+                    cumulant += dy0.y * (p0.x + p2.x);
+                    p0 = p2;
+                    t0 = t2;
+                } else {
+                    cumulant += dy1.y * (p2.x + p1.x);
+                    p1 = p2;
+                    t1 = t2;
+                }
+            }
+            // Final section:
+            cumulant += (p1.y - p0.y) * (p0.x + p1.x);
 
-            for (int i = 0; i != 9; ++i) {
-                points[i] = erfc_approx(bezier_xy_for_t(ts[i], curve.a, curve.b, curve.c));
-            }
-            for (int i = 0; i != 8; ++i) {
-                cumulant += (points[i+1].y - points[i].y) * (points[i].x + points[i+1].x);
-            }
+            
+
+//            for (int i = 0; i != 9; ++i) {
+//                points[i] = erfc_approx(bezier_xy_for_t(ts[i], curve.a, curve.b, curve.c, curve.d));
+//            }
+//            for (int i = 0; i != 8; ++i) {
+//                cumulant += (points[i+1].y - points[i].y) * (points[i].x + points[i+1].x);
+//            }
         }
                 
-        cumulant = clamp(cumulant * 0.125, 0.0, 1.0);
+        cumulant = clamp(cumulant * 0.125, -1.0, 1.0);
 
         result.color.r = 0.0;//C[0][0] * 0.001;
         result.color.g = 0.0;//C[1][1] * 0.001; //C[1][1] * 0.001;

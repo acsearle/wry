@@ -842,11 +842,11 @@
     [encoder setRenderPipelineState:_bezierRenderPipelineState];
         
     // These can be constants
-    std::vector<otf::QuadraticBezier> curves = _font2.quadratic_bezier;
+    std::vector<otf::CubicBezier> curves = _font2.cubic_bezier;
     //curves.push_back({{0.0f, 0.0f},{0.5f, 0.0f},{0.5f, 0.5f},});
     //curves.push_back({{0.6f, 0.5f},{0.5f, 0.0f},{0.0f, -0.1f},});
     id<MTLBuffer> buf_curves = [_device newBufferWithBytes:curves.data()
-                                             length:curves.size()*sizeof(otf::QuadraticBezier)
+                                             length:curves.size()*sizeof(otf::CubicBezier)
                                             options:MTLStorageModeShared];
     
     std::vector<otf::GlyphData> gi = _font2.glyph_data;
@@ -860,8 +860,9 @@
     //static unsigned int oof = 0;
     // characters.push_back({{0.0, 0.0}, 33});
     //++oof; if (oof >= gi.size()) oof = 0;
-    auto str = "Sphinx of black quartz, judge my vow.";
+    auto str = "Sphinx of black quartz, judge my rasterizer.";
     simd_float2 pos = {-4.0, -1.0};
+    // pos += _model->_looking_at / 1024.0f * float2{1.0f, -1.0f};
     for (auto a = str; *a; ++a) {
         // auto q = _font->charmap.find(*a);
         auto q = _font2.charmap.find(*a);
@@ -877,16 +878,19 @@
     otf::BezierUniforms un;
     
     float aspect_ratio = _model->_viewport_size.x / _model->_viewport_size.y;
+    float scale_size = 240.0f * 2.0 / _model->_viewport_size.x;
     un.transformation = matrix_float4x4{{
-        { 0.1f, 0.0f * aspect_ratio, 0.0f, 0.1f },
-        {-0.0f, 0.1f * aspect_ratio, 0.0f, 0.0f },
-        { 0.0f, 0.0f, 0.1f, 0.0f },
+        { scale_size, 0.0f * aspect_ratio, 0.0f, 0.0f },
+        {-0.0f, scale_size * aspect_ratio, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 0.5f, 0.0f },
         { 0.0f, 0.0f, 0.5f, 1.0f },
     }};
     
+    // un.transformation = _model->_uniforms.viewprojection_transform;
+    
     
     un.inverse_transformation = inverse(un.transformation);
-    un.pixel_size = 4.0 / _model->_viewport_size;
+    un.pixel_size = 1.0 / _model->_viewport_size;
 
     [encoder setMeshBuffer:buf_gi offset:0 atIndex:0];
     [encoder setMeshBuffer:buf_ch offset:0 atIndex:1];

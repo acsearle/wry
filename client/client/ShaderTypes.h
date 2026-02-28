@@ -228,12 +228,20 @@ namespace otf {
         unsigned int _padding[2];
     };
     
-    struct QuadraticBezier {
+//    struct QuadraticBezier {
+//        simd_float2 a;
+//        simd_float2 b;
+//        simd_float2 c;
+//        simd_float2 _padding[1];
+//    };
+
+    struct CubicBezier {
         simd_float2 a;
         simd_float2 b;
         simd_float2 c;
-        simd_float2 _padding[1];
+        simd_float2 d;
     };
+
     
     struct PerParagraph {
         // Holonomic transformation from (u,v,0,1) to screen

@@ -266,7 +266,7 @@ namespace wry {
         // constexpr float k = 1.0f / 64.0f; // metrics are in 26.6 fixed point
         
         auto& gi = result.glyph_data;
-        auto& cp = result.quadratic_bezier;
+        auto& cp = result.cubic_bezier;
 
         FT_Outline& outline = face->glyph->outline;
 //
@@ -294,40 +294,49 @@ namespace wry {
                     } break;
                     case 2: {
                         // Line
-                        cp.push_back(otf::QuadraticBezier{
+                        cp.push_back(otf::CubicBezier{
                             p[0],
-                            mix(p[0], p[1], float2{0.5f, 0.5f}),
+                            mix(p[0], p[1], float2{1.0f, 1.0f} / 3.0f),
+                            mix(p[0], p[1], float2{2.0f, 2.0f} / 3.0f),
                             p[1],
                         });
-                        p[0] = p[1];
+                        p[0] = p.back();
                         p.resize(1);
                     } break;
                     case 3: {
                         // Quadratic Bezier curve
-                        cp.push_back(otf::QuadraticBezier{
+                        cp.push_back(otf::CubicBezier{
+                            p[0],
+                            mix(p[0], p[1], float2{2.0, 2.0} / 3.0f),
+                            mix(p[1], p[2], float2{1.0, 1.0} / 3.0f),
+                            p[2],
+                        });
+                        p[0] = p.back();
+                        p.resize(1);
+                    } break;
+                    case 4: {
+                        // Cubic Bezier curve
+//                        simd_float2 ab = mix(p[0], p[1], float2{0.75f, 0.75f});
+//                        simd_float2 cd = mix(p[2], p[3], float2{0.25f, 0.25f});
+//                        simd_float2 abcd = mix(ab, cd, float2{0.5f, 0.5f});
+//                        cp.push_back(otf::QuadraticBezier{
+//                            p[0],
+//                            ab,
+//                            abcd
+//                        });
+//                        cp.push_back(otf::QuadraticBezier{
+//                            abcd,
+//                            cd,
+//                            p[3],
+//                        });
+//                        p[0] = p[3];
+                        cp.push_back(otf::CubicBezier{
                             p[0],
                             p[1],
                             p[2],
-                        });
-                        p[0] = p[2];
-                        p.resize(1);
-                    }
-                    case 4: {
-                        // Cubic Bezier curve
-                        simd_float2 ab = mix(p[0], p[1], float2{0.75f, 0.75f});
-                        simd_float2 cd = mix(p[2], p[3], float2{0.25f, 0.25f});
-                        simd_float2 abcd = mix(ab, cd, float2{0.5f, 0.5f});
-                        cp.push_back(otf::QuadraticBezier{
-                            p[0],
-                            ab,
-                            abcd
-                        });
-                        cp.push_back(otf::QuadraticBezier{
-                            abcd,
-                            cd,
                             p[3],
                         });
-                        p[0] = p[3];
+                        p[0] = p.back();
                         p.resize(1);
                     } break;
                     default:

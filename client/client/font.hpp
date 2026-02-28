@@ -48,7 +48,7 @@ namespace wry {
         float height;
         
         std::vector<otf::GlyphData> glyph_data;
-        std::vector<otf::QuadraticBezier> quadratic_bezier;
+        std::vector<otf::CubicBezier> cubic_bezier;
         
     };
     
