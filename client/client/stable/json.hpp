@@ -86,15 +86,15 @@ namespace wry::json {
     }
     
     inline auto match_json_true() {
-        return match_string(u8"true");
+        return match_zstr(u8"true");
     }
     
     inline auto match_json_false() {
-        return match_string(u8"false");
+        return match_zstr(u8"false");
     }
     
     inline auto match_json_null() {
-        return match_string(u8"null");
+        return match_zstr(u8"null");
     }
     
     inline auto match_json_number() {
@@ -724,7 +724,7 @@ namespace wry::json {
             
             match_json_whitespace()(v);
             
-            if (match_string("null")(v))
+            if (match_zstr("null")(v))
                 return std::forward<V>(visitor).visit_none();
             
             if (bool x = {}; parse_json_boolean(x)(v))

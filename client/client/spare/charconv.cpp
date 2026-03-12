@@ -8,7 +8,7 @@
 #include <cmath>
 
 #include "assert.hpp"
-#include "chartype.hpp"
+#include "ctype.hpp"
 #include "charconv.hpp"
 
 namespace wry {

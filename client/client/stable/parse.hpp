@@ -16,7 +16,7 @@ namespace wry {
     
     // a parser is a matcher with side effects
     
-    auto parse(auto&& matcher, auto&& effect) {
+    constexpr auto parse(auto&& matcher, auto&& effect) {
         return [matcher=std::forward<decltype(matcher)>(matcher),
                 effect=std::forward<decltype(effect)>(effect)](StringView& v) mutable -> bool {
             StringView u = v;
@@ -24,14 +24,22 @@ namespace wry {
         };
     }
     
-    auto action(auto&& matcher, auto&& effect) {
+    constexpr auto parse_into(auto&& matcher, StringView& target) {
         return [matcher=std::forward<decltype(matcher)>(matcher),
-                effect=std::forward<decltype(effect)>(effect)](StringView& v) mutable -> bool {
+                &target](StringView& v) mutable -> bool {
+            StringView u = v;
+            return matcher(v) && (target.reset(u / v), true);
+        };
+    }
+    
+    constexpr auto action(auto&& matcher, auto&& effect) {
+        return [matcher=std::forward<decltype(matcher)>(matcher),
+                effect=std::forward<decltype(effect)>(effect)](auto& v) mutable -> bool {
             return matcher(v) && ((void) effect(), true);
         };
     };
     
-    inline constexpr auto parse_until(auto&& many, auto&& once, auto&& action) {
+    constexpr auto parse_until(auto&& many, auto&& once, auto&& action) {
         return [many=std::forward<decltype(many)>(many),
                 once=std::forward<decltype(once)>(once),
                 action=std::forward<decltype(action)>(action)](auto& v) mutable -> bool {
@@ -49,7 +57,7 @@ namespace wry {
     }
     
     
-    inline constexpr auto parse_number(auto& x) {
+    constexpr auto parse_number(auto& x) {
         return overloaded{
             [&x](StringView& v) -> bool {
                 auto first = reinterpret_cast<const char*>(v.chars.begin());
@@ -72,13 +80,13 @@ namespace wry {
         };
     }
         
-    inline constexpr auto parse_number_relaxed(auto& x) {
+    constexpr auto parse_number_relaxed(auto& x) {
         return match_and(match_spaces(),
                          match_optional(match_character('+')),
                          parse_number(x));
     }
 
-    inline auto parse_identifier(String& value) {
+    constexpr auto parse_identifier(String& value) {
         return parse(match_identifier(), 
                      [&value](StringView match) {
             value = match;

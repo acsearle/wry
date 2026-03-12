@@ -878,7 +878,7 @@
     otf::BezierUniforms un;
     
     float aspect_ratio = _model->_viewport_size.x / _model->_viewport_size.y;
-    float scale_size = 240.0f * 2.0 / _model->_viewport_size.x;
+    float scale_size = 12.0 * (4.0/3.0) * 2.0 * 2.0 / _model->_viewport_size.x;
     un.transformation = matrix_float4x4{{
         { scale_size, 0.0f * aspect_ratio, 0.0f, 0.0f },
         {-0.0f, scale_size * aspect_ratio, 0.0f, 0.0f },

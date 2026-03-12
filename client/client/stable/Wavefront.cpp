@@ -109,7 +109,7 @@ namespace wry::Wavefront {
                 String s;
                 packed::float3 f;
                 float g;
-                if (match_and(match_string("newmtl"),
+                if (match_and(match_zstr("newmtl"),
                               match_hspace(),
                               parse_posix_portable_path(s))(v)) {
                     x.emplace_back();
@@ -118,129 +118,129 @@ namespace wry::Wavefront {
                 }
                 if (x.empty())
                     return true;
-                if (match_and(match_string("Kd"),
+                if (match_and(match_zstr("Kd"),
                               match_hspace(),
                               parse_xyz(f))(v)) {
                     x.back().Kd.emplace<packed::float3>(f);
                     continue;
                 }
-                if (match_and(match_string("map_Kd"),
+                if (match_and(match_zstr("map_Kd"),
                               match_hspace(),
                               parse_posix_portable_filename(s))(v)) {
                     x.back().Kd.emplace<String>(std::move(s));
                     continue;
                 }
-                if (match_and(match_string("Ks"),
+                if (match_and(match_zstr("Ks"),
                               match_hspace(),
                               parse_xyz(f))(v)) {
                     x.back().Ks.emplace<packed::float3>(f);
                     continue;
                 }
-                if (match_and(match_string("Ke"),
+                if (match_and(match_zstr("Ke"),
                               match_hspace(),
                               parse_xyz(f))(v)) {
                     x.back().Ke.emplace<packed::float3>(f);
                     continue;
                 }
-                if (match_and(match_string("map_Ke"),
+                if (match_and(match_zstr("map_Ke"),
                               match_hspace(),
                               parse_posix_portable_filename(s))(v)) {
                     x.back().Ke.emplace<String>(std::move(s));
                     continue;
                 }
-                if (match_and(match_string("Ni"),
+                if (match_and(match_zstr("Ni"),
                               match_hspace(),
                               parse_number(g))(v)) {
                     x.back().Ni.emplace<float>(g);
                     continue;
                 }
-                if (match_and(match_string("d"),
+                if (match_and(match_zstr("d"),
                               match_hspace(),
                               parse_number(g))(v)) {
                     x.back().d.emplace<float>(g);
                     continue;
                 }
-                if (match_and(match_string("illum"),
+                if (match_and(match_zstr("illum"),
                               match_hspace(),
                               parse_number(g))(v)) {
                     x.back().illum.emplace<float>(g);
                     continue;
                 }
 
-                if (match_and(match_string("Pr"),
+                if (match_and(match_zstr("Pr"),
                               match_hspace(),
                               parse_number(g))(v)) {
                     x.back().Pr.emplace<float>(g);
                     continue;
                 }
-                if (match_and(match_string("map_Pr"),
+                if (match_and(match_zstr("map_Pr"),
                               match_hspace(),
                               parse_posix_portable_filename(s))(v)) {
                     x.back().Pr.emplace<String>(std::move(s));
                     continue;
                 }
-                if (match_and(match_string("Ps"),
+                if (match_and(match_zstr("Ps"),
                               match_hspace(),
                               parse_number(g))(v)) {
                     x.back().Pr.emplace<float>(g);
                     continue;
                 }
-                if (match_and(match_string("map_Ps"),
+                if (match_and(match_zstr("map_Ps"),
                               match_hspace(),
                               parse_posix_portable_filename(s))(v)) {
                     x.back().Pr.emplace<String>(std::move(s));
                     continue;
                 }
 
-                if (match_and(match_string("Pm"),
+                if (match_and(match_zstr("Pm"),
                               match_hspace(),
                               parse_number(g))(v)) {
                     x.back().Pm.emplace<float>(g);
                     continue;
                 }
-                if (match_and(match_string("map_Pm"),
+                if (match_and(match_zstr("map_Pm"),
                               match_hspace(),
                               parse_posix_portable_filename(s))(v)) {
                     x.back().Pm.emplace<String>(std::move(s));
                     continue;
                 }
-                if (match_and(match_string("Pc"),
+                if (match_and(match_zstr("Pc"),
                               match_hspace(),
                               parse_number(g))(v)) {
                     x.back().Pm.emplace<float>(g);
                     continue;
                 }
-                if (match_and(match_string("map_Pc"),
+                if (match_and(match_zstr("map_Pc"),
                               match_hspace(),
                               parse_posix_portable_filename(s))(v)) {
                     x.back().Pm.emplace<String>(std::move(s));
                     continue;
                 }
-                if (match_and(match_string("Pcr"),
+                if (match_and(match_zstr("Pcr"),
                               match_hspace(),
                               parse_number(g))(v)) {
                     x.back().Pm.emplace<float>(g);
                     continue;
                 }
-                if (match_and(match_string("map_Pcr"),
+                if (match_and(match_zstr("map_Pcr"),
                               match_hspace(),
                               parse_posix_portable_filename(s))(v)) {
                     x.back().Pm.emplace<String>(std::move(s));
                     continue;
                 }
-                if (match_and(match_string("aniso"),
+                if (match_and(match_zstr("aniso"),
                               match_hspace(),
                               parse_number(g))(v)) {
                     x.back().aniso.emplace<float>(g);
                     continue;
                 }
-                if (match_and(match_string("anisor"),
+                if (match_and(match_zstr("anisor"),
                               match_hspace(),
                               parse_number(g))(v)) {
                     x.back().anisor.emplace<float>(g);
                     continue;
                 }
-                if (match_and(match_string("map_Bump -bm"),
+                if (match_and(match_zstr("map_Bump -bm"),
                               match_hspace(),
                               parse_number(g),
                               match_hspace(),
@@ -330,7 +330,7 @@ namespace wry::Wavefront {
         auto parse_coordinate() {
             return [this](StringView& v) {
                 packed::float3 coordinate = {0, 0, 0};
-                return (match_and(match_string("vt"),
+                return (match_and(match_zstr("vt"),
                                   parse_u_vw((float*)&coordinate))(v)
                         && ((void) this->coordinates.push_back(coordinate),
                             true));
@@ -340,7 +340,7 @@ namespace wry::Wavefront {
         auto parse_normal() {
             return [this](StringView& v) {
                 packed::float3 normal = {0, 0, 0};
-                return (match_and(match_string("vn"),
+                return (match_and(match_zstr("vn"),
                                   parse_xyz((float*)&normal))(v)
                         && ((void) this->normals.push_back(normal),
                             true));
@@ -350,7 +350,7 @@ namespace wry::Wavefront {
         auto parse_parameters() {
             return [this](StringView& v) {
                 packed::float3 parameter = { 0, 0, 0};
-                return (match_and(match_string("vp"),
+                return (match_and(match_zstr("vp"),
                                   parse_u_vw((float*)&parameter))(v)
                         && ((void) this->parameters.push_back(parameter),
                             true));
@@ -418,7 +418,7 @@ namespace wry::Wavefront {
         }
         
         auto parse_mtllib() {
-            return match_and(match_string("mtllib"),
+            return match_and(match_zstr("mtllib"),
                              match_plus(match_hspace()),
                              parse(match_posix_portable_path(),
                                    [this](StringView match) {
@@ -439,7 +439,7 @@ namespace wry::Wavefront {
         }
         
         auto parse_usemtl() {
-            return match_and(match_string("usemtl"),
+            return match_and(match_zstr("usemtl"),
                              match_plus(match_hspace()),
                              parse_line([this](StringView match) {
                 // printf("parse_line \"%.*s\"\n", (int) match.chars.size(), (const char*) match.chars.data());
