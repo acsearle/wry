@@ -878,11 +878,11 @@
     otf::BezierUniforms un;
     
     float aspect_ratio = _model->_viewport_size.x / _model->_viewport_size.y;
-    float scale_size = 12.0 * (4.0/3.0) * 2.0 * 2.0 / _model->_viewport_size.x;
+    float scale_size = 48.0 * (4.0/3.0) * 2.0 * 2.0 / _model->_viewport_size.x;
     un.transformation = matrix_float4x4{{
-        { scale_size, 0.0f * aspect_ratio, 0.0f, 0.0f },
-        {-0.0f, scale_size * aspect_ratio, 0.0f, 0.0f },
-        { 0.0f, 0.0f, 0.5f, 0.0f },
+        { 1.0f * scale_size, 0.5f * scale_size * aspect_ratio, 0.0f, 0.1f },
+        {-0.5f * scale_size, 1.0f * scale_size * aspect_ratio, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
         { 0.0f, 0.0f, 0.5f, 1.0f },
     }};
     
@@ -897,7 +897,8 @@
     
     [encoder setFragmentBuffer:buf_curves offset:0 atIndex:0];
     [encoder setMeshBytes:&un length:sizeof(un) atIndex:3];
-    
+    [encoder setFragmentBytes:&un length:sizeof(un) atIndex:3];
+
     [encoder drawMeshThreadgroups:MTLSizeMake(characters.size(),1,1)
       threadsPerObjectThreadgroup:MTLSizeMake(1,1,1)
         threadsPerMeshThreadgroup:MTLSizeMake(1,1,1)];

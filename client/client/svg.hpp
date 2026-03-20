@@ -24,7 +24,7 @@ namespace wry::svg {
     // - Mixed primitives (vs convert all to CubicBezier)
     // - Arcs in paths
     
-    struct CubicBezier {
+    struct CubicBezier {        
         float4x4 control_points;
     };
     

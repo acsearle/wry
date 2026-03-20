@@ -174,11 +174,12 @@ namespace otf {
     
     struct BezierPerVertex {
         float4 position [[position]];
-        float4 coordinate;
+        float4 coordinate [[center_no_perspective]];
     };
 
     struct BezierPerPrimitive {
         uint begin, end;
+        float2 position;
     };
 
     
@@ -217,6 +218,7 @@ namespace otf {
             BezierPerPrimitive p{};
             p.begin = gi.bezier_begin;
             p.end = gi.bezier_end;
+            p.position = ch.position;
             output.set_primitive(0, p);
             output.set_primitive(1, p);
             output.set_index(0, 0);
@@ -239,13 +241,13 @@ namespace otf {
             
             
             
-            
+            float4 q[4];
             float2 b[4];
             for (int i = 0; i != 4; ++i) {
                 // apply positioning in texture space
                 // transform vertices to screen space
-                float4 c = uniforms.transformation * float4(a[i] + ch.position, 0, 1);
-                b[i] = c.xy / c.w;
+                q[i] = uniforms.transformation * float4(a[i] + ch.position, 0, 1);
+                b[i] = q[i].xy / q[i].w;
             }
             
             // b is a screen-space quad
@@ -288,7 +290,11 @@ namespace otf {
                 
                 BezierPerVertex v;
                 v.position = uniforms.transformation * p;
-                v.coordinate = float4(p.xy - ch.position, 0, 1);
+                // v.position = q[i];
+                // v.position = p;
+                // v.coordinate = float4(v.position.xy - ch.position, 0, 1);
+                // screen space coordinate
+                v.coordinate = v.position / v.position.w;
                 output.set_vertex(i, v);
             }
             
@@ -446,7 +452,7 @@ namespace otf {
 
     
     [[fragment]] BezierFragmentOut
-    bezierFragmentFunction(BezierFragmentIn input [[stage_in]],
+    bezierFragmentFunction_v0(BezierFragmentIn input [[stage_in]],
                            const device otf::CubicBezier* bez [[buffer(0)]]) {
         
         float2 coordinate = input.v.coordinate.xy;
@@ -651,6 +657,212 @@ namespace otf {
         result.color.a = cumulant;
         return result;
     }
+    
+    
+    [[fragment]] BezierFragmentOut
+    bezierFragmentFunction(BezierFragmentIn input [[stage_in]],
+                           const device otf::CubicBezier* bez [[buffer(0)]],
+                           constant otf::BezierUniforms& uniforms [[buffer(3)]]) {
+        
+        // coordinate of the center of this pixel
+        float2 coordinate = input.v.coordinate.xy;
+        // page to screen transformation
+        float4x4 A = uniforms.transformation;
+        
+        BezierFragmentOut result{};
+        
+        float cumulant = 0.0;
+        
+        float4 buffer[16][4];
+        int index = 0;
+        
+        for (uint j = input.p.begin; j != input.p.end; ++j) {
+            
+            // Transform from page to screen
+            float4 a = A * float4(bez[j].a + input.p.position, 0, 1);
+            float4 b = A * float4(bez[j].b + input.p.position, 0, 1);
+            float4 c = A * float4(bez[j].c + input.p.position, 0, 1);
+            float4 d = A * float4(bez[j].d + input.p.position, 0, 1);
+            // Translate from screen to pixel
+            a.xy -= coordinate * a.w;
+            b.xy -= coordinate * b.w;
+            c.xy -= coordinate * c.w;
+            d.xy -= coordinate * d.w;
+//            // Scale according to pixel size
+            a.xy /= uniforms.pixel_size * M_SQRT2_F;
+            b.xy /= uniforms.pixel_size * M_SQRT2_F;
+            c.xy /= uniforms.pixel_size * M_SQRT2_F;
+            d.xy /= uniforms.pixel_size * M_SQRT2_F;
+////            // We have a 4D bezier curve in homogeneous pixel coordinates
+
+            
+            // Now solve the integral
+            
+            // Specifically, we want the signed area between the curve and
+            // x = +infinity
+            
+            // We can bound the error in the integral by bounding the region
+            // the curve can occupy
+            
+            buffer[0][0] = a;
+            buffer[0][1] = b;
+            buffer[0][2] = c;
+            buffer[0][3] = d;
+            index = 1;
+            
+            while (index) {
+                --index;
+                a = buffer[index][0];
+                b = buffer[index][1];
+                c = buffer[index][2];
+                d = buffer[index][3];
+                float4 lo = min(min(a, b), min(c, d));
+                float4 hi = max(max(a, b), max(c, d));
+                float2 plo = erfc_approx(hi.xy / lo.w);
+                float2 phi = erfc_approx(lo.xy / lo.w);
+                float error = (phi.x - plo.x) * (phi.y - plo.y);
+                if ((error <= 0.01)) {
+                    // cumulant += (phi.y - plo.y) * (phi.x + plo.x) * sign(a.x - d.x);
+                    float2 pa = erfc_approx(a.xy / a.w);
+                    float2 pd = erfc_approx(d.xy / d.w);
+                    cumulant += (pd.y - pa.y) * (pa.x + pd.x);
+                    // cumulant += index * 0.1;
+                } else if ((index >= 14)) {
+                    // cumulant += error * 10;
+                } else {
+                    float4 ab = mix(a, b, 0.5);
+                    float4 bc = mix(b, c, 0.5);
+                    float4 cd = mix(c, d, 0.5);
+                    float4 abbc = mix(ab, bc, 0.5);
+                    float4 bccd = mix(bc, cd, 0.5);
+                    float4 abbbcccd = mix(abbc, bccd, 0.5);
+                    buffer[index][0] = a;
+                    buffer[index][1] = ab;
+                    buffer[index][2] = abbc;
+                    buffer[index][3] = abbbcccd;
+                    ++index;
+                    buffer[index][0] = abbbcccd;
+                    buffer[index][1] = bccd;
+                    buffer[index][2] = cd;
+                    buffer[index][3] = d;
+                    ++index;
+                }
+                
+                
+            
+                
+                
+                
+                
+                
+//                
+//               
+//                // these are the control points of two new curves
+//                // a, ab, abbc, abbbcccd
+//                // abbbcccd, bccd, cd, d
+//                float eleft, eright;
+//                float cleft, cright;
+//                {
+//                    float4 lo = min(min(a, ab), min(abbc, abbbcccd));
+//                    float4 hi = max(max(a, ab), max(abbc, abbbcccd));
+//                    float2 plo = erfc_approx(hi.xy);
+//                    float2 phi = erfc_approx(lo.xy);
+//                    eleft = (phi.x - plo.x) * (phi.y - plo.y);
+//                    cleft = (phi.y - plo.y) * (phi.x + plo.x) * sign(a.y - abbbcccd.y);
+//                }
+//                {
+//                    float4 lo = min(min(abbbcccd, bccd), min(cd, d));
+//                    float4 hi = max(max(abbbcccd, bccd), max(cd, d));
+//                    float2 plo = erfc_approx(hi.xy);
+//                    float2 phi = erfc_approx(lo.xy);
+//                    eright = (phi.x - plo.x) * (phi.y - plo.y);
+//                    cright = (phi.y - plo.y) * (phi.x + plo.x) * sign(abbbcccd.y - d.y);
+//                }
+//                if (eleft < eright) {
+//                    cumulant += cleft;
+//                    a = abbbcccd;
+//                    b = bccd;
+//                    c = cd;
+//                } else {
+//                    cumulant += cright;
+//                    b = ab;
+//                    c = abbc;
+//                    d = abbbcccd;
+//                }
+//                
+            }
+//            float4 lo = min(min(a, b), min(c, d));
+//            float4 hi = max(max(a, b), max(c, d));
+//            float2 plo = erfc_approx(hi.xy);
+//            float2 phi = erfc_approx(lo.xy);
+//            cumulant += (phi.y - plo.y) * (phi.x + plo.x) * sign(a.y - d.y);
+            continue;
+            
+//            // cumulant += a.y / a.w * 1; //(phi.y - plo.y) * (plo.x + phi.x);
+//            result.color.x = abs(a.x) * 10;
+//            result.color.y = abs(a.y) * 10;
+//            result.color.z = 0.0; //a.z / a.w;
+//            result.color.w = 1.0;
+//            return result;
+
+            
+            
+//            
+//            
+//            // Now we have to solve an integral
+//            
+//            // Solve by bisection
+//            // Ideally we would have a stack and be able to recurse into problem
+//            // areas.  What about amoeba to do this in a principled way?
+//            // Early out likely stalls the group until the worst case is done
+//            float t0 = 0.0;
+//            float t1 = 1.0;
+//            float2 p0 = erfc_approx(a.xy);
+//            float2 p1 = erfc_approx(d.xy);
+//            // Ironically, this hard limit will pixelate extreme zooms.
+//            for (int i = 0; i != 7; ++i) {
+//                float t2 = (t0 + t1) * 0.5;
+//                float2 p2 = erfc_approx(bezier_xy_for_t(t2, a.xy, b.xy, c.xy, d.xy));
+//                float2 dy0 = p2 - p0;
+//                float2 dy1 = p1 - p2;
+//                // Decide which interval to accept and which to recurse into
+//                // based on the area of the curve's bounding box.
+//                // Can the compiler implement the below branchfree?
+//                // When we greedily decide to subdivide, we are giving up any
+//                // chance to improve the other interval
+//                if (abs(dy0.x * dy0.y) < abs(dy1.x * dy1.y)) {
+//                    cumulant += dy0.y * (p0.x + p2.x);
+//                    p0 = p2;
+//                    t0 = t2;
+//                } else {
+//                    cumulant += dy1.y * (p2.x + p1.x);
+//                    p1 = p2;
+//                    t1 = t2;
+//                }
+//            }
+//            // Final section:
+//            cumulant += (p1.y - p0.y) * (p0.x + p1.x);
+//            
+            
+            
+            //            for (int i = 0; i != 9; ++i) {
+            //                points[i] = erfc_approx(bezier_xy_for_t(ts[i], curve.a, curve.b, curve.c, curve.d));
+            //            }
+            //            for (int i = 0; i != 8; ++i) {
+            //                cumulant += (points[i+1].y - points[i].y) * (points[i].x + points[i+1].x);
+            //            }
+        }
+        
+        cumulant = clamp(cumulant * 0.125, -1.0, 1.0);
+        
+        result.color.r = 0.0;//C[0][0] * 0.001;
+        result.color.g = 0.0;//C[1][1] * 0.001; //C[1][1] * 0.001;
+        result.color.b = 0.25 * (1 - cumulant); //abs(C[1][0]) * 0.01;//0.0; //C[1][1] * 0.001;
+        result.color.a = cumulant;
+        return result;
+    }
+    
+    
     
 } // namespace
 

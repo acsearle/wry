@@ -12,22 +12,64 @@
 #include "xml.hpp"
 #include "test.hpp"
 
+// SVG includes ellipse sections
+//
+// Ellipses cannot be exactly represented by Bezier curves, but they can be
+// represented by rational Bezier curves, or equivalently, Bezier curves in
+// homogeneous coordinates.  This complements the use of homogenous
+// coordinates to implement perspective transformations.
 
 namespace wry::svg {
     
     namespace {
+
+        void put(std::vector<CubicBezier>& a,
+                 double x, double y,
+                 double x1, double y1,
+                 double x2, double y2,
+                 double x3, double y3) {
+            CubicBezier b;
+            b.control_points.columns[0] = make_float4(x, y, 0.0, 1.0);
+            b.control_points.columns[1] = make_float4(x1, y1, 0.0, 1.0);
+            b.control_points.columns[2] = make_float4(x2, y2, 0.0, 1.0);
+            b.control_points.columns[3] = make_float4(x3, y3, 0.0, 1.0);
+            a.push_back(b);
+        }
         
-        bool foo(auto& v, auto&... xs) {
-            return match_and(parse_number_relaxed(xs)...)(v);
+        void put(std::vector<CubicBezier>& a,
+                 double x, double y,
+                 double x1, double y1,
+                 double x2, double y2) {
+            put(a,
+                x, y,
+                mix(x, x1, 2.0 / 3.0),
+                mix(y, y1, 2.0 / 3.0),
+                mix(x1, x2, 1.0 / 3.0),
+                mix(y1, y2, 1.0 / 3.0),
+                x2, y2);
+        }
+        
+        void put(std::vector<CubicBezier>& a, double x, double y, double x1, double y1) {
+            put(a,
+                x, y,
+                mix(x, x1, 1.0 / 2.0),
+                mix(y, y1, 1.0 / 2.0),
+                x1, y1);
         }
         
         bool parse_path_d(auto v) {
+            
+            std::vector<CubicBezier> a;
+                        
+            auto get = [&v](auto&&... xs) {
+                return match_and(parse_number_relaxed(xs)...)(v);
+            };
+            
             double x = 0.0, y = 0.0;
-            double x0 = x, y0 = y;
+            double x0 = 0.0, y0 = 0.0;
             double x1 = 0.0, y1 = 0.0;
             double x2 = 0.0, y2 = 0.0;
             double x3 = 0.0, y3 = 0.0;
-            printf("    %g,%g\n", x, y);
             for (;;) {
                 match_spaces()(v);
                 if (v.empty())
@@ -36,156 +78,240 @@ namespace wry::svg {
                 v.pop_front();
                 switch (ch) {
                     case 'M':
-                        foo(v, x, y);
-                        printf("    %g,%g\n", x, y);
-                        x0 = x;
-                        y0 = y;
+                        get(x, y);
+                        x0 = x1 = x;
+                        y0 = y1 = y;
                         [[fallthrough]];
                     case 'L':
-                        while (foo(v, x, y)) {
-                            printf("    %g,%g\n", x, y);
+                        while (get(x1, y1)) {
+                            put(a, x, y, x1, y1);
+                            x = x1;
+                            y = y1;
                         }
-                        x1 = x2 = x;
-                        y1 = y2 = y;
+                        x2 = x;
+                        y2 = y;
                         break;
                     case 'm':
-                        foo(v, x1, y1);
-                        x += x1;
-                        y += y1;
-                        printf("    %g,%g\n", x, y);
-                        x0 = x;
-                        y0 = y;
+                        get(x1, y1);
+                        x1 = x += x1;
+                        y1 = y += y1;
                         [[fallthrough]];
                     case 'l':
-                        while (foo(v, x1)) {
-                            foo(v, y1);
-                            x += x1;
-                            y += y1;
-                            printf("    %g,%g\n", x, y);
+                        while (get(x1, y1)) {
+                            x1 += x;
+                            y1 += y;
+                            put(a, x, y, x1, y1);
+                            x = x1;
+                            y = y1;
                         }
-                        x1 = x2 = x;
-                        y1 = y2 = y;
+                        x2 = x;
+                        y2 = x;
                         break;
                     case 'Z':
                     case 'z':
-                        x = x0;
-                        y = y0;
-                        printf("    %g,%g\n", x, y);
+                        put(a, x, y, x0, y0);
+                        x = x1 = x2 = x0;
+                        y = y1 = y2 = y0;
                         break;
                     case 'H':
-                        while (foo(v, x))
-                            printf("    %g,%g\n", x, y);
-                        x1 = x2 = x;
-                        break;
-                    case 'h':
-                        while (foo(v, x1)) {
-                            x += x1;
-                            printf("    %g,%g\n", x, y);
-                        }
-                        x1 = x2 = x;
-                        break;
-                    case 'V':
-                        while (foo(v, y))
-                            printf("    %g,%g\n", x, y);
-                        y1 = y2 = y;
-                        break;
-                    case 'v':
-                        while (foo(v, y1)) {
-                            y += y1;
-                            printf("    %g,%g\n", x, y);
-                        }
-                        y1 = y2 = y;
-                        break;
-                    case 'Q':
-                        while (foo(v, x1, y1, x, y)) {
-                            printf("    %g,%g\n", x1, y1);
-                            printf("    %g,%g\n", x, y);
+                        while (get(x1)) {
+                            put(a, x, y, x1, y);
+                            x = x1;
                         }
                         x2 = x;
+                        break;
+                    case 'h':
+                        while (get(x1)) {
+                            x1 += x;
+                            put(a, x, y, x1, y);
+                            x = x1;
+                        }
+                        x2 = x;
+                        break;
+                    case 'V':
+                        while (get(y1)) {
+                            put(a, x, y, x, y1);
+                            y = y1;
+                        }
                         y2 = y;
                         break;
-                    case 'q':
-                        while (foo(v, x1, y1, x2, y2)) {
-                            x1 += x;
+                    case 'v':
+                        while (get(y1)) {
                             y1 += y;
-                            x += x2;
-                            y += y2;
-                            printf("    %g,%g\n", x1, y1);
-                            printf("    %g,%g\n", x, y);
+                            put(a, x, y, x, y1);
+                            y = y1;
+                        }
+                        y2 = y;
+                        break;
+                    case 'Q':
+                        while (get(x1, y1, x2, y2)) {
+                            put(a, x, y, x1, y1, x2, y2);
+                            x = x2;
+                            y = y2;
                         }
                         x1 = 2 * x - x1;
                         y1 = 2 * y - y1;
-                        x2 = x;
-                        y2 = y;
                         break;
-                    case 'T':
-                        while (foo(v, x2, y2)) {
+                    case 'q':
+                        while (get(x1, y1, x2, y2)) {
+                            x1 += x;
+                            y1 += y;
+                            x2 += x;
+                            y2 += y;
+                            put(a, x, y, x1, y1, x2, y2);
                             x = x2;
                             y = y2;
-                            printf("    %g,%g\n", x1, y1);
-                            printf("    %g,%g\n", x, y);
-                            x1 = 2 * x - x1;
-                            y1 = 2 * y - y1;
+                        }
+                        x1 = 2 * x2 - x1;
+                        y1 = 2 * y2 - y1;
+                        break;
+                    case 'T':
+                        while (get(x2, y2)) {
+                            put(a, x, y, x1, y1, x2, y2);
+                            x = x2;
+                            y = y2;
+                            x1 = 2 * x2 - x1;
+                            y1 = 2 * y2 - y1;
                         }
                         break;
                     case 't':
-                        while (foo(v, x2, y2)) {
-                            x += x2;
-                            y += y2;
-                            printf("    %g,%g\n", x1, y1);
-                            printf("    %g,%g\n", x, y);
-                            x1 = 2 * x - x1;
-                            y1 = 2 * y - y1;
+                        while (get(x2, y2)) {
+                            x2 += x;
+                            y2 += x;
+                            put(a, x, y, x1, y1, x2, y2);
+                            x = x2;
+                            y = y2;
+                            x1 = 2 * x2 - x1;
+                            y1 = 2 * y2 - y1;
                         }
                         x2 = x;
                         y2 = y;
                         break;
                     case 'C':
-                        while (foo(v, x1, y1, x2, y2, x, y)) {
-                            printf("    %g,%g\n", x1, y1);
-                            printf("    %g,%g\n", x2, y2);
-                            printf("    %g,%g\n", x, y);
+                        while (get(x1, y1, x2, y2, x3, y3)) {
+                            put(a, x, y, x1, y1, x2, y2, x3, y3);
+                            x = x3;
+                            y = y3;
                         }
-                        x1 = 2 * x - x2;
-                        y1 = 2 * y - y2;
+                        x1 = 2 * x3 - x2;
+                        y1 = 2 * y3 - y2;
                         break;
                     case 'c':
-                        while (foo(v, x1, y1, x2, y2, x3, y3)) {
+                        while (get(x1, y1, x2, y2, x3, y3)) {
                             x1 += x;
                             y1 += y;
                             x2 += x;
                             y2 += y;
-                            x += x3;
-                            y += y3;
-                            printf("    %g,%g\n", x1, y1);
-                            printf("    %g,%g\n", x2, y2);
-                            printf("    %g,%g\n", x, y);
+                            x3 += x;
+                            y3 += y;
+                            put(a, x, y, x1, y1, x2, y2, x3, y3);
+                            x = x3;
+                            y = y3;
                         }
-                        x1 = 2 * x - x2;
-                        y1 = 2 * y - y2;
+                        x1 = 2 * x3 - x2;
+                        y1 = 2 * y3 - y2;
                         break;
                     case 'S':
-                        while (foo(v, x2, y2, x, y)) {
-                            printf("    %g,%g\n", x1, y1);
-                            printf("    %g,%g\n", x2, y2);
-                            printf("    %g,%g\n", x, y);
-                            x1 = 2 * x - x2;
-                            y1 = 2 * y - y2;
+                        while (get(x2, y2, x3, y3)) {
+                            put(a, x, y, x1, y1, x2, y2, x3, y3);
+                            x = x3;
+                            y = y3;
+                            x1 = 2 * x3 - x2;
+                            y1 = 2 * y3 - y2;
                         }
                         break;
                     case 's':
-                        while (foo(v, x2, y2, x3, y3)) {
+                        while (get(x2, y2, x3, y3)) {
                             x2 += x;
                             y2 += y;
-                            x += x3;
-                            y += y3;
-                            printf("    %g,%g\n", x1, y1);
-                            printf("    %g,%g\n", x2, y2);
-                            printf("    %g,%g\n", x, y);
-                            x1 = 2 * x - x2;
-                            y1 = 2 * y - y2;
+                            x3 += x;
+                            y3 += y;
+                            put(a, x, y, x1, y1, x2, y2, x3, y3);
+                            x = x3;
+                            y = y3;
+                            x1 = 2 * x3 - x2;
+                            y1 = 2 * y3 - y2;
                         }
                         break;
+                    case 'A': {
+                        double rx = 0.0; // radius (x)
+                        double ry = 0.0; // radius (y)
+                        double angle = 0.0; // degrees
+                        double large_arc_flag = 0.0; // small, large
+                        double sweep_flag = 0.0; // counterclockwise, clockwise
+                        while (get(rx, ry, angle, large_arc_flag, sweep_flag, x2, y2)) {
+                            angle *= (M_PI / 180.0);
+                            double c = cos(angle);
+                            double s = sin(angle);
+                            // transform a unit to the specified radii and angle
+                            double2x2 A = simd_matrix(simd_make_double2(rx*c,rx*s),
+                                                     simd_make_double2(-ry*s,rx*c));
+                            // inverse of transform
+                            double2x2 B = simd_inverse(A);
+                            // transform of endpoints
+                            double2 a_ = simd_mul(B, simd_make_double2(x, y));
+                            double2 b = simd_mul(B, simd_make_double2(x2, y2));
+                            // translate the endpoints so that they lie on the
+                            // unit circle
+                            double d = simd_distance_squared(a_, b);
+                            assert(d <= 4.0); // else the radii are too small
+                            double e = sqrt(1.0 - 0.25 * d);
+                            double2 g = b - a_;
+                            // TODO: Use sweep to set the sign of h
+                            double2 h = simd_normalize(simd_make_double2(-g.y, g.x));
+                            g -= h * e;
+                            a_ -= g;
+                            b -= g;
+                            assert(abs(simd_length(a_) - 1.0) < 1e-3);
+                            assert(abs(simd_length(b) - 1.0) < 1e-3);
+                            // We now have two points on the unit circle
+                            // Construct the midpoint
+                            // TODO: Use small/large arc flag to choose p
+                            double2 p = (large_arc_flag == 0) ? (a_ + b) * 0.5 : -h;
+                            // Construct the midpoint of the arc
+                            double2 q = simd_normalize(p);
+                            // Q can be the basis of a quadratic approximation
+                            // to the arc, but we can do better.
+                            
+                            // Use w to rescale the point so that the circular
+                            // conic section becomes a parabola in 4d, while
+                            // remaining the same in projected space (x/w, y/w)
+                            double w1 = 1.0 - 0.5 * simd_distance(p, q);
+                            q *= w1;
+                            // The parabola passes through this point; we
+                            // instead need the quadratic Bezier curve control
+                            // point
+                            q = (q - p) * 2.0;
+                            w1 = (1.0 - w1) * 2.0;
+                            // For large arcs, this puts the control point
+                            // into negative w, but the actual curve won't
+                            // cross the w=0 plane.  It does make the 2d bound
+                            // tricky, and may argue for splitting "long" arcs
+                            // into two "short" sections.  The parameterization
+                            // for "long" arcs can highly nonlinear which might
+                            // interact badly with the integrator
+                            
+                            // Undo translation, accounting for w
+                            q += g * w1;
+                            // Undo transformation
+                            q = simd_mul(A, q);
+                            x1 = q.x;
+                            y1 = q.y;
+                            // We now have the control points of a quadratic
+                            // Bezier curve in 4 dimensions that projects down
+                            // to an ellipse segment in 2 dimensions:
+                            //
+                            //   (x , y , 0, 1),
+                            //   (x1, y1, 0, w),
+                            //   (x2, y2, 0, 1)
+                            
+                            put(a, x, y, x1, y1, x2, y2);
+                            x = x2;
+                            y = y2;
+                        }
+                        x1 = x;
+                        y1 = y;
+                    } break;
                     default:
                         printf("did not understand %c\n", ch);
                         return false;
