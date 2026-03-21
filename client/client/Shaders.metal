@@ -232,32 +232,28 @@ namespace otf {
         {
             float2 a[4];
 
-            // construct quad in texture coordinate space
+            // Construct the bounding box
             a[0] = float2(gi.a.x, gi.a.y);
             a[1] = float2(gi.a.x, gi.b.y);
             a[2] = float2(gi.b.x, gi.a.y);
             a[3] = float2(gi.b.x, gi.b.y);
-            
-            
-            
-            
+                        
             float4 q[4];
             float2 b[4];
             for (int i = 0; i != 4; ++i) {
-                // apply positioning in texture space
-                // transform vertices to screen space
+                // Translate and transform to screen space
                 q[i] = uniforms.transformation * float4(a[i] + ch.position, 0, 1);
+                // Project
                 b[i] = q[i].xy / q[i].w;
             }
             
-            // b is a screen-space quad
-            // find the axis-aligned bounding box of b, and pad it by some
-            // number of pixels
-            
-            // pixel_size is 2.0 / (viewport width, viewport height)
-            
-            // TODO: This is an AABB of a transformed AABB; supply hull instead?
-            
+            // Construct a bounding box again, and inflate it in pixels
+            // TODO: In the common case of mostly-axis-aligned text, this is
+            // fine.  In the case of rotated text, it is suboptimal and can
+            // greatly increase the area. The alternative, inflating the quad,
+            // hits problems when the transform produces an acute corner,
+            // needing some end cap strategy and more triangles.
+
             float2 c[4];
             c[0] = min(min(b[0], b[1]), min(b[2], b[3])) - uniforms.pixel_size * 2;
             c[3] = max(max(b[0], b[1]), max(b[2], b[3])) + uniforms.pixel_size * 2;
@@ -444,421 +440,131 @@ namespace otf {
             {-m[1][0],  m[0][0]}
         } / determinant;
     }
-    
-    // TODO: Smoothstep vs erfc
-    
-    // TODO: We don't actually want to find the exact x and y crossings, we
-    // just want to sample sufficiently in the region where erfc is changing
-
-    
-    [[fragment]] BezierFragmentOut
-    bezierFragmentFunction_v0(BezierFragmentIn input [[stage_in]],
-                           const device otf::CubicBezier* bez [[buffer(0)]]) {
         
-        float2 coordinate = input.v.coordinate.xy;
-        
-        // float2 ddpx = fwidth(coordinate);
-        float2x2 C = {{1.0, 0.0}, {1.0, 0.0}};
-        
-        {
-            // Compute the coordinate system (u, v') in which a circle in x, y
-            // is an becomes an axis-aligned ellipse
-            
-            // Transformation dxy -> duv
-            float2x2 A = float2x2{dfdx(coordinate), dfdy(coordinate)} * sqrt(0.5);
-            // Transformation duv -> dxy
-            float2x2 B = inverse(A);
-            
-            // Unit vector u
-            float2 u = float2{1.0, 0.0};
-            // Image of u in xy
-            float2 u2 = B * u;
-            // Normalize it to unit circle
-            float2 u3 = normalize(u2);
-            // Perpendicular
-            // - in general differs from the image of v
-            // - is also normalized
-            // - choice of sign determines handedness
-            float2 v3 = float2{u3[1], -u3[0]};
-            // Transform back to uv space
-            float2 u4 = A * u3;
-            float2 v4 = A * v3;
-            // u4.y will be (approximately) zero
-            float2x2 D = { u4, v4 };
-            C = inverse(D);
-            
-            
-            
-            
-
-            
-            
-        }
-    
-        BezierFragmentOut result{};
-        
-        float cumulant = 0.0;
-        
-        // Every pixel in the glyph's quad walks this same region, hopefully
-        // with linear and coherent memory access, and with no divergence of
-        // control flow
-        for (uint j = input.p.begin; j != input.p.end; ++j) {
-            CubicBezier curve;
-            curve.a = C*(bez[j].a - coordinate.xy);
-            curve.b = C*(bez[j].b - coordinate.xy);
-            curve.c = C*(bez[j].c - coordinate.xy);
-            curve.d = C*(bez[j].d - coordinate.xy);
-
-            // The curve is now transformed into something approximating screen
-            // space.  The curve xy(t) was formerly constrained to be monotonic
-            // and single-valued with respect to both x and y, but the shear
-            // part of the transform has broken this for x and curves like
-            // x = (t-0.5)**2 are now permitted. y remains monotonic and x(y)
-            // is single valued.
-            
-            // Note that the control points still bound the curve so it is
-            // valid to early-out on the hull failing to intersect the
-            // kernel.
-            
-            // To integrate the area to the right of the curve, weighted by
-            // the 2d unit normal distribution, further transform the curve
-            // by compacting x,y -> erfc((x,y)); the area to the right of
-            // this curve is the desired quanitity.   This transformation is
-            // itself monotonic for each coordinate.
-            
-            // We can now integrate \int_0^2 x(y)dy = \int_0^1 x(t) dydt(t) dt
-            
-            // Via the trapezoid rule, for (x,y) samples on the curve
-            
-            // If we sample at fixed points, our sampling becomes too coarse at
-            // large magnficiations
-            
-            // We nominate 5 critical points for the integral:
-            //     t = 0
-            //     t = 1
-            //     y = 0 (may not exist)
-            //     x = 0 (zero, one or two solutions)
-            // These are the endpoints, and the points where the derivative of
-            // erfc is maximized.  A different point of interest might be the
-            // closest approach.  Notably we don't need to exactly find these
-            // points, we just need to get samples somewhere in the middle
-            // of the x and y erfcs.
-            //
-            // We also sample midway (in t) between these points.  In
-            // particular, this captures the inflection between the x=0
-            // crossings
-            
-            // Finding the roots in t for x=0 and y=0 is somewhat awkward and
-            // doesn't scale well to cubics.  An alternative approach would be
-            // some kind of direct bisection or even Newton-Raphson inspired
-            // unequal bisection, to progressively refine the trapezoids with
-            // the worst error bounds.  We know, a priori, a great deal about
-            // the curve and integral even after the shearing.
-            
-            // We could early-out aggressively on the basis of y.
-            
-            // Bisection and early-out may not be an optimization, however if it
-            // forces the threadgroup(simdgroup?) control flow to diverge?
-            
-            // If we use a polynomial approximation for erfc, the integral
-            // itself becomes a (piecewise)polynomial, in high powers of t.
-            // However we would still need to root-find the patch boundaries,
-            // equivalent to finding where the curve crosses the boundary of some
-            // square region.
-            /*
-            
-            float ts[9];
-            ts[0] = 0.0;
-            ts[2] = 0.25;
-            ts[4] = 0.50;
-            ts[6] = 0.75;
-            //ts[2] = bezier_t_for_y(0.0, 0.0, 1.0, curve.a, curve.b, curve.c);
-            //float2 tsx0 = bezier_ts_for_x(0.0, 0.0, 1.0, curve.a, curve.b, curve.c);
-            //ts[4] = tsx0[0];
-            //ts[6] = tsx0[1];
-            ts[4] = bezier_t_for_y(0.0, 0.0, 1.0, curve.a, curve.b, curve.c, curve.d);
-            ts[8] = 1.0;
-            // clumsy sort
-            if (ts[2] > ts[4]) {
-                float tmp = ts[2];
-                ts[2] = ts[4];
-                ts[4] = tmp;
-            }
-            if (ts[2] > ts[6]) {
-                float tmp = ts[2];
-                ts[2] = ts[6];
-                ts[6] = tmp;
-            }
-            if (ts[4] > ts[6]) {
-                float tmp = ts[4];
-                ts[4] = ts[6];
-                ts[6] = tmp;
-            }
-            ts[1] = (ts[0] + ts[2]) * 0.5;
-            ts[3] = (ts[2] + ts[4]) * 0.5;
-            ts[5] = (ts[4] + ts[6]) * 0.5;
-            ts[7] = (ts[6] + ts[8]) * 0.5;
-            float2 points[9];
-            
-            // float scale_hack = input.v.position.z;
-//
-             
-             */
-            
-            // Now we have to solve an integral
-            
-            // Solve by bisection
-            // Ideally we would have a stack and be able to recurse into problem
-            // areas.  What about amoeba to do this in a principled way?
-            // Early out likely stalls the group until the worst case is done
-            float t0 = 0.0;
-            float t1 = 1.0;
-            float2 p0 = erfc_approx(curve.a);
-            float2 p1 = erfc_approx(curve.d);
-            // Ironically, this hard limit will pixelate extreme zooms.
-            for (int i = 0; i != 7; ++i) {
-                float t2 = (t0 + t1) * 0.5;
-                float2 p2 = erfc_approx(bezier_xy_for_t(t2, curve.a, curve.b, curve.c, curve.d));
-                float2 dy0 = p2 - p0;
-                float2 dy1 = p1 - p2;
-                // Decide which interval to accept and which to recurse into
-                // based on the area of the curve's bounding box.
-                // Can the compiler implement the below branchfree?
-                // When we greedily decide to subdivide, we are giving up any
-                // chance to improve the other interval
-                if (abs(dy0.x * dy0.y) < abs(dy1.x * dy1.y)) {
-                    cumulant += dy0.y * (p0.x + p2.x);
-                    p0 = p2;
-                    t0 = t2;
-                } else {
-                    cumulant += dy1.y * (p2.x + p1.x);
-                    p1 = p2;
-                    t1 = t2;
-                }
-            }
-            // Final section:
-            cumulant += (p1.y - p0.y) * (p0.x + p1.x);
-
-            
-
-//            for (int i = 0; i != 9; ++i) {
-//                points[i] = erfc_approx(bezier_xy_for_t(ts[i], curve.a, curve.b, curve.c, curve.d));
-//            }
-//            for (int i = 0; i != 8; ++i) {
-//                cumulant += (points[i+1].y - points[i].y) * (points[i].x + points[i+1].x);
-//            }
-        }
-                
-        cumulant = clamp(cumulant * 0.125, -1.0, 1.0);
-
-        result.color.r = 0.0;//C[0][0] * 0.001;
-        result.color.g = 0.0;//C[1][1] * 0.001; //C[1][1] * 0.001;
-        result.color.b = 1.0 - cumulant; //abs(C[1][0]) * 0.01;//0.0; //C[1][1] * 0.001;
-        result.color.a = cumulant;
-        return result;
-    }
-    
-    
     [[fragment]] BezierFragmentOut
     bezierFragmentFunction(BezierFragmentIn input [[stage_in]],
-                           const device otf::CubicBezier* bez [[buffer(0)]],
+                           const device otf::CubicBezier* cubic_bezier_curves [[buffer(0)]],
                            constant otf::BezierUniforms& uniforms [[buffer(3)]]) {
         
-        // coordinate of the center of this pixel
+        // Compute the fill of a closed compound cubic Bezier path, antialiased
+        // with a Gaussian kernel.  Exact if the path is not self-intersecting;
+        // self-intersections will result in regions with multiple coverage.
+        
+        // The path is looked up from a table and translated, but not otherwise
+        // transformed.
+        // TODO: This structure is suitable for text layout, but not for more
+        // general rendering.  Supply a bespoke color and transform to each
+        // path.
+                
+        // For the pixel center,
+        //   input.v.position provides viewport coordinates,
+        // [0, width] x [0, height]
+        //   input.v.coodinate provides normalized device coordinates of the
+        // pixel center, [-1, 1] x [-1, 1] x [0, 1] x [1]
+        // TODO: 
         float2 coordinate = input.v.coordinate.xy;
+        
         // page to screen transformation
         float4x4 A = uniforms.transformation;
-        
-        BezierFragmentOut result{};
-        
-        float cumulant = 0.0;
-        
-        float4 buffer[16][4];
+                
+        // stack of Bezier curves to be processed
+        const int STACK_SIZE = 64;
+        float4 stack[STACK_SIZE][4];
         int index = 0;
+        // Font glyphs typically have tens of curves.
+        // TODO: Larger glyphs, or convergence problems, will run off the end of
+        // the buffer and crash the shader; what do we want to do here?
         
         for (uint j = input.p.begin; j != input.p.end; ++j) {
-            
+
             // Transform from page to screen
-            float4 a = A * float4(bez[j].a + input.p.position, 0, 1);
-            float4 b = A * float4(bez[j].b + input.p.position, 0, 1);
-            float4 c = A * float4(bez[j].c + input.p.position, 0, 1);
-            float4 d = A * float4(bez[j].d + input.p.position, 0, 1);
+            float4 a = A * float4(cubic_bezier_curves[j].a + input.p.position, 0, 1);
+            float4 b = A * float4(cubic_bezier_curves[j].b + input.p.position, 0, 1);
+            float4 c = A * float4(cubic_bezier_curves[j].c + input.p.position, 0, 1);
+            float4 d = A * float4(cubic_bezier_curves[j].d + input.p.position, 0, 1);
             // Translate from screen to pixel
             a.xy -= coordinate * a.w;
             b.xy -= coordinate * b.w;
             c.xy -= coordinate * c.w;
             d.xy -= coordinate * d.w;
-//            // Scale according to pixel size
+            // Scale according to pixel size
             a.xy /= uniforms.pixel_size * M_SQRT2_F;
             b.xy /= uniforms.pixel_size * M_SQRT2_F;
             c.xy /= uniforms.pixel_size * M_SQRT2_F;
             d.xy /= uniforms.pixel_size * M_SQRT2_F;
-////            // We have a 4D bezier curve in homogeneous pixel coordinates
-
-            
-            // Now solve the integral
-            
-            // Specifically, we want the signed area between the curve and
-            // x = +infinity
-            
-            // We can bound the error in the integral by bounding the region
-            // the curve can occupy
-            
-            buffer[0][0] = a;
-            buffer[0][1] = b;
-            buffer[0][2] = c;
-            buffer[0][3] = d;
-            index = 1;
-            
-            while (index) {
-                --index;
-                a = buffer[index][0];
-                b = buffer[index][1];
-                c = buffer[index][2];
-                d = buffer[index][3];
-                float4 lo = min(min(a, b), min(c, d));
-                float4 hi = max(max(a, b), max(c, d));
-                float2 plo = erfc_approx(hi.xy / lo.w);
-                float2 phi = erfc_approx(lo.xy / lo.w);
-                float error = (phi.x - plo.x) * (phi.y - plo.y);
-                if ((error <= 0.01)) {
-                    // cumulant += (phi.y - plo.y) * (phi.x + plo.x) * sign(a.x - d.x);
-                    float2 pa = erfc_approx(a.xy / a.w);
-                    float2 pd = erfc_approx(d.xy / d.w);
-                    cumulant += (pd.y - pa.y) * (pa.x + pd.x);
-                    // cumulant += index * 0.1;
-                } else if ((index >= 14)) {
-                    // cumulant += error * 10;
-                } else {
-                    float4 ab = mix(a, b, 0.5);
-                    float4 bc = mix(b, c, 0.5);
-                    float4 cd = mix(c, d, 0.5);
-                    float4 abbc = mix(ab, bc, 0.5);
-                    float4 bccd = mix(bc, cd, 0.5);
-                    float4 abbbcccd = mix(abbc, bccd, 0.5);
-                    buffer[index][0] = a;
-                    buffer[index][1] = ab;
-                    buffer[index][2] = abbc;
-                    buffer[index][3] = abbbcccd;
-                    ++index;
-                    buffer[index][0] = abbbcccd;
-                    buffer[index][1] = bccd;
-                    buffer[index][2] = cd;
-                    buffer[index][3] = d;
-                    ++index;
-                }
-                
-                
-            
-                
-                
-                
-                
-                
-//                
-//               
-//                // these are the control points of two new curves
-//                // a, ab, abbc, abbbcccd
-//                // abbbcccd, bccd, cd, d
-//                float eleft, eright;
-//                float cleft, cright;
-//                {
-//                    float4 lo = min(min(a, ab), min(abbc, abbbcccd));
-//                    float4 hi = max(max(a, ab), max(abbc, abbbcccd));
-//                    float2 plo = erfc_approx(hi.xy);
-//                    float2 phi = erfc_approx(lo.xy);
-//                    eleft = (phi.x - plo.x) * (phi.y - plo.y);
-//                    cleft = (phi.y - plo.y) * (phi.x + plo.x) * sign(a.y - abbbcccd.y);
-//                }
-//                {
-//                    float4 lo = min(min(abbbcccd, bccd), min(cd, d));
-//                    float4 hi = max(max(abbbcccd, bccd), max(cd, d));
-//                    float2 plo = erfc_approx(hi.xy);
-//                    float2 phi = erfc_approx(lo.xy);
-//                    eright = (phi.x - plo.x) * (phi.y - plo.y);
-//                    cright = (phi.y - plo.y) * (phi.x + plo.x) * sign(abbbcccd.y - d.y);
-//                }
-//                if (eleft < eright) {
-//                    cumulant += cleft;
-//                    a = abbbcccd;
-//                    b = bccd;
-//                    c = cd;
-//                } else {
-//                    cumulant += cright;
-//                    b = ab;
-//                    c = abbc;
-//                    d = abbbcccd;
-//                }
-//                
-            }
-//            float4 lo = min(min(a, b), min(c, d));
-//            float4 hi = max(max(a, b), max(c, d));
-//            float2 plo = erfc_approx(hi.xy);
-//            float2 phi = erfc_approx(lo.xy);
-//            cumulant += (phi.y - plo.y) * (phi.x + plo.x) * sign(a.y - d.y);
-            continue;
-            
-//            // cumulant += a.y / a.w * 1; //(phi.y - plo.y) * (plo.x + phi.x);
-//            result.color.x = abs(a.x) * 10;
-//            result.color.y = abs(a.y) * 10;
-//            result.color.z = 0.0; //a.z / a.w;
-//            result.color.w = 1.0;
-//            return result;
-
-            
-            
-//            
-//            
-//            // Now we have to solve an integral
-//            
-//            // Solve by bisection
-//            // Ideally we would have a stack and be able to recurse into problem
-//            // areas.  What about amoeba to do this in a principled way?
-//            // Early out likely stalls the group until the worst case is done
-//            float t0 = 0.0;
-//            float t1 = 1.0;
-//            float2 p0 = erfc_approx(a.xy);
-//            float2 p1 = erfc_approx(d.xy);
-//            // Ironically, this hard limit will pixelate extreme zooms.
-//            for (int i = 0; i != 7; ++i) {
-//                float t2 = (t0 + t1) * 0.5;
-//                float2 p2 = erfc_approx(bezier_xy_for_t(t2, a.xy, b.xy, c.xy, d.xy));
-//                float2 dy0 = p2 - p0;
-//                float2 dy1 = p1 - p2;
-//                // Decide which interval to accept and which to recurse into
-//                // based on the area of the curve's bounding box.
-//                // Can the compiler implement the below branchfree?
-//                // When we greedily decide to subdivide, we are giving up any
-//                // chance to improve the other interval
-//                if (abs(dy0.x * dy0.y) < abs(dy1.x * dy1.y)) {
-//                    cumulant += dy0.y * (p0.x + p2.x);
-//                    p0 = p2;
-//                    t0 = t2;
-//                } else {
-//                    cumulant += dy1.y * (p2.x + p1.x);
-//                    p1 = p2;
-//                    t1 = t2;
-//                }
-//            }
-//            // Final section:
-//            cumulant += (p1.y - p0.y) * (p0.x + p1.x);
-//            
-            
-            
-            //            for (int i = 0; i != 9; ++i) {
-            //                points[i] = erfc_approx(bezier_xy_for_t(ts[i], curve.a, curve.b, curve.c, curve.d));
-            //            }
-            //            for (int i = 0; i != 8; ++i) {
-            //                cumulant += (points[i+1].y - points[i].y) * (points[i].x + points[i+1].x);
-            //            }
+            // Store in the buffer
+            stack[index][0] = a;
+            stack[index][1] = b;
+            stack[index][2] = c;
+            stack[index][3] = d;
+            ++index;
         }
-        
+        // Buffer now contains Bezier control points in a coordinate system
+        // that is not yet divided through by w, but is otherwise centered on
+        // and scaled to the pixel we are rasterizing
+
+        // TODO: With the exception of the pixel-dependent translation, the
+        // transformation above is common to all fragments of the primitive and
+        // could be somehow computed in the mesh shader
+                         
+        float cumulant = 0.0;
+        while (index) {
+            --index;
+            float4 a = stack[index][0];
+            float4 b = stack[index][1];
+            float4 c = stack[index][2];
+            float4 d = stack[index][3];
+            // Bounding volume of control points.
+            float4 lo = min(min(a, b), min(c, d));
+            float4 hi = max(max(a, b), max(c, d));
+            // Divide the coordinates into nonhomogeneous 2d, and then map
+            // through erf() to the integral's preferred coordinates.
+            // TODO: This error estimate may be too small for extreme w
+            float2 plo = erf6(lo.xy / lo.w);
+            float2 phi = erf6(hi.xy / lo.w);
+            // Error is proportional to the size of this region
+            float error = (phi.x - plo.x) * (phi.y - plo.y);
+            // TODO: We seem insensitive to the error threshold (which is good)
+            // but we could budget it as we subdivide to get formal convergence
+            // guarantees
+            if (error <= 1.0 / 64.0) {
+                float2 pa = erf6(a.xy / a.w);
+                float2 pd = erf6(d.xy / d.w);
+                // Use trapezoid rule
+                cumulant += (pd.y - pa.y) * (pa.x + pd.x);
+            } else {
+                // Subdivide until we can use the trapezoid rule
+                // Use de Casteljau's agorithm to generate the control points
+                // of the left and right halves of the curve
+                float4 ab = mix(a, b, 0.5);
+                float4 bc = mix(b, c, 0.5);
+                float4 cd = mix(c, d, 0.5);
+                float4 abbc = mix(ab, bc, 0.5);
+                float4 bccd = mix(bc, cd, 0.5);
+                float4 abbbcccd = mix(abbc, bccd, 0.5);
+                stack[index][0] = a;
+                stack[index][1] = ab;
+                stack[index][2] = abbc;
+                stack[index][3] = abbbcccd;
+                ++index;
+                stack[index][0] = abbbcccd;
+                stack[index][1] = bccd;
+                stack[index][2] = cd;
+                stack[index][3] = d;
+                ++index;
+            }
+        }
+         
+        // Factor of 0.125 is because erfc produces a 2 by 2 square region,
+        // and `pa.x + pb.x` is twice the mean.
         cumulant = clamp(cumulant * 0.125, -1.0, 1.0);
-        
-        result.color.r = 0.0;//C[0][0] * 0.001;
-        result.color.g = 0.0;//C[1][1] * 0.001; //C[1][1] * 0.001;
-        result.color.b = 0.25 * (1 - cumulant); //abs(C[1][0]) * 0.01;//0.0; //C[1][1] * 0.001;
-        result.color.a = cumulant;
+    
+        BezierFragmentOut result{};
+
+        result.color.r = 0 * cumulant;
+        result.color.g = 0 * cumulant;
+        result.color.b = 0 * cumulant;
+        result.color.a = 1 * cumulant;
         return result;
     }
     
