@@ -11,7 +11,6 @@
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
 
-
 #include <iostream>
 
 #include "assert.hpp"
@@ -21,6 +20,10 @@
 #include "utility.hpp"
 #include "string.hpp"
 #include "platform.hpp"
+#include "filesystem.hpp"
+#include "otf.hpp"
+#include "ShaderTypes.h"
+
 
 namespace wry {
     
@@ -294,7 +297,7 @@ namespace wry {
                     } break;
                     case 2: {
                         // Line
-                        cp.push_back(otf::CubicBezier{
+                        cp.push_back(::otf::CubicBezier{
                             p[0],
                             mix(p[0], p[1], float2{1.0f, 1.0f} / 3.0f),
                             mix(p[0], p[1], float2{2.0f, 2.0f} / 3.0f),
@@ -305,7 +308,7 @@ namespace wry {
                     } break;
                     case 3: {
                         // Quadratic Bezier curve
-                        cp.push_back(otf::CubicBezier{
+                        cp.push_back(::otf::CubicBezier{
                             p[0],
                             mix(p[0], p[1], float2{2.0, 2.0} / 3.0f),
                             mix(p[1], p[2], float2{1.0, 1.0} / 3.0f),
@@ -330,7 +333,7 @@ namespace wry {
 //                            p[3],
 //                        });
 //                        p[0] = p[3];
-                        cp.push_back(otf::CubicBezier{
+                        cp.push_back(::otf::CubicBezier{
                             p[0],
                             p[1],
                             p[2],
@@ -376,7 +379,7 @@ namespace wry {
                     gi.resize(gindex + 1);
                 }
                 
-                gi[gindex] = otf::GlyphData{
+                gi[gindex] = ::otf::GlyphData{
                     float2{(float)cb.xMin / 1000.0f, (float)cb.yMin / 1000.0f},
                     float2{(float)cb.xMax / 1000.0f, (float)cb.yMax / 1000.0f},
                     cp_a,
@@ -486,6 +489,10 @@ namespace wry {
     }
 
     
+    void build_font3() {
+        String a = string_from_file("Futura Medium Condensed.otf");
+        otf::parse((byte const*)a.chars._begin, (byte const*)a.chars._end);
+    }
     
     
 } // namespace wry

@@ -31,6 +31,7 @@ namespace wry {
     };
     
     Font build_font(SpriteAtlas&);
+    void build_font3();
 
     
     

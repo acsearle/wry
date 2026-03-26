@@ -16,7 +16,10 @@
 namespace wry::svg {
     
     // Rudimentary SVG loading
-    
+
+    // The intent is to support monochrome symbols of comparable complexity to
+    // text glyphs, not general rendering
+
     // TODO:
     // - Transform to px
     // - Clip to viewBox
@@ -28,6 +31,8 @@ namespace wry::svg {
         float4x4 control_points;
     };
     
+    // TODO: If we ignore color this becomes just a list of Bezier curves like
+    // the font
     struct PiecewiseCurve {
         uchar4 color;
         std::vector<CubicBezier> cubic_beziers;

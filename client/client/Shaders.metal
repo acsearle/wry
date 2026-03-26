@@ -461,7 +461,7 @@ namespace otf {
         // [0, width] x [0, height]
         //   input.v.coodinate provides normalized device coordinates of the
         // pixel center, [-1, 1] x [-1, 1] x [0, 1] x [1]
-        // TODO: 
+        // TODO:
         float2 coordinate = input.v.coordinate.xy;
         
         // page to screen transformation
