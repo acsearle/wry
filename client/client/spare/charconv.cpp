@@ -6,6 +6,7 @@
 //
 
 #include <cmath>
+#include <cstdlib>
 
 #include "assert.hpp"
 #include "ctype.hpp"

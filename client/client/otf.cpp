@@ -17,36 +17,33 @@
 
 namespace wry::otf {
     
+    struct TableDirectory {
+        
 #define Y \
 X(uint32_t, checksum) \
 X(uint32_t, offset) \
 X(uint32_t, length) \
 
-    struct TableRecord {
-        
-        std::array<uint8_t, 4> tableTag;
+        struct TableRecord {
+            
 #define X(A, B) A B;
-        Y
+            std::array<uint8_t, 4> tableTag;
+            Y
 #undef X
-    };
-    
-    void parse_TableRecord(span<byte const>& s, TableRecord& x) {
-        std::memcpy(&x.tableTag, s.data(), 4);
-        s.drop_front(4);
+        };
+        
+        static void parse_TableRecord(span<byte const>& s, TableRecord& x) {
 #define X(A, B) parse_ntoh(s, x.B);
-        Y
+            parse_ntoh(s, x.tableTag);
+            Y
 #undef X
-        printf("    \"%.4s\" %x %d %d\n",
-               (char const*)&x.tableTag,
-               x.checksum,
-               x.offset,
-               x.length);
-    }
+            printf("    \"%.4s\" %x %d %d\n",
+                   (char const*)&x.tableTag,
+                   x.checksum,
+                   x.offset,
+                   x.length);
+        }
 #undef Y
-    
-    
-    
-    struct TableDirectory {
         
 #define Y \
 X(uint32_t, sfntVersion) \
@@ -81,98 +78,29 @@ X(uint16_t, rangeShift) \
 #undef X
         assert((x.sfntVersion == 0x00010000) || (x.sfntVersion == 0x4F54544F));
         assert(x.numTables >= 9);
+        assert(x.searchRange == std::bit_floor(x.numTables) * 16);
+        assert(x.entrySelector == std::bit_width(x.numTables) - 1);
+        assert(x.rangeShift == x.numTables * 16 - x.searchRange);
         // printf("%u %d %x %x %d\n", x.sfntVersion, x.numTables, x.searchRange, x.entrySelector, x.rangeShift);
         for (int i = 0; i != x.numTables; ++i) {
-            TableRecord y = {};
-            parse_TableRecord(s, y);
+            TableDirectory::TableRecord y = {};
+            TableDirectory::parse_TableRecord(s, y);
             assert(y.offset + y.length <= n);
             x.tableRecords.push_back(y);
         }
     }
 #undef Y
-    
-    /*
-    struct TableDirectory {
-        
-        uint32_t sfntVersion;
-        uint16_t numTables;
-        uint16_t searchRange;
-        uint16_t entrySelector;
-        uint16_t rangeShift;
-        
-        byte const* first;
-        
-        struct TableRecord {
-            
-            std::array<uint8_t, 4> tableTag;
-            uint32_t checksum;
-            uint32_t offset;
-            uint32_t length;
-            
-            static TableRecord from(wry::Reader& r) {
-                TableRecord c{};
-                r.read(c.tableTag, c.checksum, c.offset, c.length);
-                printf("    \"%.4s\" %x %d %d\n", (char const*)&c.tableTag, c.checksum, c.offset, c.length);
-                return c;
-            }
-            
-        };
-        
-        std::vector<TableRecord> tableRecords;
-        
-        static TableDirectory from(wry::span<byte const> s) {
-            wry::Reader r{s};
-            TableDirectory a{};
-            r.read(a.sfntVersion,
-                   a.numTables,
-                   a.searchRange,
-                   a.entrySelector,
-                   a.rangeShift);
-            assert((a.sfntVersion == 0x00010000) || (a.sfntVersion == 0x4F54544F));
-            assert(a.numTables >= 9);
-            printf("%u %d %x %x %d\n", a.sfntVersion, a.numTables, a.searchRange, a.entrySelector, a.rangeShift);
-            a.first = s.data();
-            for (int i = 0; i != a.numTables; ++i) {
-                auto c = TableRecord::from(r);
-                assert(c.offset + c.length <= s.size());
-                a.tableRecords.push_back(c);
-            }
-            return a;
-        }
-        
-        wry::span<byte const> operator[](const char* key) const {
-            for (auto & a : tableRecords) {
-                if (std::memcmp(key, &a.tableTag, 4) == 0)
-                    return {first + a.offset, a.length};
-            }
-            return {};
-        }
-        
-    };
-     */
-    
+       
     struct cmapTable {
-        
-        uint16_t version;
-        uint16_t numTables;
-        
-        enum {
-            // PlatformID
-            UNICODE = 0,
             
-            // EncodingID
-            BMP = 3,
-        };
-        
         struct EncodingRecord {
+            
+            enum PlatformID : uint16_t { UNICODE = 0, };
+            enum EncodingID : uint16_t { BMP = 3, };
             
             uint16_t platformID;
             uint16_t encodingID;
             uint32_t subtableOffset;
-            
-            explicit EncodingRecord(wry::Reader& r) {
-                r.read(platformID, encodingID, subtableOffset);
-            }
             
             void debug() {
                 printf("    EncodingRecord {\n");
@@ -184,9 +112,15 @@ X(uint16_t, rangeShift) \
             
         };
         
-        std::vector<EncodingRecord> encodingRecords;
-        
         struct cmapSubtableFormat4 {
+            
+            uint16_t format;
+            uint16_t length;
+            uint16_t language;
+            uint16_t segCountX2;
+            uint16_t searchRange;
+            uint16_t entrySelector;
+            uint16_t rangeShift;
             
             size_t segCount;
             wry::span<byte const> tail;
@@ -219,53 +153,46 @@ X(uint16_t, rangeShift) \
                 }
                 return (idDelta + code) & 0xFFFF;
             }
-            
-            cmapSubtableFormat4() = default;
-            
-            explicit cmapSubtableFormat4(wry::span<byte const> s) {
-                wry::Reader r{s};
+                        
+            void debug() {
+                printf("    cmapSubtableFormat4 {\n");
+#define X(A) printf("    %s = %d,\n", #A, A);
+                X(format)
+                X(length)
+                X(language)
+                X(segCountX2)
+                X(searchRange)
+                X(entrySelector)
+                X(rangeShift)
+#undef X
+                auto s = tail;
+#define X(A)    printf("    " #A " = [\n");\
+                for (int i = 0; i != segCount; ++i) {\
+                    uint16_t A;\
+                    parse_ntoh(s, A);\
+                    printf("        %d,\n", A);\
+                }\
+                printf("    ],\n");
+                X(endCode)
+                uint16_t reservedPad;
+                parse_ntoh(s, reservedPad);
+                printf("    reservedPad = %d,\n", reservedPad);
+                X(startCode)
+                X(idDelta)
+                X(idRangeOffset)
+#undef X
+                printf("    },\n");
+
                 
-                uint16_t format;
-                uint16_t length;
-                uint16_t language;
-                uint16_t segCountX2;
-                uint16_t searchRange;
-                uint16_t entrySelector;
-                uint16_t rangeShift;
-                
-                r.read(format,
-                       length,
-                       language,
-                       segCountX2,
-                       searchRange,
-                       entrySelector,
-                       rangeShift);
-                assert(format == 4);
-                assert(length = s.size());
-                assert(language == 0);
-                
-                segCount = segCountX2 >> 1;
-                tail = r.s;
             }
             
         };
         
+        uint16_t version;
+        uint16_t numTables;
+        std::vector<EncodingRecord> encodingRecords;
+        
         cmapSubtableFormat4 bmp;
-        
-        
-        explicit cmapTable(wry::span<byte const> s)
-        : bmp{} {
-            wry::Reader r{s};
-            r.read(version, numTables);
-            for (int i = 0; i != numTables; ++i) {
-                encodingRecords.emplace_back(r);
-                if ((encodingRecords.back().platformID == UNICODE)
-                    && (encodingRecords.back().encodingID == BMP)) {
-                    bmp = cmapSubtableFormat4(s.after(encodingRecords.back().subtableOffset));
-                }
-            }
-            
-        }
         
         void debug() {
             printf("CharacterToGlyphIndexMappingTable {\n");
@@ -273,10 +200,51 @@ X(uint16_t, rangeShift) \
             printf("    numTables = %hu,\n", numTables);
             for (int i = 0; i != numTables; ++i)
                 encodingRecords[i].debug();
+            bmp.debug();
             printf("}\n");
         }
         
     };
+    
+    void parse_cmapSubtableFormat4(Bytes s, cmapTable::cmapSubtableFormat4& x) {
+        wry::Reader r{s};
+        
+        
+        
+        r.read(x.format,
+               x.length,
+               x.language,
+               x.segCountX2,
+               x.searchRange,
+               x.entrySelector,
+               x.rangeShift);
+        assert(x.format == 4);
+        
+        
+        x.segCount = x.segCountX2 >> 1;
+        x.tail = r.s;
+    }
+    
+    void parse_EncodingRecord(Bytes& s, cmapTable::EncodingRecord& x) {
+        parse_ntoh(s, x.platformID);
+        parse_ntoh(s, x.encodingID);
+        parse_ntoh(s, x.subtableOffset);
+    }
+    
+    void parse_cmapTable(Bytes s, cmapTable& x) {
+        Bytes t = s;
+        parse_ntoh(s, x.version);
+        parse_ntoh(s, x.numTables);
+        for (int i = 0; i != x.numTables; ++i) {
+            x.encodingRecords.emplace_back();
+            parse_EncodingRecord(s, x.encodingRecords.back());
+            if ((x.encodingRecords.back().platformID == cmapTable::EncodingRecord::UNICODE)
+                && (x.encodingRecords.back().encodingID == cmapTable::EncodingRecord::BMP)) {
+                parse_cmapSubtableFormat4(t.after(x.encodingRecords.back().subtableOffset), x.bmp);
+            }
+        }
+        
+    }
     
     
     template<typename T>
@@ -736,18 +704,82 @@ X(uint16_t, usUpperOpticalPointSize)\
         
     };
     
+    void enumerate_tables(Bytes s, auto&& f) {
+        Bytes t{s};
+#define X(A, B) A B; parse_ntoh(s, B);
+        X(uint32_t, sfntVersion)
+        X(uint16_t, numTables)
+        X(uint16_t, searchRange)
+        X(uint16_t, entrySelector)
+        X(uint16_t, rangeShift)
+#undef X
+        assert((sfntVersion == 0x00010000) || (sfntVersion == 0x4F54544F));
+        assert(numTables >= 9);
+        assert(searchRange == std::bit_floor(numTables) * 16);
+        assert(entrySelector == std::bit_width(numTables) - 1);
+        assert(rangeShift == numTables * 16 - searchRange);
+        for (uint16_t i = 0; i != numTables; ++i) {
+            uint8_t tableTag[4]; parse_ntoh(s, tableTag);
+            #define X(A, B) A B; parse_ntoh(s, B);
+            X(uint32_t, checksum)
+            X(uint32_t, offset)
+            X(uint32_t, length)
+#undef X
+            f(tableTag, t.subspan(offset, length));
+        }
+    }
+    
+    
+    void cmap_enumerate_encoding_records(Bytes s, auto&& f) {
+        Bytes t{s};
+#define X(A, B) A B; parse_ntoh(s, B);
+        X(uint16_t, version)
+        X(uint16_t, numTables)
+        assert(version == 0);
+        for (uint16_t i = 0; i != numTables; ++i) {
+            X(uint16_t, platformID)
+            X(uint16_t, encodingID)
+            X(uint32_t, subtableOffset)
+            f(platformID, encodingID, t.after(subtableOffset));
+        }
+    }
+    
+    void cmap_Subtable_Format_4(Bytes s, auto&& f) {
+    }
+
     
     
     void* parse(byte const* first, byte const* last) {
         
         printf("parsing .otf of %zd bytes\n", last - first);
         
+        enumerate_tables({first, last},
+                         [ ](uint8_t tableTag[4], Bytes s) {
+            printf("TableRecord \"%.4s\" of %zd bytes\n", tableTag, s.size());
+            auto eq = [tableTag](char const (&s)[5]) {
+                return std::memcmp(tableTag, s, 4) == 0;
+            };
+            if (eq("cmap")) {
+                cmap_enumerate_encoding_records(s,
+                                                [ ](uint16_t platformID,
+                                                    uint16_t encodingID,
+                                                    Bytes s) {
+                    if (platformID == 0 && encodingID == 0) {
+                        
+                    }
+                });
+            }
+        });
+        
+        
+        
         span<const byte> s{first, last};
         
         TableDirectory tableDirectory;
         parse_TableDirectory(s, tableDirectory);
         
-        auto cmap = cmapTable{tableDirectory["cmap"]};
+        cmapTable cmap;
+        parse_cmapTable(tableDirectory["cmap"], cmap);
         cmap.debug();
         
         auto head = FontHeaderTable{tableDirectory["head"]};
@@ -768,6 +800,11 @@ X(uint16_t, usUpperOpticalPointSize)\
         
         auto OS_2 = OS_2andWindowsMetricsTable{tableDirectory["OS/2"]};
         OS_2.debug();
+        
+        // These are the recommended metrics to use of the several present
+        auto ascender = OS_2.sTypoAscender; // positive
+        auto descender = OS_2.sTypoDescender; // negative
+        auto lineGap = OS_2.sTypoLineGap; // line gap
         
         if (tableDirectory.sfntVersion == 0x4F54544F) {
             auto s = tableDirectory["CFF "];

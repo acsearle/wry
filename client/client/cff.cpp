@@ -31,6 +31,15 @@ X(uint8_t, offSize)
 #define X(A, B) A B;
         Y
 #undef X
+        
+        void debug() {
+            printf("    Header {\n");
+#define X(A, B) printf("        " #B " = %d,\n", B);
+            Y
+#undef X
+            printf("    },\n");
+        }
+        
     }; // struct HEADER
     
     void parse_Header(span<byte const>& s, Header& x) {
@@ -55,6 +64,8 @@ X(uint8_t, offSize)
             // we can't assume that the data is aligned
             std::memcpy(j, src, sizeof(T) * 2);
             byte const* base = offsets + (count + 1) * sizeof(T) - 1;
+            
+            // printf("%d, %d\n", ntoh(j[0]), ntoh(j[1]));
             return { base + ntoh(j[0]), base + ntoh(j[1]) };
         }
         
@@ -71,6 +82,10 @@ X(uint8_t, offSize)
                 default:
                     abort();
             }
+        }
+        
+        void debug() {
+            printf("INDEX { count = %d, offSize = %d }\n", count, offSize);
         }
         
     }; // struct INDEX
@@ -134,7 +149,7 @@ X(uint8_t, offSize)
     }; // struct DICT
     
     
-    void parse_DICT(span<const byte>& s, DICT& x) {
+    void parse_DICT(span<const byte> s, DICT& x) {
         
         std::array<uint8_t, 2> key;
         std::vector<double> value;
@@ -682,18 +697,18 @@ X(uint8_t, offSize)
         auto r = wry::Reader{s};
 
         
-        printf("%p\n", s._begin);
-        for (int i = 0; i != 100; ++i) {
-            printf("  %x\n", (int)s._begin[i]);
+        Header header; parse_Header(s, header); header.debug();
+        INDEX name_INDEX; parse_INDEX(s, name_INDEX); name_INDEX.debug();
+        for (int i = 0; i != name_INDEX.count; ++i) {
+            auto t = name_INDEX[i];
+            printf("\"%.*s\"\n", (int)t.size(), (char const*)t._begin);
         }
-        printf("%p\n", s._begin);
-        Header header; parse_Header(s, header);
-        printf("%p\n", s._begin);
-
-        INDEX name_INDEX; parse_INDEX(s, name_INDEX);
-        INDEX top_DICT_INDEX; parse_INDEX(s, top_DICT_INDEX);
-        INDEX string_INDEX; parse_INDEX(s, string_INDEX);
-        INDEX global_subr_INDEX; parse_INDEX(s, global_subr_INDEX);
+        INDEX top_DICT_INDEX; parse_INDEX(s, top_DICT_INDEX); top_DICT_INDEX.debug();
+        INDEX string_INDEX; parse_INDEX(s, string_INDEX); string_INDEX.debug();
+        for (int i = 0; i != string_INDEX.count; ++i) {
+            auto t = string_INDEX[i];
+            printf("\"%.*s\"\n", (int)t.size(), (char const*)t._begin);
+        }INDEX global_subr_INDEX; parse_INDEX(s, global_subr_INDEX); global_subr_INDEX.debug();
         
         DICT top_DICT; {
             span t{top_DICT_INDEX[0]};
@@ -711,13 +726,19 @@ X(uint8_t, offSize)
         };
         std::span<double const> values;
         
+        // Get CharStrings offset(0)
         values = top_DICT[CHARSTRINGS];
+        assert(values.size() == 1);
+        printf("CharStrings @ %g\n", values[0]);
         s = reset;
         r.s = s;
         r.skip((std::size_t)values[0]);
-        INDEX charstrings_INDEX; parse_INDEX(r.s, charstrings_INDEX);
+        INDEX charstrings_INDEX; parse_INDEX(r.s, charstrings_INDEX); charstrings_INDEX.debug();
         
+        // Get PrivateDict size and offset(0)
         values = top_DICT[PRIVATE];
+        assert(values.size() == 2);
+        printf("PrivateDict(%g) @ %g\n", values[1], values[0]);
         auto private_DICT_s = wry::span{
             s.data() + (std::size_t)values[1],
             (std::size_t)values[0]
@@ -725,18 +746,25 @@ X(uint8_t, offSize)
         DICT private_DICT; parse_DICT(private_DICT_s, private_DICT);
         
         values = private_DICT[SUBRS];
+        printf("PrivateDict @ %g\n", values[0]);
         r.s = { private_DICT_s._begin, s._end };
         r.skip((std::size_t)values[0]);
-        INDEX local_subr_INDEX; parse_INDEX(r.s, local_subr_INDEX);
+        INDEX local_subr_INDEX; parse_INDEX(r.s, local_subr_INDEX); local_subr_INDEX.debug();
         
         Type2CharstringEngine e;
         e.global_subroutines = global_subr_INDEX;
         e.local_subroutines = local_subr_INDEX;
         
-        std::vector<Type2CharstringEngine::tmp::Bezier2> g;
-        simd_double2 pen = {};
-        std::size_t maxf = 0;
+        for (int i = 0; i != charstrings_INDEX.count; ++i) {
+            e.execute(charstrings_INDEX[i]);
+            printf("e.points.size() = %zd\n", e.points.size());
+        }
         
+        
+//        std::vector<Type2CharstringEngine::tmp::Bezier2> g;
+//        simd_double2 pen = {};
+//        std::size_t maxf = 0;
+//        
         // OTF font head table circular dependency?)
 //        auto xy_min = simd_make_double2(head.xMin, head.yMin);
 //        auto xy_max = simd_make_double2(head.xMax, head.yMax);

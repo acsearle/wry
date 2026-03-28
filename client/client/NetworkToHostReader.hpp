@@ -12,69 +12,57 @@
 #include <cstdio>
 
 #include <cstring>
+#include <ranges>
 
 #include "span.hpp"
 
 namespace wry {
-    
-    // TODO: Clean up; probably not needed at all
-    
+        
     using byte = unsigned char;
 
-    template<typename T>
-    T sgn(T x) {
-        return (T{0} < x) - (x < T{0});
-    }
+//    template<typename T>
+//    T sgn(T x) {
+//        return (T{0} < x) - (x < T{0});
+//    }
     
     // Binary file assist
         
     // overload network-to-host
     
-    inline char ntoh(char x) {
-        return x;
+    template<std::integral T>
+    T ntoh(T x) {
+        if constexpr (sizeof(T) == 1) {
+            return x;
+        } else if constexpr (sizeof(T) == 2) {
+            return ntohs(x);
+        } else if constexpr (sizeof(T) == 4) {
+            return ntohl(x);
+        } else if constexpr (sizeof(T) == 8) {
+            return ntohll(x);
+        }
+    }
+    
+    template<std::integral T>
+    void parse_ntoh(span<byte const>& s, T& x) {
+        std::memcpy(&x, s.data(), sizeof(T));
+        s.drop_front(sizeof(T));
+        x = ntoh(x);
     }
 
-    inline signed char ntoh(signed char x) {
-        return x;
+    template<std::integral... Ts>
+    void parse_ntoh(span<byte const>& s, Ts&... xs) {
+        (parse_ntoh(s, xs), ...);
     }
+    
+    template<std::ranges::range T>
+    void parse_ntoh(span<byte const>&s, T& t) {
+        for (auto& a : t)
+            parse_ntoh(s, a);
+    }
+    
 
-    inline unsigned char ntoh(unsigned char x) {
-        return x;
-    }
+    // TODO: Clean up; probably not needed at all
 
-    inline short ntoh(short x) {
-        return ntohs(x);
-    }
-    
-    inline unsigned short ntoh(unsigned short x) {
-        return ntohs(x);
-    }
-
-    inline int ntoh(int x) {
-        return ntohl(x);
-    }
-    
-    inline unsigned int ntoh(unsigned int x) {
-        return ntohl(x);
-    }
-    
-    inline long ntoh(long x) {
-        return ntohl(x);
-    }
-    
-    inline unsigned long ntoh(unsigned long x) {
-        return ntohl(x);
-    }
-    
-    inline long long ntoh(long long x) {
-        return ntohll(x);
-    }
-    
-    inline unsigned long long ntoh(unsigned long long x) {
-        return ntohll(x);
-    }
-
-    
     using Bytes = span<byte const>;
     
     struct NetworkToHostReader {
@@ -120,18 +108,7 @@ namespace wry {
         x = ntoh(x);
         return true;
     }
-    
-    template<typename T>
-    void parse_ntoh(span<byte const>& s, T& x) {
-        x = {};
-        printf("%p\n", s._begin);
-        std::memcpy(&x, s.data(), sizeof(T));
-        printf("%d\n", (unsigned int)x);
-        s.drop_front(sizeof(T));
-        printf("%p\n", s._begin);
-        x = ntoh(x);
-        printf("read %x, %zd\n", (int) x, sizeof(T));
-    }
+        
 }
 
 #endif /* NetworkToHostReader_hpp */
