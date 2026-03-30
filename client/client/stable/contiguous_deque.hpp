@@ -771,7 +771,9 @@ namespace wry {
                 T* c = b + n;
                 _poison(a, b);
                 _poison(c, d);
-                std::memcpy(b, _begin, n * sizeof(T));
+                // SAFETY: This is a relocate.  Explicit cast to void suppresses
+                // warning for non-trivially copyable types
+                std::memcpy((void*)b, _begin, n * sizeof(T));
                 ::operator delete(static_cast<void*>(_allocation_begin));
                 _allocation_begin = a;
                 _begin = b;

@@ -142,7 +142,8 @@ X(uint8_t, offSize)
                 if (nibble == 0xf)
                     break;
             }
-            std::from_chars_result result = std::from_chars(buffer, dst, x);
+            // std::from_chars_result result =
+            std::from_chars(buffer, dst, x);
             // assert((result.ptr == dst));
         }
         
@@ -210,11 +211,11 @@ X(uint8_t, offSize)
         INDEX global_subroutines;
         INDEX local_subroutines;
         
-        std::deque<double> argument_queue;
+        std::deque<float> argument_queue;
         std::vector<wry::span<byte const>> call_stack;
         bool is_not_first_argument_queue_clearing_operator = false;
-        double width = 0.0;
-        simd_double2 pen = {};
+        float width = 0.0;
+        simd_float2 pen = {};
         uint8_t mode = {};
         
         enum {
@@ -228,7 +229,7 @@ X(uint8_t, offSize)
         int nhstem = 0;
         int nvstem = 0;
         
-        std::vector<simd_double2> points;
+        std::vector<simd_float2> points;
         std::vector<uint8_t> modes;
         
         // TODO: clumsy
@@ -316,67 +317,19 @@ X(uint8_t, offSize)
         
         bool execute(std::span<byte const> str);
         
-        struct tmp {
-            struct Bezier1 {
-                simd_double2 x[2];
-                static Bezier1 fromLine(...);
-            };
-            struct Bezier2 {
-                simd_double2 x[3];
-                static Bezier2 fromLine(...);
-            };
-            struct Bezier3 {
-                simd_double2 x[4];
-                static Bezier3 fromLine(...);
-            };
+        struct Bezier3 {
+            simd_float2 x[4];
+            static Bezier3 fromLine(simd_float2 a, simd_float2 b) {
+                simd_float2 aab = simd_mix(a, b, 1.0f / 3.0f);
+                simd_float2 abb = simd_mix(a, b, 1.0f / 3.0f);
+                return Bezier3{{a,aab,abb,b}};
+            }
         };
         
-        std::vector<tmp::Bezier2> to_Bezier2_list() const {
-            std::vector<tmp::Bezier2> result;
-            
-            assert(points.size() == modes.size());
-            size_t i = 0;
-            size_t j = 0; // index of curve-closing point
-            for (; i != points.size(); ++i) {
-                switch (modes[i]) {
-                    case MOVE:
-                        if (i != 0) {
-                            // we need to close the curve
-                            result.push_back(tmp::Bezier2::fromLine(points[i-1], points[j]));
-                            j = i;
-                        }
-                        break;
-                    case LINE: {
-                        assert(i != 0);
-                        result.push_back(tmp::Bezier2::fromLine(points[i-1], points[i]));
-                    } break;
-                    case BEZIER: {
-                        assert(i != 0);
-                        auto c = tmp::Bezier3{
-                            points[i-1],
-                            points[i+0],
-                            points[i+1],
-                            points[i+2]
-                        };
-                        // auto [a, b] = tmp::reduce_parametric_continuity(c);
-                        //auto [a, b, d, e] = tmp::reduce_on_curve_points_MORE(c);
-                        // result.push_back(a);
-                        // result.push_back(b);
-                        //result.push_back(d);
-                        //result.push_back(e);
-                        i += 2;
-                    } break;
-                }
-            }
-            if (i) {
-                // close the curve with a line
-                result.push_back(tmp::Bezier2::fromLine(points[i-1], points[j]));
-            }
-            return result;
-        }
+       
         
-        std::vector<tmp::Bezier3> to_Bezier3_list() const {
-            std::vector<tmp::Bezier3> result;
+        std::vector<Bezier3> to_Bezier3_list() const {
+            std::vector<Bezier3> result;
             
             assert(points.size() == modes.size());
             size_t i = 0;
@@ -386,17 +339,17 @@ X(uint8_t, offSize)
                     case MOVE:
                         if (i != 0) {
                             // we need to close the curve
-                            result.push_back(tmp::Bezier3::fromLine(points[i-1], points[j]));
+                            result.push_back(Bezier3::fromLine(points[i-1], points[j]));
                             j = i;
                         }
                         break;
                     case LINE: {
                         assert(i != 0);
-                        result.push_back(tmp::Bezier3::fromLine(points[i-1], points[i]));
+                        result.push_back(Bezier3::fromLine(points[i-1], points[i]));
                     } break;
                     case BEZIER: {
                         assert(i != 0);
-                        result.push_back(tmp::Bezier3{
+                        result.push_back(Bezier3{
                             points[i-1],
                             points[i+0],
                             points[i+1],
@@ -408,12 +361,40 @@ X(uint8_t, offSize)
             }
             if (i) {
                 // close the curve with a line
-                result.push_back(tmp::Bezier3::fromLine(points[i-1], points[j]));
+                result.push_back(Bezier3::fromLine(points[i-1], points[j]));
             }
             return result;
         }
         
     }; // struct Type2CharstringEngine
+    
+    enum  {
+        HSTEM = 1,
+        VSTEM = 3,
+        VMOVETO,
+        RLINETO,
+        HLINETO,
+        VLINETO,
+        RRCURVETO,
+        CALLSUBR = 10,
+        RETURN,
+        ESCAPE,
+        ENDCHAR = 14,
+        HSTEMHM = 18,
+        HINTMASK,
+        CNTRMASK,
+        RMOVETO,
+        HMOVETO,
+        VSTEMHM,
+        RCURVELINE,
+        RLINECURVE,
+        VVCURVETO,
+        HHCURVETO,
+        SHORTINT,
+        CALLGSUBR,
+        VHCURVETO,
+        HVCURVETO,
+    };
         
     bool Type2CharstringEngine::execute(std::span<byte const> str) {
         reset();
@@ -423,38 +404,33 @@ X(uint8_t, offSize)
             // printf("<%d>", b0);
             if ((b0 <= 31) && (b0 != 28)) {
                 switch (b0) {
-                    case 1: {
+                    case HSTEM: {
                         maybe_width_if_odd();
-                        // printf(": hstem\n");
                         do_hstem();
                         assert(argument_queue.empty());
                         break;
                     }
-                    case 3: {
+                    case VSTEM: {
                         maybe_width_if_odd();
-                        // printf(": vstem\n");
                         do_vstem();
                         assert(argument_queue.empty());
                         break;
                     }
-                    case 4: {
+                    case VMOVETO: {
                         maybe_width_if_even();
-                        // printf(": vmoveto\n");
                         mode = MOVE;
                         dy();
                         assert(argument_queue.empty());
                         break;
                     }
-                    case 5: {
-                        // printf(": rlineto\n");
+                    case RLINETO: {
                         mode = LINE;
                         do  {
                             dxy();
                         } while ((!argument_queue.empty()));
                         break;
                     }
-                    case 6: {
-                        // printf(": hlineto\n");
+                    case HLINETO: {
                         int parity = 0;
                         mode = LINE;
                         do {
@@ -468,8 +444,7 @@ X(uint8_t, offSize)
                         } while (!argument_queue.empty());
                         break;
                     }
-                    case 7: {
-                        // printf(": vlineto\n");
+                    case VLINETO: {
                         int parity = 1;
                         mode = LINE;
                         do {
@@ -483,90 +458,76 @@ X(uint8_t, offSize)
                         } while (!argument_queue.empty());
                         break;
                     }
-                    case 8: {
-                        // printf(": rrcurveto\n");
+                    case RRCURVETO: {
                         mode = BEZIER;
                         do {
                             dxy(); dxy(); dxy();
                         } while (!argument_queue.empty());
                         break;
                     }
-                    case 10: { // callsubr
-                               // printf(": callsubr\n");
+                    case CALLSUBR: {
                         int i = (int)argument_queue.back() + 107;
                         argument_queue.pop_back();
                         call_stack.push_back(r.s);
                         r.s = local_subroutines[i];
                         break;
                     }
-                    case 11: { // return
-                               // printf(": return\n");
+                    case RETURN: {
                         assert(r.s.empty());
                         r.s = call_stack.back(); call_stack.pop_back();
                         break;
                     }
-                    case 14: // endchar
+                    case ENDCHAR: {
                         maybe_width_if_odd();
-                        // printf(": endchar\n");
                         assert(argument_queue.empty());
                         for (auto s : call_stack)
                             assert(s.empty());
-                        // print_result();
-                        // render_result();
                         return true;
-                    case 18: { // hstemhm
+                    }
+                    case HSTEMHM: { // hstemhm
                         maybe_width_if_odd();
-                        // printf(": hstemhm\n");
                         do_hstem();
                         break;
                     }
-                    case 19: { // hintmask
+                    case HINTMASK: {
                         maybe_width_if_odd();
                         if (!argument_queue.empty()) {
-                            // printf("(: vstem) ");
                             do_vstem();
                         }
-                        // printf(": hintmask");
                         do_mask(r.s);
                         assert(argument_queue.empty());
                         break;
                     }
-                    case 20: { // cntrmask
+                    case CNTRMASK: {
                         maybe_width_if_odd();
                         if (!argument_queue.empty()) {
-                            // printf("(: vstem) ");
                             do_vstem();
                         }
-                        // printf(": cntrmask");
                         do_mask(r.s);
                         assert(argument_queue.empty());
                         break;
                     }
-                    case 21: {
+                    case RMOVETO: {
                         maybe_width_if_odd();
-                        // printf(": rmoveto\n");
                         mode = MOVE;
                         dxy();
                         assert(argument_queue.empty());
                         break;
                     }
-                    case 22: {
+                    case HMOVETO: {
                         maybe_width_if_even();
-                        // printf(": hmoveto\n");
                         mode = MOVE;
                         dx();
                         assert(argument_queue.empty());
                         break;
                     }
-                    case 23: {
+                    case VSTEMHM: {
                         maybe_width_if_odd();
-                        // printf(": vstemhm\n");
                         do_vstem();
                         assert(argument_queue.empty());
                         break;
                     }
-                    case 24: {
-                        // printf(": rcurveline\n");
+                    case RCURVELINE: {
                         mode = BEZIER;
                         do {
                             dxy(); dxy(); dxy();
@@ -576,8 +537,7 @@ X(uint8_t, offSize)
                         assert(argument_queue.empty());
                         break;
                     }
-                    case 25: {
-                        // printf(": rlinecurve\n");
+                    case RLINECURVE: {
                         mode = LINE;
                         do {
                             dxy();
@@ -586,8 +546,7 @@ X(uint8_t, offSize)
                         dxy(); dxy(), dxy();
                         break;
                     }
-                    case 26: {
-                        // printf(": vvcurveto\n");
+                    case VVCURVETO: {
                         if (argument_queue.size() & 1) {
                             pen.x += argument_queue.front(); argument_queue.pop_front();
                         }
@@ -597,8 +556,7 @@ X(uint8_t, offSize)
                         } while (!argument_queue.empty());
                         break;
                     }
-                    case 27: {
-                        // printf(": hhcurveto\n");
+                    case HHCURVETO: {
                         if (argument_queue.size() & 1) {
                             pen.y += argument_queue.front(); argument_queue.pop_front();
                         }
@@ -609,8 +567,15 @@ X(uint8_t, offSize)
                         assert(argument_queue.empty());
                         break;
                     }
-                    case 30: {
-                        // printf(": vhcurveto\n");
+                    case CALLGSUBR: {
+                        int i = (int)argument_queue.back() + 107;
+                        argument_queue.pop_back();
+                        call_stack.push_back(r.s);
+                        r.s = global_subroutines[i];
+                        break;
+                    }
+                    /* case SHORTINT: */
+                    case VHCURVETO: {
                         bool parity = 1;
                         mode = BEZIER;
                         do {
@@ -632,8 +597,7 @@ X(uint8_t, offSize)
                             parity = parity ^ 1;
                         } while (!argument_queue.empty());
                         break;                    }
-                    case 31: {
-                        // printf(": hvcurveto\n");
+                    case HVCURVETO: {
                         bool parity = 0;
                         mode = BEZIER;
                         do {
@@ -758,6 +722,8 @@ X(uint8_t, offSize)
         for (int i = 0; i != charstrings_INDEX.count; ++i) {
             e.execute(charstrings_INDEX[i]);
             printf("e.points.size() = %zd\n", e.points.size());
+            auto f = e.to_Bezier3_list();
+            
         }
         
         

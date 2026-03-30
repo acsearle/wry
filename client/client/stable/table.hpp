@@ -196,6 +196,8 @@ namespace wry {
         }
                 
         void _relocate_backward_from(std::uint64_t i) {
+            // SAFETY: This is a relocate.  Explicit casts to void suppresses
+            // warning for non-trivially copyable types
             assert((i <= _mask) && _begin[i]);
             // find next empty slot
             std::uint64_t j = i;
@@ -203,13 +205,13 @@ namespace wry {
                 j = _next_index(j);
                 assert(j != i);
             } while (_begin[j]);
-            std::destroy_at(_begin + j); // something will relocate onto it
+            std::destroy_at(_begin + j);
             if (j < i) {
-                std::memmove(_begin + 1, _begin, j * sizeof(Entry));
-                std::memcpy(_begin, _begin + _mask, sizeof(Entry));
+                std::memmove((void*)(_begin + 1), _begin, j * sizeof(Entry));
+                std::memcpy((void*)_begin, _begin + _mask, sizeof(Entry));
                 j = _mask;
             }
-            std::memmove(_begin + i + 1, _begin + i, (j - i) * sizeof(Entry));
+            std::memmove((void*)(_begin + i + 1), _begin + i, (j - i) * sizeof(Entry));
             std::construct_at(_begin + i); // was relocated from and destroyed
         }
                         
@@ -238,6 +240,8 @@ namespace wry {
         }
         
         void _relocate_forward_into(std::uint64_t i) {
+            // SAFETY: This is a relocate.  Explicit casts to void suppresses
+            // warning for non-trivially copyable types
             assert(i <= _mask);
             assert(_begin[i]);
             std::destroy_at(_begin + i); // will be relocated over
@@ -254,11 +258,11 @@ namespace wry {
             // now we have [i] to overwrite, (i, j] to move and [j] to zero
             if (j < i) {
                 // we have wrapped
-                std::memmove(_begin + i, _begin + i + 1, sizeof(Entry) * (_mask - i));
-                std::memcpy(_begin + _mask, _begin, sizeof(Entry));
+                std::memmove((void*)(_begin + i), _begin + i + 1, sizeof(Entry) * (_mask - i));
+                std::memcpy((void*)(_begin + _mask), _begin, sizeof(Entry));
                 i = 0;
             }
-            std::memmove(_begin + i, _begin + i + 1, sizeof(Entry) * (j - i));
+            std::memmove((void*)(_begin + i), _begin + i + 1, sizeof(Entry) * (j - i));
             std::construct_at(_begin + j);
         }
         

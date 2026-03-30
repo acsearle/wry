@@ -16,302 +16,129 @@
 #include "otf.hpp"
 
 namespace wry::otf {
-    
+  
     struct TableDirectory {
-        
 #define Y \
-X(uint32_t, checksum) \
-X(uint32_t, offset) \
-X(uint32_t, length) \
-
-        struct TableRecord {
-            
-#define X(A, B) A B;
-            std::array<uint8_t, 4> tableTag;
-            Y
-#undef X
-        };
-        
-        static void parse_TableRecord(span<byte const>& s, TableRecord& x) {
-#define X(A, B) parse_ntoh(s, x.B);
-            parse_ntoh(s, x.tableTag);
-            Y
-#undef X
-            printf("    \"%.4s\" %x %d %d\n",
-                   (char const*)&x.tableTag,
-                   x.checksum,
-                   x.offset,
-                   x.length);
-        }
-#undef Y
-        
-#define Y \
-X(uint32_t, sfntVersion) \
-X(uint16_t, numTables) \
-X(uint16_t, searchRange) \
-X(uint16_t, entrySelector) \
-X(uint16_t, rangeShift) \
-
+        X(uint32_t, sfntVersion) \
+        X(uint16_t, numTables) \
+        X(uint16_t, searchRange) \
+        X(uint16_t, entrySelector) \
+        X(uint16_t, rangeShift)
 #define X(A, B) A B;
         Y
 #undef X
-        
-        byte const* first;
-        
-        std::vector<TableRecord> tableRecords;
-        
-        wry::span<byte const> operator[](const char* key) const {
-            for (auto & a : tableRecords) {
-                if (std::memcmp(key, &a.tableTag, 4) == 0)
-                    return {first + a.offset, a.length};
-            }
-            return {};
+        void parse(Bytes& s) {
+#define X(A, B) parse_ntoh(s, B);
+            Y
+#undef X
+            assert((sfntVersion == 0x00010000) || (sfntVersion == 0x4F54544F));
+            assert(numTables >= 9);
+            assert(searchRange == std::bit_floor(numTables) * 16);
+            assert(entrySelector == std::bit_width(numTables) - 1);
+            assert(rangeShift == numTables * 16 - searchRange);
         }
-        
+#undef Y
+    };
+
+    struct TableRecord {
+#define Y \
+        X(uint32_t, checksum) \
+        X(uint32_t, offset) \
+        X(uint32_t, length)
+#define X(A, B) A B;
+        Y
+#undef X
+        void parse(Bytes& s) {
+#define X(A, B) parse_ntoh(s, B);
+            Y
+#undef X
+        }
+#undef Y
     };
     
-    void parse_TableDirectory(span<byte const>& s, TableDirectory& x) {
-        x.first = s.data();
-        auto n = s.size();
-#define X(A, B) parse_ntoh(s, x.B);
-        Y
-#undef X
-        assert((x.sfntVersion == 0x00010000) || (x.sfntVersion == 0x4F54544F));
-        assert(x.numTables >= 9);
-        assert(x.searchRange == std::bit_floor(x.numTables) * 16);
-        assert(x.entrySelector == std::bit_width(x.numTables) - 1);
-        assert(x.rangeShift == x.numTables * 16 - x.searchRange);
-        // printf("%u %d %x %x %d\n", x.sfntVersion, x.numTables, x.searchRange, x.entrySelector, x.rangeShift);
-        for (int i = 0; i != x.numTables; ++i) {
-            TableDirectory::TableRecord y = {};
-            TableDirectory::parse_TableRecord(s, y);
-            assert(y.offset + y.length <= n);
-            x.tableRecords.push_back(y);
-        }
-    }
-#undef Y
-       
     struct cmapTable {
-            
-        struct EncodingRecord {
-            
-            enum PlatformID : uint16_t { UNICODE = 0, };
-            enum EncodingID : uint16_t { BMP = 3, };
-            
-            uint16_t platformID;
-            uint16_t encodingID;
-            uint32_t subtableOffset;
-            
-            void debug() {
-                printf("    EncodingRecord {\n");
-                printf("        platformID = %hu,\n", platformID);
-                printf("        encodingID = %hu,\n", encodingID);
-                printf("        subtableOffset = %u,\n", subtableOffset);
-                printf("    },\n");
-            }
-            
-        };
-        
-        struct cmapSubtableFormat4 {
-            
-            uint16_t format;
-            uint16_t length;
-            uint16_t language;
-            uint16_t segCountX2;
-            uint16_t searchRange;
-            uint16_t entrySelector;
-            uint16_t rangeShift;
-            
-            size_t segCount;
-            wry::span<byte const> tail;
-            
-            enum { MISSING_GLYPH = 0xFFFF };
-            
-            uint16_t lookup(size_t code) {
-                uint16_t const* cursor = (uint16_t const*) tail.data();
-                // TODO: Use Reader
-                
-                // look for first segment with end >= code
-                while (ntohs(*cursor++) < code)
-                    ;
-                // padding word is accounted for by postincrement
-                cursor += segCount;
-                uint16_t startCode = ntohs(*cursor);
-                if (startCode > code) {
-                    // segment excludes the code; thus it is not present
-                    return MISSING_GLYPH;
-                }
-                cursor += segCount;
-                uint16_t idDelta = ntohs(*cursor);
-                cursor += segCount;
-                uint16_t idRangeOffset = ntohs(*cursor);
-                if (idRangeOffset != 0) {
-                    cursor += (idRangeOffset >> 1) + (code - startCode);
-                    code = ntohs(*cursor);
-                    if (code == 0)
-                        return MISSING_GLYPH;
-                }
-                return (idDelta + code) & 0xFFFF;
-            }
-                        
-            void debug() {
-                printf("    cmapSubtableFormat4 {\n");
-#define X(A) printf("    %s = %d,\n", #A, A);
-                X(format)
-                X(length)
-                X(language)
-                X(segCountX2)
-                X(searchRange)
-                X(entrySelector)
-                X(rangeShift)
+#define Y \
+X(uint16_t, version) \
+X(uint16_t, numTables)
+#define X(A, B) A B;
+        Y
 #undef X
-                auto s = tail;
-#define X(A)    printf("    " #A " = [\n");\
-                for (int i = 0; i != segCount; ++i) {\
-                    uint16_t A;\
-                    parse_ntoh(s, A);\
-                    printf("        %d,\n", A);\
-                }\
-                printf("    ],\n");
-                X(endCode)
-                uint16_t reservedPad;
-                parse_ntoh(s, reservedPad);
-                printf("    reservedPad = %d,\n", reservedPad);
-                X(startCode)
-                X(idDelta)
-                X(idRangeOffset)
+        void parse(Bytes& s) {
+#define X(A, B) parse_ntoh(s, B);
+            Y
 #undef X
-                printf("    },\n");
-
-                
-            }
-            
-        };
-        
-        uint16_t version;
-        uint16_t numTables;
-        std::vector<EncodingRecord> encodingRecords;
-        
-        cmapSubtableFormat4 bmp;
-        
-        void debug() {
-            printf("CharacterToGlyphIndexMappingTable {\n");
-            printf("    version = %hu,\n", version);
-            printf("    numTables = %hu,\n", numTables);
-            for (int i = 0; i != numTables; ++i)
-                encodingRecords[i].debug();
-            bmp.debug();
-            printf("}\n");
         }
-        
+#undef Y
     };
     
-    void parse_cmapSubtableFormat4(Bytes s, cmapTable::cmapSubtableFormat4& x) {
-        wry::Reader r{s};
-        
-        
-        
-        r.read(x.format,
-               x.length,
-               x.language,
-               x.segCountX2,
-               x.searchRange,
-               x.entrySelector,
-               x.rangeShift);
-        assert(x.format == 4);
-        
-        
-        x.segCount = x.segCountX2 >> 1;
-        x.tail = r.s;
-    }
-    
-    void parse_EncodingRecord(Bytes& s, cmapTable::EncodingRecord& x) {
-        parse_ntoh(s, x.platformID);
-        parse_ntoh(s, x.encodingID);
-        parse_ntoh(s, x.subtableOffset);
-    }
-    
-    void parse_cmapTable(Bytes s, cmapTable& x) {
-        Bytes t = s;
-        parse_ntoh(s, x.version);
-        parse_ntoh(s, x.numTables);
-        for (int i = 0; i != x.numTables; ++i) {
-            x.encodingRecords.emplace_back();
-            parse_EncodingRecord(s, x.encodingRecords.back());
-            if ((x.encodingRecords.back().platformID == cmapTable::EncodingRecord::UNICODE)
-                && (x.encodingRecords.back().encodingID == cmapTable::EncodingRecord::BMP)) {
-                parse_cmapSubtableFormat4(t.after(x.encodingRecords.back().subtableOffset), x.bmp);
-            }
+    struct EncodingRecord {
+#define Y \
+X(uint16_t, platformID) \
+X(uint16_t, encodingID) \
+X(uint32_t, subtableOffset)
+#define X(A, B) A B;
+        Y
+#undef X
+        void parse(Bytes& s) {
+#define X(A, B) parse_ntoh(s, B);
+            Y
+#undef X
         }
-        
-    }
+#undef Y
+    };
     
-    
-    template<typename T>
-    char const* formatString = "%%?";
-    
-    template<> char const* formatString<int8_t> = "%hhd";
-    template<> char const* formatString<uint8_t> = "%hhu";
-    template<> char const* formatString<int16_t> = "%hd";
-    template<> char const* formatString<uint16_t> = "%hu";
-    template<> char const* formatString<int32_t> = "%d";
-    template<> char const* formatString<uint32_t> = "%u";
-    template<> char const* formatString<std::array<uint8_t, 4>> = "%x";
+    struct cmapSubtableFormat4 {
+#define Y \
+        X(uint16_t, format)\
+        X(uint16_t, length)\
+        X(uint16_t, language)\
+        X(uint16_t, segCountX2)\
+        X(uint16_t, searchRange)\
+        X(uint16_t, entrySelector)\
+        X(uint16_t, rangeShift)
+#define X(A, B) A B;
+        Y
+#undef X
+        void parse(Bytes& s) {
+#define X(A, B) parse_ntoh(s, B);
+            Y
+#undef X
+        }
+#undef Y
+    };
     
     struct FontHeaderTable {
-        
 #define Y \
-X(uint16_t, majorVersion)\
-X(uint16_t, minorVersion)\
-X(uint32_t, fontRevision)\
-X(uint32_t, checksumAdjustment)\
-X(uint32_t, magicNumber)\
-X(uint16_t, flags)\
-X(uint16_t, unitsPerEm)\
-X(int64_t, created)\
-X(int64_t, modified)\
-X(int16_t, xMin)\
-X(int16_t, yMin)\
-X(int16_t, xMax)\
-X(int16_t, yMax)\
-X(uint16_t, macStyle)\
-X(uint16_t, lowestRecPPEM)\
-X(int16_t, fontDirectionHint)\
-X(int16_t, indexToLocFormat)\
-X(int16_t, glyphDataFormat)\
-
-        
+        X(uint16_t, majorVersion)\
+        X(uint16_t, minorVersion)\
+        X(uint32_t, fontRevision)\
+        X(uint32_t, checksumAdjustment)\
+        X(uint32_t, magicNumber)\
+        X(uint16_t, flags)\
+        X(uint16_t, unitsPerEm)\
+        X(int64_t, created)\
+        X(int64_t, modified)\
+        X(int16_t, xMin)\
+        X(int16_t, yMin)\
+        X(int16_t, xMax)\
+        X(int16_t, yMax)\
+        X(uint16_t, macStyle)\
+        X(uint16_t, lowestRecPPEM)\
+        X(int16_t, fontDirectionHint)\
+        X(int16_t, indexToLocFormat)\
+        X(int16_t, glyphDataFormat)
 #define X(A, B) A B;
         Y
 #undef X
-        
-        explicit FontHeaderTable(wry::span<byte const> s) {
-            wry::Reader r{s};
-#define X(A, B) r.read(B);
+        void parse(Bytes& s) {
+#define X(A, B) parse_ntoh(s, B);
             Y
 #undef X
-            assert(majorVersion == 1);
-            assert(minorVersion == 0);
-            assert(magicNumber == 0x5F0F3CF5);
         }
-        
-        void debug() {
-            constexpr std::size_t buf_size = 100;
-            char buffer[buf_size];
-            printf("{\n");
-#define X(A, B) snprintf(buffer, buf_size, "    \"%%s\" : %s,\n", formatString<A>); printf(buffer, #B, B);
-            Y
-#undef X
-            printf("}\n");
-        }
-        
 #undef Y
-        
     };
     
-    
     struct HorizontalHeaderTable {
-        
 #define Y \
 X(uint16_t, majorVersion)\
 X(uint16_t, minorVersion)\
@@ -330,78 +157,38 @@ X(int16_t, reserved1)\
 X(int16_t, reserved2)\
 X(int16_t, reserved3)\
 X(int16_t, metricDataFormat)\
-X(uint16_t, numberOfHMetrics)\
-
+X(uint16_t, numberOfHMetrics)
 #define X(A, B) A B;
         Y
 #undef X
-        
-        explicit HorizontalHeaderTable(wry::span<byte const> s) {
-            wry::Reader r{s};
-#define X(A, B) r.read(B);
+        void parse(Bytes& s) {
+#define X(A, B) parse_ntoh(s, B);
             Y
 #undef X
         }
-        
-        void debug() {
-            constexpr std::size_t buf_size = 100;
-            char buffer[buf_size];
-            printf("{\n");
-#define X(A, B) snprintf(buffer, buf_size, "    \"%%s\" : %s,\n", formatString<A>); printf(buffer, #B, B);
-            Y
-#undef X
-            printf("}\n");
-        }
-        
 #undef Y
-        
     };
-    
     
     struct HorizontalMetricsTable {
-        
-        uint16_t numGlyphs;
-        uint16_t numberOfHMetrics;
-        
-        struct LongHorMetricRecord {
-            uint16_t advanceWidth;
-            int16_t lsb;
-        };
-        
-        LongHorMetricRecord const* hMetrics;
-        
-        explicit HorizontalMetricsTable(uint16_t numGlyphs,
-                                        uint16_t numberOfHMetrics,
-                                        wry::span<byte const> s)
-        : numGlyphs{numGlyphs}
-        , numberOfHMetrics{numberOfHMetrics}
-        {
-            hMetrics = (LongHorMetricRecord const*)s.data();
-            
+#define Y \
+        X(uint16_t, numGlyphs)\
+        X(uint16_t, numberOfHMetrics)
+#define X(A, B) A B;
+        Y
+#undef X
+        void parse(Bytes& s) {
+#define X(A, B) parse_ntoh(s, B);
+            Y
+#undef X
         }
-        
-        LongHorMetricRecord lookup(uint16_t glyphID) {
-            LongHorMetricRecord a{};
-            if (glyphID < numberOfHMetrics) {
-                a = hMetrics[glyphID];
-            } else {
-                int16_t const* leftSideBearings = (int16_t const*)(hMetrics + numberOfHMetrics);
-                a.advanceWidth = hMetrics[numberOfHMetrics - 1].advanceWidth;
-                a.lsb = leftSideBearings[glyphID - numberOfHMetrics];
-            }
-            return { ntoh(a.advanceWidth), ntoh(a.lsb) };
-        }
-        
-        
+#undef Y
     };
+        
     
     struct MaximumProfileTable {
-        
 #define Y \
 X(uint32_t, version)\
 X(uint16_t, numGlyphs)\
-
-#define Z \
 X(uint16_t, maxPoints)\
 X(uint16_t, maxContours)\
 X(uint16_t, maxCompositePoints)\
@@ -414,46 +201,21 @@ X(uint16_t, maxInstructionDefs)\
 X(uint16_t, maxStackElements)\
 X(uint16_t, maxSizeOfInstructions)\
 X(uint16_t, maxComponentElements)\
-X(uint16_t, maxComponentDepth)\
-
+X(uint16_t, maxComponentDepth)
 #define X(A, B) A B;
         Y
-        Z
 #undef X
-        
-        explicit MaximumProfileTable(wry::span<byte const> s) {
-            wry::Reader r{s};
-#define X(A, B) r.read(B);
+        void parse(Bytes& s) {
+#define X(A, B) parse_ntoh(s, B);
             Y
-            if (version == 0x00010000) {
-                Z
-            }
 #undef X
         }
-        
-        void debug() {
-            constexpr std::size_t buf_size = 100;
-            char buffer[buf_size];
-            printf("{\n");
-#define X(A, B) snprintf(buffer, buf_size, "    \"%%s\" : %s,\n", formatString<A>); printf(buffer, #B, B);
-            Y
-            if (version == 0x00010000) {
-                Z
-            }
-#undef X
-            printf("}\n");
-        }
-#undef Z
 #undef Y
-        
     };
     
-    
+        
     struct OS_2andWindowsMetricsTable {
-        
-        using uint8x10_t = std::array<uint8_t, 10>;
         using Tag = std::array<uint8_t, 4>;
-        
 #define Y \
 X(uint16_t, version)\
 X(int16_t, xAvgCharWidth)\
@@ -501,41 +263,19 @@ X(int16_t, sCapHeight)\
 X(uint16_t, usDefaultChar)\
 X(uint16_t, usBreakChar)\
 X(uint16_t, usMaxContext)\
-
-#define Z \
 X(uint16_t, usLowerOpticalPointSize)\
-X(uint16_t, usUpperOpticalPointSize)\
-
+X(uint16_t, usUpperOpticalPointSize)
 #define X(A, B) A B;
         Y
-        Z
 #undef X
-        
-        explicit OS_2andWindowsMetricsTable(wry::span<byte const> s) {
-            wry::Reader r{s};
-#define X(A, B) r.read(B);
+        void parse(Bytes& s) {
+#define X(A, B) parse_ntoh(s, B);
             Y
-            if (version == 0x0005) {
-                Z
-            }
 #undef X
-        }
-        void debug() {
-            constexpr std::size_t buf_size = 100;
-            char buffer[buf_size];
-            printf("{\n");
-#define X(A, B) snprintf(buffer, buf_size, "    \"%%s\" : %s,\n", formatString<A>); printf(buffer, #B, B);
-            Y
-            if (version == 0x0005) {
-                Z
-            }
-#undef X
-            printf("}\n");
-        }
-#undef Z
 #undef Y
-        
+        }
     };
+
     
     
     
@@ -759,71 +499,75 @@ X(uint16_t, usUpperOpticalPointSize)\
             auto eq = [tableTag](char const (&s)[5]) {
                 return std::memcmp(tableTag, s, 4) == 0;
             };
+            if (eq("CFF ")) {
+                cff::parse(s.begin(), s.end());
+            }
             if (eq("cmap")) {
                 cmap_enumerate_encoding_records(s,
                                                 [ ](uint16_t platformID,
                                                     uint16_t encodingID,
                                                     Bytes s) {
                     if (platformID == 0 && encodingID == 0) {
-                        
+                        cmapSubtableFormat4 x;
+                        x.parse(s);
                     }
                 });
             }
         });
         
         
-        
-        span<const byte> s{first, last};
-        
-        TableDirectory tableDirectory;
-        parse_TableDirectory(s, tableDirectory);
-        
-        cmapTable cmap;
-        parse_cmapTable(tableDirectory["cmap"], cmap);
-        cmap.debug();
-        
-        auto head = FontHeaderTable{tableDirectory["head"]};
-        head.debug();
-        
-        auto hhea = HorizontalHeaderTable{tableDirectory["hhea"]};
-        hhea.debug();
-        
-        auto maxp = MaximumProfileTable{tableDirectory["maxp"]};
-        maxp.debug();
-        
-        auto hmtx = HorizontalMetricsTable{
-            maxp.numGlyphs,
-            hhea.numberOfHMetrics,
-            tableDirectory["hmtx"]};
-        
-        // name
-        
-        auto OS_2 = OS_2andWindowsMetricsTable{tableDirectory["OS/2"]};
-        OS_2.debug();
-        
-        // These are the recommended metrics to use of the several present
-        auto ascender = OS_2.sTypoAscender; // positive
-        auto descender = OS_2.sTypoDescender; // negative
-        auto lineGap = OS_2.sTypoLineGap; // line gap
-        
-        if (tableDirectory.sfntVersion == 0x4F54544F) {
-            auto s = tableDirectory["CFF "];
-            
-            cff::parse(s._begin, s._end);
-              
-            
-        } else {
-            
-            auto loca = IndexToLocation{
-                head.indexToLocFormat,
-                maxp.numGlyphs,
-                tableDirectory["loca"]
-            };
-            
-            auto glyf = GlyphData{tableDirectory["glyf"]};
-            
-        }
-        
+//        
+//        span<const byte> s{first, last};
+//        
+//        TableDirectory tableDirectory;
+//        parse_TableDirectory(s, tableDirectory);
+//        
+//        cmapTable cmap;
+//        parse_cmapTable(tableDirectory["cmap"], cmap);
+//        cmap.debug();
+//        
+//        auto head = FontHeaderTable{tableDirectory["head"]};
+//        head.debug();
+//        
+//        auto hhea = HorizontalHeaderTable{tableDirectory["hhea"]};
+//        hhea.debug();
+//        
+//        auto maxp = MaximumProfileTable{tableDirectory["maxp"]};
+//        maxp.debug();
+//        
+//        auto hmtx = HorizontalMetricsTable{
+//            maxp.numGlyphs,
+//            hhea.numberOfHMetrics,
+//            tableDirectory["hmtx"]};
+//        
+//        // name
+//        
+//        auto OS_2 = OS_2andWindowsMetricsTable{tableDirectory["OS/2"]};
+//        OS_2.debug();
+//        
+//        // These are the recommended metrics to use of the several present
+//        auto ascender = OS_2.sTypoAscender; // positive
+//        auto descender = OS_2.sTypoDescender; // negative
+//        auto lineGap = OS_2.sTypoLineGap; // line gap
+//        
+//        if (tableDirectory.sfntVersion == 0x4F54544F) {
+//            auto s = tableDirectory["CFF "];
+//            
+//            cff::parse(s._begin, s._end);
+//              
+//            
+//        } else {
+//            
+//            auto loca = IndexToLocation{
+//                head.indexToLocFormat,
+//                maxp.numGlyphs,
+//                tableDirectory["loca"]
+//            };
+//            
+//            auto glyf = GlyphData{tableDirectory["glyf"]};
+//            
+//        }
+//        
 
         
         
@@ -836,3 +580,335 @@ X(uint16_t, usUpperOpticalPointSize)\
 
 
 
+#if 0
+
+
+struct TableDirectory {
+    
+#define Y \
+X(uint32_t, checksum) \
+X(uint32_t, offset) \
+X(uint32_t, length) \
+
+    struct TableRecord {
+        
+#define X(A, B) A B;
+        std::array<uint8_t, 4> tableTag;
+        Y
+#undef X
+    };
+    
+    static void parse_TableRecord(span<byte const>& s, TableRecord& x) {
+#define X(A, B) parse_ntoh(s, x.B);
+        parse_ntoh(s, x.tableTag);
+        Y
+#undef X
+        printf("    \"%.4s\" %x %d %d\n",
+               (char const*)&x.tableTag,
+               x.checksum,
+               x.offset,
+               x.length);
+    }
+#undef Y
+    
+    
+    byte const* first;
+    
+    std::vector<TableRecord> tableRecords;
+    
+    wry::span<byte const> operator[](const char* key) const {
+        for (auto & a : tableRecords) {
+            if (std::memcmp(key, &a.tableTag, 4) == 0)
+                return {first + a.offset, a.length};
+        }
+        return {};
+    }
+    
+};
+
+void parse_TableDirectory(span<byte const>& s, TableDirectory& x) {
+    x.first = s.data();
+    auto n = s.size();
+#define X(A, B) parse_ntoh(s, x.B);
+    Y
+#undef X
+    assert((x.sfntVersion == 0x00010000) || (x.sfntVersion == 0x4F54544F));
+    assert(x.numTables >= 9);
+    assert(x.searchRange == std::bit_floor(x.numTables) * 16);
+    assert(x.entrySelector == std::bit_width(x.numTables) - 1);
+    assert(x.rangeShift == x.numTables * 16 - x.searchRange);
+    // printf("%u %d %x %x %d\n", x.sfntVersion, x.numTables, x.searchRange, x.entrySelector, x.rangeShift);
+    for (int i = 0; i != x.numTables; ++i) {
+        TableDirectory::TableRecord y = {};
+        TableDirectory::parse_TableRecord(s, y);
+        assert(y.offset + y.length <= n);
+        x.tableRecords.push_back(y);
+    }
+}
+#undef Y
+
+
+void print() {
+    constexpr std::size_t buf_size = 100;
+    char buffer[buf_size];
+    printf("{\n");
+#define X(A, B) snprintf(buffer, buf_size, "    \"%%s\" : %s,\n", formatString<A>); printf(buffer, #B, B);
+    Y
+#undef X
+    printf("}\n");
+}
+
+
+template<typename T>
+char const* formatString = "%%?";
+
+template<> char const* formatString<int8_t> = "%hhd";
+template<> char const* formatString<uint8_t> = "%hhu";
+template<> char const* formatString<int16_t> = "%hd";
+template<> char const* formatString<uint16_t> = "%hu";
+template<> char const* formatString<int32_t> = "%d";
+template<> char const* formatString<uint32_t> = "%u";
+template<> char const* formatString<std::array<uint8_t, 4>> = "%x";
+
+
+struct cmapTable {
+    
+    struct EncodingRecord {
+        
+        enum PlatformID : uint16_t { UNICODE = 0, };
+        enum EncodingID : uint16_t { BMP = 3, };
+        
+        uint16_t platformID;
+        uint16_t encodingID;
+        uint32_t subtableOffset;
+        
+        void debug() {
+            printf("    EncodingRecord {\n");
+            printf("        platformID = %hu,\n", platformID);
+            printf("        encodingID = %hu,\n", encodingID);
+            printf("        subtableOffset = %u,\n", subtableOffset);
+            printf("    },\n");
+        }
+        
+    };
+    
+    struct cmapSubtableFormat4 {
+        
+        uint16_t format;
+        uint16_t length;
+        uint16_t language;
+        uint16_t segCountX2;
+        uint16_t searchRange;
+        uint16_t entrySelector;
+        uint16_t rangeShift;
+        
+        size_t segCount;
+        wry::span<byte const> tail;
+        
+        enum { MISSING_GLYPH = 0xFFFF };
+        
+        uint16_t lookup(size_t code) {
+            uint16_t const* cursor = (uint16_t const*) tail.data();
+            // TODO: Use Reader
+            
+            // look for first segment with end >= code
+            while (ntohs(*cursor++) < code)
+                ;
+            // padding word is accounted for by postincrement
+            cursor += segCount;
+            uint16_t startCode = ntohs(*cursor);
+            if (startCode > code) {
+                // segment excludes the code; thus it is not present
+                return MISSING_GLYPH;
+            }
+            cursor += segCount;
+            uint16_t idDelta = ntohs(*cursor);
+            cursor += segCount;
+            uint16_t idRangeOffset = ntohs(*cursor);
+            if (idRangeOffset != 0) {
+                cursor += (idRangeOffset >> 1) + (code - startCode);
+                code = ntohs(*cursor);
+                if (code == 0)
+                    return MISSING_GLYPH;
+            }
+            return (idDelta + code) & 0xFFFF;
+        }
+        
+        void debug() {
+            printf("    cmapSubtableFormat4 {\n");
+#define X(A) printf("    %s = %d,\n", #A, A);
+            X(format)
+            X(length)
+            X(language)
+            X(segCountX2)
+            X(searchRange)
+            X(entrySelector)
+            X(rangeShift)
+#undef X
+            auto s = tail;
+#define X(A)    printf("    " #A " = [\n");\
+for (int i = 0; i != segCount; ++i) {\
+uint16_t A;\
+parse_ntoh(s, A);\
+printf("        %d,\n", A);\
+}\
+printf("    ],\n");
+            X(endCode)
+            uint16_t reservedPad;
+            parse_ntoh(s, reservedPad);
+            printf("    reservedPad = %d,\n", reservedPad);
+            X(startCode)
+            X(idDelta)
+            X(idRangeOffset)
+#undef X
+            printf("    },\n");
+            
+            
+        }
+        
+    };
+    
+    uint16_t version;
+    uint16_t numTables;
+    std::vector<EncodingRecord> encodingRecords;
+    
+    cmapSubtableFormat4 bmp;
+    
+    void debug() {
+        printf("CharacterToGlyphIndexMappingTable {\n");
+        printf("    version = %hu,\n", version);
+        printf("    numTables = %hu,\n", numTables);
+        for (int i = 0; i != numTables; ++i)
+            encodingRecords[i].debug();
+        bmp.debug();
+        printf("}\n");
+    }
+    
+};
+
+void parse_cmapSubtableFormat4(Bytes s, cmapTable::cmapSubtableFormat4& x) {
+    wry::Reader r{s};
+    
+    
+    
+    r.read(x.format,
+           x.length,
+           x.language,
+           x.segCountX2,
+           x.searchRange,
+           x.entrySelector,
+           x.rangeShift);
+    assert(x.format == 4);
+    
+    
+    x.segCount = x.segCountX2 >> 1;
+    x.tail = r.s;
+}
+
+void parse_EncodingRecord(Bytes& s, cmapTable::EncodingRecord& x) {
+    parse_ntoh(s, x.platformID);
+    parse_ntoh(s, x.encodingID);
+    parse_ntoh(s, x.subtableOffset);
+}
+
+void parse_cmapTable(Bytes s, cmapTable& x) {
+    Bytes t = s;
+    parse_ntoh(s, x.version);
+    parse_ntoh(s, x.numTables);
+    for (int i = 0; i != x.numTables; ++i) {
+        x.encodingRecords.emplace_back();
+        parse_EncodingRecord(s, x.encodingRecords.back());
+        if ((x.encodingRecords.back().platformID == cmapTable::EncodingRecord::UNICODE)
+            && (x.encodingRecords.back().encodingID == cmapTable::EncodingRecord::BMP)) {
+            parse_cmapSubtableFormat4(t.after(x.encodingRecords.back().subtableOffset), x.bmp);
+        }
+    }
+    
+}
+
+
+
+struct FontHeaderTable {
+    
+#define Y \
+X(uint16_t, majorVersion)\
+X(uint16_t, minorVersion)\
+X(uint32_t, fontRevision)\
+X(uint32_t, checksumAdjustment)\
+X(uint32_t, magicNumber)\
+X(uint16_t, flags)\
+X(uint16_t, unitsPerEm)\
+X(int64_t, created)\
+X(int64_t, modified)\
+X(int16_t, xMin)\
+X(int16_t, yMin)\
+X(int16_t, xMax)\
+X(int16_t, yMax)\
+X(uint16_t, macStyle)\
+X(uint16_t, lowestRecPPEM)\
+X(int16_t, fontDirectionHint)\
+X(int16_t, indexToLocFormat)\
+X(int16_t, glyphDataFormat)\
+
+    
+#define X(A, B) A B;
+    Y
+#undef X
+    
+    explicit FontHeaderTable(wry::span<byte const> s) {
+        wry::Reader r{s};
+#define X(A, B) r.read(B);
+        Y
+#undef X
+        assert(majorVersion == 1);
+        assert(minorVersion == 0);
+        assert(magicNumber == 0x5F0F3CF5);
+    }
+    
+    void debug() {
+        constexpr std::size_t buf_size = 100;
+        char buffer[buf_size];
+        printf("{\n");
+#define X(A, B) snprintf(buffer, buf_size, "    \"%%s\" : %s,\n", formatString<A>); printf(buffer, #B, B);
+        Y
+#undef X
+        printf("}\n");
+    }
+    
+#undef Y
+    
+};
+
+struct LongHorMetricRecord {
+    uint16_t advanceWidth;
+    int16_t lsb;
+};
+
+LongHorMetricRecord const* hMetrics;
+
+explicit HorizontalMetricsTable(uint16_t numGlyphs,
+                                uint16_t numberOfHMetrics,
+                                wry::span<byte const> s)
+: numGlyphs{numGlyphs}
+, numberOfHMetrics{numberOfHMetrics}
+{
+    hMetrics = (LongHorMetricRecord const*)s.data();
+    
+}
+
+LongHorMetricRecord lookup(uint16_t glyphID) {
+    LongHorMetricRecord a{};
+    if (glyphID < numberOfHMetrics) {
+        a = hMetrics[glyphID];
+    } else {
+        int16_t const* leftSideBearings = (int16_t const*)(hMetrics + numberOfHMetrics);
+        a.advanceWidth = hMetrics[numberOfHMetrics - 1].advanceWidth;
+        a.lsb = leftSideBearings[glyphID - numberOfHMetrics];
+    }
+    return { ntoh(a.advanceWidth), ntoh(a.lsb) };
+}
+
+
+};
+
+#endif

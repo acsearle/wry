@@ -16,7 +16,7 @@ namespace wry {
     
     namespace _ctrie {
         
-        struct CNode : MainNode {
+        struct CNode final : MainNode {
             
             virtual void _garbage_collected_debug() const override {
                 printf("%s\n", __PRETTY_FUNCTION__);
@@ -33,7 +33,7 @@ namespace wry {
             const BranchNode* array[0];
             
             CNode();
-            virtual ~CNode() override final;
+            virtual ~CNode() override;
             
             const CNode* copy_insert(int pos, uint64_t flag, const BranchNode* bn) const;
             const CNode* copy_assign(int pos, const BranchNode* bn) const;
@@ -52,7 +52,7 @@ namespace wry {
             
         };
         
-        struct LNode : MainNode {
+        struct LNode final : MainNode {
             
             virtual void _garbage_collected_debug() const override {
                 printf("%s\n", __PRETTY_FUNCTION__);
@@ -79,7 +79,7 @@ namespace wry {
         };
         
         
-        struct TNode : MainNode {
+        struct TNode final : MainNode {
             
             virtual void _garbage_collected_debug() const override {
                 printf("%s\n", __PRETTY_FUNCTION__);
@@ -89,7 +89,7 @@ namespace wry {
             HeapString const* sn;
             
             explicit TNode(HeapString const* sn);
-            virtual ~TNode() override final;
+            virtual ~TNode() override;
             
             const BranchNode* _ctrie_mn_resurrect(const INode* i) const override;
             virtual bool _ctrie_mn_cleanParent2(const INode* p, const INode* i, size_t hc, int lev,
@@ -654,7 +654,11 @@ namespace wry {
     void Ctrie::_garbage_collected_scan() const {
         garbage_collected_scan(root);
     }
-    
+
+    void Ctrie::_garbage_collected_debug() const {
+        printf("%s\n", __PRETTY_FUNCTION__);
+    }
+
     
     EraseResult HeapString::_ctrie_bn_erase(const HeapString* key,
                                       int lev,

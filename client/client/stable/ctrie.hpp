@@ -82,7 +82,7 @@ namespace wry {
             virtual const BranchNode* _ctrie_mn_resurrect(const INode* i) const;
         };
         
-        struct INode : BranchNode {
+        struct INode final : BranchNode {
             
             virtual void _garbage_collected_debug() const override {
                 printf("%s\n", __PRETTY_FUNCTION__);
@@ -115,7 +115,7 @@ namespace wry {
     
     
     
-    struct Ctrie : GarbageCollected {
+    struct Ctrie final : GarbageCollected {
         
         _ctrie::INode const* root;
                                 
@@ -126,6 +126,8 @@ namespace wry {
         void erase(const HeapString* key);
         
         virtual void _garbage_collected_scan() const override;
+        virtual void _garbage_collected_debug() const override;
+
         
     }; // struct Ctrie
     

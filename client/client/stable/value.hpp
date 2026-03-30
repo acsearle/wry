@@ -21,11 +21,11 @@ namespace wry {
         uint64_t _data = {};
                 
         constexpr Value() = default;
-        constexpr Value(const Value&) = default;
-        constexpr Value(Value&) = default;
-        constexpr Value(Value&&) = default;
-        constexpr Value& operator=(const Value&) = default;
-        
+//        constexpr Value(const Value&) = default;
+//        constexpr Value& operator=(const Value&) = default;
+//        constexpr Value(Value&) = default;
+//        constexpr Value(Value&&) = default;
+
         // implicit construction from vocabulary types
         
         constexpr Value(std::nullptr_t);
@@ -195,7 +195,7 @@ namespace wry {
     
     
     // TODO: upgrade to array of limbs of arbitrary precision integer
-    struct HeapInt64 : HeapValue {
+    struct HeapInt64 final : HeapValue {
         std::int64_t _integer;
         explicit HeapInt64(std::int64_t z);
         virtual ~HeapInt64() final = default;
