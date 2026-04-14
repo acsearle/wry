@@ -16,11 +16,16 @@
 
 // https://adobe-type-tools.github.io/font-tech-notes/pdfs/5177.Type2.pdf
 
+#include <map>
+#include <vector>
+
+#include "bezier.hpp"
+
 namespace wry::cff {
     
     using byte = unsigned char;
     
-    void* parse(byte const*, byte const*);
+    std::map<int, std::vector<BezierCurve<4>>> parse(byte const*, byte const*);
     
 } // namespace wry::cff
 

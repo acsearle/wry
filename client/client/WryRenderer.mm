@@ -1241,17 +1241,19 @@
     wry::mutator_repin();
 
     // Advance the world state
-    World* new_world = {};
+    Root<World*> new_world;
     {
-        World const* old_world = {};
+        Root<World const*> old_world;
         (void) _model->_worlds.try_pop_front(old_world);
         assert(old_world);
-        mutator_overwrote(old_world);
+        printf("old_world->_count %zd\n", old_world->_count.load(Ordering::RELAXED));
+        // mutator_overwrote(old_world);
         Coroutine::Nursery nursery;
+        // the operation is bounded within the main thread's epoch
         nursery.soon(new_world, old_world->step());
         sync_wait(nursery.join());
-        _model->_worlds.push_back(new_world);
-        _model->shade_roots();
+        _model->_worlds.emplace_back(new_world);
+        // _model->shade_roots();
     }
     assert(new_world);
 
@@ -1326,7 +1328,7 @@
 
     {
 
-        auto tnow = world_get_time(new_world);
+        auto tnow = world_get_time(new_world._ptr);
         auto&& entities = new_world->_entity_for_entity_id;
         
         NSUInteger quad_count = /*entities->data.size()*/ 10 * 4 + 1000 + 2;

@@ -29,7 +29,7 @@ namespace wry {
         }
     };
             
-    Coroutine::Future<World*> World::step() const {
+    Coroutine::Future<Root<World*>> World::step() const {
         
         TransactionContext context{._world = this};
         

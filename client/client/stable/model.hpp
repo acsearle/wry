@@ -46,7 +46,8 @@ namespace wry {
         
         // simulation state
         // World* _world;
-        BlockingDeque<World const*> _worlds;
+        // BlockingDeque<World const*> _worlds;
+        BlockingDeque<Root<World const*>> _worlds;
         
         
         
@@ -67,7 +68,7 @@ namespace wry {
         // user interface state
         
         bool _outstanding_click = false;
-        Value _holding_value = {};
+        Root<Value> _holding_value = {};
         difference_type _selected_i = -1;
         difference_type _selected_j = -1;
         float2 _looking_at = {};
@@ -183,7 +184,7 @@ namespace wry {
             world->_value_for_coordinate.set(Coordinate{0, +5},
                                               value_make_integer_with((5)));
             
-            _worlds.push_back(world);
+            _worlds.emplace_back(world);
             
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();

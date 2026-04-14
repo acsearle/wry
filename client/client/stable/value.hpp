@@ -21,10 +21,8 @@ namespace wry {
         uint64_t _data = {};
                 
         constexpr Value() = default;
-//        constexpr Value(const Value&) = default;
-//        constexpr Value& operator=(const Value&) = default;
-//        constexpr Value(Value&) = default;
-//        constexpr Value(Value&&) = default;
+        
+        // Implicit special member functions are fine
 
         // implicit construction from vocabulary types
         
@@ -392,7 +390,7 @@ namespace wry {
         return (HeapValue*)self._data;
     }
     
-    inline HeapValue* _as_pointer_or_nullptr(Value self) {
+    inline HeapValue* _value_as_nullable_pointer(Value self) {
         return _value_is_object(self) ? _value_as_object(self) : nullptr;
     }
     
@@ -422,8 +420,69 @@ namespace wry {
     
     
     
-    
-    
+    inline void
+    garbage_collected_roots_add(Value value) {
+        garbage_collected_roots_add(_value_as_nullable_pointer(value));
+    }
+
+    inline void
+    garbage_collected_roots_subtract(Value value) {
+        garbage_collected_roots_subtract(_value_as_nullable_pointer(value));
+    }
+
+
+    template<>
+    struct Root<Value> {
+        
+        Value _value;
+        
+        Root() = default;
+        
+        Root(Root const& other)
+        : _value(other._value) {
+            garbage_collected_roots_add(_value);
+        }
+        
+        Root(Root&& other)
+        : _value(std::exchange(other._value, Value{})) {
+        }
+        
+        ~Root() {
+            garbage_collected_roots_subtract(_value);
+        }
+        
+        Root& operator=(Root const& other) {
+            garbage_collected_roots_subtract(_value);
+            _value = other._value;
+            garbage_collected_roots_add(_value);
+            return *this;
+        }
+        
+        Root& operator=(Root&& other) {
+            garbage_collected_roots_subtract(_value);
+            _value = std::exchange(other._value, Value{});
+            return *this;
+        }
+        
+
+        operator Value() const {
+            return _value;
+        }
+
+
+        Root(Value other)
+        : _value(other) {
+            garbage_collected_roots_add(_value);
+        }
+        
+        Root& operator=(Value other) {
+            garbage_collected_roots_subtract(_value);
+            _value = other;
+            garbage_collected_roots_add(_value);
+            return *this;
+        }
+        
+    };
     
     
 } // namespace wry

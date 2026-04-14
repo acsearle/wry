@@ -20,13 +20,21 @@
 
 namespace wry::cff {
     
+    using Card8 = std::uint8_t;
+    using Card16 = NetworkByteOrder<std::uint16_t>;
+    using Offset8 = std::uint8_t;
+    using Offset16 = NetworkByteOrder<std::uint16_t>;
+    using Offset32 = NetworkByteOrder<std::uint16_t>;
+    using OffSize = std::uint8_t;
+    using SID = NetworkByteOrder<std::uint16_t>;
+    
     struct Header {
         
 #define Y \
-X(uint8_t, major) \
-X(uint8_t, minor) \
-X(uint8_t, hdrSize) \
-X(uint8_t, offSize)
+X(Card8, major) \
+X(Card8, minor) \
+X(Card8, hdrSize) \
+X(OffSize, offSize)
         
 #define X(A, B) A B;
         Y
@@ -317,19 +325,14 @@ X(uint8_t, offSize)
         
         bool execute(std::span<byte const> str);
         
-        struct Bezier3 {
-            simd_float2 x[4];
-            static Bezier3 fromLine(simd_float2 a, simd_float2 b) {
-                simd_float2 aab = simd_mix(a, b, 1.0f / 3.0f);
-                simd_float2 abb = simd_mix(a, b, 1.0f / 3.0f);
-                return Bezier3{{a,aab,abb,b}};
-            }
-        };
+        static BezierCurve<4> fromLine(simd_float2 a, simd_float2 b) {
+            simd_float2 aab = simd_mix(a, b, 1.0f / 3.0f);
+            simd_float2 abb = simd_mix(a, b, 1.0f / 3.0f);
+            return BezierCurve<4>{{a,aab,abb,b}};
+        }
         
-       
-        
-        std::vector<Bezier3> to_Bezier3_list() const {
-            std::vector<Bezier3> result;
+        std::vector<BezierCurve<4>> to_Bezier_list() const {
+            std::vector<BezierCurve<4>> result;
             
             assert(points.size() == modes.size());
             size_t i = 0;
@@ -339,17 +342,17 @@ X(uint8_t, offSize)
                     case MOVE:
                         if (i != 0) {
                             // we need to close the curve
-                            result.push_back(Bezier3::fromLine(points[i-1], points[j]));
+                            result.push_back(fromLine(points[i-1], points[j]));
                             j = i;
                         }
                         break;
                     case LINE: {
                         assert(i != 0);
-                        result.push_back(Bezier3::fromLine(points[i-1], points[i]));
+                        result.push_back(fromLine(points[i-1], points[i]));
                     } break;
                     case BEZIER: {
                         assert(i != 0);
-                        result.push_back(Bezier3{
+                        result.push_back(BezierCurve<4>{
                             points[i-1],
                             points[i+0],
                             points[i+1],
@@ -361,7 +364,7 @@ X(uint8_t, offSize)
             }
             if (i) {
                 // close the curve with a line
-                result.push_back(Bezier3::fromLine(points[i-1], points[j]));
+                result.push_back(fromLine(points[i-1], points[j]));
             }
             return result;
         }
@@ -652,7 +655,9 @@ X(uint8_t, offSize)
     }
     
     
-    void* parse(byte const* first, byte const* last) {
+    std::map<int, std::vector<BezierCurve<4>>> parse(byte const* first, byte const* last) {
+        
+        std::map<int, std::vector<BezierCurve<4>>> result;
         
         printf("parsing .cff of %zd bytes\n", last - first);
 
@@ -722,8 +727,7 @@ X(uint8_t, offSize)
         for (int i = 0; i != charstrings_INDEX.count; ++i) {
             e.execute(charstrings_INDEX[i]);
             printf("e.points.size() = %zd\n", e.points.size());
-            auto f = e.to_Bezier3_list();
-            
+            result.emplace(i, e.to_Bezier_list());
         }
         
         
@@ -794,8 +798,8 @@ X(uint8_t, offSize)
 //        debug_dump_Bezier2_list(g);
 //        
 //        debug_raster_bezier_list(g, jumps);
-        
-        return nullptr;
+
+        return result;
         
     }
     

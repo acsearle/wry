@@ -8,6 +8,9 @@
 #ifndef garbage_collected_hpp
 #define garbage_collected_hpp
 
+#include <cinttypes>
+
+#include "assert.hpp"
 #include "atomic.hpp"
 #include "concepts.hpp"
 #include "typeinfo.hpp"
@@ -78,6 +81,10 @@ namespace wry {
     struct GarbageCollected {
         
         mutable Atomic<detail::Color> _color;
+        mutable Atomic<std::intptr_t> _count;
+
+        // TODO: We can pack the count and the color into a single word
+        // Note that the grey bits are only needed when the count is zero
         
         static void* operator new(std::size_t count);
         static void operator delete(void* pointer);
@@ -206,23 +213,188 @@ namespace wry {
         return true;
     }
 
-    inline auto
-    garbage_collected_shade(const GarbageCollected* ptr) -> void {
+    inline void
+    garbage_collected_shade(const GarbageCollected* ptr) {
         if (ptr)
             ptr->_garbage_collected_shade();
     }
     
-    inline void debug(const GarbageCollected* self) {
+    inline void
+    debug(const GarbageCollected* self) {
         self->_garbage_collected_debug();
     }
-        
+    
+    // Scanning basic types is useless
+    
     template<Arithmetic T>
-    void garbage_collected_scan(T const&) {
+    void
+    garbage_collected_scan(T const&) {
     }
     
-    void garbage_collected_scan_weak(const GarbageCollected*);
+    void
+    garbage_collected_scan_weak(const GarbageCollected*);
     
+    // Subtract (increment the multiplicity of) an object from the implicit
+    // Roots multiset.
+
+    inline void
+    garbage_collected_roots_add(const GarbageCollected* ptr) {
+        if (ptr) {
+            [[maybe_unused]] std::intptr_t before = ptr->_count.fetch_add(1, Ordering::RELAXED);
+            // std::intptr_t after = before + 1;
+            // printf("%p->_count = (%" PRIdPTR " -> %" PRIdPTR ")\n", ptr, before, after);
+            assert(before >= 0);
+        }
+    }
+
+    // Subtract (decrement the multiplicity of) an object from the implicit
+    // Roots multiset.  The object must be present in the set.
+
+    inline void
+    garbage_collected_roots_subtract(const GarbageCollected* ptr) {
+        if (ptr) {
+            // SAFETY: When the strong count reaches zero we shade the the
+            // object, just as when we ovewrite a traced pointer to the object.
+            // The lifetime and the ordering of destruction are then established
+            // by the epoch system.
+            std::intptr_t before = ptr->_count.fetch_sub(1, Ordering::RELAXED);
+            std::intptr_t after = before - 1;
+            // printf("%p->_count = (%" PRIdPTR " -> %" PRIdPTR ")\n", ptr, before, after);
+            assert(before > 0);
+            if (before == 1) {
+                ptr->_garbage_collected_shade();
+            }
+        }
+    }
+    
+    // Occurances (multiplicity) of an object in the implicit Roots multiset.
+    // This value can be changed by another thread at any time and is only for
+    // exposition.
+    
+    inline std::intptr_t
+    garbage_collected_roots_multiplicity(const GarbageCollected *ptr) {
+        return ptr ? ptr->_count.load(Ordering::RELAXED) : 0;
+    }
         
+} // namespace wry
+
+
+namespace wry {
+    
+    // Root keeps its payload in the implicit roots multiset
+
+    // It allows non-traced contexts like stack frames or coroutine frames to
+    // keep garbage-collected objects alive.
+    
+    template<typename>
+    struct Root;
+    
+    template<typename T>
+    struct Root<T*> {
+        
+        T* _ptr;
+                
+        Root() : _ptr(nullptr) {}
+        
+        Root(Root const& other)
+        : _ptr(other._ptr) {
+            garbage_collected_roots_add(_ptr);
+        }
+        
+        Root(Root&& other)
+        : _ptr(std::exchange(other._ptr, nullptr)) {
+        }
+        
+        ~Root() {
+            garbage_collected_roots_subtract(_ptr);
+        }
+        
+        Root& operator=(Root const& other) {
+            // SAFETY: Unlike std::shared_ptr, we don't need to alter the
+            //
+            garbage_collected_roots_add(other._ptr);
+            garbage_collected_roots_subtract(_ptr);
+            _ptr = other._ptr;
+            return *this;
+        }
+        
+        Root& operator=(Root&& other) {
+            garbage_collected_roots_subtract(_ptr);
+            _ptr = other._ptr;
+            other._ptr = nullptr;
+            return *this;
+        }
+        
+        bool operator==(Root const&) const = default;
+        auto operator<=>(Root const&) const = default;
+        
+        template<typename U>
+        Root(Root<U> const& other)
+        : _ptr(other._ptr) {
+            garbage_collected_roots_add(_ptr);
+        }
+        
+        template<typename U>
+        Root(Root<U>&& other)
+        : _ptr(std::exchange(other._ptr, nullptr)) {
+        }
+        
+        template<typename U>
+        Root& operator=(Root<U> const& other) {
+            garbage_collected_roots_add(other._ptr);
+            garbage_collected_roots_subtract(_ptr);
+            _ptr = other._ptr;
+            return *this;
+        }
+        
+        template<typename U>
+        Root& operator=(Root<U>&& other) {
+            garbage_collected_roots_subtract(_ptr);
+            _ptr = other._ptr;
+            other._ptr = nullptr;
+            return *this;
+        }
+        
+        template<typename U>
+        explicit Root(U* ptr)
+        : _ptr(ptr) {
+            garbage_collected_roots_add(ptr);
+        }
+        
+        template<typename U>
+        Root& operator=(U* other) {
+            garbage_collected_roots_add(other);
+            garbage_collected_roots_subtract(_ptr);
+            _ptr = other;
+            return *this;
+        }
+        
+        T& operator*() const {
+            return *_ptr;
+        }
+        
+        T* operator->() const {
+            return _ptr;
+        }
+        
+        explicit operator bool() const {
+            return (bool)_ptr;
+        }
+        
+        explicit operator T*() const {
+            return _ptr;
+        }
+        
+        bool operator!() const {
+            return !_ptr;
+        }
+        
+        bool operator==(std::nullptr_t) const {
+            return _ptr == nullptr;
+        }
+
+    }; // Root<T*>
+    
 } // namespace wry
 
 #endif /* garbage_collected_hpp */

@@ -350,7 +350,7 @@ namespace wry {
         
         // For each glyph
         while (gindex) {
-            printf("%lu -> %d\n", charcode, gindex);
+            // printf("%lu -> %d\n", charcode, gindex);
             
             // Load outline but do not scale, hint or rasterize it
             FT_Load_Glyph(face, gindex, FT_LOAD_NO_SCALE);

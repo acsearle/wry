@@ -108,7 +108,28 @@ namespace wry {
         x = ntoh(x);
         return true;
     }
+    
+    template<typename T>
+    struct NetworkByteOrder {
+        unsigned char raw[sizeof(T)];
+        operator T() const {
+            T x = {};
+            std::memcpy(&x, raw, sizeof(T));
+            x = ntoh(x);
+            return x;
+        };
+    };
+    
+    template<typename T, typename F, F k>
+    struct FixedPoint {
+        T raw;
+        operator F() const {
+            return raw * k;
+        }
+    };
         
-}
+} // namespace wry
+
+
 
 #endif /* NetworkToHostReader_hpp */

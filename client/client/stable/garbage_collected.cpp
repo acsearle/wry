@@ -39,7 +39,8 @@ namespace wry {
     constinit thread_local Bag<const GarbageCollected*> _thread_local_new_objects;
     
     GarbageCollected::GarbageCollected()
-    : _color(_thread_local_color_for_allocation) {
+    : _color{_thread_local_color_for_allocation}
+    , _count{0} {
         // SAFETY: pointer to a partially constructed object escapes.  These
         // pointers are only published to the collector thread after the
         // constructor has completed.
@@ -47,7 +48,8 @@ namespace wry {
     }
     
     GarbageCollected::GarbageCollected(GarbageCollected::DeferRegistrationTag)
-    : _color{} {
+    : _color{}
+    , _count{0} {
     }
     
     void GarbageCollected::_garbage_collected_complete_deferred_registration() const {
@@ -373,9 +375,11 @@ namespace wry {
                     while (global_children.try_pop(child)) {
                         Color after = 0;
                         Color before = child->_color.load(Ordering::RELAXED);
+                        std::intptr_t reference_count = child->_count.load(Ordering::RELAXED);
+                        Color rooted = reference_count ? _mask_for_tracing : 0;
                         do  {
                             assert(is_subset_of(before, _color_in_use));
-                            after = before | (parent_color & _mask_for_tracing);
+                            after = before | (parent_color & _mask_for_tracing) | rooted;
                             Color mark = (after & _mask_for_tracing) << 32;
                             after = (after | mark) & ~_mask_for_clearing;
                             assert(is_subset_of(after, _color_in_use));
@@ -405,9 +409,11 @@ namespace wry {
                 // - k-clear: k-* -> k-white
                 Color after = 0;
                 Color before = object->_color.load(Ordering::RELAXED);
+                std::intptr_t reference_count = object->_count.load(Ordering::RELAXED);
+                Color rooted = reference_count ? _mask_for_tracing : 0;
                 for (;;) {
                     assert(is_subset_of(before, _color_in_use));
-                    Color mark = (before & _mask_for_tracing) << 32;
+                    Color mark = ((before & _mask_for_tracing) << 32) | rooted;
                     after = (before | mark) & ~_mask_for_clearing;
                     assert(is_subset_of(after, _color_in_use));
                     if (after == before)
@@ -423,7 +429,7 @@ namespace wry {
                     // Compare exchange failed, start over
                 }
                 Color did_set = (~before) & after;
-                assert((did_set & LOW_MASK) == 0); // Never k-white -> k-grey
+                assert(((did_set & LOW_MASK) == 0) || reference_count); // Never k-white -> k-grey
                 bool must_trace = did_set & HIGH_MASK; // If k-grey -> k->black
                 if (must_trace) {
                     ++trace_count;

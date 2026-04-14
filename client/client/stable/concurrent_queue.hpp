@@ -61,6 +61,24 @@ namespace wry {
                 _condition_variable.notify_one();
         }
         
+        template<typename... U>
+        void emplace_back(U&&... args) {
+            bool notify = false;
+            WITH(std::unique_lock lock{_mutex}) {
+                _deque.emplace_back(std::forward<U>(args)...);
+                if (_deque.size() > _record_size) {
+                    _record_size = _deque.size();
+                    printf("New record work queue size: %zu\n", _deque.size());
+                }
+                if (_waiting) {
+                    notify = true;
+                    --_waiting;
+                }
+            }
+            if (notify)
+                _condition_variable.notify_one();
+        }
+        
         [[nodiscard]] bool try_pop_front(T& item) {
             WITH(std::unique_lock lock{_mutex}) {
                 bool result = !_deque.empty();

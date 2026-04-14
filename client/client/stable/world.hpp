@@ -67,11 +67,13 @@ namespace wry {
         , _waiting_on_time(waiting_on_time)
         {}
         
-        virtual ~World() = default;
+        virtual ~World() {
+            printf("~World at %p\n", this);
+        }
         
         virtual void _garbage_collected_scan() const override;
 
-        Coroutine::Future<World*> step() const;
+        Coroutine::Future<Root<World*>> step() const;
                                             
     }; // World
         
