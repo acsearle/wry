@@ -107,34 +107,6 @@ namespace wry {
         virtual void _garbage_collected_shade() const;
         virtual void _garbage_collected_scan() const = 0;
         
-        /*
-        template<typename T>
-        static void barrier_store(Atomic<T*>& target, T* desired) {
-            T* discovered = target.exchange(desired, Ordering::ACQ_REL);
-            garbage_collected_shade(discovered);
-        }
-
-        template<typename T>
-        static T barrier_exchange(Atomic<T*>& target, T* desired) {
-            T* discovered = target.exchange(desired, Ordering::ACQ_REL);
-            garbage_collected_shade(discovered);
-            return discovered;
-        }
-
-        template<typename T>
-        static bool barrier_compare_exchange_strong(Atomic<T*>& target,
-                                                    T*& expected,
-                                                    T* desired) {
-            bool result = target.barrier_compare_exchange_strong(expected,
-                                                                 desired,
-                                                                 Ordering::ACQ_REL,
-                                                                 Ordering::ACQUIRE);
-            if (result) {
-                garbage_collected_shade(expected);
-            }
-        }
-         */
-        
     }; // struct GarbageCollected
         
 
@@ -256,9 +228,12 @@ namespace wry {
             // SAFETY: When the strong count reaches zero we shade the the
             // object, just as when we ovewrite a traced pointer to the object.
             // The lifetime and the ordering of destruction are then established
-            // by the epoch system.
+            // by the epoch system.  There is no prohibition against
+            // transitioning between the zero and positive states multiple
+            // times--this just means the object is changing between root and
+            // child status.
             std::intptr_t before = ptr->_count.fetch_sub(1, Ordering::RELAXED);
-            std::intptr_t after = before - 1;
+            [[maybe_unused]] std::intptr_t after = before - 1;
             // printf("%p->_count = (%" PRIdPTR " -> %" PRIdPTR ")\n", ptr, before, after);
             assert(before > 0);
             if (before == 1) {
@@ -285,6 +260,8 @@ namespace wry {
 
     // It allows non-traced contexts like stack frames or coroutine frames to
     // keep garbage-collected objects alive.
+    
+    // TODO: Root and Edge
     
     template<typename>
     struct Root;
@@ -363,9 +340,9 @@ namespace wry {
         
         template<typename U>
         Root& operator=(U* other) {
-            garbage_collected_roots_add(other);
             garbage_collected_roots_subtract(_ptr);
             _ptr = other;
+            garbage_collected_roots_add(_ptr);
             return *this;
         }
         
@@ -394,6 +371,112 @@ namespace wry {
         }
 
     }; // Root<T*>
+    
+    
+    // An Edge must be a field OF a garbage collected object, and point TO
+    // a garbage collected object (the degenerate cases of the same object, or
+    // null, are allowed)
+    
+    template<typename>
+    struct Edge;
+    
+    template<typename T>
+    struct Edge<T*> {
+        
+        T* _ptr;
+        
+        Edge() : _ptr(nullptr) {}
+        
+        Edge(Edge const& other)
+        : _ptr(other._ptr) {
+        }
+        
+        Edge(Edge&& other)
+        : _ptr(std::exchange(other._ptr, nullptr)) {
+        }
+        
+        ~Edge() {
+            // Destruction is different from overwriting
+        }
+        
+        Edge& operator=(Edge const& other) {
+            garbage_collected_shade(_ptr);
+            _ptr = other._ptr;
+            return *this;
+        }
+        
+        Edge& operator=(Edge&& other) {
+            garbage_collected_shade(_ptr);
+            _ptr = other._ptr;
+            other._ptr = nullptr;
+            return *this;
+        }
+        
+        bool operator==(Edge const&) const = default;
+        auto operator<=>(Edge const&) const = default;
+        
+        template<typename U>
+        Edge(Edge<U> const& other)
+        : _ptr(other._ptr) {
+        }
+        
+        template<typename U>
+        Edge(Edge<U>&& other)
+        : _ptr(std::exchange(other._ptr, nullptr)) {
+        }
+        
+        template<typename U>
+        Edge& operator=(Edge<U> const& other) {
+            garbage_collected_shade(_ptr);
+            _ptr = other._ptr;
+            return *this;
+        }
+        
+        template<typename U>
+        Edge& operator=(Edge<U>&& other) {
+            garbage_collected_shade(_ptr);
+            _ptr = other._ptr;
+            other._ptr = nullptr;
+            return *this;
+        }
+        
+        template<typename U>
+        explicit Edge(U* ptr)
+        : _ptr(ptr) {
+        }
+        
+        template<typename U>
+        Edge& operator=(U* other) {
+            garbage_collected_shade(_ptr);
+            _ptr = other;
+            return *this;
+        }
+        
+        T& operator*() const {
+            return *_ptr;
+        }
+        
+        T* operator->() const {
+            return _ptr;
+        }
+        
+        explicit operator bool() const {
+            return (bool)_ptr;
+        }
+        
+        explicit operator T*() const {
+            return _ptr;
+        }
+        
+        bool operator!() const {
+            return !_ptr;
+        }
+        
+        bool operator==(std::nullptr_t) const {
+            return _ptr == nullptr;
+        }
+        
+    }; // Edge<T*>
     
 } // namespace wry
 

@@ -430,6 +430,9 @@ namespace wry {
         garbage_collected_roots_subtract(_value_as_nullable_pointer(value));
     }
 
+    
+    // TODO: This seems quite close to a common implementation with Root<T*>
+    // but the distinction between pointer and object semantics is tough
 
     template<>
     struct Root<Value> {
@@ -464,13 +467,7 @@ namespace wry {
             return *this;
         }
         
-
-        operator Value() const {
-            return _value;
-        }
-
-
-        Root(Value other)
+        explicit Root(Value other)
         : _value(other) {
             garbage_collected_roots_add(_value);
         }
@@ -480,6 +477,10 @@ namespace wry {
             _value = other;
             garbage_collected_roots_add(_value);
             return *this;
+        }
+        
+        operator Value() const {
+            return _value;
         }
         
     };

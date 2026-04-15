@@ -90,12 +90,13 @@ int main(int argc, const char** argv) {
         }
         
     } // @autoreleasepool
-    wry::mutator_unpin();
     
     printf("main is terminal\n");
     
     // Blocking join unit test job
     printf("main is joining unit tests\n");
+    // TODO: move inside thread
+    wry::mutator_unpin();
     sync_wait(nursery.join());
     wry::mutator_pin();
 
