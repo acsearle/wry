@@ -261,7 +261,9 @@ namespace wry {
     // It allows non-traced contexts like stack frames or coroutine frames to
     // keep garbage-collected objects alive.
     
-    // TODO: Root and Edge
+    // SAFETY: The idiomatic reference counted pointer must increment
+    // then decrement, but Root can safely enter and leave a zero count
+    // state, so long as the calling thread has pinned the epoch.
     
     template<typename>
     struct Root;
@@ -287,11 +289,9 @@ namespace wry {
         }
         
         Root& operator=(Root const& other) {
-            // SAFETY: Unlike std::shared_ptr, we don't need to alter the
-            //
-            garbage_collected_roots_add(other._ptr);
             garbage_collected_roots_subtract(_ptr);
             _ptr = other._ptr;
+            garbage_collected_roots_add(other._ptr);
             return *this;
         }
         
@@ -318,9 +318,9 @@ namespace wry {
         
         template<typename U>
         Root& operator=(Root<U> const& other) {
-            garbage_collected_roots_add(other._ptr);
             garbage_collected_roots_subtract(_ptr);
             _ptr = other._ptr;
+            garbage_collected_roots_add(_ptr);
             return *this;
         }
         
@@ -435,8 +435,7 @@ namespace wry {
         template<typename U>
         Edge& operator=(Edge<U>&& other) {
             garbage_collected_shade(_ptr);
-            _ptr = other._ptr;
-            other._ptr = nullptr;
+            _ptr = std::exchange(other._ptr, nullptr);
             return *this;
         }
         

@@ -24,7 +24,7 @@ namespace wry::cff {
     using Card16 = NetworkByteOrder<std::uint16_t>;
     using Offset8 = std::uint8_t;
     using Offset16 = NetworkByteOrder<std::uint16_t>;
-    using Offset32 = NetworkByteOrder<std::uint16_t>;
+    using Offset32 = NetworkByteOrder<std::uint32_t>;
     using OffSize = std::uint8_t;
     using SID = NetworkByteOrder<std::uint16_t>;
     

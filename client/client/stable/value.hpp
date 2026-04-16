@@ -483,7 +483,7 @@ namespace wry {
             return _value;
         }
         
-    };
+    }; // struct Root<Value>
     
     
 } // namespace wry
