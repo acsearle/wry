@@ -49,42 +49,58 @@ namespace wry {
         return __builtin_rotateright64(x, y);
     }
     
-    constexpr bool is_subset_of(uint64_t a, uint64_t b) {
+    constexpr bool is_subset_of(uint32_t a, uint32_t b) {
         return !(a & ~b);
     }
-    
+
     namespace detail {
-        
-        // tricolor abstraction color
-        
-        using Color = uint64_t;
-        
-        constexpr Color LOW_MASK  = 0x00000000FFFFFFFF;
-        constexpr Color HIGH_MASK = 0xFFFFFFFF00000000;
-        
-        constexpr Color are_black(Color color) {
-            return color & rotate_left(color, 32);
+
+        // Tricolor abstraction, split into two 32-bit words.  Every
+        // GarbageCollected object carries an atomic _grey word and a plain
+        // _black word; each concurrent collection claims one bit in each:
+        //
+        //     grey  black   meaning
+        //      0      0     k-white   (unreachable candidate)
+        //      1      0     k-grey    (reachable, not yet traced)
+        //      1      1     k-black   (reachable, traced)
+        //      0      1     not produced in steady state
+        //
+        // Grey bits are set by mutator shading (via fetch_or) and also by
+        // the collector.  Black bits are set only by the collector.  Up to
+        // 32 concurrent collections can coexist.
+
+        constexpr uint32_t are_black(uint32_t grey, uint32_t black) {
+            return grey & black;
         }
-        
-        constexpr Color are_grey(Color color) {
-            return are_black(color ^ HIGH_MASK);
+
+        constexpr uint32_t are_grey(uint32_t grey, uint32_t black) {
+            return grey & ~black;
         }
-        
-        constexpr Color are_white(Color color) {
-            return are_black(~color);
+
+        constexpr uint32_t are_white(uint32_t grey, uint32_t black) {
+            return ~grey & ~black;
         }
-        
+
     }
     
     
     
     struct GarbageCollected {
         
-        mutable Atomic<detail::Color> _color;
+        // Grey bits: set by mutator shading (fetch_or) and by the collector.
+        mutable Atomic<uint32_t> _grey;
+
+        // Black bits: written only by the collector after the object has
+        // been published to it.  The constructor and deferred-registration
+        // path stamp this field while the object is still visible only to
+        // the allocating thread, so a plain (mutable) store is race-free in
+        // steady state.
+        mutable uint32_t _black;
+
         mutable Atomic<std::intptr_t> _count;
 
-        // TODO: We can pack the count and the color into a single word
-        // Note that the grey bits are only needed when the count is zero
+        // TODO: We can pack _count and _grey into a single 64-bit atomic;
+        // _black can remain a separate plain 32-bit field.
         
         static void* operator new(std::size_t count);
         static void operator delete(void* pointer);
