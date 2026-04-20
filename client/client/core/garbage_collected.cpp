@@ -24,7 +24,7 @@
 
 #include "test.hpp"
 
-#define dump(X) printf("C0.%d: %08x = " #X "\n", __LINE__, (X));
+#define dump(X) printf("C0.%d: %04x = " #X "\n", __LINE__, (X));
 
 namespace wry {
 
@@ -34,9 +34,9 @@ namespace wry {
 
 #pragma mark - Global and thread_local variables
 
-    constinit thread_local uint32_t _thread_local_grey_for_allocation;
-    constinit thread_local uint32_t _thread_local_black_for_allocation;
-    constinit thread_local uint32_t _thread_local_grey_did_shade;
+    constinit thread_local uint16_t _thread_local_grey_for_allocation;
+    constinit thread_local uint16_t _thread_local_black_for_allocation;
+    constinit thread_local uint16_t _thread_local_grey_did_shade;
     constinit thread_local Bag<const GarbageCollected*> _thread_local_new_objects;
 
     GarbageCollected::GarbageCollected()
@@ -65,9 +65,9 @@ namespace wry {
     }
 
     void GarbageCollected::_garbage_collected_shade() const {
-        const uint32_t grey = _thread_local_grey_for_allocation;
-        const uint32_t before = _grey.fetch_or(grey, Ordering::RELAXED);
-        const uint32_t did_shade = grey & ~before;
+        const uint16_t grey = _thread_local_grey_for_allocation;
+        const uint16_t before = _grey.fetch_or(grey, Ordering::RELAXED);
+        const uint16_t did_shade = grey & ~before;
         _thread_local_grey_did_shade |= did_shade;
     }
 
@@ -88,7 +88,7 @@ namespace wry {
     struct Report {
 
         Report* _next = nullptr;
-        uint32_t grey_did_shade = 0;
+        uint16_t grey_did_shade = 0;
         Bag<const GarbageCollected*> allocations;
 
     }; // struct Report
@@ -97,8 +97,8 @@ namespace wry {
     // We expect that these are accessed by each thread on each quiescence,
     // which is a relatively low rate of contention
 
-    constinit Atomic<uint32_t> _global_atomic_grey_for_allocation = {};
-    constinit Atomic<uint32_t> _global_atomic_black_for_allocation = {};
+    constinit Atomic<uint16_t> _global_atomic_grey_for_allocation = {};
+    constinit Atomic<uint16_t> _global_atomic_black_for_allocation = {};
     constinit Atomic<Report*> _global_atomic_reports_head = {};
 
     void _mutator_publishes_report() {
@@ -146,18 +146,18 @@ namespace wry {
 
     struct Collector {
 
-        InlineRingBuffer<uint32_t, 4> _grey_history;
-        InlineRingBuffer<uint32_t, 4> _black_history;
-        InlineRingBuffer<uint32_t, 4> _shade_history;
+        InlineRingBuffer<uint16_t, 4> _grey_history;
+        InlineRingBuffer<uint16_t, 4> _black_history;
+        InlineRingBuffer<uint16_t, 4> _shade_history;
 
         Bag<const GarbageCollected*> _known_objects;
 
-        uint32_t _grey_for_allocation = 0;
-        uint32_t _black_for_allocation = 0;
-        uint32_t _color_in_use = 0;
-        uint32_t _mask_for_tracing = 0;
-        uint32_t _mask_for_deleting = 0;
-        uint32_t _mask_for_clearing = 0;
+        uint16_t _grey_for_allocation = 0;
+        uint16_t _black_for_allocation = 0;
+        uint16_t _color_in_use = 0;
+        uint16_t _mask_for_tracing = 0;
+        uint16_t _mask_for_deleting = 0;
+        uint16_t _mask_for_clearing = 0;
 
         Atomic<bool> _is_canceled;
 
@@ -186,7 +186,7 @@ namespace wry {
 
                 // Always read all reports
                 {
-                    uint32_t did_shade = 0;
+                    uint16_t did_shade = 0;
                     Report* head = collector_takes_reports();
                     while (head) {
                         did_shade |= head->grey_did_shade;
@@ -267,8 +267,8 @@ namespace wry {
             // We can now try to advance the state of each of the collections
             // through their several phases
 
-            uint32_t old_mask_for_deleting = _mask_for_deleting;
-            uint32_t old_mask_for_clearing = _mask_for_clearing;
+            uint16_t old_mask_for_deleting = _mask_for_deleting;
+            uint16_t old_mask_for_clearing = _mask_for_clearing;
 
             {
                 // When all threads have acknowledged k-grey, publish k-black
@@ -283,7 +283,7 @@ namespace wry {
             {
                 // When we can prove all threads have made no new k-grey
                 // during a whole sweep
-                uint32_t color_is_stable = _mask_for_tracing;
+                uint16_t color_is_stable = _mask_for_tracing;
                 color_is_stable &= ~_shade_history[0];
                 color_is_stable &= ~_shade_history[1];
                 color_is_stable &= ~_shade_history[2];
@@ -316,7 +316,7 @@ namespace wry {
 
             {
                 _color_in_use &= ~old_mask_for_clearing;
-                uint32_t new_bit = (_color_in_use + 1) & ~_color_in_use;
+                uint16_t new_bit = (_color_in_use + 1) & ~_color_in_use;
                 _grey_for_allocation |= new_bit;
                 _color_in_use       |= new_bit;
             }
@@ -363,11 +363,11 @@ namespace wry {
             // dump(_mask_for_clearing);
 
             //            printf("C0: Start scanning %zd objects with\n"
-            //                   "              trace mask %08x\n"
-            //                   "             delete mask %08x\n"
-            //                   "              clear mask %08x\n"
-            //                   "     grey_for_allocation %08x\n"
-            //                   "    black_for_allocation %08x\n",
+            //                   "              trace mask %04x\n"
+            //                   "             delete mask %04x\n"
+            //                   "              clear mask %04x\n"
+            //                   "     grey_for_allocation %04x\n"
+            //                   "    black_for_allocation %04x\n",
             //                   _known_objects.debug_size(),
             //                   _mask_for_tracing,
             //                   _mask_for_deleting,
@@ -383,14 +383,14 @@ namespace wry {
                 const GarbageCollected* parent = nullptr;
                 while (_greystack.try_pop(parent)) {
                     assert(parent);
-                    uint32_t parent_grey = parent->_grey.load(Ordering::RELAXED);
+                    uint16_t parent_grey = parent->_grey.load(Ordering::RELAXED);
                     parent->_garbage_collected_scan();
                     const GarbageCollected* child = nullptr;
                     while (global_children.try_pop(child)) {
-                        std::intptr_t reference_count = child->_count.load(Ordering::RELAXED);
-                        uint32_t rooted = reference_count ? _mask_for_tracing : 0;
-                        uint32_t before_grey = child->_grey.load(Ordering::RELAXED);
-                        uint32_t after_grey;
+                        int32_t reference_count = child->_count.load(Ordering::RELAXED);
+                        uint16_t rooted = reference_count ? _mask_for_tracing : 0;
+                        uint16_t before_grey = child->_grey.load(Ordering::RELAXED);
+                        uint16_t after_grey;
                         do {
                             assert(is_subset_of(before_grey, _color_in_use));
                             after_grey = (before_grey
@@ -404,13 +404,13 @@ namespace wry {
                                                                      Ordering::RELAXED));
                         // SAFETY: only the collector writes _black after
                         // registration, so a plain read-modify-write is safe.
-                        uint32_t before_black = child->_black;
-                        uint32_t mark = after_grey & _mask_for_tracing;
-                        uint32_t after_black = (before_black | mark) & ~_mask_for_clearing;
+                        uint16_t before_black = child->_black;
+                        uint16_t mark = after_grey & _mask_for_tracing;
+                        uint16_t after_black = (before_black | mark) & ~_mask_for_clearing;
                         assert(is_subset_of(after_black, _color_in_use));
                         child->_black = after_black;
-                        uint32_t did_set_grey  = ~before_grey  & after_grey;
-                        uint32_t did_set_black = ~before_black & after_black;
+                        uint16_t did_set_grey  = ~before_grey  & after_grey;
+                        uint16_t did_set_black = ~before_black & after_black;
                         if (did_set_grey | did_set_black) {
                             ++mark_count;
                             _greystack.push(child);
@@ -429,10 +429,10 @@ namespace wry {
                 // Depending on phase, change the k-coloration
                 // - k-mark: k-grey -> k-black, and enqueue for tracing
                 // - k-clear: k-* -> k-white
-                std::intptr_t reference_count = object->_count.load(Ordering::RELAXED);
-                uint32_t rooted = reference_count ? _mask_for_tracing : 0;
-                uint32_t before_grey = object->_grey.load(Ordering::RELAXED);
-                uint32_t after_grey;
+                int32_t reference_count = object->_count.load(Ordering::RELAXED);
+                uint16_t rooted = reference_count ? _mask_for_tracing : 0;
+                uint16_t before_grey = object->_grey.load(Ordering::RELAXED);
+                uint16_t after_grey;
                 for (;;) {
                     assert(is_subset_of(before_grey, _color_in_use));
                     after_grey = (before_grey | rooted) & ~_mask_for_clearing;
@@ -450,17 +450,17 @@ namespace wry {
                     // Compare exchange failed, start over
                 }
                 // SAFETY: only the collector writes _black after registration.
-                uint32_t before_black = object->_black;
+                uint16_t before_black = object->_black;
                 // Mark uses before_grey (not after_grey) to match the
                 // pre-split semantics: newly-rooted objects become k-grey
                 // this cycle and k-black on the next.
-                uint32_t mark = before_grey & _mask_for_tracing;
-                uint32_t after_black = (before_black | mark) & ~_mask_for_clearing;
+                uint16_t mark = before_grey & _mask_for_tracing;
+                uint16_t after_black = (before_black | mark) & ~_mask_for_clearing;
                 assert(is_subset_of(after_black, _color_in_use));
                 object->_black = after_black;
 
-                uint32_t did_set_grey  = ~before_grey  & after_grey;
-                uint32_t did_set_black = ~before_black & after_black;
+                uint16_t did_set_grey  = ~before_grey  & after_grey;
+                uint16_t did_set_black = ~before_black & after_black;
                 assert((did_set_grey == 0) || reference_count); // Never k-white -> k-grey
                 bool must_trace = did_set_black != 0; // If k-grey -> k-black
                 if (must_trace) {

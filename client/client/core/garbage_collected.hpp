@@ -49,13 +49,13 @@ namespace wry {
         return __builtin_rotateright64(x, y);
     }
     
-    constexpr bool is_subset_of(uint32_t a, uint32_t b) {
+    constexpr bool is_subset_of(uint16_t a, uint16_t b) {
         return !(a & ~b);
     }
 
     namespace detail {
 
-        // Tricolor abstraction, split into two 32-bit words.  Every
+        // Tricolor abstraction, split into two 16-bit words.  Every
         // GarbageCollected object carries an atomic _grey word and a plain
         // _black word; each concurrent collection claims one bit in each:
         //
@@ -67,17 +67,17 @@ namespace wry {
         //
         // Grey bits are set by mutator shading (via fetch_or) and also by
         // the collector.  Black bits are set only by the collector.  Up to
-        // 32 concurrent collections can coexist.
+        // 16 concurrent collections can coexist.
 
-        constexpr uint32_t are_black(uint32_t grey, uint32_t black) {
+        constexpr uint16_t are_black(uint16_t grey, uint16_t black) {
             return grey & black;
         }
 
-        constexpr uint32_t are_grey(uint32_t grey, uint32_t black) {
+        constexpr uint16_t are_grey(uint16_t grey, uint16_t black) {
             return grey & ~black;
         }
 
-        constexpr uint32_t are_white(uint32_t grey, uint32_t black) {
+        constexpr uint16_t are_white(uint16_t grey, uint16_t black) {
             return ~grey & ~black;
         }
 
@@ -88,19 +88,20 @@ namespace wry {
     struct GarbageCollected {
         
         // Grey bits: set by mutator shading (fetch_or) and by the collector.
-        mutable Atomic<uint32_t> _grey;
+        mutable Atomic<uint16_t> _grey;
 
         // Black bits: written only by the collector after the object has
         // been published to it.  The constructor and deferred-registration
         // path stamp this field while the object is still visible only to
         // the allocating thread, so a plain (mutable) store is race-free in
         // steady state.
-        mutable uint32_t _black;
+        mutable uint16_t _black;
 
-        mutable Atomic<std::intptr_t> _count;
+        mutable Atomic<int32_t> _count;
 
-        // TODO: We can pack _count and _grey into a single 64-bit atomic;
-        // _black can remain a separate plain 32-bit field.
+        // TODO: _grey (16 bits) and _count (32 bits) now fit in a single
+        // 64-bit atomic word together with room to spare; _black can remain
+        // a separate plain 16-bit field.
         
         static void* operator new(std::size_t count);
         static void operator delete(void* pointer);
@@ -228,9 +229,9 @@ namespace wry {
     inline void
     garbage_collected_roots_add(const GarbageCollected* ptr) {
         if (ptr) {
-            [[maybe_unused]] std::intptr_t before = ptr->_count.fetch_add(1, Ordering::RELAXED);
-            // std::intptr_t after = before + 1;
-            // printf("%p->_count = (%" PRIdPTR " -> %" PRIdPTR ")\n", ptr, before, after);
+            [[maybe_unused]] int32_t before = ptr->_count.fetch_add(1, Ordering::RELAXED);
+            // int32_t after = before + 1;
+            // printf("%p->_count = (%" PRId32 " -> %" PRId32 ")\n", ptr, before, after);
             assert(before >= 0);
         }
     }
@@ -248,9 +249,9 @@ namespace wry {
             // transitioning between the zero and positive states multiple
             // times--this just means the object is changing between root and
             // child status.
-            std::intptr_t before = ptr->_count.fetch_sub(1, Ordering::RELAXED);
-            [[maybe_unused]] std::intptr_t after = before - 1;
-            // printf("%p->_count = (%" PRIdPTR " -> %" PRIdPTR ")\n", ptr, before, after);
+            int32_t before = ptr->_count.fetch_sub(1, Ordering::RELAXED);
+            [[maybe_unused]] int32_t after = before - 1;
+            // printf("%p->_count = (%" PRId32 " -> %" PRId32 ")\n", ptr, before, after);
             assert(before > 0);
             if (before == 1) {
                 ptr->_garbage_collected_shade();
@@ -262,7 +263,7 @@ namespace wry {
     // This value can be changed by another thread at any time and is only for
     // exposition.
     
-    inline std::intptr_t
+    inline int32_t
     garbage_collected_roots_multiplicity(const GarbageCollected *ptr) {
         return ptr ? ptr->_count.load(Ordering::RELAXED) : 0;
     }
