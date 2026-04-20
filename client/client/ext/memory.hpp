@@ -115,10 +115,10 @@ namespace wry {
     }
     
     template<typename T>
-    T* relocate(const T* src, T* dest) {
+    constexpr T* relocate(const T* src, T* dest) {
         // SAFETY: This is a relocate.  Explicit cast to void suppresses
         // warning for non-trivially copyable types
-        std::memcpy((void*)dest, src, sizeof(T));
+        __builtin_memcpy((void*)dest, src, sizeof(T));
         return dest + 1;
     }
     

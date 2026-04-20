@@ -17,79 +17,57 @@
 #include "memory.hpp"
 
 namespace wry {
-    
-    // Half-in-place stable merge of two sorted, disjoint input ranges
-    // [first1, last1) and [first2, last2) into [d_first, d_last).  Exactly
-    // one of the inputs must be "in place", meaning one of its endpoints
-    // coincides with a matching endpoint of the destination:
-    //
-    //     first1 == d_first   // input 1 flush with head of dest
-    //     first2 == d_first   // input 2 flush with head of dest
-    //     last1  == d_last    // input 1 flush with tail of dest
-    //     last2  == d_last    // input 2 flush with tail of dest
-    //
-    // At least one of these must hold; the other input is disjoint scratch.
-    // (If two hold, the in-place range already fills dest and scratch is
-    // empty; the merge is trivially a no-op.)
-    //
-    // Like memcpy vs memmove, the caller doesn't pick a variant -- the
-    // overlap geometry alone determines the safe walk direction.  Tail-
-    // aligned overlap means forward walk; head-aligned means backward walk.
-    //
-    // Stability: on ties, an element from [first1, last1) comes earlier in
-    // the output than an element from [first2, last2).
-    //
-    // Compare std::merge (disjoint dst) and std::inplace_merge (adjacent
-    // ranges, allocating scratch internally).
+        
+    // _merge_helper is
+    //   - stable
+    //   - semi-in-place, meaning that one input range shares its beginning or
+    //     end with the destination range, and the other is disjoint with the
+    //     destination range (or, at least one input is empty)
+    //   - destructive, meaning that one input is left destructed, the other
+    //     input is mutated, and elements are constructed on the rest of the
+    //     destination set
 
     template<typename T, typename Compare>
-    void half_inplace_merge(const T* first1, const T* last1,
-                            const T* first2, const T* last2,
-                            T* d_first, T* d_last,
-                            const Compare& comparator) {
-        precondition(std::distance(first1, last1) + std::distance(first2, last2)
-                  == std::distance(d_first, d_last));
-        const bool head_overlap = (first1 == d_first) || (first2 == d_first);
-        const bool tail_overlap = (last1  == d_last ) || (last2  == d_last );
-        precondition(head_overlap || tail_overlap);
-        // If both hold, the in-place range fills dest (scratch is empty) and
-        // either walk is a trivial no-op; we arbitrarily prefer forward.
-
-        if (tail_overlap) {
-            // Forward walk: writer trails whichever input is at the tail.
-            // Ties -> take from first1 so first1's tied element lands earlier.
-            while ((first1 != last1) && (first2 != last2)) {
-                if (comparator(*first2, *first1)) {
+    void _merge_helper(const T* first1, const T* last1,
+                       const T* first2, const T* last2,
+                       T* d_first,
+                       const Compare& comp) {
+        precondition(first1 <= last1);
+        precondition(first2 <= last2);
+        auto n1 = last1 - first1;
+        auto n2 = last2 - first2;
+        auto nd = n1 + n2;
+        T* d_last = d_first + nd;
+        bool forward  = (d_last == last1) || (d_last == last2);
+        bool backward = (d_first == first1) || (d_first == first2);
+        assert(forward || backward);
+        if (forward) {
+            while((first1 != last1) && (first2 != last2)) {
+                if (comp(*first2, *first1)) {
                     relocate(first2++, d_first++);
                 } else {
                     relocate(first1++, d_first++);
                 }
             }
-            // At most one range remains; flush it only if it isn't already
-            // in place at d_first.
-            if ((first1 != last1) && (first1 != d_first))
-                relocate(first1, last1, d_first);
-            if ((first2 != last2) && (first2 != d_first))
-                relocate(first2, last2, d_first);
         } else {
-            // Backward walk: writer trails whichever input is at the head.
-            // Ties -> take from last2 (first2's tail) so first1 lands earlier.
             while ((first1 != last1) && (first2 != last2)) {
-                if (!comparator(*(last2 - 1), *(last1 - 1))) {
-                    --last2; --d_last;
-                    relocate(last2, d_last);
+                if (!comp(*(last2 - 1), *(last1 - 1))) {
+                    relocate(--last2, --d_last);
                 } else {
-                    --last1; --d_last;
-                    relocate(last1, d_last);
+                    relocate(--last1, --d_last);
                 }
             }
-            if ((first1 != last1) && (last1 != d_last))
-                relocate_backward(first1, last1, d_last);
-            if ((first2 != last2) && (last2 != d_last))
-                relocate_backward(first2, last2, d_last);
         }
+        // At least one input range is now empty
+        assert((first1 == last1) || (first2 == last2));
+        // The non-empty input range, if it exists, may or may not already be
+        // in the right place.  We relocate both unconditionally, relying on
+        // relocate to handle the degenerate cases of empty ranges and source
+        // range equals destination range
+        d_first = relocate(first1, last1, d_first);
+        d_first = relocate(first2, last2, d_first);
+        postcondition(d_first == d_last);
     }
-
 
     // Stable Priority Queue
     //
@@ -190,8 +168,8 @@ namespace wry {
                 T* d_first = first2 - _sizes[j];
                 n += _sizes[j];
                 _sizes[j] = 0;
-                half_inplace_merge(first1, last1, first2, last2,
-                                   d_first, last2, _comparator);
+                _merge_helper(first1, last1, first2, last2,
+                                   d_first, _comparator);
                 first2 = d_first;
             }
             _sizes[i] = n;
@@ -217,8 +195,8 @@ namespace wry {
                 // [first1, last1) is a contiguous sorted run of _sizes[j].
                 if (_sizes[j])
                     relocate(_heads + j, first1);
-                half_inplace_merge(first1, last1, first2, last2,
-                                   d_first, last2, _comparator);
+                _merge_helper(first1, last1, first2, last2,
+                                   d_first, _comparator);
                 first2 = d_first;
                 q[j] = 0;
             }
@@ -247,8 +225,8 @@ namespace wry {
                 // [first1, last1) is a contiguous sorted run of _sizes[j].
                 if (_sizes[j])
                     relocate(_heads + j, first1);
-                half_inplace_merge(first1, last1, first2, last2,
-                                   d_first, last2, _comparator);
+                _merge_helper(first1, last1, first2, last2,
+                                   d_first, _comparator);
                 first2 = d_first;
                 _sizes[j] = 0;
             }
@@ -278,15 +256,15 @@ namespace wry {
             if (sA <= sB) {
                 // evacuate A (left) to scratch; B stays in place at the tail
                 relocate(first2, last2, _elements);
-                half_inplace_merge(last2, last3,              // older B (in place, tail)
+                _merge_helper(last2, last3,              // older B (in place, tail)
                                    _elements, _elements + sA, // newer A (scratch)
-                                   first2, last3, _comparator);
+                                   first2, _comparator);
             } else {
                 // evacuate B (right) to scratch; A stays in place at the head
                 relocate(last2, last3, _elements);
-                half_inplace_merge(_elements, _elements + sB, // older B (scratch)
+                _merge_helper(_elements, _elements + sB, // older B (scratch)
                                    first2, last2,             // newer A (in place, head)
-                                   first2, last3, _comparator);
+                                   first2, _comparator);
             }
             _sizes[i] = std::distance(first2, last3);
             // Lift the merged head back out into the _heads cache.
