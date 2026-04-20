@@ -56,29 +56,29 @@ namespace wry {
     namespace detail {
 
         // Tricolor abstraction, split into two 16-bit words.  Every
-        // GarbageCollected object carries an atomic _grey word and a plain
+        // GarbageCollected object carries an atomic _gray word and a plain
         // _black word; each concurrent collection claims one bit in each:
         //
-        //     grey  black   meaning
+        //     gray  black   meaning
         //      0      0     k-white   (unreachable candidate)
-        //      1      0     k-grey    (reachable, not yet traced)
+        //      1      0     k-gray    (reachable, not yet traced)
         //      1      1     k-black   (reachable, traced)
         //      0      1     not produced in steady state
         //
-        // Grey bits are set by mutator shading (via fetch_or) and also by
+        // Gray bits are set by mutator shading (via fetch_or) and also by
         // the collector.  Black bits are set only by the collector.  Up to
         // 16 concurrent collections can coexist.
 
-        constexpr uint16_t are_black(uint16_t grey, uint16_t black) {
-            return grey & black;
+        constexpr uint16_t are_black(uint16_t gray, uint16_t black) {
+            return gray & black;
         }
 
-        constexpr uint16_t are_grey(uint16_t grey, uint16_t black) {
-            return grey & ~black;
+        constexpr uint16_t are_gray(uint16_t gray, uint16_t black) {
+            return gray & ~black;
         }
 
-        constexpr uint16_t are_white(uint16_t grey, uint16_t black) {
-            return ~grey & ~black;
+        constexpr uint16_t are_white(uint16_t gray, uint16_t black) {
+            return ~gray & ~black;
         }
 
     }
@@ -87,8 +87,8 @@ namespace wry {
     
     struct GarbageCollected {
         
-        // Grey bits: set by mutator shading (fetch_or) and by the collector.
-        mutable Atomic<uint16_t> _grey;
+        // Gray bits: set by mutator shading (fetch_or) and by the collector.
+        mutable Atomic<uint16_t> _gray;
 
         // Black bits: written only by the collector after the object has
         // been published to it.  The constructor and deferred-registration
@@ -99,7 +99,7 @@ namespace wry {
 
         mutable Atomic<int32_t> _count;
 
-        // TODO: _grey (16 bits) and _count (32 bits) now fit in a single
+        // TODO: _gray (16 bits) and _count (32 bits) now fit in a single
         // 64-bit atomic word together with room to spare; _black can remain
         // a separate plain 16-bit field.
         
@@ -129,7 +129,7 @@ namespace wry {
 
 
     // SHADE can be called by any mutator at any time; it will turn a white
-    // object to grey (with those colors as understood by the mutator) and note
+    // object to gray (with those colors as understood by the mutator) and note
     // that the thread has performed such an action, but otherwise have no
     // effect
 
@@ -152,7 +152,7 @@ namespace wry {
     // TODO:
     //
     // Consider maintaining a mutator-local list of the pointers that have been
-    // changed from white to grey by the mutator since the last report.  (This
+    // changed from white to gray by the mutator since the last report.  (This
     // is done by the collector we most closely resemble).  This lets us scan
     // less; but since we simultaneously sweep, does it help?
 
