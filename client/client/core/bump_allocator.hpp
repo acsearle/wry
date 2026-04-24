@@ -68,7 +68,6 @@
 // - Arena allocation
 //   - https://www.rfleury.com/p/untangling-lifetimes-the-arena-allocator
 //   - https://nullprogram.com/blog/2023/09/27/
-//   -
 // - Sanitizer
 //   - https://blog.trailofbits.com/2024/09/10/sanitize-your-c-containers-asan-annotations-step-by-step/
 
@@ -77,37 +76,42 @@ namespace wry {
     
     
     namespace bump {
-        
+                
         // Single-threaded bump allocator suitable for an arena allocator or
         // as a building block of a thread-safe epochal allocator
         
-        constexpr inline auto
-        bump_down(intptr_t begin, intptr_t end, size_t count, size_t alignment) -> intptr_t {
+        // bump-down strategy simplifies alignment
+        constexpr std::intptr_t bump_down(std::intptr_t begin,
+                                          std::intptr_t end,
+                                          std::size_t count,
+                                          std::size_t alignment) {
             assert(std::has_single_bit(alignment));
-            intptr_t new_end = (end - (intptr_t)count) & -(intptr_t)alignment;
+            std::intptr_t new_end = (end - (std::intptr_t)count) & -(std::intptr_t)alignment;
             return (new_end >= begin) ? new_end : 0;
         }
+
+        
+        // Slab is the header of a large allocation
+        
+        enum : std::size_t { DEFAULT_SLAB_SIZE = 1 << 24 };
         
         struct Slab {
             
-            Slab* _Nullable _next;
-            unsigned char* _Nonnull const _end;
-            unsigned char _data[];
-            
-            bool invariant() const {
-                return _data < _end;
-            }
-            
-            static auto
-            make_with_minimum_capacity(std::size_t capacity) -> Slab* _Nonnull
+            Slab* _Nullable _next;              // intrusive linked list
+            unsigned char* _Nonnull const _end; // pointer to end of allocation
+            unsigned char _begin[];             // flexible array member
+                        
+            static Slab* _Nonnull make_with_minimum_capacity(std::size_t capacity)
             {
                 std::size_t size = std::bit_ceil(sizeof(Slab) + capacity);
-                void* _Nonnull ptr = malloc(size);
-                unsigned char* _Nonnull end = (unsigned char*)ptr + capacity;
+                void* _Nullable ptr = malloc(size);
+                if (!ptr) [[unlikely]] abort();
+                unsigned char* _Nonnull end = (unsigned char*)ptr + size;
                 Slab* _Nonnull that = new(ptr) Slab{
                     nullptr,
                     end,
                 };
+                assert(that->_end - that->_begin >= capacity);
                 return that;
             }
             
@@ -121,8 +125,8 @@ namespace wry {
         struct State {
             
             // Free address range of the current slab
-            intptr_t _begin;
-            intptr_t _end;
+            std::intptr_t _begin;
+            std::intptr_t _end;
             
             // List of slabs and our place in that list
             Slab* _Nullable _cursor;
@@ -135,9 +139,9 @@ namespace wry {
             
             void _configure_memory_region_from_cursor() {
                 if (_cursor) {
-                    _begin = (intptr_t)(_cursor->_data);
-                    _end = (intptr_t)(_cursor->_end);
-                    ASAN_POISON_MEMORY_REGION((void*)_begin, (size_t)(_end - _begin));
+                    _begin = (std::intptr_t)(_cursor->_begin);
+                    _end = (std::intptr_t)(_cursor->_end);
+                    ASAN_POISON_MEMORY_REGION((void*)_begin, (std::size_t)(_end - _begin));
                 } else {
                     _begin = 0;
                     _end = 0;
@@ -160,15 +164,13 @@ namespace wry {
                         _cursor = _cursor->_next;
                     } else {
                         // Create new slab
-                        Slab* _Nonnull tail = Slab::make_with_minimum_capacity(std::max<std::size_t>(count, (1 << 24) - sizeof(Slab)));
-                        // printf("BUMP: New slab %zd\n", tail->_end - tail->_data);
+                        Slab* _Nonnull tail = Slab::make_with_minimum_capacity(std::max<std::size_t>(count, DEFAULT_SLAB_SIZE - sizeof(Slab)));
                         if (_cursor) {
                             // Link to existing list
                             _cursor->_next = tail;
                         } else {
                             assert(!_head);
                             // Start a new list
-                            // printf("BUMP: New list\n");
                             _head = tail;
                         }
                         // Use new slab
@@ -180,23 +182,21 @@ namespace wry {
                     _configure_memory_region_from_cursor();
                     
                     // Try to allocate from the slab
-                    intptr_t new_end = bump_down(_begin, _end, count, alignment);
+                    std::intptr_t new_end = bump_down(_begin, _end, count, alignment);
                     if (new_end) [[likely]] {
                         ASAN_UNPOISON_MEMORY_REGION((void*)new_end, count);
-                        // printf("BUMP: allocated %zd (slow path)\n", _end - new_end);
                         _end = new_end;
                         return (void*)_end;
                     }
                 }
             }
             
-            void* _Nonnull allocate(size_t count,
-                                    size_t alignment = alignof(std::max_align_t))
+            void* _Nonnull allocate(std::size_t count,
+                                    std::size_t alignment = alignof(std::max_align_t))
             {
-                intptr_t new_end = bump_down(_begin, _end, count, alignment);
+                std::intptr_t new_end = bump_down(_begin, _end, count, alignment);
                 if (new_end) [[likely]] {
                     ASAN_UNPOISON_MEMORY_REGION((void*)new_end, count);
-                    // printf("BUMP: allocated %zd\n", _end - new_end);
                     _end = new_end;
                     return (void*)_end;
                 } else {
@@ -212,14 +212,13 @@ namespace wry {
             void _asan_poison_all() {
                 Slab* _Nullable head = _head;
                 while (head) {
-                    ASAN_POISON_MEMORY_REGION(head->_data, (size_t)(head->_end - _head->_data));
+                    ASAN_POISON_MEMORY_REGION(head->_begin, (std::size_t)(head->_end - head->_begin));
                     head = head->_next;
                 }
             }
             
             // Reuse the backing memory
             void restart() {
-                // printf("BUMP: Restart\n");
                 _asan_poison_all();
                 _cursor = _head;
                 _configure_memory_region_from_cursor();
@@ -230,7 +229,7 @@ namespace wry {
                 _begin = 0;
                 _end = 0;
                 _cursor = nullptr;
-                Slab* _Nonnull head = std::exchange(_head, nullptr);
+                Slab* _Nullable head = std::exchange(_head, nullptr);
                 while (head) {
                     free(std::exchange(head, head->_next));
                 }
@@ -243,11 +242,21 @@ namespace wry {
                 return result;
             }
             
+            // We choose to crash on thread exit if State is still responsible
+            // for allocations.  It's the responsibility of users to teardown()
+            // before thread exit, or to swap out the allocations so they can
+            // endure across the thread exit.
+            ~State() {
+                if (_head) {
+                    abort();
+                }
+            }
+            
         }; // bump::State
         
         inline constinit thread_local State this_thread_state = {};
         
-        inline void* _Nonnull allocate(std::size_t count, size_t alignment = alignof(std::max_align_t)) {
+        inline void* _Nonnull allocate(std::size_t count, std::size_t alignment = alignof(std::max_align_t)) {
             return this_thread_state.allocate(count, alignment);
         }
 
@@ -262,7 +271,7 @@ namespace wry {
         }
 
         void* _Nonnull operator new(std::size_t size, std::align_val_t align) {
-            return bump::this_thread_state.allocate(size, (size_t)align);
+            return bump::this_thread_state.allocate(size, (std::size_t)align);
         }
         
         void* _Nonnull operator new(std::size_t size, void* _Nonnull ptr) {
@@ -281,18 +290,14 @@ namespace wry {
         
         typedef T value_type;
         
-        [[nodiscard]] T* _Nonnull allocate(size_t count) const {
+        [[nodiscard]] T* _Nonnull allocate(std::size_t count) const {
             return bump::allocate(count * sizeof(T), alignof(T));
         }
         
-        void deallocate(T* _Nullable, size_t) const {
+        void deallocate(T* _Nullable, std::size_t) const {
             // no-op
         }
     };
-    
-    inline void garbage_collected_scan(BumpAllocated const* _Nullable) {
-        // no-op
-    }
         
 } // namespace wry
 
