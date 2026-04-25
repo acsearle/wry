@@ -98,6 +98,10 @@ namespace wry {
         mutable uint16_t _black;
 
         mutable Atomic<int32_t> _count;
+        
+        uint16_t _debug_allocation_gray;
+        uint16_t _debug_allocation_black;
+        uint16_t _debug_allocation_epoch;
 
         // TODO: _gray (16 bits) and _count (32 bits) now fit in a single
         // 64-bit atomic word together with room to spare; _black can remain
@@ -112,11 +116,7 @@ namespace wry {
         virtual ~GarbageCollected() = default;
         GarbageCollected& operator=(const GarbageCollected&);
         GarbageCollected& operator=(GarbageCollected&&);
-        
-        struct DeferRegistrationTag {};
-        explicit GarbageCollected(DeferRegistrationTag);
-        void _garbage_collected_complete_deferred_registration() const;
-        
+                
         constexpr std::strong_ordering operator<=>(const GarbageCollected&);
         constexpr bool operator==(const GarbageCollected&);
         
@@ -493,6 +493,13 @@ namespace wry {
         }
         
     }; // Edge<T*>
+    
+    
+    struct BumpAllocated;
+    
+    inline void garbage_collected_scan(BumpAllocated const* _Nullable) {
+        // no-op
+    }
     
 } // namespace wry
 

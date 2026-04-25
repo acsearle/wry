@@ -16,7 +16,7 @@ namespace wry {
     namespace epoch {
         
         // Cooperative epoch advancement
-        
+                
         // Bibliography:
         //
         // Crossbeam https://github.com/crossbeam-rs/crossbeam
@@ -36,54 +36,104 @@ namespace wry {
         // that worthwhile.  If it proves to be an issue, a half-measure would be
         // to have a fixed sized list that threads spread over.
         
-        using Epoch = uint32_t;
-
+        // The ordering induced by the Epoch is as follows:
+        
+        // The epoch is nondecreasing and atomic.  Specifically, all threads
+        // agree on a single, total order of writes to the epoch.
+        
+        // Thread A pins epoch E.
+        // E was the current epoch at that moment.
+        
+        // Thread A writes.
+        
+        // Thread A unpins, or repins, epoch E'
+        // This is a release barrier.
+        // E' was the current epoch at that moment.
+        // E' is either E or E+1.
+        
+        // Thread B pins epoch F.
+        // F was the current epoch at that moment.
+        // This is an acquire barrier.
+        
+        // By modificaton order consistency + nondecreasing:
+        // If F > E + 1 >= E', then B wrote F after A wrote E'
+        
+        // Thus epoch E in thread A happens before epoch F in thread B if
+        // F > E + 1
+        
+        struct Epoch {
+            uint16_t raw;
+            bool operator==(Epoch const&) const = default;            
+        };
+        
+        [[nodiscard]] constexpr Epoch successor(Epoch epoch) {
+            // Wrapping is permitted
+            return Epoch{
+                .raw = (uint16_t)(epoch.raw + 1),
+            };
+        }
+        
+        [[nodiscard]] constexpr Epoch operator+(Epoch epoch, int n) {
+            return Epoch{
+                .raw = (uint16_t)(epoch.raw + n)
+            };
+        }
+        
+        struct Count {
+            uint16_t raw;
+            explicit operator bool() const { return (bool)raw; }
+        };
+        
+        [[nodiscard]] constexpr Count successor(Count count) {
+            // Wrapping is not permitted
+            if (count.raw == UINT16_MAX) [[unlikely]] {
+                abort();
+            }
+            return Count{
+                .raw = (uint16_t)(count.raw + 1),
+            };
+        };
+        
+        [[nodiscard]] constexpr Count predecessor(Count count) {
+            // Wrapping is not permitted
+            if (count.raw == 0) [[unlikely]] {
+                abort();
+            }
+            return Count{
+                .raw = (uint16_t)(count.raw - 1),
+            };
+        }
+        
+        [[nodiscard]] constexpr Count successor_of_nonzero(Count count) {
+            if ((count.raw == 0) || (count.raw == UINT16_MAX)) [[unlikely]] {
+                abort();
+            }
+            return Count{
+                .raw = (uint16_t)(count.raw + 1),
+            };
+        }
+        
+        // Service will be instantiated as a global singleton and its state
+        // is thus atomic
+        
         struct Service {
-            
-            // wrapping not allowed
-            static uint16_t _decrement_no_overflow(uint16_t x) {
-                if (x == 0) [[unlikely]]
-                    abort();
-                return x - 1;
-            }
-            
-            // wrapping not allowed
-            static uint16_t _increment_no_overflow(uint16_t x) {
-                uint16_t y = x + 1;
-                if (y == 0) [[unlikely]]
-                    abort();
-                return y;
-            }
-            
-            // wrapping not allowed
-            // 0 -> 1 not allowed
-            static uint16_t _nonzero_increment_no_overflow(uint16_t x) {
-                if (x == 0) [[unlikely]]
-                    abort();
-                uint16_t y = x + 1;
-                if (y == 0) [[unlikely]]
-                    abort();
-                return y;
-            }
             
             struct alignas(8) State {
                 
                 // TODO: If we want to wait on epoch, the layout may matter to
                 // Linux 32-bit futex.
                 
-                Epoch current;         // The current epoch
-                uint16_t pins_current; // Pins in the current epoch
-                uint16_t pins_prior;   // Pins in the prior epoch
-                
-                // Compute the prior epoch
-                Epoch prior() const { return current - 1; }
+                Epoch current;      // The current epoch
+                Count pins_current; // Pins in the current epoch
+                Count pins_prior;   // Pins in the prior epoch
+                uint16_t waiting;   // Boolean somebody is waiting
                 
                 // Validate that a given pinned epoch is consistent with this state;
                 // that is, it is either the current or prior epoch, and the
                 // corresponding pin count is not zero.
                 bool validate(Epoch occupied) const {
                     return (((occupied == current) && pins_current)
-                            || ((occupied == prior()) && pins_prior));
+                            || ((successor(occupied) == current) && pins_prior));
                 }
                 
                 // The epoch advances if and only if the previous epoch has zero
@@ -93,16 +143,12 @@ namespace wry {
                 // epoch.
                 
                 [[nodiscard]] State try_advance() const {
-                    if (pins_prior)
-                        // Prior epoch is still pinned; we can not advance
-                        return *this;
-                    else
-                        // Prior epoch is not pinned; we can advance the epoch
-                        return State {
-                            .current = current + 1, // Wrapping permitted
-                            .pins_current = 0,
-                            .pins_prior = pins_current,
-                        };
+                    return State{
+                        .current = pins_prior ? current : successor(current),
+                        .pins_current = pins_prior ? pins_current : Count{0},
+                        .pins_prior = pins_prior ? pins_prior : pins_current,
+                        .waiting = pins_prior ? waiting : uint16_t{0},
+                    };
                 }
                 
                 // New pins are applied to the current epoch
@@ -112,8 +158,9 @@ namespace wry {
                 [[nodiscard]] State pin() const {
                     return State {
                         .current = current,
-                        .pins_current = _increment_no_overflow(pins_current),
+                        .pins_current = successor(pins_current),
                         .pins_prior = pins_prior,
+                        .waiting = waiting,
                     };
                 }
                 
@@ -122,47 +169,26 @@ namespace wry {
                 // current or prior epoch.
                 
                 State unpin(Epoch occupied) const {
-                    if (occupied == current) {
-                        return State {
-                            .current = current,
-                            .pins_current = _decrement_no_overflow(pins_current),
-                            .pins_prior = pins_prior,
-                        };
-                    } else if (occupied == prior()) {
-                        return State {
-                            .current = current,
-                            .pins_current = pins_current,
-                            .pins_prior = _decrement_no_overflow(pins_prior),
-                        };
-                    } else [[unlikely]] {
+                    if (occupied != current && successor(occupied) != current) [[unlikely]] {
                         abort();
                     }
+                    return State {
+                        .current = current,
+                        .pins_current = (occupied == current) ? predecessor(pins_current) : pins_current,
+                        .pins_prior = (successor(occupied) == current) ? predecessor(pins_prior) : pins_prior,
+                        .waiting = waiting
+                    };
                 }
                 
-                // Explicit pins can pin a specific epoch so long as somebody else
-                // is currently pinning it, usually the calling thread.  In
-                // particular, it never increases .pins_prior from zero.  This
-                // property is important for making advancement safe.
-                
-                [[nodiscard]] State pin_explicit(Epoch occupied) const {
-                    if (occupied == current) {
-                        return State {
-                            .current = current,
-                            .pins_current = _nonzero_increment_no_overflow(pins_current),
-                            .pins_prior = pins_prior,
-                        };
-                    } else if (occupied == prior()) {
-                        return State {
-                            .current = current,
-                            .pins_current = pins_current,
-                            .pins_prior = _nonzero_increment_no_overflow(pins_prior),
-                        };
-                    } else [[unlikely]] {
-                        abort();
-                    }
+                State wait() const {
+                    return State {
+                        .current = current,
+                        .pins_current = pins_current,
+                        .pins_prior = pins_prior,
+                        .waiting = uint16_t{1},
+                    };
                 }
-                
-                
+
             };
             
             Atomic<State> state;
@@ -171,116 +197,52 @@ namespace wry {
             
             // The epoch system itself cannot progress if any pin is held
             // indefinitely, and is thus blocking.
-            
+                        
             [[nodiscard]] Epoch pin() {
                 State expected = state.load(Ordering::RELAXED);
-                for (;;) {
-                    State desired = expected.try_advance().pin();
-                    if (state.compare_exchange_weak(expected,
-                                                    desired,
-                                                    Ordering::ACQUIRE,
-                                                    Ordering::RELAXED)) {
-                        if (expected.current != desired.current)
-                            state.notify_all();
-                        return desired.current;
-                    }
+                State desired;
+                do {
+                    desired = expected.pin();
+                } while (!state.compare_exchange_weak(expected,
+                                                      desired,
+                                                      Ordering::ACQUIRE,
+                                                      Ordering::RELAXED));
+                if (expected.waiting && !desired.waiting) {
+                    state.notify_all();
                 }
-            }
-            
-            void pin_explicit(Epoch occupied) {
-                printf("epoch::Service::pin_explicit(%u)\n", occupied);
-                State expected = state.load(Ordering::RELAXED);
-                for (;;) {
-                    printf("expected {current %u, pins_current %u, pins_prior %u}\n", expected.current, expected.pins_current, expected.pins_prior);
-                    State desired = expected.try_advance().pin_explicit(occupied);
-                    if (state.compare_exchange_weak(expected,
-                                                    desired,
-                                                    Ordering::ACQUIRE,
-                                                    Ordering::RELAXED)) {
-                        if (expected.current != desired.current)
-                            state.notify_all();
-                        return;
-                    }
-                }
+                return desired.current;
             }
             
             Epoch unpin(Epoch occupied) {
                 State expected = state.load(Ordering::RELAXED);
-                for (;;) {
-                    State desired = expected.unpin(occupied).try_advance();
-                    if (state.compare_exchange_weak(expected,
-                                                    desired,
-                                                    Ordering::RELEASE,
-                                                    Ordering::RELAXED)) {
-                        if (expected.current != desired.current)
-                            state.notify_all();
-                        return desired.current;
-                    }
+                State desired;
+                do {
+                    desired = expected.unpin(occupied).try_advance();
+                } while (!state.compare_exchange_weak(expected,
+                                                      desired,
+                                                      Ordering::RELEASE,
+                                                      Ordering::RELAXED));
+                if (expected.waiting && !desired.waiting) {
+                    state.notify_all();
                 }
+                return desired.current;
             }
             
             [[nodiscard]] Epoch repin(Epoch occupied) {
-                // NOTE: Even when desired == expected, it is still important to
-                // perform the write to establish memory orderings
+                // SAFETY: When desired == expected, we still perform the write
+                // to establish memory orderings
                 State expected = state.load(Ordering::RELAXED);
-                for (;;) {
-                    State desired = expected.unpin(occupied).try_advance().pin();
-                    if (state.compare_exchange_weak(expected,
-                                                    desired,
-                                                    Ordering::ACQ_REL,
-                                                    Ordering::RELAXED)) {
-                        if (expected.current != desired.current)
-                            state.notify_all();
-                        return desired.current;
-                    }
+                State desired;
+                do {
+                    desired = expected.unpin(occupied).try_advance().pin();
+                } while (!state.compare_exchange_weak(expected,
+                                                      desired,
+                                                      Ordering::ACQ_REL,
+                                                      Ordering::RELAXED));
+                if (expected.waiting && !desired.waiting) {
+                    state.notify_all();
                 }
-            }
-            
-            [[nodiscard]] Epoch repin_explicit(Epoch occupied) {
-                State expected = state.load(Ordering::RELAXED);
-                for (;;) {
-                    assert(expected.validate(occupied));
-                    State desired = expected.try_advance();
-                    if (state.compare_exchange_weak(expected,
-                                                    desired,
-                                                    Ordering::ACQ_REL,
-                                                    Ordering::RELAXED)) {
-                        if (expected.current != desired.current)
-                            state.notify_all();
-                        return desired.current;
-                    }
-                }
-            }
-            
-            [[nodiscard]] Epoch repin_and_wait(Epoch occupied) {
-                State expected = state.load(Ordering::RELAXED);
-                for (;;) {
-                    assert(expected.validate(occupied));
-                    State desired = expected.try_advance();
-                    if (state.compare_exchange_weak(expected,
-                                                    desired,
-                                                    Ordering::ACQ_REL,
-                                                    Ordering::RELAXED)) {
-                        if (expected.current != desired.current) {
-                            state.notify_all();
-                        } else {
-                            state.wait(desired, Ordering::ACQUIRE);
-                        }
-                        return desired.current;
-                    }
-                }
-            }
-            
-            Epoch pin_and_unpin() {
-                State expected = state.load(Ordering::RELAXED);
-                for (;;) {
-                    State desired = expected.try_advance();
-                    if (state.compare_exchange_weak(expected, desired, Ordering::ACQ_REL, Ordering::RELAXED)) {
-                        if (expected.current != desired.current)
-                            state.notify_all();
-                        return desired.current;
-                    }
-                }
+                return desired.current;
             }
             
             Epoch load_acquire() {
@@ -292,35 +254,43 @@ namespace wry {
             
         }; // struct Service
         
-        // Usage:
-        //
-        // pin();
-        // void* buffer = epoch::allocate(count);
-        // ...
-        // unpin();
-        // ...
-        // < buffer reclaimed >
-        
         inline constinit Service allocator_global_service = {};
         
+        // Usage:
+        //
+        // pin_this_thread();
+        // void* buffer = epoch::allocate(count);
+        // ...
+        // unpin_this_thread();
+        // ...
+        // < buffer eventually reused >
+                
+        // LocalState will be instantiated as a thread_local variable and not
+        // exposed to other threads
+        
         struct LocalState {
-            // TODO: Analysis suggests we need to have four buffers in flight to
-            // handle worst case interleavings, one is not enough
             Epoch known = {};
             bool is_pinned = {};
             
             // cyclic queue of Epochs to reuse once we have advanced epochs
             // enough
-            bump::Slab* _Nullable alternates[3] = {};
-            
-            
-            // The epoch allocator wraps the bump allocator with management
-            // that reuses slabs only when enough epochs have passed
-            // TODO: rotate more
+            enum : std::size_t { SIZE = 3 };
+            bump::Slab* _Nullable alternates[SIZE] = {};
+
             void _update_with(Epoch observed) {
                 if (observed != known) {
+                    
+                    // TODO: It would be nice for BumpAllocator to just use the
+                    // head of the list, but it's also nice for BumpAllocator to
+                    // be a separate entity.
+                    
+                    // TODO: We can explicitly tag these BumpAllocators with their
+                    // associated epoch to decide when to re-use them
+                    
+                    // swap head
                     alternates[0] = bump::this_thread_state.exchange_head_and_restart(alternates[0]);
-                    std::rotate(alternates + 0, alternates + 1, alternates + 3);
+                    // rotate buffer
+                    std::rotate(alternates, alternates + 1, alternates + SIZE);
                     known = observed;
                 }
             }
@@ -329,7 +299,6 @@ namespace wry {
                 assert(!is_pinned);
                 _update_with(allocator_global_service.pin());
                 is_pinned = true;
-                
             }
             
             void unpin() {
@@ -343,14 +312,9 @@ namespace wry {
                 _update_with(allocator_global_service.repin(known));
             }
             
-            void repin_and_wait() {
-                assert(is_pinned);
-                _update_with(allocator_global_service.repin_and_wait(known));
-            }
-            
         };
         
-        inline constinit thread_local LocalState allocator_local_state = {};
+        constinit inline thread_local LocalState allocator_local_state = {};
         
         // Keep the epoch pinned while a thread is awake
         
@@ -366,40 +330,7 @@ namespace wry {
             allocator_local_state.repin();
         }
 
-        inline void repin_this_thread_and_wait_for_advancement() {
-            allocator_local_state.repin_and_wait();
-        }
-        
-        // Pin the local thread's known epoch again.  The returned epoch can
-        // be used to unpin that epoch on a different thread.
-        //
-        // This is used to tie the epoch to a non-thread scope, such as the
-        // lifetime of the root of a tree of jobs.
-        
-        [[nodiscard]] inline auto
-        pin_explicit() -> Epoch {
-            printf("pin_explicit\n");
-            printf("allocator_local_state.is_pinned %d", allocator_local_state.is_pinned);
-            assert(allocator_local_state.is_pinned);
-            printf("allocator_local_state.known %u\n", allocator_local_state.known);
-            Epoch pinned = allocator_local_state.known;
-            allocator_global_service.pin_explicit(pinned);
-            return pinned;
-        }
-
-        inline auto
-        unpin_explicit(Epoch pinned) -> Epoch {
-            assert(allocator_local_state.is_pinned);
-            return allocator_global_service.unpin(pinned);
-        }
-
-        [[nodiscard]] inline auto
-        repin_explicit(Epoch pinned) -> Epoch {
-            assert(allocator_local_state.is_pinned);
-            return allocator_global_service.repin_explicit(pinned);
-        }
-
-        inline void* _Nonnull allocate(size_t count) {
+        [[nodiscard]] inline void* _Nonnull allocate(size_t count) {
             assert(allocator_local_state.is_pinned);
             return bump::allocate(count);
         }

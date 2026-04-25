@@ -34,33 +34,24 @@ namespace wry {
 
 #pragma mark - Global and thread_local variables
 
-    constinit thread_local uint16_t _thread_local_gray_for_allocation;
-    constinit thread_local uint16_t _thread_local_black_for_allocation;
-    constinit thread_local uint16_t _thread_local_gray_did_shade;
+    constinit thread_local uint16_t _thread_local_gray_for_allocation = 0;
+    constinit thread_local uint16_t _thread_local_black_for_allocation = 0;
+    constinit thread_local uint16_t _thread_local_gray_did_shade = 0;
     constinit thread_local Bag<const GarbageCollected*> _thread_local_new_objects;
 
     GarbageCollected::GarbageCollected()
     : _gray{_thread_local_gray_for_allocation}
     , _black{_thread_local_black_for_allocation}
-    , _count{0} {
+    , _count{0}
+    , _debug_allocation_gray{_thread_local_gray_for_allocation}
+    , _debug_allocation_black{_thread_local_black_for_allocation}
+    , _debug_allocation_epoch{epoch::allocator_local_state.known.raw}
+    {
+        // Allocation may produce gray objects for some states
+        _thread_local_gray_did_shade |= _thread_local_gray_for_allocation & ~_thread_local_black_for_allocation;
         // SAFETY: pointer to a partially constructed object escapes.  These
         // pointers are only published to the collector thread after the
         // constructor has completed.
-        _thread_local_new_objects.push(this);
-    }
-
-    GarbageCollected::GarbageCollected(GarbageCollected::DeferRegistrationTag)
-    : _gray{}
-    , _black{0}
-    , _count{0} {
-    }
-
-    void GarbageCollected::_garbage_collected_complete_deferred_registration() const {
-        _gray.store(_thread_local_gray_for_allocation, Ordering::RELAXED);
-        // SAFETY: plain store into a mutable field is race-free because the
-        // object is still visible only to the allocating thread; it will be
-        // published to the collector below.
-        _black = _thread_local_black_for_allocation;
         _thread_local_new_objects.push(this);
     }
 
@@ -90,6 +81,9 @@ namespace wry {
         Report* _next = nullptr;
         uint16_t gray_did_shade = 0;
         Bag<const GarbageCollected*> allocations;
+        uint16_t debug_gray_for_allocation;
+        uint16_t debug_black_for_allocation;
+        uint16_t debug_epoch;
 
     }; // struct Report
 
@@ -108,12 +102,17 @@ namespace wry {
         Report* desired = new Report{
             nullptr,
             std::exchange(_thread_local_gray_did_shade, 0),
-            std::move(_thread_local_new_objects)
+            std::move(_thread_local_new_objects),
+            _thread_local_gray_for_allocation,
+            _thread_local_black_for_allocation,
+            epoch::allocator_local_state.known.raw
         };
+        // SAFETY: We perform a RELAXED write.  It's not safe for the collector
+        // to dereference this pointer until the epoch has advanced.
         desired->_next = _global_atomic_reports_head.load(Ordering::RELAXED);
         while (!_global_atomic_reports_head.compare_exchange_weak(desired->_next,
                                                                   desired,
-                                                                  Ordering::RELEASE,
+                                                                  Ordering::RELAXED,
                                                                   Ordering::RELAXED))
             ;
     }
@@ -137,18 +136,7 @@ namespace wry {
         _mutator_publishes_report();
         epoch::unpin_this_thread();
     }
-
-    Report* collector_takes_reports(){
-        return _global_atomic_reports_head.exchange(nullptr,
-                                                    Ordering::ACQUIRE);
-    }
-
-
-
-
-
-
-
+    
     struct Collector {
 
         InlineRingBuffer<uint16_t, 4> _gray_history;
@@ -167,17 +155,80 @@ namespace wry {
         Atomic<bool> _is_canceled;
 
         Stack<const GarbageCollected*> _graystack;
+        
+        // TODO: Bespoke container that is constexpr and helps with the tricky comparisons
+        std::deque<std::pair<epoch::Epoch, Report*>>* _embargoed_until;
 
         ~Collector() {
+            delete _embargoed_until;
             _known_objects.leak();
         }
 
+        void collector_takes_reports(){
+            // SAFETY: We perform a RELAXED load.  It's not safe to dereference this
+            // pointer until the epoch has advanced.
+            Report* head =  _global_atomic_reports_head.exchange(nullptr,
+                                                                 Ordering::RELAXED);
+            assert(epoch::allocator_local_state.is_pinned);
+            epoch::Epoch E = epoch::allocator_local_state.known;
 
+            // epoch is atomic, so all threads see consistent modification order
+            // epoch value is nondecreasing so Y > X implies Y after X
+
+            // mutator non-atomic writes to Report
+            //     happen-before (same thread)
+            // mutator stores-release to epoch (value X)
+            //     happens-before if Y > X
+            // collector loads-acquire the epoch (value Y)
+            
+            
+            // mutator loads-acquire epoch A
+            // mutator stores-relaxed pointer value Z
+            // mutator stores-releases epoch B \in {A, A+1}
+            
+            // collector loads-acquire epoch C
+            // collector loads-relaxed pointer value Z
+            // collector stores-releases epoch D \in {C, C+1}
+
+            // collector is in epoch C when it reads
+            // the mutator must therefore have been in epoch A <= C + 1 when it wrote
+            // Thus X = B <= C + 2
+            // Thus Y > C + 2
+            
+            // So if the collector gets a report pointer in epoch C, it must
+            // wait until epoch Y > C + 2 to safely follow that pointer
+            
+            _embargoed_until->emplace_back(E + 3, head);
+
+        }
+
+        void collector_reads_reports() {
+            
+            assert(epoch::allocator_local_state.is_pinned);
+            epoch::Epoch E = epoch::allocator_local_state.known;
+            
+            uint16_t did_shade = 0;
+            for (;;) {
+                if (_embargoed_until->empty())
+                    break;
+                epoch::Epoch F = _embargoed_until->front().first;
+                if ((std::int16_t)(std::uint16_t)(E.raw - F.raw) < 0)
+                    break;
+                Report* head = _embargoed_until->front().second;
+                _embargoed_until->pop_front();
+                while (head) {
+                    did_shade |= head->gray_did_shade;
+                    _known_objects.splice(std::move(head->allocations));
+                    delete std::exchange(head, head->_next);
+                }
+            }
+            // dump(did_shade);
+            _shade_history.front() |= did_shade;
+        }
 
         void loop_until_canceled() {
-
-            // Does the collector need to pin?
-            // Or just to spy on the epoch?
+            
+            _embargoed_until = new std::deque<std::pair<epoch::Epoch, Report*>>;
 
             epoch::pin_this_thread();
             epoch::Epoch epoch_at_last_change = epoch::allocator_local_state.known;
@@ -185,22 +236,14 @@ namespace wry {
             printf("C0: garbage collector starts\n");
 
             while (!_is_canceled.load(Ordering::RELAXED)) {
-
-                epoch::repin_this_thread();
-
-
-                // Always read all reports
-                {
-                    uint16_t did_shade = 0;
-                    Report* head = collector_takes_reports();
-                    while (head) {
-                        did_shade |= head->gray_did_shade;
-                        _known_objects.splice(std::move(head->allocations));
-                        delete std::exchange(head, head->_next);
-                    }
-                    _shade_history.front() |= did_shade;
-                }
-
+                                                
+                collector_takes_reports();
+                collector_reads_reports();
+                                
+                collector_scans();
+                
+                
+                
                 // All of the above ops are benign information gathering.
 
                 // We check if the epoch has changed enough that we can prove
@@ -209,43 +252,19 @@ namespace wry {
 
                 // It's important to structure the comparison to work when
                 // wrapping occurs
-                if (epoch::allocator_local_state.known - epoch_at_last_change < 2) {
+                // DEBUG: This was 2, even 10 is not enough, so it's not the (whole) problem
+                if ((std::int16_t)(std::uint16_t)(epoch::allocator_local_state.known.raw - epoch_at_last_change.raw) < 3) {
                     // TODO: Best way to sleep or wait here
                     epoch::unpin_this_thread();
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    // std::this_thread::sleep_for(std::chrono::milliseconds(20));
                     epoch::pin_this_thread();
                     continue;
                 }
-
-                // The epoch has advanced by at least two since we published
-                //
-                // This means every mutator has repinned and then loaded the
-                // color at least once
-                //
-                // Every (active) mutator has now seen the latest color we
-                // published, so we can proceed to advance the collection
-
-                // write the tricolor state
-                // release-acquire epoch
-                // note the epoch
-
-                // write a report on the old state
-                // release-acquire epoch
-                // read the trcolor state
-
-                // release-acquire epoch
-                // read the report state
-
-                // This establishes a release sequence.  The epoch properties
-                // guarantee advancement only when nobody is in the old epoch,
-                // which means that when the epoch has advanced by two we have
-                // everybody agreeing that the original epoch is in the past
+                epoch::repin_this_thread();
 
                 try_advance_collection_phases();
 
                 _shade_history.push_front(0);
-
-                // Publish the new colors
                 _gray_history.push_front(_gray_for_allocation);
                 _black_history.push_front(_black_for_allocation);
                 Color color = {
@@ -254,16 +273,11 @@ namespace wry {
                 };
                 _global_atomic_color_for_allocation.store(color, Ordering::RELAXED);
 
-                epoch::repin_this_thread();
-
                 epoch_at_last_change = epoch::allocator_local_state.known;
-
-                // Visit every object to trace and sweep them.
-                scan();
 
             } // while (!_is_cancelled.load(Ordering::RELAXED))
 
-            epoch::unpin_this_thread();
+            //epoch::unpin_this_thread();
 
         } // void Collector::loop_until_canceled()
 
@@ -286,6 +300,7 @@ namespace wry {
             {
                 // When all threads have acknowledged k-black, start tracing
                 _mask_for_tracing |= _black_history[0] & ~_black_history[1];
+                dump(_mask_for_tracing);
             }
 
             {
@@ -297,6 +312,7 @@ namespace wry {
                 color_is_stable &= ~_shade_history[2];
                 // Stop tracing these colors
                 _mask_for_tracing &= ~color_is_stable;
+                dump(_mask_for_tracing);
                 // Start deleting these whites
                 _mask_for_deleting = color_is_stable;
             }
@@ -332,7 +348,7 @@ namespace wry {
         } // void Collector::advance_state()
 
 
-        void scan() {
+        void collector_scans() {
 
 #pragma mark Scan all known objects
 
@@ -341,6 +357,7 @@ namespace wry {
             size_t trace_count = 0;
             size_t mark_count = 0;
             size_t delete_count = 0;
+            size_t scan_count = 0;
             auto t0 = std::chrono::steady_clock::now();
 
             assert(_graystack.debug_is_empty());
@@ -370,6 +387,7 @@ namespace wry {
             // dump(_mask_for_deleting);
             // dump(_mask_for_clearing);
 
+#ifdef VERBOSE
             printf("C0: Start scanning %zd objects with\n"
                    "              trace mask %04x\n"
                    "             delete mask %04x\n"
@@ -382,6 +400,7 @@ namespace wry {
                    _mask_for_clearing,
                    _gray_for_allocation,
                    _black_for_allocation);
+#endif // VERBOSE
 
             // While any objects are unprocessed
             for (;;) {
@@ -433,6 +452,7 @@ namespace wry {
                 if (!_known_objects.try_pop(object))
                     break;
                 assert(object);
+                ++scan_count;
                 // Process the object.
                 // Depending on phase, change the k-coloration
                 // - k-mark: k-gray -> k-black, and enqueue for tracing
@@ -459,10 +479,17 @@ namespace wry {
                 }
                 // SAFETY: only the collector writes _black after registration.
                 uint16_t before_black = object->_black;
-                // Mark uses before_gray (not after_gray) to match the
-                // pre-split semantics: newly-rooted objects become k-gray
-                // this cycle and k-black on the next.
-                uint16_t mark = before_gray & _mask_for_tracing;
+                
+                // ======= suspect??
+                
+// Mark uses before_gray (not after_gray) to match the
+// pre-split semantics: newly-rooted objects become k-gray
+// this cycle and k-black on the next.
+// uint16_t mark = before_gray & _mask_for_tracing;
+                uint16_t mark = after_gray & _mask_for_tracing;
+
+                // =======
+                
                 uint16_t after_black = (before_black | mark) & ~_mask_for_clearing;
                 assert(is_subset_of(after_black, _color_in_use));
                 object->_black = after_black;
@@ -486,7 +513,7 @@ namespace wry {
                         dump(after_black);
                         dump(did_set_gray);
                         dump(did_set_black);
-                        dump(before_gray & _mask_for_deleting);
+                        dump(_mask_for_deleting);
                         object->_garbage_collected_debug();
                         abort();
                     }
@@ -519,6 +546,7 @@ namespace wry {
 
              auto t1 = std::chrono::steady_clock::now();
             
+             printf("C0:     scanned %zd\n", scan_count);
              printf("C0:     marked %zd\n", trace_count + mark_count);
              printf("C0:     deleted %zd\n", delete_count);
              printf("C0:     in %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);

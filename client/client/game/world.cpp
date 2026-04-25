@@ -37,10 +37,10 @@ namespace wry {
         
         
         // Debug
-        printf("World step %lld\n", _time);
-        _waiting_on_time.for_each([](auto const& p){
-            printf("EntityID %lld is waiting for time %lld\n", p.second.data, p.first);
-        });
+//        printf("World step %lld\n", _time);
+//        _waiting_on_time.for_each([](auto const& p){
+//            printf("EntityID %lld is waiting for time %lld\n", p.second.data, p.first);
+//        });
         
         // Take the set of EntityIDs that are ready to run
         
