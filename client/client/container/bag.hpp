@@ -16,17 +16,34 @@ namespace wry {
     // A simple and fast unordered collection for plain old data types,
     // implemented as an unrolled linked list.  Push and pop are usually
     // trivial, and in the worst case still O(1), so this data structure is
-    // suitable for real-time contexts.
+    // suitable for soft-real-time contexts.
 
     // Used by the garbage collector to receive and manage pointers.  The
     // bag nodes are not themselves garbage collected.
+    
+    // TODO: Consider flexible array member instead of finessing the struct
+    
+    enum : std::size_t { BAG_PAGE_SIZE = 4096 };
         
     template<typename T>
     struct SinglyLinkedListOfInlineStacksBag {
         
         struct Node {
             
-            constexpr static size_t CAPACITY = (4096 - 16) / sizeof(T);
+            static void* operator new(std::size_t count) {
+                void* ptr = std::aligned_alloc(BAG_PAGE_SIZE, count);
+                if (!ptr) [[unlikely]] {
+                    abort();
+                }
+                return ptr;
+            }
+            
+            static void operator delete(void* ptr) {
+                std::free(ptr);
+            }
+            
+            static_assert(BAG_PAGE_SIZE - 16 >= sizeof(T));            
+            constexpr static size_t CAPACITY = (BAG_PAGE_SIZE - 16) / sizeof(T);
             
             Node* _next = nullptr;
             size_t _size = 0;
@@ -62,7 +79,7 @@ namespace wry {
 
         };
         
-        static_assert(sizeof(Node) == 4096);
+        static_assert(sizeof(Node) == BAG_PAGE_SIZE);
         
         using value_type = T;
         using size_type = std::size_t;
@@ -113,11 +130,8 @@ namespace wry {
         }
                 
         SinglyLinkedListOfInlineStacksBag& operator=(const SinglyLinkedListOfInlineStacksBag&) = delete;
-        
-        SinglyLinkedListOfInlineStacksBag& operator=(SinglyLinkedListOfInlineStacksBag&& other) {
-            SinglyLinkedListOfInlineStacksBag(std::move(other)).swap(*this);
-            return *this;
-        }
+        SinglyLinkedListOfInlineStacksBag& operator=(SinglyLinkedListOfInlineStacksBag&&) = delete;
+
         
 #ifndef NDEBUG
         bool debug_is_empty() const {
@@ -133,7 +147,7 @@ namespace wry {
 #ifndef NDEBUG
             ++_debug_size;
 #endif // NDEBUG
-            while (!_head || !_head->try_push(value)) {
+            while (!_head || !_head->try_push(std::move(value))) {
                 Node* node = new Node;
                 node->_next = _head;
                 node->_size = 0;
@@ -163,14 +177,14 @@ namespace wry {
             if (other._head) {
                 if (_head) {
                     assert(_tail && !(_tail->_next));
-                    _tail->_next = exchange(other._head, nullptr);
+                    _tail->_next = std::exchange(other._head, nullptr);
                 } else {
                     assert(!_tail);
-                    _head = exchange(other._head, nullptr);
+                    _head = std::exchange(other._head, nullptr);
                 }
-                _tail = exchange(other._tail, nullptr);
+                _tail = std::exchange(other._tail, nullptr);
 #ifndef NDEBUG
-                _debug_size += exchange(other._debug_size, 0);
+                _debug_size += std::exchange(other._debug_size, 0);
 #endif // NDEBUG
             }
         }
@@ -183,6 +197,59 @@ namespace wry {
 #endif // NDEBUG
         }
         
+        struct const_iterator {
+            
+            using iterator_category = std::forward_iterator_tag;
+            using value_type = T;
+            using difference_type = std::ptrdiff_t;
+            using pointer = T*;
+            using reference = T&;
+            
+            Node* _current;
+            size_t _index;
+            
+            T const& operator*() {
+                return _current->_elements[_index];
+            }
+            
+            T const* operator->() {
+                return _current->_elements + _index;
+            }
+                        
+            const_iterator& operator++() {
+                if (++_index == _current->_size) {
+                    _current = _current->_next;
+                    _index = 0;
+                }
+                return *this;
+            }
+            
+            const_iterator operator++(int) {
+                const_iterator tmp{*this};
+                ++*this;
+                return tmp;
+            }
+            
+            bool operator==(const const_iterator&) const = default;
+            
+        };
+        
+        const_iterator begin() const {
+            return const_iterator{_head, 0};
+        }
+        
+        const_iterator end() const {
+            return const_iterator{nullptr, 0};
+        }
+
+        const_iterator cbegin() const {
+            return const_iterator{_head, 0};
+        }
+        
+        const_iterator cend() const {
+            return const_iterator{nullptr, 0};
+        }
+
     }; // struct SinglyLinkedListOfInlineStacksBag<T>
     
     template<typename T>
@@ -193,6 +260,6 @@ namespace wry {
     template<typename T>
     using Bag = SinglyLinkedListOfInlineStacksBag<T>;
         
-}
+} // namespace wry
 
 #endif /* bag_hpp */
