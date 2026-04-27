@@ -542,7 +542,7 @@ namespace wry {
             assert(_graystack.debug_is_empty());
             assert(_known_objects.debug_is_empty());
             assert(global_children.c.empty());
-            _known_objects = std::move(survivors);
+            _known_objects.swap(survivors);
 
              auto t1 = std::chrono::steady_clock::now();
             

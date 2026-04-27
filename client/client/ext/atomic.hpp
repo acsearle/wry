@@ -29,8 +29,10 @@
 
 #include <atomic>
 
-namespace wry {
+#include "stdint.hpp"
 
+namespace wry {
+    
     // We define our own Atomic to
     // - provide a legal customization point
     // - remove error-prone casts, assignments and defaults (of sequential
@@ -40,7 +42,7 @@ namespace wry {
     //   std::atomic
     //
     // (*) libc++ is slow to adopt platform-specific futexes
-
+    
     // The implementation depends heavily on GCC-style intrinsics
     // TODO: extend to MSVC _Interlocked[op][width]_[ordering]
     
@@ -54,7 +56,7 @@ namespace wry {
     // want to do.  Ensure that we can do userspace task switching instead with
     // a coroutine, callback, or other.  Raw atomics are unlikely to be the
     // right level of abstraction for this.
-
+    
     // TODO: architecture specific cache line size
     // std::hardware_destructive_interference_size seems unimplemented
     constexpr size_t CACHE_LINE_SIZE = 128;
@@ -79,64 +81,78 @@ namespace wry {
     
     template<AlwaysLockFreeAtomic T>
     struct Atomic {
-                
-        T value;
         
-        constexpr Atomic() : value{} {}
-        explicit constexpr Atomic(T desired) : value{desired} {}
+        using value_type = T;
+        static constexpr bool is_always_lock_free = true;
+        
+        static constexpr bool _is_native = std::is_integral_v<T> || std::is_pointer_v<T>;
+        using U = std::conditional_t<_is_native, T, integer_of_byte_width_t<sizeof(T)>>;
+
+        U value;
+        
+        constexpr Atomic() noexcept
+        : value{} {
+        }
+        
+        explicit constexpr Atomic(T desired) noexcept
+        : value{std::bit_cast<U>(desired)} {
+        }
+        
         Atomic(const Atomic&) = delete;
         Atomic& operator=(const Atomic&) = delete;
         
-        T load(Ordering order) const {
-            T discovered;
-            __atomic_load(&value, &discovered, (int)order);
-            return discovered;
+        T load(Ordering order) const noexcept {
+            return std::bit_cast<T>(__atomic_load_n(&value, (int)order));
         }
-
-        void store(T desired, Ordering order) {
-            __atomic_store(&value, &desired, (int)order);
+        
+        void store(T desired, Ordering order) noexcept {
+            __atomic_store_n(&value, std::bit_cast<U>(desired), (int)order);
         }
-
-        T exchange(T desired, Ordering order) {
-            T discovered;
-            __atomic_exchange(&value, &desired, &discovered, (int)order);
-            return discovered;
+        
+        T exchange(T desired, Ordering order) noexcept {
+            return std::bit_cast<T>(__atomic_exchange_n(&value, std::bit_cast<U>(desired), (int)order));
         }
         
         bool compare_exchange_weak(T& expected,
                                    T desired,
                                    Ordering success,
-                                   Ordering failure) {
-            return __atomic_compare_exchange(&value,
-                                             &expected,
-                                             &desired,
-                                             true,
-                                             (int)success,
-                                             (int)failure);
+                                   Ordering failure) noexcept {
+            U expected2{std::bit_cast<U>(expected)};
+            bool result{__atomic_compare_exchange_n(&value,
+                                                    &expected2,
+                                                    std::bit_cast<U>(desired),
+                                                    true,
+                                                    (int)success,
+                                                    (int)failure)};
+            expected = std::bit_cast<T>(expected2);
+            return result;
         }
         
         bool compare_exchange_strong(T& expected,
                                      T desired,
                                      Ordering success,
-                                     Ordering failure) {
-            return __atomic_compare_exchange(&value,
-                                             &expected,
-                                             &desired,
-                                             false,
-                                             (int)success,
-                                             (int)failure);
+                                     Ordering failure) noexcept {
+            U expected2{std::bit_cast<U>(expected)};
+            bool result{__atomic_compare_exchange_n(&value,
+                                                    &expected2,
+                                                    std::bit_cast<U>(desired),
+                                                    false,
+                                                    (int)success,
+                                                    (int)failure)};
+            expected = std::bit_cast<T>(expected2);
+            return result;
         }
         
 #define X(Y) \
-        \
-        T fetch_##Y (T operand, Ordering order) {\
-            return __atomic_fetch_##Y (&value, operand, (int)order);\
-        }\
-        \
-        T Y##_fetch(T operand, Ordering order) {\
-            return __atomic_##Y##_fetch (&value, operand, (int)order);\
-        }
-                
+\
+T fetch_##Y (T operand, Ordering order) noexcept {\
+return __atomic_fetch_##Y (&value, operand, (int)order);\
+}\
+\
+T Y##_fetch(T operand, Ordering order) noexcept {\
+return __atomic_##Y##_fetch (&value, operand, (int)order);\
+}
+        
         // GCC builtins provide significantly more operations than std::atomic
         X(add)
         X(and)
@@ -146,12 +162,12 @@ namespace wry {
         X(or)
         X(sub)
         X(xor)
-
+        
 #undef X
-
+        
 #if defined(__APPLE__)
         
-        void wait(T& expected, Ordering order) {
+        void wait(T& expected, Ordering order) noexcept {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             uint64_t buffer = {};
             __builtin_memcpy(&buffer, &expected, sizeof(T));
@@ -176,7 +192,7 @@ namespace wry {
             }
         }
         
-        AtomicWaitResult wait_until(T& expected, Ordering order, uint64_t deadline) {
+        AtomicWaitResult wait_until(T& expected, Ordering order, uint64_t deadline) noexcept {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             uint64_t buffer = {};
             __builtin_memcpy(&buffer, &expected, sizeof(T));
@@ -185,7 +201,7 @@ namespace wry {
                 if (__builtin_memcmp(&buffer, &discovered, sizeof(T))) {
                     expected = discovered;
                     return AtomicWaitResult::NO_TIMEOUT;
-                }                
+                }
                 int count = os_sync_wait_on_address_with_deadline(&(this->value),
                                                                   buffer,
                                                                   sizeof(T),
@@ -205,15 +221,15 @@ namespace wry {
             }
         }
         
-        AtomicWaitResult wait_for(T& expected, Ordering order, uint64_t timeout_ns) {
+        AtomicWaitResult wait_for(T& expected, Ordering order, uint64_t timeout_ns) noexcept {
             struct mach_timebase_info info;
             mach_timebase_info(&info);
-            return wait_until(expected, order, mach_absolute_time() + timeout_ns / info.numer * info.denom);
+            return wait_until(expected, order, mach_absolute_time() + (timeout_ns * info.denom) / info.numer);
         }
         
-        void notify_one() {
+        void notify_one() noexcept {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
-            int result = os_sync_wake_by_address_any(&value, 
+            int result = os_sync_wake_by_address_any(&value,
                                                      sizeof(T),
                                                      OS_SYNC_WAKE_BY_ADDRESS_NONE);
             if (result != 0) switch (errno) {
@@ -224,9 +240,9 @@ namespace wry {
                     abort();
             }
         }
-
-        void notify_all() {
-            int result = os_sync_wake_by_address_all(&value, 
+        
+        void notify_all() noexcept {
+            int result = os_sync_wake_by_address_all(&value,
                                                      sizeof(T),
                                                      OS_SYNC_WAKE_BY_ADDRESS_NONE);
             if (result != 0) switch (errno) {
@@ -239,12 +255,13 @@ namespace wry {
         }
         
 #endif // defined(__APPLE__)
-
+        
 #if defined(WIN32)
         
         // TODO: This code sketch is untested
-
-        void wait(T& expected, Ordering order) {
+        
+        void wait(T& expected, Ordering order) noexcept {
+            uint64_t buffer = {};
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             for (;;) {
                 T discovered = load(order);
@@ -267,8 +284,8 @@ namespace wry {
                 }
             }
         }
-                
-        AtomicWaitResult wait_for(T& expected, Ordering order, uint64_t timeout_ns) {
+        
+        AtomicWaitResult wait_for(T& expected, Ordering order, uint64_t timeout_ns) noexcept {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             uint64_t buffer;
             for (;;) {
@@ -280,7 +297,7 @@ namespace wry {
                 BOOL result = WaitOnAddress(&value,
                                             &expected,
                                             sizeof(T),
-                                            timeout_ns / 10000000
+                                            timeout_ns / 1000000
                                             );
                 if (!result) {
                     DWORD lastError = GetLastError();
@@ -295,12 +312,12 @@ namespace wry {
             }
         }
         
-        void notify_one() {
+        void notify_one() noexcept {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             WakeByAddressSingle(&value);
         }
         
-        void notify_all() {
+        void notify_all() noexcept {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             WakeByAddressAll(&value);
         }
@@ -308,21 +325,23 @@ namespace wry {
 #endif // defined(WIN32)
         
 #if defined(__linux__)
-
-        void wait(T& expected, Ordering order) requires { sizeof(T) == 4 } {
+        
+        // TODO: This code sketch is untested
+        
+        void wait(T& expected, Ordering order) requires(sizeof(T) == 4) noexcept {
             (void) syscall(SYS_futex, &value, FUTEX_WAIT_PRIVATE, &expected, nullptr, nullptr, 0);
         }
         
-        void notify_one() requires { sizeof(T) == 4 } {
+        void notify_one() requires { sizeof(T) == 4 } noexcept {
             static_assert(sizeof(T) == 4);
             (void) syscall(SYS_futex, &value, FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
         }
-
-        void notify_all() requires { sizeof(T) == 4 } {
+        
+        void notify_all() requires { sizeof(T) == 4 } noexcept {
             static_assert(sizeof(T) == 4);
             (void) syscall(SYS_futex, &value, FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
         }
-
+        
 #endif // defined(__linux__)
         
     }; // template<typename> struct Atomic
