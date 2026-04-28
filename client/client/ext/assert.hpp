@@ -9,22 +9,21 @@
 #define assert_hpp
 
 #include <cassert>
+#include <cstdlib>
 
 // We wrap <cassert> and implement some related macros in terms of the platform
 // assert
 
-// Rust
-
-#define assert_eq(X, Y) assert((X) == (Y))
-#define assert_ne(X, Y) assert((X) != (Y))
-
-#define debug_assert assert(X)
-#define debug_assert_eq(X, Y) debug_assert((X) == (Y))
-#define debug_assert_ne(X, Y) debug_assert((X) != (Y))
+// TODO: CHECK needs a better name
+#define CHECK(x) do { if(!(x)) [[unlikely]] std::abort(); } while(0)
 
 // Contracts
 
-#define precondition assert
-#define postcondition assert
+#define precondition CHECK
+#define postcondition CHECK
+
+#define precondition_debug assert
+#define postcondition_debug assert
+
 
 #endif /* assert_hpp */

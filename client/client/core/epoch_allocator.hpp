@@ -63,7 +63,10 @@ namespace wry {
         
         struct Epoch {
             uint16_t raw;
-            bool operator==(Epoch const&) const = default;            
+            bool operator==(Epoch const&) const = default;
+            std::strong_ordering operator<=>(Epoch const& b) const {
+                return (int16_t)(raw - b.raw) <=> 0;
+            }
         };
         
         [[nodiscard]] constexpr Epoch successor(Epoch epoch) {
@@ -77,6 +80,10 @@ namespace wry {
             return Epoch{
                 .raw = (uint16_t)(epoch.raw + n)
             };
+        }
+        
+        [[nodiscard]] constexpr int16_t operator-(Epoch a, Epoch b) {
+            return (int16_t)(a.raw - b.raw);
         }
         
         struct Count {

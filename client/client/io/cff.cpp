@@ -20,8 +20,8 @@
 
 namespace wry::cff {
     
-#define CHECK(x) do { if(!(x)) [[unlikely]] std::abort(); } while(0)
-    
+#define MALFORMED() abort();
+        
     using Card8 = std::uint8_t;
     using Card16 = NetworkByteOrder<std::uint16_t>;
     using Offset8 = std::uint8_t;
@@ -30,45 +30,34 @@ namespace wry::cff {
     using OffSize = std::uint8_t;
     using SID = NetworkByteOrder<std::uint16_t>;
     
-    
-#define Y \
-X(Card8, major) \
-X(Card8, minor) \
-X(Card8, hdrSize) \
-X(OffSize, offSize)
-
     struct Header {
-                
-#define X(A, B) A B;
-        Y
-#undef X
         
-        void debug() {
-            printf("    Header {\n");
-#define X(A, B) printf("        " #B " = %d,\n", B);
-            Y
-#undef X
-            printf("    },\n");
-        }
-        
-    }; // struct HEADER
-    
-    void parse_Header(span<byte const>& s, Header& x) {
-#define X(A, B) parse_ntoh(s, x.B);
-        Y
-#undef X
-    }
-#undef Y
+        Card8 major;
+        Card8 minor;
+        Card8 hdrSize;
+        OffSize offSize;
 
+    }; // struct Header
     
+    // project the raw bytes, validate, and advance the span
+    Header const* parse_Header(span<const byte>& s) {
+        Header const* h = (Header const*)s.data();
+        CHECK(h->hdrSize >= sizeof(Header)); // basic header must fit
+        CHECK((1 <= h->offSize) && (h->offSize <= 4));
+        s.drop_front(h->hdrSize);
+        return h;
+    }
+        
     struct INDEX {
         
-        uint16_t count;
-        uint8_t offSize;
-        byte const* offsets;
+        Card16 count;
+        OffSize offSize;
+        byte offsets[];
         
-        uint32_t parse_offset(byte const*& p) const {
+        uint32_t _parse_offset(byte const*& p) const {
             uint32_t result{};
+            // because we use arithmetic operations to compose the result,
+            // it is correct for big- and little-endian hosts.
             for (int i = 0; i != offSize; ++i)
                 result = (result << 8) | *p++;
             return result;
@@ -78,30 +67,34 @@ X(OffSize, offSize)
             CHECK(i < count);
             CHECK((1 <= offSize) && (offSize <= 4));
             byte const* p = offsets + i * offSize;
-            uint32_t a = parse_offset(p);
-            uint32_t b = parse_offset(p);
+            uint32_t a = _parse_offset(p);
+            uint32_t b = _parse_offset(p);
             byte const* q = offsets + (count + 1) * offSize - 1;
             return { q + a, q + b };
         }
-        
-        void debug() {
-            printf("INDEX { count = %d, offSize = %d }\n", count, offSize);
-        }
-        
+                
     }; // struct INDEX
     
     
-    void parse_INDEX(span<const byte>& s, INDEX& x) {
-        parse_ntoh(s, x.count);
-        if (x.count) {
-            parse_ntoh(s, x.offSize);
-            CHECK((1 <= x.offSize) && (x.offSize <= 4));
-            x.offsets = s.begin();
-            // set the span to begin after the last entry
-            s._begin = x[x.count - 1]._end;
+    // project the raw bytes, validate, and advance the span
+    INDEX const* parse_INDEX(span<const byte>& s) {
+        INDEX const* x = (INDEX const*)s.data();
+        if (x->count) {
+            CHECK((1 <= x->offSize) && (x->offSize <= 4));
+            s._begin = (*x)[x->count - 1]._end;
+        } else {
+            // If the count is zero, offsize does not exist
+            s.drop_front(sizeof(Card16));
         }
+        return x;
     }
-    
+
+    // overload so the caller isn't forced to make an lvalue
+    INDEX const* parse_INDEX(span<const byte>&& s) {
+        // ... but now that we have one, use it
+        return parse_INDEX(s);
+    }
+
     struct DICT {
         
         std::map<std::array<uint8_t, 2>, std::vector<double>> dictionary;
@@ -115,7 +108,7 @@ X(OffSize, offSize)
             }
         }
         
-        static void parse_real(span<byte const>& s, double& target) {
+        static void _parse_real(span<byte const>& s, double& target) {
             constexpr static char const* table[] = {
                 "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
                 ".", "E", "E-", "", "-", ""
@@ -146,7 +139,7 @@ X(OffSize, offSize)
         
     }; // struct DICT
     
-    
+    // parse the entire span into a data structure that supports efficient lookups
     void parse_DICT(span<const byte> s, DICT& x) {
         
         std::array<uint8_t, 2> key;
@@ -168,7 +161,7 @@ X(OffSize, offSize)
                 key[0] = 0; key[1] = 0;
                 value.clear();
             } else if (b0 <= 27) [[unlikely]] {
-                CHECK(false); // reserved
+                MALFORMED(); // reserved
             } else if (b0 <= 28) {
                 uint16_t u{};
                 parse_ntoh(s, u);
@@ -179,10 +172,10 @@ X(OffSize, offSize)
                 value.push_back(u);
             } else if (b0 <= 30) {
                 double u{};
-                DICT::parse_real(s, u);
+                DICT::_parse_real(s, u);
                 value.push_back(u);
             } else if (b0 <= 31) [[unlikely]] {
-                CHECK(false); // reserved
+                MALFORMED(); // reserved
             } else if (b0 <= 246) {
                 value.push_back((int)b0 - 139);
             } else if (b0 <= 250) {
@@ -194,26 +187,26 @@ X(OffSize, offSize)
                 parse_ntoh(s, b1);
                 value.push_back((-((int)b0 - 251) << 8) - (int)b1 - 108);
             } else if (b0 <= 255)  [[unlikely]] {
-                CHECK(false); // reserved
+                MALFORMED(); // reserved
             }
         }
         if (!value.empty())
-            CHECK(false);
+            MALFORMED();
     }
     
     
     
-    struct Type2CharstringEngine {
+    struct Type2CharstringInterpreter {
         
-        INDEX global_subroutines;
-        INDEX local_subroutines;
+        INDEX const* global_subroutines;
+        INDEX const* local_subroutines;
         
-        std::deque<float> argument_queue;
+        std::deque<float> operand_stack;
         std::vector<wry::span<byte const>> call_stack;
         
         // NOTE: This awkward double negative name is suggested by the CFF
         // specification
-        bool is_not_first_argument_queue_clearing_operator = false;
+        bool is_not_first_operand_stack_clearing_operator = false;
         
         // NOTE: CFF width is not returned to the caller, because the
         // OpenType layer above provides its own authoritative value.
@@ -238,13 +231,9 @@ X(OffSize, offSize)
         
         // TODO: clumsy
         void reset() {
-            // DEBUG: We want to know if reset is discarding unused arguments
-            // or partial call stacks
-            CHECK(argument_queue.empty());
-            CHECK(call_stack.empty());
-            argument_queue.clear();
+            operand_stack.clear();
             call_stack.clear();
-            is_not_first_argument_queue_clearing_operator = false;
+            is_not_first_operand_stack_clearing_operator = false;
             pen = {};
             mode = 0;
             nhstem = 0;
@@ -254,49 +243,49 @@ X(OffSize, offSize)
         }
         
         void maybe_width() {
-            if (!is_not_first_argument_queue_clearing_operator) {
-                is_not_first_argument_queue_clearing_operator = true;
-                if (!argument_queue.empty()) {
-                    width = argument_queue.front();
-                    argument_queue.pop_front();
+            if (!is_not_first_operand_stack_clearing_operator) {
+                is_not_first_operand_stack_clearing_operator = true;
+                if (!operand_stack.empty()) {
+                    width = operand_stack.front();
+                    operand_stack.pop_front();
                 }
             }
         }
         
         void maybe_width_if_odd() {
-            if (argument_queue.size() & 1)
+            if (operand_stack.size() & 1)
                 maybe_width();
         }
         
         void maybe_width_if_even() {
-            if (!(argument_queue.size() & 1))
+            if (!(operand_stack.size() & 1))
                 maybe_width();
         }
         
-        float pop_arg() {
-            CHECK(!argument_queue.empty());
-            float a = argument_queue.front();
-            argument_queue.pop_front();
+        float pop_front_operand() {
+            CHECK(!operand_stack.empty());
+            float a = operand_stack.front();
+            operand_stack.pop_front();
             return a;
         }
 
-        float pop_arg_back() {
-            CHECK(!argument_queue.empty());
-            float a = argument_queue.back();
-            argument_queue.pop_back();
+        float pop_back_operand() {
+            CHECK(!operand_stack.empty());
+            float a = operand_stack.back();
+            operand_stack.pop_back();
             return a;
         }
         
         void shift_x() {
-            pen.x += pop_arg();
+            pen.x += pop_front_operand();
         }
         
         void shift_y() {
-            pen.y += pop_arg();
+            pen.y += pop_front_operand();
         }
         
         void if_odd_shift(bool to_x) {
-            if (argument_queue.size() & 1) {
+            if (operand_stack.size() & 1) {
                 if (to_x)
                     shift_x();
                 else
@@ -323,11 +312,11 @@ X(OffSize, offSize)
         }
         
         void do_stem(int& counter) {
-            while (argument_queue.size() >= 2) {
-                ++counter; argument_queue.pop_front();
-                ++counter; argument_queue.pop_front();
+            while (operand_stack.size() >= 2) {
+                ++counter; operand_stack.pop_front();
+                ++counter; operand_stack.pop_front();
             }
-            CHECK(argument_queue.empty());
+            CHECK(operand_stack.empty());
         }
                 
         void do_mask(wry::span<byte const>& str) {
@@ -338,13 +327,13 @@ X(OffSize, offSize)
             str.drop_front(number_of_bytes);
         }
         
-        void call_subroutine(INDEX const& subroutines, wry::Reader& r) {
-            int i = (int)pop_arg_back();
+        void call_subroutine(INDEX const& subroutines, span<byte const>& s) {
+            int i = (int)pop_back_operand();
             int bias = (subroutines.count < 1240 ? 107
                         : (subroutines.count < 33900 ? 1131
                            : 32768));
-            call_stack.push_back(r.s);
-            r.s = subroutines[i + bias];
+            call_stack.push_back(s);
+            s = subroutines[i + bias];
         }
         
         void do_alternating_curves(bool start_with_x) {
@@ -354,15 +343,15 @@ X(OffSize, offSize)
                 if (start_with_x) {
                     dx(); dxy();
                     shift_y();
-                    if (argument_queue.size() == 1) shift_x();
+                    if (operand_stack.size() == 1) shift_x();
                 } else {
                     dy(); dxy();
                     shift_x();
-                    if (argument_queue.size() == 1) shift_y();
+                    if (operand_stack.size() == 1) shift_y();
                 }
                 push();
                 start_with_x = !start_with_x;
-            } while (!argument_queue.empty());
+            } while (!operand_stack.empty());
         }
         
         void do_alternating_lineto(bool start_with_x) {
@@ -372,10 +361,10 @@ X(OffSize, offSize)
                 if (start_with_x) shift_x(); else shift_y();
                 push();
                 start_with_x = !start_with_x;
-            } while (!argument_queue.empty());
+            } while (!operand_stack.empty());
         }
         
-        bool execute(std::span<byte const> str);
+        bool execute(span<byte const> str);
         
         static BezierCurve<4> fromLine(simd_float2 a, simd_float2 b) {
             simd_float2 aab = simd_mix(a, b, 1.0f / 3.0f);
@@ -421,7 +410,7 @@ X(OffSize, offSize)
             return result;
         }
         
-    }; // struct Type2CharstringEngine
+    }; // struct Type2CharstringInterpreter
     
     enum  {
         HSTEM = 1,
@@ -451,38 +440,37 @@ X(OffSize, offSize)
         HVCURVETO,
     };
         
-    bool Type2CharstringEngine::execute(std::span<byte const> str) {
+    bool Type2CharstringInterpreter::execute(span<byte const> s) {
         reset();
-        wry::Reader r{{ str.data(), str.size()}};
-        while (!r.s.empty()) {
-            uint8_t b0 = r.read<uint8_t>();
-            // printf("<%d>", b0);
+        while (!s.empty()) {
+            uint8_t b0;
+            parse_ntoh(s, b0);
             if ((b0 <= 31) && (b0 != 28)) {
                 switch (b0) {
                     case HSTEM: {
                         maybe_width_if_odd();
                         do_stem(nhstem);
-                        CHECK(argument_queue.empty());
+                        CHECK(operand_stack.empty());
                         break;
                     }
                     case VSTEM: {
                         maybe_width_if_odd();
                         do_stem(nvstem);
-                        CHECK(argument_queue.empty());
+                        CHECK(operand_stack.empty());
                         break;
                     }
                     case VMOVETO: {
                         maybe_width_if_even();
                         mode = MOVE;
                         dy();
-                        CHECK(argument_queue.empty());
+                        CHECK(operand_stack.empty());
                         break;
                     }
                     case RLINETO: {
                         mode = LINE;
                         do  {
                             dxy();
-                        } while ((!argument_queue.empty()));
+                        } while ((!operand_stack.empty()));
                         break;
                     }
                     case HLINETO: {
@@ -497,21 +485,20 @@ X(OffSize, offSize)
                         mode = BEZIER;
                         do {
                             dxy(); dxy(); dxy();
-                        } while (!argument_queue.empty());
+                        } while (!operand_stack.empty());
                         break;
                     }
                     case CALLSUBR: {
-                        call_subroutine(local_subroutines, r);
+                        call_subroutine(*local_subroutines, s);
                         break;
                     }
                     case RETURN: {
-                        CHECK(r.s.empty());
-                        r.s = call_stack.back(); call_stack.pop_back();
+                        s = call_stack.back(); call_stack.pop_back();
                         break;
                     }
                     case ENDCHAR: {
                         maybe_width_if_odd();
-                        CHECK(argument_queue.empty());
+                        CHECK(operand_stack.empty());
                         for (auto s : call_stack)
                             CHECK(s.empty());
                         return true;
@@ -523,57 +510,57 @@ X(OffSize, offSize)
                     }
                     case HINTMASK: {
                         maybe_width_if_odd();
-                        if (!argument_queue.empty()) {
+                        if (!operand_stack.empty()) {
                             do_stem(nvstem);
                         }
-                        do_mask(r.s);
-                        CHECK(argument_queue.empty());
+                        do_mask(s);
+                        CHECK(operand_stack.empty());
                         break;
                     }
                     case CNTRMASK: {
                         maybe_width_if_odd();
-                        if (!argument_queue.empty()) {
+                        if (!operand_stack.empty()) {
                             do_stem(nvstem);
                         }
-                        do_mask(r.s);
-                        CHECK(argument_queue.empty());
+                        do_mask(s);
+                        CHECK(operand_stack.empty());
                         break;
                     }
                     case RMOVETO: {
                         maybe_width_if_odd();
                         mode = MOVE;
                         dxy();
-                        CHECK(argument_queue.empty());
+                        CHECK(operand_stack.empty());
                         break;
                     }
                     case HMOVETO: {
                         maybe_width_if_even();
                         mode = MOVE;
                         dx();
-                        CHECK(argument_queue.empty());
+                        CHECK(operand_stack.empty());
                         break;
                     }
                     case VSTEMHM: {
                         maybe_width_if_odd();
                         do_stem(nvstem);
-                        CHECK(argument_queue.empty());
+                        CHECK(operand_stack.empty());
                         break;
                     }
                     case RCURVELINE: {
                         mode = BEZIER;
                         do {
                             dxy(); dxy(); dxy();
-                        } while (argument_queue.size() >= 6);
+                        } while (operand_stack.size() >= 6);
                         mode = LINE;
                         dxy();
-                        CHECK(argument_queue.empty());
+                        CHECK(operand_stack.empty());
                         break;
                     }
                     case RLINECURVE: {
                         mode = LINE;
                         do {
                             dxy();
-                        } while (argument_queue.size() > 6);
+                        } while (operand_stack.size() > 6);
                         mode = BEZIER;
                         dxy(); dxy(); dxy();
                         break;
@@ -583,7 +570,7 @@ X(OffSize, offSize)
                         mode = BEZIER;
                         do {
                             dy(); dxy(); dy();
-                        } while (!argument_queue.empty());
+                        } while (!operand_stack.empty());
                         break;
                     }
                     case HHCURVETO: {
@@ -591,11 +578,11 @@ X(OffSize, offSize)
                         mode = BEZIER;
                         do {
                             dx(); dxy(); dx();
-                        } while (!argument_queue.empty());
+                        } while (!operand_stack.empty());
                         break;
                     }
                     case CALLGSUBR: {
-                        call_subroutine(global_subroutines, r);
+                        call_subroutine(*global_subroutines, s);
                         break;
                     }
                     /* case SHORTINT: */
@@ -609,32 +596,40 @@ X(OffSize, offSize)
                     }
                     default:
                         printf(": Unhandled b0 = %d\n", b0);
-                        CHECK(false);
+                        MALFORMED();
                         break;
                 }
             } else {
                 // Is an operand (a number)
                 double number{};
                 if (b0 == 28) {
-                    number = r.read<std::int16_t>();
+                    std::int16_t n;
+                    parse_ntoh(s, n);
+                    number = n;
                 } else if (b0 <= 246) {
                     number = b0 - 139;
                 } else if (b0 <= 250) {
-                    number = (b0 - 247) * 256 + 108 + r.read<std::uint8_t>();
+                    std::uint8_t n;
+                    parse_ntoh(s, n);
+                    number = (b0 - 247) * 256 + 108 +n;
                 } else if (b0 <= 254) {
-                    number = -(b0 - 251) * 256 - 108 - r.read<std::uint8_t>();
+                    std::uint8_t n;
+                    parse_ntoh(s, n);
+                    number = -(b0 - 251) * 256 - 108 - n;
                 } else { CHECK(b0 == 255);
-                    number = r.read<std::int32_t>() * 0x1p-16;
+                    std::int32_t n;
+                    parse_ntoh(s, n);
+                    number = n * 0x1p-16;
                 }
                 // printf("%g ",number);
-                argument_queue.push_back(number);
+                operand_stack.push_back(number);
             }
         }
-        if (!argument_queue.empty()) {
+        if (!operand_stack.empty()) {
             printf("Missing operator??\n");
         }
         printf("Missing endchar??\n");
-        CHECK(false);
+        MALFORMED();
         
     }
     
@@ -645,28 +640,28 @@ X(OffSize, offSize)
         
         printf("parsing .cff of %zd bytes\n", last - first);
 
-        span s{first, last};
-        span reset = s;
-        auto r = wry::Reader{s};
-
+        span whole{first, last};
+        span s{whole};
+        std::size_t size, offset;
         
-        Header header; parse_Header(s, header); header.debug();
-        INDEX name_INDEX; parse_INDEX(s, name_INDEX); name_INDEX.debug();
-        for (int i = 0; i != name_INDEX.count; ++i) {
-            auto t = name_INDEX[i];
+        auto header = parse_Header(s);
+        CHECK(header->major == 1);
+        
+        auto name_INDEX = parse_INDEX(s);
+        for (int i = 0; i != name_INDEX->count; ++i) {
+            auto t = (*name_INDEX)[i];
             printf("\"%.*s\"\n", (int)t.size(), (char const*)t._begin);
         }
-        INDEX top_DICT_INDEX; parse_INDEX(s, top_DICT_INDEX); top_DICT_INDEX.debug();
-        INDEX string_INDEX; parse_INDEX(s, string_INDEX); string_INDEX.debug();
-        for (int i = 0; i != string_INDEX.count; ++i) {
-            auto t = string_INDEX[i];
+        auto top_DICT_INDEX = parse_INDEX(s);
+        auto string_INDEX = parse_INDEX(s);
+        for (int i = 0; i != string_INDEX->count; ++i) {
+            auto t = (*string_INDEX)[i];
             printf("\"%.*s\"\n", (int)t.size(), (char const*)t._begin);
         }
-        INDEX global_subr_INDEX; parse_INDEX(s, global_subr_INDEX); global_subr_INDEX.debug();
+        INDEX const* global_subr_INDEX = parse_INDEX(s);
         
         DICT top_DICT; {
-            span t{top_DICT_INDEX[0]};
-            parse_DICT(t, top_DICT);
+            parse_DICT((*top_DICT_INDEX)[0], top_DICT);
         }
                 
         enum KEYS : uint8_t {
@@ -684,33 +679,29 @@ X(OffSize, offSize)
         values = top_DICT[CHARSTRINGS];
         CHECK(values.size() == 1);
         printf("CharStrings @ %g\n", values[0]);
-        s = reset;
-        r.s = s;
-        r.skip((std::size_t)values[0]);
-        INDEX charstrings_INDEX; parse_INDEX(r.s, charstrings_INDEX); charstrings_INDEX.debug();
+        offset = (std::size_t)values[0];
+        auto charstrings_INDEX = parse_INDEX(whole.after(offset));
         
         // Get PrivateDict size and offset(0)
         values = top_DICT[PRIVATE];
         CHECK(values.size() == 2);
         printf("PrivateDict(%g) @ %g\n", values[1], values[0]);
-        auto private_DICT_s = wry::span{
-            s.data() + (std::size_t)values[1],
-            (std::size_t)values[0]
-        };
+        size   = (std::size_t)values[0];
+        offset = (std::size_t)values[1];
+        auto private_DICT_s = whole.subspan(offset, size);
         DICT private_DICT; parse_DICT(private_DICT_s, private_DICT);
         
         values = private_DICT[SUBRS];
         printf("PrivateDict @ %g\n", values[0]);
-        r.s = { private_DICT_s._begin, s._end };
-        r.skip((std::size_t)values[0]);
-        INDEX local_subr_INDEX; parse_INDEX(r.s, local_subr_INDEX); local_subr_INDEX.debug();
+        offset = (std::size_t)values[0];
+        auto local_subr_INDEX = parse_INDEX(whole.after(private_DICT_s.begin() + offset));
         
-        Type2CharstringEngine e;
+        Type2CharstringInterpreter e;
         e.global_subroutines = global_subr_INDEX;
         e.local_subroutines = local_subr_INDEX;
         
-        for (int i = 0; i != charstrings_INDEX.count; ++i) {
-            e.execute(charstrings_INDEX[i]);
+        for (int i = 0; i != charstrings_INDEX->count; ++i) {
+            e.execute((*charstrings_INDEX)[i]);
             printf("e.points.size() = %zd\n", e.points.size());
             result.emplace(i, e.to_Bezier_list());
         }

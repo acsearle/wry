@@ -83,7 +83,7 @@ namespace wry {
         Bag<const GarbageCollected*> allocations;
         uint16_t debug_gray_for_allocation;
         uint16_t debug_black_for_allocation;
-        uint16_t debug_epoch;
+        epoch::Epoch debug_epoch;
 
     }; // struct Report
 
@@ -105,7 +105,7 @@ namespace wry {
             std::move(_thread_local_new_objects),
             _thread_local_gray_for_allocation,
             _thread_local_black_for_allocation,
-            epoch::allocator_local_state.known.raw
+            epoch::allocator_local_state.known
         };
         // SAFETY: We perform a RELAXED write.  It's not safe for the collector
         // to dereference this pointer until the epoch has advanced.
@@ -156,67 +156,59 @@ namespace wry {
 
         Stack<const GarbageCollected*> _graystack;
         
-        // TODO: Bespoke container that is constexpr and helps with the tricky comparisons
-        std::deque<std::pair<epoch::Epoch, Report*>>* _embargoed_until;
+        struct EmbargoedReport {
+            epoch::Epoch received;
+            Report* report;
+        };
+                        
+        std::deque<EmbargoedReport>* _embargoed_reports;
+        std::deque<std::pair<epoch::Epoch, uint16_t>>* _epoch_shade;
 
         ~Collector() {
-            delete _embargoed_until;
+            delete _embargoed_reports;
             _known_objects.leak();
         }
 
         void collector_takes_reports(){
-            // SAFETY: We perform a RELAXED load.  It's not safe to dereference this
-            // pointer until the epoch has advanced.
             Report* head =  _global_atomic_reports_head.exchange(nullptr,
                                                                  Ordering::RELAXED);
             assert(epoch::allocator_local_state.is_pinned);
             epoch::Epoch E = epoch::allocator_local_state.known;
+            _embargoed_reports->emplace_back(E, head);
 
-            // epoch is atomic, so all threads see consistent modification order
-            // epoch value is nondecreasing so Y > X implies Y after X
-
-            // mutator non-atomic writes to Report
-            //     happen-before (same thread)
-            // mutator stores-release to epoch (value X)
-            //     happens-before if Y > X
-            // collector loads-acquire the epoch (value Y)
-            
-            
-            // mutator loads-acquire epoch A
-            // mutator stores-relaxed pointer value Z
-            // mutator stores-releases epoch B \in {A, A+1}
-            
-            // collector loads-acquire epoch C
-            // collector loads-relaxed pointer value Z
-            // collector stores-releases epoch D \in {C, C+1}
-
-            // collector is in epoch C when it reads
-            // the mutator must therefore have been in epoch A <= C + 1 when it wrote
-            // Thus X = B <= C + 2
-            // Thus Y > C + 2
-            
-            // So if the collector gets a report pointer in epoch C, it must
-            // wait until epoch Y > C + 2 to safely follow that pointer
-            
-            _embargoed_until->emplace_back(E + 3, head);
-
+        }
+        
+        void _log_shade(epoch::Epoch e, uint16_t s) {
+            for (auto& a : *_epoch_shade) {
+                if (a.first == e) {
+                    a.second |= s;
+                    return;
+                }                
+            }
+            _epoch_shade->emplace_back(e, s);
         }
 
         void collector_reads_reports() {
+            assert(std::is_sorted(_embargoed_reports->begin(),
+                                  _embargoed_reports->end(),
+                                  [ ](const auto& a, const auto& b) {
+                return (int)(std::int16_t)(std::uint16_t)(b.received.raw - a.received.raw) > 0;
+            }));
             
             assert(epoch::allocator_local_state.is_pinned);
             epoch::Epoch E = epoch::allocator_local_state.known;
             
             uint16_t did_shade = 0;
             for (;;) {
-                if (_embargoed_until->empty())
+                if (_embargoed_reports->empty())
                     break;
-                epoch::Epoch F = _embargoed_until->front().first;
-                if ((std::int16_t)(std::uint16_t)(E.raw - F.raw) < 0)
+                epoch::Epoch F = _embargoed_reports->front().received;
+                if ((std::int16_t)(std::uint16_t)(E.raw - F.raw) < 3)
                     break;
-                Report* head = _embargoed_until->front().second;
-                _embargoed_until->pop_front();
+                Report* head = _embargoed_reports->front().report;
+                _embargoed_reports->pop_front();
                 while (head) {
+                    _log_shade(head->debug_epoch, head->gray_did_shade);
                     did_shade |= head->gray_did_shade;
                     _known_objects.splice(std::move(head->allocations));
                     delete std::exchange(head, head->_next);
@@ -224,11 +216,18 @@ namespace wry {
             }
             // dump(did_shade);
             _shade_history.front() |= did_shade;
+            
+            printf("--");
+            for (const auto& a : *_epoch_shade) {
+                printf("(%04x, %04x)\n", a.first.raw, a.second);
+            }
+            
         }
 
         void loop_until_canceled() {
             
-            _embargoed_until = new std::deque<std::pair<epoch::Epoch, Report*>>;
+            _embargoed_reports = new std::deque<EmbargoedReport>;
+            _epoch_shade = new std::deque<std::pair<epoch::Epoch, uint16_t>>;
 
             epoch::pin_this_thread();
             epoch::Epoch epoch_at_last_change = epoch::allocator_local_state.known;
