@@ -61,6 +61,8 @@ namespace wry {
         // Thus epoch E in thread A happens before epoch F in thread B if
         // F > E + 1
         
+        // TODO: Epoch models the cyclic group of order 2**16
+        
         struct Epoch {
             uint16_t raw;
             bool operator==(Epoch const&) const = default;
@@ -85,7 +87,13 @@ namespace wry {
         [[nodiscard]] constexpr int16_t operator-(Epoch a, Epoch b) {
             return (int16_t)(a.raw - b.raw);
         }
-        
+
+        [[nodiscard]] constexpr Epoch operator-(Epoch a, int b) {
+            return Epoch{
+                .raw = (uint16_t)(a.raw - b)
+            };
+        }
+
         struct Count {
             uint16_t raw;
             explicit operator bool() const { return (bool)raw; }

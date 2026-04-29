@@ -68,7 +68,7 @@ namespace wry {
         {}
         
         virtual ~World() {
-            printf("~World at %p\n", this);
+            // printf("~World at %p\n", this);
         }
         
         virtual void _garbage_collected_scan() const override;

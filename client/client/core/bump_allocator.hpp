@@ -254,7 +254,7 @@ namespace wry {
             
         }; // bump::State
         
-        inline constinit thread_local State this_thread_state = {};
+        extern thread_local State this_thread_state;
         
         inline void* _Nonnull allocate(std::size_t count, std::size_t alignment = alignof(std::max_align_t)) {
             return this_thread_state.allocate(count, alignment);

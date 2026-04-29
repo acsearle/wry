@@ -30,7 +30,7 @@ namespace wry {
         void push_front(T item) {
             bool notify = false;
             WITH(std::unique_lock lock{_mutex}) {
-                _deque.push_front(item);
+                _deque.push_front(std::move(item));
                 if (_deque.size() > _record_size) {
                     _record_size = _deque.size();
                     printf("New record work queue size: %zu\n", _deque.size());
@@ -47,7 +47,7 @@ namespace wry {
         void push_back(T item) {
             bool notify = false;
             WITH(std::unique_lock lock{_mutex}) {
-                _deque.push_back(item);
+                _deque.push_back(std::move(item));
                 if (_deque.size() > _record_size) {
                     _record_size = _deque.size();
                     printf("New record work queue size: %zu\n", _deque.size());
@@ -83,7 +83,7 @@ namespace wry {
             WITH(std::unique_lock lock{_mutex}) {
                 bool result = !_deque.empty();
                 if (result) {
-                    item = _deque.front();
+                    item = std::move(_deque.front());
                     _deque.pop_front();
                 }
                 return result;
@@ -94,7 +94,7 @@ namespace wry {
             WITH(std::unique_lock lock{_mutex}) {
                 bool result = !_deque.empty();
                 if (result) {
-                    item = _deque.back();
+                    item = std::move(_deque.back());
                     _deque.pop_back();
                 }
                 return result;

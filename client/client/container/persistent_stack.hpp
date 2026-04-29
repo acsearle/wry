@@ -44,6 +44,18 @@ namespace wry {
         };
                 
         Node const* _Nullable _head = nullptr;
+        
+        PersistentStack() = default;
+        PersistentStack(PersistentStack const& other) = default;
+        PersistentStack& operator=(PersistentStack const& other) {
+            mutator_overwrote(std::exchange(_head, other._head));
+            return *this;
+        }
+        
+//        ~PersistentStack() {
+//            printf(__PRETTY_FUNCTION__);
+//            //mutator_overwrote(_head);
+//        }
 
         [[nodiscard]] auto
         tail() const -> PersistentStack {
@@ -51,16 +63,16 @@ namespace wry {
             return PersistentStack{_head->_next};
         }
 
-        [[nodiscard]] auto
-        pop() const -> std::pair<T, PersistentStack> {
-            assert(_head);
-            return { _head->_payload, PersistentStack{_head->_next} };
-        }
-        
-        [[nodiscard]] auto
-        pop_else(T alternative) const -> std::pair<T, PersistentStack> {
-            return _head ? pop() : std::pair<T, PersistentStack>{ alternative, PersistentStack{} };
-        }
+//        [[nodiscard]] auto
+//        pop() const -> std::pair<T, PersistentStack> {
+//            assert(_head);
+//            return { _head->_payload, PersistentStack{_head->_next} };
+//        }
+//        
+//        [[nodiscard]] auto
+//        pop_else(T alternative) const -> std::pair<T, PersistentStack> {
+//            return _head ? pop() : std::pair<T, PersistentStack>{ alternative, PersistentStack{} };
+//        }
         
         auto
         pop() -> T {
@@ -74,10 +86,10 @@ namespace wry {
         }
 
         
-        [[nodiscard]] auto
-        push(auto&& desired) const -> PersistentStack {
-            return PersistentStack{new Node(_head, FWD(desired))};
-        }
+//        [[nodiscard]] auto
+//        push(auto&& desired) const -> PersistentStack {
+//            return PersistentStack{new Node(_head, FWD(desired))};
+//        }
         
         auto
         push(auto&& desired) -> void {

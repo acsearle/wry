@@ -61,8 +61,8 @@ int main(int argc, const char** argv) {
     
     
     // auto unit_tests = wry::run_tests().start();
-    wry::Coroutine::Nursery nursery;
-    nursery.soon(wry::run_tests());
+    // wry::Coroutine::Nursery nursery;
+    // nursery.soon(wry::run_tests());
     
     
     wry::mutator_pin();
@@ -97,7 +97,7 @@ int main(int argc, const char** argv) {
     printf("main is joining unit tests\n");
     // TODO: move inside thread
     wry::mutator_unpin();
-    sync_wait(nursery.join());
+    //sync_wait(nursery.join());
     wry::mutator_pin();
 
     printf("main is joining worker threads\n");
