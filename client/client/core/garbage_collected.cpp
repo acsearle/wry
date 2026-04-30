@@ -32,6 +32,68 @@ namespace wry::bump {
 }
 
 namespace wry {
+    
+    
+    struct bit16_t {
+        
+        uint16_t raw;
+                
+        static constexpr bit16_t unit(int k) {
+            return bit16_t{(uint16_t)(1 << (k & 0xF))};
+        }
+        
+        constexpr bool operator[](int k) const {
+            return raw & (1 << (k & 0xF));
+        }
+        
+        struct reference {
+            
+            uint16_t& raw;
+            uint16_t mask;
+            
+            explicit operator bool() const {
+                return raw & mask;
+            }
+            
+            reference& operator=(bool b) {
+                if (b) raw |= mask; else raw &= ~mask;
+                return *this;
+            }
+            
+            reference& operator&=(bool b) {
+                if (!b) raw &= ~mask;
+                return *this;
+            }
+            reference& operator^=(bool b) {
+                if (b) raw ^= mask;
+                return *this;
+            }
+            reference& operator|=(bool b) {
+                if (b) raw |= mask;
+                return *this;
+            }
+        };
+        
+        reference operator[](int k) { return {raw, (uint16_t)(1 << (k & 0xF))}; }
+        
+        constexpr bit16_t operator~() const { return { (uint16_t)~raw }; }
+        constexpr bool operator==(bit16_t const&) const = default;
+        auto operator<=>(bit16_t const&) const = delete;
+        
+        constexpr bit16_t operator&(bit16_t const& other) const { return { (uint16_t)(raw & other.raw) }; }
+        constexpr bit16_t operator^(bit16_t const& other) const { return { (uint16_t)(raw ^ other.raw) }; }
+        constexpr bit16_t operator|(bit16_t const& other) const { return { (uint16_t)(raw | other.raw) }; }
+        
+        constexpr bit16_t& operator&=(bit16_t const& other) { raw &= other.raw; return *this; }
+        constexpr bit16_t& operator^=(bit16_t const& other) { raw ^= other.raw; return *this; }
+        constexpr bit16_t& operator|=(bit16_t const& other) { raw |= other.raw; return *this; }
+        
+    };
+    
+    
+    
+    
+    
 
 #pragma mark - Forward declarations
 
@@ -53,6 +115,8 @@ namespace wry {
     , _debug_allocation_epoch{epoch::allocator_local_state.known.raw}
     {
         // Allocation may produce gray objects for some states
+        // TODO: We could conservatively make every gray allocator set this bit
+        // and avoid having this per-allocation
         _thread_local_gray_did_shade |= _thread_local_gray_for_allocation & ~_thread_local_black_for_allocation;
         // SAFETY: pointer to a partially constructed object escapes.  These
         // pointers are only published to the collector thread after the
@@ -180,10 +244,10 @@ namespace wry {
         Report* report;
     };
     
-    struct ShadeRecord {
-        epoch::Epoch when;
-        uint16_t gray;
-    };
+//    struct ShadeRecord {
+//        epoch::Epoch when;
+//        uint16_t gray;
+//    };
     
     struct ScanRecord {
         epoch::Epoch before;
@@ -217,8 +281,10 @@ namespace wry {
         
         Epoch _finalized{0xFFF0};
         
-        std::deque<ShadeRecord> _shade_history;
+        // std::deque<ShadeRecord> _shade_history;
         std::deque<ScanRecord> _scan_history;
+        
+        std::array<Epoch, 16> _shade_most_recent;
         
                                 
         ~Collector() {
@@ -248,20 +314,35 @@ namespace wry {
                     Report* head = iterator->report;
                     while (head) {
                         Epoch H = Epoch{head->debug_epoch};
+                        
                         // Report was received in epoch F.
-                        // printf("Report skew, %d\n", H - F);
+                        // Report is about epoch H
+
+                        // We've claimed we have all reports for epochs <= _finalized
+                        // If H is not after _finalized, there's a bug
                         assert(_finalized < H);
+                        
+                        // We've claimed that in epoch F, we should see reports
+                        // from F+1 at the latest.
+                        // If H is after F+1, it's a bug
                         assert(H <= F + 1);
                         
                         _known_objects.splice(std::move(head->allocations));
-                        _shade_history.emplace_back(H, head->gray_did_shade);
+                        // _shade_history.emplace_back(H, head->gray_did_shade);
+                        for (int k = 0; k != 16; ++k) {
+                            uint16_t bit = 1 << k;
+                            if (head->gray_did_shade & bit) {
+                                Epoch P = _shade_most_recent[k];
+                                _shade_most_recent[k] = std::max(P, H);
+                            }
+                        }
                         delete std::exchange(head, head->_next);
                     }
                     assert(G > _finalized);
                     _finalized = G;
                     iterator = _embargoed_reports.erase(iterator);
                 } else {
-                    ++iterator;
+                    break;
                 }
             }
         }
@@ -308,11 +389,14 @@ namespace wry {
                 collector_scans();
                 
                 //std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
                 
                 epoch::pin_this_thread();
+                epoch::allocator_global_service.wait(A);
                 assert(epoch::allocator_local_state.is_pinned);
                 Epoch B{epoch::allocator_local_state.known};
                 _scan_history.emplace_back(A, B, _black_for_allocation, _finalized);
+                
 
                 // epoch::repin_this_thread();
                 
@@ -391,16 +475,19 @@ namespace wry {
                                 continue;
                             }
                             // check if there is any gray in this epoch
-                            uint16_t gray{};
-                            for (auto& g : _shade_history) {
-                                if ((g.when >= s.before) && (g.when <= s.after)) {
-                                    gray |= g.gray;
-                                }
-                            }
-                            if (gray & k) {
-                                // no good; shading happened during the scan
+                            // uint16_t gray{};
+                            // for (auto& g : _shade_history) {
+                            //    if ((g.when >= s.before) && (g.when <= s.after)) {
+                            //        gray |= g.gray;
+                            //    }
+                            //}
+                            
+                            //if (gray & bit) {
+                            //    // no good; shading happened during the scan
+                            //    continue;
+                            //}
+                            if (_shade_most_recent[k] >= s.before)
                                 continue;
-                            }
                             happy = true;
                             break;
                         }
@@ -412,9 +499,9 @@ namespace wry {
                         for (auto& s : _scan_history) {
                             s.black &= ~bit;
                         }
-                        for (auto& g : _shade_history) {
-                            g.gray &= ~bit;
-                        }
+                        //for (auto& g : _shade_history) {
+                        //    g.gray &= ~bit;
+                        //}
                         
                         
 
@@ -531,9 +618,9 @@ namespace wry {
                 std::erase_if(_scan_history, [](auto const& x) {
                     return !x.black;
                 });
-                std::erase_if(_shade_history, [](auto const& x) {
-                    return !x.gray;
-                });
+                //std::erase_if(_shade_history, [](auto const& x) {
+                //    return !x.gray;
+                //});
             }
             
             

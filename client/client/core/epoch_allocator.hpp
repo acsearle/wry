@@ -35,99 +35,54 @@ namespace wry {
         // We don't anticipate enough contention on the global state to make
         // that worthwhile.  If it proves to be an issue, a half-measure would be
         // to have a fixed sized list that threads spread over.
+              
         
-        // The ordering induced by the Epoch is as follows:
         
-        // The epoch is nondecreasing and atomic.  Specifically, all threads
-        // agree on a single, total order of writes to the epoch.
+        // Cyclic group of order 2^N
+        //
+        // Promoting arithmetic makes uint16_t awkward to use as a cyclic group
+        // This type performs some coercion to greatly improve the ergonomics
         
-        // Thread A pins epoch E.
-        // E was the current epoch at that moment.
-        
-        // Thread A writes.
-        
-        // Thread A unpins, or repins, epoch E'
-        // This is a release barrier.
-        // E' was the current epoch at that moment.
-        // E' is either E or E+1.
-        
-        // Thread B pins epoch F.
-        // F was the current epoch at that moment.
-        // This is an acquire barrier.
-        
-        // By modificaton order consistency + nondecreasing:
-        // If F > E + 1 >= E', then B wrote F after A wrote E'
-        
-        // Thus epoch E in thread A happens before epoch F in thread B if
-        // F > E + 1
-        
-        // TODO: Epoch models the cyclic group of order 2**16
-        
-        struct Epoch {
+        struct cyc16_t {
+            
             uint16_t raw;
-            bool operator==(Epoch const&) const = default;
-            std::strong_ordering operator<=>(Epoch const& b) const {
-                return (int16_t)(raw - b.raw) <=> 0;
+            
+            cyc16_t operator++(int) { return {raw++}; }
+            cyc16_t operator--(int) { return {raw--}; }
+            cyc16_t& operator++() { ++raw; return *this; }
+            cyc16_t& operator--() { --raw; return *this; }
+            cyc16_t operator+(int delta) const { return {(uint16_t)(raw + delta)}; }
+            cyc16_t operator-(int delta) const { return {(uint16_t)(raw - delta)}; }
+            int16_t operator-(cyc16_t other) const { return (int16_t)(raw - other.raw); }
+            
+            std::strong_ordering operator<=>(cyc16_t const& other) const {
+                int difference = *this - other;
+                // catch comparisons spanning more than half a cycle
+                assert(std::abs(difference) < 0x4000);
+                return (*this - other) <=> 0;
             }
+            bool operator==(cyc16_t const& other) const = default;
+            
+            cyc16_t& operator+=(int delta) { raw += delta; return *this; }
+            cyc16_t& operator-=(int delta) { raw -= delta; return *this; }
+            
         };
         
-        [[nodiscard]] constexpr Epoch successor(Epoch epoch) {
-            // Wrapping is permitted
-            return Epoch{
-                .raw = (uint16_t)(epoch.raw + 1),
-            };
-        }
         
-        [[nodiscard]] constexpr Epoch operator+(Epoch epoch, int n) {
-            return Epoch{
-                .raw = (uint16_t)(epoch.raw + n)
-            };
-        }
-        
-        [[nodiscard]] constexpr int16_t operator-(Epoch a, Epoch b) {
-            return (int16_t)(a.raw - b.raw);
-        }
-
-        [[nodiscard]] constexpr Epoch operator-(Epoch a, int b) {
-            return Epoch{
-                .raw = (uint16_t)(a.raw - b)
-            };
-        }
-
-        struct Count {
-            uint16_t raw;
-            explicit operator bool() const { return (bool)raw; }
+        [[nodiscard]] constexpr uint16_t successor(uint16_t n) {
+            if (n == UINT16_MAX) [[unlikely]] abort();
+            return (uint16_t)(n + 1);
         };
         
-        [[nodiscard]] constexpr Count successor(Count count) {
-            // Wrapping is not permitted
-            if (count.raw == UINT16_MAX) [[unlikely]] {
-                abort();
-            }
-            return Count{
-                .raw = (uint16_t)(count.raw + 1),
-            };
-        };
-        
-        [[nodiscard]] constexpr Count predecessor(Count count) {
-            // Wrapping is not permitted
-            if (count.raw == 0) [[unlikely]] {
-                abort();
-            }
-            return Count{
-                .raw = (uint16_t)(count.raw - 1),
-            };
+        [[nodiscard]] constexpr uint16_t predecessor(uint16_t n) {
+            if (n == 0) [[unlikely]] abort();
+            return (uint16_t)(n - 1);
         }
         
-        [[nodiscard]] constexpr Count successor_of_nonzero(Count count) {
-            if ((count.raw == 0) || (count.raw == UINT16_MAX)) [[unlikely]] {
-                abort();
-            }
-            return Count{
-                .raw = (uint16_t)(count.raw + 1),
-            };
-        }
         
+        using Epoch = cyc16_t;
+        using Count = uint16_t;
+                
         // Service will be instantiated as a global singleton and its state
         // is thus atomic
         
@@ -141,14 +96,14 @@ namespace wry {
                 Epoch current;      // The current epoch
                 Count pins_current; // Pins in the current epoch
                 Count pins_prior;   // Pins in the prior epoch
-                uint16_t waiting;   // Boolean somebody is waiting
-                
+                uint16_t waiting;   // A thread is waiting
+                                
                 // Validate that a given pinned epoch is consistent with this state;
                 // that is, it is either the current or prior epoch, and the
                 // corresponding pin count is not zero.
                 bool validate(Epoch occupied) const {
                     return (((occupied == current) && pins_current)
-                            || ((successor(occupied) == current) && pins_prior));
+                            || ((occupied+1 == current) && pins_prior));
                 }
                 
                 // The epoch advances if and only if the previous epoch has zero
@@ -159,7 +114,7 @@ namespace wry {
                 
                 [[nodiscard]] State try_advance() const {
                     return State{
-                        .current = pins_prior ? current : successor(current),
+                        .current = pins_prior ? current : current+1,
                         .pins_current = pins_prior ? pins_current : Count{0},
                         .pins_prior = pins_prior ? pins_prior : pins_current,
                         .waiting = pins_prior ? waiting : uint16_t{0},
@@ -183,24 +138,25 @@ namespace wry {
                 // Aborts if the specified epoch has zero pin count, or is not the
                 // current or prior epoch.
                 
-                State unpin(Epoch occupied) const {
-                    if (occupied != current && successor(occupied) != current) [[unlikely]] {
+                [[nodiscard]] State unpin(Epoch occupied) const {
+                    if ((occupied != current) && (occupied+1 != current)) [[unlikely]] {
                         abort();
                     }
                     return State {
                         .current = current,
                         .pins_current = (occupied == current) ? predecessor(pins_current) : pins_current,
-                        .pins_prior = (successor(occupied) == current) ? predecessor(pins_prior) : pins_prior,
+                        .pins_prior = (occupied+1 == current) ? predecessor(pins_prior) : pins_prior,
                         .waiting = waiting
                     };
                 }
                 
-                State wait() const {
+                // Set the "waiting"
+                [[nodiscard]] State wait(Epoch expected) const {
                     return State {
                         .current = current,
                         .pins_current = pins_current,
                         .pins_prior = pins_prior,
-                        .waiting = uint16_t{1},
+                        .waiting = (current == expected),
                     };
                 }
 
@@ -260,11 +216,15 @@ namespace wry {
                 return desired.current;
             }
             
-            Epoch load_acquire() {
-                State expected = state.load(Ordering::ACQUIRE);
-                return expected.current;
-            }
+            // Wait does not return until "expected" is not the current epoch.
+            // It does not establish a happens-before relationship; that is
+            // pin's job.  A pinned thread can safely wait on the epoch it
+            // pinned, but it will deadlock on the next epoch.  (Debug mode will
+            // detect the deadlock.)
+            void wait(Epoch expected);
             
+            // TODO: consistency with std::atomic::wait and wry::Atomic::wait
+            // TODO: current status of libc++'s wait implementation (used to be no damn good)
             
             
         }; // struct Service
@@ -330,6 +290,34 @@ namespace wry {
         };
         
         constinit inline thread_local LocalState allocator_local_state = {};
+        
+        inline void Service::wait(Epoch expected) {
+            
+            // Detect if this_thread is pinning expected-1,
+            // and thus the epoch can never advance
+            assert(!allocator_local_state.is_pinned
+                   || (expected != allocator_local_state.known + 1));
+            
+            // The atomic operations can fail due to the pin counts changing,
+            // or entirely spuriously, but all eventualities can be handled by
+            // a simple retry loop.
+            
+            State observed = state.load(Ordering::RELAXED);
+            while (observed.current == expected) {
+                if (!observed.waiting) {
+                    State desired = observed.wait(expected);
+                    if (state.compare_exchange_weak(observed,
+                                                    desired,
+                                                    Ordering::RELAXED,
+                                                    Ordering::RELAXED)) {
+                        observed = desired;
+                    }
+                } else {
+                    state.wait(observed, Ordering::RELAXED);
+                    observed = state.load(Ordering::RELAXED);
+                }
+            }
+        }
         
         // Keep the epoch pinned while a thread is awake
         
