@@ -59,7 +59,7 @@ namespace wry {
                 int difference = *this - other;
                 // catch comparisons spanning more than half a cycle
                 assert(std::abs(difference) < 0x4000);
-                return (*this - other) <=> 0;
+                return difference <=> 0;
             }
             bool operator==(cyc16_t const& other) const = default;
             

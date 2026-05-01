@@ -25,15 +25,14 @@
 
 #include "test.hpp"
 
-#define dump(X) printf("C0.%d: %04x = " #X "\n", __LINE__, (X));
-
 namespace wry::bump {
     thread_local State this_thread_state{};
 }
 
 namespace wry {
     
-    
+    using epoch::Epoch;
+
     struct bit16_t {
         
         uint16_t raw;
@@ -51,34 +50,34 @@ namespace wry {
             uint16_t& raw;
             uint16_t mask;
             
-            explicit operator bool() const {
+            constexpr explicit operator bool() const {
                 return raw & mask;
             }
             
-            reference& operator=(bool b) {
+            constexpr reference& operator=(bool b) {
                 if (b) raw |= mask; else raw &= ~mask;
                 return *this;
             }
             
-            reference& operator&=(bool b) {
+            constexpr reference& operator&=(bool b) {
                 if (!b) raw &= ~mask;
                 return *this;
             }
-            reference& operator^=(bool b) {
+            constexpr reference& operator^=(bool b) {
                 if (b) raw ^= mask;
                 return *this;
             }
-            reference& operator|=(bool b) {
+            constexpr reference& operator|=(bool b) {
                 if (b) raw |= mask;
                 return *this;
             }
         };
         
-        reference operator[](int k) { return {raw, (uint16_t)(1 << (k & 0xF))}; }
+        constexpr reference operator[](int k) { return {raw, (uint16_t)(1 << (k & 0xF))}; }
         
         constexpr bit16_t operator~() const { return { (uint16_t)~raw }; }
         constexpr bool operator==(bit16_t const&) const = default;
-        auto operator<=>(bit16_t const&) const = delete;
+        constexpr auto operator<=>(bit16_t const&) const = delete;
         
         constexpr bit16_t operator&(bit16_t const& other) const { return { (uint16_t)(raw & other.raw) }; }
         constexpr bit16_t operator^(bit16_t const& other) const { return { (uint16_t)(raw ^ other.raw) }; }
@@ -114,10 +113,6 @@ namespace wry {
     , _debug_allocation_black{_thread_local_black_for_allocation}
     , _debug_allocation_epoch{epoch::allocator_local_state.known.raw}
     {
-        // Allocation may produce gray objects for some states
-        // TODO: We could conservatively make every gray allocator set this bit
-        // and avoid having this per-allocation
-        _thread_local_gray_did_shade |= _thread_local_gray_for_allocation & ~_thread_local_black_for_allocation;
         // SAFETY: pointer to a partially constructed object escapes.  These
         // pointers are only published to the collector thread after the
         // constructor has completed.
@@ -147,12 +142,10 @@ namespace wry {
 
     struct Report {
 
-        Report* _next = nullptr;
+        Report* next = nullptr;
         uint16_t gray_did_shade = 0;
         Bag<const GarbageCollected*> allocations;
-        uint16_t debug_gray_for_allocation;
-        uint16_t debug_black_for_allocation;
-        epoch::Epoch debug_epoch;
+        Epoch epoch;
 
     }; // struct Report
 
@@ -169,46 +162,66 @@ namespace wry {
 
     void _mutator_publishes_report() {
         Report* desired = new Report{
-            nullptr,
-            std::exchange(_thread_local_gray_did_shade, 0),
-            std::move(_thread_local_new_objects),
-            _thread_local_gray_for_allocation,
-            _thread_local_black_for_allocation,
-            epoch::allocator_local_state.known
+            .next = nullptr,
+            .gray_did_shade = std::exchange(_thread_local_gray_did_shade, 0),
+            .allocations = std::move(_thread_local_new_objects),
+            .epoch = epoch::allocator_local_state.known
         };
         // SAFETY: We perform a RELAXED write.  It's not safe for the collector
         // to dereference this pointer until the epoch has advanced.
-        desired->_next = _global_atomic_reports_head.load(Ordering::RELAXED);
-        while (!_global_atomic_reports_head.compare_exchange_weak(desired->_next,
+        desired->next = _global_atomic_reports_head.load(Ordering::RELAXED);
+        while (!_global_atomic_reports_head.compare_exchange_weak(desired->next,
                                                                   desired,
                                                                   Ordering::RELAXED,
                                                                   Ordering::RELAXED))
             ;
+        
+    }
+    
+    void _mutator_poison_color() {
+        // Put the color in to a (probably) invalid state that will trip the
+        // garbage collector
+        _thread_local_gray_for_allocation = 0xFFFF;
+        _thread_local_black_for_allocation = 0xFFFF;
+        _thread_local_gray_did_shade = 0xFFFF;
     }
 
-    void mutator_pin() {
-        epoch::pin_this_thread();
+    
+    void _mutator_load_color() {
+        // Load the global colors
         Color color = _global_atomic_color_for_allocation.load(Ordering::RELAXED);
         _thread_local_gray_for_allocation = color.gray;
         _thread_local_black_for_allocation = color.black;
+        // If the mutator is running k-gray, any allocations will produce gray
+        // objects.  We initialize it as such rather than pay a per-allocation
+        // cost.
+        _thread_local_gray_did_shade = color.gray & ~color.black;
+    }
+    
+    void mutator_pin() {
+        // unpinned color state is poisoned
+        epoch::pin_this_thread();
+        // must load the color state *after* pinning
+        _mutator_load_color();
     }
 
     void mutator_repin() {
         _mutator_publishes_report();
+        // must publish report *before* unpinning
         epoch::repin_this_thread();
-        Color color = _global_atomic_color_for_allocation.load(Ordering::RELAXED);
-        _thread_local_gray_for_allocation = color.gray;
-        _thread_local_black_for_allocation = color.black;
+        // must load the color state *after* pinning
+        _mutator_load_color();
     }
 
     void mutator_unpin() {
         _mutator_publishes_report();
+        // must publish report before unpinning
         epoch::unpin_this_thread();
+        // only poison the color state after it has been reported
+        _mutator_poison_color();
     }
     
-    
-    using epoch::Epoch;
-    
+        
     enum KPhase {
         
         UNUSED,          // Mutators are white.  Collector ignores.
@@ -243,12 +256,7 @@ namespace wry {
         epoch::Epoch received;
         Report* report;
     };
-    
-//    struct ShadeRecord {
-//        epoch::Epoch when;
-//        uint16_t gray;
-//    };
-    
+        
     struct ScanRecord {
         epoch::Epoch before;
         epoch::Epoch after;
@@ -259,8 +267,6 @@ namespace wry {
         
     struct Collector {
         
-        // InlineRingBuffer<uint16_t, 8> _history_of_mask_for_tracing;
-
         Bag<const GarbageCollected*> _known_objects;
 
         uint16_t _gray_for_allocation = 0;
@@ -275,17 +281,20 @@ namespace wry {
 
         Stack<const GarbageCollected*> _graystack;
         
-        
-        
+        // Logging structures
+        //
+        // They are all "locally" monotonic in Epoch.
+        //
+        // Epoch is cyclic, but only on much timescales much longer than the
+        // timescales of the collector.  When we compare Epochs, we account for
+        // the representation wrapping, and we trap if the Epochs are too far
+        // apart.
+
         std::deque<EmbargoedReport> _embargoed_reports;
-        
-        Epoch _finalized{0xFFF0};
-        
-        // std::deque<ShadeRecord> _shade_history;
         std::deque<ScanRecord> _scan_history;
-        
         std::array<Epoch, 16> _shade_most_recent;
         
+        Epoch _finalized{0xFFFE};
                                 
         ~Collector() {
             _known_objects.leak();
@@ -310,25 +319,22 @@ namespace wry {
                 // The last reports we can be sure we have got are from F-2
                 Epoch G = F - 2;
                 if (E >= F + 3) {
-                    printf("final %04x < %04x (now) skew %04x\n", G.raw, E.raw, E - G);
                     Report* head = iterator->report;
                     while (head) {
-                        Epoch H = Epoch{head->debug_epoch};
-                        
-                        // Report was received in epoch F.
-                        // Report is about epoch H
+                        Epoch H = Epoch{head->epoch};
 
-                        // We've claimed we have all reports for epochs <= _finalized
-                        // If H is not after _finalized, there's a bug
-                        assert(_finalized < H);
-                        
-                        // We've claimed that in epoch F, we should see reports
-                        // from F+1 at the latest.
-                        // If H is after F+1, it's a bug
+                        // H is the mutator's pinned epoch at publication. F is
+                        // the collector's pinned epoch at receipt.  When the
+                        // report was received, the collector was pinning either
+                        // the current epoch, or the previous epoch, so the
+                        // latest the report could have originated is F+1.
                         assert(H <= F + 1);
                         
+                        // We claim to have finalized the reports for the epoch
+                        // `_finalized` and earlier.  Thus H should come later
+                        assert(_finalized < H);
+                        
                         _known_objects.splice(std::move(head->allocations));
-                        // _shade_history.emplace_back(H, head->gray_did_shade);
                         for (int k = 0; k != 16; ++k) {
                             uint16_t bit = 1 << k;
                             if (head->gray_did_shade & bit) {
@@ -336,7 +342,7 @@ namespace wry {
                                 _shade_most_recent[k] = std::max(P, H);
                             }
                         }
-                        delete std::exchange(head, head->_next);
+                        delete std::exchange(head, head->next);
                     }
                     assert(G > _finalized);
                     _finalized = G;
@@ -361,9 +367,7 @@ namespace wry {
                 epoch::Epoch current_epoch = epoch::allocator_local_state.known;
 
                 if (current_epoch != epoch_at_last_change) {
-                    
-                    printf("EPOCH ADVANCEMENT: %04x\n", current_epoch.raw - epoch_at_last_change.raw);
-                                        
+                                                            
                     collector_takes_reports();
                     collector_reads_reports();
                     
@@ -386,21 +390,18 @@ namespace wry {
                 Epoch A{epoch::allocator_local_state.known};
                 epoch::unpin_this_thread();
                 
+                // TODO: Resumable partial scans
+                // Once we have enough work for a pass to last O(10ms) we
+                // should dip out periodically to open more reports and get more
+                // objects
                 collector_scans();
-                
-                //std::this_thread::sleep_for(std::chrono::milliseconds(20));
-
-                
+                                
                 epoch::pin_this_thread();
                 epoch::allocator_global_service.wait(A);
                 assert(epoch::allocator_local_state.is_pinned);
                 Epoch B{epoch::allocator_local_state.known};
                 _scan_history.emplace_back(A, B, _black_for_allocation, _finalized);
                 
-
-                // epoch::repin_this_thread();
-                
-
             } // while (!_is_cancelled.load(Ordering::RELAXED))
 
         } // void Collector::loop_until_canceled()
@@ -408,6 +409,26 @@ namespace wry {
 
 
         void try_advance_collection_phases() {
+            
+            // Each phase transition asks one of three kinds of question:
+            //
+            // *Has time passed?* - i.e., have all mutators observed a color
+            // publish, or have all reports up to some epoch been finalized?
+            // Answered by counting epochs against` kstate[k].since` or
+            // comparing `_finalized` to a fixed offset. Used by
+            // `GRAY_PUBLISHED`, `WHITE_PUBLISHED`.
+            //
+            // *Has all the work been done?* — i.e., has every known object been
+            // visited? Answered by `kstate[k].scans >= 1`. Used by `SWEEPING`,
+            // `CLEARING`. Safe because objects we haven't yet seen are
+            // guaranteed to be in the target state by the previous phase's
+            // invariant.
+            //
+            // *What did the mutators actually do?* — i.e., did a scan complete
+            // with no concurrent k-shading? Answered by `_scan_history` +
+            // `_shade_most_recent`. Used only by `BLACK_PUBLISHED`, because
+            // tracing termination depends on what the mutators wrote, not just
+            // on time.
             
             assert(epoch::allocator_local_state.is_pinned);
             epoch::Epoch E = epoch::allocator_local_state.known;
@@ -423,6 +444,10 @@ namespace wry {
                 switch (kstate[k].kphase) {
                         
                     case UNUSED:
+                        // Only start a collection for the first unused bit we
+                        // discover.
+                        // TODO: We want to keep the collections spread out; not much point
+                        // having them bunched up
                         if (!first)
                             break;
                         first = false;
@@ -430,6 +455,8 @@ namespace wry {
                         break;
                         
                     case GRAY_PUBLISHED:
+                        // Wait until all mutators have updated to run k-gray.
+                        // We don't need to wait for reports or scans.
                         if (E < kstate[k].since + 2)
                             break;
                         kstate[k] = { BLACK_PUBLISHED, E, 0 };
@@ -453,180 +480,113 @@ namespace wry {
                         // Condition (1)
                         // We publish BLACK in epoch F
                         // All mutators are BLACK in epoch F + 2
-                        // We need to have all reports from F + 1
+                        // We need to have opened all reports from F + 1, so
+                        // that `_known_objects` contains every non-k-black
+                        // object.
                         if (_finalized < F + 1)
                             break;
                         
-                        // Condition (2)
-                        bool happy = false;
                         for (auto& s : _scan_history) {
-                            // must mark k-black
+                            // (2a) must mark k-black
                             if (!(s.black & bit)) {
                                 continue;
                             }
-                            // must start after we have opened F+1
+                            // (2b) must start after we have opened F+1
                             if (s.finalized < F + 1) {
-                                // this scan started before we opened the last k-gray-allocated reports
+                                // This scan started before we opened all the
+                                // reports that could contain k-gray-allocated
+                                // objects
+                                
+                                // We can't delete scans unilaterally, but we
+                                // signal it is of no interest to k at least
+                                s.black &= ~bit;
+                                continue;
+                            }
+                            if (s.before <= _shade_most_recent[k]) {
+                                // The most recent k-gray happened after this
+                                // scan began
                                 s.black &= ~bit;
                                 continue;
                             }
                             if (_finalized < s.after) {
-                                // we haven't yet got all the gray reports we need
+                                // We haven't yet opened all the reports we
+                                // need to trust this epoch
                                 continue;
                             }
-                            // check if there is any gray in this epoch
-                            // uint16_t gray{};
-                            // for (auto& g : _shade_history) {
-                            //    if ((g.when >= s.before) && (g.when <= s.after)) {
-                            //        gray |= g.gray;
-                            //    }
-                            //}
+
+                            // SUCCESS
                             
-                            //if (gray & bit) {
-                            //    // no good; shading happened during the scan
-                            //    continue;
-                            //}
-                            if (_shade_most_recent[k] >= s.before)
-                                continue;
-                            happy = true;
-                            break;
-                        }
-                        if (!happy)
-                            break;
-                        
-                        
-                        // zero the relevant bits so we can later drain
-                        for (auto& s : _scan_history) {
-                            s.black &= ~bit;
-                        }
-                        //for (auto& g : _shade_history) {
-                        //    g.gray &= ~bit;
-                        //}
-                        
-                        
+                            // During this scan, the mutators made no new gray
+                            // objects, and shaded no white objects gray.  They
+                            // made only black objects.
+                            
+                            // The collector scanned all white and gray objects,
+                            // turning some white to black and all gray to
+                            // black.
+                            
+                            // There are now only white objects and black objects.
+                            
+                            kstate[k] = { SWEEPING, E, 0 };
 
-                        //
-                        // Timing argument:
-                        //
-                        //   T = kstate[k].since is the iteration at which we
-                        //   entered TRACING. By then T_b+2 = T (or earlier),
-                        //   so the latest mutator epoch that could have
-                        //   allocated k-gray is K = T-1.
-                        //
-                        //   Reports from K = T-1 are taken at iteration
-                        //   ≥ K+1 = T (no skip). Their embargo lifts at
-                        //   take+3 ≥ T+3, so the latest k-gray object is
-                        //   spliced in by iteration T+3 and traced by the
-                        //   scan that follows. (1) and (2) are satisfied by
-                        //   E ≥ T+3.
-                        //
-                        //   did_shade(X) for some mutator epoch X is final
-                        //   at iteration X+5 (the latest take is at iteration
-                        //   X+2 in the no-skip case, embargoed to X+5).
-                        //   So at iteration E we can trust did_shade(X) for
-                        //   X ≤ E-5.
-                        //
-                        //   For (3) we want at least one finalized
-                        //   post-TRACING epoch in the window, i.e. some X
-                        //   with T+1 ≤ X ≤ E-5. The range is non-empty when
-                        //   E ≥ T+6.
-                        //
-                        //   We use [T+1, E-5] (skipping X = T itself,
-                        //   because in-scan write barriers running
-                        //   concurrently with the first tracing scan can
-                        //   legitimately set did_shade(T) for bit k while
-                        //   visiting still-untouched k-white reachables).
-//
-//                        Epoch T = kstate[k].since;
-//                        if (E - T < 6)
-//                            break;
-//
-//                        bool any_shade = false;
-//                        for (Epoch X = T + 1; X <= E - 5; X = X + 1) {
-//                            //if (log_at(X).did_shade & bit) {
-//                            //    any_shade = true;
-//                            //    break;
-//                            //}
-//                        }
-//                        //if (any_shade)
-//                        //    break;
-//                        
-//                        // HACK:
-//                        if (E < kstate[k].since + 10)
-//                            break;
-//                        if (kstate[k].scans < 10)
-//                            break;
+                            // We can now safely clear all the scan history
+                            for (auto& t : _scan_history) {
+                                t.black &= ~bit;
+                            }
+                            // TODO: don't start over; use iterators and clear
+                            // into the future
 
-                        kstate[k] = { SWEEPING, E, 0 };
-                        break;
+                            break; // from loop over _scan_history
+                        }
                     }
+                        break; // from switch
                         
                     case SWEEPING:
+                        // Wait for one sweep to complete
                         if (!kstate[k].scans)
                             break;
+                        // All k-white objects are deleted
+                        // All objects are k-black
                         kstate[k] = { WHITE_PUBLISHED, E, 0 };
                         break;
                         
                     case WHITE_PUBLISHED: {
-
-                        // Let F be epoch transition happened.
-                        // In F+2 all mutators are white.
-                        // In F+1 some mutators are black
-                        // When F+1 and F+2 coexist, black mutators might shade
-                        // white allocations
-                        // Once F+2 is finalized we will have all new objects
-                        // that could be nonwhite
-                        
                         Epoch F = kstate[k].since;
+                        // Wait until we have opened all reports that have
+                        // objects that might have encountered a k-black mutator.
                         if (_finalized < F + 2)
                             break;
-                        
-                        // printf("WHITE skew %04x\n", E - F);
-                        
+                        // All mutators are now white; k-white is stable
                         kstate[k] = { CLEARING, E, 0 };
                     } break;
                         
                     case CLEARING:
+                        // Wait for at least one scan to complete
                         if (!kstate[k].scans)
                             break;
+                        // All objects are now k-white
                         kstate[k] = { UNUSED, E, 0 };
                         break;
                         
                 } // switch kphase
-                
-                
-                // CRITICAL:
-                //
-                // If we advance many epochs during a scan,
-                // then get reports
-                // then wait for embargo
-                // we don't get the reports until a time that depends on the
-                // slip during the scan
-                // i.e. the epoch after the scan, not the start of the scan
-                // is more relevant.
-                
-                // If we don't take the report for E+1 until E+10 it won't
-                // open until E+15 so the fact we are in E+5 is meaningless
-
                 
             } // for k
             
             
             // We've cleared the history by bit, erase the entries that are now
             // trivial
-            {
-                std::erase_if(_scan_history, [](auto const& x) {
-                    return !x.black;
-                });
-                //std::erase_if(_shade_history, [](auto const& x) {
-                //    return !x.gray;
-                //});
-            }
+            std::erase_if(_scan_history, [](auto const& x) {
+                return !x.black;
+            });
+            
+            // TODO: Rather than writing everywhere, we can probably filter with
+            // a mask, and that mask is just black_for_allocation
             
             
             
             
-            // Derive bitmasks
+            
+            // Derive bitmasks.  Once we're confident, we can rely on
+            // progression and apply deltas
             
             for (int k = 0; k != 16; ++k) {
                 uint16_t bit = 1 << k;
@@ -685,105 +645,7 @@ namespace wry {
                 
             }
             
-            
-            
-            
-            
-            
-            
-//            // We can now try to advance the state of each of the collections
-//            // through their several phases
-//
-//            uint16_t old_mask_for_deleting = _mask_for_deleting;
-//            uint16_t old_mask_for_clearing = _mask_for_clearing;
-//
-//            {
-//                // 0 - now
-//                // 1 - was gray
-//                // 2 - becomes gray
-//                // 3 - was white
-//                // When the white-gray transition was far enough in the past
-//                uint16_t g1 = log_at(E-1).gray;
-//                uint16_t g2 = log_at(E-2).gray;
-//                uint16_t g3 = log_at(E-3).gray;
-//                uint16_t before = _black_for_allocation;
-//                _black_for_allocation |= g1 & g2 & ~g3;
-//                printf("_black_for_allocation %04x -> %04x\n", before, _black_for_allocation);
-//            }
-//
-//            {
-//                // When the gray-black transition was far enough in the past
-//                uint16_t b1 = log_at(E-1).black;
-//                uint16_t b2 = log_at(E-2).black;
-//                uint16_t b3 = log_at(E-3).black;
-//                //auto before = _mask_for_tracing;
-//                //_mask_for_tracing |= b1 & b2 & ~b3;
-//                //printf("_mask_for_tracing %04x -> %04x\n", before, _mask_for_tracing);
-//            }
-//
-//            {
-//                // When we can prove all threads have made no new k-gray
-//                // during a whole sweep
-//                //uint16_t color_is_stable = _history_of_mask_for_tracing[7];
-////                color_is_stable &= ~log_at(E+1).did_shade;
-////                color_is_stable &= ~log_at(E).did_shade;
-////                color_is_stable &= ~log_at(E-1).did_shade;
-////                color_is_stable &= ~log_at(E-2).did_shade;
-////                color_is_stable &= ~log_at(E-3).did_shade;
-////                color_is_stable &= ~log_at(E-4).did_shade;
-////                color_is_stable &= ~log_at(E-5).did_shade;
-////                color_is_stable &= ~log_at(E-6).did_shade;
-////                color_is_stable &= ~log_at(E-7).did_shade;
-//                // Stop tracing these colors
-//                //_mask_for_tracing &= ~color_is_stable;
-//                //printf("    _mask_for_tracing      -> %04x\n", _mask_for_tracing);
-//                //_history_of_mask_for_tracing.push_front(_mask_for_tracing);
-//                // Start deleting these whites
-//                //auto before = _mask_for_deleting;
-//                //_mask_for_deleting = color_is_stable;
-//                //printf("_mask_for_deleting %04x -> %04x\n", before, _mask_for_deleting);
-//            }
-//
-//            {
-//                // When we have deleted k-white, unpublish k-gray and k-black
-//                // together
-//                printf("        old_mask_for_deleting %04x\n", old_mask_for_deleting);
-//                printf("        _gray_for_allocation %04x\n", _gray_for_allocation);
-//                printf("        _black_for_allocation %04x\n", _black_for_allocation);
-//                assert(is_subset_of(old_mask_for_deleting, _gray_for_allocation));
-//                assert(is_subset_of(old_mask_for_deleting, _black_for_allocation));
-//                auto before = _gray_for_allocation;
-//                _gray_for_allocation  &= ~old_mask_for_deleting;
-//                printf("_gray_for_allocation %04x -> %04x\n", before, _gray_for_allocation);
-//                before = _black_for_allocation;
-//                _black_for_allocation &= ~old_mask_for_deleting;
-//                printf("_black_for_allocation %04x -> %04x\n", before, _black_for_allocation);
-//            }
-//
-//            {
-//                // When all threads stop using k-gray and k-black, clear all k-bits
-//                uint16_t g1 = log_at(E-1).gray;
-//                uint16_t g2 = log_at(E-2).gray;
-//                uint16_t g3 = log_at(E-3).gray;
-//                _mask_for_clearing = ~g1 & ~g2 & g3;
-//                // We need to wait two cycles so that the collector
-//                // has received objects allocated k-white by a leading
-//                // mutator but shaded gray by a trailing mutator
-//                // This means that we will clear objects in all k-states:
-//                // recently allocated white, old allocated black, and
-//                // recently allocated white and shaded black by leading and
-//                // trailling mutators
-//            }
-//
-//            {
-//                _color_in_use &= ~old_mask_for_clearing;
-//                uint16_t new_bit = (_color_in_use + 1) & ~_color_in_use;
-//                _gray_for_allocation |= new_bit;
-//                printf("    _gray_for_allocation      -> %04x\n", _gray_for_allocation);
-//                _color_in_use       |= new_bit;
-//            }
-
-        } // void Collector::advance_state()
+        } // void Collector::try_advance_collection_phases()
 
         
         void violation(GarbageCollected const* object, uint16_t gray, uint16_t black, int32_t count) {
@@ -857,50 +719,14 @@ namespace wry {
 
             assert(_graystack.debug_is_empty());
             assert(survivors.debug_is_empty());
-            assert(global_children.c.empty());
+            assert(global_children.debug_is_empty());
 
             // validate state:
 
-//            assert(is_subset_of(_gray_for_allocation, _color_in_use));
-//            assert(is_subset_of(_black_for_allocation, _color_in_use));
-//
-//            assert(is_subset_of(_mask_for_tracing, _color_in_use));
-//            assert(is_subset_of(_mask_for_deleting, _color_in_use));
-//            assert(is_subset_of(_mask_for_clearing, _color_in_use));
-//
-//            assert(is_subset_of(_mask_for_tracing, _gray_for_allocation));
-//            assert(is_subset_of(_mask_for_tracing, _black_for_allocation));
-//            assert((_mask_for_tracing & _mask_for_deleting) == 0);
-//            assert((_mask_for_tracing & _mask_for_clearing) == 0);
             assert((_mask_for_deleting & _mask_for_clearing) == 0);
             assert((_mask_for_clearing & _gray_for_allocation) == 0);
             assert((_mask_for_clearing & _black_for_allocation) == 0);
 
-            // dump(_gray_for_allocation);
-            // dump(_black_for_allocation);
-            // dump(_mask_for_tracing);
-            // dump(_mask_for_deleting);
-            // dump(_mask_for_clearing);
-
-//            printf(
-//                   "C0: Start scanning %zd objects with\n"
-//                   "     gray_for_allocation %04x\n"
-//                   "    black_for_allocation %04x\n"
-//                   "       mask_for_deleting %04x\n"
-//                   "       mask_for_clearing %04x\n"
-//                   "      debug_assert_white %04x\n"
-//                   ,
-//                   _known_objects.debug_size(),
-//                   _gray_for_allocation,
-//                   _black_for_allocation,
-//                   _mask_for_deleting,
-//                   _mask_for_clearing,
-//                   _debug_assert_white);
-//            
-//            for (int k = 0; k != 16; ++k) {
-//                printf("    [%02d] %d \"%s\"\n", k, kstate[k].kphase, _KPhase_names[kstate[k].kphase]);
-//            }
-            
             for (GarbageCollected const* object : _known_objects) {
                 uint16_t gray  = object->_gray.load(Ordering::RELAXED);
                 uint16_t black = object->_black;
@@ -939,7 +765,7 @@ namespace wry {
                         uint16_t after_black = (before_black | mark_black) & ~_mask_for_clearing;
                         child->_black = after_black;
                         violation(child, after_gray, after_black, reference_count);
-                        uint16_t did_set_gray  = ~before_gray  & after_gray;
+                        // uint16_t did_set_gray  = ~before_gray  & after_gray;
                         uint16_t did_set_black = ~before_black & after_black;
                         if (did_set_black) {
                             ++mark_count;
@@ -989,7 +815,7 @@ namespace wry {
                 object->_black = after_black;
                 violation(object, after_gray, after_black, reference_count);
 
-                uint16_t did_set_gray  = ~before_gray  & after_gray;
+                // uint16_t did_set_gray  = ~before_gray  & after_gray;
                 uint16_t did_set_black = ~before_black & after_black;
 
                 if (did_set_black) {
@@ -1005,18 +831,20 @@ namespace wry {
                 }
 
             } // loop until no objects
-
+            
             assert(_graystack.debug_is_empty());
             assert(_known_objects.debug_is_empty());
             assert(global_children.c.empty());
             _known_objects.swap(survivors);
             
-             auto t1 = std::chrono::steady_clock::now();
+            auto t1 = std::chrono::steady_clock::now();
             
-             printf("C0:     scanned %zd\n", scan_count);
-             printf("C0:     marked %zd\n", trace_count + mark_count);
-             printf("C0:     deleted %zd\n", delete_count);
-             printf("C0:     in %.3gs\n", std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+            printf("C0: scanned=%zd,marked=%zd,deleted=%zd in %.3gs\n",
+                   scan_count,
+                   trace_count + mark_count,
+                   delete_count,
+                   std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+            
 
         } // void Collector::scan()
 

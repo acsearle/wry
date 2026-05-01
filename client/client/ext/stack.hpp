@@ -35,10 +35,16 @@ namespace wry {
             return result;
         }
         
-        bool debug_is_empty() const {
-            return c.empty();
+#ifndef NDEBUG
+        std::size_t size_debug() const {
+            return c.size();
         }
         
+        bool is_empty_debug() const {
+            return c.empty();
+        }
+#endif // !NDEBUG
+                
     };
     
     template<typename T>

@@ -179,9 +179,9 @@ namespace wry {
                     // messing with us
                     // if our own state gets written by somebody else, they are
                     // responsible for scheduling us
-                    printf("EntityID %lld proposes to WAIT on next_location (or new instructions)\n", _entity_id.data);
+                    // printf("EntityID %lld proposes to WAIT on next_location (or new instructions)\n", _entity_id.data);
                     tx->on_abort_retry();
-                    tx->describe();
+                    //tx->describe();
                     return;
                 }
                 tx->write_entity_id_for_coordinate(next_location, this->_entity_id);
@@ -464,8 +464,8 @@ namespace wry {
                 new_this->_phase = PHASE_TRAVELLING;
                 tx->wait_on_time(new_this->_new_time);
                 tx->on_abort_retry();
-                printf("EntityID %lld proposes to WAIT on new time\n", _entity_id.data);
-                tx->describe();
+                // printf("EntityID %lld proposes to WAIT on new time\n", _entity_id.data);
+                //tx->describe();
                 return;
             }
                 
