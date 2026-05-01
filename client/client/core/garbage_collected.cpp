@@ -26,10 +26,32 @@
 #include "test.hpp"
 
 namespace wry::bump {
+    
+    // TODO: Something weird happened with inline thread_local that forces this
+    // back to ye olde extern model
     thread_local State this_thread_state{};
+    
 }
 
 namespace wry {
+    
+    // TODO: Combine with is_pinned?
+    enum class ThreadMode : uint8_t {
+        MUTATOR = 0,
+        COLLECTOR = 1,
+    };
+    
+    constinit thread_local ThreadMode _this_thread_mode;
+    
+    void assert_this_thread_is_mutator() {
+        assert(_this_thread_mode == ThreadMode::MUTATOR);
+    }
+    
+    void assert_this_thread_is_collector() {
+        assert(_this_thread_mode == ThreadMode::COLLECTOR);
+    }
+
+
     
     using epoch::Epoch;
 
@@ -111,7 +133,7 @@ namespace wry {
     , _count{0}
     , _debug_allocation_gray{_thread_local_gray_for_allocation}
     , _debug_allocation_black{_thread_local_black_for_allocation}
-    , _debug_allocation_epoch{epoch::allocator_local_state.known.raw}
+    , _debug_allocation_epoch{epoch::local_state.known.raw}
     {
         // SAFETY: pointer to a partially constructed object escapes.  These
         // pointers are only published to the collector thread after the
@@ -165,7 +187,7 @@ namespace wry {
             .next = nullptr,
             .gray_did_shade = std::exchange(_thread_local_gray_did_shade, 0),
             .allocations = std::move(_thread_local_new_objects),
-            .epoch = epoch::allocator_local_state.known
+            .epoch = epoch::local_state.known
         };
         // SAFETY: We perform a RELAXED write.  It's not safe for the collector
         // to dereference this pointer until the epoch has advanced.
@@ -303,14 +325,14 @@ namespace wry {
         void collector_takes_reports(){
             Report* head =  _global_atomic_reports_head.exchange(nullptr,
                                                                  Ordering::RELAXED);
-            assert(epoch::allocator_local_state.is_pinned);
-            epoch::Epoch E = epoch::allocator_local_state.known;
+            assert(epoch::local_state.is_pinned);
+            epoch::Epoch E = epoch::local_state.known;
             _embargoed_reports.emplace_back(E, head);
         }
         
         void collector_reads_reports() {
-            assert(epoch::allocator_local_state.is_pinned);
-            Epoch E = epoch::allocator_local_state.known;
+            assert(epoch::local_state.is_pinned);
+            Epoch E = epoch::local_state.known;
             auto iterator = _embargoed_reports.begin();
             while (iterator != _embargoed_reports.end()) {
                 Epoch F = iterator->received;
@@ -355,16 +377,18 @@ namespace wry {
 
         void loop_until_canceled() {
             
+            _this_thread_mode = ThreadMode::COLLECTOR;
+            
             epoch::pin_this_thread();
-            assert(epoch::allocator_local_state.is_pinned);
-            epoch::Epoch epoch_at_last_change = epoch::allocator_local_state.known;
+            assert(epoch::local_state.is_pinned);
+            epoch::Epoch epoch_at_last_change = epoch::local_state.known;
 
             printf("C0: garbage collector starts\n");
 
             while (!_is_canceled.load(Ordering::RELAXED)) {
                 
-                assert(epoch::allocator_local_state.is_pinned);
-                epoch::Epoch current_epoch = epoch::allocator_local_state.known;
+                assert(epoch::local_state.is_pinned);
+                epoch::Epoch current_epoch = epoch::local_state.known;
 
                 if (current_epoch != epoch_at_last_change) {
                                                             
@@ -386,8 +410,8 @@ namespace wry {
                     }
                 }
                 
-                assert(epoch::allocator_local_state.is_pinned);
-                Epoch A{epoch::allocator_local_state.known};
+                assert(epoch::local_state.is_pinned);
+                Epoch A{epoch::local_state.known};
                 epoch::unpin_this_thread();
                 
                 // TODO: Resumable partial scans
@@ -397,9 +421,9 @@ namespace wry {
                 collector_scans();
                                 
                 epoch::pin_this_thread();
-                epoch::allocator_global_service.wait(A);
-                assert(epoch::allocator_local_state.is_pinned);
-                Epoch B{epoch::allocator_local_state.known};
+                epoch::wait(A);
+                assert(epoch::local_state.is_pinned);
+                Epoch B{epoch::local_state.known};
                 _scan_history.emplace_back(A, B, _black_for_allocation, _finalized);
                 
             } // while (!_is_cancelled.load(Ordering::RELAXED))
@@ -430,8 +454,8 @@ namespace wry {
             // tracing termination depends on what the mutators wrote, not just
             // on time.
             
-            assert(epoch::allocator_local_state.is_pinned);
-            epoch::Epoch E = epoch::allocator_local_state.known;
+            assert(epoch::local_state.is_pinned);
+            epoch::Epoch E = epoch::local_state.known;
 
             bool first = true;
             
@@ -669,8 +693,8 @@ namespace wry {
             printf("        _count %04x\n", count);
             object->_garbage_collected_debug();
             
-            bool is_pinned = epoch::allocator_local_state.is_pinned;
-            epoch::Epoch E = epoch::allocator_local_state.known;
+            bool is_pinned = epoch::local_state.is_pinned;
+            epoch::Epoch E = epoch::local_state.known;
             
             printf("%s epoch %04x\n", is_pinned ? "In" : "After", E.raw);
 

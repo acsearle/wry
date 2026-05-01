@@ -282,6 +282,10 @@ namespace wry {
     // then decrement, but Root can safely enter and leave a zero count
     // state, so long as the calling thread has pinned the epoch.
     
+    // Root must never be called on destruction
+    
+    void assert_this_thread_is_mutator();
+    
     template<typename>
     struct Root;
     
@@ -302,6 +306,13 @@ namespace wry {
         }
         
         ~Root() {
+            // To fire this assert, a Root object must have been erroneously
+            // placed into a GarbageCollected object.  Roots point into the
+            // garbage collected heap from outside it.
+            //
+            // Also, it is a contradiction for a collection to destroy a root
+            // (root vs pointer-to-root distinction?)
+            assert_this_thread_is_mutator();
             garbage_collected_roots_subtract(_ptr);
         }
         
@@ -390,6 +401,28 @@ namespace wry {
     }; // Root<T*>
     
     
+    // Suprisingly straightforward compared to atomic shared_ptr, because we
+    // don't need to atomically load-and-increment; the epoch system lets us
+    // do our increments and shades any time before the epoch ends (!)
+    
+    
+    template<typename T>
+    struct Atomic<Root<T>> {
+        Atomic<T*> raw;
+        
+        Root<T> load(Ordering order);
+        
+        // TODO: Complete after atomic shenannigans
+        
+    };
+    
+    
+#if 0
+    
+    // TODO: Edge is unnecessary.  
+    
+    void assert_this_thread_is_collector();
+    
     // An Edge must be a field OF a garbage collected object, and point TO
     // a garbage collected object (the degenerate cases of the same object, or
     // null, are allowed)
@@ -413,7 +446,7 @@ namespace wry {
         }
         
         ~Edge() {
-            // Destruction is different from overwriting
+            assert_this_thread_is_collector();
         }
         
         Edge& operator=(Edge const& other) {
@@ -493,6 +526,8 @@ namespace wry {
         }
         
     }; // Edge<T*>
+    
+#endif
     
     
     struct BumpAllocated;

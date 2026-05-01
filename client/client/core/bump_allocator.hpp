@@ -277,9 +277,17 @@ namespace wry {
         void* _Nonnull operator new(std::size_t size, void* _Nonnull ptr) {
             return ptr;
         }
+        
+        // We shouldn't expect or rely on destruction or deletion of bump-
+        // allocated objects; the canonical life cycle is to be constructed
+        // and then overwritten
 
         void operator delete(void* _Nullable) {
-            // no-op
+            __builtin_trap();
+        }
+        
+        ~BumpAllocated() {
+            __builtin_trap();
         }
 
     };

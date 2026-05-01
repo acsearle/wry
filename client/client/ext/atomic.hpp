@@ -70,6 +70,14 @@ namespace wry {
         SEQ_CST = __ATOMIC_SEQ_CST,
     };
     
+#define _WRY_ATOMIC_relaxed __ATOMIC_RELAXED
+// #define _WRY_ATOMIC_consume __ATOMIC_CONSUME
+#define _WRY_ATOMIC_acquire __ATOMIC_ACQUIRE
+#define _WRY_ATOMIC_release __ATOMIC_RELEASE
+#define _WRY_ATOMIC_acq_rel __ATOMIC_ACQ_REL
+#define _WRY_ATOMIC_seq_cst __ATOMIC_SEQ_CST
+
+    
     // Compare std::cv_status
     enum class AtomicWaitResult {
         NO_TIMEOUT,
@@ -101,10 +109,14 @@ namespace wry {
         Atomic(const Atomic&) = delete;
         Atomic& operator=(const Atomic&) = delete;
         
-        T load(Ordering order) const noexcept {
-            return std::bit_cast<T>(__atomic_load_n(&value, (int)order));
+#define MAKE_WRY_ATOMIC_LOAD(order)\
+        T load_##order() const noexcept {\
+            return std::bit_cast<T>(__atomic_load_n(&value, _WRY_ATOMIC_##order));\
         }
-        
+
+        MAKE_WRY_ATOMIC_LOAD(relaxed)
+        MAKE_WRY_ATOMIC_LOAD(acquire)
+
         void store(T desired, Ordering order) noexcept {
             __atomic_store_n(&value, std::bit_cast<U>(desired), (int)order);
         }
@@ -172,7 +184,7 @@ return __atomic_##Y##_fetch (&value, operand, (int)order);\
             uint64_t buffer = {};
             __builtin_memcpy(&buffer, &expected, sizeof(T));
             for (;;) {
-                T discovered = this->load(order);
+                T discovered = this->load_relaxed();
                 if (__builtin_memcmp(&buffer, &discovered, sizeof(T))) {
                     expected = discovered;
                     return;
@@ -197,7 +209,7 @@ return __atomic_##Y##_fetch (&value, operand, (int)order);\
             uint64_t buffer = {};
             __builtin_memcpy(&buffer, &expected, sizeof(T));
             for (;;) {
-                T discovered = this->load(order);
+                T discovered = this->load_relaxed();
                 if (__builtin_memcmp(&buffer, &discovered, sizeof(T))) {
                     expected = discovered;
                     return AtomicWaitResult::NO_TIMEOUT;
