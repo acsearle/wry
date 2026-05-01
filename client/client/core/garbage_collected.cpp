@@ -143,7 +143,7 @@ namespace wry {
 
     void GarbageCollected::_garbage_collected_shade() const {
         const uint16_t gray = _thread_local_gray_for_allocation;
-        const uint16_t before = _gray.fetch_or(gray, Ordering::RELAXED);
+        const uint16_t before = _gray.fetch_or_relaxed(gray);
         const uint16_t did_shade = gray & ~before;
         _thread_local_gray_did_shade |= did_shade;
     }
@@ -192,10 +192,8 @@ namespace wry {
         // SAFETY: We perform a RELAXED write.  It's not safe for the collector
         // to dereference this pointer until the epoch has advanced.
         desired->next = _global_atomic_reports_head.load_relaxed();
-        while (!_global_atomic_reports_head.compare_exchange_weak(desired->next,
-                                                                  desired,
-                                                                  Ordering::RELAXED,
-                                                                  Ordering::RELAXED))
+        while (!_global_atomic_reports_head.compare_exchange_weak_relaxed_relaxed(desired->next,
+                                                                                  desired))
             ;
         
     }
@@ -778,10 +776,8 @@ namespace wry {
                             after_gray = (before_gray | parent_black) & ~_mask_for_clearing;
                             if (after_gray == before_gray)
                                 break;
-                            if (child->_gray.compare_exchange_weak(before_gray,
-                                                                   after_gray,
-                                                                   Ordering::RELAXED,
-                                                                   Ordering::RELAXED))
+                            if (child->_gray.compare_exchange_weak_relaxed_relaxed(before_gray,
+                                                                                   after_gray))
                                 break;
                         }
                         uint16_t mark_black = after_gray & _black_for_allocation;
@@ -822,10 +818,8 @@ namespace wry {
                     after_gray = (before_gray | root_gray) & ~_mask_for_clearing;
                     if (after_gray == before_gray)
                         break;
-                    if (object->_gray.compare_exchange_weak(before_gray,
-                                                            after_gray,
-                                                            Ordering::RELAXED,
-                                                            Ordering::RELAXED))
+                    if (object->_gray.compare_exchange_weak_relaxed_relaxed(before_gray,
+                                                                            after_gray))
                         break;
                     // Compare exchange failed, start over
                 }

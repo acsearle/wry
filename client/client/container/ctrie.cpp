@@ -620,7 +620,7 @@ namespace wry {
         bool INode::compare_exchange(const MainNode* expected, const MainNode* desired) const {
             // Safety:
             //    We have already ACQUIRED the expected value
-            return main.compare_exchange_strong(expected, desired, Ordering::RELEASE, Ordering::RELAXED);
+            return main.compare_exchange_strong_release_relaxed(expected, desired);
         }
         
         

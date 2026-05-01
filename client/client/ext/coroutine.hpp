@@ -657,10 +657,8 @@ namespace wry::Coroutine {
                         return handle;
                     case SET_NO:
                     default:
-                        if (context-> _state.compare_exchange_weak(_next,
-                                                                   (intptr_t)this,
-                                                                   Ordering::RELEASE,
-                                                                   Ordering::ACQUIRE))
+                        if (context-> _state.compare_exchange_weak_release_acquire(_next,
+                                                                                   (intptr_t)this))
                             return std::noop_coroutine();
                 }
             }
@@ -696,10 +694,8 @@ namespace wry::Coroutine {
             intptr_t expected = _state.load_relaxed();
             for (;;) switch (expected) {
                 case SET_YES:
-                    if (_state.compare_exchange_weak(expected,
-                                                     SET_NO,
-                                                     Ordering::RELAXED,
-                                                     Ordering::RELAXED))
+                    if (_state.compare_exchange_weak_relaxed_relaxed(expected,
+                                                                     SET_NO))
                         return;
                     break;
                 default:
@@ -721,7 +717,7 @@ namespace wry::Coroutine {
         
         MultipleConsumerEvent::awaitable_type operator co_await() {
             // TODO: Can we rely on the MultipleConsumerEvent to enforce memory ordering?
-            ptrdiff_t n = _counter.sub_fetch(1, Ordering::RELEASE);
+            ptrdiff_t n = _counter.sub_fetch_release(1);
             if (n < 0)
                 abort();
             if (n == 0) {
@@ -891,10 +887,8 @@ namespace wry::Coroutine {
                 // fixup in await_suspend... except that in doing so we have
                 // taken the existing queue, and we need to traverse it to
                 // reinstall it... and this destroys the ordering
-                return _context->_state.compare_exchange_weak(_state,
-                                                              LOCKED,
-                                                              Ordering::ACQUIRE,
-                                                              Ordering::RELAXED);
+                return _context->_state.compare_exchange_weak_acquire_relaxed(_state,
+                                                                              LOCKED);
             }
             
             bool await_suspend(std::coroutine_handle<> handle) noexcept {
@@ -903,17 +897,13 @@ namespace wry::Coroutine {
                 for (;;) {
                     switch (_state) {
                         case UNLOCKED:
-                            if (_context->_state.compare_exchange_weak(_state,
-                                                                       LOCKED,
-                                                                       Ordering::ACQUIRE,
-                                                                       Ordering::RELAXED))
+                            if (_context->_state.compare_exchange_weak_acquire_relaxed(_state,
+                                                                                       LOCKED))
                                 return false;
                             break;
                         default:
-                            if (_context->_state.compare_exchange_weak(_state,
-                                                                       (intptr_t)this,
-                                                                       Ordering::RELEASE,
-                                                                       Ordering::RELAXED))
+                            if (_context->_state.compare_exchange_weak_release_relaxed(_state,
+                                                                                       (intptr_t)this))
                                 return true;
                             break;
                     }
@@ -939,11 +929,11 @@ namespace wry::Coroutine {
                 case UNLOCKED:
                     abort();
                 case LOCKED:
-                    if (_state.compare_exchange_strong(expected, UNLOCKED, Ordering::RELEASE, Ordering::RELAXED))
+                    if (_state.compare_exchange_strong_release_relaxed(expected, UNLOCKED))
                         return;
                     break;
                 default:
-                    if (_state.compare_exchange_strong(expected, LOCKED, Ordering::ACQUIRE, Ordering::RELAXED)) {
+                    if (_state.compare_exchange_strong_acquire_relaxed(expected, LOCKED)) {
                         _awaiters = (Awaitable*)expected;
                     ALPHA:
                         global_work_queue_schedule(std::exchange(_awaiters, (Awaitable*)_awaiters->_state)->_handle);

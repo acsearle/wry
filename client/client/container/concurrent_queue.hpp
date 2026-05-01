@@ -183,16 +183,16 @@ namespace wry {
                 Node* c = b->_next.load_acquire();
                 if (!c) {
                     // _tail is up to date, race to install the next node
-                    if (b->_next.compare_exchange_strong(c, a, Ordering::RELEASE, Ordering::ACQUIRE)) {
+                    if (b->_next.compare_exchange_strong_release_acquire(c, a)) {
                         // race to advance the tail
-                        if (_tail.compare_exchange_weak(b, c, Ordering::RELEASE, Ordering::RELAXED)) {
+                        if (_tail.compare_exchange_weak_release_relaxed(b, c)) {
                             garbage_collected_shade(b);
                         }
                         return;
                     }
                 } else {
                     // race to advance the tail
-                    if (_tail.compare_exchange_strong(b, c, Ordering::RELEASE, Ordering::ACQUIRE)) {
+                    if (_tail.compare_exchange_strong_release_acquire(b, c)) {
                         garbage_collected_shade(b);
                         b = c;
                     }
@@ -208,7 +208,7 @@ namespace wry {
                 if (!b)
                     return false;
                 // race to advance head
-                if (_head.compare_exchange_strong(a, b, Ordering::RELEASE, Ordering::ACQUIRE)) {
+                if (_head.compare_exchange_strong_release_acquire(a, b)) {
                     garbage_collected_shade(a);
                     // We did advance head and thus claim the payload of the new
                     // head node.

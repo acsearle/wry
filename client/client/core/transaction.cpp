@@ -72,10 +72,8 @@ namespace wry {
             // don't follow any pointers until after the thread barrier that
             // separates setting up all transactions from resolving all transactions
             node->_next = head.load_relaxed();
-            while (!head.compare_exchange_weak(node->_next,
-                                               node,
-                                               Ordering::RELAXED,
-                                               Ordering::RELAXED))
+            while (!head.compare_exchange_weak_relaxed_relaxed(node->_next,
+                                                               node))
                 ;
         }
     }

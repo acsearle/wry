@@ -20,7 +20,7 @@ namespace wry {
     static constinit Atomic<uint64_t> _entity_id_oracle_state{0};
 
     EntityID EntityID::oracle() {
-        return EntityID{_entity_id_oracle_state.add_fetch(1, Ordering::RELAXED)};
+        return EntityID{_entity_id_oracle_state.add_fetch_relaxed(1)};
     }
     
     Entity::Entity() {

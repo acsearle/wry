@@ -59,7 +59,7 @@ namespace wry {
             constinit static Atomic<int> thread_identifier{};
             size_t size = 256;
             char str[256];
-            snprintf(str, size, "W%d", thread_identifier.fetch_add(1, Ordering::RELAXED));
+            snprintf(str, size, "W%d", thread_identifier.fetch_add_relaxed(1));
             pthread_setname_np(str);
         }
         for (;;) {

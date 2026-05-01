@@ -163,6 +163,9 @@ MAKE_WRY_ATOMIC_COMPARE_EXCHANGE(strong, success, failure)
         MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(release, acquire)
         MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(acq_rel, relaxed)
         MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(acq_rel, acquire)
+        MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(seq_cst, relaxed)
+        MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(seq_cst, acquire)
+        MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(seq_cst, seq_cst)
 
         // GCC builtins provide significantly more operations than std::atomic
 

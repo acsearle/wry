@@ -187,10 +187,8 @@ namespace wry {
                 assert(new_size == 0);
                 // the queue had one item
                 // we race try_pop_front for the last element
-                bool success = this->_top.compare_exchange_weak(_cached_top,
-                                                                new_top,
-                                                                Ordering::SEQ_CST,
-                                                                Ordering::RELAXED);
+                bool success = this->_top.compare_exchange_weak_seq_cst_relaxed(_cached_top,
+                                                                                new_top);
                 assert(bottom == new_top);
                 _bottom.store_relaxed(bottom);
                 return success;
@@ -206,10 +204,8 @@ namespace wry {
                 item = (*array)[top].load_relaxed();
                 ptrdiff_t new_top = top + 1;
                 // try to claim the right to actually look at item
-                return _top.compare_exchange_weak(top,
-                                                  new_top,
-                                                  Ordering::SEQ_CST,
-                                                  Ordering::RELAXED);
+                return _top.compare_exchange_weak_seq_cst_relaxed(top,
+                                                                  new_top);
             }
             
             
