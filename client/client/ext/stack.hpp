@@ -36,13 +36,18 @@ namespace wry {
         }
         
 #ifndef NDEBUG
-        std::size_t size_debug() const {
-            return c.size();
-        }
         
-        bool is_empty_debug() const {
+        // These functions may not be trivial for some Stack implementations,
+        // make their usage obvious
+
+        bool debug_is_empty() const {
             return c.empty();
         }
+
+        std::size_t debug_size() const {
+            return c.size();
+        }
+
 #endif // !NDEBUG
                 
     };
