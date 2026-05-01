@@ -155,9 +155,9 @@ namespace wry::array_mapped_trie {
         
         virtual void _garbage_collected_debug() const override {
             printf("%s\n", __PRETTY_FUNCTION__);
-            printf("    _gray %04x\n", _gray.load(Ordering::RELAXED));
+            printf("    _gray %04x\n", _gray.load_relaxed());
             printf("    _black %04x\n", _black);
-            printf("    _count %u\n", _count.load(Ordering::RELAXED));
+            printf("    _count %u\n", _count.load_relaxed());
             printf("    _debug_allocation_gray %04x\n", _debug_allocation_gray);
             printf("    _debug_allocation_black %04x\n", _debug_allocation_black);
             printf("    _debug_allocation_epoch %d\n", _debug_allocation_epoch);

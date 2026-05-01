@@ -83,7 +83,7 @@ namespace wry {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
             
-            for (auto candidate = kv.second.load(Ordering::ACQUIRE);
+            for (auto candidate = kv.second.load_acquire();
                  candidate != nullptr;
                  candidate = candidate->_next)
             {
@@ -137,7 +137,7 @@ namespace wry {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
             
-            for (auto candidate = kv.second.load(Ordering::ACQUIRE);
+            for (auto candidate = kv.second.load_acquire();
                  candidate != nullptr;
                  candidate = candidate->_next)
             {
@@ -191,7 +191,7 @@ namespace wry {
             const Transaction::Node* writer = nullptr;
             std::vector<EntityID> waiters;
             
-            for (auto candidate = kv.second.load(Ordering::ACQUIRE);
+            for (auto candidate = kv.second.load_acquire();
                  candidate != nullptr;
                  candidate = candidate->_next)
             {
@@ -242,7 +242,7 @@ namespace wry {
             ParallelRebuildAction<PersistentSet<std::pair<Time, EntityID>>> result{};
             result.tag = ParallelRebuildAction<PersistentSet<std::pair<Time, EntityID>>>::MERGE_VALUE;
             // new_waiting_on_time.try_get(kv.first, result.value);
-            const Transaction::Node* head = kv.second.load(Ordering::RELAXED);
+            const Transaction::Node* head = kv.second.load_relaxed();
             for (; head; head = head->_next) {
                 using std::get;
                 EntityID entity_id = get<EntityID>(head->_desired);

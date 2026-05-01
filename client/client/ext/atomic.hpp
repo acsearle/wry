@@ -109,73 +109,89 @@ namespace wry {
         Atomic(const Atomic&) = delete;
         Atomic& operator=(const Atomic&) = delete;
         
-#define MAKE_WRY_ATOMIC_LOAD(order)\
-        T load_##order() const noexcept {\
-            return std::bit_cast<T>(__atomic_load_n(&value, _WRY_ATOMIC_##order));\
-        }
+#define MAKE_WRY_ATOMIC_LOAD(order) \
+T load_##order() const noexcept {\
+return std::bit_cast<T>(__atomic_load_n(&value, _WRY_ATOMIC_##order));\
+}
 
         MAKE_WRY_ATOMIC_LOAD(relaxed)
         MAKE_WRY_ATOMIC_LOAD(acquire)
+        MAKE_WRY_ATOMIC_LOAD(seq_cst)
 
-        void store(T desired, Ordering order) noexcept {
-            __atomic_store_n(&value, std::bit_cast<U>(desired), (int)order);
-        }
-        
-        T exchange(T desired, Ordering order) noexcept {
-            return std::bit_cast<T>(__atomic_exchange_n(&value, std::bit_cast<U>(desired), (int)order));
-        }
-        
-        bool compare_exchange_weak(T& expected,
-                                   T desired,
-                                   Ordering success,
-                                   Ordering failure) noexcept {
-            U expected2{std::bit_cast<U>(expected)};
-            bool result{__atomic_compare_exchange_n(&value,
-                                                    &expected2,
-                                                    std::bit_cast<U>(desired),
-                                                    true,
-                                                    (int)success,
-                                                    (int)failure)};
-            expected = std::bit_cast<T>(expected2);
-            return result;
-        }
-        
-        bool compare_exchange_strong(T& expected,
-                                     T desired,
-                                     Ordering success,
-                                     Ordering failure) noexcept {
-            U expected2{std::bit_cast<U>(expected)};
-            bool result{__atomic_compare_exchange_n(&value,
-                                                    &expected2,
-                                                    std::bit_cast<U>(desired),
-                                                    false,
-                                                    (int)success,
-                                                    (int)failure)};
-            expected = std::bit_cast<T>(expected2);
-            return result;
-        }
-        
-#define X(Y) \
-\
-T fetch_##Y (T operand, Ordering order) noexcept {\
-return __atomic_fetch_##Y (&value, operand, (int)order);\
-}\
-\
-T Y##_fetch(T operand, Ordering order) noexcept {\
-return __atomic_##Y##_fetch (&value, operand, (int)order);\
+#define MAKE_WRY_ATOMIC_STORE(order) \
+void store_##order(T desired) noexcept {\
+__atomic_store_n(&value, std::bit_cast<U>(desired), _WRY_ATOMIC_##order);\
 }
         
-        // GCC builtins provide significantly more operations than std::atomic
-        X(add)
-        X(and)
-        X(max)
-        X(min)
-        X(nand)
-        X(or)
-        X(sub)
-        X(xor)
+        MAKE_WRY_ATOMIC_STORE(relaxed)
+        MAKE_WRY_ATOMIC_STORE(release)
+        MAKE_WRY_ATOMIC_STORE(seq_cst)
+
+#define MAKE_WRY_ATOMIC_EXCHANGE(order) \
+T exchange_##order(T desired) noexcept {\
+return std::bit_cast<T>(__atomic_exchange_n(&value, std::bit_cast<U>(desired), _WRY_ATOMIC_##order));\
+}
         
-#undef X
+        MAKE_WRY_ATOMIC_EXCHANGE(relaxed)
+        MAKE_WRY_ATOMIC_EXCHANGE(acquire)
+        MAKE_WRY_ATOMIC_EXCHANGE(release)
+        MAKE_WRY_ATOMIC_EXCHANGE(acq_rel)
+        MAKE_WRY_ATOMIC_EXCHANGE(seq_cst)
+        
+#define MAKE_WRY_ATOMIC_COMPARE_EXCHANGE(strength, success, failure)\
+bool compare_exchange_##strength##_##success##_##failure(T& expected, T desired) noexcept {\
+U expected2{std::bit_cast<U>(expected)};\
+bool result{__atomic_compare_exchange_n(&value,\
+&expected2,\
+std::bit_cast<U>(desired),\
+#strength[0]=='w',\
+_WRY_ATOMIC_##success,\
+_WRY_ATOMIC_##failure)};\
+expected = std::bit_cast<T>(expected2);\
+return result;\
+}
+
+#define MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(success, failure)\
+MAKE_WRY_ATOMIC_COMPARE_EXCHANGE(weak, success, failure)\
+MAKE_WRY_ATOMIC_COMPARE_EXCHANGE(strong, success, failure)
+
+        
+        MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(relaxed, relaxed)
+        MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(acquire, relaxed)
+        MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(acquire, acquire)
+        MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(release, relaxed)
+        MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(release, acquire)
+        MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(acq_rel, relaxed)
+        MAKE_WRY_ATOMIC_COMPARE_EXCHANGE2(acq_rel, acquire)
+
+        // GCC builtins provide significantly more operations than std::atomic
+
+#define MAKE_WRY_ATOMIC_RMW(operation, order) \
+\
+T fetch_##operation##_##order(T operand) noexcept {\
+return __atomic_fetch_##operation(&value, operand, _WRY_ATOMIC_##order);\
+}\
+\
+T operation##_fetch_##order(T operand) noexcept {\
+return __atomic_##operation##_fetch(&value, operand, _WRY_ATOMIC_##order);\
+}
+        
+#define MAKE_WRY_ATOMIC_RMW2(order) \
+        MAKE_WRY_ATOMIC_RMW(add, order)\
+        MAKE_WRY_ATOMIC_RMW(and, order)\
+        MAKE_WRY_ATOMIC_RMW(max, order)\
+        MAKE_WRY_ATOMIC_RMW(min, order)\
+        MAKE_WRY_ATOMIC_RMW(nand, order)\
+        MAKE_WRY_ATOMIC_RMW(or, order)\
+        MAKE_WRY_ATOMIC_RMW(sub, order)\
+        MAKE_WRY_ATOMIC_RMW(xor, order)\
+
+        MAKE_WRY_ATOMIC_RMW2(relaxed)
+        MAKE_WRY_ATOMIC_RMW2(acquire)
+        MAKE_WRY_ATOMIC_RMW2(release)
+        MAKE_WRY_ATOMIC_RMW2(acq_rel)
+        MAKE_WRY_ATOMIC_RMW2(seq_cst)
+
         
 #if defined(__APPLE__)
         
@@ -360,7 +376,7 @@ return __atomic_##Y##_fetch (&value, operand, (int)order);\
     
     template<typename T>
     void garbage_collected_scan(Atomic<T> const& x) {
-        garbage_collected_scan(x.load(Ordering::ACQUIRE));
+        garbage_collected_scan(x.load_acquire());
     }
     
 } // namespace wry

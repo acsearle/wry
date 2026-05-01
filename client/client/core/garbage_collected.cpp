@@ -191,7 +191,7 @@ namespace wry {
         };
         // SAFETY: We perform a RELAXED write.  It's not safe for the collector
         // to dereference this pointer until the epoch has advanced.
-        desired->next = _global_atomic_reports_head.load(Ordering::RELAXED);
+        desired->next = _global_atomic_reports_head.load_relaxed();
         while (!_global_atomic_reports_head.compare_exchange_weak(desired->next,
                                                                   desired,
                                                                   Ordering::RELAXED,
@@ -211,7 +211,7 @@ namespace wry {
     
     void _mutator_load_color() {
         // Load the global colors
-        Color color = _global_atomic_color_for_allocation.load(Ordering::RELAXED);
+        Color color = _global_atomic_color_for_allocation.load_relaxed();
         _thread_local_gray_for_allocation = color.gray;
         _thread_local_black_for_allocation = color.black;
         // If the mutator is running k-gray, any allocations will produce gray
@@ -323,8 +323,7 @@ namespace wry {
         }
 
         void collector_takes_reports(){
-            Report* head =  _global_atomic_reports_head.exchange(nullptr,
-                                                                 Ordering::RELAXED);
+            Report* head =  _global_atomic_reports_head.exchange_relaxed(nullptr);
             assert(epoch::local_state.is_pinned);
             epoch::Epoch E = epoch::local_state.known;
             _embargoed_reports.emplace_back(E, head);
@@ -385,7 +384,7 @@ namespace wry {
 
             printf("C0: garbage collector starts\n");
 
-            while (!_is_canceled.load(Ordering::RELAXED)) {
+            while (!_is_canceled.load_relaxed()) {
                 
                 assert(epoch::local_state.is_pinned);
                 epoch::Epoch current_epoch = epoch::local_state.known;
@@ -401,7 +400,7 @@ namespace wry {
                         .gray = _gray_for_allocation,
                         .black = _black_for_allocation
                     };
-                    _global_atomic_color_for_allocation.store(color, Ordering::RELAXED);
+                    _global_atomic_color_for_allocation.store_relaxed(color);
                     
                     epoch_at_last_change = current_epoch;
 
@@ -426,7 +425,7 @@ namespace wry {
                 Epoch B{epoch::local_state.known};
                 _scan_history.emplace_back(A, B, _black_for_allocation, _finalized);
                 
-            } // while (!_is_cancelled.load(Ordering::RELAXED))
+            } // while (!_is_cancelled.load_relaxed())
 
         } // void Collector::loop_until_canceled()
         
@@ -752,9 +751,9 @@ namespace wry {
             assert((_mask_for_clearing & _black_for_allocation) == 0);
 
             for (GarbageCollected const* object : _known_objects) {
-                uint16_t gray  = object->_gray.load(Ordering::RELAXED);
+                uint16_t gray  = object->_gray.load_relaxed();
                 uint16_t black = object->_black;
-                int32_t count = object->_count.load(Ordering::RELAXED);
+                int32_t count = object->_count.load_relaxed();
                 violation(object, gray, black, count);
             }
 
@@ -770,9 +769,9 @@ namespace wry {
                     parent->_garbage_collected_scan();
                     const GarbageCollected* child = nullptr;
                     while (global_children.try_pop(child)) {
-                        uint16_t before_gray = child->_gray.load(Ordering::RELAXED);
+                        uint16_t before_gray = child->_gray.load_relaxed();
                         uint16_t before_black = child->_black;
-                        int32_t reference_count = child->_count.load(Ordering::RELAXED);
+                        int32_t reference_count = child->_count.load_relaxed();
                         violation(child, before_gray, before_black, reference_count);
                         uint16_t after_gray;
                         for (;;) {
@@ -813,9 +812,9 @@ namespace wry {
                 // If root, and gray is active, make it gray
                 // If in clearing mask, clear it
                                 
-                int32_t reference_count = object->_count.load(Ordering::RELAXED);
+                int32_t reference_count = object->_count.load_relaxed();
                 uint16_t root_gray = reference_count ? _gray_for_allocation : 0;
-                uint16_t before_gray = object->_gray.load(Ordering::RELAXED);
+                uint16_t before_gray = object->_gray.load_relaxed();
                 uint16_t before_black = object->_black;
                 uint16_t after_gray;
                 for (;;) {
@@ -882,7 +881,7 @@ namespace wry {
     }
 
     void collector_cancel() {
-        collector._is_canceled.store(true, Ordering::RELAXED);
+        collector._is_canceled.store_relaxed(true);
     }
 
     void mutator_overwrote(const GarbageCollected* a) {

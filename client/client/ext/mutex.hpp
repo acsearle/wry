@@ -149,14 +149,14 @@ namespace wry {
             // AWAITED -> UNLOCKED always causes a wakeup.
             
             void lock() {
-                if (_state.exchange(LOCKED, std::memory_order_acquire) == UNLOCKED)
+                if (_state.exchange(LOCKED, std::memory_order::acquire) == UNLOCKED)
                     return;
-                while (_state.exchange(AWAITED, std::memory_order_acquire) != UNLOCKED)
+                while (_state.exchange(AWAITED, std::memory_order::acquire) != UNLOCKED)
                     platform_wait_on_address(&_state, AWAITED);
             }
             
             void unlock() {
-                if (_state.exchange(UNLOCKED, std::memory_order_release) == AWAITED)
+                if (_state.exchange(UNLOCKED, std::memory_order::release) == AWAITED)
                     platform_wake_by_address_any(&_state);
             }
                         

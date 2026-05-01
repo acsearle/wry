@@ -229,7 +229,7 @@ namespace wry {
     inline void
     garbage_collected_roots_add(const GarbageCollected* ptr) {
         if (ptr) {
-            [[maybe_unused]] int32_t before = ptr->_count.fetch_add(1, Ordering::RELAXED);
+            [[maybe_unused]] int32_t before = ptr->_count.fetch_add_relaxed(1);
             // int32_t after = before + 1;
             // printf("%p->_count = (%" PRId32 " -> %" PRId32 ")\n", ptr, before, after);
             assert(before >= 0);
@@ -249,7 +249,7 @@ namespace wry {
             // transitioning between the zero and positive states multiple
             // times--this just means the object is changing between root and
             // child status.
-            int32_t before = ptr->_count.fetch_sub(1, Ordering::RELAXED);
+            int32_t before = ptr->_count.fetch_sub_relaxed(1);
             [[maybe_unused]] int32_t after = before - 1;
             // printf("%p->_count = (%" PRId32 " -> %" PRId32 ")\n", ptr, before, after);
             assert(before > 0);
@@ -265,7 +265,7 @@ namespace wry {
     
     inline int32_t
     garbage_collected_roots_multiplicity(const GarbageCollected *ptr) {
-        return ptr ? ptr->_count.load(Ordering::RELAXED) : 0;
+        return ptr ? ptr->_count.load_relaxed() : 0;
     }
         
 } // namespace wry

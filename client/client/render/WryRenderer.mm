@@ -1246,7 +1246,7 @@
         Root<World const*> old_world;
         (void) _model->_worlds.try_pop_front(old_world);
         assert(old_world);
-        // printf("old_world->_count %d\n", old_world->_count.load(Ordering::RELAXED));
+        // printf("old_world->_count %d\n", old_world->_count.load_relaxed());
         // mutator_overwrote(old_world);
         Coroutine::Nursery nursery;
         // the operation is bounded within the main thread's epoch

@@ -295,7 +295,7 @@ namespace wry {
     
 #if 0
     Value Scan<Value>::get() const {
-        return _atomic_value.load(Ordering::RELAXED);
+        return _atomic_value.load_relaxed();
     }
         
     Scan<Value>::Scan(const Value& value) 
@@ -308,7 +308,7 @@ namespace wry {
         
 
     Scan<Value>& Scan<Value>::operator=(const Value& desired) {
-        Value discovered = this->_atomic_value.exchange(desired, Ordering::RELEASE);
+        Value discovered = this->_atomic_value.exchange_release(desired);
         garbage_collected_shade(desired);
         garbage_collected_shade(discovered);
         return *this;
@@ -494,7 +494,7 @@ namespace wry {
     
 #if 0
     void debug(const Scan<Value>& self) {
-        debug(self._atomic_value.load(Ordering::ACQUIRE));
+        debug(self._atomic_value.load_acquire());
     }
 #endif
     

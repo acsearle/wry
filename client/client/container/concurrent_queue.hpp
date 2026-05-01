@@ -161,7 +161,7 @@ namespace wry {
             }
             
             virtual void _garbage_collected_scan() const override {
-                garbage_collected_scan(_next.load(Ordering::ACQUIRE));
+                garbage_collected_scan(_next.load_acquire());
                 garbage_collected_scan(_payload);
             }
             
@@ -177,10 +177,10 @@ namespace wry {
         
         void push(T item) {
             Node* a = new Node{std::move(item)};
-            Node* b = _tail.load(Ordering::ACQUIRE);
+            Node* b = _tail.load_acquire();
             for (;;) {
                 assert(b);
-                Node* c = b->_next.load(Ordering::ACQUIRE);
+                Node* c = b->_next.load_acquire();
                 if (!c) {
                     // _tail is up to date, race to install the next node
                     if (b->_next.compare_exchange_strong(c, a, Ordering::RELEASE, Ordering::ACQUIRE)) {
@@ -201,10 +201,10 @@ namespace wry {
         }
         
         bool try_pop(T& item) {
-            Node* a = _head.load(Ordering::ACQUIRE);
+            Node* a = _head.load_acquire();
             for (;;) {
                 assert(a);
-                Node* b = a->_next.load(Ordering::ACQUIRE);
+                Node* b = a->_next.load_acquire();
                 if (!b)
                     return false;
                 // race to advance head
@@ -219,9 +219,9 @@ namespace wry {
         }
                 
         bool is_empty() const {
-            Node* a = _head.load(Ordering::ACQUIRE);
+            Node* a = _head.load_acquire();
             assert(a);
-            Node* b = a->_next.load(Ordering::RELAXED);
+            Node* b = a->_next.load_relaxed();
             return !b;
         };
                 
@@ -230,8 +230,8 @@ namespace wry {
     template<typename T>
     void garbage_collected_scan(ObstructionFreeQueue<T> const& x) {
         // _head can briefly overtake _tail so we need to make both strong
-        garbage_collected_scan(x._head.load(Ordering::ACQUIRE));
-        garbage_collected_scan(x._tail.load(Ordering::ACQUIRE));
+        garbage_collected_scan(x._head.load_acquire());
+        garbage_collected_scan(x._tail.load_acquire());
     }
     
     

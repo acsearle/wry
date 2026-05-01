@@ -286,9 +286,9 @@ namespace wry::Coroutine {
         
         static void static_resume(void* ptr) {
             auto self = (Nursery*)ptr;
-            auto count = self->_counter.sub_fetch(1, Ordering::RELEASE);
+            auto count = self->_counter.sub_fetch_relaxed(1);
             if (count == 0) {
-                (void) self->_counter.load(Ordering::ACQUIRE);
+                (void) self->_counter.load_acquire();
                 ptr = self->_continuation.address();
                 [[clang::musttail]] return (*(void(**)(void*))ptr)(ptr);
                 // if we don't have tail call, we can use the global work queue
@@ -341,19 +341,19 @@ namespace wry::Coroutine {
             struct Awaitable {
                 Nursery* _nursery;
                 bool await_ready() const noexcept {
-                    auto count = _nursery->_counter.load(Ordering::RELAXED);
+                    auto count = _nursery->_counter.load_relaxed();
                     bool result = (count == -_nursery->_children);
                     if (result) {
-                        _nursery->_counter.exchange(0, Ordering::ACQUIRE);
+                        _nursery->_counter.exchange_acquire(0);
                         _nursery->_children = 0;
                     }
                     return result;
                 }
                 std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) const noexcept {
                     _nursery->_continuation = std::move(continuation);
-                    auto count = _nursery->_counter.add_fetch(std::exchange(_nursery->_children, 0), Ordering::RELEASE);
+                    auto count = _nursery->_counter.add_fetch_release(std::exchange(_nursery->_children, 0));
                     if (count == 0) {
-                        (void) _nursery->_counter.load(Ordering::ACQUIRE);
+                        (void) _nursery->_counter.load_acquire();
                         return _nursery->_continuation;
                     } else {
                         return std::noop_coroutine();
@@ -426,7 +426,7 @@ namespace wry::Coroutine {
         // atomically set the event and schedule any waiting coroutine
         
         void set_and_schedule_continuation() {
-            intptr_t was = _state.exchange(1, Ordering::ACQ_REL);
+            intptr_t was = _state.exchange_acq_rel(1);
             switch (was) {
                 case 0:
                     break;
@@ -442,7 +442,7 @@ namespace wry::Coroutine {
         }
         
         [[nodiscard]] std::coroutine_handle<> /* Nullable */ set_and_return_continuation() {
-            intptr_t was = _state.exchange(1, Ordering::ACQ_REL);
+            intptr_t was = _state.exchange_acq_rel(1);
             switch (was) {
                 case 0:
                     return nullptr;
@@ -456,7 +456,7 @@ namespace wry::Coroutine {
         // reset the event
         void reset() {
             intptr_t expected = 1;
-            (void) _state.compare_exchange_strong(expected, 0, Ordering::RELAXED, Ordering::RELAXED);
+            (void) _state.compare_exchange_strong_relaxed_relaxed(expected, 0);
             switch (expected) {
                 case 0:
                     // The event was not signaled anyway
@@ -474,7 +474,7 @@ namespace wry::Coroutine {
             intptr_t _expected = 0;
             
             bool await_ready() noexcept {
-                _expected = _context->_state.load(Ordering::ACQUIRE);
+                _expected = _context->_state.load_acquire();
                 // If the event is already set, just continue without suspending
                 return _expected == 1;
             }
@@ -485,10 +485,7 @@ namespace wry::Coroutine {
                 for (;;) switch (_expected) {
                     case 0:
                         // Atomically install the current coroutine as the awaiter
-                        if (_context->_state.compare_exchange_weak(_expected,
-                                                                   desired,
-                                                                   Ordering::RELEASE,
-                                                                   Ordering::ACQUIRE))
+                        if (_context->_state.compare_exchange_weak_release_acquire(_expected, desired))
                             return true;
                         break;
                     case 1:
@@ -528,15 +525,15 @@ namespace wry::Coroutine {
         }
         
         ~SingleConsumerLatch() {
-            assert(_counter.load(Ordering::RELAXED) == 0);
+            assert(_counter.load_relaxed() == 0);
         }
                 
         bool _count_down_common(ptrdiff_t n) {
             assert(n > 0);
-            ptrdiff_t count = _counter.sub_fetch(n, Ordering::RELEASE);
+            ptrdiff_t count = _counter.sub_fetch_release(n);
             bool result = (count == 0);
             if (result)
-                (void) _counter.load(Ordering::ACQUIRE);
+                (void) _counter.load_acquire();
             return result;
         }
         
@@ -559,7 +556,7 @@ namespace wry::Coroutine {
         }
         
         bool try_wait() const {
-            return _counter.load(Ordering::ACQUIRE) == 0;
+            return _counter.load_acquire() == 0;
         }
         
         
@@ -649,7 +646,7 @@ namespace wry::Coroutine {
             std::coroutine_handle<> _continuation;
             
             bool await_ready() noexcept {
-                _next = context->_state.load(Ordering::ACQUIRE);
+                _next = context->_state.load_acquire();
                 return _next == SET_YES;
             }
             
@@ -678,7 +675,7 @@ namespace wry::Coroutine {
         }
 
         void set() {
-            intptr_t was = _state.exchange(SET_YES, Ordering::ACQUIRE);
+            intptr_t was = _state.exchange_acquire(SET_YES);
             switch (was) {
                 case SET_YES:
                     break;
@@ -696,7 +693,7 @@ namespace wry::Coroutine {
         }
         
         void reset() {
-            intptr_t expected = _state.load(Ordering::RELAXED);
+            intptr_t expected = _state.load_relaxed();
             for (;;) switch (expected) {
                 case SET_YES:
                     if (_state.compare_exchange_weak(expected,
@@ -728,7 +725,7 @@ namespace wry::Coroutine {
             if (n < 0)
                 abort();
             if (n == 0) {
-                (void) _counter.load(Ordering::ACQUIRE);
+                (void) _counter.load_acquire();
                 _event.set();
             }
             return _event.operator co_await();
@@ -937,7 +934,7 @@ namespace wry::Coroutine {
             intptr_t expected = {};
             if (_awaiters)
                 goto ALPHA;
-            expected = _state.load(Ordering::RELAXED);
+            expected = _state.load_relaxed();
             for (;;) switch (expected) {
                 case UNLOCKED:
                     abort();

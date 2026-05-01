@@ -614,7 +614,7 @@ namespace wry {
         
         
         const MainNode* INode::load() const {
-            return main.load(Ordering::ACQUIRE);
+            return main.load_acquire();
         }
         
         bool INode::compare_exchange(const MainNode* expected, const MainNode* desired) const {

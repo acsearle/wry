@@ -77,7 +77,7 @@ namespace wry {
             virtual void _garbage_collected_scan() const /* override */ {
                 garbage_collected_scan(_key);
                 for (size_t i = 0; i != _size; ++i) {
-                    garbage_collected_scan(_next[i].load(Ordering::ACQUIRE));
+                    garbage_collected_scan(_next[i].load_acquire());
                 }
             }
             
@@ -108,7 +108,7 @@ namespace wry {
             // This is called only when the allocator is GC
             virtual void _garbage_collected_scan() const {
                 for (size_t i = 0; i != 33; ++i) {
-                    garbage_collected_scan(_next[i].load(Ordering::ACQUIRE));
+                    garbage_collected_scan(_next[i].load_acquire());
                 }
             }
             
@@ -137,7 +137,7 @@ namespace wry {
                 assert(current);
                 // acquire to iterate a live sequence, relaxed to iterate a frozen
                 // sequence
-                current = current->_next[0].load(Ordering::ACQUIRE);
+                current = current->_next[0].load_acquire();
                 return *this;
             }
             
@@ -201,7 +201,7 @@ namespace wry {
         FrozenCursor make_cursor() const {
             return FrozenCursor{
                 (FrozenNexts const*)(&_head->_top),
-                _head->_top.load(Ordering::RELAXED) - 1,
+                _head->_top.load_relaxed() - 1,
             };
         }
 
@@ -212,7 +212,7 @@ namespace wry {
         
         [[nodiscard]] iterator begin() const {
             return iterator{
-                _head->_next[0].load(Ordering::ACQUIRE)
+                _head->_next[0].load_acquire()
             };
         }
         
@@ -223,10 +223,10 @@ namespace wry {
         template<typename Query> [[nodiscard]] auto
         find(const Query& query) const -> iterator
         {
-            size_t i = _head->_top.load(Ordering::RELAXED) - 1;
+            size_t i = _head->_top.load_relaxed() - 1;
             Atomic<Node*> const* _Nonnull left = _head->_next + i;
             for (;;) {
-                Node* candidate = left->load(Ordering::ACQUIRE);
+                Node* candidate = left->load_acquire();
                 if (!candidate || H{}.compare(query, candidate->_key)) {
                     if (i == 0)
                         return iterator{nullptr};
@@ -249,11 +249,8 @@ namespace wry {
             // TODO: this is the only place we need to implement a write barrier
             assert(left && desired);
             assert(!expected || (H{}.compare(desired->_key, expected->_key)));
-            desired->_next[i].store(expected, Ordering::RELEASE);
-            if (left->compare_exchange_strong(expected,
-                                              desired,
-                                              Ordering::RELEASE,
-                                              Ordering::ACQUIRE))
+            desired->_next[i].store_release(expected);
+            if (left->compare_exchange_strong_release_acquire(expected, desired))
                 return { desired, true };
         beta:
             if (!expected || (H{}.compare(desired->_key, expected->_key)))
@@ -261,7 +258,7 @@ namespace wry {
             if (!(H{}.compare(expected->_key, desired->_key)))
                 return std::pair(expected, false);
             left = expected->_next + i;
-            expected = left->load(Ordering::ACQUIRE);
+            expected = left->load_acquire();
             goto beta;
         }
         
@@ -270,7 +267,7 @@ namespace wry {
                                                              auto&& keylike,
                                                              auto&&... args) {
         alpha:
-            Node* _Nullable candidate = left->load(Ordering::ACQUIRE);
+            Node* _Nullable candidate = left->load_acquire();
             if (!candidate || H{}.compare(keylike, candidate->_key))
                 goto beta;
             if (!(H{}.compare(candidate->_key, keylike)))
@@ -297,11 +294,11 @@ namespace wry {
         
         std::pair<iterator, bool> try_emplace(auto&& keylike, auto&&... args) {
             assert(_head);
-            size_t i = _head->_top.load(Ordering::RELAXED);
+            size_t i = _head->_top.load_relaxed();
             assert(i > 0);
             auto result = _try_emplace(i - 1, _head->_next + (i - 1), FORWARD(keylike), FORWARD(args)...);
             if (result.second && result.first->_size > i) {
-                _head->_top.fetch_max(result.first->_size, Ordering::RELAXED);
+                _head->_top.fetch_max_relaxed(result.first->_size);
                 while (i < result.first->_size) {
                     auto [discovered, wrote] = _link_level(i, _head->_next + i, nullptr, result.first);
                     assert(wrote);

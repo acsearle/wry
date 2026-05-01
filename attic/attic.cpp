@@ -686,7 +686,7 @@ namespace _persistent_map {
     //                                handle.destroy();
     //                                return std::noop_coroutine();
     //                            default: /* CONTINUATION */
-    //                                (void) handle.promise()._state.load(Ordering::ACQUIRE);
+    //                                (void) handle.promise()._state.load_acquire();
     //                                return std::coroutine_handle<>::from_address((void*)was);
     //                        }
     //                    }
@@ -2925,7 +2925,7 @@ inline constexpr _detail::_##NAME NAME;\
         
         template<std::derived_from<GarbageCollected> T>
         T* Scan<T*>::operator->() const {
-            return _object.load(Ordering::RELAXED);
+            return _object.load_relaxed();
         }
         
         template<std::derived_from<GarbageCollected> T>
@@ -2960,7 +2960,7 @@ inline constexpr _detail::_##NAME NAME;\
         
         template<std::derived_from<GarbageCollected> T>
         T* Scan<T*>::get() const {
-            return _object.load(Ordering::RELAXED);
+            return _object.load_relaxed();
         }
         
         template<std::derived_from<GarbageCollected> T>
@@ -3021,12 +3021,12 @@ inline constexpr _detail::_##NAME NAME;\
         
         template<PointerConvertibleTo<GarbageCollected> T>
         void garbage_collected_scan(const Scan<T*>& self) {
-            garbage_collected_scan(self._object.load(Ordering::ACQUIRE));
+            garbage_collected_scan(self._object.load_acquire());
         }
         
         template<PointerConvertibleTo<GarbageCollected> T>
         void garbage_collected_scan(const Scan<Atomic<T*>>& self) {
-            const T* a = self.load(Ordering::ACQUIRE);
+            const T* a = self.load_acquire();
             garbage_collected_scan(a);
         }
         
@@ -3045,7 +3045,7 @@ inline constexpr _detail::_##NAME NAME;\
         
         template<PointerConvertibleTo<GarbageCollected> T>
         void garbage_collected_shade(const Scan<Atomic<T*>>& self) {
-            const T* a = self.load(Ordering::ACQUIRE);
+            const T* a = self.load_acquire();
             if (a)
                 a->_garbage_collected_shade();
         }

@@ -141,45 +141,45 @@ namespace wry {
             }
             
             void push(T item) const {
-                CircularWeakArray<T> const* array = this->_array.load(Ordering::RELAXED);
-                ptrdiff_t bottom = this->_bottom.load(Ordering::RELAXED);
+                CircularWeakArray<T> const* array = this->_array.load_relaxed();
+                ptrdiff_t bottom = this->_bottom.load_relaxed();
                 ptrdiff_t capacity = array->capacity();
                 assert(bottom - _cached_top <= capacity);
                 if (bottom - _cached_top == capacity) {
                     // we may be out of space; refresh our knowledge of top
-                    _cached_top = this->_top.load(Ordering::SEQ_CST);
+                    _cached_top = this->_top.load_seq_cst();
                     assert(bottom - _cached_top <= capacity);
                     if (bottom - _cached_top == capacity) {
                         // we are out of space; expand the array
                         CircularWeakArray<T>* new_array = CircularWeakArray<T>::make(capacity << 1);
                         for (ptrdiff_t i = _cached_top; i != bottom; ++i)
-                            (*new_array)[i].store((*array)[i].load(Ordering::RELAXED), Ordering::RELAXED);
-                        _array.store(new_array, Ordering::RELEASE);
+                            (*new_array)[i].store_relaxed((*array)[i].load_relaxed());
+                        _array.store_release(new_array);
                         array = new_array;
                     }
                 }
-                (*array)[bottom].store(item, Ordering::RELAXED);
-                _bottom.store(bottom + 1, Ordering::RELEASE);
+                (*array)[bottom].store_relaxed(item);
+                _bottom.store_release(bottom + 1);
             }
             
             bool try_pop(T& item) const {
-                ptrdiff_t bottom = this->_bottom.load(Ordering::RELAXED);
+                ptrdiff_t bottom = this->_bottom.load_relaxed();
                 ptrdiff_t new_bottom = bottom - 1;
                 
-                _bottom.store(new_bottom, Ordering::RELAXED);
-                ptrdiff_t _cached_top = _top.load(Ordering::SEQ_CST);
+                _bottom.store_relaxed(new_bottom);
+                ptrdiff_t _cached_top = _top.load_seq_cst();
                 
                 assert(_cached_top <= bottom);
                 ptrdiff_t new_top = _cached_top + 1;
                 ptrdiff_t new_size = new_bottom - _cached_top;
                 if (new_size < 0) {
                     // the queue had no items
-                    _bottom.store(bottom, Ordering::RELAXED);
+                    _bottom.store_relaxed(bottom);
                     return false;
                 }
-                CircularWeakArray<T> const* array = this->_array.load(Ordering::RELAXED);
+                CircularWeakArray<T> const* array = this->_array.load_relaxed();
                 // speculative load
-                item = (*array)[new_bottom].load(Ordering::RELAXED);
+                item = (*array)[new_bottom].load_relaxed();
                 if (new_size > 0) {
                     // the queue had multiple items
                     return true;
@@ -192,18 +192,18 @@ namespace wry {
                                                                 Ordering::SEQ_CST,
                                                                 Ordering::RELAXED);
                 assert(bottom == new_top);
-                _bottom.store(bottom, Ordering::RELAXED);
+                _bottom.store_relaxed(bottom);
                 return success;
             }
             
             bool try_steal(T& item) const {
-                ptrdiff_t top = _top.load(Ordering::SEQ_CST);
-                ptrdiff_t bottom = _bottom.load(Ordering::ACQUIRE);
+                ptrdiff_t top = _top.load_seq_cst();
+                ptrdiff_t bottom = _bottom.load_acquire();
                 if (!(top < bottom))
                     return false;
-                CircularWeakArray<T> const* array = _array.load(Ordering::ACQUIRE);
+                CircularWeakArray<T> const* array = _array.load_acquire();
                 // speculative load
-                item = (*array)[top].load(Ordering::RELAXED);
+                item = (*array)[top].load_relaxed();
                 ptrdiff_t new_top = top + 1;
                 // try to claim the right to actually look at item
                 return _top.compare_exchange_weak(top,

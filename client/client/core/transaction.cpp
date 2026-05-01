@@ -71,7 +71,7 @@ namespace wry {
             // ORDER: We don't need to ACQUIRE or even RELEASE here because we
             // don't follow any pointers until after the thread barrier that
             // separates setting up all transactions from resolving all transactions
-            node->_next = head.load(Ordering::RELAXED);
+            node->_next = head.load_relaxed();
             while (!head.compare_exchange_weak(node->_next,
                                                node,
                                                Ordering::RELAXED,
@@ -188,7 +188,7 @@ namespace wry {
     
     Transaction::State Transaction::resolve() const {
         // Check if the transaction was already resolved
-        State observed = _state.load(Ordering::RELAXED);
+        State observed = _state.load_relaxed();
         if (observed != INITIAL)
             return observed;
         // We are in a race to resolve ourself and our dependencies
@@ -200,7 +200,7 @@ namespace wry {
                 // Get the head of the list of actions on this key
                 // ORDER: Transaction mutations happen-before the completion
                 // barrier happens-before transaction resolution
-                const Node* head = _nodes[i]._head->load(Ordering::RELAXED);
+                const Node* head = _nodes[i]._head->load_relaxed();
                 // Consider each action
                 for (; head; head = head->_next) {
                     // If that transaction is higher priority than us
@@ -233,7 +233,7 @@ namespace wry {
     }
 
     Transaction::State Transaction::abort() const {
-        State prior = _state.exchange(State::ABORTED, Ordering::RELAXED);
+        State prior = _state.exchange_relaxed(State::ABORTED);
         assert(prior != State::COMMITTED);
         if (prior != State::ABORTED)
             printf("EntityID %llu ABORTED\n", _entity->_entity_id.data);
@@ -243,7 +243,7 @@ namespace wry {
     }
 
     Transaction::State Transaction::commit() const {
-        State prior = _state.exchange(State::COMMITTED, Ordering::RELAXED);
+        State prior = _state.exchange_relaxed(State::COMMITTED);
         assert(prior != State::ABORTED);
 //        if (prior != State::COMMITTED)
 //            printf("COMMITTED transaction for EntityID %llu\n", _entity->_entity_id.data);
