@@ -378,9 +378,13 @@ it doesn't respect the code quoting.
 
 - Mutator shading: `_garbage_collected_shade` at
   [garbage_collected.cpp:58–63](../garbage_collected.cpp#L58-L63), and
-  through `Edge::operator=` calling `garbage_collected_shade` (the write
-  barrier on overwrite) and through `Root` reaching multiplicity zero
-  ([garbage_collected.hpp:256–258](../garbage_collected.hpp#L256-L258)).
+  through `Edge::operator=` calling `garbage_collected_shade` (the
+  Yuasa-style snapshot-at-the-beginning / deletion barrier — shades the
+  displaced pointer on overwrite) and through `Root` reaching multiplicity
+  zero ([garbage_collected.hpp:256–258](../garbage_collected.hpp#L256-L258)).
+  We use unconditional `fetch_or` on the gray bits rather than Yuasa's
+  classic "if white, shade gray"; equivalent because OR is idempotent on
+  any already-non-white object's gray bit.
 - Collector marking and clearing: `Collector::collector_scans`
   ([garbage_collected.cpp:351–554](../garbage_collected.cpp#L351-L554)),
   inside the per-object CAS loops on `_gray` and the plain writes to `_black`.

@@ -577,13 +577,22 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
     
     // GarbageCollectedSlot<T> — atomic strong edge to a GC object T.
     //
-    // Implements the Dijkstra write barrier: any pointer overwritten by a
-    // store/exchange/CAS is shaded, so the collector — which may be tracing
+    // Implements a Yuasa-style snapshot-at-the-beginning (deletion) write
+    // barrier: any pointer overwritten by a store/exchange/CAS has its
+    // displaced (old) value shaded, so the collector — which may be tracing
     // concurrently and may have observed the old pointer to be reachable but
     // not yet traced it — does not lose track of it.  The store path uses
     // an exchange so it can recover the displaced pointer; the inner
     // ordering is at least acq_rel (release publish + acquire to dereference
     // the displaced pointer for shading).
+    //
+    // Implementation note: Yuasa's classic formulation is "if the displaced
+    // value is white, shade it gray."  We omit the conditional and just
+    // unconditionally fetch_or the gray bits onto the displaced node.  Because
+    // gray and black both have the gray bit set, OR-ing onto an already-non-
+    // white object is idempotent on its color, so the unconditional form is
+    // semantically equivalent to Yuasa's conditional check, with a single
+    // RMW instead of a load-branch-store.
     //
     // Every load runs at ≥ acquire (so the loaded pointer can be safely
     // dereferenced) and every store publishes with ≥ release.  Names mirror
@@ -659,9 +668,9 @@ T* load_##public_order() const noexcept {\
             raw.nonatomic_store(desired);
         }
 
-        // Store: exchange + shade displaced.  Inner exchange at ≥ acq_rel:
-        // release publishes desired, acquire so the shade can dereference
-        // the displaced pointer's _gray field.
+        // Store: exchange + Yuasa shade of the displaced pointer.  Inner
+        // exchange at ≥ acq_rel: release publishes desired, acquire so the
+        // shade can dereference the displaced pointer's _gray field.
 
 #define MAKE_WRY_ATOMIC_GC_STORE(public_order, internal_order) \
 void store_##public_order(T* desired) noexcept {\

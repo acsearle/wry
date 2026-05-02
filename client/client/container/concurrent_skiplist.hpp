@@ -44,6 +44,7 @@ namespace wry {
         x ^= x >>  7;
         x ^= x << 17;
         _skiplist_prng_state = x;
+        assert(x != 0);
         return x;
     }
     
@@ -164,7 +165,7 @@ namespace wry {
         
         struct Head : IntrusiveAllocator {
             
-            static constexpr size_t HEAD_LEVELS = 33;
+            static constexpr size_t HEAD_LEVELS = 64;
             
             // Local placement-new: GarbageCollected's `operator new(size_t)`
             // would otherwise hide the global placement form via class-scope
@@ -197,7 +198,7 @@ namespace wry {
             // search-acceleration pointers that don't introduce reachability
             // — every node they reach is also reachable via level 0.  Tracing
             // from _next[0] reaches every node in O(N) hops.  Skipping the
-            // upper slots saves both per-scan work (no 33-slot loop) and any
+            // upper slots saves both per-scan work (no HEAD_LEVELS-slot loop) and any
             // ordering tangle around _top: we never load _top in the scan.
             //
             // _compare is scanned in case the user's comparator carries GC
