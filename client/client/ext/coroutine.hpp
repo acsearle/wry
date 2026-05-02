@@ -781,7 +781,7 @@ namespace wry::Coroutine {
          void (*__resume)(void* addr);
          void (*__destroy)(void* addr);
          __coroutine_promise_type __promise;
-         byte __state[0];
+         byte __state[];
      };
      
      LLVM will instantiate a single __resume function that switches over an

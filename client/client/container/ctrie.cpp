@@ -30,7 +30,7 @@ namespace wry {
             static std::pair<uint64_t, int> flagpos(uint64_t h, int lev, uint64_t bmp);
             
             uint64_t bmp;
-            const BranchNode* array[0];
+            const BranchNode* array[];
             
             CNode();
             virtual ~CNode() override;

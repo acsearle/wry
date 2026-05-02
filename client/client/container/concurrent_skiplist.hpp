@@ -61,7 +61,7 @@ namespace wry {
             
             Key _key;
             size_t _size;
-            NextSlot _next[0] __counted_by(_size);
+            NextSlot _next[] __counted_by(_size);
 
             explicit Node(size_t n, auto&&... args)
             : IntrusiveAllocator()
@@ -113,7 +113,7 @@ namespace wry {
         struct Head : IntrusiveAllocator {
             
             Atomic<size_t> _top;
-            NextSlot _next[0];
+            NextSlot _next[];
 
             static void* _Nonnull  operator new(size_t count, void* _Nonnull ptr) {
                 return ptr;

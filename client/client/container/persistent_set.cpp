@@ -73,14 +73,14 @@
  uint64_t _prefix;      // (58 - _shift) upper bits common to keys
  int _shift;            // bits for indexing
  uint64_t _bitmap;      // map of bits for indexing
- Node<T>* _children[0]; // popcount(_bitmap) children
+ Node<T>* _children[]; // popcount(_bitmap) children
  };
  
  template<typename T>
  struct Leaf : GarbageCollected {
  uint64_t _prefix; // upper 58 bits common to keys
  uint64_t _bitmap; // map of lower six bits of keys
- T _values[0];     // popcount(_bitmap) values
+ T _values[];     // popcount(_bitmap) values
  
  T* find(uint64_t key) {
  if ((_prefix ^ key) >> 6)

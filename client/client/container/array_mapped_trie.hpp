@@ -85,8 +85,8 @@ namespace wry::array_mapped_trie {
         Bitmap _bitmap; // bitmap of which items are present
         union {
             // compressed flexible member array of children or values
-            Node const* _Nonnull _children[0] __counted_by(_debug_count);
-            T _values[0] __counted_by(_debug_count);
+            Node const* _Nonnull _children[] __counted_by(_debug_count);
+            T _values[] __counted_by(_debug_count);
         };
                         
         Key get_prefix_mask() const {

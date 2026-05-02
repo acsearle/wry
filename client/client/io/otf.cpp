@@ -55,7 +55,7 @@ namespace wry::otf {
         uint16 searchRange;
         uint16 entrySelector;
         uint16 rangeShift;
-        TableRecord tableRecords[0];
+        TableRecord tableRecords[];
     };
     
     
@@ -70,7 +70,7 @@ namespace wry::otf {
         
         uint16 version;
         uint16 numTables;
-        EncodingRecord encodingRecords[0];
+        EncodingRecord encodingRecords[];
     
         struct Format4 {
             uint16 format;
@@ -80,7 +80,7 @@ namespace wry::otf {
             uint16 searchRange;
             uint16 entrySelector;
             uint16 rangeShift;
-            uint16 endCode[0];
+            uint16 endCode[];
         };
         
     };
@@ -134,7 +134,7 @@ namespace wry::otf {
             FWORD lsb;
         };
         
-        LongHorMetric hMetrics[0];
+        LongHorMetric hMetrics[];
         
     };
         

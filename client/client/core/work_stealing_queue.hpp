@@ -83,7 +83,7 @@ namespace wry {
         struct CircularWeakArray : GarbageCollected {
             
             size_t _mask;
-            mutable Atomic<T> _data[0];
+            mutable Atomic<T> _data[];
             
             size_t capacity() const { return _mask + 1; }
             
