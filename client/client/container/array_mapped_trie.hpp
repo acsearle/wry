@@ -462,7 +462,6 @@ namespace wry::array_mapped_trie {
                 auto [a, b] = partition_mask(*p, key, mask);
                 if (a) {
                     if (result.first) {
-                        mutator_overwrote(result.first);
                         result.first = merge(result.first, a);
                     } else {
                         result.first = a;
@@ -470,7 +469,6 @@ namespace wry::array_mapped_trie {
                 }
                 if (b) {
                     if (result.second) {
-                        mutator_overwrote(result.second);
                         result.second = merge(result.second, b);
                     } else {
                         result.second = b;
@@ -508,26 +506,23 @@ namespace wry::array_mapped_trie {
             Key key = new_child->_prefix;
             assert(prefix_includes_key(key));
             Node* _Nonnull new_node = clone_with_capacity(popcount(_bitmap));
-            // Node const* old_child =
             (void) compressed_array_exchange_for_index(new_node->_bitmap,
                                                        new_node->_children,
                                                        get_index_for_key(key),
                                                        new_child);
-            // mutator_overwrote(old_child);
             return new_node;
         }
-        
-        Node* _Nonnull clone_and_erase_child_containing_key(Key key) const {
+
+        [[nodiscard]] Node* _Nonnull clone_and_erase_child_containing_key(Key key) const {
             assert(has_children());
             Node* new_node = clone_with_capacity(popcount(_bitmap));
-            const Node* old_child = nullptr;
+            [[maybe_unused]] Node const* _ = nullptr;
             bool did_erase = compressed_array_erase_for_index(new_node->_debug_capacity,
                                                               new_node->_bitmap,
                                                               new_node->_children,
                                                               get_index_for_key(key),
-                                                              old_child);
+                                                              _);
             assert(did_erase);
-            // mutator_overwrote(old_child);
             --(new_node->_debug_count);
             return new_node;
         }

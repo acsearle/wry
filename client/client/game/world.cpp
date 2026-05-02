@@ -270,17 +270,11 @@ namespace wry {
                                                          context._verb_entity_for_entity_id,
                                                          action_for_entity_for_entity_id));
         
-        mutator_overwrote(new_waiting_on_time._inner);
         co_await nursery.fork(new_waiting_on_time,
                               coroutine_parallel_rebuild(new_waiting_on_time,
                                                          context._wait_on_time,
                                                          action_for_waiting_on_time));
-        
-        
-        // TODO: Unlike the overwrites above, we have multiple winners and we
-        // want to merge them into the target value
-                
-                
+
         co_await nursery.join();
         
         // HACK: We have two separate representations of work for next_time,

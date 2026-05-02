@@ -47,15 +47,7 @@ namespace wry {
         
         PersistentStack() = default;
         PersistentStack(PersistentStack const& other) = default;
-        PersistentStack& operator=(PersistentStack const& other) {
-            mutator_overwrote(std::exchange(_head, other._head));
-            return *this;
-        }
-        
-//        ~PersistentStack() {
-//            printf(__PRETTY_FUNCTION__);
-//            //mutator_overwrote(_head);
-//        }
+        PersistentStack& operator=(PersistentStack const& other) = default;
 
         [[nodiscard]] auto
         tail() const -> PersistentStack {
@@ -77,7 +69,6 @@ namespace wry {
         auto
         pop() -> T {
             assert(_head);
-            mutator_overwrote(_head);
             return std::exchange(_head, _head->_next)->_payload;
         }
         
@@ -93,7 +84,6 @@ namespace wry {
         
         auto
         push(auto&& desired) -> void {
-            mutator_overwrote(_head);
             _head = new Node(_head, FORWARD(desired));
         }
                         

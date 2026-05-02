@@ -279,8 +279,12 @@ namespace wry {
             if (i == 0) {
                 Node* _Nonnull p = Node::with_random_size_emplace(FORWARD(keylike), FORWARD(args)...);
                 auto result = _link_level(0, left, candidate, p);
-                if (!result.second)
+                if (!result.second) {
+                    // TODO: This trips ~BumpAllocator
+                    // Cleaning up the unused new node is a good idea in
+                    // general.  But we need to decide on a policy here
                     delete p; // <-- Uses custom operator delete
+                }
                 return result;
             } else {
                 auto result = _try_emplace(i - 1, left - 1, FORWARD(keylike), FORWARD(args)...);

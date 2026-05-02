@@ -141,16 +141,13 @@ namespace wry {
                 case ParallelRebuildAction<T>::NONE:
                     break;
                 case ParallelRebuildAction<T>::WRITE_VALUE:
-                    mutator_overwrote(result.ki._inner);
                     result.ki = as_multimap_replace(result.ki, first->first, std::move(p.second.value));
                     break;
                 case ParallelRebuildAction<T>::CLEAR_VALUE:
                     assert(p.second.value.empty());
-                    mutator_overwrote(result.ki._inner);
                     result.ki = as_multimap_erase(result.ki, first->first);
                     break;
                 case ParallelRebuildAction<T>::MERGE_VALUE:
-                    mutator_overwrote(result.ki._inner);
                     result.ki = as_multimap_merge(result.ki, first->first, std::move(p.second.value));
                     break;
             }

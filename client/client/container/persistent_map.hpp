@@ -80,14 +80,12 @@ namespace wry {
         // Mutable interface.  The backing structure remains immutable; this is
         // just sugar to tersely swing the pointer.
         PersistentMap& set(Key key, T value) {
-            mutator_overwrote(_inner);
             *this = clone_and_set(key, value);
             return *this;
         }
 
         bool try_erase(Key key, T& victim) {
             auto [node, flag] = clone_and_try_erase(key, victim);
-            mutator_overwrote(_inner);
             _inner = node._inner;
             return flag;
         }

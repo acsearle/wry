@@ -53,7 +53,6 @@ namespace wry {
         // Mutable interface.  The backing structure remains immutable; this is
         // just sugar to tersely swing the pointer.
         PersistentSet& set(Key key) {
-            mutator_overwrote(_inner);
             return *this = clone_and_set(key);
         }
                 
@@ -89,7 +88,6 @@ namespace wry {
         }
         
         void merge(PersistentSet const& other) {
-            mutator_overwrote(_inner);
             _inner = N::merge(_inner, other._inner);
         }
         
