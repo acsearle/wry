@@ -27,7 +27,7 @@ namespace wry::concurrent_map {
                 auto [p, f] = a.try_emplace(k, v);
                 auto [q, g] = b.try_emplace(k, v);
                 assert(f == g);
-                if (!p) {
+                if (p != a.end()) {
                     assert(p->second == q->second);
                 }
             }

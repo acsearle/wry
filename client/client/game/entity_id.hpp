@@ -47,7 +47,7 @@ namespace wry {
             return EntityID{.data = h};
         }
         
-        constexpr bool compare(key_type a, key_type b) const {
+        constexpr bool operator()(key_type a, key_type b) const {
             return hash(a) < hash(b);
         }
 

@@ -26,9 +26,11 @@ namespace wry {
         using hash_type = std::make_unsigned_t<T>;
         constexpr hash_type hash(key_type key) const { return key; }
         constexpr key_type unhash(hash_type z) const { return z; }
-        constexpr bool compare(key_type a, key_type b) const {
+        
+        constexpr bool operator()(key_type a, key_type b) const {
             return a < b;
         }
+        
     };
     
     // TODO: This should use a DefaultKeyService for A and B individually
@@ -60,7 +62,7 @@ namespace wry {
             __builtin_memcpy(&key.first, (char*)&z + sizeof(B), sizeof(A));
             return key;
         }
-        constexpr bool compare(key_type a, key_type b) const {
+        constexpr bool operator()(key_type a, key_type b) const {
             return hash(a) < hash(b);
         }
     };

@@ -60,7 +60,7 @@ namespace wry {
             
         }
         
-        constexpr bool compare(key_type a, key_type b) const {
+        constexpr bool operator()(key_type a, key_type b) const {
             return hash(a) < hash(b);
         }
         

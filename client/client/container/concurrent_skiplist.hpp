@@ -17,8 +17,21 @@
 
 namespace wry {
     
-    // Concurrent skiplist without erasure
-        
+    // Concurrent skiplist
+    //
+    // size() and erase() lack a compelling use case at the moment are not
+    // currently implemented.  Both would likely involve significant changes
+    // and introduce per-operation overhead.
+    // - size() would require maintaining an essentially separate concurrent
+    //   counter.
+    // - erase() would require upgrading each level into a Harris-Michael linked
+    //   list, with a stolen pointer bit marking deletion, and every (mutating)
+    //   traversal required to help in the cleanup.
+    
+    // References:
+    // Tim Harris, "A Pragmatic Implementation of Non-Blocking Linked-Lists," DISC 2001
+    // Maged Michael, "High Performance Dynamic Lock-Free Hash Tables and List-Based Sets," SPAA 2002
+    // Fraser & Harris, "Concurrent Programming Without Locks," TOCS 2007
     
     // Constinit-ialize to a nonzero value.  Keeps the thread_local as cheap as possible.
     // We don't really care that the threads start out synchronized
@@ -34,14 +47,14 @@ namespace wry {
         return x;
     }
     
-    template<typename Key, typename H = DefaultKeyService<Key>, typename IntrusiveAllocator = EpochAllocated>
+    template<typename Key, typename Compare = DefaultKeyService<Key>, typename IntrusiveAllocator = EpochAllocated>
     struct ConcurrentSkiplistSet {
 
         struct Node;
 
         // The slot type for in-skiplist edges to Nodes.  We dispatch on
         // IntrusiveAllocator (complete at this point) rather than going
-        // through NextSlot (which would invoke slot_for<Node*> and need
+        // through Slot<Node*> (which would invoke slot_for<Node*> and need
         // Node complete — Node is mid-definition where _next[] is
         // declared).  GarbageCollectedSlot's class body must be parsable
         // even with Node forward-only, which is why its static_assert
@@ -54,14 +67,12 @@ namespace wry {
 
         struct Node : IntrusiveAllocator {
             
+            // Local placement-new: GarbageCollected's `operator new(size_t)`
+            // would otherwise hide the global placement form via class-scope
+            // name lookup, breaking `new(raw) Node` inside `with_size_emplace()`.
             static void* _Nonnull  operator new(size_t count, void* _Nonnull ptr) {
                 return ptr;
             }
-            
-            // size member is not essential to the major operations
-            // - needed for memory debug
-            // - needed for GC scanning
-            //   - which is itself not needed for ephemeral operation
             
             Key _key;
             size_t _size;
@@ -75,6 +86,7 @@ namespace wry {
 
             static Node* _Nonnull with_size_emplace(size_t n, auto&&... args) {
                 size_t number_of_bytes = sizeof(Node) + sizeof(NextSlot) * n;
+                // Not checked; we accept crashing on OOM.
                 void* _Nonnull raw = IntrusiveAllocator::operator new(number_of_bytes,
                                                                       std::align_val_t{alignof(Node)});
                 std::memset(raw, 0, number_of_bytes);
@@ -83,7 +95,7 @@ namespace wry {
             
             static Node* _Nonnull with_random_size_emplace(auto&&... args) {
                 size_t n = 1 + __builtin_ctzll(_skiplist_xorshift64());
-                Node* a = with_size_emplace(n, std::forward<decltype(args)>(args)...);
+                Node* a = with_size_emplace(n, FORWARD(args)...);
                 return a;
             }
             
@@ -112,40 +124,6 @@ namespace wry {
             }
 
         }; // struct Node
-        
-        
-        struct Head : IntrusiveAllocator {
-            
-            Atomic<size_t> _top;
-            NextSlot _next[];
-
-            static void* _Nonnull  operator new(size_t count, void* _Nonnull ptr) {
-                return ptr;
-            }
-
-            Head() : _top(1) {}
-
-            static Head* _Nonnull make() {
-                size_t n = 33;
-                size_t number_of_bytes = sizeof(Head) + sizeof(NextSlot) * n;
-                void* _Nonnull raw = IntrusiveAllocator::operator new(number_of_bytes,
-                                                                  std::align_val_t{alignof(Head)});
-                std::memset(raw, 0, number_of_bytes);
-                return new(raw) Head;
-            }
-            
-            // Implicit-override pattern, see Node above.
-            void _garbage_collected_scan() const {
-                for (size_t i = 0; i != 33; ++i) {
-                    garbage_collected_scan(_next[i].load_acquire());
-                }
-            }
-
-            void _garbage_collected_debug() const {
-                printf("%s\n", __PRETTY_FUNCTION__);
-            }
-
-        };
         
         struct iterator {
             
@@ -180,12 +158,66 @@ namespace wry {
                 return old;
             }
             
-            operator bool() const {
-                return current;
+        }; // struct iterator
+        
+        
+        struct Head : IntrusiveAllocator {
+            
+            static constexpr size_t HEAD_LEVELS = 33;
+            
+            // Local placement-new: GarbageCollected's `operator new(size_t)`
+            // would otherwise hide the global placement form via class-scope
+            // name lookup, breaking `new(raw) Head` inside `make()`.
+            static void* _Nonnull  operator new(size_t count, void* _Nonnull ptr) {
+                return ptr;
+            }
+
+            Compare _compare;
+            Atomic<size_t> _top;
+            NextSlot _next[] __counted_by(HEAD_LEVELS);
+            
+            explicit Head(Compare comp) : _compare(std::move(comp)), _top(1) {}
+
+            static Head* _Nonnull make(Compare comp) {
+                size_t n = HEAD_LEVELS;
+                size_t number_of_bytes = sizeof(Head) + sizeof(NextSlot) * n;
+                // Not checked; we accept crashing on OOM.
+                void* _Nonnull raw = IntrusiveAllocator::operator new(number_of_bytes,
+                                                                  std::align_val_t{alignof(Head)});
+                std::memset(raw, 0, number_of_bytes);
+                return new(raw) Head(std::move(comp));
             }
             
-        }; // struct iterator
+            // Implicit-override pattern, see Node above.
+            void _garbage_collected_scan() const {
+                garbage_collected_scan(_compare);
+                for (size_t i = 0; i != HEAD_LEVELS; ++i) {
+                    garbage_collected_scan(_next[i].load_acquire());
+                }
+            }
 
+            void _garbage_collected_debug() const {
+                printf("%s\n", __PRETTY_FUNCTION__);
+            }
+            
+            // Forward declare substantial methods
+            
+            template<typename Query> [[nodiscard]] iterator
+            find(const Query& query) const;
+            
+            [[nodiscard]] std::pair<Node* _Nullable, bool>
+            _link_level(size_t i, NextSlot* _Nonnull left, Node* _Nullable expected, Node* _Nonnull desired);
+
+            template<typename Keylike, typename... Args>
+            std::pair<Node* _Nullable, bool>
+            _try_emplace(size_t i, NextSlot* _Nonnull left, Keylike&& keylike, Args&&... args);
+            
+            template<typename Keylike, typename... Args>
+            std::pair<iterator, bool>
+            try_emplace(Keylike&& keylike, Args&&... args);
+
+        };
+        
         // Cursor for use after a "freeze" point — i.e., once all writers
         // to this skiplist have stopped and happens-before with the
         // current thread has been established (e.g. via an epoch advance).
@@ -239,9 +271,12 @@ namespace wry {
             };
         }
 
-        
         ConcurrentSkiplistSet()
-        : _head(Head::make()) {
+        : ConcurrentSkiplistSet(Compare{}) {
+        }
+
+        explicit ConcurrentSkiplistSet(Compare comp)
+        : _head(Head::make(std::move(comp))) {
         }
         
         [[nodiscard]] iterator begin() const {
@@ -254,105 +289,143 @@ namespace wry {
             return iterator{nullptr};
         }
         
-        template<typename Query> [[nodiscard]] auto
-        find(const Query& query) const -> iterator
-        {
-            size_t i = _head->_top.load_relaxed() - 1;
-            NextSlot const* _Nonnull left = _head->_next + i;
-            for (;;) {
-                Node* candidate = left->load_acquire();
-                if (!candidate || H{}.compare(query, candidate->_key)) {
-                    if (i == 0)
-                        return iterator{nullptr};
-                    --i;
-                    --left;
-                } else if (H{}.compare(candidate->_key, query)) {
-                    left = candidate->_next + i;
-                } else {
-                    return iterator{candidate};
-                }
-            }
-        }
-        
-        [[nodiscard]] static auto
-        _link_level(size_t i, NextSlot* _Nonnull left,
-                    Node* _Nullable expected, Node* _Nonnull desired)
-        -> std::pair<Node* _Nullable, bool>
-        {
-        alpha:
-            assert(left && desired);
-            assert(!expected || (H{}.compare(desired->_key, expected->_key)));
-            // desired is thread-private here; the publishing CAS below
-            // carries release ordering, so this preceding store can be
-            // non-atomic.
-            desired->_next[i].nonatomic_store(expected);
-            if (left->compare_exchange_strong_release_acquire(expected, desired))
-                return { desired, true };
-        beta:
-            if (!expected || (H{}.compare(desired->_key, expected->_key)))
-                goto alpha;
-            if (!(H{}.compare(expected->_key, desired->_key)))
-                return std::pair(expected, false);
-            left = expected->_next + i;
-            expected = left->load_acquire();
-            goto beta;
-        }
-        
-        static std::pair<Node* _Nullable, bool> _try_emplace(size_t i,
-                                                             NextSlot* _Nonnull left,
-                                                             auto&& keylike,
-                                                             auto&&... args) {
-        alpha:
-            Node* _Nullable candidate = left->load_acquire();
-            if (!candidate || H{}.compare(keylike, candidate->_key))
-                goto beta;
-            if (!(H{}.compare(candidate->_key, keylike)))
-                return {candidate, false};
-            left = candidate->_next + i;
-            goto alpha;
-        beta:
-            assert(!candidate || H{}.compare(keylike, candidate->_key));
-            if (i == 0) {
-                return _link_level(0, left, candidate,
-                                   Node::with_random_size_emplace(FORWARD(keylike),
-                                                                  FORWARD(args)...));
-                // If _link_level fails, we are relying on the Node we just
-                // created being cleaned up eventually by IntrusiveAllocator.
-                // Doing nothing is correct for EpochAllocator and
-                // GarbageCollected.
-            } else {
-                auto result = _try_emplace(i - 1, left - 1, FORWARD(keylike), FORWARD(args)...);
-                if (result.second && (i < result.first->_size)) {
-                    result = _link_level(i, left, candidate, result.first);
-                    assert(result.second);
-                }
-                return result;
-            }
-        }
-        
-        std::pair<iterator, bool> try_emplace(auto&& keylike, auto&&... args) {
+        template<typename Query>
+        [[nodiscard]] iterator find(Query const& query) const {
             assert(_head);
-            size_t i = _head->_top.load_relaxed();
-            assert(i > 0);
-            auto result = _try_emplace(i - 1, _head->_next + (i - 1), FORWARD(keylike), FORWARD(args)...);
-            if (result.second && result.first->_size > i) {
-                _head->_top.fetch_max_relaxed(result.first->_size);
-                while (i < result.first->_size) {
-                    auto [discovered, wrote] = _link_level(i, _head->_next + i, nullptr, result.first);
-                    assert(wrote);
-                    // TODO: Handle the failure of _link_level.  What does it
-                    // mean?
-                    ++i;
-                }
-            }
-            return { iterator{ result.first }, result.second };
+            return _head->find(query);
         }
         
-        // TODO: emplace keeps an existing value.  What do we want for
-        // pairs?
+        template<typename Keylike, typename... Args>
+        std::pair<iterator, bool> try_emplace(Keylike&& keylike, Args&&... args) {
+            assert(_head);
+            return _head->try_emplace(FORWARD(keylike), FORWARD(args)...);
+            
+        }
         
-    }; // concurrent_skiplist<Key, Compare>
+        
+    }; // ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>
 
+    
+    template<typename Key, typename Compare, typename IntrusiveAllocator>
+    template<typename Query>
+    [[nodiscard]] ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::iterator
+    ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::Head
+    ::find(Query const& query) const
+    {
+        size_t i = _top.load_relaxed() - 1;
+        assert((i + 1) > 0);
+        NextSlot const* _Nonnull left = _next + i;
+        for (;;) {
+            Node* candidate = left->load_acquire();
+            if (!candidate || _compare(query, candidate->_key)) {
+                if (i == 0)
+                    return iterator{nullptr};
+                --i;
+                --left;
+            } else if (_compare(candidate->_key, query)) {
+                left = candidate->_next + i;
+            } else {
+                return iterator{candidate};
+            }
+        }
+    }
+    
+    template<typename Key, typename Compare, typename IntrusiveAllocator>
+    [[nodiscard]] std::pair<typename ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::Node* _Nullable, bool>
+    ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::Head
+    ::_link_level(size_t i, NextSlot* _Nonnull left,
+                  Node* _Nullable expected, Node* _Nonnull desired)
+    {
+        // STYLE: GOTO considered helpful for concurrent code that
+        // handles failure by restarting from an earlier step.
+        // Nested loops introduce a lot of indentation noise and their
+        // multiple conditional breaks and continues require careful
+        // reasoning to work out where control flow actually ends up. /rant
+    alpha:
+        assert(left && desired);
+        assert(!expected || (std::as_const(_compare)(desired->_key, expected->_key)));
+        // desired is thread-private here; the publishing CAS below
+        // carries release ordering, so this preceding store can be
+        // non-atomic.
+        desired->_next[i].nonatomic_store(expected);
+        if (left->compare_exchange_strong_release_acquire(expected, desired))
+            return { desired, true };
+    beta:
+        if (!expected || (std::as_const(_compare)(desired->_key, expected->_key)))
+            goto alpha;
+        if (!(std::as_const(_compare)(expected->_key, desired->_key)))
+            return std::pair(expected, false);
+        left = expected->_next + i;
+        expected = left->load_acquire();
+        goto beta;
+    }
+    
+    template<typename Key, typename Compare, typename IntrusiveAllocator>
+    template<typename Keylike, typename... Args>
+    std::pair<typename ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::Node* _Nullable, bool>
+    ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::Head
+    ::_try_emplace(size_t i,
+                   NextSlot* _Nonnull left,
+                   Keylike&& keylike,
+                   Args&&... args) {
+    alpha:
+        Node* _Nullable candidate = left->load_acquire();
+        if (!candidate || std::as_const(_compare)(keylike, candidate->_key))
+            goto beta;
+        if (!(std::as_const(_compare)(candidate->_key, keylike)))
+            return {candidate, false};
+        left = candidate->_next + i;
+        goto alpha;
+    beta:
+        assert(!candidate || std::as_const(_compare)(keylike, candidate->_key));
+        if (i == 0) {
+            return _link_level(0, left, candidate,
+                               Node::with_random_size_emplace(FORWARD(keylike),
+                                                              FORWARD(args)...));
+            // If _link_level fails, we are relying on the Node we just
+            // created being cleaned up eventually by IntrusiveAllocator.
+            // Doing nothing is correct for EpochAllocator and
+            // GarbageCollected.
+        } else {
+            auto result = _try_emplace(i - 1, left - 1, FORWARD(keylike), FORWARD(args)...);
+            if (result.second && (i < result.first->_size)) {
+                result = _link_level(i, left, candidate, result.first);
+                assert(result.second);
+            }
+            return result;
+        }
+    }
+    
+    
+    // `try_emplace` is winner-takes-all on the value; intended for sets of
+    // strongly ordered values or for atomic-headed coordination patterns
+    // For other concurrent map use, prefer a different primitive that can
+    // delegate the decision of what ends up in the structure.
+    // `java.util.concurrentConcurrentHashMap.compute` is an example
+    template<typename Key, typename Compare, typename IntrusiveAllocator>
+    template<typename Keylike, typename... Args>
+    std::pair<typename ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::iterator, bool>
+    ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::Head
+    ::try_emplace(Keylike&& keylike, Args&&... args) {
+        size_t i = _top.load_relaxed();
+        assert(i > 0);
+        auto result = _try_emplace(i - 1, _next + (i - 1), FORWARD(keylike), FORWARD(args)...);
+        if (result.second && result.first->_size > i) {
+            _top.fetch_max_relaxed(result.first->_size);
+            while (i < result.first->_size) {
+                auto [discovered, wrote] = _link_level(i, _next + i, nullptr, result.first);
+                // _link_level only returns wrote=false when an equivalent key is
+                // already in the level-i chain.  By the skiplist invariant, any
+                // level-i node is also in level 0; we just successfully inserted
+                // at level 0 with a unique key, so no equivalent key exists at
+                // any level.  Hence wrote should always be true here.
+                assert(wrote);
+                ++i;
+            }
+        }
+        return { iterator{ result.first }, result.second };
+    }
+    
 
     // ADL hook for GC parents that hold a ConcurrentSkiplistSet member.
     //
@@ -375,6 +448,12 @@ namespace wry {
     }
 
 
+    // ConcurrentSkiplistMap by wrapping a ConcurrentSkiplistSet.
+    //
+    // In the absence of a compelling use case, no way is provided to mutate an
+    // existing element yet.  In general, it would require T to be atomic.
+    
+    
     template<typename Key, typename T, typename H = DefaultKeyService<Key>>
     struct ConcurrentSkiplistMap {
         
@@ -382,6 +461,10 @@ namespace wry {
         
         struct ComparePair : H {
             
+            // This helper allows us to overload the function object to
+            // provide ordering for combinations of (Key, T) and Key
+            //
+            // TODO: Unify with KeyService
             static decltype(auto) key_if_pair(auto&& keylike) {
                 if constexpr (std::is_same_v<std::decay_t<decltype(keylike)>, P>) {
                     return std::forward_like<decltype(keylike)>(keylike.first);
@@ -390,8 +473,8 @@ namespace wry {
                 }
             }
             
-            bool compare(auto&& a, auto&& b) const {
-                return H{}.compare(key_if_pair(FORWARD(a)),
+            bool operator()(auto&& a, auto&& b) const {
+                return H{}(key_if_pair(FORWARD(a)),
                                  key_if_pair(FORWARD(b)));
             }
             
@@ -422,17 +505,6 @@ namespace wry {
         Cursor make_cursor() const {
             return _set.make_cursor();
         }
-
-        
-        /*
-         const T& operator[](auto&& keylike) const {
-         return _set.try_emplace(FORWARD(keylike), T{}).first->second;
-         }
-         
-         T& operator[](auto&& keylike) {
-         return _set.try_emplace(FORWARD(keylike), T{}).first->second;
-         }
-         */
         
     }; // struct concurrent_skiplist_map
     
