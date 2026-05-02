@@ -9,20 +9,30 @@
 #define concurrent_skiplist_hpp
 
 
-#include <cassert>
-
-#include <random>
-
-#include "garbage_collected.hpp"
+#include "assert.hpp"
 #include "epoch_allocator.hpp"
-#include "utility.hpp"
+#include "garbage_collected.hpp"
 #include "key_service.hpp"
+#include "utility.hpp"
 
 namespace wry {
     
     // Concurrent skiplist without erasure
         
-    inline constinit thread_local std::ranlux24* _Nullable thread_local_random_number_generator = nullptr;
+    
+    // Constinit-ialize to a nonzero value.  Keeps the thread_local as cheap as possible.
+    // We don't really care that the threads start out synchronized
+    // TODO: On pool thread entry, replace value with something better
+    constinit inline thread_local uint64_t _skiplist_prng_state = 0x9E3779B97F4A7C15ULL;
+    
+    inline uint64_t _skiplist_xorshift64() {
+        uint64_t x = _skiplist_prng_state;
+        x ^= x << 13;
+        x ^= x >>  7;
+        x ^= x << 17;
+        _skiplist_prng_state = x;
+        return x;
+    }
     
     template<typename Key, typename H = DefaultKeyService<Key>, typename IntrusiveAllocator = EpochAllocated>
     struct ConcurrentSkiplistSet {
@@ -67,16 +77,8 @@ namespace wry {
                 return new(raw) Node(n, FORWARD(args)...);
             }
             
-            // TODO: restrict generator to a maximum of 1 + current size?
-            //
-            // TODO: tune shape of distribution
-            // Quick experiment indicates a n^{-0.5} is better than n^{-0.25}
             static Node* _Nonnull with_random_size_emplace(auto&&... args) {
-                // TODO: initialize this on thread
-                if (!thread_local_random_number_generator) {
-                    thread_local_random_number_generator = new std::ranlux24;
-                }
-                size_t n = 1 + __builtin_ctz((*thread_local_random_number_generator)());
+                size_t n = 1 + __builtin_ctzll(_skiplist_xorshift64());
                 Node* a = with_size_emplace(n, std::forward<decltype(args)>(args)...);
                 return a;
             }

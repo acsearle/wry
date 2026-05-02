@@ -18,9 +18,6 @@ namespace wry {
 
     define_test("skiplist") {
                    
-        // TODO: Competes with ConcurrentMap test
-        thread_local_random_number_generator = new std::ranlux24;
-
         {
             ConcurrentSkiplistSet<int> a;
             std::set<int> b;
