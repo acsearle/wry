@@ -26,14 +26,22 @@ namespace wry {
     
     template<typename Key, typename H = DefaultKeyService<Key>, typename IntrusiveAllocator = EpochAllocated>
     struct ConcurrentSkiplistSet {
-        
+
         struct Node;
-        
-        struct FrozenSizeAtomicSkips {
-            size_t _size;
-            Atomic<Node* _Nullable> _next[0] __counted_by(_size);
-        };
-        
+
+        // The slot type for in-skiplist edges to Nodes.  We dispatch on
+        // IntrusiveAllocator (complete at this point) rather than going
+        // through NextSlot (which would invoke slot_for<Node*> and need
+        // Node complete — Node is mid-definition where _next[] is
+        // declared).  GarbageCollectedSlot's class body must be parsable
+        // even with Node forward-only, which is why its static_assert
+        // lives in the ctor.
+        using NextSlot = std::conditional_t<
+            std::is_base_of_v<GarbageCollected, IntrusiveAllocator>,
+            GarbageCollectedSlot<Node*>,
+            Atomic<Node*>
+        >;
+
         struct Node : IntrusiveAllocator {
             
             // size member is not essential to the major operations
@@ -43,16 +51,16 @@ namespace wry {
             
             Key _key;
             size_t _size;
-            Atomic<Node* _Nullable> _next[0] __counted_by(_size);
-            
+            NextSlot _next[0] __counted_by(_size);
+
             explicit Node(size_t n, auto&&... args)
             : IntrusiveAllocator()
             , _key(FORWARD(args)...)
             , _size(n) {
             }
-                        
+
             static Node* _Nonnull with_size_emplace(size_t n, auto&&... args) {
-                size_t number_of_bytes = sizeof(Node) + sizeof(Atomic<Node*>) * n;
+                size_t number_of_bytes = sizeof(Node) + sizeof(NextSlot) * n;
                 void* _Nonnull raw = IntrusiveAllocator::operator new(number_of_bytes,
                                                                       std::align_val_t{alignof(Node)});
                 std::memset(raw, 0, number_of_bytes);
@@ -73,45 +81,64 @@ namespace wry {
                 return a;
             }
             
-            // This is called only when the allocator is GC
-            virtual void _garbage_collected_scan() const /* override */ {
+            // In GC mode (IntrusiveAllocator derives from GarbageCollected),
+            // these methods' signatures match the base's pure virtuals and
+            // implicitly override them — Node becomes a concrete GC type
+            // with a vtable.  In bump mode the base has no matching
+            // virtuals, these are just regular member functions, no vtable
+            // is added, and the bodies are dead code (the bump-mode ADL
+            // overload of garbage_collected_scan(ConcurrentSkiplistSet) is
+            // a no-op so they're never called).
+            //
+            // C++ forbids `requires` on virtual functions, so we can't
+            // make the override conditional via constraints; the implicit-
+            // override mechanism is what gives us "virtual only when the
+            // base has the matching virtual."
+            void _garbage_collected_scan() const {
                 garbage_collected_scan(_key);
                 for (size_t i = 0; i != _size; ++i) {
                     garbage_collected_scan(_next[i].load_acquire());
                 }
             }
-            
-            
+
+            void _garbage_collected_debug() const {
+                printf("%s\n", __PRETTY_FUNCTION__);
+            }
+
         }; // struct Node
         
         
         struct Head : IntrusiveAllocator {
             
             Atomic<size_t> _top;
-            Atomic<Node* _Nullable> _next[0];
-            
+            NextSlot _next[0];
+
             static void* _Nonnull  operator new(size_t count, void* _Nonnull ptr) {
                 return ptr;
             }
-            
+
             Head() : _top(1) {}
-            
+
             static Head* _Nonnull make() {
                 size_t n = 33;
-                size_t number_of_bytes = sizeof(Head) + sizeof(Atomic<Node*>) * n;
+                size_t number_of_bytes = sizeof(Head) + sizeof(NextSlot) * n;
                 void* _Nonnull raw = IntrusiveAllocator::operator new(number_of_bytes,
                                                                   std::align_val_t{alignof(Head)});
                 std::memset(raw, 0, number_of_bytes);
                 return new(raw) Head;
             }
             
-            // This is called only when the allocator is GC
-            virtual void _garbage_collected_scan() const {
+            // Implicit-override pattern, see Node above.
+            void _garbage_collected_scan() const {
                 for (size_t i = 0; i != 33; ++i) {
                     garbage_collected_scan(_next[i].load_acquire());
                 }
             }
-            
+
+            void _garbage_collected_debug() const {
+                printf("%s\n", __PRETTY_FUNCTION__);
+            }
+
         };
         
         struct iterator {
@@ -153,54 +180,55 @@ namespace wry {
             
         }; // struct iterator
 
-        struct FrozenNexts {
-            size_t _size;
-            Node const* _Nullable _next[0];
-        };
-
+        // Cursor for use after a "freeze" point — i.e., once all writers
+        // to this skiplist have stopped and happens-before with the
+        // current thread has been established (e.g. via an epoch advance).
+        // Each step is a plain pointer chase via nonatomic_load; no
+        // atomic loads, no fences.  Misuse during the live phase is a
+        // data race.
+        //
+        // _next points into either Head's or a Node's _next[] array — the
+        // arrays have the same element type, so the cursor is unaware
+        // which kind of object it currently sits in.
         struct FrozenCursor {
-            FrozenNexts const* _Nullable _pointer;
+            NextSlot const* _Nullable _next;
             size_t _level;
-            
+
             bool bottom() const {
                 return _level == 0;
             }
-            
+
             FrozenCursor down() const {
                 assert(_level);
-                return FrozenCursor {
-                    _pointer,
-                    _level - 1,
-                };
+                return FrozenCursor { _next, _level - 1 };
             }
-            
+
             bool end() const {
-                return _pointer == nullptr;
+                return _next == nullptr;
             }
-            
+
             FrozenCursor right() const {
-                assert(_pointer);
-                Node const* a = _pointer->_next[_level];
-                size_t const* b = a ? &a->_size : nullptr;
-                assert(!b || *b >= _level);
+                assert(_next);
+                Node const* a = _next[_level].nonatomic_load();
                 return FrozenCursor{
-                    (FrozenNexts const*)b,
+                    a ? &a->_next[0] : nullptr,
                     _level,
                 };
             }
-            
+
             Key const* _Nullable key() const {
-                Node const* a = _pointer->_next[_level];
-                return a ? &(a->_key) : nullptr;
+                assert(_next);
+                Node const* a = _next[_level].nonatomic_load();
+                return a ? &a->_key : nullptr;
             }
-            
+
         };
-                
+
         Head* _Nonnull _head;
-        
+
         FrozenCursor make_cursor() const {
             return FrozenCursor{
-                (FrozenNexts const*)(&_head->_top),
+                &_head->_next[0],
                 _head->_top.load_relaxed() - 1,
             };
         }
@@ -224,7 +252,7 @@ namespace wry {
         find(const Query& query) const -> iterator
         {
             size_t i = _head->_top.load_relaxed() - 1;
-            Atomic<Node*> const* _Nonnull left = _head->_next + i;
+            NextSlot const* _Nonnull left = _head->_next + i;
             for (;;) {
                 Node* candidate = left->load_acquire();
                 if (!candidate || H{}.compare(query, candidate->_key)) {
@@ -241,15 +269,17 @@ namespace wry {
         }
         
         [[nodiscard]] static auto
-        _link_level(size_t i, Atomic<Node*>* _Nonnull left,
+        _link_level(size_t i, NextSlot* _Nonnull left,
                     Node* _Nullable expected, Node* _Nonnull desired)
         -> std::pair<Node* _Nullable, bool>
         {
         alpha:
-            // TODO: this is the only place we need to implement a write barrier
             assert(left && desired);
             assert(!expected || (H{}.compare(desired->_key, expected->_key)));
-            desired->_next[i].store_release(expected);
+            // desired is thread-private here; the publishing CAS below
+            // carries release ordering, so this preceding store can be
+            // non-atomic.
+            desired->_next[i].nonatomic_store(expected);
             if (left->compare_exchange_strong_release_acquire(expected, desired))
                 return { desired, true };
         beta:
@@ -263,7 +293,7 @@ namespace wry {
         }
         
         static std::pair<Node* _Nullable, bool> _try_emplace(size_t i,
-                                                             Atomic<Node*>* _Nonnull left,
+                                                             NextSlot* _Nonnull left,
                                                              auto&& keylike,
                                                              auto&&... args) {
         alpha:
@@ -316,8 +346,29 @@ namespace wry {
         // pairs?
         
     }; // concurrent_skiplist<Key, Compare>
-    
-    
+
+
+    // ADL hook for GC parents that hold a ConcurrentSkiplistSet member.
+    //
+    // GC mode: recurse into _head; the spine is then traced via the
+    // virtual overrides on Head and each Node.
+    template<typename Key, typename H, typename Allocator>
+    requires (std::is_base_of_v<GarbageCollected, Allocator>)
+    void garbage_collected_scan(ConcurrentSkiplistSet<Key, H, Allocator> const& self) {
+        garbage_collected_scan(self._head);
+    }
+
+    // Bump mode: no-op.  GC payloads inside epoch-allocated nodes must
+    // already be reachable to the collector via some independent path
+    // (otherwise they'd already have been collected), so there's no need
+    // to trace through the bump skiplist.
+    template<typename Key, typename H, typename Allocator>
+    requires (std::is_base_of_v<BumpAllocated, Allocator>)
+    void garbage_collected_scan(ConcurrentSkiplistSet<Key, H, Allocator> const&) {
+        // no-op
+    }
+
+
     template<typename Key, typename T, typename H = DefaultKeyService<Key>>
     struct ConcurrentSkiplistMap {
         

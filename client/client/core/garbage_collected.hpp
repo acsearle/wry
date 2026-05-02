@@ -599,21 +599,29 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
     template<typename T>
     struct GarbageCollectedSlot<T*> {
 
-        static_assert(std::is_base_of_v<GarbageCollected, T>);
+        // The constraint sits in the constructors rather than the class
+        // body so that merely *naming* GarbageCollectedSlot<T*> (e.g. as
+        // the unselected branch of a std::conditional_t over an incomplete
+        // T) does not require T to be complete.  The check fires the
+        // first time any GarbageCollectedSlot is actually constructed.
 
         using value_type = T*;
         static constexpr bool is_always_lock_free = true;
 
         Atomic<T*> raw;
 
-        constexpr GarbageCollectedSlot() noexcept : raw{} {}
+        constexpr GarbageCollectedSlot() noexcept : raw{} {
+            static_assert(std::is_base_of_v<GarbageCollected, T>);
+        }
 
         // Construction has no displaced pointer to shade — we're going from
         // "no edge exists" to "edge points at desired".  The pointee's
         // reachability is established when the collector eventually traces
         // the parent (which is still being constructed, so not yet reachable).
         explicit constexpr GarbageCollectedSlot(T* desired) noexcept
-        : raw(desired) {}
+        : raw(desired) {
+            static_assert(std::is_base_of_v<GarbageCollected, T>);
+        }
 
         ~GarbageCollectedSlot() {
             // GarbageCollectedSlot lives in a GC-derived parent and is
