@@ -414,10 +414,6 @@ namespace wry {
 
     
     
-    void* HeapString::operator new(std::size_t self, std::size_t extra) {
-        return GarbageCollected::operator new(self + extra);
-    }
-        
     const HeapString* HeapString::make(std::string_view view) {
         return make(std::hash<std::string_view>()(view), view);
     }

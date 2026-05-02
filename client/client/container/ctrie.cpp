@@ -7,6 +7,8 @@
 
 //#include "adl.hpp"
 
+#include <cstring>
+
 #include "utility.hpp"
 #include "ctrie.hpp"
 #include "HeapString.hpp"
@@ -22,16 +24,18 @@ namespace wry {
                 printf("%s\n", __PRETTY_FUNCTION__);
             }
 
-            
-            static void* operator new(size_t fixed, size_t variable);
-            
-            static const CNode* make(int num);
+            // Local placement-new: GarbageCollected's `operator new(size_t)`
+            // would otherwise hide the global placement form via class-scope
+            // name lookup, breaking `new(raw) CNode` inside `make()`.
+            static void* operator new(size_t, void* ptr) noexcept { return ptr; }
+
+            static CNode* make(int num);
             static const CNode* make(const HeapString* sn1, const HeapString* sn2, int lev);
             static std::pair<uint64_t, int> flagpos(uint64_t h, int lev, uint64_t bmp);
-            
+
             uint64_t bmp;
             size_t _debug_size;
-            const BranchNode* array[] __counted_by(debug_size);
+            const BranchNode* array[] __counted_by(_debug_size);
             
             CNode();
             virtual ~CNode() override;
@@ -125,14 +129,9 @@ namespace wry {
         }
         
         
-        HeapString* make_HeapString_from_Query(Query query) {
-            size_t n = query.view.size();
-            assert(n > 7);
-            HeapString* a = new(n) HeapString;
-            a->_hash = query.hash;
-            a->_size = n;
-            __builtin_memcpy(a->_bytes, query.view.data(), n);
-            return a;
+        const HeapString* make_HeapString_from_Query(Query query) {
+            assert(query.view.size() > 7);
+            return HeapString::make(query.hash, query.view);
         }
         
         
@@ -171,10 +170,13 @@ namespace wry {
         }
 
 
-        void* CNode::operator new(size_t self, size_t entries) {
-            return GarbageCollected::operator new(self + entries * sizeof(BranchNode*));
+        CNode* CNode::make(int num) {
+            size_t bytes = sizeof(CNode) + num * sizeof(BranchNode*);
+            void* raw = GarbageCollected::operator new(bytes);
+            std::memset(raw, 0, bytes);
+            return new(raw) CNode;
         }
-        
+
         CNode::CNode()
         : bmp{0}
         , _debug_size{0} {
@@ -188,7 +190,7 @@ namespace wry {
         
         const CNode* CNode::copy_assign(int pos, const BranchNode *bn) const {
             int num = __builtin_popcountll(this->bmp);
-            CNode* ncn = new(num) CNode;
+            CNode* ncn = CNode::make(num);
             ncn->bmp = this->bmp;
             ncn->_debug_size = __builtin_popcountll(ncn->bmp);
             for (int i = 0; i != num; ++i) {
@@ -208,7 +210,7 @@ namespace wry {
         
         const CNode* CNode::resurrected() const {
             int num = __builtin_popcountll(this->bmp);
-            CNode* ncn = new(num) CNode;
+            CNode* ncn = CNode::make(num);
             ncn->bmp = this->bmp;
             ncn->_debug_size = __builtin_popcountll(ncn->bmp);
             for (int i = 0; i != num; ++i) {
@@ -413,8 +415,8 @@ namespace wry {
             uint64_t flag2 = (uint64_t)1 << pos2;
             uint64_t bmp = flag1 | flag2;
             int num = __builtin_popcountll(bmp);
-            
-            CNode* ncn = new(num) CNode;
+
+            CNode* ncn = CNode::make(num);
             ncn->bmp = bmp;
             ncn->_debug_size = __builtin_popcountll(ncn->bmp);
             switch (num) {
@@ -435,7 +437,7 @@ namespace wry {
         const CNode* CNode::copy_erase(int pos, uint64_t flag) const {
             assert(bmp & flag);
             int num = __builtin_popcountll(bmp);
-            CNode* ncn = new (num-1) CNode;
+            CNode* ncn = CNode::make(num-1);
             ncn->bmp = bmp ^ flag;
             ncn->_debug_size = __builtin_popcountll(ncn->bmp);
             const BranchNode** dest = ncn->array;
@@ -452,7 +454,7 @@ namespace wry {
         const CNode* CNode::copy_insert(int pos, uint64_t flag, const BranchNode* bn) const {
             assert(!(bmp & flag));
             int num = __builtin_popcountll(bmp);
-            CNode* ncn = new (num+1) CNode;
+            CNode* ncn = CNode::make(num+1);
             ncn->bmp = bmp ^ flag;
             ncn->_debug_size = __builtin_popcountll(ncn->bmp);
             const BranchNode* const* src = array;
@@ -642,7 +644,7 @@ namespace wry {
     }
     
     Ctrie::Ctrie()
-    : root(new INode(new(0) CNode)) {
+    : root(new INode(_ctrie::CNode::make(0))) {
     }
                     
     const HeapString* Ctrie::find_or_emplace(Query query) {

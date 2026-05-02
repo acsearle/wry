@@ -17,7 +17,11 @@ namespace wry {
     
     struct HeapString final : _ctrie::BranchNode {
 
-        static void* operator new(std::size_t count, std::size_t extra);
+        // Local placement-new: GarbageCollected's `operator new(size_t)`
+        // would otherwise hide the global placement form via class-scope
+        // name lookup, breaking `new(raw) HeapString` inside `make()`.
+        static void* operator new(std::size_t, void* ptr) noexcept { return ptr; }
+
         static const HeapString* make(std::size_t hash, std::string_view view);
         static const HeapString* make(std::string_view view);
 

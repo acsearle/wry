@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <cinttypes>
 #include <thread>
 #include <queue>
@@ -893,10 +894,18 @@ namespace wry {
 namespace wry {
 
     const HeapString* HeapString::make(size_t hash, std::string_view view) {
-        abort();
-#if 0
-        return global_collector->string_ctrie->find_or_emplace(_ctrie::Query{hash, view});
-#endif
+        // TODO: this should intern via a global string ctrie; for now we
+        // allocate a fresh HeapString every call.  Original sketch:
+        //   return global_collector->string_ctrie->find_or_emplace(_ctrie::Query{hash, view});
+        size_t n = view.size();
+        size_t bytes = sizeof(HeapString) + n;
+        void* raw = GarbageCollected::operator new(bytes);
+        std::memset(raw, 0, bytes);
+        HeapString* a = new(raw) HeapString;
+        a->_hash = hash;
+        a->_size = n;
+        std::memcpy(a->_bytes, view.data(), n);
+        return a;
     }
 
 

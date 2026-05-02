@@ -8,6 +8,8 @@
 #ifndef transaction_hpp
 #define transaction_hpp
 
+#include <cstring>
+
 #include "concurrent_map.hpp"
 #include "atomic.hpp"
 #include "entity.hpp"
@@ -151,22 +153,21 @@ namespace wry {
         Node _nodes[] __counted_by(_size);
                 
         // virtual void _garbage_collected_scan() const {}
-        
-        static void* operator new(size_t basic, size_t extra) {
-            return EpochAllocated::operator new(basic + extra * sizeof(Node));
-        }
-        
+
         Transaction(TransactionContext* context, const Entity* entity, size_t capacity)
         : _context(context)
         , _entity(entity)
         , _state(INITIAL)
         , _capacity(capacity) {}
-        
+
         ~Transaction() {
         }
-        
+
         static Transaction* make(TransactionContext* context, const Entity* entity, size_t count) {
-            return new(count) Transaction(context, entity, count);
+            size_t bytes = sizeof(Transaction) + count * sizeof(Node);
+            void* raw = EpochAllocated::operator new(bytes);
+            std::memset(raw, 0, bytes);
+            return new(raw) Transaction(context, entity, count);
         }
 
         bool try_read_value_for_coordinate(Coordinate, Value&) const;
