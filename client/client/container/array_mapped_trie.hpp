@@ -370,7 +370,7 @@ namespace wry::array_mapped_trie {
             // allocate a new branch with worst-case capacity
             Node* c = make(a->_prefix,
                            a->_shift,
-                           a->_debug_count,
+                           popcount(a->_bitmap),
                            0,
                            0);
             
@@ -517,8 +517,7 @@ namespace wry::array_mapped_trie {
             assert(has_children());
             Node* new_node = clone_with_capacity(popcount(_bitmap));
             [[maybe_unused]] Node const* _ = nullptr;
-            bool did_erase = compressed_array_erase_for_index(new_node->_debug_capacity,
-                                                              new_node->_bitmap,
+            bool did_erase = compressed_array_erase_for_index(new_node->_bitmap,
                                                               new_node->_children,
                                                               get_index_for_key(key),
                                                               _);

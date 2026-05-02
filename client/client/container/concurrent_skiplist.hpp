@@ -54,6 +54,10 @@ namespace wry {
 
         struct Node : IntrusiveAllocator {
             
+            static void* _Nonnull  operator new(size_t count, void* _Nonnull ptr) {
+                return ptr;
+            }
+            
             // size member is not essential to the major operations
             // - needed for memory debug
             // - needed for GC scanning

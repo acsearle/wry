@@ -30,7 +30,8 @@ namespace wry {
             static std::pair<uint64_t, int> flagpos(uint64_t h, int lev, uint64_t bmp);
             
             uint64_t bmp;
-            const BranchNode* array[];
+            size_t _debug_size;
+            const BranchNode* array[] __counted_by(debug_size);
             
             CNode();
             virtual ~CNode() override;
@@ -171,10 +172,12 @@ namespace wry {
 
 
         void* CNode::operator new(size_t self, size_t entries) {
-            return GarbageCollected::operator new(self + entries * sizeof(GarbageCollected*));
+            return GarbageCollected::operator new(self + entries * sizeof(BranchNode*));
         }
         
-        CNode::CNode() : bmp(0) {
+        CNode::CNode()
+        : bmp{0}
+        , _debug_size{0} {
         }
         
         CNode::~CNode() {
@@ -187,6 +190,7 @@ namespace wry {
             int num = __builtin_popcountll(this->bmp);
             CNode* ncn = new(num) CNode;
             ncn->bmp = this->bmp;
+            ncn->_debug_size = __builtin_popcountll(ncn->bmp);
             for (int i = 0; i != num; ++i) {
                 const BranchNode* sub = (i == pos) ? bn : this->array[i];
                 garbage_collected_shade(sub);
@@ -206,6 +210,7 @@ namespace wry {
             int num = __builtin_popcountll(this->bmp);
             CNode* ncn = new(num) CNode;
             ncn->bmp = this->bmp;
+            ncn->_debug_size = __builtin_popcountll(ncn->bmp);
             for (int i = 0; i != num; ++i) {
                 const BranchNode* bn = this->array[i]->_ctrie_bn_resurrect();
                 garbage_collected_shade(bn);
@@ -411,6 +416,7 @@ namespace wry {
             
             CNode* ncn = new(num) CNode;
             ncn->bmp = bmp;
+            ncn->_debug_size = __builtin_popcountll(ncn->bmp);
             switch (num) {
                 case 1: {
                     ncn->array[0] = new INode(CNode::make(hs1, hs2, lev + W));
@@ -431,6 +437,7 @@ namespace wry {
             int num = __builtin_popcountll(bmp);
             CNode* ncn = new (num-1) CNode;
             ncn->bmp = bmp ^ flag;
+            ncn->_debug_size = __builtin_popcountll(ncn->bmp);
             const BranchNode** dest = ncn->array;
             for (int i = 0; i != num; ++i) {
                 if (i != pos) {
@@ -447,6 +454,7 @@ namespace wry {
             int num = __builtin_popcountll(bmp);
             CNode* ncn = new (num+1) CNode;
             ncn->bmp = bmp ^ flag;
+            ncn->_debug_size = __builtin_popcountll(ncn->bmp);
             const BranchNode* const* src = array;
             for (int i = 0; i != num+1; ++i) {
                 if (i != pos) {

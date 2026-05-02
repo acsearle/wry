@@ -23,7 +23,7 @@ namespace wry {
 
         size_t _hash;
         size_t _size;
-        char _bytes[];
+        char _bytes[] __counted_by(_size);
         
         std::string_view as_string_view() const;
         
