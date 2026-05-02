@@ -574,117 +574,165 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
     }
     
     
-#if 0
-    
-    // TODO: Edge is unnecessary.  
-    
     void assert_this_thread_is_collector();
     
-    // An Edge must be a field OF a garbage collected object, and point TO
-    // a garbage collected object (the degenerate cases of the same object, or
-    // null, are allowed)
-    
+    // Slot<T*>
+    //
+    // An atomic strong edge from one garbage-collected object to another.
+    // (Subsumes what an "Edge" type would have been: a non-atomic Edge is
+    // unnecessary because the collector can't legally read non-atomic mutator
+    // writes — that would be a data race.  The atomic version IS what
+    // mutators use when they want the collector to be able to follow the
+    // pointer concurrently.)
+    //
+    // Mechanics differ from Atomic<Root<T*>>: there is no implicit-roots
+    // multiset count to maintain, because the parent GC object's reachability
+    // is what keeps the pointee alive.  What's required instead is the
+    // Dijkstra write barrier: any pointer that is overwritten must be shaded,
+    // so the collector — which may be tracing concurrently and may have
+    // observed the old pointer to be reachable but not yet traced it — does
+    // not lose track of it.
+    //
+    // As with Atomic<Root<T*>>, every load runs at ≥ acquire (so the loaded
+    // pointer can be safely dereferenced) and every store runs at ≥ release
+    // on the publish side AND ≥ acquire on the displaced-pointer side (so
+    // mutator_overwrote can dereference the old pointer to call shade on it).
+    // Names mirror Atomic<T*>; weaker requested orderings are silently
+    // strengthened to the minimum that preserves these invariants.
+
     template<typename>
-    struct Edge;
-    
+    struct Slot;
+
     template<typename T>
-    struct Edge<T*> {
-        
-        T* _ptr;
-        
-        Edge() : _ptr(nullptr) {}
-        
-        Edge(Edge const& other)
-        : _ptr(other._ptr) {
-        }
-        
-        Edge(Edge&& other)
-        : _ptr(std::exchange(other._ptr, nullptr)) {
-        }
-        
-        ~Edge() {
+    struct Slot<T*> {
+
+        using value_type = T*;
+        static constexpr bool is_always_lock_free = true;
+
+        Atomic<T*> raw;
+
+        constexpr Slot() noexcept : raw{} {}
+
+        // Construction has no displaced pointer to shade — we're going from
+        // "no edge exists" to "edge points at desired".  The pointee's
+        // reachability is established when the collector eventually traces
+        // the parent (which is still being constructed, so not yet reachable).
+        explicit constexpr Slot(T* desired) noexcept
+        : raw(desired) {}
+
+        ~Slot() {
+            // Slot should be a field of a GarbageCollected-derived object,
+            // and destroyed only by the collector on the collector thread
+            
+            // Not only do we not need to run the write barrier, there is no
+            // write barrier defined for the collector thread, and the pointee
+            // may have already been destroyed leaving us with a dangling
+            // pointer we must not load.
+            
+            // The only useful thing we can do is trap destruction outside the
+            // collector (the complement of what ~Root asserts)
             assert_this_thread_is_collector();
         }
-        
-        Edge& operator=(Edge const& other) {
-            garbage_collected_shade(_ptr);
-            _ptr = other._ptr;
-            return *this;
-        }
-        
-        Edge& operator=(Edge&& other) {
-            garbage_collected_shade(_ptr);
-            _ptr = other._ptr;
-            other._ptr = nullptr;
-            return *this;
-        }
-        
-        bool operator==(Edge const&) const = default;
-        auto operator<=>(Edge const&) const = default;
-        
-        template<typename U>
-        Edge(Edge<U> const& other)
-        : _ptr(other._ptr) {
-        }
-        
-        template<typename U>
-        Edge(Edge<U>&& other)
-        : _ptr(std::exchange(other._ptr, nullptr)) {
-        }
-        
-        template<typename U>
-        Edge& operator=(Edge<U> const& other) {
-            garbage_collected_shade(_ptr);
-            _ptr = other._ptr;
-            return *this;
-        }
-        
-        template<typename U>
-        Edge& operator=(Edge<U>&& other) {
-            garbage_collected_shade(_ptr);
-            _ptr = std::exchange(other._ptr, nullptr);
-            return *this;
-        }
-        
-        template<typename U>
-        explicit Edge(U* ptr)
-        : _ptr(ptr) {
-        }
-        
-        template<typename U>
-        Edge& operator=(U* other) {
-            garbage_collected_shade(_ptr);
-            _ptr = other;
-            return *this;
-        }
-        
-        T& operator*() const {
-            return *_ptr;
-        }
-        
-        T* operator->() const {
-            return _ptr;
-        }
-        
-        explicit operator bool() const {
-            return (bool)_ptr;
-        }
-        
-        explicit operator T*() const {
-            return _ptr;
-        }
-        
-        bool operator!() const {
-            return !_ptr;
-        }
-        
-        bool operator==(std::nullptr_t) const {
-            return _ptr == nullptr;
-        }
-        
-    }; // Edge<T*>
-    
-#endif
+
+        Slot(const Slot&) = delete;
+        Slot& operator=(const Slot&) = delete;
+
+        // Load: returns the raw pointer.  Inner load runs at ≥ acquire so the
+        // caller can dereference what they get back.
+
+#define MAKE_WRY_ATOMIC_GC_LOAD(public_order, internal_order) \
+T* load_##public_order() const noexcept {\
+    return raw.load_##internal_order();\
+}
+
+        MAKE_WRY_ATOMIC_GC_LOAD(relaxed, acquire)
+        MAKE_WRY_ATOMIC_GC_LOAD(acquire, acquire)
+        MAKE_WRY_ATOMIC_GC_LOAD(seq_cst, seq_cst)
+
+        // Store: must shade the displaced pointer (Dijkstra barrier), so we
+        // use exchange internally to recover it.  Inner exchange runs at
+        // ≥ acq_rel: release on the publish side AND acquire on the load
+        // side (so mutator_overwrote -> shade can dereference the old
+        // pointer's _gray field).
+
+#define MAKE_WRY_ATOMIC_GC_STORE(public_order, internal_order) \
+void store_##public_order(T* desired) noexcept {\
+    T* old = raw.exchange_##internal_order(desired);\
+    mutator_overwrote(old);\
+}
+
+        MAKE_WRY_ATOMIC_GC_STORE(relaxed, acq_rel)
+        MAKE_WRY_ATOMIC_GC_STORE(release, acq_rel)
+        MAKE_WRY_ATOMIC_GC_STORE(seq_cst, seq_cst)
+
+        // Exchange: same mechanics as store but the displaced pointer is
+        // also returned to the caller (after being shaded).
+
+#define MAKE_WRY_ATOMIC_GC_EXCHANGE(public_order, internal_order) \
+T* exchange_##public_order(T* desired) noexcept {\
+    T* old = raw.exchange_##internal_order(desired);\
+    mutator_overwrote(old);\
+    return old;\
+}
+
+        MAKE_WRY_ATOMIC_GC_EXCHANGE(relaxed, acq_rel)
+        MAKE_WRY_ATOMIC_GC_EXCHANGE(acquire, acq_rel)
+        MAKE_WRY_ATOMIC_GC_EXCHANGE(release, acq_rel)
+        MAKE_WRY_ATOMIC_GC_EXCHANGE(acq_rel, acq_rel)
+        MAKE_WRY_ATOMIC_GC_EXCHANGE(seq_cst, seq_cst)
+
+        // compare_exchange:
+        //   On success: shade the displaced pointer (== expected at success
+        //     time).  expected is unchanged.
+        //   On failure: expected is updated to the actual current pointer by
+        //     the underlying CAS; nothing else to do.
+        //
+        // Inner orderings: success ≥ acq_rel (publish desired AND dereference
+        // displaced for shade); failure ≥ acquire (caller may dereference the
+        // updated expected).  seq_cst stays seq_cst.
+
+#define MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strength, public_succ, public_fail, internal_succ, internal_fail) \
+bool compare_exchange_##strength##_##public_succ##_##public_fail(T*& expected, T* desired) noexcept {\
+    bool ok = raw.compare_exchange_##strength##_##internal_succ##_##internal_fail(expected, desired);\
+    if (ok)\
+        mutator_overwrote(expected);\
+    return ok;\
+}
+
+#define MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2(public_succ, public_fail, internal_succ, internal_fail) \
+MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(weak,   public_succ, public_fail, internal_succ, internal_fail) \
+MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_succ, internal_fail)
+
+        MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2(relaxed, relaxed, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2(acquire, relaxed, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2(acquire, acquire, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2(release, relaxed, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2(release, acquire, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2(acq_rel, relaxed, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2(acq_rel, acquire, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2(seq_cst, relaxed, seq_cst, acquire)
+        MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2(seq_cst, acquire, seq_cst, acquire)
+        MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2(seq_cst, seq_cst, seq_cst, seq_cst)
+
+#undef MAKE_WRY_ATOMIC_GC_LOAD
+#undef MAKE_WRY_ATOMIC_GC_STORE
+#undef MAKE_WRY_ATOMIC_GC_EXCHANGE
+#undef MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE
+#undef MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2
+
+        void notify_one() noexcept { raw.notify_one(); }
+        void notify_all() noexcept { raw.notify_all(); }
+
+        // TODO: wait variants — same shape as elsewhere; left until a
+        // concrete need arises.
+
+    }; // struct Slot<T*>
+
+    // Scan: load-acquire so the recursing scan can safely dereference.
+    template<typename T>
+    void garbage_collected_scan(Slot<T*> const& x) {
+        garbage_collected_scan(x.raw.load_acquire());
+    }
     
     
     struct BumpAllocated;
