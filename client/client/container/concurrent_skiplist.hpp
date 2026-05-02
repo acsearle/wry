@@ -277,15 +277,13 @@ namespace wry {
         beta:
             assert(!candidate || H{}.compare(keylike, candidate->_key));
             if (i == 0) {
-                Node* _Nonnull p = Node::with_random_size_emplace(FORWARD(keylike), FORWARD(args)...);
-                auto result = _link_level(0, left, candidate, p);
-                if (!result.second) {
-                    // TODO: This trips ~BumpAllocator
-                    // Cleaning up the unused new node is a good idea in
-                    // general.  But we need to decide on a policy here
-                    delete p; // <-- Uses custom operator delete
-                }
-                return result;
+                return _link_level(0, left, candidate,
+                                   Node::with_random_size_emplace(FORWARD(keylike),
+                                                                  FORWARD(args)...));
+                // If _link_level fails, we are relying on the Node we just
+                // created being cleaned up eventually by IntrusiveAllocator.
+                // Doing nothing is correct for EpochAllocator and
+                // GarbageCollected.
             } else {
                 auto result = _try_emplace(i - 1, left - 1, FORWARD(keylike), FORWARD(args)...);
                 if (result.second && (i < result.first->_size)) {
