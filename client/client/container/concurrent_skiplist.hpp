@@ -112,11 +112,12 @@ namespace wry {
             // make the override conditional via constraints; the implicit-
             // override mechanism is what gives us "virtual only when the
             // base has the matching virtual."
+            // Scan only _next[0]; the level-0 chain reaches every node, so
+            // levels 1.._size-1 are redundant for reachability.  See Head's
+            // _garbage_collected_scan for the longer argument.
             void _garbage_collected_scan() const {
                 garbage_collected_scan(_key);
-                for (size_t i = 0; i != _size; ++i) {
-                    garbage_collected_scan(_next[i].load_acquire());
-                }
+                garbage_collected_scan(_next[0].load_acquire());
             }
 
             void _garbage_collected_debug() const {
@@ -189,11 +190,21 @@ namespace wry {
             }
             
             // Implicit-override pattern, see Node above.
+            //
+            // We scan only _next[0] (the level-0 chain head), not the full
+            // level array.  By the skiplist invariant, every node in the
+            // structure is in the level-0 chain; levels 1..HEAD_LEVELS-1 are
+            // search-acceleration pointers that don't introduce reachability
+            // — every node they reach is also reachable via level 0.  Tracing
+            // from _next[0] reaches every node in O(N) hops.  Skipping the
+            // upper slots saves both per-scan work (no 33-slot loop) and any
+            // ordering tangle around _top: we never load _top in the scan.
+            //
+            // _compare is scanned in case the user's comparator carries GC
+            // references; for the common stateless case its scan is a no-op.
             void _garbage_collected_scan() const {
                 garbage_collected_scan(_compare);
-                for (size_t i = 0; i != HEAD_LEVELS; ++i) {
-                    garbage_collected_scan(_next[i].load_acquire());
-                }
+                garbage_collected_scan(_next[0].load_acquire());
             }
 
             void _garbage_collected_debug() const {
