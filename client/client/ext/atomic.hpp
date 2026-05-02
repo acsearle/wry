@@ -127,6 +127,24 @@ __atomic_store_n(&value, std::bit_cast<U>(desired), _WRY_ATOMIC_##order);\
         MAKE_WRY_ATOMIC_STORE(release)
         MAKE_WRY_ATOMIC_STORE(seq_cst)
 
+        // Non-atomic access to the underlying storage.  No atomic op,
+        // no fence, no barrier; the compiler is free to hoist, fold and
+        // reorder these as it would for any plain memory access.
+        //
+        // Safe only when the caller can establish happens-before by some
+        // out-of-band means — typically (a) writing the field while the
+        // containing object is still thread-private and not yet escaped,
+        // or (b) reading the field after a "freeze" point where all
+        // writers have stopped and synchronization has been established
+        // (e.g. via an epoch advance).  Misuse is a data race.
+        T nonatomic_load() const noexcept {
+            return std::bit_cast<T>(value);
+        }
+
+        void nonatomic_store(T desired) noexcept {
+            value = std::bit_cast<U>(desired);
+        }
+
 #define MAKE_WRY_ATOMIC_EXCHANGE(order) \
 T exchange_##order(T desired) noexcept {\
 return std::bit_cast<T>(__atomic_exchange_n(&value, std::bit_cast<U>(desired), _WRY_ATOMIC_##order));\
