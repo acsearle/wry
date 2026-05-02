@@ -401,20 +401,177 @@ namespace wry {
     }; // Root<T*>
     
     
-    // Suprisingly straightforward compared to atomic shared_ptr, because we
+    // Surprisingly straightforward compared to atomic shared_ptr, because we
     // don't need to atomically load-and-increment; the epoch system lets us
     // do our increments and shades any time before the epoch ends (!)
-    
-    
+    //
+    // The specialization stores the bare T* atomically.  All public methods
+    // accept and return Root<T*>, fixing up the implicit-roots-multiset count
+    // as if a Root were stored.  The atomic itself owns one count on whatever
+    // T* it currently holds (analogous to a Root field).
+    //
+    // Because we will dereference any pointer we read (to manipulate its
+    // _count), every load-side operation runs at memory_order_acquire or
+    // stronger; every store-side operation runs at memory_order_release or
+    // stronger.  Names mirror Atomic<T*>; weaker requested orderings are
+    // silently strengthened to the minimum that lets us safely follow the
+    // pointer.
+
     template<typename T>
-    struct Atomic<Root<T>> {
+    struct Atomic<Root<T*>> {
+
+        using value_type = Root<T*>;
+        static constexpr bool is_always_lock_free = true;
+
         Atomic<T*> raw;
-        
-        Root<T> load(Ordering order);
-        
-        // TODO: Complete after atomic shenannigans
-        
-    };
+
+        constexpr Atomic() noexcept : raw{} {}
+
+        explicit Atomic(Root<T*> desired) noexcept
+        : raw(std::exchange(desired._ptr, nullptr)) {
+            // raw adopts desired's +1; nulling desired prevents its dtor
+            // from subtracting it back off again.
+        }
+
+        ~Atomic() {
+            // Drop our +1 on whatever pointer we currently hold.  Destruction
+            // is single-threaded; no concurrent reader can race with us.
+            assert_this_thread_is_mutator();
+            garbage_collected_roots_subtract(raw.load_relaxed());
+        }
+
+        Atomic(const Atomic&) = delete;
+        Atomic& operator=(const Atomic&) = delete;
+
+        // Load: returns a Root<T*> that has its own +1.  Inner load runs at
+        // ≥ acquire so the caller can dereference what they get back.
+
+#define MAKE_WRY_ATOMIC_ROOT_LOAD(public_order, internal_order) \
+Root<T*> load_##public_order() const noexcept {\
+    return Root<T*>(raw.load_##internal_order());\
+}
+
+        MAKE_WRY_ATOMIC_ROOT_LOAD(relaxed, acquire)
+        MAKE_WRY_ATOMIC_ROOT_LOAD(acquire, acquire)
+        MAKE_WRY_ATOMIC_ROOT_LOAD(seq_cst, seq_cst)
+
+        // Store: must recover the displaced pointer to subtract its count, so
+        // we use exchange internally regardless of the requested name.  Inner
+        // exchange runs at ≥ acq_rel: release on the publish side (so other
+        // threads see the new pointer with proper happens-before) and acquire
+        // on the load side (so we can dereference the displaced pointer to
+        // decrement its count).
+
+#define MAKE_WRY_ATOMIC_ROOT_STORE(public_order, internal_order) \
+void store_##public_order(Root<T*> desired) noexcept {\
+    T* d = std::exchange(desired._ptr, nullptr);\
+    T* old = raw.exchange_##internal_order(d);\
+    garbage_collected_roots_subtract(old);\
+}
+
+        MAKE_WRY_ATOMIC_ROOT_STORE(relaxed, acq_rel)
+        MAKE_WRY_ATOMIC_ROOT_STORE(release, acq_rel)
+        MAKE_WRY_ATOMIC_ROOT_STORE(seq_cst, seq_cst)
+
+        // Exchange: identical mechanics to store but the displaced pointer's
+        // +1 is transferred to the caller's returned Root rather than
+        // released.
+
+#define MAKE_WRY_ATOMIC_ROOT_EXCHANGE(public_order, internal_order) \
+Root<T*> exchange_##public_order(Root<T*> desired) noexcept {\
+    T* d = std::exchange(desired._ptr, nullptr);\
+    T* old = raw.exchange_##internal_order(d);\
+    /* Adopt old into the returned Root without touching its count: */\
+    /* the +1 the atomic was holding is now the +1 the caller holds. */\
+    Root<T*> result;\
+    result._ptr = old;\
+    return result;\
+}
+
+        MAKE_WRY_ATOMIC_ROOT_EXCHANGE(relaxed, acq_rel)
+        MAKE_WRY_ATOMIC_ROOT_EXCHANGE(acquire, acq_rel)
+        MAKE_WRY_ATOMIC_ROOT_EXCHANGE(release, acq_rel)
+        MAKE_WRY_ATOMIC_ROOT_EXCHANGE(acq_rel, acq_rel)
+        MAKE_WRY_ATOMIC_ROOT_EXCHANGE(seq_cst, seq_cst)
+
+        // Compare-exchange:
+        //   On success: the atomic now holds desired's pointer; the +1 that
+        //     was on the old pointer (== expected._ptr at success time) has
+        //     to be released, and desired's +1 is transferred to the atomic.
+        //     The caller's `expected` is unchanged (still owns its +1).
+        //   On failure: the actual current pointer is loaded into expected;
+        //     expected's old +1 is released and a fresh +1 is taken on the
+        //     loaded value.  desired is untouched (its dtor releases its +1).
+        //
+        // Inner orderings: success must provide ≥ acq_rel (publish desired AND
+        // dereference the displaced pointer to subtract its count); failure
+        // must provide ≥ acquire (we add a count on whatever was loaded into
+        // expected, which dereferences it).  seq_cst on either side stays
+        // seq_cst.
+
+#define MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strength, public_succ, public_fail, internal_succ, internal_fail) \
+bool compare_exchange_##strength##_##public_succ##_##public_fail(Root<T*>& expected, Root<T*> desired) noexcept {\
+    T* exp_raw = expected._ptr;\
+    bool ok = raw.compare_exchange_##strength##_##internal_succ##_##internal_fail(exp_raw, desired._ptr);\
+    if (ok) {\
+        garbage_collected_roots_subtract(expected._ptr);\
+        desired._ptr = nullptr;\
+    } else {\
+        expected = exp_raw;\
+    }\
+    return ok;\
+}
+
+#define MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE2(public_succ, public_fail, internal_succ, internal_fail) \
+MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(weak,   public_succ, public_fail, internal_succ, internal_fail) \
+MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_succ, internal_fail)
+
+        // Public name mirrors every CAS combination Atomic<T*> exposes; the
+        // internal call uses the upgraded orderings (success ≥ acq_rel,
+        // failure ≥ acquire), or seq_cst pass-through.
+        MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE2(relaxed, relaxed, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE2(acquire, relaxed, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE2(acquire, acquire, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE2(release, relaxed, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE2(release, acquire, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE2(acq_rel, relaxed, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE2(acq_rel, acquire, acq_rel, acquire)
+        MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE2(seq_cst, relaxed, seq_cst, acquire)
+        MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE2(seq_cst, acquire, seq_cst, acquire)
+        MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE2(seq_cst, seq_cst, seq_cst, seq_cst)
+
+#undef MAKE_WRY_ATOMIC_ROOT_LOAD
+#undef MAKE_WRY_ATOMIC_ROOT_STORE
+#undef MAKE_WRY_ATOMIC_ROOT_EXCHANGE
+#undef MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE
+#undef MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE2
+
+        // Notify is independent of the Root semantics — it just wakes
+        // futex waiters on the underlying word.
+
+        void notify_one() noexcept { raw.notify_one(); }
+        void notify_all() noexcept { raw.notify_all(); }
+
+        // TODO: wait variants.  These need to wait until the underlying T*
+        // changes from the caller's expected.  Updating expected on wake
+        // requires the same -1/+1 dance as compare_exchange's failure path.
+
+    }; // struct Atomic<Root<T*>>
+
+    // Scan an Atomic<Root<T*>> by reading its raw pointer directly — there is
+    // no point manufacturing a Root just to scan and then destroy it, which
+    // would add then subtract the same count for nothing.  An acquire load
+    // gives us the freedom to dereference the pointer if the scan recurses.
+    template<typename T>
+    void garbage_collected_scan(Atomic<Root<T*>> const& x) {
+        garbage_collected_scan(x.raw.load_acquire());
+    }
+
+    // Scanning a Root<T*> just scans the underlying pointer.
+    template<typename T>
+    void garbage_collected_scan(Root<T*> const& x) {
+        garbage_collected_scan(x._ptr);
+    }
     
     
 #if 0
