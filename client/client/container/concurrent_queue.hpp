@@ -185,7 +185,7 @@ namespace wry {
                     // _tail is up to date, race to install the next node
                     if (b->_next.compare_exchange_strong_release_acquire(c, a)) {
                         // race to advance the tail
-                        if (_tail.compare_exchange_weak_release_relaxed(b, c)) {
+                        if (_tail.compare_exchange_weak_release_relaxed(b, a)) {
                             garbage_collected_shade(b);
                         }
                         return;
