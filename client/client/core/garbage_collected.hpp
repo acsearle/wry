@@ -12,6 +12,7 @@
 
 #include "assert.hpp"
 #include "atomic.hpp"
+#include "bump_allocator.hpp"
 #include "concepts.hpp"
 #include "typeinfo.hpp"
 #include "type_traits.hpp"
@@ -574,66 +575,56 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
     
     void assert_this_thread_is_collector();
     
-    // Slot<T*>
+    // GarbageCollectedSlot<T> — atomic strong edge to a GC object T.
     //
-    // An atomic strong edge from one garbage-collected object to another.
-    // (Subsumes what an "Edge" type would have been: a non-atomic Edge is
-    // unnecessary because the collector can't legally read non-atomic mutator
-    // writes — that would be a data race.  The atomic version IS what
-    // mutators use when they want the collector to be able to follow the
-    // pointer concurrently.)
+    // Implements the Dijkstra write barrier: any pointer overwritten by a
+    // store/exchange/CAS is shaded, so the collector — which may be tracing
+    // concurrently and may have observed the old pointer to be reachable but
+    // not yet traced it — does not lose track of it.  The store path uses
+    // an exchange so it can recover the displaced pointer; the inner
+    // ordering is at least acq_rel (release publish + acquire to dereference
+    // the displaced pointer for shading).
     //
-    // Mechanics differ from Atomic<Root<T*>>: there is no implicit-roots
-    // multiset count to maintain, because the parent GC object's reachability
-    // is what keeps the pointee alive.  What's required instead is the
-    // Dijkstra write barrier: any pointer that is overwritten must be shaded,
-    // so the collector — which may be tracing concurrently and may have
-    // observed the old pointer to be reachable but not yet traced it — does
-    // not lose track of it.
+    // Every load runs at ≥ acquire (so the loaded pointer can be safely
+    // dereferenced) and every store publishes with ≥ release.  Names mirror
+    // Atomic<T*>; weaker requested orderings are silently strengthened to
+    // the minimum that preserves these invariants.
     //
-    // As with Atomic<Root<T*>>, every load runs at ≥ acquire (so the loaded
-    // pointer can be safely dereferenced) and every store runs at ≥ release
-    // on the publish side AND ≥ acquire on the displaced-pointer side (so
-    // the shade of the old pointer can dereference it).  Names mirror
-    // Atomic<T*>; weaker requested orderings are silently strengthened to the
-    // minimum that preserves these invariants.
+    // For non-GC pointees, use the generic Slot<T*> alias below — it picks
+    // a vanilla Atomic<T*> (no barrier) via the slot_for customization
+    // point.
 
-    template<typename>
-    struct Slot;
+    template<typename> struct GarbageCollectedSlot;
 
     template<typename T>
-    struct Slot<T*> {
+    struct GarbageCollectedSlot<T*> {
+
+        static_assert(std::is_base_of_v<GarbageCollected, T>);
 
         using value_type = T*;
         static constexpr bool is_always_lock_free = true;
 
         Atomic<T*> raw;
 
-        constexpr Slot() noexcept : raw{} {}
+        constexpr GarbageCollectedSlot() noexcept : raw{} {}
 
         // Construction has no displaced pointer to shade — we're going from
         // "no edge exists" to "edge points at desired".  The pointee's
         // reachability is established when the collector eventually traces
         // the parent (which is still being constructed, so not yet reachable).
-        explicit constexpr Slot(T* desired) noexcept
+        explicit constexpr GarbageCollectedSlot(T* desired) noexcept
         : raw(desired) {}
 
-        ~Slot() {
-            // Slot should be a field of a GarbageCollected-derived object,
-            // and destroyed only by the collector on the collector thread
-            
-            // Not only do we not need to run the write barrier, there is no
-            // write barrier defined for the collector thread, and the pointee
-            // may have already been destroyed leaving us with a dangling
-            // pointer we must not load.
-            
-            // The only useful thing we can do is trap destruction outside the
-            // collector (the complement of what ~Root asserts)
+        ~GarbageCollectedSlot() {
+            // GarbageCollectedSlot lives in a GC-derived parent and is
+            // destroyed only by the collector on the collector thread; no
+            // barrier is needed (and the pointee may already be destroyed,
+            // so loading it would be unsafe).  Trap any other thread.
             assert_this_thread_is_collector();
         }
 
-        Slot(const Slot&) = delete;
-        Slot& operator=(const Slot&) = delete;
+        GarbageCollectedSlot(const GarbageCollectedSlot&) = delete;
+        GarbageCollectedSlot& operator=(const GarbageCollectedSlot&) = delete;
 
         // Load: returns the raw pointer.  Inner load runs at ≥ acquire so the
         // caller can dereference what they get back.
@@ -647,11 +638,22 @@ T* load_##public_order() const noexcept {\
         MAKE_WRY_ATOMIC_GC_LOAD(acquire, acquire)
         MAKE_WRY_ATOMIC_GC_LOAD(seq_cst, seq_cst)
 
-        // Store: must shade the displaced pointer (Dijkstra barrier), so we
-        // use exchange internally to recover it.  Inner exchange runs at
-        // ≥ acq_rel: release on the publish side AND acquire on the load
-        // side, so the shade of the displaced pointer can read its _gray
-        // field.
+        // Non-atomic access — see Atomic<T>::nonatomic_load /
+        // nonatomic_store for the contract.  No shade is performed
+        // by nonatomic_store: the precondition (object not yet
+        // escaped to other threads) means the collector cannot have
+        // observed the displaced pointer, so nothing to preserve.
+        T* nonatomic_load() const noexcept {
+            return raw.nonatomic_load();
+        }
+
+        void nonatomic_store(T* desired) noexcept {
+            raw.nonatomic_store(desired);
+        }
+
+        // Store: exchange + shade displaced.  Inner exchange at ≥ acq_rel:
+        // release publishes desired, acquire so the shade can dereference
+        // the displaced pointer's _gray field.
 
 #define MAKE_WRY_ATOMIC_GC_STORE(public_order, internal_order) \
 void store_##public_order(T* desired) noexcept {\
@@ -724,21 +726,40 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
         // TODO: wait variants — same shape as elsewhere; left until a
         // concrete need arises.
 
-    }; // struct Slot<T*>
+    }; // struct GarbageCollectedSlot<T*>
 
     // Scan: load-acquire so the recursing scan can safely dereference.
     template<typename T>
-    void garbage_collected_scan(Slot<T*> const& x) {
+    void garbage_collected_scan(GarbageCollectedSlot<T*> const& x) {
         garbage_collected_scan(x.raw.load_acquire());
     }
-    
-    
-    struct BumpAllocated;
-    
+
     inline void garbage_collected_scan(BumpAllocated const* _Nullable) {
         // no-op
     }
-    
+
+    // slot_for<T*>::type — customization point for picking a slot
+    // implementation appropriate to the pointee's allocation regime.
+    //
+    // Specializations live near the marker class they dispatch on, so
+    // adding a new regime (e.g. ReferenceCounted) is a new partial
+    // specialization in a new file rather than an edit here.
+    //
+    // Slot<T*> is the public alias.  Misuse with an unsupported T is a
+    // compile error: the primary template has no definition.
+
+    template<typename> struct slot_for;
+
+    template<typename T>
+    requires (std::is_base_of_v<GarbageCollected, T>)
+    struct slot_for<T*> { using type = GarbageCollectedSlot<T*>; };
+
+    template<typename T>
+    requires (std::is_base_of_v<BumpAllocated, T>)
+    struct slot_for<T*> { using type = Atomic<T*>; };
+
+    template<typename T> using Slot = typename slot_for<T>::type;
+
 } // namespace wry
 
 #endif /* garbage_collected_hpp */
