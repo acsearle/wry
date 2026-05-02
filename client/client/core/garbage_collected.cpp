@@ -878,12 +878,6 @@ namespace wry {
         collector._is_canceled.store_relaxed(true);
     }
 
-    void mutator_overwrote(const GarbageCollected* a) {
-        if (a) {
-            a->_garbage_collected_shade();
-        }
-    }
-
 
 
 

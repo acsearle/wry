@@ -31,8 +31,6 @@ namespace wry {
     void mutator_pin();
     void mutator_repin();
     void mutator_unpin();
-    void mutator_overwrote(GarbageCollected const* old_ptr);
-    void mutator_mark_root(GarbageCollected const* root_ptr);
     
     
     
@@ -596,9 +594,9 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
     // As with Atomic<Root<T*>>, every load runs at ≥ acquire (so the loaded
     // pointer can be safely dereferenced) and every store runs at ≥ release
     // on the publish side AND ≥ acquire on the displaced-pointer side (so
-    // mutator_overwrote can dereference the old pointer to call shade on it).
-    // Names mirror Atomic<T*>; weaker requested orderings are silently
-    // strengthened to the minimum that preserves these invariants.
+    // the shade of the old pointer can dereference it).  Names mirror
+    // Atomic<T*>; weaker requested orderings are silently strengthened to the
+    // minimum that preserves these invariants.
 
     template<typename>
     struct Slot;
@@ -652,13 +650,13 @@ T* load_##public_order() const noexcept {\
         // Store: must shade the displaced pointer (Dijkstra barrier), so we
         // use exchange internally to recover it.  Inner exchange runs at
         // ≥ acq_rel: release on the publish side AND acquire on the load
-        // side (so mutator_overwrote -> shade can dereference the old
-        // pointer's _gray field).
+        // side, so the shade of the displaced pointer can read its _gray
+        // field.
 
 #define MAKE_WRY_ATOMIC_GC_STORE(public_order, internal_order) \
 void store_##public_order(T* desired) noexcept {\
     T* old = raw.exchange_##internal_order(desired);\
-    mutator_overwrote(old);\
+    garbage_collected_shade(old);\
 }
 
         MAKE_WRY_ATOMIC_GC_STORE(relaxed, acq_rel)
@@ -671,7 +669,7 @@ void store_##public_order(T* desired) noexcept {\
 #define MAKE_WRY_ATOMIC_GC_EXCHANGE(public_order, internal_order) \
 T* exchange_##public_order(T* desired) noexcept {\
     T* old = raw.exchange_##internal_order(desired);\
-    mutator_overwrote(old);\
+    garbage_collected_shade(old);\
     return old;\
 }
 
@@ -695,7 +693,7 @@ T* exchange_##public_order(T* desired) noexcept {\
 bool compare_exchange_##strength##_##public_succ##_##public_fail(T*& expected, T* desired) noexcept {\
     bool ok = raw.compare_exchange_##strength##_##internal_succ##_##internal_fail(expected, desired);\
     if (ok)\
-        mutator_overwrote(expected);\
+        garbage_collected_shade(expected);\
     return ok;\
 }
 
