@@ -5,6 +5,7 @@
 - C++20 game/runtime project with substantial breadth: systems plumbing (concurrent allocators, lock-free containers, coroutines, atomic primitives, an epoch-based GC), simulation, rendering, audio, IO and wire-format parsing. Concurrent-systems work is a significant area but not the whole codebase — much else hasn't been engaged with yet.
 - For concurrent code anywhere in the project, be precise about std::memory_order semantics — cite the specific ordering and the synchronizes-with / happens-before edge being relied on. Prefer concrete interleaving examples over hand-wavy claims about correctness.
 - Fundamentals first: when in doubt, get the underlying primitives and contracts right before engaging with higher-level features that depend on them.
+- The collector lives in `client/client/core/garbage_collected.{hpp,cpp}` and is documented in `client/client/core/docs/tricolor.md`. It is a DLG-family concurrent tracing collector with a Yuasa-style deletion barrier and ragged epoch-based phase transitions. Mutators never block waiting on the collector; this is a load-bearing invariant. The 16-bit gray/black words support up to 16 overlapping concurrent collections distinguished by bit position.
 
 ## Code Review Discipline
 

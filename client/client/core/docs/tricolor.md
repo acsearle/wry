@@ -791,3 +791,157 @@ N scales with the collection graph size.
   nonatomic writes, but... maybe it isn't.
 - **Tests and testability**
 
+
+---
+
+## 7. Literature comparison
+
+A pass at locating this design in the published GC literature.  Names and
+claims are best-effort; cross-check before quoting.
+
+### What this system mechanically is
+
+- Concurrent mark-sweep, non-moving, non-generational.
+- Tricolor (white/gray/black), with the twist that gray and black are
+  encoded as *separate bits per "k-collection"* — supporting up to 16
+  overlapping concurrent collections distinguished by bit position.  Most
+  schemes have one collection at a time.
+- **Yuasa-style deletion barrier** — shades the displaced pointer on
+  overwrite, via unconditional `fetch_or` on the gray bit (idempotent on
+  already-non-white objects, so equivalent to Yuasa's classic conditional
+  "if white, shade gray").
+- Per-mutator-thread allocation bags (`_thread_local_new_objects`),
+  reported to the collector at quiescence boundaries.
+- Phase transitions are **ragged**: each mutator observes a phase change
+  at its own next pin/repin boundary, not at a synchronized handshake.
+  The collector waits *enough epochs* before relying on a phase change
+  being globally visible.
+- An "embargo" (3-epoch delay) on reading mutator reports gives the
+  per-mutator stores time to be globally visible before the collector
+  dereferences them.
+
+### DLG (Doligez-Leroy-Gonthier, 1993/1994)
+
+The closest classical match.  They have:
+
+- Concurrent mark-sweep tricolor.
+- Snapshot-at-the-beginning (Yuasa) deletion barrier.
+- Phase structure CLEAR / TRACING / SWEEPING / RESTING, very close to our
+  UNUSED / GRAY_PUBLISHED / BLACK_PUBLISHED / SWEEPING / WHITE_PUBLISHED /
+  CLEARING.
+- Per-thread allocation regions, shared heap, distinction between "young"
+  private and shared globally-visible state.
+
+What we share: barrier choice, tricolor, phase shape, per-thread
+allocation.
+
+What we differ on:
+
+- **Phase synchronization mechanism.**  DLG uses synchronous handshakes —
+  every mutator must acknowledge a phase change before the collector
+  advances.  Each thread blocks at the handshake until released.  Our
+  scheme is **ragged**: the phase publication is a single atomic store,
+  mutators observe it at their own quiescence, the collector waits N
+  epochs to be sure.  Threads never block waiting for each other.
+- **K-collection overlap.**  DLG runs one collection at a time.  Our
+  16-bit gray/black words let multiple collections coexist with non-
+  overlapping bit roles.  This specific design pattern doesn't appear in
+  mainstream literature in this form; it's the natural generalization but
+  no canonical reference is known to the author.
+- **Generational / private-region separation.**  DLG distinguishes
+  "private young" from "shared old" and runs a special-case allocator +
+  write barrier for the latter.  We have no generational separation.
+
+### Pizlo's lineage (Schism 2010, FUGC, Fiji CMR)
+
+The "ragged safepoint" terminology is closest to this family.  Filip
+Pizlo coined "ragged safepoints" in *Schism* (PLDI 2010) for an
+asynchronous handshake mechanism: the collector requests work at each
+thread's next polling point, threads do it on their own time, the
+collector proceeds when all have responded.  Same idea as our epoch
+advances, different implementation (Pizlo uses callbacks at safepoints;
+we use a counted atomic state that mutators read at pin/repin).
+
+Pizlo's most current work, FUGC ("Fil's Unbelievable Garbage Collector"),
+describes itself as a "grey-stack Dijkstra accurate non-moving"
+collector using "soft handshakes (ragged safepoints)".  FUGC explicitly
+cites DLG as antecedent and Schism/Fiji CMR as Pizlo's prior work.  It
+uses:
+
+- **Dijkstra insertion barrier**, not Yuasa.  (Stores newly-pointed-at
+  object onto worklist; we shade displaced.)
+- Ragged safepoints for phase transitions.
+- No load barrier.
+- Non-moving.
+
+What we share with FUGC: ragged phase transitions, non-moving, no load
+barrier, tricolor.
+
+What we differ on: barrier choice (Yuasa vs Dijkstra), and the specific
+safepoint-vs-epoch implementation.
+
+### Crossbeam-style epoch-based reclamation
+
+Our epoch service has the same shape as Fraser's epoch-based reclamation
+(EBR), popularized by Aaron Turon's *Lock-freedom without garbage
+collection* (2015) and the Rust `crossbeam-epoch` crate: pin/unpin,
+bounded retirement, advance-when-quiescent.  We use it for both the
+embargo on mutator reports and the synchronization mechanism for phase
+transitions.
+
+This is what fuses the DLG-style tricolor with the Pizlo-style ragged
+safepoints:
+
+- **From EBR**: the bounded-retirement pin/unpin contract, with the
+  embargo as the retirement delay.
+- **From Pizlo's ragged safepoints**: phase transitions don't require
+  synchronous handshakes; mutators observe phase changes at their own
+  quiescence.
+
+### One-line characterization
+
+**A DLG-family concurrent tracing collector** (tricolor + Yuasa deletion
+barrier + per-thread allocation reports + phased mark/sweep) **with
+Pizlo-style ragged phase transitions** (no synchronous handshakes;
+phases publish as atomic colors and mutators observe at their own
+quiescence) **driven by a Fraser-style epoch service** (pin/unpin with
+N-epoch embargo replacing the usual hazard-pointer / quiescent-state
+retirement).
+
+The k-collection multi-bit overlap is a structural detail we can't trace
+to a specific paper but feels like an unwritten generalization —
+multiple instances of the otherwise-standard scheme, packed into the
+same gray/black word at distinct bit positions.
+
+### Bibliography of close cousins
+
+- Doligez & Leroy, *A Concurrent, Generational Garbage Collector for a
+  Multithreaded Implementation of ML*, POPL 1993 — primary DLG.
+- Doligez & Gonthier, *Portable, Unobtrusive Garbage Collection for
+  Multiprocessor Systems*, POPL 1994 — the "unobtrusive" handshake
+  formulation closest in spirit to our ragged style (still synchronous
+  though).
+- Yuasa, *Real-time garbage collection on general-purpose machines*,
+  Journal of Systems and Software, 1990 — the deletion barrier we use.
+- Pizlo et al., *Schism: Fragmentation-Tolerant Real-Time Garbage
+  Collection*, PLDI 2010 — first use of "ragged safepoints"; closest
+  spirit to our phase-transition mechanism.
+- Pizlo, *Fil's Unbelievable Garbage Collector* (https://fil-c.org/fugc) —
+  modern descendant; explicit DLG comparison; uses Dijkstra not Yuasa.
+- Vechev, Yahav & Bacon, *Derivation and Evaluation of Concurrent
+  Collectors*, ECOOP 2005 — formal taxonomy that classifies our scheme as
+  an instance of "incremental snapshot-at-the-beginning," close to but
+  distinct from incremental update.
+- Pirinen, *Barrier techniques for incremental tracing*, ISMM 1998 —
+  classic survey separating "what is preserved" by a barrier from "how"
+  it preserves it.
+- Österlund, *Block-free concurrent GC: stack scanning and copying*,
+  ISMM 2016 — modern asynchronous-handshake stack scanning; ZGC parts of
+  the lineage.
+- Turon, *Lock-freedom without garbage collection* (2015,
+  http://aturon.github.io/tech/2015/08/27/epoch/) — accessible
+  epoch-based reclamation explainer; close to our epoch service shape.
+- Jones, Hosking & Moss, *The Garbage Collection Handbook*, 2nd ed.
+  2023 — the design lineage by direct admission of the author: pick the
+  options that place the least compute burden on the mutator.
+
