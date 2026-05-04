@@ -158,7 +158,10 @@ namespace wry {
     }
 
     void garbage_collected_scan_weak(GarbageCollected const* child) {
-        abort();
+        // Phase 0: weak edges are not traced.  The collector reaches weak
+        // referents only via the dedicated WEAK_DECISION pass (Phase 2+); it
+        // does not follow them during normal scan, and a strong shade would
+        // defeat the whole point of weakness.  See core/docs/ctrie.md.
     }
 
 
@@ -894,9 +897,9 @@ namespace wry {
 namespace wry {
 
     const HeapString* HeapString::make(size_t hash, std::string_view view) {
-        // TODO: this should intern via a global string ctrie; for now we
-        // allocate a fresh HeapString every call.  Original sketch:
-        //   return global_collector->string_ctrie->find_or_emplace(_ctrie::Query{hash, view});
+        // TODO(ctrie.md Phase 3): intern via the global string ctrie.  For
+        // now (Phase 0) we allocate a fresh HeapString every call; the trie
+        // machinery exists but is not yet on the production allocation path.
         size_t n = view.size();
         size_t bytes = sizeof(HeapString) + n;
         void* raw = GarbageCollected::operator new(bytes);

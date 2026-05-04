@@ -35,27 +35,42 @@ namespace wry {
             return _head;
         }
         
-        wry::Task test_t::run_all() {
+        static bool _matches_filter(const test_t::base* test, std::string_view filter) {
+            if (filter.empty())
+                return true;
+            for (const char* meta : test->_metadata) {
+                if (std::string_view(meta).find(filter) != std::string_view::npos)
+                    return true;
+            }
+            return false;
+        }
+
+        wry::Task test_t::run_all(std::string_view filter) {
             base* head = exchange(get_head(), nullptr);
             Coroutine::Nursery nursery;
             while (head) {
-                co_await nursery.fork([](base* head) -> wry::Task {
+                base* test = exchange(head, head->next);
+                if (!_matches_filter(test, filter)) {
+                    delete test;
+                    continue;
+                }
+                co_await nursery.fork([](base* test) -> wry::Task {
                     uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-                    co_await (head->run());
+                    co_await (test->run());
                     uint64_t t1 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-                    head->print_metadata("", (t1 - t0) * 1e-9);
-                    delete head;
+                    test->print_metadata("", (t1 - t0) * 1e-9);
+                    delete test;
                     co_return;
-                } (exchange(head, head->next)));
+                } (test));
             }
             co_await nursery.join();
             printf("[all] : unit tests complete\n");
         }
-        
+
     } // namespace detail
-    
-    wry::Task run_tests() {
-        return detail::test_t::run_all();
+
+    wry::Task run_tests(std::string_view filter) {
+        return detail::test_t::run_all(filter);
     }
     
 } // namespace wry

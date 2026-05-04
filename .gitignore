@@ -1,2 +1,28 @@
-
+# macOS
 .DS_Store
+._*
+
+# Xcode build outputs
+build/
+DerivedData/
+
+# Xcode per-user state (window layouts, breakpoints, etc.)
+xcuserdata/
+*.xcuserstate
+
+# Xcode "moved aside" backups
+*.moved-aside
+
+# Debug symbols
+*.dSYM/
+
+# Generic build artifacts
+*.o
+*.a
+
+# Editors
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

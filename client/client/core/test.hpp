@@ -8,6 +8,7 @@
 #ifndef test_hpp
 #define test_hpp
 
+#include <string_view>
 #include <vector>
 
 #include "assert.hpp"
@@ -45,7 +46,7 @@ namespace wry {
             };
             
             static base*& get_head();
-            
+
             template<typename X>
             test_t(std::vector<const char*> s, X&& x) {
                 base*& head = get_head();
@@ -53,8 +54,8 @@ namespace wry {
                 p->next = head;
                 head = p;
             }
-            
-            static Task run_all();
+
+            static Task run_all(std::string_view filter);
             
         };
         
@@ -78,7 +79,9 @@ namespace wry {
     
     using Coroutine::Task;
 
-    Task run_tests();
+    // Runs every registered test whose metadata contains `filter` as a
+    // substring (in any of its strings).  Empty filter runs all tests.
+    Task run_tests(std::string_view filter = {});
     
 } // namespace wry
 

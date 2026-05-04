@@ -12,10 +12,22 @@
 
 namespace wry {
     
-    // Concurrent hash array mapped trie is now out of date with recent garbage
-    // collector changes but it may be needed when fleshing out the Value type
-    // and its interned strings.  The garbage collector does not currently
-    // support the weak references needed for a weak dictionary.
+    // Concurrent hash array mapped trie used as the global string-intern
+    // dictionary.  The trie holds HeapStrings weakly so the collector can
+    // reclaim unreferenced strings; mutators upgrade weak observations via
+    // a per-SNode atomic state.
+    //
+    // See core/docs/ctrie.md for the full design (structure, weak-slot
+    // protocol, phase ordering, memory ordering).
+    //
+    // Algorithm: Prokopec, Bagwell, Bronson, Odersky, "Concurrent Tries
+    // with Efficient Non-Blocking Snapshots" (PPoPP 2012) -- our SNode /
+    // LNode / TNode structure follows that paper, modulo their snapshot
+    // machinery (GCAS / RDCSS / Gen) which we do not implement.
+    //
+    // The weak protocol lands progressively (see ctrie.md "Phase ordering")
+    // - this file is currently at Phase 0 (bitrot fixes only; the trie is
+    // not yet on the HeapString::make path).
     
     struct HeapString;
     
@@ -31,7 +43,8 @@ namespace wry {
         struct CNode;
         struct LNode;
         struct TNode;
-        
+        struct SNode;
+
         struct INode;
         
         struct Query {
@@ -51,9 +64,9 @@ namespace wry {
         };
         
         struct BranchNode : AnyNode {
-            
+
             virtual void _garbage_collected_debug() const override {
-                printf("%s\n", __PRETTY_FUNCTION__);
+                printf("BranchNode\n");
             }
 
             virtual EraseResult
@@ -68,9 +81,9 @@ namespace wry {
         };
         
         struct MainNode : AnyNode {
-            
+
             virtual void _garbage_collected_debug() const override {
-                printf("%s\n", __PRETTY_FUNCTION__);
+                printf("MainNode\n");
             }
 
             virtual void _ctrie_mn_clean(int level, const INode* parent) const;
@@ -83,14 +96,18 @@ namespace wry {
         };
         
         struct INode final : BranchNode {
-            
+
             virtual void _garbage_collected_debug() const override {
-                printf("%s\n", __PRETTY_FUNCTION__);
+                printf("INode\n");
             }
 
             
-            mutable Atomic<const MainNode*> main;
-            
+            // Slot rather than bare Atomic so that CAS-replacement of
+            // INode::main automatically Yuasa-shades the displaced
+            // MainNode (CNode/TNode/LNode), preserving any in-flight
+            // tracing.  See [garbage_collected.hpp:608] for the slot.
+            mutable GarbageCollectedSlot<MainNode const*> main;
+
             explicit INode(const MainNode*);
             virtual ~INode() final = default;
             

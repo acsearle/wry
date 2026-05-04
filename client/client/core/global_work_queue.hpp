@@ -35,6 +35,8 @@ namespace wry {
     // Offset hacking can be used to recover the address of an object the
     // function pointer is not the first member of.
     //
+    // Longer term, the intent is to use thread-sharded work-stealing queues or
+    // some other low-contention strategy.
     
     void global_work_queue_schedule(void*);
     

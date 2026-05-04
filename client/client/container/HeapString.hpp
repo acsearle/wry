@@ -15,7 +15,10 @@
 
 namespace wry {
     
-    struct HeapString final : _ctrie::BranchNode {
+    // HeapString is an interned-string value.  It is stored in the trie via
+    // an _ctrie::SNode wrapper -- HeapString itself is not a Branch.  See
+    // [core/docs/ctrie.md].
+    struct HeapString final : HeapValue {
 
         // Local placement-new: GarbageCollected's `operator new(size_t)`
         // would otherwise hide the global placement form via class-scope
@@ -28,22 +31,18 @@ namespace wry {
         size_t _hash;
         size_t _size;
         char _bytes[] __counted_by(_size);
-        
+
         std::string_view as_string_view() const;
-        
+
         HeapString();
         virtual ~HeapString() override final;
-        
-        virtual void _garbage_collected_shade() const override final;
+
+        // _garbage_collected_shade inherits the GarbageCollected default
+        // (fetch_or on _gray with the thread-local gray bits); HeapString
+        // has no GC-managed children, so scan is a no-op.
         virtual void _garbage_collected_scan() const override final;
         virtual void _garbage_collected_debug() const override final;
 
-        virtual const HeapString* _ctrie_any_find_or_emplace2(const _ctrie::INode* in, const _ctrie::LNode* ln) const override final;
-        
-        virtual const _ctrie::MainNode* _ctrie_bn_to_contracted(const _ctrie::CNode*) const override final;
-        virtual const HeapString* _ctrie_bn_find_or_emplace(_ctrie::Query query, int lev, const _ctrie::INode* i, const _ctrie::CNode* cn, int pos) const override final;
-        virtual _ctrie::EraseResult _ctrie_bn_erase(const HeapString* key, int lev, const _ctrie::INode* i, const _ctrie::CNode* cn, int pos, uint64_t flag) const override final;
-        
     }; // struct HeapString
     
     

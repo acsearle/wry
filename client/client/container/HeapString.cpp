@@ -10,35 +10,15 @@
 namespace wry {
     
     HeapString::~HeapString() {
-        printf("~\"%.*s\"\n", (int)_size, (const char*)_bytes);
+        // intentionally silent
     }
 
-    void HeapString::_garbage_collected_shade() const {
-        abort();
-#if 0
-        _garbage_collected_trace(p);
-#endif
-    }
-    
     void HeapString::_garbage_collected_scan() const {
-        abort();
-#if 0
-        Color expected = Color::WHITE;
-        (void) color.compare_exchange(expected, Color::BLACK);
-        switch (expected) {
-            case Color::WHITE:
-            case Color::BLACK:
-                break;
-            case Color::GRAY:
-            case Color::RED:
-            default:
-                debug(this);
-                abort();
-        }
-#endif
+        // No GC-managed children.  The interesting reachability question
+        // for HeapString is handled in WEAK_DECISION (Phase 2+); see
+        // core/docs/ctrie.md.
     }
-    
-    
+
     void HeapString::_garbage_collected_debug() const {
         printf("\"%.*s\"", (int)_size, (const char*)_bytes);
     }

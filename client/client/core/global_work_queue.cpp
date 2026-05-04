@@ -7,13 +7,50 @@
 
 #include "global_work_queue.hpp"
 
+#include "atomic.hpp"
+#include "bump_allocator.hpp"
 #include "concurrent_queue.hpp"
 #include "garbage_collected.hpp"
 
 
 namespace wry {
-    
+
     BlockingDeque<void*> global_work_queue;
+
+    namespace {
+
+        // TODO: bump-allocator slab hand-off
+        //
+        // The thread_local `bump::this_thread_state` aborts on its destructor
+        // if it still owns slabs at thread exit (by deliberate design, see
+        // bump_allocator.hpp).  At present a worker thread can finish servicing
+        // and exit while bump-allocated objects it produced are still in use
+        // elsewhere — typically because the work it just ran allocated objects
+        // visible to other threads via the GC heap.
+        //
+        // The proper fix is to hand the slab list off to an owner that keeps
+        // it alive long enough: the garbage collector (which can free a slab
+        // after a handshake confirms no thread holds a pointer into it), or
+        // an arena pool that other threads can pull from.  Until that exists,
+        // we leak: each exiting worker prepends its slab list onto a global
+        // singly-linked list and never frees it.  The leak is bounded by the
+        // number of workers that have ever run.
+        Atomic<bump::Slab*> _orphaned_bump_slabs{};
+
+        void _leak_this_thread_bump_slabs() {
+            bump::Slab* mine = bump::this_thread_state.exchange_head_and_restart(nullptr);
+            if (!mine)
+                return;
+            bump::Slab* tail = mine;
+            while (tail->_next)
+                tail = tail->_next;
+            bump::Slab* expected = _orphaned_bump_slabs.load_relaxed();
+            do {
+                tail->_next = expected;
+            } while (!_orphaned_bump_slabs.compare_exchange_weak_relaxed_relaxed(expected, mine));
+        }
+
+    } // anonymous namespace
     
     // Note that while we wake one waiter when adding one work unit, we don't
     // reserve that work for that waiter; instead another thread might complete
@@ -74,6 +111,11 @@ namespace wry {
             }
             mutator_unpin();
         }
+        // Hand off (i.e. leak) any slabs this thread still owns so that the
+        // bump::State destructor doesn't abort.  See _leak_this_thread_bump_slabs.
+        _leak_this_thread_bump_slabs();
+        // TODO: We can safely free the slabs after a certain number of epochs
+        // have passed.  This is a use case for a "global_work_queue_schedule_after_epoch(epoch, ...)"
     }
     
 }
