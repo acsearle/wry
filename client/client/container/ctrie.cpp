@@ -64,8 +64,8 @@ namespace wry {
         
         // SNode is the per-key leaf wrapper.  HeapString is not itself a
         // Branch -- every reference to a HeapString from inside the trie
-        // goes through an SNode.  The atomic WeakState lives on this type
-        // (Phase 1+).  See [core/docs/ctrie.md].
+        // goes through an SNode.  The atomic WeakState lives on this type.
+        // See [core/docs/ctrie.md].
         struct SNode final : BranchNode {
 
             virtual void _garbage_collected_debug() const override {
@@ -73,9 +73,85 @@ namespace wry {
             }
 
             HeapString const* sn;
+            mutable Atomic<WeakState> state;
 
             explicit SNode(HeapString const* sn);
             virtual ~SNode() override final;
+
+            // Mutator side of the weak-slot protocol.  Returns the
+            // wrapped HeapString if the entry is live, or nullptr if
+            // it is GONE (in which case the caller must install a
+            // fresh entry).
+            //
+            // Three observed states, three responses:
+            //
+            //   READY       → CAS-to-WAS_LOADED, return sn on success.
+            //                 (CAS may race the collector's READY→GONE;
+            //                 on failure the loop re-checks `s`.)
+            //   WAS_LOADED  → return sn directly, no RMW.  See "why
+            //                 the WAS_LOADED shortcut is sound" below.
+            //   GONE        → return nullptr.
+            //
+            // Memory ordering: relaxed throughout.  The slot atomic
+            // arbitrates *only* the READY/GONE race; the HeapString
+            // pointer is published once by the SNode constructor and
+            // is reachable through the parent INode's release-acquire
+            // chain.  See [core/docs/ctrie.md] §"Memory ordering".
+            //
+            // ── Why the WAS_LOADED shortcut is sound ───────────────
+            //
+            // A mutator that observes WAS_LOADED and returns sn
+            // *without* recording its observation in the slot's MO is
+            // protected by two independent guarantees that converge
+            // on the same conclusion:
+            //
+            //  (A) Epoch bound on the deref window.  The mutator
+            //      holds an epoch pin while it dereferences sn.  The
+            //      collector cannot transition state directly from
+            //      WAS_LOADED to GONE in one cycle: it can only do
+            //      WAS_LOADED→READY (resurrect) this cycle, and
+            //      READY→GONE next cycle.  Two full WEAK_DECISION
+            //      passes span multiple epoch advances each.  The
+            //      mutator's pin caps global epoch at X+1, so within
+            //      the deref window state can advance at most one
+            //      step (WAS_LOADED→READY); GONE is unreachable.
+            //      Epoch-deferred free of sn is therefore impossible
+            //      while the mutator is pinned.
+            //
+            //  (B) The collector's resurrect *is* a shade.  When the
+            //      collector does WAS_LOADED→READY in WEAK_DECISION,
+            //      it ORs every currently-active gray and black bit
+            //      onto the underlying HeapString — making it "as if
+            //      traced" for every live cycle.  This is at least as
+            //      strong as anything a mutator's RMW could have
+            //      contributed.  Whatever staleness the mutator's
+            //      relaxed load might have, the collector's own work
+            //      has already kept the object alive across the
+            //      relevant epoch boundary.
+            //
+            // Argument (A) reasons from the consumer side ("my pin
+            // bounds free"); argument (B) reasons from the producer
+            // side ("the collector's resurrect already shaded it").
+            // They converge.  Either alone would suffice; having both
+            // is reassurance, not redundancy.
+            //
+            // The contract carried by either argument: weak read
+            // returns a *transient* reference.  Callers who want sn
+            // to outlive their pin must store it strongly somewhere
+            // (a Root, or a Slot inside a live GC object).  The
+            // intern dictionary deduplicates; it does not keep
+            // alive.
+            //
+            // Edge case — lookup while all bits are inactive: the
+            // CAS to WAS_LOADED still sticks, but no WEAK_DECISION
+            // pass is currently running to do the resurrect-shade.
+            // The state stays at WAS_LOADED across epochs until the
+            // next cycle's WEAK_DECISION, which will then resurrect
+            // with whatever bits are active by then.  Sound; just
+            // means a long-quiet system can carry stale-looking
+            // WAS_LOADED state on SNodes that are nonetheless still
+            // reachable via the trie.
+            HeapString const* lock() const noexcept;
 
             virtual void _garbage_collected_scan() const override;
 
@@ -428,14 +504,20 @@ namespace wry {
         
         const MainNode* CNode::make(const SNode* s1, const SNode* s2, int lev) {
 
-            // Hash bits exhausted: at lev = 60 we've consumed bits 0..59 of
-            // the 64-bit hash, leaving only 4 bits in the next chunk.  Two
-            // strings whose hashes match for 60 bits are a true collision
-            // (or close enough to one that we'd bottom out almost
+            // Hash bits exhausted: at lev = 60 we've consumed bits 0..59
+            // of the 64-bit hash, leaving only 4 bits in the next chunk.
+            // Two strings whose hashes match for 60 bits are a true
+            // collision (or close enough that we'd bottom out almost
             // immediately) -- send them to an LNode chain.
+            //
+            // Phase 1: LNode is structurally present but we don't develop
+            // it further until Phase Whatever.  A 64-bit hash on a
+            // realistic key set effectively never reaches this code path;
+            // if it does, abort loudly so we know we have to deal with
+            // it.
             if (lev >= 60) {
-                assert(s1->sn != s2->sn);
-                return new LNode(s1, new LNode(s2, nullptr));
+                // TODO(ctrie.md Phase Whatever): build LNode chain here.
+                abort();
             }
 
             uint64_t pos1 = (s1->sn->_hash >> lev) & 63;
@@ -515,10 +597,32 @@ namespace wry {
         : main(mn) {
         }
 
-        SNode::SNode(const HeapString* s) : sn(s) {
+        SNode::SNode(const HeapString* s) : sn(s), state(WeakState::READY) {
         }
 
         SNode::~SNode() {
+        }
+
+        const HeapString* SNode::lock() const noexcept {
+            // See the big comment on `lock()` for why the WAS_LOADED
+            // shortcut is sound.
+            WeakState s = state.load_relaxed();
+            for (;;) {
+                switch (s) {
+                    case WeakState::WAS_LOADED:
+                        return sn;
+                    case WeakState::GONE:
+                        return nullptr;
+                    case WeakState::READY:
+                        if (state.compare_exchange_weak_relaxed_relaxed(s, WeakState::WAS_LOADED))
+                            return sn;
+                        // CAS failed; `s` now holds the observed
+                        // value (READY → WAS_LOADED by another
+                        // mutator, or READY → GONE by the collector).
+                        // Loop and re-check.
+                        break;
+                }
+            }
         }
 
         LNode::LNode(const SNode* a, const LNode* b) : sn(a), next(b) {
@@ -549,24 +653,26 @@ namespace wry {
 
         const AnyNode* LNode::find_or_copy_emplace(Query query) const {
 
-            // Walk the collision list.  If we find the key, return its
-            // SNode (which dispatches via _ctrie_any_find_or_emplace2 to
-            // the underlying HeapString).  Otherwise prepend a freshly-
-            // allocated SNode wrapping a fresh HeapString and return the
-            // new chain head.
+            // Walk the collision list.  If we find the key and lock it,
+            // return its SNode (which dispatches via
+            // _ctrie_any_find_or_emplace2 to the underlying HeapString).
+            // Otherwise prepend a freshly-allocated SNode wrapping a
+            // fresh HeapString and return the new chain head.
             //
-            // Phase 0: every reached SNode holds a strong reference, so
-            // "found" implies "live".  Phase 4 will replace the early
-            // return with a WeakSlot::lock() -- on GONE, fall through and
-            // install a new entry instead, à la the "key was condemned"
-            // path described in [core/docs/ctrie.md].
+            // Phase 1: lock() returns non-null for any reachable SNode
+            // because nothing produces GONE yet.  The fall-through-on-
+            // null path is Phase 4 work; until then we abort to make
+            // any premature GONE observation loud.
 
             for (const LNode* current = this; current; current = current->next) {
                 const SNode* s = current->sn;
                 assert(s);
                 if (query != s->sn)
                     continue;
-                return s;
+                if (s->lock())
+                    return s;
+                // TODO(ctrie.md Phase 4): GONE-aware "compete to replace".
+                abort();
             }
 
             // Key not present; prepend a fresh entry.
@@ -686,16 +792,19 @@ namespace wry {
                                                            const CNode* cn,
                                                            int pos) const {
             // We have hashed to the bucket holding this SNode.  Either our
-            // wrapped HeapString matches the query -- return it -- or we
-            // expand the HAMT one level deeper.
+            // wrapped HeapString matches the query -- lock it and return
+            // -- or we expand the HAMT one level deeper.
             //
-            // Phase 0: every reached SNode holds a strong reference, so an
-            // exact match means "live".  Phase 4 will replace the early
-            // return with a WeakSlot::lock() -- on GONE, fall through and
-            // install a fresh SNode/HeapString instead.
+            // Phase 1: lock() returns non-null for any reachable SNode
+            // because nothing produces GONE yet.  The fall-through-on-
+            // null path is Phase 4 work; until then we abort to make any
+            // premature GONE observation loud.
 
             if (query == this->sn) {
-                return this->sn;
+                if (HeapString const* hs = this->lock())
+                    return hs;
+                // TODO(ctrie.md Phase 4): GONE-aware "compete to replace".
+                abort();
             }
 
             // Hash collision at this level (but distinct keys): expand one

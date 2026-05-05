@@ -30,7 +30,7 @@ namespace wry {
     // not yet on the HeapString::make path).
     
     struct HeapString;
-    
+
     namespace _ctrie {
 
         struct Query;
@@ -46,6 +46,26 @@ namespace wry {
         struct SNode;
 
         struct INode;
+
+        // Per-SNode weak-slot protocol state.  The lifecycle is:
+        //
+        //   READY  ⟷  WAS_LOADED        (mutator CAS on lookup;
+        //     │                          collector CAS on resurrect)
+        //     ▼
+        //   GONE   (terminal; SNode and its HeapString are queued
+        //           for epoch-deferred free)
+        //
+        // The mutator's `lock()` advances READY → WAS_LOADED (and
+        // WAS_LOADED → WAS_LOADED) atomically, returning the wrapped
+        // HeapString.  Observing GONE means the entry has been
+        // condemned and the caller must install a fresh one.
+        //
+        // See [core/docs/ctrie.md] §"Weak slot protocol".
+        enum class WeakState : uint8_t {
+            READY = 0,
+            WAS_LOADED,
+            GONE,
+        };
         
         struct Query {
             size_t hash;

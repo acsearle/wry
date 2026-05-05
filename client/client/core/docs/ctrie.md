@@ -68,16 +68,49 @@ Mutator `lock(SNode*) → HeapString*`:
 ```
 loop {
     s = state.load_relaxed();
-    if (s == GONE) return nullptr;
-    if (state.compare_exchange_weak_relaxed_relaxed(s, WAS_LOADED))
-        return sn;
+    switch (s) {
+        case WAS_LOADED: return sn;          // shortcut, no RMW
+        case GONE:       return nullptr;
+        case READY:
+            if (state.compare_exchange_weak_relaxed_relaxed(s, WAS_LOADED))
+                return sn;
+            // CAS failed; loop with updated s.
+    }
 }
 ```
 
-**The mutator MUST perform the RMW even when state is already WAS_LOADED.**
-Its observation has to appear in the slot's modification order so the
-collector's subsequent `(READY, GONE)` CAS reliably fails.  A read-acquire
-shortcut is *unsound*.
+**The WAS_LOADED shortcut is sound** for two converging reasons:
+
+1. *Epoch bound on the deref window.*  The collector cannot transition
+   `WAS_LOADED → GONE` in one cycle — it can only do `WAS_LOADED → READY`
+   this cycle and `READY → GONE` next.  Two full WEAK_DECISION passes span
+   multiple epoch advances each.  A mutator's pin caps global epoch
+   progression at X+1, so within the deref window state can advance at
+   most one step (`WAS_LOADED → READY`); GONE is unreachable.  Epoch-
+   deferred free of `sn` is therefore impossible while the mutator is
+   pinned.
+2. *The collector's resurrect is a shade.*  When the collector does
+   `WAS_LOADED → READY` in WEAK_DECISION it ORs every currently-active
+   gray and black bit onto the underlying HeapString.  That's at least
+   as strong as anything a mutator RMW could contribute; whatever
+   staleness a mutator's relaxed load might have, the collector's own
+   work has already kept the object alive across the relevant epoch.
+
+(1) reasons from the consumer side ("my pin bounds free"); (2) reasons
+from the producer side ("the collector already shaded it").  Either
+alone suffices; having both is reassurance.
+
+**The contract:** weak read returns a *transient* reference.  Callers
+who want `sn` to outlive their pin must store it strongly (a Root, or
+a Slot in a live GC object).  The intern dictionary deduplicates; it
+does not keep alive.
+
+**Edge case — lookup while no bits are active.**  The READY → WAS_LOADED
+CAS still sticks; no WEAK_DECISION is currently running to undo it.
+State stays at WAS_LOADED across epochs until the next cycle, at which
+point the resurrect happens with whatever bits are active by then.
+Sound; long-quiet systems can carry "stale-looking" WAS_LOADED state on
+otherwise-reachable SNodes.
 
 Collector per-SNode in `_sweep_weak`:
 ```
