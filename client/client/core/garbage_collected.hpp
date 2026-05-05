@@ -40,8 +40,7 @@ namespace wry {
     // safe — typically just `global_work_queue_schedule`.  Thread-safe;
     // multiple callers may register concurrently.
     void register_collection_cycle_callback(uint64_t k,
-                                            void (*callback)(void*) noexcept,
-                                            void* user) noexcept;
+                                            void* callback) noexcept;
     
     
     

@@ -328,33 +328,41 @@ namespace wry {
         // Public entry: `register_collection_cycle_callback` (declared in
         // garbage_collected.hpp).  Used to test that a piece of work has
         // had a chance to be observed and acted on by the collector.
-        Atomic<uint64_t> _completed_cycles{0};
         struct CycleWaiter {
             uint64_t target;
-            void (*callback)(void*) noexcept;
-            void* user;
+            void* callback;
+            uint16_t tag;
         };
         std::mutex _cycle_waiters_mutex;
         std::vector<CycleWaiter> _cycle_waiters;
 
-        void _on_cycle_completed() {
-            _completed_cycles.fetch_add_relaxed(1);
-            uint64_t now = _completed_cycles.load_relaxed();
+        void _on_cycle_started(uint16_t tag) {
+            std::scoped_lock guard{_cycle_waiters_mutex};
+            for (auto& x : _cycle_waiters)
+                x.tag |= tag;
+        }
+
+        void _on_cycle_completed(uint16_t tag) {
             std::vector<CycleWaiter> ready;
             {
-                std::lock_guard<std::mutex> g(_cycle_waiters_mutex);
+                std::scoped_lock guard{_cycle_waiters_mutex};
                 auto it = _cycle_waiters.begin();
                 while (it != _cycle_waiters.end()) {
-                    if (now >= it->target) {
-                        ready.push_back(*it);
-                        it = _cycle_waiters.erase(it);
+                    if (tag & it->tag) {
+                        it->tag = 0;
+                        if (!--it->target) {
+                            ready.push_back(std::move(*it));
+                            it = _cycle_waiters.erase(it);
+                            // TODO: Use the swap-to-end idiom to avoid
+                            // O(N^2) reshuffles.
+                        }
                     } else {
                         ++it;
                     }
                 }
             }
             for (auto& w : ready)
-                (*w.callback)(w.user);
+                global_work_queue_schedule(w.callback);
         }
 
         ~Collector() {
@@ -514,6 +522,7 @@ namespace wry {
                             break;
                         first = false;
                         kstate[k] = { GRAY_PUBLISHED, E, 0 };
+                        _on_cycle_started(bit);
                         break;
                         
                     case GRAY_PUBLISHED:
@@ -627,7 +636,7 @@ namespace wry {
                             break;
                         // All objects are now k-white
                         kstate[k] = { UNUSED, E, 0 };
-                        _on_cycle_completed();
+                        _on_cycle_completed(bit);
                         break;
                         
                 } // switch kphase
@@ -921,15 +930,13 @@ namespace wry {
     }
 
     void register_collection_cycle_callback(uint64_t k,
-                                            void (*callback)(void*) noexcept,
-                                            void* user) noexcept {
+                                            void* callback) noexcept {
         if (k == 0) {
-            (*callback)(user);
-            return;
+            global_work_queue_schedule(callback);
+        } else {
+            std::scoped_lock guard{collector._cycle_waiters_mutex};
+            collector._cycle_waiters.emplace_back(k, callback, 0);
         }
-        std::lock_guard<std::mutex> g(collector._cycle_waiters_mutex);
-        uint64_t now = collector._completed_cycles.load_relaxed();
-        collector._cycle_waiters.push_back({now + k, callback, user});
     }
 
 
