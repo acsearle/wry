@@ -32,6 +32,16 @@ namespace wry {
     void mutator_pin();
     void mutator_repin();
     void mutator_unpin();
+
+    // Register a callback (function pointer + user) to be invoked exactly
+    // once after `k` full collection cycles have completed since this call.
+    // `k == 0` fires immediately on the calling thread.  Otherwise the
+    // callback runs on the collector thread and should be cheap and async-
+    // safe — typically just `global_work_queue_schedule`.  Thread-safe;
+    // multiple callers may register concurrently.
+    void register_collection_cycle_callback(uint64_t k,
+                                            void (*callback)(void*) noexcept,
+                                            void* user) noexcept;
     
     
     

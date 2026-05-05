@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cinttypes>
+#include <mutex>
 #include <thread>
 #include <queue>
 #include <deque>
@@ -317,9 +318,45 @@ namespace wry {
         std::deque<EmbargoedReport> _embargoed_reports;
         std::deque<ScanRecord> _scan_history;
         std::array<Epoch, 16> _shade_most_recent;
-        
+
         Epoch _finalized{0xFFFE};
-                                
+
+        // Cycle-completion counter and pending callback list.  Bumped each
+        // time any kbit transitions CLEARING → UNUSED (i.e., one full cycle
+        // of that bit completed).  Waiters drain after each bump.
+        //
+        // Public entry: `register_collection_cycle_callback` (declared in
+        // garbage_collected.hpp).  Used to test that a piece of work has
+        // had a chance to be observed and acted on by the collector.
+        Atomic<uint64_t> _completed_cycles{0};
+        struct CycleWaiter {
+            uint64_t target;
+            void (*callback)(void*) noexcept;
+            void* user;
+        };
+        std::mutex _cycle_waiters_mutex;
+        std::vector<CycleWaiter> _cycle_waiters;
+
+        void _on_cycle_completed() {
+            _completed_cycles.fetch_add_relaxed(1);
+            uint64_t now = _completed_cycles.load_relaxed();
+            std::vector<CycleWaiter> ready;
+            {
+                std::lock_guard<std::mutex> g(_cycle_waiters_mutex);
+                auto it = _cycle_waiters.begin();
+                while (it != _cycle_waiters.end()) {
+                    if (now >= it->target) {
+                        ready.push_back(*it);
+                        it = _cycle_waiters.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+            for (auto& w : ready)
+                (*w.callback)(w.user);
+        }
+
         ~Collector() {
             _known_objects.leak();
         }
@@ -590,6 +627,7 @@ namespace wry {
                             break;
                         // All objects are now k-white
                         kstate[k] = { UNUSED, E, 0 };
+                        _on_cycle_completed();
                         break;
                         
                 } // switch kphase
@@ -880,6 +918,18 @@ namespace wry {
 
     void collector_cancel() {
         collector._is_canceled.store_relaxed(true);
+    }
+
+    void register_collection_cycle_callback(uint64_t k,
+                                            void (*callback)(void*) noexcept,
+                                            void* user) noexcept {
+        if (k == 0) {
+            (*callback)(user);
+            return;
+        }
+        std::lock_guard<std::mutex> g(collector._cycle_waiters_mutex);
+        uint64_t now = collector._completed_cycles.load_relaxed();
+        collector._cycle_waiters.push_back({now + k, callback, user});
     }
 
 

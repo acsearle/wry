@@ -63,6 +63,26 @@ int main(int argc, const char** argv) {
         workers.emplace_back(&wry::global_work_queue_service);
     }
 
+    // In --test-only mode there is no NSApp event loop driving the epoch
+    // forward, so phase transitions that gate on `_finalized` (which only
+    // advances when the collector ingests fresh mutator reports) would
+    // stall once the test suspends.  A small heartbeat thread cycles
+    // pin/unpin to publish empty reports, keeping the collector advancing.
+    // The GUI flow doesn't need this — its renderer / event handling
+    // produces plenty of mutator activity.
+    std::atomic<bool> heartbeat_stop{false};
+    std::thread heartbeat_thread;
+    if (test_only) {
+        heartbeat_thread = std::thread([&heartbeat_stop] {
+            pthread_setname_np("test-heartbeat");
+            while (!heartbeat_stop.load(std::memory_order_relaxed)) {
+                wry::mutator_pin();
+                wry::mutator_unpin();
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        });
+    }
+
     // TODO: At this point, optionally run a stress test of the garbage
     // collector and epoch system itself.
 
@@ -120,6 +140,11 @@ int main(int argc, const char** argv) {
     // at the top of `loop_until_canceled` never returns and the
     // subsequent `collector_thread.join()` deadlocks.  None of the
     // teardown calls below need main to be a mutator.
+
+    if (test_only) {
+        heartbeat_stop.store(true, std::memory_order_relaxed);
+        heartbeat_thread.join();
+    }
 
     printf("main is joining worker threads\n");
     wry::global_work_queue_cancel();

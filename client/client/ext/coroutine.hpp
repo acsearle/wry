@@ -27,6 +27,12 @@ namespace wry {
 
     void global_work_queue_schedule(std::coroutine_handle<>);
 
+    // Defined in garbage_collected.cpp; forward-declared here so the
+    // WaitForCollectionCycles awaitable below can be header-only.
+    void register_collection_cycle_callback(uint64_t k,
+                                            void (*callback)(void*) noexcept,
+                                            void* user) noexcept;
+
 }
 
 namespace wry::Coroutine {
@@ -58,6 +64,29 @@ namespace wry::Coroutine {
     struct SuspendAndSchedule : std::suspend_always {
         void await_suspend(std::coroutine_handle<> handle) const noexcept {
             global_work_queue_schedule(handle);
+        }
+    };
+
+    // Suspend until `cycles` full collection cycles have completed since
+    // the suspend.  The collector schedules the resume via the global work
+    // queue, so the coroutine resumes on a worker thread.  `cycles == 0`
+    // is ready (no suspension).
+    //
+    // Useful for tests that need the collector to have had a chance to
+    // observe and react to mutator-side changes.  Two cycles are typically
+    // needed for the WAS_LOADED → READY → GONE progression of the weak
+    // protocol; pass `cycles >= 3` to absorb the cycle that may have
+    // already been in flight when the wait was requested.
+    struct WaitForCollectionCycles {
+        uint64_t cycles;
+        bool await_ready() const noexcept { return cycles == 0; }
+        void await_suspend(std::coroutine_handle<> handle) const noexcept {
+            register_collection_cycle_callback(cycles, &_resume, handle.address());
+        }
+        void await_resume() const noexcept {}
+    private:
+        static void _resume(void* p) noexcept {
+            global_work_queue_schedule(std::coroutine_handle<>::from_address(p));
         }
     };
     

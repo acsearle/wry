@@ -753,6 +753,18 @@ namespace wry {
             int n = snprintf(buf, sizeof(buf), "key-%d", i);
             kept.emplace_back(trie->find_or_emplace(query_for(std::string_view(buf, n))));
         }
+
+        // Wait for several full collection cycles so the collector has
+        // had a chance to scan the trie and run any cleanup phases that
+        // depend on a full sweep.  The Roots in `kept` pin every interned
+        // HeapString across the suspension; everything unrooted (transient
+        // INodes / CNodes / SNodes left in the wake of trie growth)
+        // becomes eligible for collection during this gap.  Three cycles
+        // is the smallest count that absorbs an in-flight cycle plus the
+        // two cycles that the eventual weak protocol will need
+        // (WAS_LOADED → READY → GONE).
+        co_await Coroutine::WaitForCollectionCycles{3};
+
         for (int i = 0; i != 64; ++i) {
             char buf[24];
             int n = snprintf(buf, sizeof(buf), "key-%d", i);
