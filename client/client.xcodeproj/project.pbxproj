@@ -380,8 +380,8 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					/opt/homebrew/Cellar/freetype/2.13.3/lib,
-					/opt/homebrew/Cellar/libpng/1.6.44/lib,
+					/opt/homebrew/opt/freetype/lib,
+					/opt/homebrew/opt/libpng/lib,
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
@@ -433,8 +433,8 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					/opt/homebrew/Cellar/freetype/2.13.3/lib,
-					/opt/homebrew/Cellar/libpng/1.6.44/lib,
+					/opt/homebrew/opt/freetype/lib,
+					/opt/homebrew/opt/libpng/lib,
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
