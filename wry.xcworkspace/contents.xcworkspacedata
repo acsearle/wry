@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Workspace
+   version = "1.0">
+   <FileRef
+      location = "group:LICENSE.txt">
+   </FileRef>
+   <FileRef
+      location = "group:README.md">
+   </FileRef>
+   <FileSystemSynchronizedGroup
+      location = "group:attic"
+      name = "attic">
+   </FileSystemSynchronizedGroup>
+   <Group
+      location = "group:docs"
+      name = "docs">
+      <FileRef
+         location = "group:gc.md">
+      </FileRef>
+      <FileRef
+         location = "group:/Users/antony/Desktop/wry/docs/design.md">
+      </FileRef>
+      <FileRef
+         location = "group:/Users/antony/Desktop/wry/docs/working.txt">
+      </FileRef>
+      <FileRef
+         location = "group:/Users/antony/Desktop/wry/docs/plan.md">
+      </FileRef>
+      <FileRef
+         location = "group:/Users/antony/Desktop/wry/docs/story.md">
+      </FileRef>
+      <FileRef
+         location = "group:/Users/antony/Desktop/wry/docs/todo.md">
+      </FileRef>
+      <FileRef
+         location = "group:hashtable.md">
+      </FileRef>
+   </Group>
+   <FileRef
+      location = "group:client/client.xcodeproj">
+   </FileRef>
+</Workspace>
