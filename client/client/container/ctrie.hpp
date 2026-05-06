@@ -90,7 +90,7 @@ namespace wry {
 
         struct AnyNode : GarbageCollected {
             virtual FindOrEmplaceResult
-            _ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const;
+            _ctrie_any_find_or_emplace2(INode const* in, LNode const* ln) const;
         };
 
         struct BranchNode : AnyNode {
@@ -100,14 +100,14 @@ namespace wry {
             }
 
             virtual EraseResult
-            _ctrie_bn_erase(KeyType key, int level, const INode* in,
-                            const CNode* cn, int pos, uint64_t flag) const = 0;
+            _ctrie_bn_erase(KeyType key, int level, INode const* in,
+                            CNode const* cn, int pos, uint64_t flag) const = 0;
             virtual FindOrEmplaceResult
-            _ctrie_bn_find_or_emplace(KeyType key, ValueType default_, int level, const INode* in,
-                                      const CNode* cn, int pos) const = 0;
-            virtual const BranchNode* _ctrie_bn_resurrect() const;
-            virtual const MainNode*
-            _ctrie_bn_to_contracted(const CNode* cn) const;
+            _ctrie_bn_find_or_emplace(KeyType key, ValueType default_, int level, INode const* in,
+                                      CNode const* cn, int pos) const = 0;
+            virtual BranchNode const* _ctrie_bn_resurrect() const;
+            virtual MainNode const*
+            _ctrie_bn_to_contracted(CNode const* cn) const;
         };
         
         struct MainNode : AnyNode {
@@ -116,13 +116,13 @@ namespace wry {
                 printf("MainNode\n");
             }
 
-            virtual void _ctrie_mn_clean(int level, const INode* parent) const;
-            virtual bool _ctrie_mn_cleanParent(const INode* p, const INode* i, size_t hc, int lev, const MainNode* m) const;
-            virtual bool _ctrie_mn_cleanParent2(const INode* p, const INode* i, size_t hc, int lev, const CNode* cn, int pos) const;
-            virtual EraseResult _ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* i) const = 0;
-            virtual void _ctrie_mn_erase2(const INode* p, const INode* i, size_t hc, int lev) const;
-            virtual FindOrEmplaceResult _ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const = 0;
-            virtual const BranchNode* _ctrie_mn_resurrect(const INode* i) const;
+            virtual void _ctrie_mn_clean(int level, INode const* parent) const;
+            virtual bool _ctrie_mn_cleanParent(INode const* p, INode const* i, size_t hc, int lev, MainNode const* m) const;
+            virtual bool _ctrie_mn_cleanParent2(INode const* p, INode const* i, size_t hc, int lev, CNode const* cn, int pos) const;
+            virtual EraseResult _ctrie_mn_erase(KeyType key, int lev, INode const* parent, INode const* i) const = 0;
+            virtual void _ctrie_mn_erase2(INode const* p, INode const* i, size_t hc, int lev) const;
+            virtual FindOrEmplaceResult _ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, INode const* parent, INode const* i) const = 0;
+            virtual BranchNode const* _ctrie_mn_resurrect(INode const* i) const;
         };
         
         struct INode final : BranchNode {
@@ -138,24 +138,24 @@ namespace wry {
             // tracing.  See [garbage_collected.hpp:608] for the slot.
             mutable GarbageCollectedSlot<MainNode const*> main;
 
-            explicit INode(const MainNode*);
+            explicit INode(MainNode const*);
             virtual ~INode() final = default;
             
             void clean(int lev) const;
-            FindOrEmplaceResult find_or_emplace(KeyType key, ValueType default_, int level, const INode* parent) const;
+            FindOrEmplaceResult find_or_emplace(KeyType key, ValueType default_, int level, INode const* parent) const;
             // TODO: erase by key vs erase by SNode identity
-            EraseResult erase(KeyType key, int level, const INode* parent) const;
-            const MainNode* load() const;
-            bool compare_exchange(const MainNode* expected, const MainNode* desired) const;
+            EraseResult erase(KeyType key, int level, INode const* parent) const;
+            MainNode const* load() const;
+            bool compare_exchange(MainNode const* expected, MainNode const* desired) const;
             
             
             virtual void _garbage_collected_scan() const override;
             
-            virtual const BranchNode* _ctrie_bn_resurrect() const override;
+            virtual BranchNode const* _ctrie_bn_resurrect() const override;
             virtual FindOrEmplaceResult _ctrie_bn_find_or_emplace(KeyType key, ValueType default_, int level,
-                                                                const INode* in, const CNode* cn, int pos) const override;
-            virtual EraseResult _ctrie_bn_erase(KeyType key, int level, const INode* in,
-                                                const CNode* cn, int pos, uint64_t flag) const override;
+                                                                INode const* in, CNode const* cn, int pos) const override;
+            virtual EraseResult _ctrie_bn_erase(KeyType key, int level, INode const* in,
+                                                CNode const* cn, int pos, uint64_t flag) const override;
             
         };
         

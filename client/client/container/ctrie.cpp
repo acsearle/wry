@@ -32,14 +32,14 @@ namespace wry {
             // of the trie (lev >= 60, where the next level would exhaust the
             // hash) returns an LNode collision list.  Either way, the result
             // is a MainNode and is wrapped in an INode by the caller.
-            static const MainNode* make(const SNode* s1, const SNode* s2, int lev);
+            static MainNode const* make(SNode const* s1, SNode const* s2, int lev);
             static std::pair<uint64_t, int> flagpos(uint64_t h, int lev, uint64_t bmp);
 
             uint64_t bmp;
 #ifndef NDEBUG
                 size_t _debug_size;
 #endif
-            const BranchNode* array[]
+            BranchNode const* array[]
 #ifndef NDEBUG
                 __counted_by(_debug_size)
 #endif
@@ -48,18 +48,18 @@ namespace wry {
             CNode();
             virtual ~CNode() override;
             
-            const CNode* copy_insert(int pos, uint64_t flag, const BranchNode* bn) const;
-            const CNode* copy_assign(int pos, const BranchNode* bn) const;
-            const CNode* copy_erase(int pos, uint64_t flag) const;
-            const CNode* resurrected() const;
-            const MainNode* to_compressed(int level) const;
-            const MainNode* to_contracted(int level) const;
+            CNode const* copy_insert(int pos, uint64_t flag, BranchNode const* bn) const;
+            CNode const* copy_assign(int pos, BranchNode const* bn) const;
+            CNode const* copy_erase(int pos, uint64_t flag) const;
+            CNode const* resurrected() const;
+            MainNode const* to_compressed(int level) const;
+            MainNode const* to_contracted(int level) const;
             
             
-            virtual void _ctrie_mn_clean(int level, const INode* parent) const override;
-            virtual bool _ctrie_mn_cleanParent(const INode* p, const INode* i, size_t hc, int lev, const MainNode* m) const override;
-            virtual EraseResult _ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* i) const override;
-            virtual FindOrEmplaceResult _ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const override;
+            virtual void _ctrie_mn_clean(int level, INode const* parent) const override;
+            virtual bool _ctrie_mn_cleanParent(INode const* p, INode const* i, size_t hc, int lev, MainNode const* m) const override;
+            virtual EraseResult _ctrie_mn_erase(KeyType key, int lev, INode const* parent, INode const* i) const override;
+            virtual FindOrEmplaceResult _ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, INode const* parent, INode const* i) const override;
 
             virtual void _garbage_collected_scan() const override;
             
@@ -81,11 +81,11 @@ namespace wry {
 
             virtual void _garbage_collected_scan() const override;
 
-            virtual FindOrEmplaceResult _ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const override;
+            virtual FindOrEmplaceResult _ctrie_any_find_or_emplace2(INode const* in, LNode const* ln) const override;
 
-            virtual const MainNode* _ctrie_bn_to_contracted(const CNode* cn) const override;
-            virtual FindOrEmplaceResult _ctrie_bn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* i, const CNode* cn, int pos) const override;
-            virtual EraseResult _ctrie_bn_erase(KeyType key, int lev, const INode* i, const CNode* cn, int pos, uint64_t flag) const override;
+            virtual MainNode const* _ctrie_bn_to_contracted(CNode const* cn) const override;
+            virtual FindOrEmplaceResult _ctrie_bn_find_or_emplace(KeyType key, ValueType default_, int lev, INode const* i, CNode const* cn, int pos) const override;
+            virtual EraseResult _ctrie_bn_erase(KeyType key, int lev, INode const* i, CNode const* cn, int pos, uint64_t flag) const override;
         };
 
         struct LNode final : MainNode {
@@ -101,16 +101,16 @@ namespace wry {
             LNode(SNode const* s, LNode const* n);
             virtual ~LNode() override final;
 
-            const AnyNode* find_or_copy_emplace(KeyType key, ValueType default_) const;
-            const LNode* copy_erase(KeyType key) const;
-            const LNode* copy_erase(const LNode* victim) const;
+            AnyNode const* find_or_copy_emplace(KeyType key, ValueType default_) const;
+            LNode const* copy_erase(KeyType key) const;
+            LNode const* copy_erase(LNode const* victim) const;
 
             virtual void _garbage_collected_scan() const override;
 
-            virtual FindOrEmplaceResult _ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const override;
+            virtual FindOrEmplaceResult _ctrie_any_find_or_emplace2(INode const* in, LNode const* ln) const override;
 
-            virtual FindOrEmplaceResult _ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const override;
-            virtual EraseResult _ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* i) const override;
+            virtual FindOrEmplaceResult _ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, INode const* parent, INode const* i) const override;
+            virtual EraseResult _ctrie_mn_erase(KeyType key, int lev, INode const* parent, INode const* i) const override;
 
         };
 
@@ -127,12 +127,12 @@ namespace wry {
             explicit TNode(SNode const* sn);
             virtual ~TNode() override;
 
-            const BranchNode* _ctrie_mn_resurrect(const INode* i) const override;
-            virtual bool _ctrie_mn_cleanParent2(const INode* p, const INode* i, size_t hc, int lev,
-                                                const CNode* cn, int pos) const override;
-            virtual FindOrEmplaceResult _ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const override;
-            virtual EraseResult _ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* i) const override;
-            virtual void _ctrie_mn_erase2(const INode* p, const INode* i, size_t hc, int lev) const override;
+            BranchNode const* _ctrie_mn_resurrect(INode const* i) const override;
+            virtual bool _ctrie_mn_cleanParent2(INode const* p, INode const* i, size_t hc, int lev,
+                                                CNode const* cn, int pos) const override;
+            virtual FindOrEmplaceResult _ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, INode const* parent, INode const* i) const override;
+            virtual EraseResult _ctrie_mn_erase(KeyType key, int lev, INode const* parent, INode const* i) const override;
+            virtual void _ctrie_mn_erase2(INode const* p, INode const* i, size_t hc, int lev) const override;
 
             virtual void _garbage_collected_scan() const override;
 
@@ -141,10 +141,10 @@ namespace wry {
         
         constexpr int W = 6;
        
-        void cleanParent(const INode* p, const INode* i, size_t hc, int lev) {
+        void cleanParent(INode const* p, INode const* i, size_t hc, int lev) {
             for (;;) {
-                const MainNode* m = i->load();
-                const MainNode* pm = p->load();
+                MainNode const* m = i->load();
+                MainNode const* pm = p->load();
                 if (pm->_ctrie_mn_cleanParent(p, i, hc, lev, m))
                     break;
             }
@@ -154,37 +154,37 @@ namespace wry {
 
 
         // TODO: Should be abstract?
-        FindOrEmplaceResult AnyNode::_ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const {
+        FindOrEmplaceResult AnyNode::_ctrie_any_find_or_emplace2(INode const* in, LNode const* ln) const {
             abort();
         }
 
                 
-        void MainNode::_ctrie_mn_clean(int level, const INode *parent) const {
+        void MainNode::_ctrie_mn_clean(int level, INode const* parent) const {
             // noop
         }
         
-        bool MainNode::_ctrie_mn_cleanParent(const INode* parent, const INode* in, size_t hc, int lev, const MainNode* m) const {
+        bool MainNode::_ctrie_mn_cleanParent(INode const* parent, INode const* in, size_t hc, int lev, MainNode const* m) const {
             return true;
         }
         
-        bool MainNode::_ctrie_mn_cleanParent2(const INode* p, const INode* i, size_t hc, int lev, const CNode* cn, int pos) const {
+        bool MainNode::_ctrie_mn_cleanParent2(INode const* p, INode const* i, size_t hc, int lev, CNode const* cn, int pos) const {
             return true;
         }
         
-        void MainNode::_ctrie_mn_erase2(const INode* parent, const INode* i, size_t hc, int lev) const {
+        void MainNode::_ctrie_mn_erase2(INode const* parent, INode const* i, size_t hc, int lev) const {
             // noop
         }
 
-        const BranchNode* MainNode::_ctrie_mn_resurrect(const INode* i) const {
+        BranchNode const* MainNode::_ctrie_mn_resurrect(INode const* i) const {
             return i;
         }
         
         
-        const BranchNode* BranchNode::_ctrie_bn_resurrect() const {
+        BranchNode const* BranchNode::_ctrie_bn_resurrect() const {
             return this;
         }
                 
-        const MainNode* BranchNode::_ctrie_bn_to_contracted(const CNode* cn) const {
+        MainNode const* BranchNode::_ctrie_bn_to_contracted(CNode const* cn) const {
             return cn;
         }
 
@@ -220,11 +220,11 @@ namespace wry {
         
         
         
-        const CNode* CNode::copy_assign(int pos, const BranchNode *bn) const {
+        CNode const* CNode::copy_assign(int pos, BranchNode const* bn) const {
             int num = __builtin_popcountll(this->bmp);
             CNode* ncn = CNode::make_with_bitmap(this->bmp);
             for (int i = 0; i != num; ++i) {
-                const BranchNode* sub = (i == pos) ? bn : this->array[i];
+                BranchNode const* sub = (i == pos) ? bn : this->array[i];
                 garbage_collected_shade(sub);
                 ncn->array[i] = sub;
             }
@@ -238,33 +238,33 @@ namespace wry {
             return {flag, pos};
         }
         
-        const CNode* CNode::resurrected() const {
+        CNode const* CNode::resurrected() const {
             int num = __builtin_popcountll(this->bmp);
             CNode* ncn = CNode::make_with_bitmap(this->bmp);
             for (int i = 0; i != num; ++i) {
-                const BranchNode* bn = this->array[i]->_ctrie_bn_resurrect();
+                BranchNode const* bn = this->array[i]->_ctrie_bn_resurrect();
                 garbage_collected_shade(bn);
                 ncn->array[i] = bn;
             }
             return ncn;
         }
         
-        const MainNode* CNode::to_contracted(int level) const {
+        MainNode const* CNode::to_contracted(int level) const {
             if (level == 0)
                 return this;
             int num = __builtin_popcountll(this->bmp);
             if (num != 1)
                 return this;
-            const BranchNode* bn = this->array[0];
+            BranchNode const* bn = this->array[0];
             return bn->_ctrie_bn_to_contracted(this);
         }
         
-        [[nodiscard]] const MainNode* CNode::to_compressed(int level) const {
+        [[nodiscard]] MainNode const* CNode::to_compressed(int level) const {
             return resurrected()->to_contracted(level);
         }
         
         
-        void CNode::_ctrie_mn_clean(int level, const INode* parent) const {
+        void CNode::_ctrie_mn_clean(int level, INode const* parent) const {
             // INode::clean() is only invoked in contexts where we are already
             // going to RESTART descending the tree, so we don't need to report
             // if this compare_exchange fails
@@ -274,7 +274,7 @@ namespace wry {
             parent->compare_exchange(this, this->to_compressed(level));
         }
         
-        bool CNode::_ctrie_mn_cleanParent(const INode* parent, const INode* in, size_t hc, int lev, const MainNode* m) const {
+        bool CNode::_ctrie_mn_cleanParent(INode const* parent, INode const* in, size_t hc, int lev, MainNode const* m) const {
             // this == READ(p->main)
             //    m == READ(i->main)
             auto [flag, pos] = flagpos(hc, lev, bmp);
@@ -286,16 +286,16 @@ namespace wry {
             return m->_ctrie_mn_cleanParent2(parent, in, hc, lev, this, pos);
         }
         
-        FindOrEmplaceResult CNode::_ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const {
-            const CNode* cn = this;
-            const MainNode* mn = this;
+        FindOrEmplaceResult CNode::_ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, INode const* parent, INode const* i) const {
+            CNode const* cn = this;
+            MainNode const* mn = this;
             auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
             if (!(cn->bmp & flag)) {
                 SNode* nsn = new SNode(key, default_);
-                const MainNode* nmn = cn->copy_insert(pos, flag, nsn);
+                MainNode const* nmn = cn->copy_insert(pos, flag, nsn);
                 return i->compare_exchange(mn, nmn) ? FindOrEmplaceResult{default_} : std::nullopt;
             }
-            const BranchNode* bn = cn->array[pos];
+            BranchNode const* bn = cn->array[pos];
             return bn->_ctrie_bn_find_or_emplace(key, default_, lev, i, cn, pos);
         }
         
@@ -307,30 +307,30 @@ namespace wry {
             load()->_ctrie_mn_clean(level, this);
         }
 
-        const BranchNode* INode::_ctrie_bn_resurrect() const {
-            const MainNode* mn = load();
+        BranchNode const* INode::_ctrie_bn_resurrect() const {
+            MainNode const* mn = load();
             return mn->_ctrie_mn_resurrect(this);
         }
         
-        FindOrEmplaceResult INode::find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent) const {
+        FindOrEmplaceResult INode::find_or_emplace(KeyType key, ValueType default_, int lev, INode const* parent) const {
             return load()->_ctrie_mn_find_or_emplace(key, default_, lev, parent, this);
         }
 
 
         
         
-        TNode::TNode(const SNode* sn)
+        TNode::TNode(SNode const* sn)
         : sn(sn) {
         }
 
         TNode::~TNode() {
         }
 
-        bool TNode::_ctrie_mn_cleanParent2(const INode* p, const INode* i, size_t hc, int lev, const CNode* cn, int pos) const {
+        bool TNode::_ctrie_mn_cleanParent2(INode const* p, INode const* i, size_t hc, int lev, CNode const* cn, int pos) const {
             return p->compare_exchange(cn,  cn->copy_assign(pos, sn)->to_contracted(lev));
         }
 
-        const BranchNode* TNode::_ctrie_mn_resurrect(const INode*) const {
+        BranchNode const* TNode::_ctrie_mn_resurrect(INode const*) const {
             return sn;
         }
                 
@@ -341,20 +341,20 @@ namespace wry {
         
         
        
-        FindOrEmplaceResult TNode::_ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const {
+        FindOrEmplaceResult TNode::_ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, INode const* parent, INode const* i) const {
             if (parent)
                 parent->clean(lev - W);
             return std::nullopt;
         }
         
-       FindOrEmplaceResult LNode::_ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const {
+       FindOrEmplaceResult LNode::_ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, INode const* parent, INode const* i) const {
             return this->find_or_copy_emplace(key, default_)->_ctrie_any_find_or_emplace2(i, this);
         }
                 
-        FindOrEmplaceResult LNode::_ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const {
+        FindOrEmplaceResult LNode::_ctrie_any_find_or_emplace2(INode const* in, LNode const* ln) const {
             // We are the head of a new LNode list created to contain the new SNode
-            const MainNode* mn = ln;
-            const MainNode* nmn = this;
+            MainNode const* mn = ln;
+            MainNode const* nmn = this;
             // Try and install the new list
             // On success, return our value
             // On failure, return nullopt to indicate we start over
@@ -364,8 +364,8 @@ namespace wry {
         
         
         FindOrEmplaceResult INode::_ctrie_bn_find_or_emplace(KeyType key, ValueType default_, int lev,
-                                                           const INode* i,
-                                                           const CNode* cn,
+                                                           INode const* i,
+                                                           CNode const* cn,
                                                            int pos) const {
             return find_or_emplace(key, default_, lev + W, i);
         }
@@ -375,11 +375,11 @@ namespace wry {
         
         
         
-        EraseResult INode::erase(KeyType key, int lev, const INode* parent) const {
+        EraseResult INode::erase(KeyType key, int lev, INode const* parent) const {
             return load()->_ctrie_mn_erase(key, lev, parent, this);
         }
         
-        EraseResult CNode::_ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* i) const {
+        EraseResult CNode::_ctrie_mn_erase(KeyType key, int lev, INode const* parent, INode const* i) const {
             auto [flag, pos] = flagpos(key.hash(), lev, this->bmp);
             if (!(flag & this->bmp))
                 // Key is not present, so postcondition is satisfied
@@ -391,17 +391,17 @@ namespace wry {
             return result;
         }
         
-        EraseResult TNode::_ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* i) const {
+        EraseResult TNode::_ctrie_mn_erase(KeyType key, int lev, INode const* parent, INode const* i) const {
             if (parent)
                 parent->clean(lev - W);
             return EraseResult::RESTART;
         }
         
-        EraseResult LNode::_ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* in) const {
-            const LNode* head = this->copy_erase(key);
+        EraseResult LNode::_ctrie_mn_erase(KeyType key, int lev, INode const* parent, INode const* in) const {
+            LNode const* head = this->copy_erase(key);
             if (head == this)
                 return EraseResult::NOTFOUND;
-            const MainNode* desired = head;
+            MainNode const* desired = head;
             if (!(head->next)) // if list contains only one element
                 desired = new TNode(head->sn);  // sn is SNode*
             // TODO: if EraseResult::OK should we try and clean up any tombstone?
@@ -411,13 +411,13 @@ namespace wry {
         }
            
         
-        EraseResult INode::_ctrie_bn_erase(KeyType key, int lev, const INode* i, const CNode* cn, int pos, uint64_t flag) const {
+        EraseResult INode::_ctrie_bn_erase(KeyType key, int lev, INode const* i, CNode const* cn, int pos, uint64_t flag) const {
             return this->erase(key, lev + W, i);
         }
         
         
         
-        void TNode::_ctrie_mn_erase2(const INode* parent, const INode* i, size_t hc, int lev) const {
+        void TNode::_ctrie_mn_erase2(INode const* parent, INode const* i, size_t hc, int lev) const {
             cleanParent(parent, i, hc, lev);
         }
         
@@ -425,7 +425,7 @@ namespace wry {
         
         
         
-        const MainNode* CNode::make(const SNode* s1, const SNode* s2, int lev) {
+        MainNode const* CNode::make(SNode const* s1, SNode const* s2, int lev) {
 
             // Hash bits exhausted: at lev = 60 we've consumed bits 0..59
             // of the 64-bit hash, leaving only 4 bits in the next chunk.
@@ -476,11 +476,11 @@ namespace wry {
             }
         }
         
-        const CNode* CNode::copy_erase(int pos, uint64_t flag) const {
+        CNode const* CNode::copy_erase(int pos, uint64_t flag) const {
             assert(bmp & flag);
             int num = __builtin_popcountll(bmp);
             CNode* ncn = CNode::make_with_bitmap(bmp ^ flag);
-            const BranchNode** dest = ncn->array;
+            BranchNode const** dest = ncn->array;
             for (int i = 0; i != num; ++i) {
                 if (i != pos) {
                     garbage_collected_shade(array[i]);
@@ -491,11 +491,11 @@ namespace wry {
             return ncn;
         }
         
-        const CNode* CNode::copy_insert(int pos, uint64_t flag, const BranchNode* bn) const {
+        CNode const* CNode::copy_insert(int pos, uint64_t flag, BranchNode const* bn) const {
             assert(!(bmp & flag));
             int num = __builtin_popcountll(bmp);
             CNode* ncn = CNode::make_with_bitmap(bmp ^ flag);
-            const BranchNode* const* src = array;
+            BranchNode const* const* src = array;
             for (int i = 0; i != num+1; ++i) {
                 if (i != pos) {
                     ncn->array[i] = *src++;
@@ -508,7 +508,7 @@ namespace wry {
             return ncn;
         }
         
-        INode::INode(const MainNode* mn)
+        INode::INode(MainNode const* mn)
         : main(mn) {
         }
 
@@ -520,7 +520,7 @@ namespace wry {
         SNode::~SNode() {
         }
 
-        LNode::LNode(const SNode* a, const LNode* b) : sn(a), next(b) {
+        LNode::LNode(SNode const* a, LNode const* b) : sn(a), next(b) {
         }
 
         LNode::~LNode() {
@@ -529,12 +529,12 @@ namespace wry {
 
         // NOTE: The new list reverse the order of the elements before victim
         //    as ++ [b] ++ cs -> reverse(as) ++ cs
-        const LNode* LNode::copy_erase(const LNode* victim) const {
+        LNode const* LNode::copy_erase(LNode const* victim) const {
             assert(victim);
             // Reuse any nodes after the victim
-            const LNode* head = victim->next;
+            LNode const* head = victim->next;
             // Copy any nodes before the victim
-            for (const LNode* curr = this; curr != victim; curr = curr->next) {
+            for (LNode const* curr = this; curr != victim; curr = curr->next) {
                 assert(curr); // <-- victim was not in the list!
                 head = new LNode(curr->sn, head);
             }
@@ -543,15 +543,15 @@ namespace wry {
         
         
 
-        const AnyNode* LNode::find_or_copy_emplace(KeyType key, ValueType default_) const {
+        AnyNode const* LNode::find_or_copy_emplace(KeyType key, ValueType default_) const {
 
             // Walk the collision list.  If we find the key
             // return its SNode.
             // Otherwise prepend a freshly-allocated SNode return it as the
             // new head of the list.
 
-            for (const LNode* current = this; current; current = current->next) {
-                const SNode* s = current->sn;
+            for (LNode const* current = this; current; current = current->next) {
+                SNode const* s = current->sn;
                 assert(s);
                 if (key != s->k)
                     continue;
@@ -563,7 +563,7 @@ namespace wry {
         }
         
         
-        const LNode* LNode::copy_erase(KeyType key) const {
+        LNode const* LNode::copy_erase(KeyType key) const {
             abort();
         }
         
@@ -596,11 +596,11 @@ namespace wry {
         }
         
         
-        const MainNode* INode::load() const {
+        MainNode const* INode::load() const {
             return main.load_acquire();
         }
 
-        bool INode::compare_exchange(const MainNode* expected, const MainNode* desired) const {
+        bool INode::compare_exchange(MainNode const* expected, MainNode const* desired) const {
             // Safety: we have already ACQUIRED the expected value.  The
             // slot's CAS internally upgrades to acq_rel and shades the
             // displaced MainNode (Yuasa); see GarbageCollectedSlot.
@@ -646,8 +646,8 @@ namespace wry {
 
         EraseResult SNode::_ctrie_bn_erase(KeyType key,
                                            int lev,
-                                           const INode* i,
-                                           const CNode* cn,
+                                           INode const* i,
+                                           CNode const* cn,
                                            int pos,
                                            uint64_t flag) const {
             if (this->k != key)
@@ -660,8 +660,8 @@ namespace wry {
         }
 
         FindOrEmplaceResult SNode::_ctrie_bn_find_or_emplace(KeyType key, ValueType default_, int lev,
-                                                           const INode* i,
-                                                           const CNode* cn,
+                                                           INode const* i,
+                                                           CNode const* cn,
                                                            int pos) const {
             // We have hashed to the bucket holding this SNode.  Either the
             // the key matches or we expand the HAMT one level deeper.
@@ -675,19 +675,19 @@ namespace wry {
             // LNode collision list if hash bits run out.
             SNode* nsn = new SNode(key, default_);
             INode* nbn = new INode(CNode::make(this, nsn, lev + W));
-            const MainNode* mn = cn;
-            const MainNode* nmn = cn->copy_assign(pos, nbn);
+            MainNode const* mn = cn;
+            MainNode const* nmn = cn->copy_assign(pos, nbn);
             // SAFETY: if we lose the CAS race, the speculative INode and
             // sub-MainNode we built become orphans; the collector will pick
             // them up via the thread-local new-objects bag.
             return i->compare_exchange(mn, nmn) ? FindOrEmplaceResult{nsn->v} : std::nullopt;
         }
 
-        const MainNode* SNode::_ctrie_bn_to_contracted(const CNode* cn) const {
+        MainNode const* SNode::_ctrie_bn_to_contracted(CNode const* cn) const {
             return new TNode(this);
         }
 
-        FindOrEmplaceResult SNode::_ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const {
+        FindOrEmplaceResult SNode::_ctrie_any_find_or_emplace2(INode const* in, LNode const* ln) const {
             return this->v;
         }
 
