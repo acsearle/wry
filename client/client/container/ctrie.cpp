@@ -10,7 +10,20 @@
 
 namespace wry {
 
-    using namespace _ctrie;
+    struct KeyType {
+        std::size_t data;
+        std::size_t hash() const { return wry::hash(data); }
+        bool operator==(KeyType const&) const = default;
+    };
+
+    void garbage_collected_scan(KeyType const&) {}
+
+    struct ValueType {
+        std::size_t data;
+        bool operator==(ValueType const&) const = default;
+    };
+
+    void garbage_collected_scan(ValueType const&) {}
 
     // Phase 0 sanity test.  The collector and worker threads are running
     // by the time tests are dispatched, and the worker threads are
@@ -18,8 +31,7 @@ namespace wry {
     // operations are well-defined here.
     define_test("ctrie") {
 
-        Root<Ctrie*> trie(new Ctrie());
-
+        Root<Ctrie<KeyType, ValueType>*> trie(new Ctrie<KeyType, ValueType>());
 
         KeyType k0{1234567890};
         ValueType v0{2345678901};
