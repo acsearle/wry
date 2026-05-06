@@ -41,19 +41,29 @@ namespace wry {
         template<typename K, typename V> struct SNode;
         template<typename K, typename V> struct INode;
 
-        enum class EraseResult {
-            RESTART,
-            OK,
-            NOTFOUND,
+        template<typename V>
+        struct FindResult {
+            enum Tag { OK, RESTART, NOT_FOUND };
+            Tag tag;
+            V value;
         };
 
-        // std::optional<V> is used internally to signal OK or RESTART.
-        // The top-level loop retries on nullopt and always returns a value.
+        template<typename V>
+        struct FindOrEmplaceResult {
+            enum Tag { OK, RESTART };
+            Tag tag;
+            V value;
+        };
 
+        enum class EraseResult {
+            OK,
+            RESTART,
+            NOT_FOUND,
+        };
 
         template<typename K, typename V>
         struct AnyNode : GarbageCollected {
-            virtual std::optional<V>
+            virtual FindOrEmplaceResult<V>
             _ctrie_any_find_or_emplace2(INode<K,V> const* in, LNode<K,V> const* ln) const;
         };
 
@@ -64,12 +74,16 @@ namespace wry {
                 printf("BranchNode\n");
             }
 
+            virtual FindResult<V>
+            _ctrie_bn_find(K key, int level, INode<K,V> const* in,
+                                      CNode<K,V> const* cn, int pos) const = 0;
+            virtual FindOrEmplaceResult<V>
+            _ctrie_bn_find_or_emplace(K key, V default_, int level, INode<K,V> const* in,
+                                      CNode<K,V> const* cn, int pos) const = 0;
             virtual EraseResult
             _ctrie_bn_erase(K key, int level, INode<K,V> const* in,
                             CNode<K,V> const* cn, int pos, uint64_t flag) const = 0;
-            virtual std::optional<V>
-            _ctrie_bn_find_or_emplace(K key, V default_, int level, INode<K,V> const* in,
-                                      CNode<K,V> const* cn, int pos) const = 0;
+
             virtual BranchNode<K,V> const* _ctrie_bn_resurrect() const;
             virtual MainNode<K,V> const* _ctrie_bn_to_contracted(CNode<K,V> const* cn) const;
         };
@@ -86,7 +100,8 @@ namespace wry {
             virtual bool _ctrie_mn_cleanParent2(INode<K,V> const* p, INode<K,V> const* i, size_t hc, int lev, CNode<K,V> const* cn, int pos) const;
             virtual EraseResult _ctrie_mn_erase(K key, int lev, INode<K,V> const* parent, INode<K,V> const* i) const = 0;
             virtual void _ctrie_mn_erase2(INode<K,V> const* p, INode<K,V> const* i, size_t hc, int lev) const;
-            virtual std::optional<V> _ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const = 0;
+            virtual FindResult<V> _ctrie_mn_find(K key, int lev, INode<K,V> const* parent, INode<K,V> const* i) const = 0;
+            virtual FindOrEmplaceResult<V> _ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const = 0;
             virtual BranchNode<K,V> const* _ctrie_mn_resurrect(INode<K,V> const* i) const;
         };
 
@@ -107,16 +122,21 @@ namespace wry {
             virtual ~INode() final = default;
 
             void clean(int lev) const;
-            std::optional<V> find_or_emplace(K key, V default_, int level, INode<K,V> const* parent) const;
-            // TODO: erase by key vs erase by SNode identity
+
+            FindResult<V> find(K key, int level, INode<K, V> const* parent) const;
+            FindOrEmplaceResult<V> find_or_emplace(K key, V default_, int level, INode<K,V> const* parent) const;
             EraseResult erase(K key, int level, INode<K,V> const* parent) const;
+            // TODO: erase by key vs erase by SNode identity
+
             MainNode<K,V> const* load() const;
             bool compare_exchange(MainNode<K,V> const* expected, MainNode<K,V> const* desired) const;
 
             virtual void _garbage_collected_scan() const override;
 
             virtual BranchNode<K,V> const* _ctrie_bn_resurrect() const override;
-            virtual std::optional<V> _ctrie_bn_find_or_emplace(K key, V default_, int level,
+            virtual FindResult<V> _ctrie_bn_find(K key, int level,
+                                                               INode<K,V> const* in, CNode<K,V> const* cn, int pos) const override;
+            virtual FindOrEmplaceResult<V> _ctrie_bn_find_or_emplace(K key, V default_, int level,
                                                                 INode<K,V> const* in, CNode<K,V> const* cn, int pos) const override;
             virtual EraseResult _ctrie_bn_erase(K key, int level, INode<K,V> const* in,
                                                 CNode<K,V> const* cn, int pos, uint64_t flag) const override;
@@ -165,8 +185,10 @@ namespace wry {
 
             virtual void _ctrie_mn_clean(int level, INode<K,V> const* parent) const override;
             virtual bool _ctrie_mn_cleanParent(INode<K,V> const* p, INode<K,V> const* i, size_t hc, int lev, MainNode<K,V> const* m) const override;
+
+            virtual FindResult<V> _ctrie_mn_find(K key, int lev, INode<K,V> const* parent, INode<K,V> const* i) const override;
+            virtual FindOrEmplaceResult<V> _ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const override;
             virtual EraseResult _ctrie_mn_erase(K key, int lev, INode<K,V> const* parent, INode<K,V> const* i) const override;
-            virtual std::optional<V> _ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const override;
 
             virtual void _garbage_collected_scan() const override;
         };
@@ -187,10 +209,12 @@ namespace wry {
 
             virtual void _garbage_collected_scan() const override;
 
-            virtual std::optional<V> _ctrie_any_find_or_emplace2(INode<K,V> const* in, LNode<K,V> const* ln) const override;
+            virtual FindOrEmplaceResult<V> _ctrie_any_find_or_emplace2(INode<K,V> const* in, LNode<K,V> const* ln) const override;
 
             virtual MainNode<K,V> const* _ctrie_bn_to_contracted(CNode<K,V> const* cn) const override;
-            virtual std::optional<V> _ctrie_bn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* i, CNode<K,V> const* cn, int pos) const override;
+
+            virtual FindResult<V> _ctrie_bn_find(K key, int lev, INode<K,V> const* i, CNode<K,V> const* cn, int pos) const override;
+            virtual FindOrEmplaceResult<V> _ctrie_bn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* i, CNode<K,V> const* cn, int pos) const override;
             virtual EraseResult _ctrie_bn_erase(K key, int lev, INode<K,V> const* i, CNode<K,V> const* cn, int pos, uint64_t flag) const override;
         };
 
@@ -207,15 +231,17 @@ namespace wry {
             LNode(SNode<K,V> const* s, LNode<K,V> const* n);
             virtual ~LNode() override final;
 
+            FindResult<V> find(K key) const;
             AnyNode<K,V> const* find_or_copy_emplace(K key, V default_) const;
             LNode<K,V> const* copy_erase(K key) const;
             LNode<K,V> const* copy_erase(LNode<K,V> const* victim) const;
 
             virtual void _garbage_collected_scan() const override;
 
-            virtual std::optional<V> _ctrie_any_find_or_emplace2(INode<K,V> const* in, LNode<K,V> const* ln) const override;
+            virtual FindOrEmplaceResult<V> _ctrie_any_find_or_emplace2(INode<K,V> const* in, LNode<K,V> const* ln) const override;
 
-            virtual std::optional<V> _ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const override;
+            virtual FindResult<V> _ctrie_mn_find(K key, int lev, INode<K,V> const* parent, INode<K,V> const* i) const override;
+            virtual FindOrEmplaceResult<V> _ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const override;
             virtual EraseResult _ctrie_mn_erase(K key, int lev, INode<K,V> const* parent, INode<K,V> const* i) const override;
         };
 
@@ -234,7 +260,8 @@ namespace wry {
             BranchNode<K,V> const* _ctrie_mn_resurrect(INode<K,V> const* i) const override;
             virtual bool _ctrie_mn_cleanParent2(INode<K,V> const* p, INode<K,V> const* i, size_t hc, int lev,
                                                 CNode<K,V> const* cn, int pos) const override;
-            virtual std::optional<V> _ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const override;
+            virtual FindResult<V> _ctrie_mn_find(K key, int lev, INode<K,V> const* parent, INode<K,V> const* i) const override;
+            virtual FindOrEmplaceResult<V> _ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const override;
             virtual EraseResult _ctrie_mn_erase(K key, int lev, INode<K,V> const* parent, INode<K,V> const* i) const override;
             virtual void _ctrie_mn_erase2(INode<K,V> const* p, INode<K,V> const* i, size_t hc, int lev) const override;
 
@@ -245,18 +272,15 @@ namespace wry {
 
     } // namespace _ctrie
 
-
-
     template<typename K, typename V>
     struct Ctrie final : GarbageCollected {
 
         _ctrie::INode<K,V> const* root;
 
-        using FindResult = std::optional<V>;
-
         Ctrie();
         virtual ~Ctrie() override final;
 
+        std::optional<V> find(K key);
         V find_or_emplace(K key, V default_);
         void erase(K key);
 
@@ -281,15 +305,14 @@ namespace wry {
             }
         }
 
-        // TODO: Should be abstract?
         template<typename K, typename V>
-        inline std::optional<V> AnyNode<K,V>::_ctrie_any_find_or_emplace2(INode<K,V> const* in, LNode<K,V> const* ln) const {
-            abort();
+        inline FindOrEmplaceResult<V> AnyNode<K,V>::_ctrie_any_find_or_emplace2(INode<K,V> const* in, LNode<K,V> const* ln) const {
+            std::unreachable();
         }
 
         template<typename K, typename V>
         inline void MainNode<K,V>::_ctrie_mn_clean(int level, INode<K,V> const* parent) const {
-            // noop
+            // no-op
         }
 
         template<typename K, typename V>
@@ -304,7 +327,7 @@ namespace wry {
 
         template<typename K, typename V>
         inline void MainNode<K,V>::_ctrie_mn_erase2(INode<K,V> const* parent, INode<K,V> const* i, size_t hc, int lev) const {
-            // noop
+            // no-op
         }
 
         template<typename K, typename V>
@@ -429,14 +452,27 @@ namespace wry {
         }
 
         template<typename K, typename V>
-        inline std::optional<V> CNode<K,V>::_ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const {
+        inline FindResult<V> CNode<K,V>::_ctrie_mn_find(K key, int lev, INode<K,V> const* parent, INode<K,V> const* i) const {
+            CNode<K,V> const* cn = this;
+            auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
+            if (!(cn->bmp & flag)) {
+                return { FindResult<V>::NOT_FOUND, {} };
+            }
+            BranchNode<K,V> const* bn = cn->array[pos];
+            return bn->_ctrie_bn_find(key, lev, i, cn, pos);
+        }
+
+        template<typename K, typename V>
+        inline FindOrEmplaceResult<V> CNode<K,V>::_ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const {
             CNode<K,V> const* cn = this;
             MainNode<K,V> const* mn = this;
             auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
             if (!(cn->bmp & flag)) {
                 SNode<K,V>* nsn = new SNode<K,V>(key, default_);
                 MainNode<K,V> const* nmn = cn->copy_insert(pos, flag, nsn);
-                return i->compare_exchange(mn, nmn) ? std::optional<V>{default_} : std::nullopt;
+                return (i->compare_exchange(mn, nmn)
+                        ? FindOrEmplaceResult<V>{ FindOrEmplaceResult<V>::OK, default_ }
+                        : FindOrEmplaceResult<V>{ FindOrEmplaceResult<V>::RESTART, {} });
             }
             BranchNode<K,V> const* bn = cn->array[pos];
             return bn->_ctrie_bn_find_or_emplace(key, default_, lev, i, cn, pos);
@@ -454,7 +490,12 @@ namespace wry {
         }
 
         template<typename K, typename V>
-        inline std::optional<V> INode<K,V>::find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent) const {
+        inline FindResult<V> INode<K,V>::find(K key, int lev, INode<K,V> const* parent) const {
+            return load()->_ctrie_mn_find(key, lev, parent, this);
+        }
+
+        template<typename K, typename V>
+        inline FindOrEmplaceResult<V> INode<K,V>::find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent) const {
             return load()->_ctrie_mn_find_or_emplace(key, default_, lev, parent, this);
         }
 
@@ -478,28 +519,50 @@ namespace wry {
         }
 
         template<typename K, typename V>
-        inline std::optional<V> TNode<K,V>::_ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const {
+        inline FindResult<V> TNode<K,V>::_ctrie_mn_find(K key, int lev, INode<K,V> const* parent, INode<K,V> const* i) const {
             if (parent)
                 parent->clean(lev - W);
-            return std::nullopt;
+            return { FindResult<V>::RESTART, {} };
         }
 
         template<typename K, typename V>
-        inline std::optional<V> LNode<K,V>::_ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const {
+        inline FindOrEmplaceResult<V> TNode<K,V>::_ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const {
+            if (parent)
+                parent->clean(lev - W);
+            return { FindOrEmplaceResult<V>::RESTART, {} };
+        }
+
+        template<typename K, typename V>
+        inline FindResult<V> LNode<K,V>::_ctrie_mn_find(K key, int lev, INode<K,V> const* parent, INode<K,V> const* i) const {
+            return this->find(key);
+        }
+
+        template<typename K, typename V>
+        inline FindOrEmplaceResult<V> LNode<K,V>::_ctrie_mn_find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent, INode<K,V> const* i) const {
             return this->find_or_copy_emplace(key, default_)->_ctrie_any_find_or_emplace2(i, this);
         }
 
         template<typename K, typename V>
-        inline std::optional<V> LNode<K,V>::_ctrie_any_find_or_emplace2(INode<K,V> const* in, LNode<K,V> const* ln) const {
+        inline FindOrEmplaceResult<V> LNode<K,V>::_ctrie_any_find_or_emplace2(INode<K,V> const* in, LNode<K,V> const* ln) const {
             // We are the head of a new LNode list created to contain the new SNode.
             MainNode<K,V> const* mn = ln;
             MainNode<K,V> const* nmn = this;
-            // On success, return our value; on failure, return nullopt to restart.
-            return in->compare_exchange(mn, nmn) ? std::optional<V>{sn->v} : std::nullopt;
+            // On success, return our value; on failure, restart
+            return (in->compare_exchange(mn, nmn)
+                    ? FindOrEmplaceResult<V>{ FindOrEmplaceResult<V>::OK, sn->v }
+                    : FindOrEmplaceResult<V>{ FindOrEmplaceResult<V>::RESTART, {} });
         }
 
         template<typename K, typename V>
-        inline std::optional<V> INode<K,V>::_ctrie_bn_find_or_emplace(K key, V default_, int lev,
+        inline FindResult<V> INode<K,V>::_ctrie_bn_find(K key, int lev,
+                                                                      INode<K,V> const* i,
+                                                                      CNode<K,V> const* cn,
+                                                                      int pos) const {
+            return find(key, lev + W, i);
+        }
+
+        template<typename K, typename V>
+        inline FindOrEmplaceResult<V> INode<K,V>::_ctrie_bn_find_or_emplace(K key, V default_, int lev,
                                                                        INode<K,V> const* i,
                                                                        CNode<K,V> const* cn,
                                                                        int pos) const {
@@ -516,7 +579,7 @@ namespace wry {
             auto [flag, pos] = flagpos(key.hash(), lev, this->bmp);
             if (!(flag & this->bmp))
                 // Key is not present, so postcondition is satisfied
-                return EraseResult::NOTFOUND;
+                return EraseResult::NOT_FOUND;
             EraseResult result = this->array[pos]->_ctrie_bn_erase(key, lev, i, this, pos, flag);
             if ((result == EraseResult::OK) && parent)
                 // Check if the erasure left a TNode to clean up
@@ -535,7 +598,7 @@ namespace wry {
         inline EraseResult LNode<K,V>::_ctrie_mn_erase(K key, int lev, INode<K,V> const* parent, INode<K,V> const* in) const {
             LNode<K,V> const* head = this->copy_erase(key);
             if (head == this)
-                return EraseResult::NOTFOUND;
+                return EraseResult::NOT_FOUND;
             MainNode<K,V> const* desired = head;
             if (!(head->next)) // if list contains only one element
                 desired = new TNode<K,V>(head->sn);
@@ -600,7 +663,7 @@ namespace wry {
                     return ncn;
                 }
                 default:
-                    abort();
+                    std::unreachable();
             }
         }
 
@@ -677,6 +740,19 @@ namespace wry {
         }
 
         template<typename K, typename V>
+        inline FindResult<V> LNode<K,V>::find(K key) const {
+            for (LNode<K,V> const* current = this; current; current = current->next) {
+                SNode<K,V> const* s = current->sn;
+                assert(s);
+                if (key != s->k)
+                    continue;
+                return { FindResult<V>::OK, s->v };
+            }
+            // Key not present
+            return { FindResult<V>::NOT_FOUND, {} };
+        }
+
+        template<typename K, typename V>
         inline AnyNode<K,V> const* LNode<K,V>::find_or_copy_emplace(K key, V default_) const {
             // Walk the collision list.  If we find the key return its SNode.
             // Otherwise prepend a freshly-allocated SNode and return the new
@@ -747,7 +823,7 @@ namespace wry {
                                                        int pos,
                                                        uint64_t flag) const {
             if (this->k != key)
-                return EraseResult::NOTFOUND;
+                return EraseResult::NOT_FOUND;
             // SAFETY: We sometimes discard the pointer to the contracted node;
             // this is OK because the garbage collector saves us.
             return (i->compare_exchange(cn, cn->copy_erase(pos, flag)->to_contracted(lev))
@@ -756,14 +832,29 @@ namespace wry {
         }
 
         template<typename K, typename V>
-        inline std::optional<V> SNode<K,V>::_ctrie_bn_find_or_emplace(K key, V default_, int lev,
+        inline FindResult<V> SNode<K,V>::_ctrie_bn_find(K key, int lev,
+                                                                      INode<K,V> const* i,
+                                                                      CNode<K,V> const* cn,
+                                                                      int pos) const {
+            // We have hashed to the bucket holding this SNode.  Either the
+            // key matches or we expand the HAMT one level deeper.
+            if (key == this->k) {
+                return { FindResult<V>::OK, this->v};
+            } else {
+                return { FindResult<V>::NOT_FOUND, {}};
+            }
+
+        }
+
+        template<typename K, typename V>
+        inline FindOrEmplaceResult<V> SNode<K,V>::_ctrie_bn_find_or_emplace(K key, V default_, int lev,
                                                                        INode<K,V> const* i,
                                                                        CNode<K,V> const* cn,
                                                                        int pos) const {
             // We have hashed to the bucket holding this SNode.  Either the
             // key matches or we expand the HAMT one level deeper.
             if (key == this->k) {
-                return this->v;
+                return { FindOrEmplaceResult<V>::OK, this->v };
             }
 
             // Hash collision at this level (but distinct keys): expand one
@@ -776,7 +867,9 @@ namespace wry {
             // SAFETY: if we lose the CAS race, the speculative INode and
             // sub-MainNode we built become orphans; the collector will pick
             // them up via the thread-local new-objects bag.
-            return i->compare_exchange(mn, nmn) ? std::optional<V>{nsn->v} : std::nullopt;
+            return (i->compare_exchange(mn, nmn)
+                    ? FindOrEmplaceResult<V>{FindOrEmplaceResult<V>::OK, nsn->v}
+                    : FindOrEmplaceResult<V>{FindOrEmplaceResult<V>::RESTART, {}});
         }
 
         template<typename K, typename V>
@@ -785,8 +878,8 @@ namespace wry {
         }
 
         template<typename K, typename V>
-        inline std::optional<V> SNode<K,V>::_ctrie_any_find_or_emplace2(INode<K,V> const* in, LNode<K,V> const* ln) const {
-            return this->v;
+        inline FindOrEmplaceResult<V> SNode<K,V>::_ctrie_any_find_or_emplace2(INode<K,V> const* in, LNode<K,V> const* ln) const {
+            return { FindOrEmplaceResult<V>::OK, this->v };
         }
 
     } // namespace _ctrie
@@ -800,12 +893,35 @@ namespace wry {
     inline Ctrie<K,V>::~Ctrie() {
     }
 
+
+    template<typename K, typename V>
+    inline std::optional<V> Ctrie<K, V>::find(K key) {
+        for (;;) {
+            _ctrie::FindResult<V> a = root->find(key, 0, nullptr);
+            switch (a.tag) {
+                case _ctrie::FindResult<V>::OK:
+                    return a.value;
+                case _ctrie::FindResult<V>::RESTART:
+                    break;
+                case _ctrie::FindResult<V>::NOT_FOUND:
+                    return std::nullopt;
+                default:
+                    std::unreachable();
+            }
+        }
+    }
     template<typename K, typename V>
     inline V Ctrie<K,V>::find_or_emplace(K key, V default_) {
         for (;;) {
-            std::optional<V> result = root->find_or_emplace(key, default_, 0, nullptr);
-            if (result)
-                return *result;
+            _ctrie::FindOrEmplaceResult<V> result = root->find_or_emplace(key, default_, 0, nullptr);
+            switch (result.tag) {
+                case _ctrie::FindOrEmplaceResult<V>::OK:
+                    return result.value;
+                case _ctrie::FindOrEmplaceResult<V>::RESTART:
+                    break;
+                default:
+                    std::unreachable();
+            }
         }
     }
 
@@ -824,6 +940,7 @@ namespace wry {
     inline void Ctrie<K,V>::_garbage_collected_debug() const {
         printf("Ctrie\n");
     }
+
 
 } // namespace wry
 

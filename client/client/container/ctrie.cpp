@@ -67,9 +67,39 @@ namespace wry {
         for (size_t i = 0; i != 64; ++i) {
             KeyType key{i};
             ValueType value{i};
+            std::optional<ValueType> result = trie->find(key);
+            if (result.has_value()) {
+                printf("[%zu] -> {%zu} expect %zu (hash() -> %0.16zx\n", key.data, result.value().data, kept[i].data, key.hash());
+                assert(result == kept[i]);
+            } else {
+                printf("[%zu] -> {} expect %zu (hash() -> %0.16zx\n", key.data, kept[i].data, key.hash());
+                assert(result.has_value());
+            }
+        }
+
+        for (size_t i = 0; i != 64; ++i) {
+            KeyType key{i};
+            ValueType value{i};
             ValueType result = trie->find_or_emplace(key, value);
             printf("[%zu] -> %zu expect %zu (hash() -> %0.16zx\n", key.data, result.data, kept[i].data, key.hash());
             assert(result == kept[i]);
+        }
+
+        for (size_t i = 0; i != 64; ++i) {
+            KeyType key{i};
+            trie->erase(key);
+        }
+
+        for (size_t i = 0; i != 64; ++i) {
+            KeyType key{i};
+            std::optional<ValueType> result = trie->find(key);
+            if (result.has_value()) {
+                printf("[%zu] -> {%zu} expect {} (hash() -> %0.16zx\n", key.data, result.value().data, key.hash());
+                assert(!result.has_value());
+            } else {
+                printf("[%zu] -> {} expect {} (hash() -> %0.16zx\n", key.data, key.hash());
+                assert(!result.has_value());
+            }
         }
 
         co_return;
