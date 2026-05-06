@@ -5,13 +5,8 @@
 //  Created by Antony Searle on 14/6/2024.
 //
 
-//#include "adl.hpp"
-
-#include <cstring>
-
 #include "utility.hpp"
 #include "ctrie.hpp"
-#include "HeapString.hpp"
 #include "test.hpp"
 
 
@@ -30,7 +25,9 @@ namespace wry {
             // name lookup, breaking `new(raw) CNode` inside `make()`.
             static void* operator new(size_t, void* ptr) noexcept { return ptr; }
 
-            static CNode* make(int num);
+            static CNode* make_with_count(int count);
+            static CNode* make_with_bitmap(uint64_t bitmap);
+
             // Two-key constructor: returns a CNode normally, but at the bottom
             // of the trie (lev >= 60, where the next level would exhaust the
             // hash) returns an LNode collision list.  Either way, the result
@@ -39,9 +36,15 @@ namespace wry {
             static std::pair<uint64_t, int> flagpos(uint64_t h, int lev, uint64_t bmp);
 
             uint64_t bmp;
-            size_t _debug_size;
-            const BranchNode* array[] __counted_by(_debug_size);
-            
+#ifndef NDEBUG
+                size_t _debug_size;
+#endif
+            const BranchNode* array[]
+#ifndef NDEBUG
+                __counted_by(_debug_size)
+#endif
+                ;
+
             CNode();
             virtual ~CNode() override;
             
@@ -55,16 +58,14 @@ namespace wry {
             
             virtual void _ctrie_mn_clean(int level, const INode* parent) const override;
             virtual bool _ctrie_mn_cleanParent(const INode* p, const INode* i, size_t hc, int lev, const MainNode* m) const override;
-            virtual EraseResult _ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const override;
-            virtual const HeapString* _ctrie_mn_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const override;
-            
+            virtual EraseResult _ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* i) const override;
+            virtual FindOrEmplaceResult _ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const override;
+
             virtual void _garbage_collected_scan() const override;
             
         };
         
-        // SNode is the per-key leaf wrapper.  HeapString is not itself a
-        // Branch -- every reference to a HeapString from inside the trie
-        // goes through an SNode.  The atomic WeakState lives on this type.
+        // SNode is the per-key leaf.
         // See [core/docs/ctrie.md].
         struct SNode final : BranchNode {
 
@@ -72,94 +73,19 @@ namespace wry {
                 printf("SNode\n");
             }
 
-            HeapString const* sn;
-            mutable Atomic<WeakState> state;
+            KeyType k;
+            ValueType v;
 
-            explicit SNode(HeapString const* sn);
+            explicit SNode(KeyType, ValueType);
             virtual ~SNode() override final;
-
-            // Mutator side of the weak-slot protocol.  Returns the
-            // wrapped HeapString if the entry is live, or nullptr if
-            // it is GONE (in which case the caller must install a
-            // fresh entry).
-            //
-            // Three observed states, three responses:
-            //
-            //   READY       → CAS-to-WAS_LOADED, return sn on success.
-            //                 (CAS may race the collector's READY→GONE;
-            //                 on failure the loop re-checks `s`.)
-            //   WAS_LOADED  → return sn directly, no RMW.  See "why
-            //                 the WAS_LOADED shortcut is sound" below.
-            //   GONE        → return nullptr.
-            //
-            // Memory ordering: relaxed throughout.  The slot atomic
-            // arbitrates *only* the READY/GONE race; the HeapString
-            // pointer is published once by the SNode constructor and
-            // is reachable through the parent INode's release-acquire
-            // chain.  See [core/docs/ctrie.md] §"Memory ordering".
-            //
-            // ── Why the WAS_LOADED shortcut is sound ───────────────
-            //
-            // A mutator that observes WAS_LOADED and returns sn
-            // *without* recording its observation in the slot's MO is
-            // protected by two independent guarantees that converge
-            // on the same conclusion:
-            //
-            //  (A) Epoch bound on the deref window.  The mutator
-            //      holds an epoch pin while it dereferences sn.  The
-            //      collector cannot transition state directly from
-            //      WAS_LOADED to GONE in one cycle: it can only do
-            //      WAS_LOADED→READY (resurrect) this cycle, and
-            //      READY→GONE next cycle.  Two full WEAK_DECISION
-            //      passes span multiple epoch advances each.  The
-            //      mutator's pin caps global epoch at X+1, so within
-            //      the deref window state can advance at most one
-            //      step (WAS_LOADED→READY); GONE is unreachable.
-            //      Epoch-deferred free of sn is therefore impossible
-            //      while the mutator is pinned.
-            //
-            //  (B) The collector's resurrect *is* a shade.  When the
-            //      collector does WAS_LOADED→READY in WEAK_DECISION,
-            //      it ORs every currently-active gray and black bit
-            //      onto the underlying HeapString — making it "as if
-            //      traced" for every live cycle.  This is at least as
-            //      strong as anything a mutator's RMW could have
-            //      contributed.  Whatever staleness the mutator's
-            //      relaxed load might have, the collector's own work
-            //      has already kept the object alive across the
-            //      relevant epoch boundary.
-            //
-            // Argument (A) reasons from the consumer side ("my pin
-            // bounds free"); argument (B) reasons from the producer
-            // side ("the collector's resurrect already shaded it").
-            // They converge.  Either alone would suffice; having both
-            // is reassurance, not redundancy.
-            //
-            // The contract carried by either argument: weak read
-            // returns a *transient* reference.  Callers who want sn
-            // to outlive their pin must store it strongly somewhere
-            // (a Root, or a Slot inside a live GC object).  The
-            // intern dictionary deduplicates; it does not keep
-            // alive.
-            //
-            // Edge case — lookup while all bits are inactive: the
-            // CAS to WAS_LOADED still sticks, but no WEAK_DECISION
-            // pass is currently running to do the resurrect-shade.
-            // The state stays at WAS_LOADED across epochs until the
-            // next cycle's WEAK_DECISION, which will then resurrect
-            // with whatever bits are active by then.  Sound; just
-            // means a long-quiet system can carry stale-looking
-            // WAS_LOADED state on SNodes that are nonetheless still
-            // reachable via the trie.
-            HeapString const* lock() const noexcept;
 
             virtual void _garbage_collected_scan() const override;
 
-            virtual const HeapString* _ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const override;
+            virtual FindOrEmplaceResult _ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const override;
 
             virtual const MainNode* _ctrie_bn_to_contracted(const CNode* cn) const override;
-            virtual const HeapString* _ctrie_bn_find_or_emplace(Query query, int lev, const INode* i, const CNode* cn, int pos) const override;
-            virtual EraseResult _ctrie_bn_erase(const HeapString* key, int lev, const INode* i, const CNode* cn, int pos, uint64_t flag) const override;
+            virtual FindOrEmplaceResult _ctrie_bn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* i, const CNode* cn, int pos) const override;
+            virtual EraseResult _ctrie_bn_erase(KeyType key, int lev, const INode* i, const CNode* cn, int pos, uint64_t flag) const override;
         };
 
         struct LNode final : MainNode {
@@ -175,16 +101,16 @@ namespace wry {
             LNode(SNode const* s, LNode const* n);
             virtual ~LNode() override final;
 
-            const AnyNode* find_or_copy_emplace(Query query) const;
-            const LNode* copy_erase(const HeapString* key) const;
+            const AnyNode* find_or_copy_emplace(KeyType key, ValueType default_) const;
+            const LNode* copy_erase(KeyType key) const;
             const LNode* copy_erase(const LNode* victim) const;
 
             virtual void _garbage_collected_scan() const override;
 
-            virtual const HeapString* _ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const override;
+            virtual FindOrEmplaceResult _ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const override;
 
-            virtual const HeapString* _ctrie_mn_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const override;
-            virtual EraseResult _ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const override;
+            virtual FindOrEmplaceResult _ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const override;
+            virtual EraseResult _ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* i) const override;
 
         };
 
@@ -204,8 +130,8 @@ namespace wry {
             const BranchNode* _ctrie_mn_resurrect(const INode* i) const override;
             virtual bool _ctrie_mn_cleanParent2(const INode* p, const INode* i, size_t hc, int lev,
                                                 const CNode* cn, int pos) const override;
-            virtual HeapString const* _ctrie_mn_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const override;
-            virtual EraseResult _ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const override;
+            virtual FindOrEmplaceResult _ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const override;
+            virtual EraseResult _ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* i) const override;
             virtual void _ctrie_mn_erase2(const INode* p, const INode* i, size_t hc, int lev) const override;
 
             virtual void _garbage_collected_scan() const override;
@@ -215,15 +141,6 @@ namespace wry {
         
         constexpr int W = 6;
        
-        
-        bool operator==(const Query& left, const HeapString* right) {
-            size_t n = left.view.size();
-            return ((left.hash == right->_hash)
-                    && (n == right->_size)
-                    && !__builtin_memcmp(left.view.data(), right->_bytes, n)
-                    );
-        }
-        
         void cleanParent(const INode* p, const INode* i, size_t hc, int lev) {
             for (;;) {
                 const MainNode* m = i->load();
@@ -234,13 +151,10 @@ namespace wry {
         }
         
         
-        const HeapString* make_HeapString_from_Query(Query query) {
-            // assert(query.view.size() > 7);
-            return HeapString::make(query.hash, query.view);
-        }
-        
-        
-        const HeapString* AnyNode::_ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const {
+
+
+        // TODO: Should be abstract?
+        FindOrEmplaceResult AnyNode::_ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const {
             abort();
         }
 
@@ -275,18 +189,32 @@ namespace wry {
         }
 
 
-        CNode* CNode::make(int num) {
-            size_t bytes = sizeof(CNode) + num * sizeof(BranchNode*);
+        CNode* CNode::make_with_count(int count) {
+            size_t bytes = sizeof(CNode) + count * sizeof(BranchNode*);
             void* raw = GarbageCollected::operator new(bytes);
             std::memset(raw, 0, bytes);
-            return new(raw) CNode;
+            CNode* result = new(raw) CNode;
+#ifndef NDEBUG
+            result->_debug_size = count;
+#endif
+            return result;
+        }
+
+        CNode* CNode::make_with_bitmap(uint64_t bitmap) {
+            int count = __builtin_popcountll(bitmap);
+            CNode* result = make_with_count(count);
+            result->bmp = bitmap;
+            return result;
         }
 
         CNode::CNode()
         : bmp{0}
-        , _debug_size{0} {
+#ifndef NDEBUG
+        , _debug_size{0}
+#endif
+        {
         }
-        
+
         CNode::~CNode() {
         }
         
@@ -294,9 +222,7 @@ namespace wry {
         
         const CNode* CNode::copy_assign(int pos, const BranchNode *bn) const {
             int num = __builtin_popcountll(this->bmp);
-            CNode* ncn = CNode::make(num);
-            ncn->bmp = this->bmp;
-            ncn->_debug_size = __builtin_popcountll(ncn->bmp);
+            CNode* ncn = CNode::make_with_bitmap(this->bmp);
             for (int i = 0; i != num; ++i) {
                 const BranchNode* sub = (i == pos) ? bn : this->array[i];
                 garbage_collected_shade(sub);
@@ -314,9 +240,7 @@ namespace wry {
         
         const CNode* CNode::resurrected() const {
             int num = __builtin_popcountll(this->bmp);
-            CNode* ncn = CNode::make(num);
-            ncn->bmp = this->bmp;
-            ncn->_debug_size = __builtin_popcountll(ncn->bmp);
+            CNode* ncn = CNode::make_with_bitmap(this->bmp);
             for (int i = 0; i != num; ++i) {
                 const BranchNode* bn = this->array[i]->_ctrie_bn_resurrect();
                 garbage_collected_shade(bn);
@@ -362,18 +286,17 @@ namespace wry {
             return m->_ctrie_mn_cleanParent2(parent, in, hc, lev, this, pos);
         }
         
-        const HeapString* CNode::_ctrie_mn_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const {
+        FindOrEmplaceResult CNode::_ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const {
             const CNode* cn = this;
             const MainNode* mn = this;
-            auto [flag, pos] = flagpos(query.hash, lev, cn->bmp);
+            auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
             if (!(cn->bmp & flag)) {
-                const HeapString* nhs = make_HeapString_from_Query(query);
-                SNode* nsn = new SNode(nhs);
+                SNode* nsn = new SNode(key, default_);
                 const MainNode* nmn = cn->copy_insert(pos, flag, nsn);
-                return i->compare_exchange(mn, nmn) ? nhs : nullptr;
+                return i->compare_exchange(mn, nmn) ? FindOrEmplaceResult{default_} : std::nullopt;
             }
             const BranchNode* bn = cn->array[pos];
-            return bn->_ctrie_bn_find_or_emplace(query, lev, i, cn, pos);
+            return bn->_ctrie_bn_find_or_emplace(key, default_, lev, i, cn, pos);
         }
         
 
@@ -389,8 +312,8 @@ namespace wry {
             return mn->_ctrie_mn_resurrect(this);
         }
         
-        const HeapString* INode::find_or_emplace(Query query, int lev, const INode* parent) const {
-            return load()->_ctrie_mn_find_or_emplace(query, lev, parent, this);
+        FindOrEmplaceResult INode::find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent) const {
+            return load()->_ctrie_mn_find_or_emplace(key, default_, lev, parent, this);
         }
 
 
@@ -418,33 +341,33 @@ namespace wry {
         
         
        
-        const HeapString* TNode::_ctrie_mn_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const {
+        FindOrEmplaceResult TNode::_ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const {
             if (parent)
                 parent->clean(lev - W);
-            return nullptr;
+            return std::nullopt;
         }
         
-        const HeapString* LNode::_ctrie_mn_find_or_emplace(Query query, int lev, const INode* parent, const INode* i) const {
-            return this->find_or_copy_emplace(query)->_ctrie_any_find_or_emplace2(i, this);
+       FindOrEmplaceResult LNode::_ctrie_mn_find_or_emplace(KeyType key, ValueType default_, int lev, const INode* parent, const INode* i) const {
+            return this->find_or_copy_emplace(key, default_)->_ctrie_any_find_or_emplace2(i, this);
         }
                 
-        const HeapString* LNode::_ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const {
+        FindOrEmplaceResult LNode::_ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const {
             // We are the head of a new LNode list created to contain the new SNode
             const MainNode* mn = ln;
             const MainNode* nmn = this;
             // Try and install the new list
-            // On success, return our string
-            // On failure, return null to indicate we start over
-            return in->compare_exchange(mn, nmn) ? sn->sn : nullptr;
+            // On success, return our value
+            // On failure, return nullopt to indicate we start over
+            return in->compare_exchange(mn, nmn) ? FindOrEmplaceResult{sn->v} : std::nullopt;
         }
         
         
         
-        const HeapString* INode::_ctrie_bn_find_or_emplace(Query query, int lev,
+        FindOrEmplaceResult INode::_ctrie_bn_find_or_emplace(KeyType key, ValueType default_, int lev,
                                                            const INode* i,
                                                            const CNode* cn,
                                                            int pos) const {
-            return find_or_emplace(query, lev + W, i);
+            return find_or_emplace(key, default_, lev + W, i);
         }
         
         
@@ -452,29 +375,29 @@ namespace wry {
         
         
         
-        EraseResult INode::erase(const HeapString* key, int lev, const INode* parent) const {
+        EraseResult INode::erase(KeyType key, int lev, const INode* parent) const {
             return load()->_ctrie_mn_erase(key, lev, parent, this);
         }
         
-        EraseResult CNode::_ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const {
-            auto [flag, pos] = flagpos(key->_hash, lev, this->bmp);
+        EraseResult CNode::_ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* i) const {
+            auto [flag, pos] = flagpos(key.hash(), lev, this->bmp);
             if (!(flag & this->bmp))
                 // Key is not present, so postcondition is satisfied
                 return EraseResult::NOTFOUND;
             EraseResult result = this->array[pos]->_ctrie_bn_erase(key, lev, i, this, pos, flag);
             if ((result == EraseResult::OK) && parent)
                 // Check if the erasure left a TNode to clean up
-                i->load()->_ctrie_mn_erase2(parent, i, key->_hash, lev - W);
+                i->load()->_ctrie_mn_erase2(parent, i, key.hash(), lev - W);
             return result;
         }
         
-        EraseResult TNode::_ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* i) const {
+        EraseResult TNode::_ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* i) const {
             if (parent)
                 parent->clean(lev - W);
             return EraseResult::RESTART;
         }
         
-        EraseResult LNode::_ctrie_mn_erase(const HeapString* key, int lev, const INode* parent, const INode* in) const {
+        EraseResult LNode::_ctrie_mn_erase(KeyType key, int lev, const INode* parent, const INode* in) const {
             const LNode* head = this->copy_erase(key);
             if (head == this)
                 return EraseResult::NOTFOUND;
@@ -488,7 +411,7 @@ namespace wry {
         }
            
         
-        EraseResult INode::_ctrie_bn_erase(const HeapString* key, int lev, const INode* i, const CNode* cn, int pos, uint64_t flag) const {
+        EraseResult INode::_ctrie_bn_erase(KeyType key, int lev, const INode* i, const CNode* cn, int pos, uint64_t flag) const {
             return this->erase(key, lev + W, i);
         }
         
@@ -506,22 +429,19 @@ namespace wry {
 
             // Hash bits exhausted: at lev = 60 we've consumed bits 0..59
             // of the 64-bit hash, leaving only 4 bits in the next chunk.
-            // Two strings whose hashes match for 60 bits are a true
+            // Two keys whose hashes match for 60 bits are a true
             // collision (or close enough that we'd bottom out almost
             // immediately) -- send them to an LNode chain.
-            //
-            // Phase 1: LNode is structurally present but we don't develop
-            // it further until Phase Whatever.  A 64-bit hash on a
-            // realistic key set effectively never reaches this code path;
-            // if it does, abort loudly so we know we have to deal with
-            // it.
+
+            // TODO: Just use the last 4 bits
+
             if (lev >= 60) {
-                // TODO(ctrie.md Phase Whatever): build LNode chain here.
+                // TODO: build LNode chain here.
                 abort();
             }
 
-            uint64_t pos1 = (s1->sn->_hash >> lev) & 63;
-            uint64_t pos2 = (s2->sn->_hash >> lev) & 63;
+            uint64_t pos1 = (s1->k.hash() >> lev) & 63;
+            uint64_t pos2 = (s2->k.hash() >> lev) & 63;
 
             // Order by level-position so array[pos] indexes correctly via
             // flagpos.  An earlier version swapped on full hash, which is
@@ -537,9 +457,8 @@ namespace wry {
             uint64_t bmp = flag1 | flag2;
             int num = __builtin_popcountll(bmp);
 
-            CNode* ncn = CNode::make(num);
-            ncn->bmp = bmp;
-            ncn->_debug_size = __builtin_popcountll(ncn->bmp);
+            CNode* ncn = CNode::make_with_bitmap(bmp);
+
             switch (num) {
                 case 1: {
                     // Both keys land in the same bucket at this level.
@@ -560,9 +479,7 @@ namespace wry {
         const CNode* CNode::copy_erase(int pos, uint64_t flag) const {
             assert(bmp & flag);
             int num = __builtin_popcountll(bmp);
-            CNode* ncn = CNode::make(num-1);
-            ncn->bmp = bmp ^ flag;
-            ncn->_debug_size = __builtin_popcountll(ncn->bmp);
+            CNode* ncn = CNode::make_with_bitmap(bmp ^ flag);
             const BranchNode** dest = ncn->array;
             for (int i = 0; i != num; ++i) {
                 if (i != pos) {
@@ -577,9 +494,7 @@ namespace wry {
         const CNode* CNode::copy_insert(int pos, uint64_t flag, const BranchNode* bn) const {
             assert(!(bmp & flag));
             int num = __builtin_popcountll(bmp);
-            CNode* ncn = CNode::make(num+1);
-            ncn->bmp = bmp ^ flag;
-            ncn->_debug_size = __builtin_popcountll(ncn->bmp);
+            CNode* ncn = CNode::make_with_bitmap(bmp ^ flag);
             const BranchNode* const* src = array;
             for (int i = 0; i != num+1; ++i) {
                 if (i != pos) {
@@ -597,32 +512,12 @@ namespace wry {
         : main(mn) {
         }
 
-        SNode::SNode(const HeapString* s) : sn(s), state(WeakState::READY) {
+        SNode::SNode(KeyType key, ValueType value)
+        : k(key)
+        , v(value) {
         }
 
         SNode::~SNode() {
-        }
-
-        const HeapString* SNode::lock() const noexcept {
-            // See the big comment on `lock()` for why the WAS_LOADED
-            // shortcut is sound.
-            WeakState s = state.load_relaxed();
-            for (;;) {
-                switch (s) {
-                    case WeakState::WAS_LOADED:
-                        return sn;
-                    case WeakState::GONE:
-                        return nullptr;
-                    case WeakState::READY:
-                        if (state.compare_exchange_weak_relaxed_relaxed(s, WeakState::WAS_LOADED))
-                            return sn;
-                        // CAS failed; `s` now holds the observed
-                        // value (READY → WAS_LOADED by another
-                        // mutator, or READY → GONE by the collector).
-                        // Loop and re-check.
-                        break;
-                }
-            }
         }
 
         LNode::LNode(const SNode* a, const LNode* b) : sn(a), next(b) {
@@ -631,7 +526,9 @@ namespace wry {
         LNode::~LNode() {
         }
         
-        
+
+        // NOTE: The new list reverse the order of the elements before victim
+        //    as ++ [b] ++ cs -> reverse(as) ++ cs
         const LNode* LNode::copy_erase(const LNode* victim) const {
             assert(victim);
             // Reuse any nodes after the victim
@@ -639,11 +536,6 @@ namespace wry {
             // Copy any nodes before the victim
             for (const LNode* curr = this; curr != victim; curr = curr->next) {
                 assert(curr); // <-- victim was not in the list!
-                              // Make a copy
-                //LNode* a = new LNode;
-                //a->sn = curr->sn;
-                // Push onto the list
-                //a->next = exchange(head, a);
                 head = new LNode(curr->sn, head);
             }
             return head;
@@ -651,40 +543,27 @@ namespace wry {
         
         
 
-        const AnyNode* LNode::find_or_copy_emplace(Query query) const {
+        const AnyNode* LNode::find_or_copy_emplace(KeyType key, ValueType default_) const {
 
-            // Walk the collision list.  If we find the key and lock it,
-            // return its SNode (which dispatches via
-            // _ctrie_any_find_or_emplace2 to the underlying HeapString).
-            // Otherwise prepend a freshly-allocated SNode wrapping a
-            // fresh HeapString and return the new chain head.
-            //
-            // Phase 1: lock() returns non-null for any reachable SNode
-            // because nothing produces GONE yet.  The fall-through-on-
-            // null path is Phase 4 work; until then we abort to make
-            // any premature GONE observation loud.
+            // Walk the collision list.  If we find the key
+            // return its SNode.
+            // Otherwise prepend a freshly-allocated SNode return it as the
+            // new head of the list.
 
             for (const LNode* current = this; current; current = current->next) {
                 const SNode* s = current->sn;
                 assert(s);
-                if (query != s->sn)
+                if (key != s->k)
                     continue;
-                if (s->lock())
-                    return s;
-                // TODO(ctrie.md Phase 4): GONE-aware "compete to replace".
-                abort();
+                return s;
             }
 
             // Key not present; prepend a fresh entry.
-            const HeapString* nhs = make_HeapString_from_Query(query);
-            return new LNode(new SNode(nhs), this);
+            return new LNode(new SNode(key, default_), this);
         }
         
         
-        const LNode* LNode::copy_erase(const HeapString* key) const {
-            // TODO(ctrie.md Phase 2): collector-driven removal of GONE
-            // entries.  Will splice (not copy) once `next` becomes atomic
-            // and the WEAK_DECISION phase exists.  Currently unreachable.
+        const LNode* LNode::copy_erase(KeyType key) const {
             abort();
         }
         
@@ -693,10 +572,6 @@ namespace wry {
         
         
         void CNode::_garbage_collected_scan() const {
-            // Phase 0: strong-trace every entry, including SNode leaves.
-            // This keeps interned strings alive as long as the trie holds
-            // a reference, which is the conservative behaviour we want
-            // before the WeakState protocol arrives in Phase 1+.
             int num = __builtin_popcountll(bmp);
             for (int i = 0; i != num; ++i)
                 garbage_collected_scan(array[i]);
@@ -707,19 +582,17 @@ namespace wry {
         }
 
         void LNode::_garbage_collected_scan() const {
-            garbage_collected_scan(sn);     // SNode (strong; weak in Phase 1+)
+            garbage_collected_scan(sn);
             garbage_collected_scan(next);
         }
 
         void TNode::_garbage_collected_scan() const {
-            garbage_collected_scan(sn);     // SNode (strong; weak in Phase 1+)
+            garbage_collected_scan(sn);
         }
 
         void SNode::_garbage_collected_scan() const {
-            // Phase 0: strong trace on the underlying HeapString, so the
-            // trie holds interned strings alive (belt-and-braces).  Phase
-            // 1+ will switch this to weak via the WEAK_DECISION pass.
-            garbage_collected_scan(sn);
+            garbage_collected_scan(k);
+            garbage_collected_scan(v);
         }
         
         
@@ -744,20 +617,19 @@ namespace wry {
     }
     
     Ctrie::Ctrie()
-    : root(new INode(_ctrie::CNode::make(0))) {
+    : root(new INode(_ctrie::CNode::make_with_count(0))) {
     }
                     
-    const HeapString* Ctrie::find_or_emplace(Query query) {
+    ValueType Ctrie::find_or_emplace(KeyType key, ValueType default_) {
         for (;;) {
-            const INode* r = this->root;
-            const HeapString* result = r->find_or_emplace(query, 0, nullptr);
+            FindOrEmplaceResult result = this->root->find_or_emplace(key, default_, 0, nullptr);
             if (result)
-                return result;
+                return *result;
         }
     }
     
-    void Ctrie::erase(const HeapString* hs) {
-        while (this->root->erase(hs, 0, nullptr) == EraseResult::RESTART)
+    void Ctrie::erase(KeyType k) {
+        while (this->root->erase(k, 0, nullptr) == EraseResult::RESTART)
             ;
     }
 
@@ -772,13 +644,13 @@ namespace wry {
     
     namespace _ctrie {
 
-        EraseResult SNode::_ctrie_bn_erase(const HeapString* key,
+        EraseResult SNode::_ctrie_bn_erase(KeyType key,
                                            int lev,
                                            const INode* i,
                                            const CNode* cn,
                                            int pos,
                                            uint64_t flag) const {
-            if (this->sn != key)
+            if (this->k != key)
                 return EraseResult::NOTFOUND;
             // SAFETY: We sometimes discard the pointer to the contracted node;
             // this is OK because the garbage collector saves us.
@@ -787,46 +659,36 @@ namespace wry {
                     : EraseResult::RESTART);
         }
 
-        const HeapString* SNode::_ctrie_bn_find_or_emplace(Query query, int lev,
+        FindOrEmplaceResult SNode::_ctrie_bn_find_or_emplace(KeyType key, ValueType default_, int lev,
                                                            const INode* i,
                                                            const CNode* cn,
                                                            int pos) const {
-            // We have hashed to the bucket holding this SNode.  Either our
-            // wrapped HeapString matches the query -- lock it and return
-            // -- or we expand the HAMT one level deeper.
-            //
-            // Phase 1: lock() returns non-null for any reachable SNode
-            // because nothing produces GONE yet.  The fall-through-on-
-            // null path is Phase 4 work; until then we abort to make any
-            // premature GONE observation loud.
+            // We have hashed to the bucket holding this SNode.  Either the
+            // the key matches or we expand the HAMT one level deeper.
 
-            if (query == this->sn) {
-                if (HeapString const* hs = this->lock())
-                    return hs;
-                // TODO(ctrie.md Phase 4): GONE-aware "compete to replace".
-                abort();
+            if (key == this->k) {
+                return this->v;
             }
 
             // Hash collision at this level (but distinct keys): expand one
             // level of HAMT.  CNode::make may itself bottom out into an
             // LNode collision list if hash bits run out.
-            const HeapString* nhs = make_HeapString_from_Query(query);
-            SNode* nsn = new SNode(nhs);
+            SNode* nsn = new SNode(key, default_);
             INode* nbn = new INode(CNode::make(this, nsn, lev + W));
             const MainNode* mn = cn;
             const MainNode* nmn = cn->copy_assign(pos, nbn);
             // SAFETY: if we lose the CAS race, the speculative INode and
             // sub-MainNode we built become orphans; the collector will pick
             // them up via the thread-local new-objects bag.
-            return i->compare_exchange(mn, nmn) ? nhs : nullptr;
+            return i->compare_exchange(mn, nmn) ? FindOrEmplaceResult{nsn->v} : std::nullopt;
         }
 
         const MainNode* SNode::_ctrie_bn_to_contracted(const CNode* cn) const {
             return new TNode(this);
         }
 
-        const HeapString* SNode::_ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const {
-            return this->sn;
+        FindOrEmplaceResult SNode::_ctrie_any_find_or_emplace2(const INode* in, const LNode* ln) const {
+            return this->v;
         }
 
     } // namespace _ctrie
@@ -837,48 +699,47 @@ namespace wry {
     // mutator-pinned ([global_work_queue.cpp]), so allocation-and-shade
     // operations are well-defined here.
     define_test("ctrie") {
+
         Root<Ctrie*> trie(new Ctrie());
 
-        auto query_for = [](std::string_view sv) -> Query {
-            return Query{std::hash<std::string_view>()(sv), sv};
-        };
 
-        Root<HeapString const*> a(trie->find_or_emplace(query_for("hello, world")));
-        Root<HeapString const*> b(trie->find_or_emplace(query_for("goodnight, moon")));
-        assert(a._ptr != b._ptr);
-        assert(a._ptr->as_string_view() == "hello, world");
-        assert(b._ptr->as_string_view() == "goodnight, moon");
+        KeyType k0{1234567890};
+        ValueType v0{2345678901};
+        KeyType k1{3456789012};
+        ValueType v1{4567890123};
 
-        // Lookup canonicalises: same content → same pointer.
-        Root<HeapString const*> a2(trie->find_or_emplace(query_for("hello, world")));
-        assert(a._ptr == a2._ptr);
+        ValueType a = trie->find_or_emplace(k0, v0);
+        ValueType b = trie->find_or_emplace(k1, v1);
+        assert(a.data == v0.data);
+        assert(b.data == v1.data);
+        printf("[%zu] -> %zu expect %zu (hash() -> %0.16zx\n", k0.data, a.data, v0.data, k0.hash());
+        printf("[%zu] -> %zu expect %zu (hash() -> %0.16zx\n", k1.data, b.data, v1.data, k1.hash());
 
-        // Distinct keys with the same hash bucket at level 0 still
-        // canonicalise correctly.  We can't easily force this without
-        // collisions, so just exercise more keys to grow the trie.
-        std::vector<Root<HeapString const*>> kept;
-        for (int i = 0; i != 64; ++i) {
-            char buf[24];
-            int n = snprintf(buf, sizeof(buf), "key-%d", i);
-            kept.emplace_back(trie->find_or_emplace(query_for(std::string_view(buf, n))));
+
+        // Exercise more keys to grow the trie.
+        std::vector<ValueType> kept;
+        for (size_t i = 0; i != 64; ++i) {
+            KeyType key{i};
+            ValueType value{i};
+            ValueType result = trie->find_or_emplace(key, value);
+            printf("[%zu] -> %zu expect %zu (hash() -> %0.16zx\n", key.data, result.data, value.data, key.hash());
+            assert(result == value);
+            kept.emplace_back(value);
         }
 
         // Wait for several full collection cycles so the collector has
         // had a chance to scan the trie and run any cleanup phases that
-        // depend on a full sweep.  The Roots in `kept` pin every interned
-        // HeapString across the suspension; everything unrooted (transient
+        // depend on a full sweep.  Everything unrooted (transient
         // INodes / CNodes / SNodes left in the wake of trie growth)
-        // becomes eligible for collection during this gap.  Three cycles
-        // is the smallest count that absorbs an in-flight cycle plus the
-        // two cycles that the eventual weak protocol will need
-        // (WAS_LOADED → READY → GONE).
+        // becomes eligible for collection during this gap.
         co_await Coroutine::WaitForCollectionCycles{3};
 
-        for (int i = 0; i != 64; ++i) {
-            char buf[24];
-            int n = snprintf(buf, sizeof(buf), "key-%d", i);
-            Root<HeapString const*> again(trie->find_or_emplace(query_for(std::string_view(buf, n))));
-            assert(again._ptr == kept[i]._ptr);
+        for (size_t i = 0; i != 64; ++i) {
+            KeyType key{i};
+            ValueType value{i};
+            ValueType result = trie->find_or_emplace(key, value);
+            printf("[%zu] -> %zu expect %zu (hash() -> %0.16zx\n", key.data, result.data, kept[i].data, key.hash());
+            assert(result == kept[i]);
         }
 
         co_return;

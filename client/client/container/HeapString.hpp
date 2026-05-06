@@ -10,8 +10,7 @@
 
 #include <string_view>
 
-#include "garbage_collected.hpp"
-#include "ctrie.hpp"
+#include "value.hpp"
 
 namespace wry {
     
