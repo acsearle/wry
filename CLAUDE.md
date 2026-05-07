@@ -17,3 +17,7 @@
 ## Plan Mode
 
 While in plan mode, do not call Edit/Write/Bash-with-side-effects under any circumstances. If the user appears to have already applied fixes, confirm before suggesting further edits and remain in plan mode until explicitly exited.
+
+## File Contents
+
+- Strong default: ASCII only when editing files. Box-drawing characters for section breaks (e.g. `──`), fancy bullets, em-dashes, and similar decorative non-ASCII are gratuitous and break grep, diff tooling, and some terminals. Use `//`, `// ----`, or `// ====` for section dividers; ASCII art for diagrams. Exceptions are defensible (mathematical symbols where ASCII spelling is awkward, canonical non-English names, user-visible strings) but should be the rare conscious choice, not the default.

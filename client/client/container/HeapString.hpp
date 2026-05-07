@@ -14,9 +14,6 @@
 
 namespace wry {
     
-    // HeapString is an interned-string value.  It is stored in the trie via
-    // an _ctrie::SNode wrapper -- HeapString itself is not a Branch.  See
-    // [core/docs/ctrie.md].
     struct HeapString final : HeapValue {
 
         // Local placement-new: GarbageCollected's `operator new(size_t)`

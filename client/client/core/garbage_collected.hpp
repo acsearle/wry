@@ -381,7 +381,13 @@ namespace wry {
             garbage_collected_roots_add(_ptr);
             return *this;
         }
-        
+
+        Root& operator=(std::nullptr_t) {
+            garbage_collected_roots_subtract(_ptr);
+            _ptr = nullptr;
+            return *this;
+        }
+
         T& operator*() const {
             return *_ptr;
         }

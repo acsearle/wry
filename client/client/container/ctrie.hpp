@@ -38,26 +38,43 @@ namespace wry {
     // are written as one function body using `if (auto x = node->as_x())`,
     // mirroring the paper's pseudocode more closely than M-operations
     // ×N-types of double-dispatch virtuals.
+    //
+    // Structure: all node types and helper functions are nested inside
+    // `_ctrie<K,V>` so that K, V are bound once at the outer level.  Inside
+    // `_ctrie<K,V>` every cross-type reference is unqualified.  External
+    // users (`Ctrie<K,V>`) reach into `_ctrie<K,V>` through `using` aliases.
 
-    namespace _ctrie {
 
-        template<typename K, typename V> struct AnyNode;
-        template<typename K, typename V> struct   MainNode;
-        template<typename K, typename V> struct     CNode;
-        template<typename K, typename V> struct     LNode;
-        template<typename K, typename V> struct     TNode;
-        template<typename K, typename V> struct   BranchNode;
-        template<typename K, typename V> struct     INode;
-        template<typename K, typename V> struct     SNode;
+    // -- Helpers (independent of K, V) ---------------------------------------
 
-        template<typename V>
+    inline std::pair<uint64_t, int> flagpos(uint64_t hash, int lev, uint64_t bmp) {
+        uint64_t a = (hash >> lev) & 63;
+        uint64_t flag = ((uint64_t)1 << a);
+        int pos = __builtin_popcountll(bmp & (flag - 1));
+        return {flag, pos};
+    }
+
+    template<typename K, typename V>
+    struct _ctrie {
+
+        // Forward declarations (visual hierarchy)
+        struct AnyNode;
+        struct   MainNode;
+        struct     CNode;
+        struct     LNode;
+        struct     TNode;
+        struct   BranchNode;
+        struct     INode;
+        struct     SNode;
+
+        // -- Result types ----------------------------------------------------
+
         struct FindResult {
             enum Tag { OK, RESTART, NOT_FOUND };
             Tag tag;
             V value;
         };
 
-        template<typename V>
         struct FindOrEmplaceResult {
             enum Tag { OK, RESTART };
             Tag tag;
@@ -70,191 +87,33 @@ namespace wry {
             NOT_FOUND,
         };
 
-        inline std::pair<uint64_t, int> flagpos(uint64_t hash, int lev, uint64_t bmp) {
-            uint64_t a = (hash >> lev) & 63;
-            uint64_t flag = ((uint64_t)1 << a);
-            int pos = __builtin_popcountll(bmp & (flag - 1));
-            return {flag, pos};
-        }
-
-        // Type-test virtuals.  Default returns nullptr; each concrete type
-        // overrides one to return `this`.  All five live on AnyNode so the
-        // result of LNode::found_or_prepended (an SNode-or-LNode) can be
-        // queried uniformly.  Static type discrimination (MainNode vs
-        // BranchNode) is preserved in slot/array element types.
-        template<typename K, typename V>
-        struct AnyNode : GarbageCollected {
-            virtual CNode<K,V> const* as_cnode() const { return nullptr; }
-            virtual TNode<K,V> const* as_tnode() const { return nullptr; }
-            virtual LNode<K,V> const* as_lnode() const { return nullptr; }
-            virtual INode<K,V> const* as_inode() const { return nullptr; }
-            virtual SNode<K,V> const* as_snode() const { return nullptr; }
+        struct AlterResult {
+            enum Tag { OK, RESTART };
+            std::optional<V> value;
         };
 
-        // MainNode: anything that may live in INode::main (CNode/TNode/LNode).
-        template<typename K, typename V>
-        struct MainNode : AnyNode<K,V> {
-            virtual void _garbage_collected_debug() const override {
-                printf("MainNode\n");
-            }
-        };
+        static constexpr int W = 6;
 
-        // BranchNode: anything that may live in CNode::array[] (INode/SNode).
-        template<typename K, typename V>
-        struct BranchNode : AnyNode<K,V> {
-            virtual void _garbage_collected_debug() const override {
-                printf("BranchNode\n");
-            }
-        };
+        // -- Helpers (K, V bound from enclosing scope) -----------------------
 
-        template<typename K, typename V>
-        struct INode final : BranchNode<K,V> {
-
-            virtual void _garbage_collected_debug() const override {
-                printf("INode\n");
-            }
-
-            // Slot rather than bare Atomic so that CAS-replacement of
-            // INode::main automatically Yuasa-shades the displaced
-            // MainNode (CNode/TNode/LNode), preserving any in-flight
-            // tracing.  See [garbage_collected.hpp:608] for the slot.
-            mutable GarbageCollectedSlot<MainNode<K,V> const*> main;
-
-            explicit INode(MainNode<K,V> const*);
-
-            void clean(int lev) const;
-
-            FindResult<V> find(K key, int level, INode<K,V> const* parent) const;
-            FindOrEmplaceResult<V> find_or_emplace(K key, V default_, int level, INode<K,V> const* parent) const;
-            EraseResult erase(K key, int level, INode<K,V> const* parent) const;
-            // TODO: erase by key vs erase by SNode identity
-
-            INode<K,V> const* as_inode() const override { return this; }
-            virtual void _garbage_collected_scan() const override;
-        };
-
-        template<typename K, typename V>
-        struct CNode final : MainNode<K,V> {
-
-            virtual void _garbage_collected_debug() const override {
-                printf("CNode[bmp=%llx]\n", (unsigned long long)bmp);
-            }
-
-            // Local placement-new: GarbageCollected's `operator new(size_t)`
-            // would otherwise hide the global placement form via class-scope
-            // name lookup, breaking `new(raw) CNode` inside `make()`.
-            static void* operator new(size_t, void* ptr) noexcept { return ptr; }
-
-            static CNode<K,V>* make_with_bitmap(uint64_t bitmap);
-            // Two-key constructor: returns a CNode normally, but at the bottom
-            // of the trie (lev >= 60, where the next level would exhaust the
-            // hash) returns an LNode collision list.  Either way, the result
-            // is a MainNode and is wrapped in an INode by the caller.
-            static MainNode<K,V> const* make_with_pair(SNode<K,V> const* s1, SNode<K,V> const* s2, int lev);
-
-            uint64_t bmp;
-#ifndef NDEBUG
-            size_t _debug_size;
-#endif
-            BranchNode<K,V> const* array[]
-#ifndef NDEBUG
-                __counted_by(_debug_size)
-#endif
-                ;
-
-            explicit CNode(uint64_t bitmap_);
-
-            CNode<K,V> const* inserted(int pos, uint64_t flag, BranchNode<K,V> const* bn) const;
-            CNode<K,V> const* updated(int pos, BranchNode<K,V> const* bn) const;
-            CNode<K,V> const* removed(int pos, uint64_t flag) const;
-            CNode<K,V> const* resurrected() const;
-            MainNode<K,V> const* to_compressed(int level) const;
-            MainNode<K,V> const* to_contracted(int level) const;
-
-            CNode<K,V> const* as_cnode() const override { return this; }
-            virtual void _garbage_collected_scan() const override;
-        };
-
-        // SNode is the per-key leaf.
-        template<typename K, typename V>
-        struct SNode final : BranchNode<K,V> {
-
-            virtual void _garbage_collected_debug() const override {
-                printf("SNode\n");
-            }
-
-            K k;
-            V v;
-
-            explicit SNode(K, V);
-
-            SNode<K,V> const* as_snode() const override { return this; }
-            virtual void _garbage_collected_scan() const override;
-        };
-
-        template<typename K, typename V>
-        struct LNode final : MainNode<K,V> {
-
-            virtual void _garbage_collected_debug() const override {
-                printf("LNode\n");
-            }
-
-            SNode<K,V> const* sn;
-            LNode<K,V> const* next;
-
-            LNode(SNode<K,V> const* s, LNode<K,V> const* n);
-
-            FindResult<V> find(K key) const;
-            // Returns either an SNode (key already present) or a fresh LNode
-            // head (new entry prepended); caller dispatches via as_snode /
-            // as_lnode.
-            AnyNode<K,V> const* found_or_prepended(K key, V default_) const;
-            LNode<K,V> const* erased(K key) const;
-            LNode<K,V> const* without(LNode<K,V> const* victim) const;
-
-            LNode<K,V> const* as_lnode() const override { return this; }
-            virtual void _garbage_collected_scan() const override;
-        };
-
-        template<typename K, typename V>
-        struct TNode final : MainNode<K,V> {
-
-            virtual void _garbage_collected_debug() const override {
-                printf("TNode\n");
-            }
-
-            SNode<K,V> const* sn;
-
-            explicit TNode(SNode<K,V> const* sn);
-
-            TNode<K,V> const* as_tnode() const override { return this; }
-            virtual void _garbage_collected_scan() const override;
-        };
-
-        constexpr int W = 6;
-
-        // ── Inline method definitions ─────────────────────────────────────────────
-
-
-        // Atomic load-ACQUIRE with read barrier
-        template<typename K, typename V>
-        MainNode<K,V> const* READ(GarbageCollectedSlot<MainNode<K,V> const*> const& main) {
+        // Atomic load-ACQUIRE with read barrier.
+        static MainNode const* READ(GarbageCollectedSlot<MainNode const*> const& main) {
             return main.load_acquire();
         }
 
-        // Atomic Compare-And-Swap-RELEASE with write barrier
-        template<typename K, typename V>
-        bool CAS(GarbageCollectedSlot<MainNode<K,V> const*>& main,
-                 MainNode<K,V> const* expected,
-                 MainNode<K,V> const* desired) {
-            // Safety: we have already ACQUIRED the expected value.  The
-            // slot's CAS internally upgrades to acq_rel and shades the
-            // displaced MainNode (Yuasa); see GarbageCollectedSlot.
-
-            // We do not expose the unexpected value on the failure because the
-            // higher level operation must RESTART from the root of the data
-            // structure if this CAS fails.  We use the `strong` form so that
-            // we only take this expensive path for non-spurious failures.
+        // Atomic Compare-And-Swap-RELEASE with write barrier.
+        //
+        // Safety: we have already ACQUIRED the expected value.  The slot's CAS
+        // internally upgrades to acq_rel and shades the displaced MainNode
+        // (Yuasa); see GarbageCollectedSlot.
+        //
+        // We do not expose the unexpected value on failure because the higher
+        // level operation must RESTART from the root if this CAS fails.  We
+        // use the `strong` form so we only take this expensive path for
+        // non-spurious failures.
+        static bool CAS(GarbageCollectedSlot<MainNode const*>& main,
+                        MainNode const* expected,
+                        MainNode const* desired) {
             return main.compare_exchange_strong_release_relaxed(expected, desired);
         }
 
@@ -262,8 +121,7 @@ namespace wry {
         // at p->main) referring to child INode `i` whose main has tombstoned.
         // Repair by replacing the CNode entry with the tomb's resurrected SNode
         // (and contracting the parent CNode if it now has only one slot).
-        template<typename K, typename V>
-        inline void cleanParent(INode<K,V> const* p, INode<K,V> const* i, size_t hc, int lev) {
+        static void cleanParent(INode const* p, INode const* i, size_t hc, int lev) {
             auto m  = READ(i->main);
             auto pm = READ(p->main);
             if (auto cn = pm->as_cnode()) {
@@ -277,430 +135,636 @@ namespace wry {
             }
         }
 
-        // INode -------------------------------------------------------------
+        // -- Node hierarchy --------------------------------------------------
 
-        template<typename K, typename V>
-        inline INode<K,V>::INode(MainNode<K,V> const* mn) : main(mn) {}
+        // Type-test virtuals.  Default returns nullptr; each concrete type
+        // overrides one to return `this`.  All five live on AnyNode so the
+        // result of LNode::found_or_prepended (an SNode-or-LNode) can be
+        // queried uniformly.  Static type discrimination (MainNode vs
+        // BranchNode) is preserved in slot/array element types.
+        struct AnyNode : GarbageCollected {
+            virtual CNode const* as_cnode() const { return nullptr; }
+            virtual TNode const* as_tnode() const { return nullptr; }
+            virtual LNode const* as_lnode() const { return nullptr; }
+            virtual INode const* as_inode() const { return nullptr; }
+            virtual SNode const* as_snode() const { return nullptr; }
+        };
 
-        template<typename K, typename V>
-        inline void INode<K,V>::clean(int level) const {
-            auto mn = READ(main);
-            if (auto cn = mn->as_cnode()) {
-                // SAFETY: the result of to_compressed may be discarded if the
-                // CAS loses; the GC retains it via the new-objects bag.
-                CAS(main, cn, cn->to_compressed(level));
+        // MainNode: anything that may live in INode::main (CNode/TNode/LNode).
+        struct MainNode : AnyNode {
+            virtual void _garbage_collected_debug() const override {
+                printf("MainNode\n");
             }
-            // Anything else (TNode/LNode) needs no compression here.
-        }
+        };
 
-        template<typename K, typename V>
-        inline FindResult<V> INode<K,V>::find(K key, int lev, INode<K,V> const* parent) const {
-            auto mn = READ(main);
+        // BranchNode: anything that may live in CNode::array[] (INode/SNode).
+        struct BranchNode : AnyNode {
+            virtual void _garbage_collected_debug() const override {
+                printf("BranchNode\n");
+            }
+        };
 
-            if (auto cn = mn->as_cnode()) {
-                auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
-                if (!(flag & cn->bmp)) return { FindResult<V>::NOT_FOUND, {} };
-                auto bn = cn->array[pos];
-                if (auto sin = bn->as_inode()) {
-                    return sin->find(key, lev + W, this);
-                } else if (auto sn = bn->as_snode()) {
-                    if (sn->k == key) {
-                        return { FindResult<V>::OK, sn->v };
-                    } else {
-                        return { FindResult<V>::NOT_FOUND, {} };
+        struct INode final : BranchNode {
+
+            virtual void _garbage_collected_debug() const override {
+                printf("INode\n");
+            }
+
+            // Slot rather than bare Atomic so that CAS-replacement of
+            // INode::main automatically Yuasa-shades the displaced
+            // MainNode (CNode/TNode/LNode), preserving any in-flight
+            // tracing.  See [garbage_collected.hpp:608] for the slot.
+            mutable GarbageCollectedSlot<MainNode const*> main;
+
+            explicit INode(MainNode const* mn) : main(mn) {}
+
+            void clean(int level) const {
+                auto mn = READ(main);
+                if (auto cn = mn->as_cnode()) {
+                    // SAFETY: the result of to_compressed may be discarded if
+                    // the CAS loses; the GC retains it via the new-objects bag.
+                    CAS(main, cn, cn->to_compressed(level));
+                }
+                // Anything else (TNode/LNode) needs no compression here.
+            }
+
+            FindResult find(K key, int lev, INode const* parent) const {
+                auto mn = READ(main);
+                if (auto cn = mn->as_cnode()) {
+                    auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
+                    if (!(flag & cn->bmp)) return { FindResult::NOT_FOUND, {} };
+                    auto bn = cn->array[pos];
+                    if (auto sin = bn->as_inode()) {
+                        return sin->find(key, lev + W, this);
+                    } else if (auto sn = bn->as_snode()) {
+                        if (sn->k == key) return { FindResult::OK,        sn->v };
+                        else              return { FindResult::NOT_FOUND, {}    };
                     }
-                }
-            } else if (auto tn = mn->as_tnode()) {
-                // Help compress the parent and ask the caller to retry.
-                if (parent)
-                    parent->clean(lev - W);
-                return { FindResult<V>::RESTART, {} };
-            } else if (auto ln = mn->as_lnode()) {
-                return ln->find(key);
-            }
-            std::unreachable();
-        }
-
-        template<typename K, typename V>
-        inline FindOrEmplaceResult<V>
-        INode<K,V>::find_or_emplace(K key, V default_, int lev, INode<K,V> const* parent) const {
-            MainNode<K,V> const* mn = READ(main);
-
-            if (auto cn = mn->as_cnode()) {
-                auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
-                if (!(flag & cn->bmp)) {
-                    // Empty slot: install a fresh SNode.
-                    SNode<K,V>* nsn = new SNode<K,V>(key, default_);
-                    MainNode<K,V> const* nmn = cn->inserted(pos, flag, nsn);
-                    return CAS(main, mn, nmn)
-                        ? FindOrEmplaceResult<V>{ FindOrEmplaceResult<V>::OK,      default_ }
-                        : FindOrEmplaceResult<V>{ FindOrEmplaceResult<V>::RESTART, {}       };
-                }
-                BranchNode<K,V> const* bn = cn->array[pos];
-                if (auto in = bn->as_inode())
-                    return in->find_or_emplace(key, default_, lev + W, this);
-                if (auto sn = bn->as_snode()) {
-                    if (key == sn->k)
-                        return { FindOrEmplaceResult<V>::OK, sn->v };
-                    // Distinct key: expand the HAMT one level.  CNode::make_with_pair
-                    // bottoms out into an LNode chain if hash bits run out.
-                    SNode<K,V>* nsn = new SNode<K,V>(key, default_);
-                    INode<K,V>* nin = new INode<K,V>(CNode<K,V>::make_with_pair(sn, nsn, lev + W));
-                    MainNode<K,V> const* nmn = cn->updated(pos, nin);
-                    // SAFETY: if we lose the CAS race, the speculative INode
-                    // and sub-MainNode become orphans; the collector picks
-                    // them up via the thread-local new-objects bag.
-                    return CAS(main, mn, nmn)
-                        ? FindOrEmplaceResult<V>{ FindOrEmplaceResult<V>::OK,      nsn->v }
-                        : FindOrEmplaceResult<V>{ FindOrEmplaceResult<V>::RESTART, {}     };
+                } else if (mn->as_tnode()) {
+                    // Help compress the parent and ask the caller to retry.
+                    if (parent) parent->clean(lev - W);
+                    return { FindResult::RESTART, {} };
+                } else if (auto ln = mn->as_lnode()) {
+                    return ln->find(key);
                 }
                 std::unreachable();
             }
 
-            if (mn->as_tnode()) {
-                if (parent)
-                    parent->clean(lev - W);
-                return { FindOrEmplaceResult<V>::RESTART, {} };
-            }
+            FindOrEmplaceResult find_or_emplace(K key, V default_, int lev, INode const* parent) const {
+                auto mn = READ(main);
 
-            if (auto ln = mn->as_lnode()) {
-                AnyNode<K,V> const* result = ln->found_or_prepended(key, default_);
-                if (auto sn = result->as_snode()) {
-                    // Key already present in the collision list.
-                    return { FindOrEmplaceResult<V>::OK, sn->v };
+                if (auto cn = mn->as_cnode()) {
+                    auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
+                    if (!(flag & cn->bmp)) {
+                        // Empty slot: install a fresh SNode.
+                        SNode* nsn = new SNode(key, default_);
+                        MainNode const* nmn = cn->inserted(pos, flag, nsn);
+                        return (CAS(main, mn, nmn)
+                                ? FindOrEmplaceResult{ FindOrEmplaceResult::OK, default_ }
+                                : FindOrEmplaceResult{ FindOrEmplaceResult::RESTART, {} });
+                    }
+                    BranchNode const* bn = cn->array[pos];
+                    if (auto in = bn->as_inode())
+                        return in->find_or_emplace(key, default_, lev + W, this);
+                    if (auto sn = bn->as_snode()) {
+                        if (key == sn->k)
+                            return { FindOrEmplaceResult::OK, sn->v };
+                        // Distinct key: expand the HAMT one level.
+                        // CNode::make_with_pair bottoms out into an LNode chain
+                        // if hash bits run out.
+                        SNode* nsn = new SNode(key, default_);
+                        INode* nin = new INode(CNode::make_with_pair(sn, nsn, lev + W));
+                        MainNode const* nmn = cn->updated(pos, nin);
+                        // SAFETY: if we lose the CAS race, the speculative INode
+                        // and sub-MainNode become orphans; the collector picks
+                        // them up via the thread-local new-objects bag.
+                        return CAS(main, mn, nmn)
+                            ? FindOrEmplaceResult{ FindOrEmplaceResult::OK,      nsn->v }
+                            : FindOrEmplaceResult{ FindOrEmplaceResult::RESTART, {}     };
+                    }
+                    std::unreachable();
                 }
-                if (auto nln = result->as_lnode()) {
-                    // New head: install via CAS.  nln->sn is the freshly-
-                    // prepended SNode carrying our (key, default_).
-                    return CAS(main, ln, nln)
-                        ? FindOrEmplaceResult<V>{ FindOrEmplaceResult<V>::OK,      nln->sn->v }
-                        : FindOrEmplaceResult<V>{ FindOrEmplaceResult<V>::RESTART, {}         };
+
+                if (mn->as_tnode()) {
+                    if (parent) parent->clean(lev - W);
+                    return { FindOrEmplaceResult::RESTART, {} };
                 }
+
+                if (auto ln = mn->as_lnode()) {
+                    AnyNode const* result = ln->found_or_prepended(key, default_);
+                    if (auto sn = result->as_snode()) {
+                        // Key already present in the collision list.
+                        return { FindOrEmplaceResult::OK, sn->v };
+                    }
+                    if (auto nln = result->as_lnode()) {
+                        // New head: install via CAS.  nln->sn is the freshly-
+                        // prepended SNode carrying our (key, default_).
+                        return CAS(main, ln, nln)
+                            ? FindOrEmplaceResult{ FindOrEmplaceResult::OK,      nln->sn->v }
+                            : FindOrEmplaceResult{ FindOrEmplaceResult::RESTART, {}         };
+                    }
+                    std::unreachable();
+                }
+
                 std::unreachable();
             }
 
-            std::unreachable();
-        }
+            EraseResult erase(K key, int lev, INode const* parent) const {
+                auto mn = READ(main);
 
-        template<typename K, typename V>
-        inline EraseResult INode<K,V>::erase(K key, int lev, INode<K,V> const* parent) const {
-            MainNode<K,V> const* mn = READ(main);
-
-            if (auto cn = mn->as_cnode()) {
-                auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
-                if (!(flag & cn->bmp))
-                    return EraseResult::NOT_FOUND;
-                BranchNode<K,V> const* bn = cn->array[pos];
-                EraseResult result;
-                if (auto in = bn->as_inode()) {
-                    result = in->erase(key, lev + W, this);
-                } else if (auto sn = bn->as_snode()) {
-                    if (sn->k != key)
+                if (auto cn = mn->as_cnode()) {
+                    auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
+                    if (!(flag & cn->bmp))
                         return EraseResult::NOT_FOUND;
-                    // SAFETY: contracted result may be discarded on CAS loss;
-                    // the GC retains it via the new-objects bag.
-                    result = CAS(main, cn, cn->removed(pos, flag)->to_contracted(lev))
+                    BranchNode const* bn = cn->array[pos];
+                    EraseResult result;
+                    if (auto in = bn->as_inode()) {
+                        result = in->erase(key, lev + W, this);
+                    } else if (auto sn = bn->as_snode()) {
+                        if (sn->k != key)
+                            return EraseResult::NOT_FOUND;
+                        // SAFETY: contracted result may be discarded on CAS loss;
+                        // the GC retains it via the new-objects bag.
+                        result = CAS(main, cn, cn->removed(pos, flag)->to_contracted(lev))
+                            ? EraseResult::OK
+                            : EraseResult::RESTART;
+                    } else {
+                        std::unreachable();
+                    }
+                    // Post-erase: if our main is now a TNode and we have a
+                    // parent, try to absorb the tomb into the parent CNode.
+                    if (result == EraseResult::OK && parent) {
+                        auto mn2 = READ(main);
+                        if (mn2->as_tnode())
+                            cleanParent(parent, this, key.hash(), lev - W);
+                    }
+                    return result;
+                }
+
+                if (mn->as_tnode()) {
+                    if (parent) parent->clean(lev - W);
+                    return EraseResult::RESTART;
+                }
+
+                if (auto ln = mn->as_lnode()) {
+                    LNode const* head = ln->erased(key);
+                    if (head == ln)
+                        return EraseResult::NOT_FOUND;
+                    MainNode const* desired = head;
+                    if (!head->next) // collapse single-element list to a tomb
+                        desired = new TNode(head->sn);
+                    // TODO: if EraseResult::OK should we try and clean up any tombstone?
+                    return CAS(main, ln, desired)
                         ? EraseResult::OK
                         : EraseResult::RESTART;
-                } else {
+                }
+
+                std::unreachable();
+            }
+
+            INode const* as_inode() const override { return this; }
+            virtual void _garbage_collected_scan() const override {
+                garbage_collected_scan(main);
+            }
+
+
+            template<typename F>
+            AlterResult alter(K key, int lev, INode const* parent, F const& fn) const {
+                auto mn = READ(main);
+
+                if (auto cn = mn->as_cnode()) {
+                    auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
+                    if (!(flag & cn->bmp)) {
+                        // Slot is empty
+                        std::optional<V> v{fn({})};
+                        if (!v) return { AlterResult::OK, std::optional<V>{} };
+                        SNode* nsn = new SNode(key, *v);
+                        MainNode const* nmn = cn->inserted(pos, flag, nsn);
+                        return CAS(main, mn, nmn)
+                        ? AlterResult{ AlterResult::OK, {} }
+                        : AlterResult{ AlterResult::RESTART, {} };
+                    }
+                    BranchNode const* bn = cn->array[pos];
+                    AlterResult result;
+                    if (auto in = bn->as_inode()) {
+                        result = in->alter(key, lev + W, this, fn);
+                    } else if (auto sn = bn->as_snode()) {
+                        if (key == sn->k) {
+                            // Key found
+                            std::optional<V> v{fn(sn->v)};
+                            if (!v) {
+                                // We want to erase
+                                result = (CAS(main, cn, cn->removed(pos, flag)->to_contracted(lev))
+                                          ? AlterResult{ AlterResult::OK, sn->v }
+                                          : AlterResult{ AlterResult::RESTART, {} });
+                                // Post-erase: if our main is now a TNode and we have a
+                                // parent, try to absorb the tomb into the parent CNode.
+                                if (result == EraseResult::OK && parent) {
+                                    auto mn2 = READ(main);
+                                    if (mn2->as_tnode())
+                                        cleanParent(parent, this, key.hash(), lev - W);
+                                }
+                                return result;
+                            } else {
+                                // We want to replace
+                                result = (CAS(main, cn, cn->updated(pos, new SNode(key, *v)))
+                                          ? AlterResult{ AlterResult::OK, sn->v }
+                                          : AlterResult{ AlterResult::RESTART, {} });
+                                return result;
+                            }
+                        } else {
+                            // Key not found
+                            std::optional<V> v{fn({})};
+                            if (!v) return { AlterResult::OK, {} };
+                            // Distinct key: expand the HAMT one level.
+                            // CNode::make_with_pair bottoms out into an LNode chain
+                            // if hash bits run out.
+                            SNode* nsn = new SNode(key, *v);
+                            INode* nin = new INode(CNode::make_with_pair(sn, nsn, lev + W));
+                            MainNode const* nmn = cn->updated(pos, nin);
+                            // SAFETY: if we lose the CAS race, the speculative INode
+                            // and sub-MainNode become orphans; the collector picks
+                            // them up via the thread-local new-objects bag.
+                            return (CAS(main, mn, nmn)
+                                    ? AlterResult{ AlterResult::OK, std::optional<V>{} }
+                                    : AlterResult{ AlterResult::RESTART, {} });
+                        }
+                    }
                     std::unreachable();
                 }
-                // Post-erase: if our main is now a TNode and we have a parent,
-                // try to absorb the tomb into the parent CNode.
-                if (result == EraseResult::OK && parent) {
-                    MainNode<K,V> const* mn2 = READ(main);
-                    if (mn2->as_tnode())
-                        cleanParent(parent, this, key.hash(), lev - W);
+
+                if (mn->as_tnode()) {
+                    if (parent) parent->clean(lev - W);
+                    return { AlterResult::RESTART, {} };
                 }
-                return result;
+
+                if (auto ln = mn->as_lnode()) {
+                    // AnyNode const* result = ln->found_or_prepended(key, default_);
+                    LNode const* target = ln->find_lnode_for_key(key);
+                    if (!target) {
+                        // Not present
+                        std::optional<V> v{fn({})};
+                        if (!v) // No change needed
+                            return { AlterResult::OK, {} };
+                        // Prepend new LNode
+                        auto nln = new LNode(new SNode(key, *v), ln);
+                        return (CAS(main, ln, nln)
+                                ? AlterResult{ AlterResult::OK, {} }
+                                : AlterResult{ AlterResult::RESTART, {} });
+                    }
+                    assert(target->sn->k == key);
+                    // Is present
+                    std::optional<V> v{fn({target->sn->k})};
+                    if (!v) {
+                        // Gotta erase it
+                        LNode const* nln = ln->without(target);
+                        MainNode const* nmn = nln;
+                        if (!nln->next) // collapse single-element list to a tomb
+                            nmn = new TNode(nln->sn);
+                        return (CAS(main, ln, nmn)
+                                ? AlterResult{ AlterResult::OK, target->sn->v }
+                                : AlterResult{ AlterResult::RESTART, {} });
+                    }
+                    // Gotta replace it
+                    auto nln = new LNode(new SNode(key, *v), ln->without(target));
+                    return (CAS(main, ln, nln)
+                            ? AlterResult{ AlterResult::OK, target->sn->v }
+                            : AlterResult{ AlterResult::RESTART, {} });
+                    std::unreachable();
+                }
+                std::unreachable();
             }
 
-            if (mn->as_tnode()) {
-                if (parent)
-                    parent->clean(lev - W);
-                return EraseResult::RESTART;
+        };
+
+        struct CNode final : MainNode {
+
+            virtual void _garbage_collected_debug() const override {
+                printf("CNode[bmp=%llx]\n", (unsigned long long)bmp);
             }
 
-            if (auto ln = mn->as_lnode()) {
-                LNode<K,V> const* head = ln->erased(key);
-                if (head == ln)
-                    return EraseResult::NOT_FOUND;
-                MainNode<K,V> const* desired = head;
-                if (!head->next) // collapse single-element list to a tomb
-                    desired = new TNode<K,V>(head->sn);
-                // TODO: if EraseResult::OK should we try and clean up any tombstone?
-                return CAS(main, ln, desired)
-                    ? EraseResult::OK
-                    : EraseResult::RESTART;
+            // Local placement-new: GarbageCollected's `operator new(size_t)`
+            // would otherwise hide the global placement form via class-scope
+            // name lookup, breaking `new(raw) CNode` inside `make_with_*`.
+            static void* operator new(size_t, void* ptr) noexcept { return ptr; }
+
+            static CNode* make_with_bitmap(uint64_t bitmap) {
+                int count = __builtin_popcountll(bitmap);
+                size_t bytes = sizeof(CNode) + count * sizeof(BranchNode*);
+                void* raw = GarbageCollected::operator new(bytes);
+                std::memset(raw, 0, bytes);
+                return new(raw) CNode(bitmap);
             }
 
-            std::unreachable();
-        }
+            // Two-key constructor: returns a CNode normally, but at the bottom
+            // of the trie (lev >= 60, where the next level would exhaust the
+            // hash) returns an LNode collision list.  Either way, the result
+            // is a MainNode and is wrapped in an INode by the caller.
+            static MainNode const* make_with_pair(SNode const* s1, SNode const* s2, int lev) {
 
-        template<typename K, typename V>
-        void INode<K,V>::_garbage_collected_scan() const {
-            garbage_collected_scan(main);
-        }
+                if (lev >= 64) {
+                    // We have exhausted the hash bits
+                    assert(s1->k.hash() == s2->k.hash());
+                    LNode const* head = nullptr;
+                    head = new LNode(s1, head);
+                    head = new LNode(s2, head);
+                    return head;
+                }
 
-        // CNode -------------------------------------------------------------
+                uint64_t pos1 = (s1->k.hash() >> lev) & 63;
+                uint64_t pos2 = (s2->k.hash() >> lev) & 63;
 
-        template<typename K, typename V>
-        CNode<K,V>* CNode<K,V>::make_with_bitmap(uint64_t bitmap) {
-            int count = __builtin_popcountll(bitmap);
-            size_t bytes = sizeof(CNode<K,V>) + count * sizeof(BranchNode<K,V>*);
-            void* raw = GarbageCollected::operator new(bytes);
-            std::memset(raw, 0, bytes);
-            return new(raw) CNode<K,V>(bitmap);
-        }
+                // Order by level-position so array[pos] indexes correctly via
+                // flagpos.  An earlier version swapped on full hash, which is
+                // wrong: the relative order of full hashes does not in general
+                // match the relative order of any particular bit-chunk.
+                if (pos2 < pos1) {
+                    std::swap(s1, s2);
+                    std::swap(pos1, pos2);
+                }
 
-        template<typename K, typename V>
-        CNode<K,V>::CNode(uint64_t bitmap_)
-        : bmp{bitmap_}
+                uint64_t flag1 = (uint64_t)1 << pos1;
+                uint64_t flag2 = (uint64_t)1 << pos2;
+                uint64_t bmp = flag1 | flag2;
+                int num = __builtin_popcountll(bmp);
+
+                CNode* ncn = CNode::make_with_bitmap(bmp);
+
+                switch (num) {
+                    case 1: {
+                        // Both keys land in the same bucket at this level.
+                        // Recurse one level deeper inside an INode wrapper.
+                        ncn->array[0] = new INode(CNode::make_with_pair(s1, s2, lev + W));
+                        return ncn;
+                    }
+                    case 2: {
+                        ncn->array[0] = s1;  // pos1 < pos2; lower position first
+                        ncn->array[1] = s2;
+                        return ncn;
+                    }
+                    default:
+                        std::unreachable();
+                }
+            }
+
+            uint64_t bmp;
 #ifndef NDEBUG
-        , _debug_size{(size_t)__builtin_popcountll(bitmap_)}
+            size_t _debug_size;
 #endif
-        {
-        }
+            BranchNode const* array[]
+#ifndef NDEBUG
+                __counted_by(_debug_size)
+#endif
+                ;
 
-        // SAFETY: The functions below build new CNodes by mutating their array
-        // elements.  At that point, the new CNode is thread-private so this
-        // mutation is thread safe (no other threads know about the memory
-        // location), and in particular, doesn't require the write barrier (the
-        // garbage collector thread doesn't know about the memory location).
-
-        template<typename K, typename V>
-        CNode<K,V> const* CNode<K,V>::updated(int pos, BranchNode<K,V> const* bn) const {
-            int num = __builtin_popcountll(this->bmp);
-            CNode<K,V>* ncn = CNode<K,V>::make_with_bitmap(this->bmp);
-            for (int i = 0; i != num; ++i) {
-                BranchNode<K,V> const* sub = (i == pos) ? bn : this->array[i];
-                ncn->array[i] = sub;
+            explicit CNode(uint64_t bitmap_)
+            : bmp{bitmap_}
+#ifndef NDEBUG
+            , _debug_size{(size_t)__builtin_popcountll(bitmap_)}
+#endif
+            {
             }
-            return ncn;
-        }
 
-        template<typename K, typename V>
-        CNode<K,V> const* CNode<K,V>::removed(int pos, uint64_t flag) const {
-            assert(bmp & flag);
-            int num = __builtin_popcountll(bmp);
-            CNode<K,V>* ncn = CNode<K,V>::make_with_bitmap(bmp ^ flag);
-            BranchNode<K,V> const** dest = ncn->array;
-            for (int i = 0; i != num; ++i) {
-                if (i != pos) {
-                    *dest++ = array[i];
+            // SAFETY: The functions below build new CNodes by mutating their
+            // array elements.  At that point, the new CNode is thread-private,
+            // so this mutation is thread safe (no other threads know about the
+            // memory location).  In particular, no write barrier is required:
+            // the new-objects bag is itself thread-private until the thread
+            // explicitly transfers it to the collector at the next epoch
+            // unpin, and the collector cannot scan the new CNode before then.
+
+            CNode const* updated(int pos, BranchNode const* bn) const {
+                int num = __builtin_popcountll(this->bmp);
+                CNode* ncn = CNode::make_with_bitmap(this->bmp);
+                for (int i = 0; i != num; ++i) {
+                    BranchNode const* sub = (i == pos) ? bn : this->array[i];
+                    ncn->array[i] = sub;
                 }
+                return ncn;
             }
-            assert(dest == ncn->array + (num - 1));
-            return ncn;
-        }
 
-        template<typename K, typename V>
-        CNode<K,V> const* CNode<K,V>::inserted(int pos, uint64_t flag, BranchNode<K,V> const* bn) const {
-            assert(!(bmp & flag));
-            int num = __builtin_popcountll(bmp);
-            CNode<K,V>* ncn = CNode<K,V>::make_with_bitmap(bmp ^ flag);
-            BranchNode<K,V> const* const* src = array;
-            for (int i = 0; i != num + 1; ++i) {
-                if (i != pos) {
-                    ncn->array[i] = *src++;
-                } else {
+            CNode const* removed(int pos, uint64_t flag) const {
+                assert(bmp & flag);
+                int num = __builtin_popcountll(bmp);
+                CNode* ncn = CNode::make_with_bitmap(bmp ^ flag);
+                BranchNode const** dest = ncn->array;
+                for (int i = 0; i != num; ++i) {
+                    if (i != pos) {
+                        *dest++ = array[i];
+                    }
+                }
+                assert(dest == ncn->array + (num - 1));
+                return ncn;
+            }
+
+            CNode const* inserted(int pos, uint64_t flag, BranchNode const* bn) const {
+                assert(!(bmp & flag));
+                int num = __builtin_popcountll(bmp);
+                CNode* ncn = CNode::make_with_bitmap(bmp ^ flag);
+                BranchNode const* const* src = array;
+                for (int i = 0; i != num + 1; ++i) {
+                    if (i != pos) {
+                        ncn->array[i] = *src++;
+                    } else {
+                        ncn->array[i] = bn;
+                    }
+                }
+                assert(src == array + num);
+                return ncn;
+            }
+
+            // resurrected: copy of this CNode where each I-over-T slot is
+            // replaced by the tomb's SNode.  Other slots (live INodes, plain
+            // SNodes) are copied as-is.
+            CNode const* resurrected() const {
+                int num = __builtin_popcountll(this->bmp);
+                CNode* ncn = CNode::make_with_bitmap(this->bmp);
+                for (int i = 0; i != num; ++i) {
+                    BranchNode const* bn = this->array[i];
+                    if (auto in = bn->as_inode()) {
+                        auto mn = READ(in->main);
+                        if (auto tn = mn->as_tnode())
+                            bn = tn->sn;
+                    }
                     ncn->array[i] = bn;
                 }
+                return ncn;
             }
-            assert(src == array + num);
-            return ncn;
-        }
 
-        // resurrected: copy of this CNode where each I-over-T slot is replaced
-        // by the tomb's SNode.  Other slots (live INodes, plain SNodes) are
-        // copied as-is.
-        template<typename K, typename V>
-        CNode<K,V> const* CNode<K,V>::resurrected() const {
-            int num = __builtin_popcountll(this->bmp);
-            CNode<K,V>* ncn = CNode<K,V>::make_with_bitmap(this->bmp);
-            for (int i = 0; i != num; ++i) {
-                BranchNode<K,V> const* bn = this->array[i];
-                if (auto in = bn->as_inode()) {
-                    MainNode<K,V> const* mn = READ(in->main);
-                    if (auto tn = mn->as_tnode())
-                        bn = tn->sn;
-                }
-                ncn->array[i] = bn;
-            }
-            return ncn;
-        }
-
-        // to_contracted: if this CNode now holds a single SNode at the leaf,
-        // collapse to a TNode so cleanParent can absorb us upward.  An INode
-        // singleton or any non-leaf CNode is left alone.
-        template<typename K, typename V>
-        MainNode<K,V> const* CNode<K,V>::to_contracted(int level) const {
-            if (level == 0)
+            // to_contracted: if this CNode now holds a single SNode at the
+            // leaf, collapse to a TNode so cleanParent can absorb us upward.
+            // An INode singleton or any non-leaf CNode is left alone.
+            MainNode const* to_contracted(int level) const {
+                if (level == 0)
+                    return this;
+                int num = __builtin_popcountll(this->bmp);
+                if (num != 1)
+                    return this;
+                BranchNode const* bn = this->array[0];
+                if (auto sn = bn->as_snode())
+                    return new TNode(sn);
                 return this;
-            int num = __builtin_popcountll(this->bmp);
-            if (num != 1)
-                return this;
-            BranchNode<K,V> const* bn = this->array[0];
-            if (auto sn = bn->as_snode())
-                return new TNode<K,V>(sn);
-            return this;
-        }
-
-        template<typename K, typename V>
-        [[nodiscard]] MainNode<K,V> const* CNode<K,V>::to_compressed(int level) const {
-            return resurrected()->to_contracted(level);
-        }
-
-        template<typename K, typename V>
-        MainNode<K,V> const* CNode<K,V>::make_with_pair(SNode<K,V> const* s1, SNode<K,V> const* s2, int lev) {
-            // Hash bits exhausted: at lev = 60 we've consumed bits 0..59
-            // of the 64-bit hash, leaving only 4 bits in the next chunk.
-            // Two keys whose hashes match for 60 bits are a true
-            // collision -- send them to an LNode chain.
-            // TODO: Just use the last 4 bits
-            if (lev >= 60) {
-                // TODO: build LNode chain here.
-                abort();
             }
 
-            uint64_t pos1 = (s1->k.hash() >> lev) & 63;
-            uint64_t pos2 = (s2->k.hash() >> lev) & 63;
-
-            // Order by level-position so array[pos] indexes correctly via
-            // flagpos.  An earlier version swapped on full hash, which is
-            // wrong: the relative order of full hashes does not in general
-            // match the relative order of any particular bit-chunk.
-            if (pos2 < pos1) {
-                std::swap(s1, s2);
-                std::swap(pos1, pos2);
+            [[nodiscard]] MainNode const* to_compressed(int level) const {
+                return resurrected()->to_contracted(level);
             }
 
-            uint64_t flag1 = (uint64_t)1 << pos1;
-            uint64_t flag2 = (uint64_t)1 << pos2;
-            uint64_t bmp = flag1 | flag2;
-            int num = __builtin_popcountll(bmp);
+            CNode const* as_cnode() const override { return this; }
+            virtual void _garbage_collected_scan() const override {
+                int num = __builtin_popcountll(bmp);
+                for (int i = 0; i != num; ++i)
+                    garbage_collected_scan(array[i]);
+            }
+        };
 
-            CNode<K,V>* ncn = CNode<K,V>::make_with_bitmap(bmp);
+        // SNode is the per-key leaf.
+        struct SNode final : BranchNode {
 
-            switch (num) {
-                case 1: {
-                    // Both keys land in the same bucket at this level.
-                    // Recurse one level deeper inside an INode wrapper.
-                    ncn->array[0] = new INode<K,V>(CNode<K,V>::make_with_pair(s1, s2, lev + W));
-                    return ncn;
+            virtual void _garbage_collected_debug() const override {
+                printf("SNode\n");
+            }
+
+            K k;
+            V v;
+
+            explicit SNode(K key, V value) : k(key), v(value) {}
+
+            SNode const* as_snode() const override { return this; }
+            virtual void _garbage_collected_scan() const override {
+                garbage_collected_scan(k);
+                garbage_collected_scan(v);
+            }
+        };
+
+        struct LNode final : MainNode {
+
+            virtual void _garbage_collected_debug() const override {
+                printf("LNode\n");
+            }
+
+            SNode const* sn;
+            LNode const* next;
+
+            LNode(SNode const* a, LNode const* b) : sn(a), next(b) {}
+
+            LNode const* find_lnode_for_key(K key) const {
+                for (LNode const* current = this; current; current = current->next) {
+                    assert(current->sn);
+                    if (current->sn->k == key)
+                        return current;
                 }
-                case 2: {
-                    ncn->array[0] = s1;  // pos1 < pos2; lower position first
-                    ncn->array[1] = s2;
-                    return ncn;
+                return nullptr;
+            }
+
+            FindResult find(K key) const {
+                LNode const* target = find_lnode_for_key(key);
+                return (target
+                        ? FindResult{ FindResult::OK, target->sn->v }
+                        : FindResult{ FindResult::NOT_FOUND, {} });
+            }
+
+            // Returns either an SNode (key already present) or a fresh LNode
+            // head (new entry prepended); caller dispatches via as_snode /
+            // as_lnode.
+            AnyNode const* found_or_prepended(K key, V default_) const {
+                LNode const* target = find_lnode_for_key(key);
+                return (target
+                        ? (AnyNode const*)target->sn
+                        : (AnyNode const*)new LNode{ new SNode{ key, default_ }, this });
+            }
+
+            // NOTE: The new list reverses the order of the elements before
+            // victim:  as ++ [b] ++ cs  ->  reverse(as) ++ cs
+            LNode const* without(LNode const* victim) const {
+                assert(victim);
+                LNode const* head = victim->next;
+                for (LNode const* curr = this; curr != victim; curr = curr->next) {
+                    assert(curr); // victim was not in the list
+                    head = new LNode(curr->sn, head);
                 }
-                default:
-                    std::unreachable();
+                return head;
             }
-        }
 
-        template<typename K, typename V>
-        void CNode<K,V>::_garbage_collected_scan() const {
-            int num = __builtin_popcountll(bmp);
-            for (int i = 0; i != num; ++i)
-                garbage_collected_scan(array[i]);
-        }
 
-        // SNode -------------------------------------------------------------
-
-        template<typename K, typename V>
-        SNode<K,V>::SNode(K key, V value)
-        : k(key)
-        , v(value) {
-        }
-
-        template<typename K, typename V>
-        void SNode<K,V>::_garbage_collected_scan() const {
-            garbage_collected_scan(k);
-            garbage_collected_scan(v);
-        }
-
-        // LNode -------------------------------------------------------------
-
-        template<typename K, typename V>
-        LNode<K,V>::LNode(SNode<K,V> const* a, LNode<K,V> const* b)
-        : sn(a)
-        , next(b) {
-        }
-
-        template<typename K, typename V>
-        FindResult<V> LNode<K,V>::find(K key) const {
-            for (LNode<K,V> const* current = this; current; current = current->next) {
-                SNode<K,V> const* s = current->sn;
-                assert(s);
-                if (key == s->k)
-                    return { FindResult<V>::OK, s->v };
+            LNode const* erased(K key) const {
+                LNode const* victim = find_lnode_for_key(key);
+                return victim ? without(victim) : this;
             }
-            return { FindResult<V>::NOT_FOUND, {} };
-        }
 
-        template<typename K, typename V>
-        AnyNode<K,V> const* LNode<K,V>::found_or_prepended(K key, V default_) const {
-            // Walk the collision list.  If we find the key return its SNode.
-            // Otherwise prepend a freshly-allocated SNode and return the new
-            // list head.
-            for (LNode<K,V> const* current = this; current; current = current->next) {
-                SNode<K,V> const* s = current->sn;
-                assert(s);
-                if (key == s->k)
-                    return s;
+            LNode const* as_lnode() const override { return this; }
+            virtual void _garbage_collected_scan() const override {
+                garbage_collected_scan(sn);
+                garbage_collected_scan(next);
             }
-            return new LNode<K,V>(new SNode<K,V>(key, default_), this);
-        }
+        };
 
-        // NOTE: The new list reverses the order of the elements before victim:
-        //    as ++ [b] ++ cs  ->  reverse(as) ++ cs
-        template<typename K, typename V>
-        LNode<K,V> const* LNode<K,V>::without(LNode<K,V> const* victim) const {
-            assert(victim);
-            LNode<K,V> const* head = victim->next;
-            for (LNode<K,V> const* curr = this; curr != victim; curr = curr->next) {
-                assert(curr); // victim was not in the list
-                head = new LNode<K,V>(curr->sn, head);
+        struct TNode final : MainNode {
+
+            virtual void _garbage_collected_debug() const override {
+                printf("TNode\n");
             }
-            return head;
-        }
 
-        template<typename K, typename V>
-        LNode<K,V> const* LNode<K,V>::erased(K key) const {
-            abort();
-        }
+            SNode const* sn;
 
-        template<typename K, typename V>
-        void LNode<K,V>::_garbage_collected_scan() const {
-            garbage_collected_scan(sn);
-            garbage_collected_scan(next);
-        }
+            explicit TNode(SNode const* sn) : sn(sn) {}
 
-        // TNode -------------------------------------------------------------
+            TNode const* as_tnode() const override { return this; }
+            virtual void _garbage_collected_scan() const override {
+                garbage_collected_scan(sn);
+            }
+        };
 
-        template<typename K, typename V>
-        TNode<K,V>::TNode(SNode<K,V> const* sn) : sn(sn) {}
+    }; // struct _ctrie
 
-        template<typename K, typename V>
-        void TNode<K,V>::_garbage_collected_scan() const {
-            garbage_collected_scan(sn);
-        }
-
-    } // namespace _ctrie
-
-    // ── Ctrie<K,V> ────────────────────────────────────────────────────────────
+    // -- Ctrie<K,V> ----------------------------------------------------------
 
     template<typename K, typename V>
     struct Ctrie final : GarbageCollected {
 
-        _ctrie::INode<K,V> const* root;
+        using INode               = typename _ctrie<K,V>::INode;
+        using CNode               = typename _ctrie<K,V>::CNode;
+        using FindResult          = typename _ctrie<K,V>::FindResult;
+        using FindOrEmplaceResult = typename _ctrie<K,V>::FindOrEmplaceResult;
+        using EraseResult         = typename _ctrie<K,V>::EraseResult;
+        using AlterResult         = typename _ctrie<K,V>::AlterResult;
 
-        Ctrie();
+        INode const* root;
 
-        std::optional<V> find(K key);
-        V find_or_emplace(K key, V default_);
-        void erase(K key);
+        Ctrie() : root(new INode(CNode::make_with_bitmap(0))) {}
+
+        std::optional<V> find(K key) {
+            for (;;) {
+                FindResult a = root->find(key, 0, nullptr);
+                switch (a.tag) {
+                    case FindResult::OK:        return a.value;
+                    case FindResult::NOT_FOUND: return std::nullopt;
+                    case FindResult::RESTART:   break;
+                    default:                    std::unreachable();
+                }
+            }
+        }
+
+        V find_or_emplace(K key, V default_) {
+            for (;;) {
+                FindOrEmplaceResult r = root->find_or_emplace(key, default_, 0, nullptr);
+                switch (r.tag) {
+                    case FindOrEmplaceResult::OK:      return r.value;
+                    case FindOrEmplaceResult::RESTART: break;
+                    default:                           std::unreachable();
+                }
+            }
+        }
+
+        bool erase(K key) {
+            for (;;) {
+                switch (root->erase(key, 0, nullptr)) {
+                    case EraseResult::OK: return true;
+                    case EraseResult::RESTART: break;
+                    case EraseResult::NOT_FOUND: return false;
+                }
+            }
+        }
 
         // alter: atomically looks up a key and based on the value if any
         // decides the new value, if any, and returns the old value
@@ -708,60 +772,31 @@ namespace wry {
         // The provided function f may be evaluated multiple times
         // Analagous to fetch_update for an atomic scalar value.
         template<typename F>
-        requires std::invocable<F&, std::optional<V>> &&
-        std::convertible_to<std::invoke_result_t<F&, std::optional<V>>, std::optional<V>>
-        std::optional<V> alter(K key, F fn);
+        std::optional<V> alter(K key, F const& fn) {
+            for (;;) {
+                auto r = root->alter(key, 0, nullptr, fn);
+                switch (r) {
+                    case AlterResult::OK:
+                        return r.value;
+                    case AlterResult::RESTART:
+                        break;
+                }
+            }
+        }
+        // TODO: name this concept
+        // requires std::invocable<F&, std::optional<V>> &&
+        // std::convertible_to<std::invoke_result_t<F&, std::optional<V>>, std::optional<V>>
 
-        virtual void _garbage_collected_scan() const override;
-        virtual void _garbage_collected_debug() const override;
+
+        virtual void _garbage_collected_scan() const override {
+            garbage_collected_scan(root);
+        }
+
+        virtual void _garbage_collected_debug() const override {
+            printf("Ctrie\n");
+        }
 
     }; // struct Ctrie
-
-    template<typename K, typename V>
-    Ctrie<K,V>::Ctrie()
-    : root(new _ctrie::INode<K,V>(_ctrie::CNode<K,V>::make_with_bitmap(0))) {
-    }
-
-    template<typename K, typename V>
-    std::optional<V> Ctrie<K,V>::find(K key) {
-        for (;;) {
-            _ctrie::FindResult<V> a = root->find(key, 0, nullptr);
-            switch (a.tag) {
-                case _ctrie::FindResult<V>::OK:        return a.value;
-                case _ctrie::FindResult<V>::NOT_FOUND: return std::nullopt;
-                case _ctrie::FindResult<V>::RESTART:   break;
-                default:                               std::unreachable();
-            }
-        }
-    }
-
-    template<typename K, typename V>
-    V Ctrie<K,V>::find_or_emplace(K key, V default_) {
-        for (;;) {
-            _ctrie::FindOrEmplaceResult<V> r = root->find_or_emplace(key, default_, 0, nullptr);
-            switch (r.tag) {
-                case _ctrie::FindOrEmplaceResult<V>::OK:      return r.value;
-                case _ctrie::FindOrEmplaceResult<V>::RESTART: break;
-                default:                                      std::unreachable();
-            }
-        }
-    }
-
-    template<typename K, typename V>
-    void Ctrie<K,V>::erase(K key) {
-        while (root->erase(key, 0, nullptr) == _ctrie::EraseResult::RESTART)
-            ;
-    }
-
-    template<typename K, typename V>
-    void Ctrie<K,V>::_garbage_collected_scan() const {
-        garbage_collected_scan(root);
-    }
-
-    template<typename K, typename V>
-    void Ctrie<K,V>::_garbage_collected_debug() const {
-        printf("Ctrie\n");
-    }
 
 } // namespace wry
 
