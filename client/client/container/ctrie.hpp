@@ -89,6 +89,7 @@ namespace wry {
 
         struct AlterResult {
             enum Tag { OK, RESTART };
+            Tag tag;
             std::optional<V> value;
         };
 
@@ -188,14 +189,15 @@ namespace wry {
                 // Anything else (TNode/LNode) needs no compression here.
             }
 
-            FindResult find(K key, int lev, INode const* parent) const {
+            FindResult find(K key,std::size_t hc, int lev, INode const* parent) const {
+                assert(hc == key.hash());
                 auto mn = READ(main);
                 if (auto cn = mn->as_cnode()) {
-                    auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
+                    auto [flag, pos] = flagpos(hc, lev, cn->bmp);
                     if (!(flag & cn->bmp)) return { FindResult::NOT_FOUND, {} };
                     auto bn = cn->array[pos];
                     if (auto sin = bn->as_inode()) {
-                        return sin->find(key, lev + W, this);
+                        return sin->find(key, hc, lev + W, this);
                     } else if (auto sn = bn->as_snode()) {
                         if (sn->k == key) return { FindResult::OK,        sn->v };
                         else              return { FindResult::NOT_FOUND, {}    };
@@ -210,11 +212,12 @@ namespace wry {
                 std::unreachable();
             }
 
-            FindOrEmplaceResult find_or_emplace(K key, V default_, int lev, INode const* parent) const {
+            FindOrEmplaceResult find_or_emplace(K key, std::size_t hc, V default_, int lev, INode const* parent) const {
+                assert(hc == key.hash());
                 auto mn = READ(main);
 
                 if (auto cn = mn->as_cnode()) {
-                    auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
+                    auto [flag, pos] = flagpos(hc, lev, cn->bmp);
                     if (!(flag & cn->bmp)) {
                         // Empty slot: install a fresh SNode.
                         SNode* nsn = new SNode(key, default_);
@@ -269,11 +272,12 @@ namespace wry {
                 std::unreachable();
             }
 
-            EraseResult erase(K key, int lev, INode const* parent) const {
+            EraseResult erase(K key, std::size_t hc, int lev, INode const* parent) const {
+                assert(hc == key.hash());
                 auto mn = READ(main);
 
                 if (auto cn = mn->as_cnode()) {
-                    auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
+                    auto [flag, pos] = flagpos(hc, lev, cn->bmp);
                     if (!(flag & cn->bmp))
                         return EraseResult::NOT_FOUND;
                     BranchNode const* bn = cn->array[pos];
@@ -313,10 +317,18 @@ namespace wry {
                     MainNode const* desired = head;
                     if (!head->next) // collapse single-element list to a tomb
                         desired = new TNode(head->sn);
-                    // TODO: if EraseResult::OK should we try and clean up any tombstone?
-                    return CAS(main, ln, desired)
+
+                    auto result = CAS(main, ln, desired)
                         ? EraseResult::OK
                         : EraseResult::RESTART;
+                    // Post-erase: if our main is now a TNode and we have a
+                    // parent, try to absorb the tomb into the parent CNode.
+                    if (result == EraseResult::OK && parent) {
+                        auto mn2 = READ(main);
+                        if (mn2->as_tnode())
+                            cleanParent(parent, this, key.hash(), lev - W);
+                    }
+                    return result;
                 }
 
                 std::unreachable();
@@ -329,11 +341,12 @@ namespace wry {
 
 
             template<typename F>
-            AlterResult alter(K key, int lev, INode const* parent, F const& fn) const {
+            AlterResult alter(K key, size_t hc, int lev, INode const* parent, F const& fn) const {
+                assert(hc == key.hash());
                 auto mn = READ(main);
 
                 if (auto cn = mn->as_cnode()) {
-                    auto [flag, pos] = flagpos(key.hash(), lev, cn->bmp);
+                    auto [flag, pos] = flagpos(hc, lev, cn->bmp);
                     if (!(flag & cn->bmp)) {
                         // Slot is empty
                         std::optional<V> v{fn({})};
@@ -347,7 +360,15 @@ namespace wry {
                     BranchNode const* bn = cn->array[pos];
                     AlterResult result;
                     if (auto in = bn->as_inode()) {
-                        result = in->alter(key, lev + W, this, fn);
+                        result = in->alter(key, hc, lev + W, this, fn);
+                        // Post-erase: if our main is now a TNode and we have a
+                        // parent, try to absorb the tomb into the parent CNode.
+                        if (result.tag == AlterResult::OK && parent) {
+                            auto mn2 = READ(main);
+                            if (mn2->as_tnode())
+                                cleanParent(parent, this, hc, lev - W);
+                        }
+                        return result;
                     } else if (auto sn = bn->as_snode()) {
                         if (key == sn->k) {
                             // Key found
@@ -359,10 +380,10 @@ namespace wry {
                                           : AlterResult{ AlterResult::RESTART, {} });
                                 // Post-erase: if our main is now a TNode and we have a
                                 // parent, try to absorb the tomb into the parent CNode.
-                                if (result == EraseResult::OK && parent) {
+                                if (result.tag == AlterResult::OK && parent) {
                                     auto mn2 = READ(main);
                                     if (mn2->as_tnode())
-                                        cleanParent(parent, this, key.hash(), lev - W);
+                                        cleanParent(parent, this, hc, lev - W);
                                 }
                                 return result;
                             } else {
@@ -399,7 +420,7 @@ namespace wry {
                 }
 
                 if (auto ln = mn->as_lnode()) {
-                    // AnyNode const* result = ln->found_or_prepended(key, default_);
+
                     LNode const* target = ln->find_lnode_for_key(key);
                     if (!target) {
                         // Not present
@@ -414,23 +435,31 @@ namespace wry {
                     }
                     assert(target->sn->k == key);
                     // Is present
-                    std::optional<V> v{fn({target->sn->k})};
+                    std::optional<V> v{fn(target->sn->v)};
                     if (!v) {
                         // Gotta erase it
                         LNode const* nln = ln->without(target);
                         MainNode const* nmn = nln;
                         if (!nln->next) // collapse single-element list to a tomb
                             nmn = new TNode(nln->sn);
-                        return (CAS(main, ln, nmn)
+                        auto result = (CAS(main, ln, nmn)
                                 ? AlterResult{ AlterResult::OK, target->sn->v }
                                 : AlterResult{ AlterResult::RESTART, {} });
+                        // Post-erase: if our main is now a TNode and we have a
+                        // parent, try to absorb the tomb into the parent CNode.
+                        if (result.tag == AlterResult::OK && parent) {
+                            auto mn2 = READ(main);
+                            if (mn2->as_tnode())
+                                cleanParent(parent, this, hc, lev - W);
+                        }
+                        return result;
                     }
                     // Gotta replace it
                     auto nln = new LNode(new SNode(key, *v), ln->without(target));
                     return (CAS(main, ln, nln)
                             ? AlterResult{ AlterResult::OK, target->sn->v }
                             : AlterResult{ AlterResult::RESTART, {} });
-                    std::unreachable();
+
                 }
                 std::unreachable();
             }
@@ -639,6 +668,8 @@ namespace wry {
 
         struct LNode final : MainNode {
 
+            // INVARIANT: all SNodes should have the same k.hash() value
+
             virtual void _garbage_collected_debug() const override {
                 printf("LNode\n");
             }
@@ -651,6 +682,7 @@ namespace wry {
             LNode const* find_lnode_for_key(K key) const {
                 for (LNode const* current = this; current; current = current->next) {
                     assert(current->sn);
+                    assert(current->sn->k.hash() == key.hash());
                     if (current->sn->k == key)
                         return current;
                 }
@@ -681,6 +713,7 @@ namespace wry {
                 LNode const* head = victim->next;
                 for (LNode const* curr = this; curr != victim; curr = curr->next) {
                     assert(curr); // victim was not in the list
+                    assert(curr->sn->k.hash() == victim->sn->k.hash());
                     head = new LNode(curr->sn, head);
                 }
                 return head;
@@ -735,7 +768,7 @@ namespace wry {
 
         std::optional<V> find(K key) {
             for (;;) {
-                FindResult a = root->find(key, 0, nullptr);
+                FindResult a = root->find(key, key.hash(), 0, nullptr);
                 switch (a.tag) {
                     case FindResult::OK:        return a.value;
                     case FindResult::NOT_FOUND: return std::nullopt;
@@ -747,7 +780,7 @@ namespace wry {
 
         V find_or_emplace(K key, V default_) {
             for (;;) {
-                FindOrEmplaceResult r = root->find_or_emplace(key, default_, 0, nullptr);
+                FindOrEmplaceResult r = root->find_or_emplace(key, key.hash(), default_, 0, nullptr);
                 switch (r.tag) {
                     case FindOrEmplaceResult::OK:      return r.value;
                     case FindOrEmplaceResult::RESTART: break;
@@ -758,7 +791,7 @@ namespace wry {
 
         bool erase(K key) {
             for (;;) {
-                switch (root->erase(key, 0, nullptr)) {
+                switch (root->erase(key, key.hash(), 0, nullptr)) {
                     case EraseResult::OK: return true;
                     case EraseResult::RESTART: break;
                     case EraseResult::NOT_FOUND: return false;
@@ -774,8 +807,8 @@ namespace wry {
         template<typename F>
         std::optional<V> alter(K key, F const& fn) {
             for (;;) {
-                auto r = root->alter(key, 0, nullptr, fn);
-                switch (r) {
+                auto r = root->alter(key, key.hash(), 0, nullptr, fn);
+                switch (r.tag) {
                     case AlterResult::OK:
                         return r.value;
                     case AlterResult::RESTART:

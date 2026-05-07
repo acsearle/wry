@@ -75,12 +75,22 @@ namespace wry {
         for (int i = 0; i != 1 << 17; i += m) {
             std::span s{data.data() + i, data.data() + i + m};
             co_await nursery.fork([](auto trie, std::span<T> s) -> Coroutine::Future<> {
-                for (auto [k, f, v] : s) {
+                for (auto& [k, f, v] : s) {
                     if (f) {
-                        auto w = trie->find_or_emplace(k, v);
+                        auto g = f;
+                        // auto w = trie->find_or_emplace(k, v);
+                        auto w = trie->alter(k, [&](std::optional<ValueType> const& in) -> std::optional<ValueType> {
+                            if (in) {
+                                // Sneaky backdoor to fixup the count in the vector if there's a collison
+                                f = 0;
+                                return in;
+                            } else {
+                                return {v};
+                            }
+                        });
                         // printf("[%zu] -> %zu expect %zu (hash() -> %0.16zx\n", k.data, w.data, v.data, k.hash());
-                        // TODO: occasional collisions to be expected
-                        assert(w == v);
+                        // If we had to change the flag, we returned the item we hit
+                        assert(w.has_value() == (g && !f));
                     }
                 }
                 co_return;
@@ -116,7 +126,14 @@ namespace wry {
             std::span s{data.data() + i, data.data() + i + m};
             co_await nursery.fork([](auto trie, std::span<T> s) -> Coroutine::Future<> {
                 for (auto [k, f, v] : s) {
-                    trie->erase(k);
+                    // trie->erase(k);
+                    auto w = trie->alter(k, [](std::optional<ValueType> const& in) {
+                        return std::optional<ValueType>{};
+                    });
+                    assert((bool)w.has_value() == f);
+                    if (f) {
+                        assert(*w == v);
+                    }
                 }
                 co_return;
             }(trie, s));
