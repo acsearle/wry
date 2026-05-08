@@ -133,7 +133,7 @@ namespace wry {
         using S = PersistentSet<Key, H>;
         auto z = H{}.hash(Key{a, B{}});
         auto mask = H{}.mask_first();
-        x._inner->for_each_mask(x._inner, z, mask, [action=std::move(action)](H::hash_type key, int dummy) {
+        x._inner->for_each_mask(x._inner, z, mask, [action=std::forward<F>(action)](H::hash_type key, int dummy) {
             return action(H{}.unhash(key));
         });
     }

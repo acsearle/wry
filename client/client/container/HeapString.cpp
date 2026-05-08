@@ -22,7 +22,19 @@ namespace wry {
     void HeapString::_garbage_collected_debug() const {
         printf("\"%.*s\"", (int)_size, (const char*)_bytes);
     }
-    
-    
-    
+//
+//    HeapString const* HeapString::make(std::size_t hc, std::string_view view) {
+//        void* a = malloc(sizeof(HeapString) + view.size());
+//        HeapString* b = new(a) HeapString;
+//        b->_hash = hc;
+//        b->_size = view.size();
+//        std::memcpy(b->_bytes, view.data(), view.size());
+//        return b;
+//    }
+//
+//
+//    HeapString const* HeapString::make(std::string_view view) {
+//        return make(hash_combine(view.data(), view.size()), view);
+//    }
+
 } // namespace wry

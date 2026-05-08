@@ -131,7 +131,8 @@ namespace wry {
         virtual void _garbage_collected_debug() const = 0;
         virtual void _garbage_collected_shade() const;
         virtual void _garbage_collected_scan() const = 0;
-        
+        virtual bool _garbage_collected_decide_weak(uint16_t mask) const { return false; };
+
     }; // struct GarbageCollected
         
 

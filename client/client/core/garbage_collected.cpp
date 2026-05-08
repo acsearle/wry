@@ -124,22 +124,30 @@ namespace wry {
 
 #pragma mark - Global and thread_local variables
 
-    constinit thread_local uint16_t _thread_local_gray_for_allocation = 0;
-    constinit thread_local uint16_t _thread_local_black_for_allocation = 0;
-    constinit thread_local uint16_t _thread_local_gray_did_shade = 0;
+    // Thread-locals get initialized in the poisoned state to catch unpinned
+    // access
+
+    // TODO: Poison the bag somehow
+    constinit thread_local uint16_t _thread_local_gray_for_allocation = 0xFFFF;
+    constinit thread_local uint16_t _thread_local_black_for_allocation = 0xFFFF;
+    constinit thread_local uint16_t _thread_local_gray_did_shade = 0xFFFF;
     constinit thread_local Bag<const GarbageCollected*> _thread_local_new_objects;
 
     GarbageCollected::GarbageCollected()
     : _gray{_thread_local_gray_for_allocation}
     , _black{_thread_local_black_for_allocation}
     , _count{0}
+#ifndef NDEBUG
     , _debug_allocation_gray{_thread_local_gray_for_allocation}
     , _debug_allocation_black{_thread_local_black_for_allocation}
     , _debug_allocation_epoch{epoch::local_state.known.raw}
+#endif
     {
         // SAFETY: pointer to a partially constructed object escapes.  These
         // pointers are only published to the collector thread after the
         // constructor has completed.
+
+        // TODO: We can require non-null
         _thread_local_new_objects.push(this);
     }
 
@@ -255,6 +263,8 @@ namespace wry {
                          // ...when all mutators are gray...
         BLACK_PUBLISHED, // Mutators becoming black.  Collector traces.
                          // ...when no objects are gray...
+        WEAK_DECIDING,   // Mutators are black.  Collector decides fate of weak objects
+                         // ...when all objects have been visited...
         SWEEPING,        // Mutators are black.  Collector deletes white objects.
                          // ...when all objects have been visited...
         WHITE_PUBLISHED, // Mutators are becoming white.  Collector waits.
@@ -296,6 +306,7 @@ namespace wry {
 
         uint16_t _gray_for_allocation = 0;
         uint16_t _black_for_allocation = 0;
+        uint16_t _mask_for_deciding = 0;
         uint16_t _mask_for_deleting = 0;
         uint16_t _mask_for_clearing = 0;
         
@@ -597,7 +608,7 @@ namespace wry {
                             
                             // There are now only white objects and black objects.
                             
-                            kstate[k] = { SWEEPING, E, 0 };
+                            kstate[k] = { WEAK_DECIDING, E, 0 };
 
                             // We can now safely clear all the scan history
                             for (auto& t : _scan_history) {
@@ -610,7 +621,13 @@ namespace wry {
                         }
                     }
                         break; // from switch
-                        
+
+                    case WEAK_DECIDING:
+                        if (!kstate[k].scans)
+                            break;
+                        kstate[k] = { SWEEPING, E, 0 };
+                        break;
+
                     case SWEEPING:
                         // Wait for one sweep to complete
                         if (!kstate[k].scans)
@@ -667,6 +684,7 @@ namespace wry {
                     case UNUSED:
                         _gray_for_allocation &= ~bit;
                         _black_for_allocation &= ~bit;
+                        _mask_for_deciding &= ~bit;
                         _mask_for_deleting &= ~bit;
                         _mask_for_clearing &= ~bit;
                         _debug_assert_white |= bit;
@@ -675,6 +693,7 @@ namespace wry {
                     case GRAY_PUBLISHED:
                         _gray_for_allocation |= bit;
                         _black_for_allocation &= ~bit;
+                        _mask_for_deciding &= ~bit;
                         _mask_for_deleting &= ~bit;
                         _mask_for_clearing &= ~bit;
                         _debug_assert_white &= ~bit;
@@ -683,14 +702,24 @@ namespace wry {
                     case BLACK_PUBLISHED:
                         _gray_for_allocation |= bit;
                         _black_for_allocation |= bit;
+                        _mask_for_deciding &= ~bit;
                         _mask_for_deleting &= ~bit;
                         _mask_for_clearing &= ~bit;
                         _debug_assert_white &= ~bit;
                         _debug_assert_nonblack &= ~bit;
                         break;
+                    case WEAK_DECIDING:
+                        _gray_for_allocation |= bit;
+                        _black_for_allocation |= bit;
+                        _mask_for_deciding |= bit;
+                        _mask_for_deleting &= ~bit;
+                        _mask_for_clearing &= ~bit;
+                        _debug_assert_white &= ~bit;
+                        _debug_assert_nonblack &= ~bit;
                     case SWEEPING:
                         _gray_for_allocation |= bit;
                         _black_for_allocation |= bit;
+                        _mask_for_deciding &= ~bit;
                         _mask_for_deleting |= bit;
                         _mask_for_clearing &= ~bit;
                         _debug_assert_white &= ~bit;
@@ -699,6 +728,7 @@ namespace wry {
                     case WHITE_PUBLISHED:
                         _gray_for_allocation &= ~bit;
                         _black_for_allocation &= ~bit;
+                        _mask_for_deciding &= ~bit;
                         _mask_for_deleting &= ~bit;
                         _mask_for_clearing &= ~bit;
                         _debug_assert_white &= ~bit;
@@ -707,6 +737,7 @@ namespace wry {
                     case CLEARING:
                         _gray_for_allocation &= ~bit;
                         _black_for_allocation &= ~bit;
+                        _mask_for_deciding &= ~bit;
                         _mask_for_deleting &= ~bit;
                         _mask_for_clearing |= bit;
                         _debug_assert_white &= ~bit;
@@ -860,7 +891,8 @@ namespace wry {
                 // If in clearing mask, clear it
                                 
                 int32_t reference_count = object->_count.load_relaxed();
-                uint16_t root_gray = reference_count ? _gray_for_allocation : 0;
+                bool weak_was_loaded = object->_garbage_collected_decide_weak(_mask_for_deciding);
+                uint16_t root_gray = (reference_count || weak_was_loaded) ? _gray_for_allocation : 0;
                 uint16_t before_gray = object->_gray.load_relaxed();
                 uint16_t before_black = object->_black;
                 uint16_t after_gray;

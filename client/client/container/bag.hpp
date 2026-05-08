@@ -24,7 +24,9 @@ namespace wry {
     // TODO: Consider flexible array member instead of finessing the struct
     
     enum : std::size_t { BAG_PAGE_SIZE = 4096 };
-        
+
+    enum class poisoned_e { POISONED };
+
     template<typename T>
     struct SinglyLinkedListOfInlineStacksBag {
         
@@ -106,10 +108,20 @@ namespace wry {
         : _head(nullptr)
         , _tail(nullptr)
 #ifndef NDEBUG
-        , _debug_size(0) {
+        , _debug_size(0)
 #endif // NDEBUG
+        {
         }
-        
+
+        constexpr SinglyLinkedListOfInlineStacksBag(poisoned_e)
+        : _head((Node*)alignof(Node*))
+        , _tail(nullptr)
+#ifndef NDEBUG
+        , _debug_size(0)
+#endif // NDEBUG
+        {
+        }
+
         SinglyLinkedListOfInlineStacksBag(const SinglyLinkedListOfInlineStacksBag&) = delete;
         
         SinglyLinkedListOfInlineStacksBag(SinglyLinkedListOfInlineStacksBag&& other)

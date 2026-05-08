@@ -197,7 +197,7 @@ namespace wry {
             any_operation _operation;
             void set_value(auto&& x) {
                 _operation.emplace(then(schedule(std::move(_scheduler)),
-                                        [=]() mutable { return std::move(x); })
+                                        [x=std::forward<decltype(x)>(x)]() mutable { return std::move(x); })
                                    .connect(std::move(_receiver)));
                 _operation.start();
             }

@@ -28,7 +28,8 @@ namespace wry {
     // machinery (GCAS / RDCSS / Gen) which we do not implement.  We hew closely
     // to the pseudocode, foregoing normal C++ idioms.
     //
-    // K must provide:  size_t hash() const;  bool operator==(K const&) const;
+    // K must provide:  size_t hash(K const&) const; (ADL)
+    //                  bool operator==(K const&) const;
     //                  garbage_collected_scan(K const&)  (ADL)
     // V must provide:  garbage_collected_scan(V const&)  (ADL)
     //
@@ -72,13 +73,13 @@ namespace wry {
         struct FindResult {
             enum Tag { OK, RESTART, NOT_FOUND };
             Tag tag;
-            V value;
+            V value; // Meaningful if OK
         };
 
         struct FindOrEmplaceResult {
             enum Tag { OK, RESTART };
             Tag tag;
-            V value;
+            V value; // Meaningful if OK
         };
 
         enum class EraseResult {
@@ -87,10 +88,17 @@ namespace wry {
             NOT_FOUND,
         };
 
+        struct AlterChoice {
+            enum Tag { KEEP, REPLACE, ERASE };
+            Tag tag;
+            V value; // Meaningful if REPLACE
+        };
+
         struct AlterResult {
             enum Tag { OK, RESTART };
             Tag tag;
-            std::optional<V> value;
+            std::optional<V> before;
+            std::optional<V> after;
         };
 
         static constexpr int W = 6;
@@ -190,7 +198,7 @@ namespace wry {
             }
 
             FindResult find(K key,std::size_t hc, int lev, INode const* parent) const {
-                assert(hc == key.hash());
+                assert(hc == hash(key));
                 auto mn = READ(main);
                 if (auto cn = mn->as_cnode()) {
                     auto [flag, pos] = flagpos(hc, lev, cn->bmp);
@@ -213,7 +221,7 @@ namespace wry {
             }
 
             FindOrEmplaceResult find_or_emplace(K key, std::size_t hc, V default_, int lev, INode const* parent) const {
-                assert(hc == key.hash());
+                assert(hc == hash(key));
                 auto mn = READ(main);
 
                 if (auto cn = mn->as_cnode()) {
@@ -273,7 +281,7 @@ namespace wry {
             }
 
             EraseResult erase(K key, std::size_t hc, int lev, INode const* parent) const {
-                assert(hc == key.hash());
+                assert(hc == hash(key));
                 auto mn = READ(main);
 
                 if (auto cn = mn->as_cnode()) {
@@ -300,7 +308,7 @@ namespace wry {
                     if (result == EraseResult::OK && parent) {
                         auto mn2 = READ(main);
                         if (mn2->as_tnode())
-                            cleanParent(parent, this, key.hash(), lev - W);
+                            cleanParent(parent, this, hc, lev - W);
                     }
                     return result;
                 }
@@ -326,7 +334,7 @@ namespace wry {
                     if (result == EraseResult::OK && parent) {
                         auto mn2 = READ(main);
                         if (mn2->as_tnode())
-                            cleanParent(parent, this, key.hash(), lev - W);
+                            cleanParent(parent, this, hc, lev - W);
                     }
                     return result;
                 }
@@ -342,20 +350,29 @@ namespace wry {
 
             template<typename F>
             AlterResult alter(K key, size_t hc, int lev, INode const* parent, F const& fn) const {
-                assert(hc == key.hash());
+                assert(hc == hash(key));
                 auto mn = READ(main);
 
                 if (auto cn = mn->as_cnode()) {
                     auto [flag, pos] = flagpos(hc, lev, cn->bmp);
                     if (!(flag & cn->bmp)) {
                         // Slot is empty
-                        std::optional<V> v{fn({})};
-                        if (!v) return { AlterResult::OK, std::optional<V>{} };
-                        SNode* nsn = new SNode(key, *v);
-                        MainNode const* nmn = cn->inserted(pos, flag, nsn);
-                        return CAS(main, mn, nmn)
-                        ? AlterResult{ AlterResult::OK, {} }
-                        : AlterResult{ AlterResult::RESTART, {} };
+                        AlterChoice choice{fn({})};
+                        switch (choice.tag) {
+                            case AlterChoice::KEEP:
+                                return { AlterResult::OK, {}, {} };
+                            case AlterChoice::ERASE:
+                                return { AlterResult::OK, {}, {} };
+                            case AlterChoice::REPLACE: {
+                                SNode* nsn = new SNode(key, choice.value);
+                                MainNode const* nmn = cn->inserted(pos, flag, nsn);
+                                return (CAS(main, mn, nmn)
+                                        ? AlterResult{ AlterResult::OK, {}, nsn->v }
+                                        : AlterResult{ AlterResult::RESTART, {}, {} });
+                            }
+                            default:
+                                std::unreachable();
+                        }
                     }
                     BranchNode const* bn = cn->array[pos];
                     AlterResult result;
@@ -372,43 +389,55 @@ namespace wry {
                     } else if (auto sn = bn->as_snode()) {
                         if (key == sn->k) {
                             // Key found
-                            std::optional<V> v{fn(sn->v)};
-                            if (!v) {
-                                // We want to erase
-                                result = (CAS(main, cn, cn->removed(pos, flag)->to_contracted(lev))
-                                          ? AlterResult{ AlterResult::OK, sn->v }
-                                          : AlterResult{ AlterResult::RESTART, {} });
-                                // Post-erase: if our main is now a TNode and we have a
-                                // parent, try to absorb the tomb into the parent CNode.
-                                if (result.tag == AlterResult::OK && parent) {
-                                    auto mn2 = READ(main);
-                                    if (mn2->as_tnode())
-                                        cleanParent(parent, this, hc, lev - W);
+                            AlterChoice choice{fn(sn->v)};
+                            switch (choice.tag) {
+                                case AlterChoice::KEEP:
+                                    return AlterResult { AlterResult::OK, sn->v, sn->v };
+                                case AlterChoice::REPLACE:
+                                    return (CAS(main, cn, cn->updated(pos, new SNode(key, choice.value)))
+                                            ? AlterResult{ AlterResult::OK, sn->v, choice.value }
+                                            : AlterResult{ AlterResult::RESTART, {}, {} });
+                                case AlterChoice::ERASE: {
+                                    result = (CAS(main, cn, cn->removed(pos, flag)->to_contracted(lev))
+                                              ? AlterResult{ AlterResult::OK, sn->v, {} }
+                                              : AlterResult{ AlterResult::RESTART, {}, {} });
+                                    // Post-erase: if our main is now a TNode and we have a
+                                    // parent, try to absorb the tomb into the parent CNode.
+                                    if (result.tag == AlterResult::OK && parent) {
+                                        auto mn2 = READ(main);
+                                        if (mn2->as_tnode())
+                                            cleanParent(parent, this, hc, lev - W);
+                                    }
+                                    return result;
                                 }
-                                return result;
-                            } else {
-                                // We want to replace
-                                result = (CAS(main, cn, cn->updated(pos, new SNode(key, *v)))
-                                          ? AlterResult{ AlterResult::OK, sn->v }
-                                          : AlterResult{ AlterResult::RESTART, {} });
-                                return result;
+                                default:
+                                    std::unreachable();
                             }
                         } else {
                             // Key not found
-                            std::optional<V> v{fn({})};
-                            if (!v) return { AlterResult::OK, {} };
-                            // Distinct key: expand the HAMT one level.
-                            // CNode::make_with_pair bottoms out into an LNode chain
-                            // if hash bits run out.
-                            SNode* nsn = new SNode(key, *v);
-                            INode* nin = new INode(CNode::make_with_pair(sn, nsn, lev + W));
-                            MainNode const* nmn = cn->updated(pos, nin);
-                            // SAFETY: if we lose the CAS race, the speculative INode
-                            // and sub-MainNode become orphans; the collector picks
-                            // them up via the thread-local new-objects bag.
-                            return (CAS(main, mn, nmn)
-                                    ? AlterResult{ AlterResult::OK, std::optional<V>{} }
-                                    : AlterResult{ AlterResult::RESTART, {} });
+                            AlterChoice choice{fn({})};
+                            switch (choice.tag) {
+                                case AlterChoice::KEEP:
+                                    return { AlterResult::OK, {}, {} };
+                                case AlterChoice::ERASE:
+                                    return { AlterResult::OK, {}, {} };
+                                case AlterChoice::REPLACE: {
+                                    // Distinct key: expand the HAMT one level.
+                                    // CNode::make_with_pair bottoms out into an LNode chain
+                                    // if hash bits run out.
+                                    SNode* nsn = new SNode(key, choice.value);
+                                    INode* nin = new INode(CNode::make_with_pair(sn, nsn, lev + W));
+                                    MainNode const* nmn = cn->updated(pos, nin);
+                                    // SAFETY: if we lose the CAS race, the speculative INode
+                                    // and sub-MainNode become orphans; the collector picks
+                                    // them up via the thread-local new-objects bag.
+                                    return (CAS(main, mn, nmn)
+                                            ? AlterResult{ AlterResult::OK, {}, choice.value }
+                                            : AlterResult{ AlterResult::RESTART, {}, {} });
+                                }
+                                default:
+                                    std::unreachable();
+                            }
                         }
                     }
                     std::unreachable();
@@ -424,42 +453,57 @@ namespace wry {
                     LNode const* target = ln->find_lnode_for_key(key);
                     if (!target) {
                         // Not present
-                        std::optional<V> v{fn({})};
-                        if (!v) // No change needed
-                            return { AlterResult::OK, {} };
-                        // Prepend new LNode
-                        auto nln = new LNode(new SNode(key, *v), ln);
-                        return (CAS(main, ln, nln)
-                                ? AlterResult{ AlterResult::OK, {} }
-                                : AlterResult{ AlterResult::RESTART, {} });
+                        AlterChoice choice{fn({})};
+                        switch (choice.tag) {
+                            case AlterChoice::KEEP:
+                                return { AlterResult::OK, {}, {} };
+                            case AlterChoice::ERASE:
+                                return { AlterResult::OK, {}, {} };
+                            case AlterChoice::REPLACE: {
+                                // Prepend new LNode
+                                auto nln = new LNode(new SNode(key, choice.value), ln);
+                                return (CAS(main, ln, nln)
+                                        ? AlterResult{ AlterResult::OK, {}, choice.value }
+                                        : AlterResult{ AlterResult::RESTART, {}, {} });
+                            }
+                            default:
+                                std::unreachable();
+                        }
                     }
                     assert(target->sn->k == key);
                     // Is present
-                    std::optional<V> v{fn(target->sn->v)};
-                    if (!v) {
-                        // Gotta erase it
-                        LNode const* nln = ln->without(target);
-                        MainNode const* nmn = nln;
-                        if (!nln->next) // collapse single-element list to a tomb
-                            nmn = new TNode(nln->sn);
-                        auto result = (CAS(main, ln, nmn)
-                                ? AlterResult{ AlterResult::OK, target->sn->v }
-                                : AlterResult{ AlterResult::RESTART, {} });
-                        // Post-erase: if our main is now a TNode and we have a
-                        // parent, try to absorb the tomb into the parent CNode.
-                        if (result.tag == AlterResult::OK && parent) {
-                            auto mn2 = READ(main);
-                            if (mn2->as_tnode())
-                                cleanParent(parent, this, hc, lev - W);
+                    AlterChoice choice{fn(target->sn->v)};
+                    switch (choice.tag) {
+                        case AlterChoice::KEEP:
+                            return { AlterResult::OK, target->sn->v, target->sn->v };
+                        case AlterChoice::ERASE: {
+                            // Gotta erase it
+                            LNode const* nln = ln->without(target);
+                            MainNode const* nmn = nln;
+                            if (!nln->next) // collapse single-element list to a tomb
+                                nmn = new TNode(nln->sn);
+                            auto result = (CAS(main, ln, nmn)
+                                           ? AlterResult{ AlterResult::OK, target->sn->v, choice.value }
+                                           : AlterResult{ AlterResult::RESTART, {}, {} });
+                            // Post-erase: if our main is now a TNode and we have a
+                            // parent, try to absorb the tomb into the parent CNode.
+                            if (result.tag == AlterResult::OK && parent) {
+                                auto mn2 = READ(main);
+                                if (mn2->as_tnode())
+                                    cleanParent(parent, this, hc, lev - W);
+                            }
+                            return result;
                         }
-                        return result;
+                        case AlterChoice::REPLACE: {
+                            // Gotta replace it
+                            auto nln = new LNode(new SNode(key, choice.value), ln->without(target));
+                            return (CAS(main, ln, nln)
+                                    ? AlterResult{ AlterResult::OK, target->sn->v, choice.value }
+                                    : AlterResult{ AlterResult::RESTART, {}, {} });
+                        }
+                        default:
+                            std::unreachable();
                     }
-                    // Gotta replace it
-                    auto nln = new LNode(new SNode(key, *v), ln->without(target));
-                    return (CAS(main, ln, nln)
-                            ? AlterResult{ AlterResult::OK, target->sn->v }
-                            : AlterResult{ AlterResult::RESTART, {} });
-
                 }
                 std::unreachable();
             }
@@ -469,7 +513,7 @@ namespace wry {
         struct CNode final : MainNode {
 
             virtual void _garbage_collected_debug() const override {
-                printf("CNode[bmp=%llx]\n", (unsigned long long)bmp);
+                printf("%s {bmp=%" PRIx64 "}\n", __PRETTY_FUNCTION__, bmp);
             }
 
             // Local placement-new: GarbageCollected's `operator new(size_t)`
@@ -493,15 +537,15 @@ namespace wry {
 
                 if (lev >= 64) {
                     // We have exhausted the hash bits
-                    assert(s1->k.hash() == s2->k.hash());
+                    assert(hash(s1->k) == hash(s2->k));
                     LNode const* head = nullptr;
                     head = new LNode(s1, head);
                     head = new LNode(s2, head);
                     return head;
                 }
 
-                uint64_t pos1 = (s1->k.hash() >> lev) & 63;
-                uint64_t pos2 = (s2->k.hash() >> lev) & 63;
+                uint64_t pos1 = (hash(s1->k) >> lev) & 63;
+                uint64_t pos2 = (hash(s2->k) >> lev) & 63;
 
                 // Order by level-position so array[pos] indexes correctly via
                 // flagpos.  An earlier version swapped on full hash, which is
@@ -668,7 +712,7 @@ namespace wry {
 
         struct LNode final : MainNode {
 
-            // INVARIANT: all SNodes should have the same k.hash() value
+            // INVARIANT: all SNodes should have the same hash(k) value
 
             virtual void _garbage_collected_debug() const override {
                 printf("LNode\n");
@@ -682,7 +726,7 @@ namespace wry {
             LNode const* find_lnode_for_key(K key) const {
                 for (LNode const* current = this; current; current = current->next) {
                     assert(current->sn);
-                    assert(current->sn->k.hash() == key.hash());
+                    assert(hash(current->sn->k) == hash(key));
                     if (current->sn->k == key)
                         return current;
                 }
@@ -713,7 +757,7 @@ namespace wry {
                 LNode const* head = victim->next;
                 for (LNode const* curr = this; curr != victim; curr = curr->next) {
                     assert(curr); // victim was not in the list
-                    assert(curr->sn->k.hash() == victim->sn->k.hash());
+                    assert(hash(curr->sn->k) == hash(victim->sn->k));
                     head = new LNode(curr->sn, head);
                 }
                 return head;
@@ -761,6 +805,7 @@ namespace wry {
         using FindOrEmplaceResult = typename _ctrie<K,V>::FindOrEmplaceResult;
         using EraseResult         = typename _ctrie<K,V>::EraseResult;
         using AlterResult         = typename _ctrie<K,V>::AlterResult;
+        using AlterChoice         = typename _ctrie<K,V>::AlterChoice;
 
         INode const* root;
 
@@ -768,7 +813,7 @@ namespace wry {
 
         std::optional<V> find(K key) {
             for (;;) {
-                FindResult a = root->find(key, key.hash(), 0, nullptr);
+                FindResult a = root->find(key, hash(key), 0, nullptr);
                 switch (a.tag) {
                     case FindResult::OK:        return a.value;
                     case FindResult::NOT_FOUND: return std::nullopt;
@@ -780,7 +825,7 @@ namespace wry {
 
         V find_or_emplace(K key, V default_) {
             for (;;) {
-                FindOrEmplaceResult r = root->find_or_emplace(key, key.hash(), default_, 0, nullptr);
+                FindOrEmplaceResult r = root->find_or_emplace(key, hash(key), default_, 0, nullptr);
                 switch (r.tag) {
                     case FindOrEmplaceResult::OK:      return r.value;
                     case FindOrEmplaceResult::RESTART: break;
@@ -791,7 +836,7 @@ namespace wry {
 
         bool erase(K key) {
             for (;;) {
-                switch (root->erase(key, key.hash(), 0, nullptr)) {
+                switch (root->erase(key, hash(key), 0, nullptr)) {
                     case EraseResult::OK: return true;
                     case EraseResult::RESTART: break;
                     case EraseResult::NOT_FOUND: return false;
@@ -805,12 +850,12 @@ namespace wry {
         // The provided function f may be evaluated multiple times
         // Analagous to fetch_update for an atomic scalar value.
         template<typename F>
-        std::optional<V> alter(K key, F const& fn) {
+        std::pair<std::optional<V>, std::optional<V>> alter(K key, F const& fn) {
             for (;;) {
-                auto r = root->alter(key, key.hash(), 0, nullptr, fn);
+                auto r = root->alter(key, hash(key), 0, nullptr, fn);
                 switch (r.tag) {
                     case AlterResult::OK:
-                        return r.value;
+                        return { r.before, r.after };
                     case AlterResult::RESTART:
                         break;
                 }
@@ -826,7 +871,7 @@ namespace wry {
         }
 
         virtual void _garbage_collected_debug() const override {
-            printf("Ctrie\n");
+            printf("%s\n", __PRETTY_FUNCTION__);
         }
 
     }; // struct Ctrie

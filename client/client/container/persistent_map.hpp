@@ -204,7 +204,7 @@ namespace wry {
         co_return PersistentMap<Key, T, H>{
             coroutine_parallel_rebuild2(source.inner,
                                         modifier,
-                                        std::move(action_for_key))
+                                        std::forward<F>(action_for_key))
         };
     }
     

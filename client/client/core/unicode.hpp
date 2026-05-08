@@ -457,7 +457,7 @@ namespace wry {
                 }
                 assert((b & 0xC0) == 0x80); // <-- else seq ended inside multibyte
                 char32_t c = b & 0x0000003F;
-                if ((b & 0xE) == 0xC0) { // 2leading
+                if ((b & 0xE) == 0xC0) { // 2leading // 0xE = 1110   0xC = 1100
                     c |= (b & 0x0000001F) << 6;
                     // 0 0000 0000 0000 0111 1111
                     // 0 0000 0000 0222 2211 1111

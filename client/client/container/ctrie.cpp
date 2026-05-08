@@ -22,9 +22,11 @@ namespace wry {
         inline static std::size_t _mask;
 
         std::size_t data;
-        std::size_t hash() const { return wry::hash(data) & _mask; }
         bool operator==(KeyType const&) const = default;
     };
+
+    std::size_t hash(KeyType k) { return wry::hash(k.data) & KeyType::_mask; }
+
 
     void garbage_collected_scan(KeyType const&) {}
 
@@ -40,7 +42,6 @@ namespace wry {
     // mutator-pinned ([global_work_queue.cpp]), so allocation-and-shade
     // operations are well-defined here.
     define_test("ctrie") {
-
         // TODO: We need to report seed for reporducibility (and ability specify it)
         std::random_device rd;
         auto seed = rd();
@@ -61,7 +62,7 @@ namespace wry {
             std::vector<std::size_t> hashes;
             for (auto [k, f, _] : data) {
                 if (f) {
-                    hashes.push_back(k.hash());
+                    hashes.push_back(hash(k));
                 }
             }
             std::sort(hashes.begin(), hashes.end());
@@ -71,6 +72,7 @@ namespace wry {
         }
 
         Root<Ctrie<KeyType, ValueType>*> trie(new Ctrie<KeyType, ValueType>());
+        using AlterChoice = Ctrie<KeyType, ValueType>::AlterChoice;
 
         Coroutine::Nursery nursery;
 
@@ -81,20 +83,19 @@ namespace wry {
             co_await nursery.fork([](auto trie, std::span<T> s) -> Coroutine::Future<> {
                 for (auto& [k, f, v] : s) {
                     if (f) {
-                        auto g = f;
                         // auto w = trie->find_or_emplace(k, v);
-                        auto w = trie->alter(k, [&](std::optional<ValueType> const& in) -> std::optional<ValueType> {
+                        auto [w, x] = trie->alter(k, [&](std::optional<ValueType> const& in) -> AlterChoice {
                             if (in) {
-                                // Sneaky backdoor to fixup the count in the vector if there's a collison
-                                f = 0;
-                                return in;
+                                return AlterChoice { AlterChoice::KEEP, {} };
                             } else {
-                                return {v};
+                                return AlterChoice { AlterChoice::REPLACE, v };
                             }
                         });
-                        // printf("[%zu] -> %zu expect %zu (hash() -> %0.16zx\n", k.data, w.data, v.data, k.hash());
-                        // If we had to change the flag, we returned the item we hit
-                        assert(w.has_value() == (g && !f));
+                        if (w) {
+                            f = false;
+                        } else {
+                            assert(*x == v);
+                        }
                     }
                 }
                 co_return;
@@ -131,8 +132,8 @@ namespace wry {
             co_await nursery.fork([](auto trie, std::span<T> s) -> Coroutine::Future<> {
                 for (auto [k, f, v] : s) {
                     // trie->erase(k);
-                    auto w = trie->alter(k, [](std::optional<ValueType> const& in) {
-                        return std::optional<ValueType>{};
+                    auto [w, x] = trie->alter(k, [](std::optional<ValueType> const& in) {
+                        return AlterChoice { AlterChoice::ERASE, {} };
                     });
                     assert((bool)w.has_value() == f);
                     if (f) {
@@ -180,9 +181,9 @@ namespace wry {
         struct CommKey {
             inline static std::size_t _mask;
             std::size_t data;
-            std::size_t hash() const { return wry::hash(data) & _mask; }
             bool operator==(CommKey const&) const = default;
         };
+        std::size_t hash(CommKey k) { return wry::hash(k.data) & CommKey::_mask; }
 
         struct CommVal {
             std::size_t data;
@@ -248,6 +249,7 @@ namespace wry {
 
         // Run.
         Root<Ctrie<CommKey, CommVal>*> trie(new Ctrie<CommKey, CommVal>());
+        using AlterChoice = Ctrie<CommKey, CommVal>::AlterChoice;
         Coroutine::Nursery nursery;
 
         constexpr size_t batch = 1 << 9; // 512 ops per fork
@@ -262,14 +264,11 @@ namespace wry {
                         // alter ignores the returned old value -- we only
                         // care about the final state, which we'll check
                         // after the join.
-                        trie->alter(k,
-                            [delta](std::optional<CommVal> const& in)
-                            -> std::optional<CommVal> {
+                        trie->alter(k, [delta](std::optional<CommVal> const& in) -> AlterChoice {
                                 std::int64_t n =
                                     (in ? (std::int64_t)in->data : 0) + delta;
-                                if (n == 0) return std::optional<CommVal>{};
-                                return std::optional<CommVal>{
-                                    CommVal{(std::size_t)n}};
+                            if (n == 0) return AlterChoice { AlterChoice::ERASE, {} };
+                            return AlterChoice { AlterChoice::REPLACE, CommVal{(std::size_t)n} };
                             });
                     }
                     co_return;
