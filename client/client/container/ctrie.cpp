@@ -85,11 +85,7 @@ namespace wry {
                     if (f) {
                         // auto w = trie->find_or_emplace(k, v);
                         auto [w, x] = trie->alter(k, [&](std::optional<ValueType> const& in) -> AlterChoice {
-                            if (in) {
-                                return AlterChoice { AlterChoice::KEEP, {} };
-                            } else {
-                                return AlterChoice { AlterChoice::REPLACE, v };
-                            }
+                            return in ? AlterChoice::keep() : AlterChoice::replace(v);
                         });
                         if (w) {
                             f = false;
@@ -133,7 +129,7 @@ namespace wry {
                 for (auto [k, f, v] : s) {
                     // trie->erase(k);
                     auto [w, x] = trie->alter(k, [](std::optional<ValueType> const& in) {
-                        return AlterChoice { AlterChoice::ERASE, {} };
+                        return AlterChoice::erase();
                     });
                     assert((bool)w.has_value() == f);
                     if (f) {
@@ -267,8 +263,8 @@ namespace wry {
                         trie->alter(k, [delta](std::optional<CommVal> const& in) -> AlterChoice {
                                 std::int64_t n =
                                     (in ? (std::int64_t)in->data : 0) + delta;
-                            if (n == 0) return AlterChoice { AlterChoice::ERASE, {} };
-                            return AlterChoice { AlterChoice::REPLACE, CommVal{(std::size_t)n} };
+                            if (n == 0) return AlterChoice::erase();
+                            return AlterChoice::replace(CommVal{(std::size_t)n});
                             });
                     }
                     co_return;

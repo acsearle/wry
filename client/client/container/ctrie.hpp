@@ -74,6 +74,10 @@ namespace wry {
             enum Tag { OK, RESTART, NOT_FOUND };
             Tag tag;
             V value; // Meaningful if OK
+            static FindResult ok(V v) { return { OK, std::move(v) }; }
+            static FindResult restart() { return { RESTART, {} }; }
+            static FindResult not_found() { return { NOT_FOUND, {} }; }
+
         };
 
         struct FindOrEmplaceResult {
@@ -92,6 +96,10 @@ namespace wry {
             enum Tag { KEEP, REPLACE, ERASE };
             Tag tag;
             V value; // Meaningful if REPLACE
+
+            static AlterChoice keep() { return { KEEP, {}}; }
+            static AlterChoice replace(V v) { return { REPLACE, std::move(v) }; }
+            static AlterChoice erase() { return { ERASE, {}}; }
         };
 
         struct AlterResult {
@@ -99,6 +107,10 @@ namespace wry {
             Tag tag;
             std::optional<V> before;
             std::optional<V> after;
+
+            static AlterResult ok(std::optional<V> before, std::optional<V> after) { return { OK, std::move(before), std::move(after) }; }
+            static AlterResult restart() { return { RESTART, {}, {} }; }
+
         };
 
         static constexpr int W = 6;
@@ -202,18 +214,17 @@ namespace wry {
                 auto mn = READ(main);
                 if (auto cn = mn->as_cnode()) {
                     auto [flag, pos] = flagpos(hc, lev, cn->bmp);
-                    if (!(flag & cn->bmp)) return { FindResult::NOT_FOUND, {} };
+                    if (!(flag & cn->bmp)) return FindResult::not_found();
                     auto bn = cn->array[pos];
                     if (auto sin = bn->as_inode()) {
                         return sin->find(key, hc, lev + W, this);
                     } else if (auto sn = bn->as_snode()) {
-                        if (sn->k == key) return { FindResult::OK,        sn->v };
-                        else              return { FindResult::NOT_FOUND, {}    };
+                        return (sn->k == key) ? FindResult::ok(sn->v) : FindResult::not_found();
                     }
                 } else if (mn->as_tnode()) {
                     // Help compress the parent and ask the caller to retry.
                     if (parent) parent->clean(lev - W);
-                    return { FindResult::RESTART, {} };
+                    return FindResult::restart();
                 } else if (auto ln = mn->as_lnode()) {
                     return ln->find(key);
                 }
@@ -360,15 +371,14 @@ namespace wry {
                         AlterChoice choice{fn({})};
                         switch (choice.tag) {
                             case AlterChoice::KEEP:
-                                return { AlterResult::OK, {}, {} };
                             case AlterChoice::ERASE:
-                                return { AlterResult::OK, {}, {} };
+                                return AlterResult::ok({}, {});
                             case AlterChoice::REPLACE: {
                                 SNode* nsn = new SNode(key, choice.value);
                                 MainNode const* nmn = cn->inserted(pos, flag, nsn);
                                 return (CAS(main, mn, nmn)
-                                        ? AlterResult{ AlterResult::OK, {}, nsn->v }
-                                        : AlterResult{ AlterResult::RESTART, {}, {} });
+                                        ? AlterResult::ok({}, nsn->v)
+                                        : AlterResult::restart());
                             }
                             default:
                                 std::unreachable();
@@ -392,15 +402,15 @@ namespace wry {
                             AlterChoice choice{fn(sn->v)};
                             switch (choice.tag) {
                                 case AlterChoice::KEEP:
-                                    return AlterResult { AlterResult::OK, sn->v, sn->v };
+                                    return AlterResult::ok(sn->v, sn->v);
                                 case AlterChoice::REPLACE:
                                     return (CAS(main, cn, cn->updated(pos, new SNode(key, choice.value)))
-                                            ? AlterResult{ AlterResult::OK, sn->v, choice.value }
-                                            : AlterResult{ AlterResult::RESTART, {}, {} });
+                                            ? AlterResult::ok(sn->v, choice.value)
+                                            : AlterResult::restart());
                                 case AlterChoice::ERASE: {
                                     result = (CAS(main, cn, cn->removed(pos, flag)->to_contracted(lev))
-                                              ? AlterResult{ AlterResult::OK, sn->v, {} }
-                                              : AlterResult{ AlterResult::RESTART, {}, {} });
+                                              ? AlterResult::ok(sn->v, {})
+                                              : AlterResult::restart());
                                     // Post-erase: if our main is now a TNode and we have a
                                     // parent, try to absorb the tomb into the parent CNode.
                                     if (result.tag == AlterResult::OK && parent) {
@@ -417,10 +427,11 @@ namespace wry {
                             // Key not found
                             AlterChoice choice{fn({})};
                             switch (choice.tag) {
+
                                 case AlterChoice::KEEP:
-                                    return { AlterResult::OK, {}, {} };
                                 case AlterChoice::ERASE:
-                                    return { AlterResult::OK, {}, {} };
+                                    return AlterResult::ok({}, {});
+
                                 case AlterChoice::REPLACE: {
                                     // Distinct key: expand the HAMT one level.
                                     // CNode::make_with_pair bottoms out into an LNode chain
@@ -432,8 +443,8 @@ namespace wry {
                                     // and sub-MainNode become orphans; the collector picks
                                     // them up via the thread-local new-objects bag.
                                     return (CAS(main, mn, nmn)
-                                            ? AlterResult{ AlterResult::OK, {}, choice.value }
-                                            : AlterResult{ AlterResult::RESTART, {}, {} });
+                                            ? AlterResult::ok({}, choice.value)
+                                            : AlterResult::restart());
                                 }
                                 default:
                                     std::unreachable();
@@ -445,7 +456,7 @@ namespace wry {
 
                 if (mn->as_tnode()) {
                     if (parent) parent->clean(lev - W);
-                    return { AlterResult::RESTART, {} };
+                    return AlterResult::restart();
                 }
 
                 if (auto ln = mn->as_lnode()) {
@@ -456,15 +467,14 @@ namespace wry {
                         AlterChoice choice{fn({})};
                         switch (choice.tag) {
                             case AlterChoice::KEEP:
-                                return { AlterResult::OK, {}, {} };
                             case AlterChoice::ERASE:
-                                return { AlterResult::OK, {}, {} };
+                                return AlterResult::ok({}, {});
                             case AlterChoice::REPLACE: {
                                 // Prepend new LNode
                                 auto nln = new LNode(new SNode(key, choice.value), ln);
                                 return (CAS(main, ln, nln)
-                                        ? AlterResult{ AlterResult::OK, {}, choice.value }
-                                        : AlterResult{ AlterResult::RESTART, {}, {} });
+                                        ? AlterResult::ok({}, choice.value)
+                                        : AlterResult::restart());
                             }
                             default:
                                 std::unreachable();
@@ -475,7 +485,7 @@ namespace wry {
                     AlterChoice choice{fn(target->sn->v)};
                     switch (choice.tag) {
                         case AlterChoice::KEEP:
-                            return { AlterResult::OK, target->sn->v, target->sn->v };
+                            return AlterResult::ok(target->sn->v, target->sn->v);
                         case AlterChoice::ERASE: {
                             // Gotta erase it
                             LNode const* nln = ln->without(target);
@@ -483,8 +493,8 @@ namespace wry {
                             if (!nln->next) // collapse single-element list to a tomb
                                 nmn = new TNode(nln->sn);
                             auto result = (CAS(main, ln, nmn)
-                                           ? AlterResult{ AlterResult::OK, target->sn->v, choice.value }
-                                           : AlterResult{ AlterResult::RESTART, {}, {} });
+                                           ? AlterResult::ok(target->sn->v, choice.value)
+                                           : AlterResult::restart());
                             // Post-erase: if our main is now a TNode and we have a
                             // parent, try to absorb the tomb into the parent CNode.
                             if (result.tag == AlterResult::OK && parent) {
@@ -498,8 +508,8 @@ namespace wry {
                             // Gotta replace it
                             auto nln = new LNode(new SNode(key, choice.value), ln->without(target));
                             return (CAS(main, ln, nln)
-                                    ? AlterResult{ AlterResult::OK, target->sn->v, choice.value }
-                                    : AlterResult{ AlterResult::RESTART, {}, {} });
+                                    ? AlterResult::ok(target->sn->v, choice.value)
+                                    : AlterResult::restart());
                         }
                         default:
                             std::unreachable();
