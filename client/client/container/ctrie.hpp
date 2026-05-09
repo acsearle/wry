@@ -11,6 +11,7 @@
 #include <optional>
 #include <cstring>
 #include <utility>
+#include <concepts>
 
 #include "garbage_collected.hpp"
 #include "hash.hpp"
@@ -28,23 +29,10 @@ namespace wry {
     // machinery (GCAS / RDCSS / Gen) which we do not implement.  We hew closely
     // to the pseudocode, foregoing normal C++ idioms.
     //
-    // K must provide:  size_t hash(K const&) const; (ADL)
-    //                  bool operator==(K const&) const;
-    //                  garbage_collected_scan(K const&)  (ADL)
-    // V must provide:  garbage_collected_scan(V const&)  (ADL)
-    //
     // Dispatch model: each concrete node type overrides one `as_*` virtual
-    // to return `this`; the base default returns nullptr.  Operations that
-    // pattern-match on node type (find/find_or_emplace/erase/cleanParent)
-    // are written as one function body using `if (auto x = node->as_x())`,
-    // mirroring the paper's pseudocode more closely than M-operations
-    // ×N-types of double-dispatch virtuals.
-    //
-    // Structure: all node types and helper functions are nested inside
-    // `_ctrie<K,V>` so that K, V are bound once at the outer level.  Inside
-    // `_ctrie<K,V>` every cross-type reference is unqualified.  External
-    // users (`Ctrie<K,V>`) reach into `_ctrie<K,V>` through `using` aliases.
-
+    // to return `this`; the base default returns nullptr.  Operations in the
+    // paper's pseudocode that pattern-match on node type are translated into
+    // `if (auto x = node->as_x())`.
 
     // -- Helpers (independent of K, V) ---------------------------------------
 
@@ -55,18 +43,25 @@ namespace wry {
         return {flag, pos};
     }
 
-    template<typename K, typename V>
-    struct _ctrie {
+    template<typename K>
+    void garbage_collected_scan(std::hash<K> const&) {}
+
+    template<typename V>
+    void garbage_collected_scan(std::equal_to<V> const&) {}
+
+    // -- Ctrie<K,V> ----------------------------------------------------------
+
+    template<typename K, typename V, typename Hasher = std::hash<K>, typename KeyEqual = std::equal_to<K>>
+    struct Ctrie final : GarbageCollected {
 
         // Forward declarations (visual hierarchy)
-        struct AnyNode;
-        struct   MainNode;
-        struct     CNode;
-        struct     LNode;
-        struct     TNode;
-        struct   BranchNode;
-        struct     INode;
-        struct     SNode;
+        struct MainNode;
+        struct   CNode;
+        struct   LNode;
+        struct   TNode;
+        struct BranchNode;
+        struct   INode;
+        struct   SNode;
 
         // -- Result types ----------------------------------------------------
 
@@ -78,18 +73,6 @@ namespace wry {
             static FindResult restart() { return { RESTART, {} }; }
             static FindResult not_found() { return { NOT_FOUND, {} }; }
 
-        };
-
-        struct FindOrEmplaceResult {
-            enum Tag { OK, RESTART };
-            Tag tag;
-            V value; // Meaningful if OK
-        };
-
-        enum class EraseResult {
-            OK,
-            RESTART,
-            NOT_FOUND,
         };
 
         struct AlterChoice {
@@ -159,36 +142,31 @@ namespace wry {
         // -- Node hierarchy --------------------------------------------------
 
         // Type-test virtuals.  Default returns nullptr; each concrete type
-        // overrides one to return `this`.  All five live on AnyNode so the
-        // result of LNode::found_or_prepended (an SNode-or-LNode) can be
-        // queried uniformly.  Static type discrimination (MainNode vs
-        // BranchNode) is preserved in slot/array element types.
-        struct AnyNode : GarbageCollected {
-            virtual CNode const* as_cnode() const { return nullptr; }
-            virtual TNode const* as_tnode() const { return nullptr; }
-            virtual LNode const* as_lnode() const { return nullptr; }
-            virtual INode const* as_inode() const { return nullptr; }
-            virtual SNode const* as_snode() const { return nullptr; }
-        };
-
+        // overrides one to return `this`.  Static type discrimination
+        // (MainNode vs BranchNode) is preserved in slot/array element types.
         // MainNode: anything that may live in INode::main (CNode/TNode/LNode).
-        struct MainNode : AnyNode {
+        struct MainNode : GarbageCollected {
+            virtual CNode const* as_cnode() const { return nullptr; }
+            virtual LNode const* as_lnode() const { return nullptr; }
+            virtual TNode const* as_tnode() const { return nullptr; }
             virtual void _garbage_collected_debug() const override {
-                printf("MainNode\n");
+                printf("%s\n", __PRETTY_FUNCTION__);
             }
         };
 
         // BranchNode: anything that may live in CNode::array[] (INode/SNode).
-        struct BranchNode : AnyNode {
+        struct BranchNode : GarbageCollected {
+            virtual INode const* as_inode() const { return nullptr; }
+            virtual SNode const* as_snode() const { return nullptr; }
             virtual void _garbage_collected_debug() const override {
-                printf("BranchNode\n");
+                printf("%s\n", __PRETTY_FUNCTION__);
             }
         };
 
         struct INode final : BranchNode {
 
             virtual void _garbage_collected_debug() const override {
-                printf("INode\n");
+                printf("%s\n", __PRETTY_FUNCTION__);
             }
 
             // Slot rather than bare Atomic so that CAS-replacement of
@@ -209,270 +187,121 @@ namespace wry {
                 // Anything else (TNode/LNode) needs no compression here.
             }
 
-            FindResult find(K key,std::size_t hc, int lev, INode const* parent) const {
-                assert(hc == hash(key));
-                auto mn = READ(main);
-                if (auto cn = mn->as_cnode()) {
-                    auto [flag, pos] = flagpos(hc, lev, cn->bmp);
-                    if (!(flag & cn->bmp)) return FindResult::not_found();
-                    auto bn = cn->array[pos];
-                    if (auto sin = bn->as_inode()) {
-                        return sin->find(key, hc, lev + W, this);
-                    } else if (auto sn = bn->as_snode()) {
-                        return (sn->k == key) ? FindResult::ok(sn->v) : FindResult::not_found();
-                    }
-                } else if (mn->as_tnode()) {
-                    // Help compress the parent and ask the caller to retry.
-                    if (parent) parent->clean(lev - W);
-                    return FindResult::restart();
-                } else if (auto ln = mn->as_lnode()) {
-                    return ln->find(key);
-                }
-                std::unreachable();
-            }
 
-            FindOrEmplaceResult find_or_emplace(K key, std::size_t hc, V default_, int lev, INode const* parent) const {
-                assert(hc == hash(key));
-                auto mn = READ(main);
-
-                if (auto cn = mn->as_cnode()) {
-                    auto [flag, pos] = flagpos(hc, lev, cn->bmp);
-                    if (!(flag & cn->bmp)) {
-                        // Empty slot: install a fresh SNode.
-                        SNode* nsn = new SNode(key, default_);
-                        MainNode const* nmn = cn->inserted(pos, flag, nsn);
-                        return (CAS(main, mn, nmn)
-                                ? FindOrEmplaceResult{ FindOrEmplaceResult::OK, default_ }
-                                : FindOrEmplaceResult{ FindOrEmplaceResult::RESTART, {} });
-                    }
-                    BranchNode const* bn = cn->array[pos];
-                    if (auto in = bn->as_inode())
-                        return in->find_or_emplace(key, default_, lev + W, this);
-                    if (auto sn = bn->as_snode()) {
-                        if (key == sn->k)
-                            return { FindOrEmplaceResult::OK, sn->v };
-                        // Distinct key: expand the HAMT one level.
-                        // CNode::make_with_pair bottoms out into an LNode chain
-                        // if hash bits run out.
-                        SNode* nsn = new SNode(key, default_);
-                        INode* nin = new INode(CNode::make_with_pair(sn, nsn, lev + W));
-                        MainNode const* nmn = cn->updated(pos, nin);
-                        // SAFETY: if we lose the CAS race, the speculative INode
-                        // and sub-MainNode become orphans; the collector picks
-                        // them up via the thread-local new-objects bag.
-                        return CAS(main, mn, nmn)
-                            ? FindOrEmplaceResult{ FindOrEmplaceResult::OK,      nsn->v }
-                            : FindOrEmplaceResult{ FindOrEmplaceResult::RESTART, {}     };
-                    }
-                    std::unreachable();
-                }
-
-                if (mn->as_tnode()) {
-                    if (parent) parent->clean(lev - W);
-                    return { FindOrEmplaceResult::RESTART, {} };
-                }
-
-                if (auto ln = mn->as_lnode()) {
-                    AnyNode const* result = ln->found_or_prepended(key, default_);
-                    if (auto sn = result->as_snode()) {
-                        // Key already present in the collision list.
-                        return { FindOrEmplaceResult::OK, sn->v };
-                    }
-                    if (auto nln = result->as_lnode()) {
-                        // New head: install via CAS.  nln->sn is the freshly-
-                        // prepended SNode carrying our (key, default_).
-                        return CAS(main, ln, nln)
-                            ? FindOrEmplaceResult{ FindOrEmplaceResult::OK,      nln->sn->v }
-                            : FindOrEmplaceResult{ FindOrEmplaceResult::RESTART, {}         };
-                    }
-                    std::unreachable();
-                }
-
-                std::unreachable();
-            }
-
-            EraseResult erase(K key, std::size_t hc, int lev, INode const* parent) const {
-                assert(hc == hash(key));
-                auto mn = READ(main);
-
-                if (auto cn = mn->as_cnode()) {
-                    auto [flag, pos] = flagpos(hc, lev, cn->bmp);
-                    if (!(flag & cn->bmp))
-                        return EraseResult::NOT_FOUND;
-                    BranchNode const* bn = cn->array[pos];
-                    EraseResult result;
-                    if (auto in = bn->as_inode()) {
-                        result = in->erase(key, lev + W, this);
-                    } else if (auto sn = bn->as_snode()) {
-                        if (sn->k != key)
-                            return EraseResult::NOT_FOUND;
-                        // SAFETY: contracted result may be discarded on CAS loss;
-                        // the GC retains it via the new-objects bag.
-                        result = CAS(main, cn, cn->removed(pos, flag)->to_contracted(lev))
-                            ? EraseResult::OK
-                            : EraseResult::RESTART;
-                    } else {
-                        std::unreachable();
-                    }
-                    // Post-erase: if our main is now a TNode and we have a
-                    // parent, try to absorb the tomb into the parent CNode.
-                    if (result == EraseResult::OK && parent) {
-                        auto mn2 = READ(main);
-                        if (mn2->as_tnode())
-                            cleanParent(parent, this, hc, lev - W);
-                    }
-                    return result;
-                }
-
-                if (mn->as_tnode()) {
-                    if (parent) parent->clean(lev - W);
-                    return EraseResult::RESTART;
-                }
-
-                if (auto ln = mn->as_lnode()) {
-                    LNode const* head = ln->erased(key);
-                    if (head == ln)
-                        return EraseResult::NOT_FOUND;
-                    MainNode const* desired = head;
-                    if (!head->next) // collapse single-element list to a tomb
-                        desired = new TNode(head->sn);
-
-                    auto result = CAS(main, ln, desired)
-                        ? EraseResult::OK
-                        : EraseResult::RESTART;
-                    // Post-erase: if our main is now a TNode and we have a
-                    // parent, try to absorb the tomb into the parent CNode.
-                    if (result == EraseResult::OK && parent) {
-                        auto mn2 = READ(main);
-                        if (mn2->as_tnode())
-                            cleanParent(parent, this, hc, lev - W);
-                    }
-                    return result;
-                }
-
-                std::unreachable();
-            }
 
             INode const* as_inode() const override { return this; }
             virtual void _garbage_collected_scan() const override {
                 garbage_collected_scan(main);
             }
 
+        };
 
-            template<typename F>
-            AlterResult alter(K key, size_t hc, int lev, INode const* parent, F const& fn) const {
-                assert(hc == hash(key));
-                auto mn = READ(main);
+        FindResult _find(INode const* self, K key,std::size_t hc, int lev, INode const* parent) const {
+            assert(hc == _hasher(key));
+            auto mn = READ(self->main);
+            if (auto cn = mn->as_cnode()) {
+                auto [flag, pos] = flagpos(hc, lev, cn->bmp);
+                if (!(flag & cn->bmp)) return FindResult::not_found();
+                auto bn = cn->array[pos];
+                if (auto sin = bn->as_inode()) {
+                    return _find(sin, key, hc, lev + W, self);
+                } else if (auto sn = bn->as_snode()) {
+                    return _key_equal(sn->k, key) ? FindResult::ok(sn->v) : FindResult::not_found();
+                }
+            } else if (mn->as_tnode()) {
+                // Help compress the parent and ask the caller to retry.
+                if (parent) parent->clean(lev - W);
+                return FindResult::restart();
+            } else if (auto ln = mn->as_lnode()) {
+                return _find(ln, key);
+            }
+            std::unreachable();
+        }
 
-                if (auto cn = mn->as_cnode()) {
-                    auto [flag, pos] = flagpos(hc, lev, cn->bmp);
-                    if (!(flag & cn->bmp)) {
-                        // Slot is empty
-                        AlterChoice choice{fn({})};
+        template<typename F>
+        AlterResult _alter(INode const* self, K key, size_t hc, int lev, INode const* parent, F const& fn) const {
+            assert(hc == _hasher(key));
+            auto mn = READ(self->main);
+
+            if (auto cn = mn->as_cnode()) {
+                auto [flag, pos] = flagpos(hc, lev, cn->bmp);
+                if (!(flag & cn->bmp)) {
+                    // Slot is empty
+                    AlterChoice choice{fn({})};
+                    switch (choice.tag) {
+                        case AlterChoice::KEEP:
+                        case AlterChoice::ERASE:
+                            return AlterResult::ok({}, {});
+                        case AlterChoice::REPLACE: {
+                            SNode* nsn = new SNode(key, choice.value);
+                            MainNode const* nmn = cn->inserted(pos, flag, nsn);
+                            return (CAS(self->main, mn, nmn)
+                                    ? AlterResult::ok({}, nsn->v)
+                                    : AlterResult::restart());
+                        }
+                        default:
+                            std::unreachable();
+                    }
+                }
+                BranchNode const* bn = cn->array[pos];
+                AlterResult result;
+                if (auto in = bn->as_inode()) {
+                    result = _alter(in, key, hc, lev + W, self, fn);
+                    // Post-erase: if our main is now a TNode and we have a
+                    // parent, try to absorb the tomb into the parent CNode.
+                    if (result.tag == AlterResult::OK && parent) {
+                        auto mn2 = READ(self->main);
+                        if (mn2->as_tnode())
+                            cleanParent(parent, self, hc, lev - W);
+                    }
+                    return result;
+                } else if (auto sn = bn->as_snode()) {
+                    if (_key_equal(key, sn->k)) {
+                        // Key found
+                        AlterChoice choice{fn(sn->v)};
                         switch (choice.tag) {
                             case AlterChoice::KEEP:
-                            case AlterChoice::ERASE:
-                                return AlterResult::ok({}, {});
-                            case AlterChoice::REPLACE: {
-                                SNode* nsn = new SNode(key, choice.value);
-                                MainNode const* nmn = cn->inserted(pos, flag, nsn);
-                                return (CAS(main, mn, nmn)
-                                        ? AlterResult::ok({}, nsn->v)
+                                return AlterResult::ok(sn->v, sn->v);
+                            case AlterChoice::REPLACE:
+                                return (CAS(self->main, cn, cn->updated(pos, new SNode(key, choice.value)))
+                                        ? AlterResult::ok(sn->v, choice.value)
                                         : AlterResult::restart());
+                            case AlterChoice::ERASE: {
+                                result = (CAS(self->main, cn, cn->removed(pos, flag)->to_contracted(lev))
+                                          ? AlterResult::ok(sn->v, {})
+                                          : AlterResult::restart());
+                                // Post-erase: if our main is now a TNode and we have a
+                                // parent, try to absorb the tomb into the parent CNode.
+                                if (result.tag == AlterResult::OK && parent) {
+                                    auto mn2 = READ(self->main);
+                                    if (mn2->as_tnode())
+                                        cleanParent(parent, self, hc, lev - W);
+                                }
+                                return result;
                             }
                             default:
                                 std::unreachable();
                         }
-                    }
-                    BranchNode const* bn = cn->array[pos];
-                    AlterResult result;
-                    if (auto in = bn->as_inode()) {
-                        result = in->alter(key, hc, lev + W, this, fn);
-                        // Post-erase: if our main is now a TNode and we have a
-                        // parent, try to absorb the tomb into the parent CNode.
-                        if (result.tag == AlterResult::OK && parent) {
-                            auto mn2 = READ(main);
-                            if (mn2->as_tnode())
-                                cleanParent(parent, this, hc, lev - W);
-                        }
-                        return result;
-                    } else if (auto sn = bn->as_snode()) {
-                        if (key == sn->k) {
-                            // Key found
-                            AlterChoice choice{fn(sn->v)};
-                            switch (choice.tag) {
-                                case AlterChoice::KEEP:
-                                    return AlterResult::ok(sn->v, sn->v);
-                                case AlterChoice::REPLACE:
-                                    return (CAS(main, cn, cn->updated(pos, new SNode(key, choice.value)))
-                                            ? AlterResult::ok(sn->v, choice.value)
-                                            : AlterResult::restart());
-                                case AlterChoice::ERASE: {
-                                    result = (CAS(main, cn, cn->removed(pos, flag)->to_contracted(lev))
-                                              ? AlterResult::ok(sn->v, {})
-                                              : AlterResult::restart());
-                                    // Post-erase: if our main is now a TNode and we have a
-                                    // parent, try to absorb the tomb into the parent CNode.
-                                    if (result.tag == AlterResult::OK && parent) {
-                                        auto mn2 = READ(main);
-                                        if (mn2->as_tnode())
-                                            cleanParent(parent, this, hc, lev - W);
-                                    }
-                                    return result;
-                                }
-                                default:
-                                    std::unreachable();
-                            }
-                        } else {
-                            // Key not found
-                            AlterChoice choice{fn({})};
-                            switch (choice.tag) {
-
-                                case AlterChoice::KEEP:
-                                case AlterChoice::ERASE:
-                                    return AlterResult::ok({}, {});
-
-                                case AlterChoice::REPLACE: {
-                                    // Distinct key: expand the HAMT one level.
-                                    // CNode::make_with_pair bottoms out into an LNode chain
-                                    // if hash bits run out.
-                                    SNode* nsn = new SNode(key, choice.value);
-                                    INode* nin = new INode(CNode::make_with_pair(sn, nsn, lev + W));
-                                    MainNode const* nmn = cn->updated(pos, nin);
-                                    // SAFETY: if we lose the CAS race, the speculative INode
-                                    // and sub-MainNode become orphans; the collector picks
-                                    // them up via the thread-local new-objects bag.
-                                    return (CAS(main, mn, nmn)
-                                            ? AlterResult::ok({}, choice.value)
-                                            : AlterResult::restart());
-                                }
-                                default:
-                                    std::unreachable();
-                            }
-                        }
-                    }
-                    std::unreachable();
-                }
-
-                if (mn->as_tnode()) {
-                    if (parent) parent->clean(lev - W);
-                    return AlterResult::restart();
-                }
-
-                if (auto ln = mn->as_lnode()) {
-
-                    LNode const* target = ln->find_lnode_for_key(key);
-                    if (!target) {
-                        // Not present
+                    } else {
+                        // Key not found
                         AlterChoice choice{fn({})};
                         switch (choice.tag) {
+
                             case AlterChoice::KEEP:
                             case AlterChoice::ERASE:
                                 return AlterResult::ok({}, {});
+
                             case AlterChoice::REPLACE: {
-                                // Prepend new LNode
-                                auto nln = new LNode(new SNode(key, choice.value), ln);
-                                return (CAS(main, ln, nln)
+                                // Distinct key: expand the HAMT one level.
+                                // make_cnode_with_pair bottoms out into an LNode chain
+                                // if hash bits run out.
+                                SNode* nsn = new SNode(key, choice.value);
+                                INode* nin = new INode(make_cnode_with_pair(sn, nsn, lev + W));
+                                MainNode const* nmn = cn->updated(pos, nin);
+                                // SAFETY: if we lose the CAS race, the speculative INode
+                                // and sub-MainNode become orphans; the collector picks
+                                // them up via the thread-local new-objects bag.
+                                return (CAS(self->main, mn, nmn)
                                         ? AlterResult::ok({}, choice.value)
                                         : AlterResult::restart());
                             }
@@ -480,45 +309,74 @@ namespace wry {
                                 std::unreachable();
                         }
                     }
-                    assert(target->sn->k == key);
-                    // Is present
-                    AlterChoice choice{fn(target->sn->v)};
+                }
+                std::unreachable();
+            }
+
+            if (mn->as_tnode()) {
+                if (parent) parent->clean(lev - W);
+                return AlterResult::restart();
+            }
+
+            if (auto ln = mn->as_lnode()) {
+
+                LNode const* target = find_lnode_for_key(ln, key);
+                if (!target) {
+                    // Not present
+                    AlterChoice choice{fn({})};
                     switch (choice.tag) {
                         case AlterChoice::KEEP:
-                            return AlterResult::ok(target->sn->v, target->sn->v);
-                        case AlterChoice::ERASE: {
-                            // Gotta erase it
-                            LNode const* nln = ln->without(target);
-                            MainNode const* nmn = nln;
-                            if (!nln->next) // collapse single-element list to a tomb
-                                nmn = new TNode(nln->sn);
-                            auto result = (CAS(main, ln, nmn)
-                                           ? AlterResult::ok(target->sn->v, choice.value)
-                                           : AlterResult::restart());
-                            // Post-erase: if our main is now a TNode and we have a
-                            // parent, try to absorb the tomb into the parent CNode.
-                            if (result.tag == AlterResult::OK && parent) {
-                                auto mn2 = READ(main);
-                                if (mn2->as_tnode())
-                                    cleanParent(parent, this, hc, lev - W);
-                            }
-                            return result;
-                        }
+                        case AlterChoice::ERASE:
+                            return AlterResult::ok({}, {});
                         case AlterChoice::REPLACE: {
-                            // Gotta replace it
-                            auto nln = new LNode(new SNode(key, choice.value), ln->without(target));
-                            return (CAS(main, ln, nln)
-                                    ? AlterResult::ok(target->sn->v, choice.value)
+                            // Prepend new LNode
+                            auto nln = new LNode(new SNode(key, choice.value), ln);
+                            return (CAS(self->main, ln, nln)
+                                    ? AlterResult::ok({}, choice.value)
                                     : AlterResult::restart());
                         }
                         default:
                             std::unreachable();
                     }
                 }
-                std::unreachable();
+                assert(_key_equal(target->sn->k, key));
+                // Is present
+                AlterChoice choice{fn(target->sn->v)};
+                switch (choice.tag) {
+                    case AlterChoice::KEEP:
+                        return AlterResult::ok(target->sn->v, target->sn->v);
+                    case AlterChoice::ERASE: {
+                        // Gotta erase it
+                        LNode const* nln = without(ln, target);
+                        MainNode const* nmn = nln;
+                        if (!nln->next) // collapse single-element list to a tomb
+                            nmn = new TNode(nln->sn);
+                        auto result = (CAS(self->main, ln, nmn)
+                                       ? AlterResult::ok(target->sn->v, choice.value)
+                                       : AlterResult::restart());
+                        // Post-erase: if our main is now a TNode and we have a
+                        // parent, try to absorb the tomb into the parent CNode.
+                        if (result.tag == AlterResult::OK && parent) {
+                            auto mn2 = READ(self->main);
+                            if (mn2->as_tnode())
+                                cleanParent(parent, self, hc, lev - W);
+                        }
+                        return result;
+                    }
+                    case AlterChoice::REPLACE: {
+                        // Gotta replace it
+                        auto nln = new LNode(new SNode(key, choice.value), without(ln, target));
+                        return (CAS(self->main, ln, nln)
+                                ? AlterResult::ok(target->sn->v, choice.value)
+                                : AlterResult::restart());
+                    }
+                    default:
+                        std::unreachable();
+                }
             }
+            std::unreachable();
+        }
 
-        };
 
         struct CNode final : MainNode {
 
@@ -537,57 +395,6 @@ namespace wry {
                 void* raw = GarbageCollected::operator new(bytes);
                 std::memset(raw, 0, bytes);
                 return new(raw) CNode(bitmap);
-            }
-
-            // Two-key constructor: returns a CNode normally, but at the bottom
-            // of the trie (lev >= 60, where the next level would exhaust the
-            // hash) returns an LNode collision list.  Either way, the result
-            // is a MainNode and is wrapped in an INode by the caller.
-            static MainNode const* make_with_pair(SNode const* s1, SNode const* s2, int lev) {
-
-                if (lev >= 64) {
-                    // We have exhausted the hash bits
-                    assert(hash(s1->k) == hash(s2->k));
-                    LNode const* head = nullptr;
-                    head = new LNode(s1, head);
-                    head = new LNode(s2, head);
-                    return head;
-                }
-
-                uint64_t pos1 = (hash(s1->k) >> lev) & 63;
-                uint64_t pos2 = (hash(s2->k) >> lev) & 63;
-
-                // Order by level-position so array[pos] indexes correctly via
-                // flagpos.  An earlier version swapped on full hash, which is
-                // wrong: the relative order of full hashes does not in general
-                // match the relative order of any particular bit-chunk.
-                if (pos2 < pos1) {
-                    std::swap(s1, s2);
-                    std::swap(pos1, pos2);
-                }
-
-                uint64_t flag1 = (uint64_t)1 << pos1;
-                uint64_t flag2 = (uint64_t)1 << pos2;
-                uint64_t bmp = flag1 | flag2;
-                int num = __builtin_popcountll(bmp);
-
-                CNode* ncn = CNode::make_with_bitmap(bmp);
-
-                switch (num) {
-                    case 1: {
-                        // Both keys land in the same bucket at this level.
-                        // Recurse one level deeper inside an INode wrapper.
-                        ncn->array[0] = new INode(CNode::make_with_pair(s1, s2, lev + W));
-                        return ncn;
-                    }
-                    case 2: {
-                        ncn->array[0] = s1;  // pos1 < pos2; lower position first
-                        ncn->array[1] = s2;
-                        return ncn;
-                    }
-                    default:
-                        std::unreachable();
-                }
             }
 
             uint64_t bmp;
@@ -701,6 +508,57 @@ namespace wry {
             }
         };
 
+        // Two-key constructor: returns a CNode normally, but at the bottom
+        // of the trie (lev >= 60, where the next level would exhaust the
+        // hash) returns an LNode collision list.  Either way, the result
+        // is a MainNode and is wrapped in an INode by the caller.
+        MainNode const* make_cnode_with_pair(SNode const* s1, SNode const* s2, int lev) const {
+
+            if (lev >= 64) {
+                // We have exhausted the hash bits
+                assert(_hasher(s1->k) == _hasher(s2->k));
+                LNode const* head = nullptr;
+                head = new LNode(s1, head);
+                head = new LNode(s2, head);
+                return head;
+            }
+
+            uint64_t pos1 = (_hasher(s1->k) >> lev) & 63;
+            uint64_t pos2 = (_hasher(s2->k) >> lev) & 63;
+
+            // Order by level-position so array[pos] indexes correctly via
+            // flagpos.  An earlier version swapped on full hash, which is
+            // wrong: the relative order of full hashes does not in general
+            // match the relative order of any particular bit-chunk.
+            if (pos2 < pos1) {
+                std::swap(s1, s2);
+                std::swap(pos1, pos2);
+            }
+
+            uint64_t flag1 = (uint64_t)1 << pos1;
+            uint64_t flag2 = (uint64_t)1 << pos2;
+            uint64_t bmp = flag1 | flag2;
+            int num = __builtin_popcountll(bmp);
+
+            CNode* ncn = CNode::make_with_bitmap(bmp);
+
+            switch (num) {
+                case 1: {
+                    // Both keys land in the same bucket at this level.
+                    // Recurse one level deeper inside an INode wrapper.
+                    ncn->array[0] = new INode(make_cnode_with_pair(s1, s2, lev + W));
+                    return ncn;
+                }
+                case 2: {
+                    ncn->array[0] = s1;  // pos1 < pos2; lower position first
+                    ncn->array[1] = s2;
+                    return ncn;
+                }
+                default:
+                    std::unreachable();
+            }
+        }
+
         // SNode is the per-key leaf.
         struct SNode final : BranchNode {
 
@@ -725,59 +583,13 @@ namespace wry {
             // INVARIANT: all SNodes should have the same hash(k) value
 
             virtual void _garbage_collected_debug() const override {
-                printf("LNode\n");
+                printf("%s\n", __PRETTY_FUNCTION__);
             }
 
             SNode const* sn;
             LNode const* next;
 
             LNode(SNode const* a, LNode const* b) : sn(a), next(b) {}
-
-            LNode const* find_lnode_for_key(K key) const {
-                for (LNode const* current = this; current; current = current->next) {
-                    assert(current->sn);
-                    assert(hash(current->sn->k) == hash(key));
-                    if (current->sn->k == key)
-                        return current;
-                }
-                return nullptr;
-            }
-
-            FindResult find(K key) const {
-                LNode const* target = find_lnode_for_key(key);
-                return (target
-                        ? FindResult{ FindResult::OK, target->sn->v }
-                        : FindResult{ FindResult::NOT_FOUND, {} });
-            }
-
-            // Returns either an SNode (key already present) or a fresh LNode
-            // head (new entry prepended); caller dispatches via as_snode /
-            // as_lnode.
-            AnyNode const* found_or_prepended(K key, V default_) const {
-                LNode const* target = find_lnode_for_key(key);
-                return (target
-                        ? (AnyNode const*)target->sn
-                        : (AnyNode const*)new LNode{ new SNode{ key, default_ }, this });
-            }
-
-            // NOTE: The new list reverses the order of the elements before
-            // victim:  as ++ [b] ++ cs  ->  reverse(as) ++ cs
-            LNode const* without(LNode const* victim) const {
-                assert(victim);
-                LNode const* head = victim->next;
-                for (LNode const* curr = this; curr != victim; curr = curr->next) {
-                    assert(curr); // victim was not in the list
-                    assert(hash(curr->sn->k) == hash(victim->sn->k));
-                    head = new LNode(curr->sn, head);
-                }
-                return head;
-            }
-
-
-            LNode const* erased(K key) const {
-                LNode const* victim = find_lnode_for_key(key);
-                return victim ? without(victim) : this;
-            }
 
             LNode const* as_lnode() const override { return this; }
             virtual void _garbage_collected_scan() const override {
@@ -786,10 +598,40 @@ namespace wry {
             }
         };
 
+        LNode const* find_lnode_for_key(LNode const* self, K key) const {
+            for (LNode const* current = self; current; current = current->next) {
+                assert(current->sn);
+                assert(_hasher(current->sn->k) == _hasher(key));
+                if (_key_equal(current->sn->k, key))
+                    return current;
+            }
+            return nullptr;
+        }
+
+        FindResult _find(LNode const* self, K key) const {
+            LNode const* target = find_lnode_for_key(self, key);
+            return (target
+                    ? FindResult::ok(target->sn->v)
+                    : FindResult::not_found());
+        }
+
+        // NOTE: The new list reverses the order of the elements before
+        // victim:  as ++ [b] ++ cs  ->  reverse(as) ++ cs
+        LNode const* without(LNode const* self, LNode const* victim) const {
+            assert(victim);
+            LNode const* head = victim->next;
+            for (LNode const* curr = self; curr != victim; curr = curr->next) {
+                assert(curr); // victim was not in the list
+                assert(_hasher(curr->sn->k) == _hasher(victim->sn->k));
+                head = new LNode(curr->sn, head);
+            }
+            return head;
+        }
+
         struct TNode final : MainNode {
 
             virtual void _garbage_collected_debug() const override {
-                printf("TNode\n");
+                printf("%s\n", __PRETTY_FUNCTION__);
             }
 
             SNode const* sn;
@@ -802,28 +644,19 @@ namespace wry {
             }
         };
 
-    }; // struct _ctrie
-
-    // -- Ctrie<K,V> ----------------------------------------------------------
-
-    template<typename K, typename V>
-    struct Ctrie final : GarbageCollected {
-
-        using INode               = typename _ctrie<K,V>::INode;
-        using CNode               = typename _ctrie<K,V>::CNode;
-        using FindResult          = typename _ctrie<K,V>::FindResult;
-        using FindOrEmplaceResult = typename _ctrie<K,V>::FindOrEmplaceResult;
-        using EraseResult         = typename _ctrie<K,V>::EraseResult;
-        using AlterResult         = typename _ctrie<K,V>::AlterResult;
-        using AlterChoice         = typename _ctrie<K,V>::AlterChoice;
-
         INode const* root;
+        Hasher _hasher;
+        KeyEqual _key_equal;
 
-        Ctrie() : root(new INode(CNode::make_with_bitmap(0))) {}
+        explicit Ctrie(Hasher hasher_ = Hasher{}, KeyEqual key_equal_ = KeyEqual{})
+        : root(new INode(CNode::make_with_bitmap(0)))
+        , _hasher(std::move(hasher_))
+        , _key_equal(std::move(key_equal_)) {
+        }
 
         std::optional<V> find(K key) {
             for (;;) {
-                FindResult a = root->find(key, hash(key), 0, nullptr);
+                FindResult a = _find(root, key, _hasher(key), 0, nullptr);
                 switch (a.tag) {
                     case FindResult::OK:        return a.value;
                     case FindResult::NOT_FOUND: return std::nullopt;
@@ -833,36 +666,16 @@ namespace wry {
             }
         }
 
-        V find_or_emplace(K key, V default_) {
-            for (;;) {
-                FindOrEmplaceResult r = root->find_or_emplace(key, hash(key), default_, 0, nullptr);
-                switch (r.tag) {
-                    case FindOrEmplaceResult::OK:      return r.value;
-                    case FindOrEmplaceResult::RESTART: break;
-                    default:                           std::unreachable();
-                }
-            }
-        }
-
-        bool erase(K key) {
-            for (;;) {
-                switch (root->erase(key, hash(key), 0, nullptr)) {
-                    case EraseResult::OK: return true;
-                    case EraseResult::RESTART: break;
-                    case EraseResult::NOT_FOUND: return false;
-                }
-            }
-        }
-
-        // alter: atomically looks up a key and based on the value if any
-        // decides the new value, if any, and returns the old value
-        // TBD: return old (like atomic), new (popular) or both (kitchen sink)
-        // The provided function f may be evaluated multiple times
-        // Analagous to fetch_update for an atomic scalar value.
+        // alter: atomically looks up a key, provides the associated value if
+        // any to a user function returning AlterChoice
         template<typename F>
-        std::pair<std::optional<V>, std::optional<V>> alter(K key, F const& fn) {
+        std::pair<std::optional<V>, std::optional<V>> alter(K key, F const& fn)
+        requires requires(F const& f, std::optional<V> const& in) {
+            { f(in) } -> std::same_as<AlterChoice>;
+        }
+        {
             for (;;) {
-                auto r = root->alter(key, hash(key), 0, nullptr, fn);
+                auto r = _alter(root, key, _hasher(key), 0, nullptr, fn);
                 switch (r.tag) {
                     case AlterResult::OK:
                         return { r.before, r.after };
@@ -871,20 +684,18 @@ namespace wry {
                 }
             }
         }
-        // TODO: name this concept
-        // requires std::invocable<F&, std::optional<V>> &&
-        // std::convertible_to<std::invoke_result_t<F&, std::optional<V>>, std::optional<V>>
-
 
         virtual void _garbage_collected_scan() const override {
             garbage_collected_scan(root);
+            garbage_collected_scan(_hasher);
+            garbage_collected_scan(_key_equal);
         }
 
         virtual void _garbage_collected_debug() const override {
             printf("%s\n", __PRETTY_FUNCTION__);
         }
 
-    }; // struct Ctrie
+    }; // struct Ctrie<K,V,Hasher,KeyEqual>
 
 } // namespace wry
 

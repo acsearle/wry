@@ -19,16 +19,22 @@ namespace wry {
 
     struct KeyType {
 
-        inline static std::size_t _mask;
-
         std::size_t data;
         bool operator==(KeyType const&) const = default;
     };
 
-    std::size_t hash(KeyType k) { return wry::hash(k.data) & KeyType::_mask; }
-
-
     void garbage_collected_scan(KeyType const&) {}
+
+    template<typename K>
+    struct MaskedWryHasher {
+        std::size_t mask;
+        std::size_t operator()(K const& k) const {
+            return wry::hash(k.data) & mask;
+        }
+    };
+
+    template<typename K>
+    void garbage_collected_scan(MaskedWryHasher<K> const&) {}
 
     struct ValueType {
         std::size_t data;
@@ -47,9 +53,11 @@ namespace wry {
         auto seed = rd();
         printf("SEED = %u\n", seed);
         std::mt19937_64 gen{seed};
-        KeyType::_mask = gen() & gen();
+        std::size_t mask = gen() & gen();
+        using Hasher = MaskedWryHasher<KeyType>;
+        Hasher hasher{mask};
 
-        printf("MASK %0.16zx (%d)\n", KeyType::_mask, __builtin_popcountll(KeyType::_mask));
+        printf("MASK %0.16zx (%d)\n", mask, __builtin_popcountll(mask));
 
         using T = std::tuple<KeyType, int, ValueType>;
 
@@ -62,7 +70,7 @@ namespace wry {
             std::vector<std::size_t> hashes;
             for (auto [k, f, _] : data) {
                 if (f) {
-                    hashes.push_back(hash(k));
+                    hashes.push_back(hasher(k));
                 }
             }
             std::sort(hashes.begin(), hashes.end());
@@ -71,8 +79,8 @@ namespace wry {
             printf("UNIQUE HASHES = %zd / %zd\n", n, hashes.size());
         }
 
-        Root<Ctrie<KeyType, ValueType>*> trie(new Ctrie<KeyType, ValueType>());
-        using AlterChoice = Ctrie<KeyType, ValueType>::AlterChoice;
+        Root<Ctrie<KeyType, ValueType, Hasher>*> trie(new Ctrie<KeyType, ValueType, MaskedWryHasher<KeyType>>(hasher));
+        using AlterChoice = Ctrie<KeyType, ValueType, Hasher>::AlterChoice;
 
         Coroutine::Nursery nursery;
 
@@ -83,7 +91,6 @@ namespace wry {
             co_await nursery.fork([](auto trie, std::span<T> s) -> Coroutine::Future<> {
                 for (auto& [k, f, v] : s) {
                     if (f) {
-                        // auto w = trie->find_or_emplace(k, v);
                         auto [w, x] = trie->alter(k, [&](std::optional<ValueType> const& in) -> AlterChoice {
                             return in ? AlterChoice::keep() : AlterChoice::replace(v);
                         });
@@ -127,7 +134,6 @@ namespace wry {
             std::span s{data.data() + i, data.data() + i + m};
             co_await nursery.fork([](auto trie, std::span<T> s) -> Coroutine::Future<> {
                 for (auto [k, f, v] : s) {
-                    // trie->erase(k);
                     auto [w, x] = trie->alter(k, [](std::optional<ValueType> const& in) {
                         return AlterChoice::erase();
                     });
@@ -175,11 +181,9 @@ namespace wry {
     namespace {
 
         struct CommKey {
-            inline static std::size_t _mask;
             std::size_t data;
             bool operator==(CommKey const&) const = default;
         };
-        std::size_t hash(CommKey k) { return wry::hash(k.data) & CommKey::_mask; }
 
         struct CommVal {
             std::size_t data;
@@ -202,9 +206,11 @@ namespace wry {
         // Aggressive mask: AND of three random words, expected popcount 8,
         // so ~256 hash buckets — guarantees substantial LNode coverage at
         // 8K keys.
-        CommKey::_mask = gen() & gen() & gen();
+        std::size_t mask = gen() & gen() & gen();
+        using Hasher = MaskedWryHasher<CommKey>;
+        Hasher hasher{mask};
         printf("[ctrie_commutative] MASK=%016zx (%d bits)\n",
-               CommKey::_mask, __builtin_popcountll(CommKey::_mask));
+               mask, __builtin_popcountll(mask));
 
         constexpr size_t N         = 1 << 13; // 8192 distinct keys
         constexpr int   target_max = 4;       // per-key target in [-4, +4]
@@ -244,8 +250,8 @@ namespace wry {
                entries.size(), ops.size());
 
         // Run.
-        Root<Ctrie<CommKey, CommVal>*> trie(new Ctrie<CommKey, CommVal>());
-        using AlterChoice = Ctrie<CommKey, CommVal>::AlterChoice;
+        Root<Ctrie<CommKey, CommVal, Hasher>*> trie(new Ctrie<CommKey, CommVal, Hasher>(hasher));
+        using AlterChoice = Ctrie<CommKey, CommVal, Hasher>::AlterChoice;
         Coroutine::Nursery nursery;
 
         constexpr size_t batch = 1 << 9; // 512 ops per fork
