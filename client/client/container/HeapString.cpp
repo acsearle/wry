@@ -7,10 +7,12 @@
 
 #include "HeapString.hpp"
 
+#include "test.hpp"
+
 namespace wry {
     
     HeapString::~HeapString() {
-        // intentionally silent
+        printf("%p:%s\n", this, __PRETTY_FUNCTION__);
     }
 
     void HeapString::_garbage_collected_scan() const {
@@ -36,5 +38,29 @@ namespace wry {
 //    HeapString const* HeapString::make(std::string_view view) {
 //        return make(hash_combine(view.data(), view.size()), view);
 //    }
+
+
+    define_test("[string interning]") {
+
+        HeapString const* a{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one")};
+        HeapString const* b{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one")};
+
+        assert(a == b);
+
+        co_await Coroutine::WaitForCollectionCycles{3};
+        // SAFETY: a and b are now dangling
+
+        HeapString const* c{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one")};
+        HeapString const* d{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one")};
+
+        assert(c == d);
+
+        // TODO: This can spuriously fire if the allocation is reused
+        assert(a != c);
+
+
+        co_return;
+    };
+
 
 } // namespace wry

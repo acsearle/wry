@@ -43,11 +43,10 @@ namespace wry {
         return {flag, pos};
     }
 
-    template<typename K>
-    void garbage_collected_scan(std::hash<K> const&) {}
+    template<typename K> void garbage_collected_scan(std::hash<K> const&) {}
+    template<typename V> void garbage_collected_scan(std::equal_to<V> const&) {}
+    inline void garbage_collected_scan(std::string const&) {}
 
-    template<typename V>
-    void garbage_collected_scan(std::equal_to<V> const&) {}
 
     // -- Ctrie<K,V> ----------------------------------------------------------
 

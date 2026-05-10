@@ -274,8 +274,16 @@ namespace wry {
         
     };
     
-    const char* _KPhase_names[] = { "UNUSED", "GRAY_PUBLISHED", "BLACK_PUBLISHED", "SWEEPING", "WHITE_PUBLISHED", "CLEARING" };
-    
+    const char* _KPhase_names[] = {
+        "UNUSED",
+        "GRAY_PUBLISHED",
+        "BLACK_PUBLISHED",
+        "WEAK_DECIDING",
+        "SWEEPING",
+        "WHITE_PUBLISHED",
+        "CLEARING"
+    };
+
     struct KState {
         KPhase kphase;
         Epoch since;
@@ -436,7 +444,7 @@ namespace wry {
             
             _this_thread_mode = ThreadMode::COLLECTOR;
             
-            epoch::pin_this_thread();
+            mutator_pin();
             assert(epoch::local_state.is_pinned);
             epoch::Epoch epoch_at_last_change = epoch::local_state.known;
 
@@ -469,15 +477,15 @@ namespace wry {
                 
                 assert(epoch::local_state.is_pinned);
                 Epoch A{epoch::local_state.known};
-                epoch::unpin_this_thread();
-                
+                // epoch::unpin_this_thread();
+
                 // TODO: Resumable partial scans
                 // Once we have enough work for a pass to last O(10ms) we
                 // should dip out periodically to open more reports and get more
                 // objects
                 collector_scans();
-                                
-                epoch::pin_this_thread();
+
+                mutator_repin();
                 epoch::wait(A);
                 assert(epoch::local_state.is_pinned);
                 Epoch B{epoch::local_state.known};
@@ -716,6 +724,7 @@ namespace wry {
                         _mask_for_clearing &= ~bit;
                         _debug_assert_white &= ~bit;
                         _debug_assert_nonblack &= ~bit;
+                        break;
                     case SWEEPING:
                         _gray_for_allocation |= bit;
                         _black_for_allocation |= bit;
@@ -884,15 +893,14 @@ namespace wry {
                 assert(object);
                 ++scan_count;
 
-                
-                // Process the object:
+                // Process weak decision point
+                if (_mask_for_deciding)
+                    object->_garbage_collected_decide_weak(_mask_for_deciding, _gray_for_allocation, _black_for_allocation);
 
-                // If root, and gray is active, make it gray
-                // If in clearing mask, clear it
-                                
+                // Process root set
                 int32_t reference_count = object->_count.load_relaxed();
-                bool weak_was_loaded = object->_garbage_collected_decide_weak(_mask_for_deciding);
-                uint16_t root_gray = (reference_count || weak_was_loaded) ? _gray_for_allocation : 0;
+                uint16_t root_gray = reference_count ? _gray_for_allocation : 0;
+
                 uint16_t before_gray = object->_gray.load_relaxed();
                 uint16_t before_black = object->_black;
                 uint16_t after_gray;
@@ -997,6 +1005,7 @@ namespace wry {
         a->_hash = hash;
         a->_size = n;
         std::memcpy(a->_bytes, view.data(), n);
+        printf("%p:%s\n", a, __PRETTY_FUNCTION__);
         return a;
     }
 
