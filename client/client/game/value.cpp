@@ -414,14 +414,7 @@ namespace wry {
 
     
     
-    const HeapString* HeapString::make(std::string_view view) {
-        return make(std::hash<std::string_view>()(view), view);
-    }
-    
-    std::string_view HeapString::as_string_view() const {
-        return std::string_view(_bytes, _size);
-    }
-    
+
     
     
     

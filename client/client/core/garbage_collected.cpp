@@ -985,31 +985,3 @@ namespace wry {
 } // namespace wry
 
 
-
-
-
-
-// LEGACY
-
-namespace wry {
-
-    const HeapString* HeapString::make(size_t hash, std::string_view view) {
-        // TODO(ctrie.md Phase 3): intern via the global string ctrie.  For
-        // now (Phase 0) we allocate a fresh HeapString every call; the trie
-        // machinery exists but is not yet on the production allocation path.
-        size_t n = view.size();
-        size_t bytes = sizeof(HeapString) + n;
-        void* raw = GarbageCollected::operator new(bytes);
-        std::memset(raw, 0, bytes);
-        HeapString* a = new(raw) HeapString;
-        a->_hash = hash;
-        a->_size = n;
-        std::memcpy(a->_bytes, view.data(), n);
-        printf("%p:%s\n", a, __PRETTY_FUNCTION__);
-        return a;
-    }
-
-
-}
-
-

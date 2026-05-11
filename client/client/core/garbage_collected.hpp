@@ -23,9 +23,9 @@ namespace wry {
         
     struct GarbageCollected;
     
-    void garbage_collected_shade(GarbageCollected const*);
-    void garbage_collected_scan(GarbageCollected const*);
-    
+    void garbage_collected_shade(GarbageCollected const* _Nullable);
+    void garbage_collected_scan(GarbageCollected const* _Nullable);
+
     void collector_run_on_this_thread();
     void collector_cancel();
 
@@ -40,8 +40,8 @@ namespace wry {
     // safe — typically just `global_work_queue_schedule`.  Thread-safe;
     // multiple callers may register concurrently.
     void register_collection_cycle_callback(uint64_t k,
-                                            void* callback) noexcept;
-    
+                                            void* _Nonnull callback) noexcept;
+
     
     
     
@@ -61,36 +61,22 @@ namespace wry {
         return !(a & ~b);
     }
 
-    namespace detail {
 
-        // Tricolor abstraction, split into two 16-bit words.  Every
-        // GarbageCollected object carries an atomic _gray word and a plain
-        // _black word; each concurrent collection claims one bit in each:
-        //
-        //     gray  black   meaning
-        //      0      0     k-white   (unreachable candidate)
-        //      1      0     k-gray    (reachable, not yet traced)
-        //      1      1     k-black   (reachable, traced)
-        //      0      1     not produced in steady state
-        //
-        // Gray bits are set by mutator shading (via fetch_or) and also by
-        // the collector.  Black bits are set only by the collector.  Up to
-        // 16 concurrent collections can coexist.
+    // Tricolor abstraction, split into two 16-bit words.  Every
+    // GarbageCollected object carries an atomic _gray word and a plain
+    // _black word; each concurrent collection claims one bit in each:
+    //
+    //     gray  black   meaning
+    //      0      0     k-white   (unreachable candidate)
+    //      1      0     k-gray    (reachable, not yet traced)
+    //      1      1     k-black   (reachable, traced)
+    //      0      1     not produced in steady state
+    //
+    // Gray bits are set by mutator shading (via fetch_or) and also by
+    // the collector.  Black bits are set only by the collector.  Up to
+    // 16 concurrent collections can coexist.
 
-        constexpr uint16_t are_black(uint16_t gray, uint16_t black) {
-            return gray & black;
-        }
 
-        constexpr uint16_t are_gray(uint16_t gray, uint16_t black) {
-            return gray & ~black;
-        }
-
-        constexpr uint16_t are_white(uint16_t gray, uint16_t black) {
-            return ~gray & ~black;
-        }
-
-    }
-    
     
     
     struct GarbageCollected {
@@ -115,9 +101,9 @@ namespace wry {
         // 64-bit atomic word together with room to spare; _black can remain
         // a separate plain 16-bit field.
         
-        static void* operator new(std::size_t count);
-        static void operator delete(void* pointer);
-        
+        static void* _Nonnull operator new(std::size_t count);
+        static void operator delete(void* _Nullable pointer);
+
         GarbageCollected();
         GarbageCollected(const GarbageCollected&);
         GarbageCollected(GarbageCollected&&);
@@ -170,23 +156,19 @@ namespace wry {
 namespace wry {
     
         
-    inline auto GarbageCollected::
-    operator new(std::size_t count) -> void* {
+    inline void* _Nonnull GarbageCollected::operator new(std::size_t count) {
         return calloc(count, 1);
     }
     
-    inline auto GarbageCollected::
-    operator delete(void* pointer) -> void{
+    inline void GarbageCollected::operator delete(void* _Nonnull pointer) {
         free(pointer);
     }
     
-    inline GarbageCollected::
-    GarbageCollected(const GarbageCollected&)
+    inline GarbageCollected::GarbageCollected(const GarbageCollected&)
     : GarbageCollected() {
     }
     
-    inline GarbageCollected::
-    GarbageCollected(GarbageCollected&&)
+    inline GarbageCollected::GarbageCollected(GarbageCollected&&)
     : GarbageCollected() {
     }
 
@@ -212,44 +194,36 @@ namespace wry {
     }
 
     inline void
-    garbage_collected_shade(const GarbageCollected* ptr) {
+    garbage_collected_shade(GarbageCollected const* _Nullable ptr) {
         if (ptr)
             ptr->_garbage_collected_shade();
     }
     
     inline void
-    debug(const GarbageCollected* self) {
+    debug(GarbageCollected const* _Nullable self) {
         self->_garbage_collected_debug();
     }
-    
-    // Scanning basic types is useless
-    
+
+    // Provide a no-op scan for basic non-pointer types
     template<Arithmetic T>
-    void
-    garbage_collected_scan(T const&) {
-    }
+    void garbage_collected_scan(T const&) {}
     
-    void
-    garbage_collected_scan_weak(const GarbageCollected*);
-    
+    void garbage_collected_scan_weak(GarbageCollected const* _Nullable);
+
     // Subtract (increment the multiplicity of) an object from the implicit
     // Roots multiset.
 
-    inline void
-    garbage_collected_roots_add(const GarbageCollected* ptr) {
+    inline void garbage_collected_roots_add(GarbageCollected const* _Nullable ptr) {
         if (ptr) {
             [[maybe_unused]] int32_t before = ptr->_count.fetch_add_relaxed(1);
-            // int32_t after = before + 1;
-            // printf("%p->_count = (%" PRId32 " -> %" PRId32 ")\n", ptr, before, after);
-            assert(before >= 0);
+            assert(before >= 0 && before != INT32_MAX);
         }
     }
 
     // Subtract (decrement the multiplicity of) an object from the implicit
     // Roots multiset.  The object must be present in the set.
 
-    inline void
-    garbage_collected_roots_subtract(const GarbageCollected* ptr) {
+    inline void garbage_collected_roots_subtract(GarbageCollected const* _Nullable ptr) {
         if (ptr) {
             // SAFETY: When the strong count reaches zero we shade the the
             // object, just as when we ovewrite a traced pointer to the object.
@@ -259,12 +233,9 @@ namespace wry {
             // times--this just means the object is changing between root and
             // child status.
             int32_t before = ptr->_count.fetch_sub_relaxed(1);
-            [[maybe_unused]] int32_t after = before - 1;
-            // printf("%p->_count = (%" PRId32 " -> %" PRId32 ")\n", ptr, before, after);
             assert(before > 0);
-            if (before == 1) {
+            if (before == 1)
                 ptr->_garbage_collected_shade();
-            }
         }
     }
     
@@ -272,8 +243,7 @@ namespace wry {
     // This value can be changed by another thread at any time and is only for
     // exposition.
     
-    inline int32_t
-    garbage_collected_roots_multiplicity(const GarbageCollected *ptr) {
+    inline int32_t garbage_collected_roots_multiplicity(GarbageCollected const * _Nullable ptr) {
         return ptr ? ptr->_count.load_relaxed() : 0;
     }
         
@@ -301,10 +271,24 @@ namespace wry {
     template<typename T>
     struct Root<T*> {
         
-        T* _ptr;
-                
+        T* _Nullable _ptr;
+
+        template<typename U>
+        explicit Root(U* _Nullable u)
+        : _ptr(u) {
+            garbage_collected_roots_add(_ptr);
+        }
+
+        template<typename U>
+        Root& operator=(U* _Nullable other) {
+            garbage_collected_roots_subtract(_ptr);
+            _ptr = other;
+            garbage_collected_roots_add(_ptr);
+            return *this;
+        }
+
         Root() : _ptr(nullptr) {}
-        
+
         Root(Root const& other)
         : _ptr(other._ptr) {
             garbage_collected_roots_add(_ptr);
@@ -338,10 +322,7 @@ namespace wry {
             other._ptr = nullptr;
             return *this;
         }
-        
-        bool operator==(Root const&) const = default;
-        auto operator<=>(Root const&) const = default;
-        
+
         template<typename U>
         Root(Root<U> const& other)
         : _ptr(other._ptr) {
@@ -368,20 +349,6 @@ namespace wry {
             other._ptr = nullptr;
             return *this;
         }
-        
-        template<typename U>
-        explicit Root(U* ptr)
-        : _ptr(ptr) {
-            garbage_collected_roots_add(ptr);
-        }
-        
-        template<typename U>
-        Root& operator=(U* other) {
-            garbage_collected_roots_subtract(_ptr);
-            _ptr = other;
-            garbage_collected_roots_add(_ptr);
-            return *this;
-        }
 
         Root& operator=(std::nullptr_t) {
             garbage_collected_roots_subtract(_ptr);
@@ -390,10 +357,12 @@ namespace wry {
         }
 
         T& operator*() const {
+            assert(_ptr);
             return *_ptr;
         }
         
-        T* operator->() const {
+        T* _Nonnull operator->() const {
+            assert(_ptr);
             return _ptr;
         }
         
@@ -401,17 +370,21 @@ namespace wry {
             return (bool)_ptr;
         }
         
-        explicit operator T*() const {
+        explicit operator T* _Nullable() const {
             return _ptr;
         }
         
         bool operator!() const {
             return !_ptr;
         }
-        
+
+        bool operator==(Root const&) const = default;
+        auto operator<=>(Root const&) const = default;
+
         bool operator==(std::nullptr_t) const {
             return _ptr == nullptr;
         }
+
 
     }; // Root<T*>
     
@@ -792,6 +765,105 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
     struct slot_for<T*> { using type = Atomic<T*>; };
 
     template<typename T> using Slot = typename slot_for<T>::type;
+
+
+
+
+    template<typename T>
+    struct WeakHolder : GarbageCollected {
+
+        void _garbage_collected_debug() const override {
+            printf("WeakHolder\n");
+        }
+
+        enum State { READY, WAS_LOADED, GONE };
+
+        mutable Atomic<State> _state;
+        T const* _Nullable _weak;
+
+        explicit WeakHolder(T const* _Nullable weak) : _state{READY}, _weak{weak} {}
+
+        T const* _Nullable mutator_try_upgrade() const {
+            State expected = _state.load_relaxed();
+            for (;;) {
+                switch (expected) {
+                    case READY:
+                        if (_state.compare_exchange_weak_relaxed_relaxed(expected, WAS_LOADED))
+                            return _weak;
+                        break;
+                    case WAS_LOADED:
+                        return _weak;
+                    case GONE:
+                        return nullptr;
+                    default:
+                        std::unreachable();
+                }
+            }
+        }
+
+        // Return value indicates if shading is requested
+        virtual void _garbage_collected_decide_weak(uint16_t next_delete_mask,
+                                                    uint16_t gray_for_marking,
+                                                    uint16_t black_for_marking) const override {
+            State expected = _state.load_relaxed();
+            for (;;) {
+                switch (expected) {
+                    case READY:
+                        // Not loaded since last decision
+                        if (_weak->_black & next_delete_mask) {
+                            // Is reachable
+                            return;
+                        }
+                        // Is not reachable, and is about to be deleted
+                        // Race to mark it gone, against mutators loading it
+                        if (_state.compare_exchange_weak_relaxed_relaxed(expected, GONE)) {
+                            // Now marked GONE. The weak referent will be
+                            // collected next scan, and this object itself is
+                            // basically a tombstone entry in the trie.
+
+                            // Race to erase ourself from the trie, against
+                            // mutators replacing it.  If the key is never used
+                            // again, this is our only opportunity to reclaim
+                            // the resources.
+                            _heap_string_ctrie_collector_try_erase(this);
+                            // TODO: This requires WeakHolder to know how to erase itself, and from what structure; bad coupling
+                            return;
+                        }
+                        // Failed to mark it GONE, spuriously or because a
+                        // mutator LOADED it.  Start over.
+                        break;
+                    case WAS_LOADED:
+                        // Was loaded by a mutator since the last decision
+                        // Unconditionally change it back to READY, since
+                        // mutators will not transition it from this state.
+                        _state.store_relaxed(READY);
+                        // We shade it with *all* the live bits, as-if it was
+                        // newly allocated.
+                        _weak->_gray.fetch_or_relaxed(gray_for_marking);
+                        _weak->_black |= black_for_marking;
+                        // TODO: This is enough for childess objects.  We need
+                        // to put it on the graystack if it has children.  That's
+                        // another awkward interface break.
+                        return;
+                    case GONE:
+                        // Was doomed by a previous decision, is already erased
+                        // from the trie.  Will be collected soon.  No action
+                        // required.
+                        return;
+                    default:
+                        std::unreachable();
+                }
+            }
+        }
+
+        virtual void _garbage_collected_scan() const override {
+            // This enumerates *strong* referents, of which there are none.
+        }
+
+    };
+
+
+
 
 } // namespace wry
 

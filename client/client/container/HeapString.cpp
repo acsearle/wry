@@ -15,6 +15,15 @@ namespace wry {
         printf("%p:%s\n", this, __PRETTY_FUNCTION__);
     }
 
+    const HeapString* HeapString::make(std::string_view view) {
+        return make(std::hash<std::string_view>()(view), view);
+    }
+
+    std::string_view HeapString::as_string_view() const {
+        return std::string_view(_bytes, _size);
+    }
+
+
     void HeapString::_garbage_collected_scan() const {
         // No GC-managed children.  The interesting reachability question
         // for HeapString is handled in WEAK_DECISION (Phase 2+); see
@@ -38,6 +47,26 @@ namespace wry {
 //    HeapString const* HeapString::make(std::string_view view) {
 //        return make(hash_combine(view.data(), view.size()), view);
 //    }
+
+
+
+    const HeapString* HeapString::make(size_t hash, std::string_view view) {
+        // TODO(ctrie.md Phase 3): intern via the global string ctrie.  For
+        // now (Phase 0) we allocate a fresh HeapString every call; the trie
+        // machinery exists but is not yet on the production allocation path.
+        size_t n = view.size();
+        size_t bytes = sizeof(HeapString) + n;
+        void* raw = GarbageCollected::operator new(bytes);
+        std::memset(raw, 0, bytes);
+        HeapString* a = new(raw) HeapString;
+        a->_hash = hash;
+        a->_size = n;
+        std::memcpy(a->_bytes, view.data(), n);
+        printf("%p:%s\n", a, __PRETTY_FUNCTION__);
+        return a;
+    }
+
+
 
 
     define_test("[string interning]") {
