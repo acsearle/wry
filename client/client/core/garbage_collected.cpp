@@ -110,7 +110,7 @@ namespace wry {
         constexpr bit16_t& operator&=(bit16_t const& other) { raw &= other.raw; return *this; }
         constexpr bit16_t& operator^=(bit16_t const& other) { raw ^= other.raw; return *this; }
         constexpr bit16_t& operator|=(bit16_t const& other) { raw |= other.raw; return *this; }
-        
+
     };
     
     
@@ -127,10 +127,10 @@ namespace wry {
     // Thread-locals get initialized in the poisoned state to catch unpinned
     // access
 
-    // TODO: Poison the bag somehow
     constinit thread_local uint16_t _thread_local_gray_for_allocation = 0xFFFF;
     constinit thread_local uint16_t _thread_local_black_for_allocation = 0xFFFF;
     constinit thread_local uint16_t _thread_local_gray_did_shade = 0xFFFF;
+    // TODO: Poison the bag somehow
     constinit thread_local Bag<const GarbageCollected*> _thread_local_new_objects;
 
     GarbageCollected::GarbageCollected()
@@ -312,12 +312,17 @@ namespace wry {
         
         Bag<const GarbageCollected*> _known_objects;
 
+        bit16_t _is_unused = {(uint16_t)0xFFFF};
+        bit16_t _is_gray_published = {};
+        bit16_t _is_black_published = {};
+        bit16_t _is_weak_deciding = {};
+        bit16_t _is_sweeping = {};
+        bit16_t _is_white_published = {};
+        bit16_t _is_clearing = {};
+
+
         uint16_t _gray_for_allocation = 0;
         uint16_t _black_for_allocation = 0;
-        uint16_t _mask_for_deciding = 0;
-        uint16_t _mask_for_deleting = 0;
-        uint16_t _mask_for_clearing = 0;
-        
         uint16_t _debug_assert_white;
         uint16_t _debug_assert_nonblack;
 
@@ -523,8 +528,40 @@ namespace wry {
             epoch::Epoch E = epoch::local_state.known;
 
             bool first = true;
-            
-            
+
+            for (int k = 0; k != 16; ++k) {
+                auto p = UNUSED;
+                if (_is_unused[k])
+                    p = UNUSED;
+                if (_is_gray_published[k])
+                    p = GRAY_PUBLISHED;
+                if (_is_black_published[k])
+                    p = BLACK_PUBLISHED;
+                if (_is_weak_deciding[k])
+                    p = WEAK_DECIDING;
+                if (_is_sweeping[k])
+                    p = SWEEPING;
+                if (_is_white_published[k])
+                    p = WHITE_PUBLISHED;
+                if (_is_clearing[k])
+                    p = CLEARING;
+                kstate[k].kphase = p;
+            }
+
+
+
+
+
+//            {
+//                bit16_t mask;
+//                for (int k = 0; k != 16; ++k) {
+//                    mask[k] = E < kstate[k].since + 2;
+//                }
+//                _is_black_published |= _is_gray_published & mask;
+//                _is_gray_published &= ~mask;
+//            }
+
+
             // Compute transitions
             
             for (int k = 0; k != 16; ++k) {
@@ -678,85 +715,26 @@ namespace wry {
             // TODO: Rather than writing everywhere, we can probably filter with
             // a mask, and that mask is just black_for_allocation
             
-            
-            
-            
-            
-            // Derive bitmasks.  Once we're confident, we can rely on
-            // progression and apply deltas
-            
+            // Derive bitmasks.
+
             for (int k = 0; k != 16; ++k) {
-                uint16_t bit = 1 << k;
-                
-                switch (kstate[k].kphase) {
-                    case UNUSED:
-                        _gray_for_allocation &= ~bit;
-                        _black_for_allocation &= ~bit;
-                        _mask_for_deciding &= ~bit;
-                        _mask_for_deleting &= ~bit;
-                        _mask_for_clearing &= ~bit;
-                        _debug_assert_white |= bit;
-                        _debug_assert_nonblack |= bit;
-                        break;
-                    case GRAY_PUBLISHED:
-                        _gray_for_allocation |= bit;
-                        _black_for_allocation &= ~bit;
-                        _mask_for_deciding &= ~bit;
-                        _mask_for_deleting &= ~bit;
-                        _mask_for_clearing &= ~bit;
-                        _debug_assert_white &= ~bit;
-                        _debug_assert_nonblack |= bit;
-                        break;
-                    case BLACK_PUBLISHED:
-                        _gray_for_allocation |= bit;
-                        _black_for_allocation |= bit;
-                        _mask_for_deciding &= ~bit;
-                        _mask_for_deleting &= ~bit;
-                        _mask_for_clearing &= ~bit;
-                        _debug_assert_white &= ~bit;
-                        _debug_assert_nonblack &= ~bit;
-                        break;
-                    case WEAK_DECIDING:
-                        _gray_for_allocation |= bit;
-                        _black_for_allocation |= bit;
-                        _mask_for_deciding |= bit;
-                        _mask_for_deleting &= ~bit;
-                        _mask_for_clearing &= ~bit;
-                        _debug_assert_white &= ~bit;
-                        _debug_assert_nonblack &= ~bit;
-                        break;
-                    case SWEEPING:
-                        _gray_for_allocation |= bit;
-                        _black_for_allocation |= bit;
-                        _mask_for_deciding &= ~bit;
-                        _mask_for_deleting |= bit;
-                        _mask_for_clearing &= ~bit;
-                        _debug_assert_white &= ~bit;
-                        _debug_assert_nonblack &= ~bit;
-                        break;
-                    case WHITE_PUBLISHED:
-                        _gray_for_allocation &= ~bit;
-                        _black_for_allocation &= ~bit;
-                        _mask_for_deciding &= ~bit;
-                        _mask_for_deleting &= ~bit;
-                        _mask_for_clearing &= ~bit;
-                        _debug_assert_white &= ~bit;
-                        _debug_assert_nonblack &= ~bit;
-                        break;
-                    case CLEARING:
-                        _gray_for_allocation &= ~bit;
-                        _black_for_allocation &= ~bit;
-                        _mask_for_deciding &= ~bit;
-                        _mask_for_deleting &= ~bit;
-                        _mask_for_clearing |= bit;
-                        _debug_assert_white &= ~bit;
-                        _debug_assert_nonblack &= ~bit;
-                        break;
-                }
-                
-                
+                auto p = kstate[k].kphase;
+                _is_unused[k] = p == UNUSED;
+                _is_gray_published[k] = p == GRAY_PUBLISHED;
+                _is_black_published[k] = p == BLACK_PUBLISHED;
+                _is_weak_deciding[k] = p == WEAK_DECIDING;
+                _is_sweeping[k] = p == SWEEPING;
+                _is_white_published[k] = p == WHITE_PUBLISHED;
+                _is_clearing[k] = p == CLEARING;
             }
-            
+
+            _black_for_allocation = (_is_black_published | _is_weak_deciding | _is_sweeping).raw;
+            _gray_for_allocation = (_is_gray_published | _is_black_published | _is_weak_deciding | _is_sweeping).raw;
+            _black_for_allocation = (_is_black_published | _is_weak_deciding | _is_sweeping).raw;
+            _debug_assert_white = _is_unused.raw;
+            _debug_assert_nonblack = (_is_unused | _is_gray_published).raw;
+
+
         } // void Collector::try_advance_collection_phases()
 
         
@@ -765,8 +743,8 @@ namespace wry {
             uint16_t a = black & ~gray;
             uint16_t b = (gray | black) & _debug_assert_white;
             uint16_t c = black & _debug_assert_nonblack;
-            uint16_t d = (gray ^ black) & _mask_for_deleting;
-            
+            uint16_t d = (gray ^ black) & _is_sweeping.raw;
+
             if (!(a | b | c | d))
                 return;
                                     
@@ -809,8 +787,8 @@ namespace wry {
                    _known_objects.debug_size(),
                    _gray_for_allocation,
                    _black_for_allocation,
-                   _mask_for_deleting,
-                   _mask_for_clearing,
+                   _is_sweeping.raw,
+                   _is_clearing.raw,
                    _debug_assert_white);
             
             
@@ -835,9 +813,9 @@ namespace wry {
 
             // validate state:
 
-            assert((_mask_for_deleting & _mask_for_clearing) == 0);
-            assert((_mask_for_clearing & _gray_for_allocation) == 0);
-            assert((_mask_for_clearing & _black_for_allocation) == 0);
+            assert((_is_sweeping & _is_clearing).raw == 0);
+            assert((_is_clearing.raw & _gray_for_allocation) == 0);
+            assert((_is_clearing.raw & _black_for_allocation) == 0);
 
             for (GarbageCollected const* object : _known_objects) {
                 uint16_t gray  = object->_gray.load_relaxed();
@@ -864,7 +842,7 @@ namespace wry {
                         violation(child, before_gray, before_black, reference_count);
                         uint16_t after_gray;
                         for (;;) {
-                            after_gray = (before_gray | parent_black) & ~_mask_for_clearing;
+                            after_gray = (before_gray | parent_black) & ~_is_clearing.raw;
                             if (after_gray == before_gray)
                                 break;
                             if (child->_gray.compare_exchange_weak_relaxed_relaxed(before_gray,
@@ -872,7 +850,7 @@ namespace wry {
                                 break;
                         }
                         uint16_t mark_black = after_gray & _black_for_allocation;
-                        uint16_t after_black = (before_black | mark_black) & ~_mask_for_clearing;
+                        uint16_t after_black = (before_black | mark_black) & ~_is_clearing.raw;
                         child->_black = after_black;
                         violation(child, after_gray, after_black, reference_count);
                         // uint16_t did_set_gray  = ~before_gray  & after_gray;
@@ -894,8 +872,8 @@ namespace wry {
                 ++scan_count;
 
                 // Process weak decision point
-                if (_mask_for_deciding)
-                    object->_garbage_collected_decide_weak(_mask_for_deciding, _gray_for_allocation, _black_for_allocation);
+                if (_is_weak_deciding.raw)
+                    object->_garbage_collected_decide_weak(_is_weak_deciding.raw, _gray_for_allocation, _black_for_allocation);
 
                 // Process root set
                 int32_t reference_count = object->_count.load_relaxed();
@@ -906,7 +884,7 @@ namespace wry {
                 uint16_t after_gray;
                 for (;;) {
                     violation(object, before_gray, before_black, reference_count);
-                    after_gray = (before_gray | root_gray) & ~_mask_for_clearing;
+                    after_gray = (before_gray | root_gray) & ~_is_clearing.raw;
                     if (after_gray == before_gray)
                         break;
                     if (object->_gray.compare_exchange_weak_relaxed_relaxed(before_gray,
@@ -919,7 +897,7 @@ namespace wry {
                 // If in clearing mask, clear it
                 
                 uint16_t mark_black = after_gray & _black_for_allocation;
-                uint16_t after_black = (before_black | mark_black) & ~_mask_for_clearing;
+                uint16_t after_black = (before_black | mark_black) & ~_is_clearing.raw;
                 object->_black = after_black;
                 violation(object, after_gray, after_black, reference_count);
 
@@ -931,7 +909,7 @@ namespace wry {
                     _graystack.push(object);
                 }
                 
-                if (_mask_for_deleting && !(_mask_for_deleting & after_gray)) {
+                if (_is_sweeping.raw && !(_is_sweeping.raw & after_gray)) {
                     delete object;
                     ++delete_count;
                 } else {
