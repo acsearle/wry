@@ -111,8 +111,53 @@ namespace wry {
         constexpr bit16_t& operator^=(bit16_t const& other) { raw ^= other.raw; return *this; }
         constexpr bit16_t& operator|=(bit16_t const& other) { raw |= other.raw; return *this; }
 
+        constexpr explicit operator bool() const { return (bool)raw; }
+        constexpr bool operator!() const { return !raw; }
+
     };
-    
+
+    template<typename T>
+    struct masked_array {
+
+        T data[16];
+
+        struct reference {
+            masked_array* target;
+            bit16_t mask;
+
+            reference& operator=(T right) {
+                for (int i = 0; i != 16; ++i) {
+                    if (mask[i]) {
+                        target->data[i] = right;
+                    }
+                }
+                return *this;
+            }
+        };
+
+        reference operator[](bit16_t mask) {
+            return reference{this, mask};
+        }
+
+#define X(Y)\
+        bit16_t operator Y (T right) const {\
+            bit16_t result;\
+            for (int i = 0; i != 16; ++i) {\
+                result[i] = data[i] Y right;\
+            }\
+            return result;\
+        }
+        X(==)
+        X(!=)
+        X(<)
+        X(<=)
+        X(>=)
+        X(>)
+#undef X
+
+    };
+
+
     
     
     
@@ -547,20 +592,6 @@ namespace wry {
                     p = CLEARING;
                 kstate[k].kphase = p;
             }
-
-
-
-
-
-//            {
-//                bit16_t mask;
-//                for (int k = 0; k != 16; ++k) {
-//                    mask[k] = E < kstate[k].since + 2;
-//                }
-//                _is_black_published |= _is_gray_published & mask;
-//                _is_gray_published &= ~mask;
-//            }
-
 
             // Compute transitions
             
