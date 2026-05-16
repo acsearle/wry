@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <deque>
+#include <memory>
 
 #include "cff.hpp"
 
@@ -41,7 +42,7 @@ namespace wry::cff {
     
     // project the raw bytes, validate, and advance the span
     Header const* parse_Header(span<const byte>& s) {
-        Header const* h = (Header const*)s.data();
+        auto h = (Header const*)s.data();
         CHECK(h->hdrSize >= sizeof(Header)); // basic header must fit
         CHECK((1 <= h->offSize) && (h->offSize <= 4));
         s.drop_front(h->hdrSize);
@@ -96,18 +97,7 @@ namespace wry::cff {
     }
 
     struct DICT {
-        
-        std::map<std::array<uint8_t, 2>, std::vector<double>> dictionary;
-        
-        std::span<double const> operator[](int i, int j = 0) const {
-            auto it = dictionary.find(std::array<uint8_t, 2>{(uint8_t)i, (uint8_t)j});
-            if (it != dictionary.end()) {
-                return {it->second.data(), it->second.size()};
-            } else {
-                return {};
-            }
-        }
-        
+
         static void _parse_real(span<byte const>& s, double& target) {
             constexpr static char const* table[] = {
                 "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
@@ -136,6 +126,19 @@ namespace wry::cff {
             std::from_chars_result result = std::from_chars(first, last, target);
             CHECK(result.ptr == last);
         }
+
+        std::map<std::array<uint8_t, 2>, std::vector<double>> dictionary;
+        
+        std::span<double const> operator[](int i, int j = 0) const {
+            auto it = dictionary.find(std::array<uint8_t, 2>{(uint8_t)i, (uint8_t)j});
+            if (it != dictionary.end()) {
+                return {it->second.data(), it->second.size()};
+            } else {
+                return {};
+            }
+        }
+        
+
         
     }; // struct DICT
     
@@ -366,15 +369,9 @@ namespace wry::cff {
         
         bool execute(span<byte const> str);
         
-        static BezierCurve<4> fromLine(simd_float2 a, simd_float2 b) {
-            simd_float2 aab = simd_mix(a, b, 1.0f / 3.0f);
-            simd_float2 abb = simd_mix(a, b, 2.0f / 3.0f);
-            return BezierCurve<4>{{a,aab,abb,b}};
-        }
-        
-        std::vector<BezierCurve<4>> to_Bezier_list() const {
-            std::vector<BezierCurve<4>> result;
-            
+        std::vector<simd_float4x2> to_Bezier_list() const {
+            std::vector<simd_float4x2> result;
+
             CHECK(points.size() == modes.size());
             size_t i = 0;
             size_t j = 0; // index of curve-closing point
@@ -383,17 +380,17 @@ namespace wry::cff {
                     case MOVE:
                         if (i != 0) {
                             // we need to close the curve
-                            result.push_back(fromLine(points[i-1], points[j]));
+                            result.push_back(make_bezier4({points[i-1], points[j]}));
                             j = i;
                         }
                         break;
                     case LINE: {
                         CHECK(i != 0);
-                        result.push_back(fromLine(points[i-1], points[i]));
+                        result.push_back(make_bezier4({points[i-1], points[i]}));
                     } break;
                     case BEZIER: {
                         CHECK(i != 0);
-                        result.push_back(BezierCurve<4>{
+                        result.push_back(simd_float4x2{
                             points[i-1],
                             points[i+0],
                             points[i+1],
@@ -405,42 +402,43 @@ namespace wry::cff {
             }
             if (i) {
                 // close the curve with a line
-                result.push_back(fromLine(points[i-1], points[j]));
+                result.push_back(make_bezier4({points[i-1], points[j]}));
             }
             return result;
         }
         
     }; // struct Type2CharstringInterpreter
-    
-    enum  {
-        HSTEM = 1,
-        VSTEM = 3,
-        VMOVETO,
-        RLINETO,
-        HLINETO,
-        VLINETO,
-        RRCURVETO,
-        CALLSUBR = 10,
-        RETURN,
-        ESCAPE,
-        ENDCHAR = 14,
-        HSTEMHM = 18,
-        HINTMASK,
-        CNTRMASK,
-        RMOVETO,
-        HMOVETO,
-        VSTEMHM,
-        RCURVELINE,
-        RLINECURVE,
-        VVCURVETO,
-        HHCURVETO,
-        SHORTINT,
-        CALLGSUBR,
-        VHCURVETO,
-        HVCURVETO,
-    };
         
     bool Type2CharstringInterpreter::execute(span<byte const> s) {
+
+        enum  {
+            HSTEM = 1,
+            VSTEM = 3,
+            VMOVETO,
+            RLINETO,
+            HLINETO,
+            VLINETO,
+            RRCURVETO,
+            CALLSUBR = 10,
+            RETURN,
+            ESCAPE,
+            ENDCHAR = 14,
+            HSTEMHM = 18,
+            HINTMASK,
+            CNTRMASK,
+            RMOVETO,
+            HMOVETO,
+            VSTEMHM,
+            RCURVELINE,
+            RLINECURVE,
+            VVCURVETO,
+            HHCURVETO,
+            SHORTINT,
+            CALLGSUBR,
+            VHCURVETO,
+            HVCURVETO,
+        };
+
         reset();
         while (!s.empty()) {
             uint8_t b0;
@@ -632,15 +630,85 @@ namespace wry::cff {
         MALFORMED();
         
     }
-    
-    
-    std::map<int, std::vector<BezierCurve<4>>> parse(byte const* first, byte const* last) {
-        
-        std::map<int, std::vector<BezierCurve<4>>> result;
-        
-        printf("parsing .cff of %zd bytes\n", last - first);
 
-        span whole{first, last};
+
+    struct Handle {
+
+        Header const* header;
+        INDEX const* name_INDEX;
+        INDEX const* top_DICT_INDEX;
+        INDEX const* string_INDEX;
+        INDEX const* global_subr_INDEX;
+        DICT top_DICT;
+        INDEX const* charstrings_INDEX;
+        DICT private_DICT;
+        INDEX const* local_subr_INDEX;
+
+    };
+
+    Handle const* parse_CFF(span<byte const> whole) {
+
+        std::size_t size, offset;
+        span s{whole};
+        Handle* self = new Handle;
+
+        self->header = parse_Header(s);
+        CHECK(self->header->major == 1);
+        self->name_INDEX = parse_INDEX(s);
+        self->top_DICT_INDEX = parse_INDEX(s);
+        self->string_INDEX = parse_INDEX(s);
+        self->global_subr_INDEX = parse_INDEX(s);
+        parse_DICT((*self->top_DICT_INDEX)[0], self->top_DICT);
+
+        enum KEYS : uint8_t {
+            // top
+            CHARSET = 15,
+            ENCODINGS = 16,
+            CHARSTRINGS = 17,
+            PRIVATE = 18,
+            // private
+            SUBRS = 19,
+        };
+        std::span<double const> values;
+
+        // Get charstrings_INDEX offset(0)
+        values = self->top_DICT[CHARSTRINGS];
+        CHECK(values.size() == 1);
+        offset = (std::size_t)values[0];
+        self->charstrings_INDEX = parse_INDEX(whole.after(offset));
+
+        // Get private_DICT size and offset(0)
+        values = self->top_DICT[PRIVATE];
+        CHECK(values.size() == 2);
+        size   = (std::size_t)values[0];
+        offset = (std::size_t)values[1];
+        auto private_DICT_s = whole.subspan(offset, size);
+        parse_DICT(private_DICT_s, self->private_DICT);
+
+        // Get local_subr_INDEX offset
+        values = self->private_DICT[SUBRS];
+        CHECK(values.size() == 1);
+        offset = (std::size_t)values[0];
+        self->local_subr_INDEX = parse_INDEX(whole.after(private_DICT_s.begin() + offset));
+
+        return self;
+
+    }
+
+    std::vector<bezier4> path_for_index(Handle const* handle, int index) {
+        Type2CharstringInterpreter e;
+        e.global_subroutines = handle->global_subr_INDEX;
+        e.local_subroutines = handle->local_subr_INDEX;
+        e.execute((*handle->charstrings_INDEX)[index]);
+        return e.to_Bezier_list();
+    }
+
+    std::map<int, std::vector<simd_float4x2>> parse(span<byte const> whole) {
+
+        std::map<int, std::vector<simd_float4x2>> result;
+        
+        printf("parsing .cff of %zd bytes\n", whole.size());
+
         span s{whole};
         std::size_t size, offset;
         

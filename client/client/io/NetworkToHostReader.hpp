@@ -20,13 +20,6 @@ namespace wry {
         
     using byte = unsigned char;
 
-//    template<typename T>
-//    T sgn(T x) {
-//        return (T{0} < x) - (x < T{0});
-//    }
-    
-    // Binary file assist
-        
     // overload network-to-host
     
     template<std::integral T>
@@ -109,22 +102,19 @@ namespace wry {
         return true;
     }
     
-    template<typename T>
+    template<std::integral T>
     struct NetworkByteOrder {
         unsigned char raw[sizeof(T)];
         operator T() const {
-            T x = {};
-            std::memcpy(&x, raw, sizeof(T));
-            x = ntoh(x);
-            return x;
+            return ntoh(std::bit_cast<T>(raw));
         };
     };
     
-    template<typename T, typename F, F k>
+    template<typename T, typename F, F scale_factor>
     struct FixedPoint {
         T raw;
         operator F() const {
-            return raw * k;
+            return raw * scale_factor;
         }
     };
         

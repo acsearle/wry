@@ -491,7 +491,7 @@ namespace wry {
     
     void build_font3() {
         String a = string_from_file("Futura Medium Condensed.otf");
-        otf::parse((byte const*)a.chars._begin, (byte const*)a.chars._end);
+        otf::parse_Handle({(byte const*)a.chars.data(), a.chars.size()});
     }
     
     

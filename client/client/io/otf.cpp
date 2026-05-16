@@ -42,35 +42,53 @@ namespace wry::otf {
     using Version16Dot16 = int32;
 
     struct TableDirectory {
-        
-        struct TableRecord {
-            Tag tableTag;
-            uint32 checksum;
-            Offset32 offset;
-            uint32 length;
-        };
-        
+
         uint32 sfntVersion;
         uint16 numTables;
         uint16 searchRange;
         uint16 entrySelector;
         uint16 rangeShift;
-        TableRecord tableRecords[];
+
+        struct TableRecord {
+            Tag tableTag;
+            uint32 checksum;
+            Offset32 offset;
+            uint32 length;
+        } tableRecords[];
+
+
+        span<byte const> find(const char* key) const {
+            auto first = tableRecords;
+            auto last = first + numTables;
+            for (; first != last; ++first) {
+                printf("%.4s ? %s\n", first->tableTag.data(), key);
+                if (std::memcmp(&first->tableTag, key, 4) == 0) {
+                    printf("yea: %d, %d\n", (int)first->offset, (int)first->length);
+                    return {
+                        (byte const*)this + first->offset,
+                        first->length
+                    };
+                } else {
+                    printf("nea\n");
+                }
+            }
+            return {};
+        }
+
     };
     
     
     
     struct CharacterToGlyphIndexMapping {
         
+        uint16 version;
+        uint16 numTables;
+
         struct EncodingRecord {
             uint16 platformID;
             uint16 encodingID;
             Offset32 subtableOffset;
-        };
-        
-        uint16 version;
-        uint16 numTables;
-        EncodingRecord encodingRecords[];
+        } encodingRecords[];
     
         struct Format4 {
             uint16 format;
@@ -81,14 +99,56 @@ namespace wry::otf {
             uint16 entrySelector;
             uint16 rangeShift;
             uint16 endCode[];
+
+            int glyph_index_from_character(int c) const {
+                int glyphId = 0;
+                assert(format == 4);
+                auto segCount = segCountX2 / 2;
+                uint16 const* reservedPad = endCode + segCount;
+                uint16 const* startCode = reservedPad + 1;
+                int16  const* idDelta = (int16 const*)startCode + segCount;
+                uint16 const* idRangeOffset = (uint16 const*)idDelta + segCount;
+                // uint16 const* glyphIdArray = idRangeOffset + segCount; // exposition only
+                // Find i such that c <= endCode[i]
+                auto p = std::upper_bound(endCode, endCode + segCount, c - 1, std::less{});
+                auto i = p - endCode;
+                CHECK(c <= endCode[i]);
+                if (startCode[i] <= c) {
+                    if (idRangeOffset[i] != 0) {
+                        // Follow the cursed specification verbatim
+                        glyphId = *(idRangeOffset[i]/2
+                                    + (c - startCode[i])
+                                    + &idRangeOffset[i]);
+                        if (glyphId != 0) {
+                            glyphId += idDelta[i];
+                        }
+                    } else {
+                        glyphId = idDelta[i] + c;
+                    }
+                } else {
+                    abort();
+                }
+                return glyphId & 0xFFFF;
+            }
+
         };
-        
+
+        Format4 const* find_format4() const {
+            for (int i = 0; i != numTables; ++i) {
+                void const* subtable = (byte const*)this + encodingRecords[i].subtableOffset;
+                if (*(uint16 const*)subtable == 4)
+                    return (Format4 const*)subtable;
+            }
+            return nullptr;
+        }
+
     };
     
     
 
 
     struct FontHeader {
+
         uint16 majorVersion;
         uint16 minorVersion;
         Fixed fontRevision;
@@ -107,9 +167,11 @@ namespace wry::otf {
         int16 fontDirectionHint;
         int16 indexToLocFormat;
         int16 glyphDataFormat;
+
     };
     
     struct HorizontalHeader {
+
         uint16 majorVersion;
         uint16 minorVersion;
         FWORD ascender;
@@ -125,6 +187,7 @@ namespace wry::otf {
         int16 _reserved[4];
         int16 metricDataFormat;
         uint16 numberOfHMetrics;
+
     };
     
     struct HorizontalMetrics {
@@ -132,17 +195,17 @@ namespace wry::otf {
         struct LongHorMetric {
             UFWORD advanceWidth;
             FWORD lsb;
-        };
-        
-        LongHorMetric hMetrics[];
-        
+        } hMetrics[];
+
     };
         
-    
+
     struct MaximumProfile {
-        Version16Dot16 version;
+
+        Version16Dot16 version;      // v0.5
         uint16 numGlyphs;
-        uint16 maxPoints;
+        /*
+        uint16 maxPoints;            // v1.0
         uint16 maxContours;
         uint16 maxCompositePoints;
         uint16 maxCompositeContours;
@@ -155,6 +218,8 @@ namespace wry::otf {
         uint16 maxSizeOfInstructions;
         uint16 maxComponentElements;
         uint16 maxComponentDepth;
+         */
+
     };
     
     struct NamingTable {
@@ -162,7 +227,8 @@ namespace wry::otf {
     };
         
     struct OS_2andWindowsSpecificMetrics {
-        uint16 version;
+        
+        uint16 version;                 // v0
         FWORD xAvgCharWidth;
         uint16 usWeightClass;
         uint16 usWidthClass;
@@ -192,15 +258,17 @@ namespace wry::otf {
         FWORD sTypoLineGap;
         UFWORD usWinAscent;
         UFWORD usWinDescent;
-        uint32 ulCodePageRange1;
-        uint32 ulCodePageRange2;
-        FWORD sxHeight;
-        FWORD sCapHeight;
-        uint16 usDefaultChar;
-        uint16 usBreakChar;
-        uint16 usMaxContext;
-        uint16 usLowerOpticalPointSize;
-        uint16 usUpperOpticalPointSize;
+        /*
+        uint32 ulCodePageRange1;        // v1
+        uint32 ulCodePageRange2;        // v1
+        FWORD sxHeight;                 // v4
+        FWORD sCapHeight;               // v4
+        uint16 usDefaultChar;           // v4
+        uint16 usBreakChar;             // v4
+        uint16 usMaxContext;            // v4
+        uint16 usLowerOpticalPointSize; // v5
+        uint16 usUpperOpticalPointSize; // v5
+         */
     };
 
     struct PostScriptInformation {
@@ -375,7 +443,7 @@ namespace wry::otf {
         
     };
     
-    void enumerate_tables(Bytes s, auto&& f) {
+    void enumerate_tables(span<byte const> s, auto&& f) {
         auto tableDirectory = (TableDirectory const*)s.data();
         for (int i = 0; i != tableDirectory->numTables; ++i) {
             auto& r = tableDirectory->tableRecords[i];
@@ -384,7 +452,7 @@ namespace wry::otf {
     }
     
     
-    void cmap_enumerate_encoding_records(Bytes s, auto&& f) {
+    void cmap_enumerate_encoding_records(span<byte const> s, auto&& f) {
         auto cmap = (CharacterToGlyphIndexMapping const*)s.data();
         for (int i = 0; i != cmap->numTables; ++i) {
             auto& r = cmap->encodingRecords[i];
@@ -392,7 +460,7 @@ namespace wry::otf {
         }
     }
     
-    void cmapSubtableFormat4_enumerate_mapping(Bytes s, auto&& f) {
+    void cmapSubtableFormat4_enumerate_mapping(span<byte const> s, auto&& f) {
         auto subtable = (CharacterToGlyphIndexMapping::Format4 const*)s.data();
         CHECK(subtable->format == 4);
         int segCount = subtable->segCountX2 >> 1;
@@ -420,161 +488,98 @@ namespace wry::otf {
         }
     }
 
-    struct Context {
-        
-        TableDirectory const* tableDirectory;
-        
-        // Required tables
-        CharacterToGlyphIndexMapping const* cmap;
-        FontHeader const* head;
-        HorizontalHeader const* hhea;
+    struct Handle {
+
+        // Hold a minimal set of subtable mappings
+
         HorizontalMetrics const* hmtx;
-        MaximumProfile const* maxp;
-        NamingTable const* name;
-        OS_2andWindowsSpecificMetrics const* OS_2;
-        PostScriptInformation const* post;
+        cff::Handle const* cff_;
+        CharacterToGlyphIndexMapping::Format4 const* cmap_subtable;
 
-        // CFF outlines table
-        void const* CFF_;
+        int maxp_numberOfGlyphs;
+        int hhea_numberOfHMetrics;
 
-        // TrueType outlines tables
-        GlyphData const* glyf;
-        IndexToLocation const* loca;
-        
-        // Advanced
-        GlyphPositioningData const* GPOS;
-        
-        // Derived quantities
-        CharacterToGlyphIndexMapping::Format4 const* format4;
-        double scale;
-        double offset;
-                
+        float scale;
+        float offset;
+
+        HorizontalMetrics::LongHorMetric horizontal_metrics_for_glyph_index(int glyph_inddex) {
+            return hmtx->hMetrics[std::min(glyph_inddex, hhea_numberOfHMetrics)];
+        }
+
+        std::vector<bezier4> path_for_glyph_index(int glyph_index) {
+            std::vector<bezier4> result = cff::path_for_glyph_index(cff_, glyph_index);
+            for (bezier4& a : result)
+                for (simd_float2& b : a.columns)
+                    (b += simd_float2{0.0f, (float)offset}) *= (float)scale;
+            return result;
+        }
+
+        std::vector<bezier4> path_for_character(int c) {
+            int glyph_index = cmap_subtable->glyph_index_from_character(c);
+            return path_for_glyph_index(glyph_index);
+        }
+
+        float advance_for_character(int c) {
+            int glyph_index = cmap_subtable->glyph_index_from_character(c);
+            return horizontal_metrics_for_glyph_index(glyph_index).advanceWidth * (float)scale;
+        }
+
     };
-    
-    void get_one(Context* a, int c) {
-        // Get glyph index
-        int glyphId = 0;
-        {
-            // Use cmap format 4 table (basic multilingual plane)
-            auto b = a->format4;
-            auto segCount = b->segCountX2 / 2;
-            uint16 const* endCode = b->endCode;
-            uint16 const* reservedPad = endCode + segCount;
-            uint16 const* startCode = reservedPad + 1;
-            int16  const* idDelta = (int16 const*)startCode + segCount;
-            uint16 const* idRangeOffset = (uint16 const*)idDelta + segCount;
-            // exposition only
-            [[maybe_unused]] uint16 const* glyphIdArray = idRangeOffset + segCount;
-            // Find i such that c <= endCode[i]
-            auto p = std::upper_bound(endCode, endCode + segCount, c - 1, std::less{});
-            auto i = p - endCode;
-            CHECK(c <= endCode[i]);
-            if (startCode[i] <= c) {
-                if (idRangeOffset[i] != 0) {
-                    // Follow the cursed specification verbatim
-                    glyphId = *(idRangeOffset[i]/2
-                                + (c - startCode[i])
-                                + &idRangeOffset[i]);
-                    if (glyphId != 0) {
-                        glyphId += idDelta[i];
-                    }
-                } else {
-                    glyphId = idDelta[i] + c;
-                }
-            }
-            // Modulo 65536
-            glyphId &= 0x0000FFFF;
-        }
-        
-        // Get horizontal advance width
-        double advanceWidth = 0;
-        {
-            int i = std::min(glyphId, a->hhea->numberOfHMetrics - 1);
-            advanceWidth = a->hmtx->hMetrics[i].advanceWidth;
-        }
-        
-        // Get Bezier curves
-        {
-            
-        }
-        
 
+    template<typename T>
+    T const* span_cast(span<byte const> a) {
+        if (a.empty()) {
+            return nullptr;
+        } else {
+            assert(sizeof(T) <= a.size());
+            return (T const*)a.data();
+        }
     }
-    
-    void* parse(byte const* first, byte const* last) {
-        
-        printf("parsing .otf of %zd bytes\n", last - first);
-        
-        
-        Context* a = new Context;
-        a->tableDirectory = (TableDirectory const*)first;
 
-        // Enumerate tables and record locations
-        for (int i = 0; i != a->tableDirectory->numTables; ++i) {
-            auto& r = a->tableDirectory->tableRecords[i];
-            CHECK(r.offset <= (last - first));
-            void const* s = first + r.offset;
-            // TODO: The check ensures only that the start of the subtable is in-bounds
-            auto eq = [&](char const (&s)[5]) {
-                return std::memcmp(&r.tableTag, s, 4) == 0;
-            };
-            if (eq("CFF "))
-                a->CFF_ = (void const*)s;
-            if (eq("GPOS"))
-                a->GPOS = (GlyphPositioningData const*)s;
-            if (eq("OS/2"))
-                a->OS_2 = (OS_2andWindowsSpecificMetrics const*)s;
-            if (eq("cmap"))
-                a->cmap = (CharacterToGlyphIndexMapping const*)s;
-            if (eq("head"))
-                a->head = (FontHeader const*)s;
-            if (eq("hhea"))
-                a->hhea = (HorizontalHeader const*)s;
-            if (eq("hmtx"))
-                a->hmtx = (HorizontalMetrics const*)s;
-            if (eq("maxp"))
-                a->maxp = (MaximumProfile const*)s;
-            if (eq("name"))
-                a->name = (NamingTable const*)s;
-            if (eq("post"))
-                a->post = (PostScriptInformation const*)s;
-        }
-        
-        for (int i = 0; i != a->cmap->numTables; ++i) {
-            auto& r = a->cmap->encodingRecords[i];
-            auto b = (byte const*)a->cmap + r.subtableOffset;
-            int format = *(uint16 const*)b;
-            if (format == 4) {
-                // TODO: Is last wins correct?
-                // I *think* the file must have only one Format4 table, but
-                // might have multiple paths to it
-                a->format4 = (CharacterToGlyphIndexMapping::Format4 const*)b;
-            }
-        }
-        
-        double ascender =  a->OS_2->sTypoAscender;
-        double descender = a->OS_2->sTypoDescender;
-        double lineGap =   a->OS_2->sTypoLineGap;
-        
-        DUMP(ascender);
-        DUMP(descender);
-        DUMP(lineGap);
-        DUMP(ascender-descender);
-        DUMP(ascender-descender+lineGap);
-        
-        a->scale = 1.0 / (ascender - descender + lineGap);
-        a->offset = -descender + lineGap * 0.5;
-                
-        int numGlyphs = a->maxp->numGlyphs;
-        int numberOfHMetrics = a->hhea->numberOfHMetrics;
-        
-        // TODO: Rest of implementation
-        // We currently run the above as a smoke test, but produce no output
-                
-        delete a;
-        return nullptr;
+    Handle const* parse_Handle(span<byte const> whole) {
+
+        auto h = new Handle;
+
+        auto tableDirectory = span_cast<TableDirectory>(whole);
+
+        // Required tables
+
+        auto cmap = span_cast<CharacterToGlyphIndexMapping>(tableDirectory->find("cmap"));
+        // auto head = span_cast<FontHeader>(tableDirectory->find("head"));
+        auto hhea = span_cast<HorizontalHeader>(tableDirectory->find("hhea"));
+        h->  hmtx = span_cast<HorizontalMetrics>(tableDirectory->find("hmtx"));
+        auto maxp = span_cast<MaximumProfile>(tableDirectory->find("maxp"));
+        // auto name = span_cast<NamingTable>(tableDirectory->find("name"));
+        auto os_2 = span_cast<OS_2andWindowsSpecificMetrics>(tableDirectory->find("OS/2"));
+        // auto post = span_cast<PostScriptInformation>(tableDirectory->find("post"));
+
+        // Tables related to TrueType outlines
+        // ...
+
+        // auto glyf = span_cast<GlyphData>(tableDirectory->find("glyf"));
+        // auto loca = span_cast<IndexToLocation>(tableDirectory->find("loca"));
+
+        // Tables related to CFF outlines
+
+        h->cff_ = cff::parse_CFF(tableDirectory->find("CFF "));
+
+        // Derived quantities
+
+        h->cmap_subtable = cmap->find_format4();
+
+        h->maxp_numberOfGlyphs = maxp->numGlyphs;
+        h->hhea_numberOfHMetrics = hhea->numberOfHMetrics;
+
+        double ascender =  os_2->sTypoAscender;
+        double descender = os_2->sTypoDescender;
+        double lineGap =   os_2->sTypoLineGap;
+
+        h->scale = 1.0f / (ascender - descender + lineGap);
+        h->offset = -descender + lineGap * 0.5f;
+
+        return h;
     }
-    
-    
+
+
 } // namespace wry::otf
 

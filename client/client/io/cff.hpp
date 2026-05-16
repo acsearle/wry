@@ -19,14 +19,20 @@
 #include <map>
 #include <vector>
 
+#include "stddef.hpp"
 #include "bezier.hpp"
+#include "span.hpp"
 
 namespace wry::cff {
     
-    using byte = unsigned char;
-    
-    std::map<int, std::vector<BezierCurve<4>>> parse(byte const*, byte const*);
-    
+    std::map<int, std::vector<simd_float4x2>> parse(span<byte const>);
+
+    struct Handle;
+
+    Handle const* parse_CFF(span<byte const>);
+
+    std::vector<bezier4> path_for_glyph_index(Handle const*, int glyph_index);
+
 } // namespace wry::cff
 
 
