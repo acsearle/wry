@@ -159,7 +159,6 @@ namespace wry::cff {
                     parse_ntoh(s, b1);
                     key[1] = b1;
                 }
-                // printf("key = %d %d\n", key[0], key[1]);
                 x.dictionary.emplace(key, std::move(value));
                 key[0] = 0; key[1] = 0;
                 value.clear();
@@ -593,7 +592,7 @@ namespace wry::cff {
                         break;
                     }
                     default:
-                        printf(": Unhandled b0 = %d\n", b0);
+                        fprintf(stderr, ": Unhandled b0 = %d\n", b0);
                         MALFORMED();
                         break;
                 }
@@ -619,20 +618,23 @@ namespace wry::cff {
                     parse_ntoh(s, n);
                     number = n * 0x1p-16;
                 }
-                // printf("%g ",number);
                 operand_stack.push_back(number);
             }
         }
         if (!operand_stack.empty()) {
-            printf("Missing operator??\n");
+            fprintf(stderr, "operand_stack:\n");
+            for (auto& x : operand_stack) {
+                fprintf(stderr, "    [ %g ]\n", x);
+            }
+            fprintf(stderr, "Missing operator?\n");
         }
-        printf("Missing endchar??\n");
+        fprintf(stderr, "Missing endchar?\n");
         MALFORMED();
         
     }
 
 
-    struct Handle {
+    struct Handle::Inner {
 
         Header const* header;
         INDEX const* name_INDEX;
@@ -646,11 +648,15 @@ namespace wry::cff {
 
     };
 
-    Handle const* parse_CFF(span<byte const> whole) {
+    Handle::~Handle() {
+        delete _inner;
+    }
+
+    Handle Handle::parse(span<byte const> whole) {
 
         std::size_t size, offset;
         span s{whole};
-        Handle* self = new Handle;
+        auto self = new Handle::Inner;
 
         self->header = parse_Header(s);
         CHECK(self->header->major == 1);
@@ -691,91 +697,18 @@ namespace wry::cff {
         offset = (std::size_t)values[0];
         self->local_subr_INDEX = parse_INDEX(whole.after(private_DICT_s.begin() + offset));
 
-        return self;
+        Handle h;
+        h._inner = self;
+        return h;
 
     }
 
-    std::vector<bezier4> path_for_index(Handle const* handle, int index) {
+    std::vector<bezier4> Handle::outline_for_glyph_index(int glyph_index) const {
         Type2CharstringInterpreter e;
-        e.global_subroutines = handle->global_subr_INDEX;
-        e.local_subroutines = handle->local_subr_INDEX;
-        e.execute((*handle->charstrings_INDEX)[index]);
+        e.global_subroutines = _inner->global_subr_INDEX;
+        e.local_subroutines = _inner->local_subr_INDEX;
+        e.execute((*_inner->charstrings_INDEX)[glyph_index]);
         return e.to_Bezier_list();
     }
-
-    std::map<int, std::vector<simd_float4x2>> parse(span<byte const> whole) {
-
-        std::map<int, std::vector<simd_float4x2>> result;
-        
-        printf("parsing .cff of %zd bytes\n", whole.size());
-
-        span s{whole};
-        std::size_t size, offset;
-        
-        auto header = parse_Header(s);
-        CHECK(header->major == 1);
-        
-        auto name_INDEX = parse_INDEX(s);
-        for (int i = 0; i != name_INDEX->count; ++i) {
-            auto t = (*name_INDEX)[i];
-            printf("\"%.*s\"\n", (int)t.size(), (char const*)t._begin);
-        }
-        auto top_DICT_INDEX = parse_INDEX(s);
-        auto string_INDEX = parse_INDEX(s);
-        for (int i = 0; i != string_INDEX->count; ++i) {
-            auto t = (*string_INDEX)[i];
-            printf("\"%.*s\"\n", (int)t.size(), (char const*)t._begin);
-        }
-        INDEX const* global_subr_INDEX = parse_INDEX(s);
-        
-        DICT top_DICT; {
-            parse_DICT((*top_DICT_INDEX)[0], top_DICT);
-        }
-                
-        enum KEYS : uint8_t {
-            // top
-            CHARSET = 15,
-            ENCODINGS = 16,
-            CHARSTRINGS = 17,
-            PRIVATE = 18,
-            // private
-            SUBRS = 19,
-        };
-        std::span<double const> values;
-        
-        // Get CharStrings offset(0)
-        values = top_DICT[CHARSTRINGS];
-        CHECK(values.size() == 1);
-        printf("CharStrings @ %g\n", values[0]);
-        offset = (std::size_t)values[0];
-        auto charstrings_INDEX = parse_INDEX(whole.after(offset));
-        
-        // Get PrivateDict size and offset(0)
-        values = top_DICT[PRIVATE];
-        CHECK(values.size() == 2);
-        printf("PrivateDict(%g) @ %g\n", values[1], values[0]);
-        size   = (std::size_t)values[0];
-        offset = (std::size_t)values[1];
-        auto private_DICT_s = whole.subspan(offset, size);
-        DICT private_DICT; parse_DICT(private_DICT_s, private_DICT);
-        
-        values = private_DICT[SUBRS];
-        printf("PrivateDict @ %g\n", values[0]);
-        offset = (std::size_t)values[0];
-        auto local_subr_INDEX = parse_INDEX(whole.after(private_DICT_s.begin() + offset));
-        
-        Type2CharstringInterpreter e;
-        e.global_subroutines = global_subr_INDEX;
-        e.local_subroutines = local_subr_INDEX;
-        
-        for (int i = 0; i != charstrings_INDEX->count; ++i) {
-            e.execute((*charstrings_INDEX)[i]);
-            printf("e.points.size() = %zd\n", e.points.size());
-            result.emplace(i, e.to_Bezier_list());
-        }
-        return result;
-        
-    }
-    
     
 } // namespace wry::CFF

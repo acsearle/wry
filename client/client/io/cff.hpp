@@ -24,14 +24,43 @@
 #include "span.hpp"
 
 namespace wry::cff {
-    
-    std::map<int, std::vector<simd_float4x2>> parse(span<byte const>);
 
-    struct Handle;
+    struct Handle {
 
-    Handle const* parse_CFF(span<byte const>);
+        static Handle parse(span<byte const>);
 
-    std::vector<bezier4> path_for_glyph_index(Handle const*, int glyph_index);
+        struct Inner;
+        Inner* _inner;
+
+        void swap(Handle& other) {
+            using std::swap;
+            std::swap(_inner, other._inner);
+        }
+
+        Handle()
+        : _inner(nullptr) {
+        }
+
+        Handle(Handle const&) = delete;
+
+        Handle(Handle&& other)
+        : _inner(std::exchange(other._inner, nullptr)) {
+        }
+
+        ~Handle();
+
+        Handle& operator=(Handle const&) = delete;
+
+        Handle& operator=(Handle&& other) {
+            Handle(std::move(other)).swap(*this);
+            return *this;
+        }
+
+        operator bool() const { return (bool)_inner; }
+
+        std::vector<bezier4> outline_for_glyph_index(int glyph_index) const;
+
+    };
 
 } // namespace wry::cff
 

@@ -61,15 +61,11 @@ namespace wry::otf {
             auto first = tableRecords;
             auto last = first + numTables;
             for (; first != last; ++first) {
-                printf("%.4s ? %s\n", first->tableTag.data(), key);
                 if (std::memcmp(&first->tableTag, key, 4) == 0) {
-                    printf("yea: %d, %d\n", (int)first->offset, (int)first->length);
                     return {
                         (byte const*)this + first->offset,
                         first->length
                     };
-                } else {
-                    printf("nea\n");
                 }
             }
             return {};
@@ -125,8 +121,6 @@ namespace wry::otf {
                     } else {
                         glyphId = idDelta[i] + c;
                     }
-                } else {
-                    abort();
                 }
                 return glyphId & 0xFFFF;
             }
@@ -201,11 +195,11 @@ namespace wry::otf {
         
 
     struct MaximumProfile {
-
-        Version16Dot16 version;      // v0.5
+        // v0.5
+        Version16Dot16 version;
         uint16 numGlyphs;
-        /*
-        uint16 maxPoints;            // v1.0
+        // v1.0
+        uint16 maxPoints;
         uint16 maxContours;
         uint16 maxCompositePoints;
         uint16 maxCompositeContours;
@@ -218,8 +212,6 @@ namespace wry::otf {
         uint16 maxSizeOfInstructions;
         uint16 maxComponentElements;
         uint16 maxComponentDepth;
-         */
-
     };
     
     struct NamingTable {
@@ -227,8 +219,8 @@ namespace wry::otf {
     };
         
     struct OS_2andWindowsSpecificMetrics {
-        
-        uint16 version;                 // v0
+        // v0.0
+        uint16 version;
         FWORD xAvgCharWidth;
         uint16 usWeightClass;
         uint16 usWidthClass;
@@ -258,17 +250,18 @@ namespace wry::otf {
         FWORD sTypoLineGap;
         UFWORD usWinAscent;
         UFWORD usWinDescent;
-        /*
-        uint32 ulCodePageRange1;        // v1
-        uint32 ulCodePageRange2;        // v1
-        FWORD sxHeight;                 // v4
-        FWORD sCapHeight;               // v4
-        uint16 usDefaultChar;           // v4
-        uint16 usBreakChar;             // v4
-        uint16 usMaxContext;            // v4
-        uint16 usLowerOpticalPointSize; // v5
-        uint16 usUpperOpticalPointSize; // v5
-         */
+        // v1.0
+        uint32 ulCodePageRange1;
+        uint32 ulCodePageRange2;
+        // v4.0
+        FWORD sxHeight;
+        FWORD sCapHeight;
+        uint16 usDefaultChar;
+        uint16 usBreakChar;
+        uint16 usMaxContext;
+        // v5.0
+        uint16 usLowerOpticalPointSize;
+        uint16 usUpperOpticalPointSize;
     };
 
     struct PostScriptInformation {
@@ -276,255 +269,264 @@ namespace wry::otf {
     
     struct GlyphPositioningData {
     };
-    
-    struct GlyphData {
-        
-        struct GlyphHeader {
-            
-            int16_t numberOfContours;
-            int16_t xMin;
-            int16_t yMin;
-            int16_t xMax;
-            int16_t yMax;
-            
-            std::vector<uint16_t> endPtsOfContours;
-            uint16_t instructionLength;
-            std::vector<uint8_t> instructions;
-            std::vector<uint8_t> flags;
-            std::vector<simd_short2> points;
-            std::vector<bool> on_curve;
-            
-            enum {
-                ON_CURVE_POINT = 0x01,
-                X_SHORT_VECTOR = 0x02,
-                Y_SHORT_VECTOR = 0x04,
-                REPEAT_FLAG    = 0x08,
-                X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR = 0x10,
-                Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR = 0x20,
-            };
-            
-            GlyphHeader(wry::Reader r) {
-                r.read(numberOfContours, xMin, yMin, xMax, yMax);
-                // TODO: Compund glyphs are not handled yet
-                CHECK(numberOfContours);
-                CHECK(xMin <= xMax);
-                CHECK(yMin <= yMax);
-                for (int i = 0; i != numberOfContours; ++i)
-                    endPtsOfContours.push_back(r.read<uint16_t>());
-                r.read(instructionLength);
-                for (int i = 0; i != instructionLength; ++i)
-                    instructions.push_back(r.read<uint8_t>());
-                ptrdiff_t x_bytes = 0;
-                size_t sentinel = endPtsOfContours.back();
-                
-                // We need to parse the flags enough to find x and y
-                
-                wry::Reader rf{r};
-                for (; sentinel;) {
-                    uint8_t f{};
-                    rf.read(f);
-                    
-                    // This could be a table?
-                    // 0x2 | (0x1 << 0x2) | (1 << (0x2 | 0x10)
-                    // x_bytes += (0x0406 >> (f & 0x12)) & 0x3
-                    
+
+
+    struct GlyphHeader {
+
+        int16 numberOfContours;
+        int16 xMin;
+        int16 yMin;
+        int16 xMax;
+        int16 yMax;
+
+    };
+
+    struct GlyphInterpreter {
+
+//        std::vector<uint16_t> endPtsOfContours;
+//        uint16_t instructionLength;
+//        std::vector<uint8_t> instructions;
+//        std::vector<uint8_t> flags;
+        std::vector<simd_float2> points;
+        std::vector<bool> on_curve;
+
+        enum {
+            ON_CURVE_POINT = 0x01,
+            X_SHORT_VECTOR = 0x02,
+            Y_SHORT_VECTOR = 0x04,
+            REPEAT_FLAG    = 0x08,
+            X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR = 0x10,
+            Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR = 0x20,
+        };
+
+        std::vector<bezier4> parse(span<byte const> s) {
+            auto h = (GlyphHeader const*)s.data();
+            // TODO: Compund glyphs are not handled yet
+            printf("%d\n", (int)h->numberOfContours);
+            printf("%d\n", (int)h->xMin);
+            printf("%d\n", (int)h->yMin);
+            printf("%d\n", (int)h->xMax);
+            printf("%d\n", (int)h->yMax);
+            if (h->numberOfContours == 0)
+                return {};
+            CHECK(h->numberOfContours > 0); // negative values indicate compiste glyphs
+            CHECK(h->xMin <= h->xMax);
+            CHECK(h->yMin <= h->yMax);
+            s.drop_front(sizeof(GlyphHeader));
+
+
+            span<uint16 const> endPtsOfContours((uint16 const*)s.data(), h->numberOfContours);
+            uint16_t instructionLength = *endPtsOfContours.end(); // <-- deliberate one-past-the-end
+            span<uint8 const> instructions((uint8 const*)(endPtsOfContours.end() + 1), instructionLength);
+            uint8 const* flags_first = instructions.end();
+
+            ptrdiff_t x_bytes = 0;
+
+            // We need to parse the flags enough to find x and y
+
+            auto flags_last = flags_first;
+            for (int remaining = endPtsOfContours.back() + 1; remaining;) {
+                assert(remaining > 0);
+                uint8_t f = *flags_last++;
+                int n = 1;
+                if (f & REPEAT_FLAG)
+                    n += *flags_last++;
+                switch (f & (X_SHORT_VECTOR | X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR)) {
+                    case 0:
+                        x_bytes += (n << 1);
+                        break;
+                    case X_SHORT_VECTOR:
+                        x_bytes += n;
+                        break;
+                    case X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR:
+                        x_bytes += 0;
+                        break;
+                    case (X_SHORT_VECTOR | X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR):
+                        x_bytes += n;
+                        break;
+                }
+                remaining -= n;
+            }
+
+            // Set up the readers for the next pass
+            // auto [sx, sy] = rf.s.partition(x_bytes);
+            uint8 const* sx = flags_last;
+            uint8 const* sy = sx + x_bytes;
+
+            wry::Reader rx{{sx, sy}}, ry{{sy, s.end()}};
+            // rf.s = r.s.before(rf.s.begin());
+
+            simd_short2 pen{};
+            for (byte const* rf = flags_first; rf != flags_last;) {
+                uint8_t f = *rf++;
+                uint8_t n = 1;
+                if (f & REPEAT_FLAG) {
+                    n += *rf++;
+                }
+                while (n--) {
                     switch (f & (X_SHORT_VECTOR | X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR)) {
                         case 0:
-                            CHECK(((0x0406 >> (f & 0x12)) & 0x3) == 2);
-                            x_bytes += 2;
+                            pen.x += rx.read<int16_t>();
                             break;
                         case X_SHORT_VECTOR:
-                            CHECK(((0x0406 >> (f & 0x12)) & 0x3) == 1);
-                            x_bytes += 1;
+                            pen.x -= (int)rx.read<uint8_t>();
                             break;
                         case X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR:
-                            CHECK(((0x0406 >> (f & 0x12)) & 0x3) == 0);
-                            x_bytes += 0;
                             break;
                         case (X_SHORT_VECTOR | X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR):
-                            CHECK(((0x0406 >> (f & 0x12)) & 0x3) == 1);
-                            x_bytes += 1;
+                            pen.x += (int)rx.read<uint8_t>();
                             break;
                     }
-                    if (f & REPEAT_FLAG)
-                        sentinel -= rf.read<uint8_t>();
-                }
-                
-                // Set up the readers for the next pass
-                auto [sx, sy] = rf.s.partition(x_bytes);
-                wry::Reader rx{sx}, ry{sy};
-                rf.s = r.s.before(rf.s.begin());
-                
-                simd_short2 pen{};
-                for (; !rf.s.empty();) {
-                    uint8_t f = rf.read<uint8_t>();
-                    uint8_t n = 1;
-                    if (f & REPEAT_FLAG) {
-                        n = rf.read<uint8_t>();
+                    switch (f & (Y_SHORT_VECTOR | Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR)) {
+                        case 0:
+                            pen.y += ry.read<int16_t>();
+                            break;
+                        case Y_SHORT_VECTOR:
+                            pen.y -= (int)ry.read<uint8_t>();
+                            break;
+                        case Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR:
+                            break;
+                        case (Y_SHORT_VECTOR | Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR):
+                            pen.y += (int)ry.read<uint8_t>();
+                            break;
                     }
-                    while (n--) {
-                        switch (f & (X_SHORT_VECTOR | X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR)) {
-                            case 0:
-                                pen.x += rx.read<int16_t>();
-                                break;
-                            case X_SHORT_VECTOR:
-                                pen.x -=(int)rx.read<uint8_t>();
-                                break;
-                            case X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR:
-                                break;
-                            case (X_SHORT_VECTOR | X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR):
-                                pen.x += (int)rx.read<uint8_t>();
-                                break;
-                        }
-                        switch (f & (Y_SHORT_VECTOR | Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR)) {
-                            case 0:
-                                pen.y += ry.read<int16_t>();
-                                break;
-                            case Y_SHORT_VECTOR:
-                                pen.y -= (int)ry.read<uint8_t>();
-                                break;
-                            case Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR:
-                                break;
-                            case (Y_SHORT_VECTOR | Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR):
-                                pen.y += (int)ry.read<uint8_t>();
-                                break;
-                        }
-                        points.push_back(pen);
-                        on_curve.push_back(f & ON_CURVE_POINT);
-                    }
+                    points.push_back(simd_float2{(float)pen.x, (float)pen.y});
+                    on_curve.push_back(f & ON_CURVE_POINT);
                 }
-                
-                CHECK(points.size() == endPtsOfContours.back() + 1);
-                
-                
-                
-                
-                
-                
-                
-                
-                
             }
-            
-        };
-        
-        wry::span<byte const> s;
-        explicit GlyphData(wry::span<byte const> s)
-        : s(s) {
-            
-        };
-        
-    };
-    
-    
-    
-    struct IndexToLocation {
-        
-        int16_t indexToLocFormat;
-        uint16_t numGlyphs;
-        wry::span<byte const> s;
-        
-        explicit IndexToLocation(int16_t indexToLocFormat, uint16_t numGlyphs, wry::span<byte const> s)
-        : indexToLocFormat(indexToLocFormat)
-        , numGlyphs(numGlyphs)
-        , s(s) {
-        };
-        
-        uint32_t operator[](uint32_t glyphID) {
-            wry::Reader r{s};
-            if (!indexToLocFormat) {
-                r.skip(glyphID * sizeof(uint16_t));
-                return r.read<uint16_t>();
-            } else {
-                r.skip(glyphID * sizeof(uint32_t));
-                return r.read<uint32_t>();
-            }
-        }
-        
-    };
-    
-    void enumerate_tables(span<byte const> s, auto&& f) {
-        auto tableDirectory = (TableDirectory const*)s.data();
-        for (int i = 0; i != tableDirectory->numTables; ++i) {
-            auto& r = tableDirectory->tableRecords[i];
-            f(r.tableTag, s.subspan(r.offset, r.length));
-        }
-    }
-    
-    
-    void cmap_enumerate_encoding_records(span<byte const> s, auto&& f) {
-        auto cmap = (CharacterToGlyphIndexMapping const*)s.data();
-        for (int i = 0; i != cmap->numTables; ++i) {
-            auto& r = cmap->encodingRecords[i];
-            f(r.platformID, r.encodingID, s.after(r.subtableOffset));
-        }
-    }
-    
-    void cmapSubtableFormat4_enumerate_mapping(span<byte const> s, auto&& f) {
-        auto subtable = (CharacterToGlyphIndexMapping::Format4 const*)s.data();
-        CHECK(subtable->format == 4);
-        int segCount = subtable->segCountX2 >> 1;
-        uint16 const* startCode = subtable->endCode + segCount + 1;
-        int16 const* idDelta = (int16 const*)startCode + segCount;
-        uint16 const* idRangeOffset = (uint16 const*)idDelta + segCount;
-        for (int i = 0; i != segCount; ++i) {
-            for (int c = startCode[i];; ++c) {
-                uint16_t glyphID = {};
-                if (idRangeOffset[i]) {
-                    glyphID = *(idRangeOffset[i] / 2
-                                + (c - startCode[i])
-                                + &idRangeOffset[i]);
-                    if (glyphID != 0) {
-                        glyphID += idDelta[i];
-                    }
-                } else {
-                    glyphID = c + idDelta[i];
-                }
-                // printf("unicode %x -> glyphID -> %d\n", (int)(startCode + j), (int)glyphID);
-                f(c, glyphID);
-                if (c == subtable->endCode[i])
-                    break;
-            }
-        }
-    }
 
-    struct Handle {
+            CHECK(points.size() == endPtsOfContours.back() + 1);
+
+            std::vector<bezier4> result;
+            simd_float2 a, b, c;
+            int i0 = 0, i1;
+            for (int j = 0; j != endPtsOfContours.size(); ++j) {
+                i1 = endPtsOfContours[j];
+                for (int i = i0; i != i1 - 1; ++i) {
+                    if (on_curve[i + 1]) {
+                        if (on_curve[i + 0]) {
+                            a = points[i + 0];
+                            c = points[i + 1];
+                            b = simd_mix(a, c, 0.5f);
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        assert(i + 2 < points.size());
+                        a = points[i + 0];
+                        b = points[i + 1];
+                        c = points[i + 2];
+                        if (!on_curve[i + 0]) {
+                            a = simd_mix(a, b, 0.5f);
+                        }
+                        if (!on_curve[i + 2]) {
+                            c = simd_mix(b, c, 0.5f);
+                        }
+                    }
+                    result.push_back(bezier4{{
+                        a,
+                        simd_mix(a, b, 2.0f / 3.0f),
+                        simd_mix(b, c, 1.0f / 3.0f),
+                        c
+                    }});
+                }
+                i0 = i1;
+            }
+
+
+            for (auto& p : result)
+                for (int i = 0; i != 4; ++i)
+                    printf("  %g %g\n", p.columns[i].x, p.columns[i].y);
+
+            return result;
+        }
+
+    };
+
+
+    struct Handle::Inner {
 
         // Hold a minimal set of subtable mappings
 
         HorizontalMetrics const* hmtx;
-        cff::Handle const* cff_;
+        OS_2andWindowsSpecificMetrics const* os_2;
         CharacterToGlyphIndexMapping::Format4 const* cmap_subtable;
 
+        span<byte const> glyf;
+        span<byte const> loca;
+
+        cff::Handle cff_;
+
+        int head_indexToLocFormat;
         int maxp_numberOfGlyphs;
         int hhea_numberOfHMetrics;
 
-        float scale;
-        float offset;
-
-        HorizontalMetrics::LongHorMetric horizontal_metrics_for_glyph_index(int glyph_inddex) {
-            return hmtx->hMetrics[std::min(glyph_inddex, hhea_numberOfHMetrics)];
+        Metrics metrics_for_face() const {
+            return Metrics{
+                .ascender = (float)os_2->sTypoAscender,
+                .descender = (float)os_2->sTypoDescender,
+                .line_gap = (float)os_2->sTypoLineGap,
+            };
         }
 
-        std::vector<bezier4> path_for_glyph_index(int glyph_index) {
-            std::vector<bezier4> result = cff::path_for_glyph_index(cff_, glyph_index);
-            for (bezier4& a : result)
-                for (simd_float2& b : a.columns)
-                    (b += simd_float2{0.0f, (float)offset}) *= (float)scale;
-            return result;
+        HorizontalMetrics::LongHorMetric horizontal_metrics_for_glyph_index(int glyph_index) const {
+            return hmtx->hMetrics[std::min(glyph_index, hhea_numberOfHMetrics - 1)];
         }
 
-        std::vector<bezier4> path_for_character(int c) {
+        std::vector<bezier4> outline_for_glyph_index(int glyph_index) const {
+            if (cff_) {
+                return cff_.outline_for_glyph_index(glyph_index);
+            } else if (glyf && loca) {
+                uint32_t a, b;
+                switch (head_indexToLocFormat) {
+                    case 0:
+                        // Short format: stored value is the actual offset divided by 2
+                        a = (uint32_t)((Offset16 const*)loca.data())[glyph_index + 0] * 2;
+                        b = (uint32_t)((Offset16 const*)loca.data())[glyph_index + 1] * 2;
+                        break;
+                    case 1:
+                        a = ((Offset32 const*)loca.data())[glyph_index + 0];
+                        b = ((Offset32 const*)loca.data())[glyph_index + 1];
+                        break;
+                    default:
+                        abort();
+                }
+                if (a == b) {
+                    // Empty glyph (e.g. .notdef, space) — no outline
+                    return {};
+                }
+                auto c = glyf.subspan(a, b - a);
+
+                GlyphInterpreter e;
+                return e.parse(c);
+            } else {
+                abort();
+            }
+        }
+
+        std::vector<bezier4> outline_for_character(int c) const {
             int glyph_index = cmap_subtable->glyph_index_from_character(c);
-            return path_for_glyph_index(glyph_index);
+            return outline_for_glyph_index(glyph_index);
         }
 
-        float advance_for_character(int c) {
+        float advance_for_character(int c) const {
             int glyph_index = cmap_subtable->glyph_index_from_character(c);
-            return horizontal_metrics_for_glyph_index(glyph_index).advanceWidth * (float)scale;
+            return horizontal_metrics_for_glyph_index(glyph_index).advanceWidth;
         }
 
     };
+
+    Handle::~Handle() {
+        delete _inner;
+    }
+
+    std::vector<bezier4> Handle::outline_for_character(int c) const {
+        return _inner->outline_for_character(c);
+    }
+
+    Handle::Metrics Handle::metrics_for_face() const {
+        return _inner->metrics_for_face();
+    }
 
     template<typename T>
     T const* span_cast(span<byte const> a) {
@@ -536,48 +538,50 @@ namespace wry::otf {
         }
     }
 
-    Handle const* parse_Handle(span<byte const> whole) {
+    Handle Handle::parse(span<byte const> whole) {
 
-        auto h = new Handle;
+        auto h = new Handle::Inner;
 
         auto tableDirectory = span_cast<TableDirectory>(whole);
 
         // Required tables
 
         auto cmap = span_cast<CharacterToGlyphIndexMapping>(tableDirectory->find("cmap"));
-        // auto head = span_cast<FontHeader>(tableDirectory->find("head"));
+        auto head = span_cast<FontHeader>(tableDirectory->find("head"));
         auto hhea = span_cast<HorizontalHeader>(tableDirectory->find("hhea"));
-        h->  hmtx = span_cast<HorizontalMetrics>(tableDirectory->find("hmtx"));
-        auto maxp = span_cast<MaximumProfile>(tableDirectory->find("maxp"));
+        h->hmtx = span_cast<HorizontalMetrics>(tableDirectory->find("hmtx"));
+        auto maxp = (MaximumProfile const*)tableDirectory->find("maxp").data();
         // auto name = span_cast<NamingTable>(tableDirectory->find("name"));
-        auto os_2 = span_cast<OS_2andWindowsSpecificMetrics>(tableDirectory->find("OS/2"));
+        h->os_2 = (OS_2andWindowsSpecificMetrics const*)tableDirectory->find("OS/2").data();
         // auto post = span_cast<PostScriptInformation>(tableDirectory->find("post"));
 
         // Tables related to TrueType outlines
-        // ...
 
-        // auto glyf = span_cast<GlyphData>(tableDirectory->find("glyf"));
-        // auto loca = span_cast<IndexToLocation>(tableDirectory->find("loca"));
+        {
+            h->glyf = tableDirectory->find("glyf");
+            h->loca = tableDirectory->find("loca");
+            printf("h->glyf %p %zd\n", h->glyf.data(), h->glyf.size());
+            printf("h->loca %p %zd\n", h->loca.data(), h->loca.size());
+        }
 
         // Tables related to CFF outlines
 
-        h->cff_ = cff::parse_CFF(tableDirectory->find("CFF "));
+        {
+            if (auto s = tableDirectory->find("CFF "))
+                h->cff_ = cff::Handle::parse(s);
+        }
 
         // Derived quantities
 
         h->cmap_subtable = cmap->find_format4();
 
-        h->maxp_numberOfGlyphs = maxp->numGlyphs;
+        h->head_indexToLocFormat = head->indexToLocFormat;
         h->hhea_numberOfHMetrics = hhea->numberOfHMetrics;
+        h->maxp_numberOfGlyphs = maxp->numGlyphs;
 
-        double ascender =  os_2->sTypoAscender;
-        double descender = os_2->sTypoDescender;
-        double lineGap =   os_2->sTypoLineGap;
-
-        h->scale = 1.0f / (ascender - descender + lineGap);
-        h->offset = -descender + lineGap * 0.5f;
-
-        return h;
+        Handle g;
+        g._inner = h;
+        return g;
     }
 
 
