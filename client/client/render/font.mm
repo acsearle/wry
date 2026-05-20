@@ -160,6 +160,7 @@ namespace wry {
         FT_Face face;
         e = FT_New_Face(ft,
                         path_for_resource(u8"Futura Medium Condensed", u8"otf").c_str(),
+                        // path_for_resource("OpenSans_Condensed-Light","ttf").c_str(),
                         // path_for_resource("Hack-Regular", "ttf").c_str(),
                         //"OpenSans-VariableFont_wdth,wght.ttf",
                         0,
@@ -249,160 +250,77 @@ namespace wry {
      */
     
     Font2 build_font2() {
-        
+
         Font2 result;
-        
-        FT_Library ft;
-        FT_Error e = FT_Init_FreeType(&ft);
-        assert(!e);
-        
-        FT_Face face;
-        e = FT_New_Face(ft,
-                        path_for_resource(u8"Futura Medium Condensed", u8"otf").c_str(),
-                        0,
-                        &face);
-        assert(!e);
-        
-        FT_UInt gindex = 0;
-        FT_ULong charcode = FT_Get_First_Char(face, &gindex);
-        
-        // constexpr float k = 1.0f / 64.0f; // metrics are in 26.6 fixed point
-        
+
+        // Load the font file and parse with our bespoke OTF/CFF stack.
+        // String bytes = string_from_file("Futura Medium Condensed.otf");
+        String bytes = string_from_file("OpenSans_Condensed-Light.ttf");
+        // String bytes = string_from_file("OpenSans-VariableFont_wdth,wght.ttf");
+        auto handle = otf::Handle::parse({
+            (byte const*)bytes.chars.data(),
+            bytes.chars.size()
+        });
+
+        // All design-unit values are normalized by 1 / unitsPerEm.
+        float upem_scale = 1.0f / (float)handle.units_per_em();
+
+        auto m = handle.metrics_for_face();
+        result.ascender  = (float)m.ascender  * upem_scale;
+        result.descender = (float)m.descender * upem_scale;
+        result.height    = (float)(m.ascender - m.descender + m.line_gap) * upem_scale;
+
         auto& gi = result.glyph_data;
         auto& cp = result.cubic_bezier;
 
-        FT_Outline& outline = face->glyph->outline;
-//
-//        auto foo = [&](int k) -> float2 {
-//            return float2{(float)outline.points[k].x, (float)outline.points[k].y};
-//        };
-//        
-//        auto bar = [&](auto... ks) {
-//            return bcpFrom(foo(ks)...);
-//        };
+        // Reserve glyph 0 (.notdef) so any later lookup by glyph_index is in-bounds.
+        gi.push_back(::otf::GlyphData{{0,0}, {0,0}, 0, 0});
 
-        // render all glyphs
-        
-        std::vector<float2> p;
-        auto push = [&](int k) {
-            {
-                FT_Vector a = outline.points[k];
-                p.push_back(float2{(float)a.x / 1000.0f, (float)a.y / 1000.0f});
-            }
-            // printf("%d ", outline.tags[k] & 3);
-            if (outline.tags[k] & 1) {
-                // On-curve point
-                switch (p.size()) {
-                    case 1: {
-                    } break;
-                    case 2: {
-                        // Line
-                        cp.push_back(::otf::CubicBezier{
-                            p[0],
-                            mix(p[0], p[1], float2{1.0f, 1.0f} / 3.0f),
-                            mix(p[0], p[1], float2{2.0f, 2.0f} / 3.0f),
-                            p[1],
-                        });
-                        p[0] = p.back();
-                        p.resize(1);
-                    } break;
-                    case 3: {
-                        // Quadratic Bezier curve
-                        cp.push_back(::otf::CubicBezier{
-                            p[0],
-                            mix(p[0], p[1], float2{2.0, 2.0} / 3.0f),
-                            mix(p[1], p[2], float2{1.0, 1.0} / 3.0f),
-                            p[2],
-                        });
-                        p[0] = p.back();
-                        p.resize(1);
-                    } break;
-                    case 4: {
-                        // Cubic Bezier curve
-//                        simd_float2 ab = mix(p[0], p[1], float2{0.75f, 0.75f});
-//                        simd_float2 cd = mix(p[2], p[3], float2{0.25f, 0.25f});
-//                        simd_float2 abcd = mix(ab, cd, float2{0.5f, 0.5f});
-//                        cp.push_back(otf::QuadraticBezier{
-//                            p[0],
-//                            ab,
-//                            abcd
-//                        });
-//                        cp.push_back(otf::QuadraticBezier{
-//                            abcd,
-//                            cd,
-//                            p[3],
-//                        });
-//                        p[0] = p[3];
-                        cp.push_back(::otf::CubicBezier{
-                            p[0],
-                            p[1],
-                            p[2],
-                            p[3],
-                        });
-                        p[0] = p.back();
-                        p.resize(1);
-                    } break;
-                    default:
-                        abort();
-                }
-            }
-        };
-        
-        // For each glyph
-        while (gindex) {
-            // printf("%lu -> %d\n", charcode, gindex);
-            
-            // Load outline but do not scale, hint or rasterize it
-            FT_Load_Glyph(face, gindex, FT_LOAD_NO_SCALE);
-            assert(face->glyph->format == FT_GLYPH_FORMAT_OUTLINE);
+        // For the smoke test ("Sphinx of black quartz, ...") printable ASCII is
+        // enough.  Broader coverage would require exposing cmap enumeration in
+        // otf::Handle.
+        for (int charcode = 32; charcode != 127; ++charcode) {
+            int glyph_index = handle.glyph_index_for_character(charcode);
+            if (glyph_index == 0)
+                continue; // character not in font
 
-            unsigned int cp_a = (int) cp.size();
+            // Outline curves come back in font design units.  Scale to per-em
+            // normalized coordinates and compute the control-point bbox.
+            auto curves = handle.outline_for_glyph_index(glyph_index);
 
-            int j0 = 0;
-            for (int i = 0; i != outline.n_contours; ++i) {
-                int j = j0;
-                for (; j != outline.contours[i] + 1; ++j) {
-                    push(j);
-                }
-                push(j0);
-                j0 = j;
-                // printf("\n");
-                p.clear();
-            }
-            
-            {
-                FT_BBox cb = {};
-                FT_Outline_Get_CBox(&outline, &cb);
-                unsigned int cp_b = (int) cp.size();
-                
-                if (gi.size() < gindex + 1) {
-                    gi.resize(gindex + 1);
-                }
-                
-                gi[gindex] = ::otf::GlyphData{
-                    float2{(float)cb.xMin / 1000.0f, (float)cb.yMin / 1000.0f},
-                    float2{(float)cb.xMax / 1000.0f, (float)cb.yMax / 1000.0f},
-                    cp_a,
-                    cp_b,
-                };
-            }
-            
-  
-            float advance = face->glyph->advance.x / 1000.0f;
-            result.charmap.insert(std::make_pair((uint) charcode, Font2::Glyph{gindex, advance}));
+            unsigned int cp_a = (unsigned int)cp.size();
 
-            charcode = FT_Get_Next_Char(face, charcode, &gindex);
+            float2 lo = float2{ INFINITY,  INFINITY};
+            float2 hi = float2{-INFINITY, -INFINITY};
+            for (auto const& curve : curves) {
+                float2 c0 = curve.columns[0] * upem_scale;
+                float2 c1 = curve.columns[1] * upem_scale;
+                float2 c2 = curve.columns[2] * upem_scale;
+                float2 c3 = curve.columns[3] * upem_scale;
+                lo = simd_min(lo, simd_min(simd_min(c0, c1), simd_min(c2, c3)));
+                hi = simd_max(hi, simd_max(simd_max(c0, c1), simd_max(c2, c3)));
+                cp.push_back(::otf::CubicBezier{c0, c1, c2, c3});
+            }
+
+            unsigned int cp_b = (unsigned int)cp.size();
+
+            if (cp_a == cp_b) {
+                // Empty glyph (e.g. space): collapse bbox to origin.
+                lo = float2{0, 0};
+                hi = float2{0, 0};
+            }
+
+            if (gi.size() < (size_t)(glyph_index + 1))
+                gi.resize((size_t)(glyph_index + 1));
+            gi[glyph_index] = ::otf::GlyphData{lo, hi, cp_a, cp_b};
+
+            float advance = handle.advance_for_glyph_index(glyph_index) * upem_scale;
+            result.charmap.insert(std::make_pair(
+                (uint)charcode,
+                Font2::Glyph{(uint)glyph_index, advance}
+            ));
         }
-        
-//        result.height = face->size->metrics.height * k;
-//        result.ascender = face->size->metrics.ascender * k;
-//        result.descender = face->size->metrics.descender * k;
-//        
-        FT_Done_Face(face);
-        FT_Done_FreeType(ft);
-        
-        //return result;
-        
+
         return result;
     }
     

@@ -57,8 +57,15 @@ namespace wry::otf {
         };
 
         Metrics metrics_for_face() const;
+        int units_per_em() const;
 
+        // Glyph access.  Coordinates are in font design units; divide by
+        // units_per_em() to normalize.
+        int glyph_index_for_character(int c) const;
+        std::vector<bezier4> outline_for_glyph_index(int glyph_index) const;
         std::vector<bezier4> outline_for_character(int c) const;
+        float advance_for_glyph_index(int glyph_index) const;
+        float advance_for_character(int c) const;
 
     };
 

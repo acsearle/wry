@@ -518,6 +518,7 @@ namespace wry::otf {
 
         int start = 0;
         for (int end : a.endPtsOfContours) {
+            size_t curves_begin = result.size();
             for (int i = start; i != end; ++i)
                 push(i, i + 1);
             // close the contour
@@ -545,6 +546,18 @@ namespace wry::otf {
                 }});
             }
             points.clear();
+
+            // TrueType contours are oriented clockwise (with y-up); the analytic
+            // coverage integrator (and the CFF input format) expects
+            // counter-clockwise.  Reverse the per-contour curve slice and swap
+            // each cubic's endpoint/control pairs to flip orientation.
+            std::reverse(result.begin() + curves_begin, result.end());
+            for (size_t k = curves_begin; k != result.size(); ++k) {
+                auto& cubic = result[k];
+                std::swap(cubic.columns[0], cubic.columns[3]);
+                std::swap(cubic.columns[1], cubic.columns[2]);
+            }
+
             start = end + 1;
         }
 
@@ -575,6 +588,7 @@ namespace wry::otf {
         cff::Handle cff_;
 
         int head_indexToLocFormat;
+        int head_unitsPerEm;
         int maxp_numberOfGlyphs;
         int hhea_numberOfHMetrics;
 
@@ -606,7 +620,7 @@ namespace wry::otf {
                     abort();
             }
             if (a == b) {
-                // Empty glyph (e.g. .notdef, space) — no outline
+                // Empty glyph (e.g. .notdef, space): no outline
                 return {};
             }
             auto c = glyf.subspan(a, b - a);
@@ -678,8 +692,28 @@ namespace wry::otf {
         return _inner->outline_for_character(c);
     }
 
+    std::vector<bezier4> Handle::outline_for_glyph_index(int glyph_index) const {
+        return _inner->outline_for_glyph_index(glyph_index);
+    }
+
+    int Handle::glyph_index_for_character(int c) const {
+        return _inner->cmap_subtable->glyph_index_from_character(c);
+    }
+
+    float Handle::advance_for_glyph_index(int glyph_index) const {
+        return _inner->horizontal_metrics_for_glyph_index(glyph_index).advanceWidth;
+    }
+
+    float Handle::advance_for_character(int c) const {
+        return _inner->advance_for_character(c);
+    }
+
     Handle::Metrics Handle::metrics_for_face() const {
         return _inner->metrics_for_face();
+    }
+
+    int Handle::units_per_em() const {
+        return _inner->head_unitsPerEm;
     }
 
     template<typename T>
@@ -730,6 +764,7 @@ namespace wry::otf {
         h->cmap_subtable = cmap->find_format4();
 
         h->head_indexToLocFormat = head->indexToLocFormat;
+        h->head_unitsPerEm = head->unitsPerEm;
         h->hhea_numberOfHMetrics = hhea->numberOfHMetrics;
         h->maxp_numberOfGlyphs = maxp->numGlyphs;
 
