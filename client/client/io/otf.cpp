@@ -11,6 +11,8 @@
 #include <array>
 #include <vector>
 #include <algorithm>
+#include <deque>
+
 #include "simd.hpp"
 
 #include "NetworkToHostReader.hpp"
@@ -281,167 +283,268 @@ namespace wry::otf {
 
     };
 
-    struct GlyphInterpreter {
+    template<std::integral T>
+    T read(span<byte const>& s) {
+        CHECK(s.size() >= sizeof(T));
+        T x = {};
+        std::memcpy(&x, s.data(), sizeof(T));
+        s.drop_front(sizeof(T));
+        return ntoh(x);
+    }
 
-//        std::vector<uint16_t> endPtsOfContours;
-//        uint16_t instructionLength;
-//        std::vector<uint8_t> instructions;
-//        std::vector<uint8_t> flags;
-        std::vector<simd_float2> points;
-        std::vector<bool> on_curve;
+    enum SimpleGlyphFlags {
+        ON_CURVE_POINT = 0x01,
+        X_SHORT_VECTOR = 0x02,
+        Y_SHORT_VECTOR = 0x04,
+        REPEAT_FLAG    = 0x08,
+        X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR = 0x10,
+        Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR = 0x20,
+        OVERLAP_SIMPLE = 0x40,
+        // RESERVED = 0x80,
+    };
 
-        enum {
-            ON_CURVE_POINT = 0x01,
-            X_SHORT_VECTOR = 0x02,
-            Y_SHORT_VECTOR = 0x04,
-            REPEAT_FLAG    = 0x08,
-            X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR = 0x10,
-            Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR = 0x20,
-        };
+    struct SimpleGlyph {
 
-        std::vector<bezier4> parse(span<byte const> s) {
-            auto h = (GlyphHeader const*)s.data();
-            // TODO: Compund glyphs are not handled yet
-            printf("%d\n", (int)h->numberOfContours);
-            printf("%d\n", (int)h->xMin);
-            printf("%d\n", (int)h->yMin);
-            printf("%d\n", (int)h->xMax);
-            printf("%d\n", (int)h->yMax);
-            if (h->numberOfContours == 0)
-                return {};
-            CHECK(h->numberOfContours > 0); // negative values indicate compiste glyphs
-            CHECK(h->xMin <= h->xMax);
-            CHECK(h->yMin <= h->yMax);
-            s.drop_front(sizeof(GlyphHeader));
+        std::vector<uint16_t> endPtsOfContours;
+        std::vector<uint8_t> flags;
+        std::vector<simd_float2> coordinates;
 
+        void transform(simd_float2x2 A) {
+            for (auto& x : coordinates)
+                x = simd_mul(A, x);
+        }
 
-            span<uint16 const> endPtsOfContours((uint16 const*)s.data(), h->numberOfContours);
-            uint16_t instructionLength = *endPtsOfContours.end(); // <-- deliberate one-past-the-end
-            span<uint8 const> instructions((uint8 const*)(endPtsOfContours.end() + 1), instructionLength);
-            uint8 const* flags_first = instructions.end();
+        void translate(simd_float2 b) {
+            for (auto& x : coordinates)
+                x += b;
+        }
 
-            ptrdiff_t x_bytes = 0;
-
-            // We need to parse the flags enough to find x and y
-
-            auto flags_last = flags_first;
-            for (int remaining = endPtsOfContours.back() + 1; remaining;) {
-                assert(remaining > 0);
-                uint8_t f = *flags_last++;
-                int n = 1;
-                if (f & REPEAT_FLAG)
-                    n += *flags_last++;
-                switch (f & (X_SHORT_VECTOR | X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR)) {
-                    case 0:
-                        x_bytes += (n << 1);
-                        break;
-                    case X_SHORT_VECTOR:
-                        x_bytes += n;
-                        break;
-                    case X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR:
-                        x_bytes += 0;
-                        break;
-                    case (X_SHORT_VECTOR | X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR):
-                        x_bytes += n;
-                        break;
-                }
-                remaining -= n;
-            }
-
-            // Set up the readers for the next pass
-            // auto [sx, sy] = rf.s.partition(x_bytes);
-            uint8 const* sx = flags_last;
-            uint8 const* sy = sx + x_bytes;
-
-            wry::Reader rx{{sx, sy}}, ry{{sy, s.end()}};
-            // rf.s = r.s.before(rf.s.begin());
-
-            simd_short2 pen{};
-            for (byte const* rf = flags_first; rf != flags_last;) {
-                uint8_t f = *rf++;
-                uint8_t n = 1;
-                if (f & REPEAT_FLAG) {
-                    n += *rf++;
-                }
-                while (n--) {
-                    switch (f & (X_SHORT_VECTOR | X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR)) {
-                        case 0:
-                            pen.x += rx.read<int16_t>();
-                            break;
-                        case X_SHORT_VECTOR:
-                            pen.x -= (int)rx.read<uint8_t>();
-                            break;
-                        case X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR:
-                            break;
-                        case (X_SHORT_VECTOR | X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR):
-                            pen.x += (int)rx.read<uint8_t>();
-                            break;
-                    }
-                    switch (f & (Y_SHORT_VECTOR | Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR)) {
-                        case 0:
-                            pen.y += ry.read<int16_t>();
-                            break;
-                        case Y_SHORT_VECTOR:
-                            pen.y -= (int)ry.read<uint8_t>();
-                            break;
-                        case Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR:
-                            break;
-                        case (Y_SHORT_VECTOR | Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR):
-                            pen.y += (int)ry.read<uint8_t>();
-                            break;
-                    }
-                    points.push_back(simd_float2{(float)pen.x, (float)pen.y});
-                    on_curve.push_back(f & ON_CURVE_POINT);
-                }
-            }
-
-            CHECK(points.size() == endPtsOfContours.back() + 1);
-
-            std::vector<bezier4> result;
-            simd_float2 a, b, c;
-            int i0 = 0, i1;
-            for (int j = 0; j != endPtsOfContours.size(); ++j) {
-                i1 = endPtsOfContours[j];
-                for (int i = i0; i != i1 - 1; ++i) {
-                    if (on_curve[i + 1]) {
-                        if (on_curve[i + 0]) {
-                            a = points[i + 0];
-                            c = points[i + 1];
-                            b = simd_mix(a, c, 0.5f);
-                        } else {
-                            continue;
-                        }
-                    } else {
-                        assert(i + 2 < points.size());
-                        a = points[i + 0];
-                        b = points[i + 1];
-                        c = points[i + 2];
-                        if (!on_curve[i + 0]) {
-                            a = simd_mix(a, b, 0.5f);
-                        }
-                        if (!on_curve[i + 2]) {
-                            c = simd_mix(b, c, 0.5f);
-                        }
-                    }
-                    result.push_back(bezier4{{
-                        a,
-                        simd_mix(a, b, 2.0f / 3.0f),
-                        simd_mix(b, c, 1.0f / 3.0f),
-                        c
-                    }});
-                }
-                i0 = i1;
-            }
-
-
-            for (auto& p : result)
-                for (int i = 0; i != 4; ++i)
-                    printf("  %g %g\n", p.columns[i].x, p.columns[i].y);
-
-            return result;
+        void extend(SimpleGlyph const& other) {
+            auto numberOfPoints = endPtsOfContours.back() + 1;
+            assert(flags.size() == numberOfPoints);
+            assert(coordinates.size() == numberOfPoints);
+            for (auto e : other.endPtsOfContours)
+                endPtsOfContours.push_back(numberOfPoints + e);
+            flags.insert(flags.end(), other.flags.begin(), other.flags.end());
+            coordinates.insert(coordinates.end(), other.coordinates.begin(), other.coordinates.end());
         }
 
     };
+
+    SimpleGlyph otf_parse_simple_glyph(span<byte const>& s, int numberOfContours) {
+
+        assert(numberOfContours >= 0);
+        if (numberOfContours == 0)
+            return {};   // legal empty simple glyph (e.g. .notdef, space)
+
+        std::vector<uint16_t> endPtsOfContours;
+        for (int i = 0; i != numberOfContours; ++i)
+            endPtsOfContours.push_back(read<uint16_t>(s));
+        size_t numberOfPoints = endPtsOfContours.back() + 1;
+
+        auto instructionLength = read<uint16_t>(s);
+
+        s.drop_front(instructionLength);
+
+        std::vector<uint8_t> flags;
+        for (size_t i = 0; i != numberOfPoints;) {
+            assert(i < numberOfPoints);
+            int n = 1;
+            auto b = read<uint8_t>(s);
+            if (b & REPEAT_FLAG)
+                n += read<uint8_t>(s);
+            flags.insert(flags.end(), n, b);
+            i += n;
+        }
+
+        assert(flags.size() == numberOfPoints);
+
+        std::vector<simd_float2> coordinates(numberOfPoints);
+
+        float x = 0.0f;
+        for (size_t i = 0; i != numberOfPoints; ++i) {
+            auto f = flags[i];
+            switch (f & (X_SHORT_VECTOR | X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR)) {
+                case 0:
+                    x += read<int16_t>(s);
+                    break;
+                case X_SHORT_VECTOR:
+                    x -= read<uint8_t>(s);
+                    break;
+                case X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR:
+                    break;
+                case (X_SHORT_VECTOR | X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR):
+                    x += read<uint8_t>(s);
+                    break;
+                default:
+                    std::unreachable();
+            }
+            coordinates[i].x = x;
+        }
+
+        float y = 0.0f;
+        for (size_t i = 0; i != numberOfPoints; ++i) {
+            auto f = flags[i];
+            switch (f & (Y_SHORT_VECTOR | Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR)) {
+                case 0:
+                    y += read<int16_t>(s);
+                    break;
+                case Y_SHORT_VECTOR:
+                    y -= read<uint8_t>(s);
+                    break;
+                case Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR:
+                    break;
+                case (Y_SHORT_VECTOR | Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR):
+                    y += read<uint8_t>(s);
+                    break;
+                default:
+                    std::unreachable();
+            }
+            coordinates[i].y = y;
+        }
+
+        // all data consumed (up to offset granualrity)
+        CHECK(s.size() <= 1);
+
+        return SimpleGlyph {
+            endPtsOfContours,
+            flags,
+            coordinates,
+        };
+
+    }
+
+
+    enum ComponentGlyphFlags {
+        ARG1_AND_2_ARE_WORDS = 0x0001,
+        ARGS_ARE_XY_VALUES = 0x0002,
+        ROUND_XY_TO_GRID = 0x0004,
+        WE_HAVE_A_SCALE = 0x0008,
+        MORE_COMPONENTS = 0x0020,
+        WE_HAVE_AN_X_AND_Y_SCALE = 0x0040,
+        WE_HAVE_A_TWO_BY_TWO = 0x0080,
+        WE_HAVE_INSTRUCTIONS = 0x0100,
+        USE_MY_METRICS = 0x0200,
+        OVERLAP_COMPOUND = 0x0400,
+        SCALED_COMPONENT_OFFSET = 0x0800,
+        UNSCALED_COMPONENT_OFFSET = 0x1000,
+        // RESERVED = 0xE010,
+    };
+
+    struct ComponentGlyph {
+        uint16_t flags;
+        uint16_t glyphIndex;
+        int32_t argument1;
+        int32_t argument2;
+        simd_float2x2 scale;
+    };
+
+    ComponentGlyph otf_parse_component_glyph(span<byte const>& s) {
+
+        uint16_t flags = read<uint16_t>(s);
+        uint16_t glyphIndex = read<uint16_t>(s);
+        int32_t argument1, argument2;
+        if (flags & ARGS_ARE_XY_VALUES) {
+            if (flags & ARG1_AND_2_ARE_WORDS) {
+                argument1 = read<int16_t>(s);
+                argument2 = read<int16_t>(s);
+            } else {
+                argument1 = read<int8_t>(s);
+                argument2 = read<int8_t>(s);
+            }
+        } else {
+            if (flags & ARG1_AND_2_ARE_WORDS) {
+                argument1 = read<uint16_t>(s);
+                argument2 = read<uint16_t>(s);
+            } else {
+                argument1 = read<uint8_t>(s);
+                argument2 = read<uint8_t>(s);
+            }
+        }
+        // float xscale = 1.0f, yscale = 1.0f, scale01 = 0.0f, scale10 = 0.0f;
+        simd_float2x2 scale = {{{0x1.0p+14f,0.0f},{0.0f,0x1.0p+14f}}};
+        if (flags & WE_HAVE_A_SCALE) {
+            scale.columns[0].x = read<int16_t>(s);
+            scale.columns[1].y = scale.columns[0].x;
+        } else if (flags & WE_HAVE_AN_X_AND_Y_SCALE) {
+            scale.columns[0].x = read<int16_t>(s);
+            scale.columns[1].y = read<int16_t>(s);
+        } else if (flags & WE_HAVE_A_TWO_BY_TWO) {
+            scale.columns[0].x = read<int16_t>(s);
+            scale.columns[0].y = read<int16_t>(s);
+            scale.columns[1].x = read<int16_t>(s);
+            scale.columns[1].y = read<int16_t>(s);
+        }
+        scale.columns[0] *= 0x1.0p-14f;
+        scale.columns[1] *= 0x1.0p-14f;
+
+
+        // if !ARGS_ARE_XY_VALUES:
+        // the tranformed point[arg2] in the child must align with
+        // the point[arg1] in the parent glyph (the concatenated points of all previously processed glyphs)
+
+        return ComponentGlyph{
+            flags,
+            glyphIndex,
+            argument1,
+            argument2,
+            scale
+        };
+
+    }
+
+
+    std::vector<bezier4> process_points(SimpleGlyph const& a) {
+
+        std::vector<bezier4> result;
+        std::deque<simd_float2> points;
+        auto push = [&](int i, int j) {
+            bool fi = a.flags[i] & ON_CURVE_POINT;
+            bool fj = a.flags[j] & ON_CURVE_POINT;
+            simd_float2 vi = a.coordinates[i];
+            simd_float2 vj = a.coordinates[j];
+            points.push_back(vi);
+            if (fi != fj) {
+                points.push_back(simd_mix(vi, vj, 0.5f));
+            }
+        };
+
+        int start = 0;
+        for (int end : a.endPtsOfContours) {
+            for (int i = start; i != end; ++i)
+                push(i, i + 1);
+            // close the contour
+            push(end, start);
+            if (!(a.flags[start] & ON_CURVE_POINT)) {
+                // fixup the start point
+                simd_float2 v = points.back();
+                points.push_front(v);
+            }
+            while (points.size() >= 3) {
+                auto a = points.front(); points.pop_front();
+                auto b = points.front(); points.pop_front();
+                auto c = points.front();
+                result.push_back(bezier4{{
+                    a,
+                    simd_mix(a, b, 2.0f / 3.0f),
+                    simd_mix(b, c, 1.0f / 3.0f),
+                    c
+                }});
+            }
+            points.clear();
+        }
+
+        for (auto& p : result)
+            for (int i = 0; i != 4; ++i)
+                printf("  %g %g\n", p.columns[i].x, p.columns[i].y);
+
+        return result;
+    }
+
+
+
+
+
 
 
     struct Handle::Inner {
@@ -473,32 +576,64 @@ namespace wry::otf {
             return hmtx->hMetrics[std::min(glyph_index, hhea_numberOfHMetrics - 1)];
         }
 
+        span<byte const> otf_span_for_glyph_index(int glyph_index) const {
+            size_t a, b;
+            switch (head_indexToLocFormat) {
+                case 0:
+                    // Short format: stored value is the actual offset divided by 2
+                    a = (size_t)((Offset16 const*)loca.data())[glyph_index + 0] * 2;
+                    b = (size_t)((Offset16 const*)loca.data())[glyph_index + 1] * 2;
+                    break;
+                case 1:
+                    a = ((Offset32 const*)loca.data())[glyph_index + 0];
+                    b = ((Offset32 const*)loca.data())[glyph_index + 1];
+                    break;
+                default:
+                    abort();
+            }
+            if (a == b) {
+                // Empty glyph (e.g. .notdef, space) — no outline
+                return {};
+            }
+            auto c = glyf.subspan(a, b - a);
+            return c;
+        }
+
+        SimpleGlyph otf_parse_glyph(span<byte const>& s) const {
+            auto header = (GlyphHeader const*)s.data();
+            s.drop_front(sizeof(GlyphHeader));
+            if (header->numberOfContours >= 0) {
+                return otf_parse_simple_glyph(s, header->numberOfContours);
+            } else if (header->numberOfContours == -1) {
+                SimpleGlyph parent = {};
+                ComponentGlyph a;
+                do {
+                    a = otf_parse_component_glyph(s);
+                    span<byte const> t = otf_span_for_glyph_index(a.glyphIndex);
+                    SimpleGlyph b = otf_parse_glyph(t);
+                    b.transform(a.scale);
+                    if (a.flags & ARGS_ARE_XY_VALUES) {
+                        b.translate({(float)a.argument1, (float)a.argument2});
+                    } else {
+                        b.translate(parent.coordinates[a.argument1] - b.coordinates[a.argument2]);
+                    }
+                    parent.extend(b);
+                } while (a.flags & MORE_COMPONENTS);
+                return parent;
+            } else {
+                abort();
+            }
+        }
+
         std::vector<bezier4> outline_for_glyph_index(int glyph_index) const {
             if (cff_) {
                 return cff_.outline_for_glyph_index(glyph_index);
             } else if (glyf && loca) {
-                uint32_t a, b;
-                switch (head_indexToLocFormat) {
-                    case 0:
-                        // Short format: stored value is the actual offset divided by 2
-                        a = (uint32_t)((Offset16 const*)loca.data())[glyph_index + 0] * 2;
-                        b = (uint32_t)((Offset16 const*)loca.data())[glyph_index + 1] * 2;
-                        break;
-                    case 1:
-                        a = ((Offset32 const*)loca.data())[glyph_index + 0];
-                        b = ((Offset32 const*)loca.data())[glyph_index + 1];
-                        break;
-                    default:
-                        abort();
-                }
-                if (a == b) {
-                    // Empty glyph (e.g. .notdef, space) — no outline
+                span<byte const> a = otf_span_for_glyph_index(glyph_index);
+                if (!a)
                     return {};
-                }
-                auto c = glyf.subspan(a, b - a);
-
-                GlyphInterpreter e;
-                return e.parse(c);
+                SimpleGlyph b = otf_parse_glyph(a);
+                return process_points(b);
             } else {
                 abort();
             }

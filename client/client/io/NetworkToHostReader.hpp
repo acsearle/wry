@@ -52,56 +52,7 @@ namespace wry {
         for (auto& a : t)
             parse_ntoh(s, a);
     }
-    
 
-    // TODO: Clean up; probably not needed at all
-
-    using Bytes = span<byte const>;
-    
-    struct NetworkToHostReader {
-        
-        span<byte const> s;
-        
-        void skip(std::size_t n) {
-            s.drop_front(n);
-        }
-        
-        template<typename T>
-        void read(T& x) {
-            std::memcpy(&x, s.data(), sizeof(T));
-            s.drop_front(sizeof(T));
-            if constexpr (std::is_integral_v<T>) {
-                x = ntoh(x);
-            }
-        }
-        
-        template<typename T, typename T2, typename... Ts>
-        void read(T& x, T2& x2, Ts&... xs) {
-            read(x);
-            read(x2, xs...);
-        }
-        
-        template<typename T>
-        T read() {
-            T x{};
-            read(x);
-            return x;
-        }
-        
-    };
-    
-    using Reader = NetworkToHostReader;
-    
-    template<std::integral T>
-    bool read(span<byte const>& s, T& x) {
-        if (s.size() < sizeof(T))
-            return false;
-        std::memcpy(&x, s.data(), sizeof(T));
-        s.drop_front(sizeof(T));
-        x = ntoh(x);
-        return true;
-    }
-    
     template<std::integral T>
     struct NetworkByteOrder {
         unsigned char raw[sizeof(T)];

@@ -490,6 +490,7 @@ namespace wry {
 
     
     void build_font3() {
+        /*
         String a = string_from_file("Futura Medium Condensed.otf");
         auto aa = otf::Handle::parse({(byte const*)a.chars.data(), a.chars.size()});
         auto aaa = aa.outline_for_character('a');
@@ -498,6 +499,15 @@ namespace wry {
         auto bb = otf::Handle::parse({(byte const*)b.chars.data(), b.chars.size()});
         auto bbb = bb.outline_for_character('b');
         printf("bbb.size() = %zd\n", bbb.size());
+         */
+        auto a = string_from_file("OpenSans_Condensed-Light.ttf");
+        auto b = otf::Handle::parse({(byte const*)a.chars.data(), a.chars.size()});
+        for (int c = 32; c != 127; ++c) {
+            printf(" - %c ---\n", c);
+            b.outline_for_character(c);
+        }
+
+
     }
     
     
