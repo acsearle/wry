@@ -470,10 +470,13 @@ namespace wry::otf {
             scale.columns[0].x = read<int16_t>(s);
             scale.columns[1].y = read<int16_t>(s);
         } else if (flags & WE_HAVE_A_TWO_BY_TWO) {
-            scale.columns[0].x = read<int16_t>(s);
-            scale.columns[0].y = read<int16_t>(s);
-            scale.columns[1].x = read<int16_t>(s);
-            scale.columns[1].y = read<int16_t>(s);
+            // Wire order is xscale, scale01, scale10, yscale (per OT spec).
+            // Transform is [x';y'] = [xscale scale01; scale10 yscale] [x;y].
+            // simd_float2x2 is column-major, so M[row][col] = M.columns[col][row].
+            scale.columns[0].x = read<int16_t>(s);   // xscale
+            scale.columns[1].x = read<int16_t>(s);   // scale01
+            scale.columns[0].y = read<int16_t>(s);   // scale10
+            scale.columns[1].y = read<int16_t>(s);   // yscale
         }
         scale.columns[0] *= 0x1.0p-14f;
         scale.columns[1] *= 0x1.0p-14f;
@@ -504,7 +507,11 @@ namespace wry::otf {
             simd_float2 vi = a.coordinates[i];
             simd_float2 vj = a.coordinates[j];
             points.push_back(vi);
-            if (fi != fj) {
+            // Insert an implicit midpoint between adjacent same-type points:
+            //  on-on   -> the midpoint is the implicit control of a line
+            //             (degenerate quadratic).
+            //  off-off -> the midpoint is the implicit on-curve anchor.
+            if (fi == fj) {
                 points.push_back(simd_mix(vi, vj, 0.5f));
             }
         };
@@ -515,10 +522,16 @@ namespace wry::otf {
                 push(i, i + 1);
             // close the contour
             push(end, start);
-            if (!(a.flags[start] & ON_CURVE_POINT)) {
-                // fixup the start point
-                simd_float2 v = points.back();
-                points.push_front(v);
+            if (a.flags[start] & ON_CURVE_POINT) {
+                // on-start: append the starting anchor at the back so the
+                // consumer's last (a, b, c) triple closes the loop.
+                points.push_back(a.coordinates[start]);
+            } else {
+                // off-start: the natural start anchor was deposited at the
+                // back by the closing push (either an on-curve point or an
+                // implicit midpoint). Rotate it to the front so the consumer
+                // starts there.
+                points.push_front(points.back());
             }
             while (points.size() >= 3) {
                 auto a = points.front(); points.pop_front();
@@ -532,6 +545,7 @@ namespace wry::otf {
                 }});
             }
             points.clear();
+            start = end + 1;
         }
 
         for (auto& p : result)
@@ -615,9 +629,14 @@ namespace wry::otf {
                     if (a.flags & ARGS_ARE_XY_VALUES) {
                         b.translate({(float)a.argument1, (float)a.argument2});
                     } else {
+                        // Match-point semantics require a non-empty parent.
+                        CHECK(!parent.endPtsOfContours.empty());
                         b.translate(parent.coordinates[a.argument1] - b.coordinates[a.argument2]);
                     }
-                    parent.extend(b);
+                    if (parent.endPtsOfContours.empty())
+                        parent = std::move(b);
+                    else
+                        parent.extend(b);
                 } while (a.flags & MORE_COMPONENTS);
                 return parent;
             } else {
