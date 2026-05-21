@@ -580,7 +580,6 @@
             
             
             _font2 = build_font2();
-            build_font3();
             
             
         }

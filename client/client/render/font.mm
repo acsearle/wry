@@ -27,227 +27,225 @@
 
 namespace wry {
     
-    auto binomial_n(auto first, auto n) {
-        // [k] = (n ; k) = n! / (k! (n - k)!)
-        // \Sigma_{k=0}^n (n; k) = 2^n
-        decltype(n) a = 1, b = 1;
-        while (n) {
-            *first = a;
-            a *= n;
-            assert(a % b == 0);
-            a /= b;
-            ++first;
-            --n;
-            ++b;
-        }
-        return first;
-    }
-    
-    // Apply a simple pixel-scale drop-shadow to existing artwork
-    
-    // TODO: This seems like a bad idea vs a shader?
-    
-    matrix<RGBA8Unorm_sRGB> apply_shadow(matrix_view<R8Unorm> x) {
+    matrix<RGBA8Unorm_sRGB> rgba_from_a(matrix_view<R8Unorm> x) {
 
-        // We get an alpha map.
-        //
-        // We want a drop-shadow, Gaussian, offset below
-
-        float k[5] = { 0.0625f, 0.25f, 0.375f, 0.25f, 0.0625f };
-        // double k[5] = { 1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0 };
-        // double k[5] = { 1.0 / 6.0, 4.0 / 6.0, 6.0 / 6.0, 4.0 / 6.0, 1.0 / 6.0 };
-        // double k[5] = { 0, 0, 1, 0, 0 };
-                
-        matrix<float> a(x.minor() + 4, x.major() + 4);
-        matrix<R8Unorm> b(x.minor() + 4 + 4, x.major() + 4 + 4);
-        
-        b = 0.0f;
-        b.sub(4, 4, x.minor(), x.major()) = x;
-        
-        // Compute offset filter
-        for (size_t i = 0; i != a.minor(); ++i) {
-            for (size_t j = 0; j != a.major(); ++j) {
-                a[i, j] = 0.0f;
-                for (size_t u = 0; u != 5; ++u) {
-                    for (size_t v = 0; v != 5; ++v) {
-                        //printf("%g\n", (float) b[i + u, j + v]);
-                        a[i, j] += k[u] * k[v] * b[i + u, j + v];
-                    }
-                }
-            }
-        }
-        
-        // Blend with offset glyph alpha
-        for (size_t i = 0; i != x.minor(); ++i) {
-            for (size_t j = 0; j != x.major(); ++j) {
-                float alpha = x[i, j];
-                (a[i + 0, j + 2] *= (1.0 - alpha)) += alpha;
-            }
-        }
-        
-        // Copy alpha into final result
-        matrix<RGBA8Unorm_sRGB> c(a.minor(), a.major());
+        matrix<RGBA8Unorm_sRGB> c(x.minor(), x.major());
         for (size_t i = 0; i != c.minor(); ++i) {
             for (size_t j = 0; j != c.major(); ++j) {
-                c[i, j].a = a[i, j];
+                c[i, j].a = x[i, j];
             }
         }
         
         // Color is alpha to linear color to sRGB
-        for (size_t i = 0; i != x.minor(); ++i) {
-            for (size_t j = 0; j != x.major(); ++j) {
+        for (size_t i = 0; i != c.minor(); ++i) {
+            for (size_t j = 0; j != c.major(); ++j) {
                 uchar d = _multiply_alpha_table[x[i, j]._][255];
                 //printf("%d\n", (int) d);
-                auto& p = c[i + 0, j + 2];
+                auto& p = c[i, j];
                 p.r._ = d;
                 p.g._ = d;
                 p.b._ = d;
             }
         }
-        
-        
         return c;
-        
     }
-    
-    
-    /*
-    
-    // tight-bound
-    simd_int2 prune(image<simd_uchar4>& x, auto predicate = [](pixel v) {
-        return v == pixel{0,0,0,0}; } )
+
+    // CPU port of Shaders.metal::otf::bezierFragmentFunction, simplified for
+    // the rasterizer-into-atlas use case: no perspective (w=1 implicitly), no
+    // page-to-screen transform.  Returns the signed analytic coverage of a
+    // closed cubic Bezier path under a 1-pixel-sigma 2D Gaussian prefilter,
+    // evaluated at one pixel.  Positive for CCW-outer contours (the
+    // convention process_points emits after orientation normalization).
+    static float coverage_at_pixel(std::vector<bezier4> const& curves,
+                                   simd_float2 pixel_center,
+                                   float pixel_size_du)
     {
-        simd_int2 offset = {};
-        
-        auto f = [&](auto v) {
-            return std::all_of(std::begin(v), std::end(v), predicate);
-        };
-        
-        while (x.get_height() && f(x.front())) {
-            ++offset.y;
-            --x._height;
-            x._origin += x._stride;
+        // TODO: This function is structured to avoid recursion and diverging
+        // control flow on the GPU.  It could be written more isiomatically
+        // on the CPU with recursion.
+
+        // Typical glyphs have a few dozen curves and subdivide ~6 levels in
+        // the worst case, so 128 is comfortable.  If we overflow we drop the
+        // tail rather than crash; the coverage error is bounded by the
+        // error-threshold on the dropped curves.
+        constexpr int STACK_SIZE = 128;
+        simd_float2 stack[STACK_SIZE][4];
+        int sp = 0;
+
+        // Convert to "erf coordinates": 1 unit == sqrt(2) pixels == one sigma
+        // of the unit-pixel Gaussian.  Same scale convention as the shader's
+        // `pixel_size * M_SQRT2_F` divisor.
+        // NOTE: Extra factor of two from somewhere is needed
+        float scale = 1.0f / (pixel_size_du * (float)M_SQRT2) * 2.0;
+
+        for (auto const& curve : curves) {
+            if (sp >= STACK_SIZE) break;
+            stack[sp][0] = (curve.columns[0] - pixel_center) * scale;
+            stack[sp][1] = (curve.columns[1] - pixel_center) * scale;
+            stack[sp][2] = (curve.columns[2] - pixel_center) * scale;
+            stack[sp][3] = (curve.columns[3] - pixel_center) * scale;
+            ++sp;
         }
 
-        while (x.get_height() && f(x.back())) {
-            --x._height;
-        }
-        
-        while (x.get_width() && f(x.column(0))) {
-            ++offset.x;
-            --x._width;
-            ++x._origin;
+        float cumulant = 0.0f;
+        while (sp) {
+            --sp;
+            simd_float2 a = stack[sp][0];
+            simd_float2 b = stack[sp][1];
+            simd_float2 c = stack[sp][2];
+            simd_float2 d = stack[sp][3];
+
+            // Control-point bbox: the curve stays inside this convex hull.
+            simd_float2 lo = simd_min(simd_min(a, b), simd_min(c, d));
+            simd_float2 hi = simd_max(simd_max(a, b), simd_max(c, d));
+            // Map bbox corners to erf coordinates so the error estimate is in
+            // the integrator's natural units.
+            simd_float2 plo = erf(lo);
+            simd_float2 phi = erf(hi);
+            float error = (phi.x - plo.x) * (phi.y - plo.y);
+
+            if (error <= 1.0f / 64.0f) {
+                // Trapezoid rule between the two endpoints in erf coords.
+                simd_float2 pa = erf(a);
+                simd_float2 pd = erf(d);
+                cumulant += (pd.y - pa.y) * (pa.x + pd.x);
+            } else if (sp + 2 <= STACK_SIZE) {
+                // de Casteljau subdivision at t=0.5: left half, right half.
+                simd_float2 ab = simd_mix(a, b, 0.5f);
+                simd_float2 bc = simd_mix(b, c, 0.5f);
+                simd_float2 cd = simd_mix(c, d, 0.5f);
+                simd_float2 abbc = simd_mix(ab, bc, 0.5f);
+                simd_float2 bccd = simd_mix(bc, cd, 0.5f);
+                simd_float2 abbbcccd = simd_mix(abbc, bccd, 0.5f);
+                stack[sp][0] = a;
+                stack[sp][1] = ab;
+                stack[sp][2] = abbc;
+                stack[sp][3] = abbbcccd;
+                ++sp;
+                stack[sp][0] = abbbcccd;
+                stack[sp][1] = bccd;
+                stack[sp][2] = cd;
+                stack[sp][3] = d;
+                ++sp;
+            }
+            // else stack full: drop this curve's contribution.
         }
 
-        while (x.get_width() && f(x.column(x.get_width() - 1))) {
-            --x._width;
-        }
-        
-        return offset;
-        
+        // Factor of 0.125 matches the shader: erf range is [-1, 1] (width 2),
+        // and pa.x + pd.x is twice the trapezoid mean.
+        return cumulant * 0.125f;
     }
-     
-     */
-     
-    Font build_font(SpriteAtlas& atl) {
-        
-        Font result;
-        
-        FT_Library ft;
-        FT_Error e = FT_Init_FreeType(&ft);
-        assert(!e);
-        
-        FT_Face face;
-        e = FT_New_Face(ft,
-                        path_for_resource(u8"Futura Medium Condensed", u8"otf").c_str(),
-                        // path_for_resource("OpenSans_Condensed-Light","ttf").c_str(),
-                        // path_for_resource("Hack-Regular", "ttf").c_str(),
-                        //"OpenSans-VariableFont_wdth,wght.ttf",
-                        0,
-                        &face);
-        assert(!e);
-        
-        FT_Set_Pixel_Sizes(face, 0, 40);
-        
-        FT_UInt gindex = 0;
-        FT_ULong charcode = FT_Get_First_Char(face, &gindex);
-        
-        matrix<uchar4> u;
-        constexpr float k = 1.0f / 64.0f; // metrics are in 26.6 fixed point
-        
-        // render all glyphs
-        while (gindex) {
-            
-            // DUMP(charcode);
-            
-            // Render fractional pixel coverage
-            FT_Load_Glyph(face, gindex, FT_LOAD_RENDER); // load and render for gray level
-            
-            // Render signed distance field from Bezier curves
-            // FT_Load_Glyph(face, gindex, FT_LOAD_DEFAULT); // load but do not render
-            // FT_Render_Glyph(face->glyph, FT_RENDER_MODE_SDF);
 
-            // Render signed distance field from bitmask
-            // FT_Load_Glyph(face, gindex, FT_LOAD_RENDER); // load and render for gray level
-            // FT_Render_Glyph(face->glyph, FT_RENDER_MODE_SDF); // re-render for SDF
+    struct GlyphBitmap {
+        matrix<R8Unorm> coverage; // 0 = no fill, 255 = full fill
+        int bitmap_left;          // pixel offset from pen origin to left edge
+        int bitmap_top;           // pixel offset from baseline upward to top edge
+    };
 
-            // apply subtle dropshadow
-            auto v = matrix_view<R8Unorm>(stride_iterator<R8Unorm>(reinterpret_cast<R8Unorm*>(face->glyph->bitmap.buffer),
-                                                                   face->glyph->bitmap.pitch),
-                                          face->glyph->bitmap.rows,
-                                          face->glyph->bitmap.width);
-            matrix<RGBA8Unorm_sRGB> u = apply_shadow(v);
-            // draw_bounding_box(u);
-            
-            Sprite s = atl.place(u,
-                                 make<float2>(-face->glyph->bitmap_left + 2,
-                                                  +face->glyph->bitmap_top + 1
-                                                  ));
-            
-            float advance = face->glyph->advance.x * k;
-            result.charmap.insert(std::make_pair((uint) charcode, Font::Glyph{s, advance}));
-            
-            charcode = FT_Get_Next_Char(face, charcode, &gindex);
+    // Rasterize a glyph outline (in font design units) to an 8-bit coverage
+    // bitmap at the given design-units-per-pixel scale, using the analytic
+    // Gaussian-prefilter integrator above.  The returned offsets match
+    // FreeType's bitmap_left/bitmap_top conventions so the rest of the
+    // pipeline (apply_shadow, atlas placement) needs no changes.
+    static GlyphBitmap rasterize_glyph(std::vector<bezier4> const& curves,
+                                       float pixel_size_du)
+    {
+        if (curves.empty()) {
+            // Empty glyph (e.g. space).  Hand back a zero-sized bitmap; the
+            // downstream apply_shadow will produce a 4x4 fully-transparent
+            // result, the atlas will place it, and only the advance matters.
+            return GlyphBitmap{matrix<R8Unorm>{}, 0, 0};
         }
-        
-        result.height = face->size->metrics.height * k;
-        result.ascender = face->size->metrics.ascender * k;
-        result.descender = face->size->metrics.descender * k;
-        
-        FT_Done_Face(face);
-        FT_Done_FreeType(ft);
-        
+
+        // Control-point bbox in design units.
+        simd_float2 lo = simd_float2{ INFINITY,  INFINITY};
+        simd_float2 hi = simd_float2{-INFINITY, -INFINITY};
+        for (auto const& curve : curves) {
+            for (int i = 0; i != 4; ++i) {
+                lo = simd_min(lo, curve.columns[i]);
+                hi = simd_max(hi, curve.columns[i]);
+            }
+        }
+
+        // Pixel-space bbox with Gaussian-spillover padding.  3 sigma captures
+        // >99.7% of the Gaussian mass; beyond that the falloff is invisible
+        // at 8-bit precision.
+        constexpr int padding = 3;
+        int x_min_px = (int)std::floor(lo.x / pixel_size_du) - padding;
+        int x_max_px = (int)std::ceil (hi.x / pixel_size_du) + padding;
+        int y_min_px = (int)std::floor(lo.y / pixel_size_du) - padding;
+        int y_max_px = (int)std::ceil (hi.y / pixel_size_du) + padding;
+
+        int width  = x_max_px - x_min_px;
+        int height = y_max_px - y_min_px;
+
+        matrix<R8Unorm> bitmap((size_t)height, (size_t)width);
+
+        // TrueType design y is up; bitmap rows go top-to-bottom (row 0 = top).
+        for (int row = 0; row != height; ++row) {
+            float y_du = (y_max_px - row - 0.5f) * pixel_size_du;
+            for (int col = 0; col != width; ++col) {
+                float x_du = (x_min_px + col + 0.5f) * pixel_size_du;
+                float cov = coverage_at_pixel(curves,
+                                              simd_float2{x_du, y_du},
+                                              pixel_size_du);
+                // R8Unorm::operator=(float) clamps [0,1] internally.
+                bitmap[row, col] = cov;
+            }
+        }
+
+        return GlyphBitmap{
+            std::move(bitmap),
+            x_min_px,
+            y_max_px,
+        };
+    }
+
+    Font build_font(SpriteAtlas& atl) {
+
+        Font result;
+
+        // Load the font file and parse with our bespoke OTF/CFF stack.
+        String bytes = string_from_file("Futura Medium Condensed.otf");
+        auto handle = otf::Handle::parse({
+            (byte const*)bytes.chars.data(),
+            bytes.chars.size()
+        });
+
+        int upem = handle.units_per_em();
+        constexpr int target_em_pixels = 40; // matches the old FT_Set_Pixel_Sizes
+        float pixel_size_du = (float)upem / (float)target_em_pixels;
+
+        auto m = handle.metrics_for_face();
+        result.ascender  = (float)m.ascender  / pixel_size_du;
+        result.descender = (float)m.descender / pixel_size_du;
+        result.height    = (float)(m.ascender - m.descender + m.line_gap)
+                           / pixel_size_du;
+
+        // Printable ASCII; same scope as build_font2.  Anything else would
+        // require cmap enumeration on otf::Handle.
+        for (int charcode = 32; charcode != 127; ++charcode) {
+            int glyph_index = handle.glyph_index_for_character(charcode);
+            if (glyph_index == 0)
+                continue; // character not in font
+
+            auto curves = handle.outline_for_glyph_index(glyph_index);
+            auto gb = rasterize_glyph(curves, pixel_size_du);
+            matrix<RGBA8Unorm_sRGB> u = rgba_from_a(gb.coverage);
+
+            Sprite s = atl.place(u, make<float2>(-gb.bitmap_left,
+                                                  gb.bitmap_top));
+
+            float advance = handle.advance_for_glyph_index(glyph_index)
+                            / pixel_size_du;
+            result.charmap.insert(std::make_pair((uint)charcode,
+                                                 Font::Glyph{s, advance}));
+        }
+
         return result;
     }
-    
-//    float3x2 a;
-//    
-//    otf::QuadraticBezier bcpFrom(float2 a, float2 b) {
-//        return otf::QuadraticBezier(a, mix(a, b, float2{0.5f, 0.5f}), b);
-//    }
-//    otf::QuadraticBezier bcpFrom(float2 a, float2 b, float2 c) {
-//        return otf::QuadraticBezier(a, b, c);
-//    }
-//    
-//    otf::QuadraticBezier bcpFrom(float2 a, float2 b, float2 c, float2 d) {
-//        return otf::QuadraticBezier(a, b, d);
-//    }
-    
-    /*
-    std::pair<Bezier2, Bezier2> reduce_parametric_continuity(Bezier3 q) {
-        // Match dx/dt at the endpoints
-        // dt' = 2.0 dt
-        // 3.0 * (b - a)dt == 2.0 * (b' - a')dt'
-        // (b' - a') == 0.75 * (b - a)
-        simd_double2 b2 = simd_mix(q.a, q.b, 0.75);
-        simd_double2 b3 = simd_mix(q.c, q.d, 0.25);
-        simd_double2 c2a3 = simd_mix(b2, b3, 0.5);
-        return {
-            Bezier2{q.a, b2, c2a3},
-            Bezier2{c2a3, b3, q.d},
-        };
-    }
-     */
+
+
     
     Font2 build_font2() {
 
@@ -406,29 +404,6 @@ namespace wry {
         
     }
 
-    
-    void build_font3() {
-        /*
-        String a = string_from_file("Futura Medium Condensed.otf");
-        auto aa = otf::Handle::parse({(byte const*)a.chars.data(), a.chars.size()});
-        auto aaa = aa.outline_for_character('a');
-        printf("aaa.size() = %zd\n", aaa.size());
-        String b = string_from_file("OpenSans_Condensed-Light.ttf");
-        auto bb = otf::Handle::parse({(byte const*)b.chars.data(), b.chars.size()});
-        auto bbb = bb.outline_for_character('b');
-        printf("bbb.size() = %zd\n", bbb.size());
-         */
-        auto a = string_from_file("OpenSans_Condensed-Light.ttf");
-        auto b = otf::Handle::parse({(byte const*)a.chars.data(), a.chars.size()});
-        for (int c = 32; c != 127; ++c) {
-            printf(" - %c ---\n", c);
-            b.outline_for_character(c);
-        }
-
-
-    }
-    
-    
 } // namespace wry
 
 

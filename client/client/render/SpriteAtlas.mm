@@ -64,11 +64,13 @@ namespace wry {
     Sprite SpriteAtlas::place(matrix_view<const RGBA8Unorm_sRGB> v, float2 origin) {
         auto tl = _packer.place(simd::make<simd::ulong2>(v.major(),
                                                  v.minor()));
-        [_texture replaceRegion:MTLRegionMake2D(tl.x, tl.y,
-                                                v.major(), v.minor())
-                    mipmapLevel:0
-                      withBytes:v.data()
-                    bytesPerRow:v.major_bytes()];
+        if (v.major() != 0) {
+            [_texture replaceRegion:MTLRegionMake2D(tl.x, tl.y,
+                                                    v.major(), v.minor())
+                        mipmapLevel:0
+                          withBytes:v.data()
+                        bytesPerRow:v.major_bytes()];
+        }
         Sprite s;
         s.a.position = make<float4>(-origin, 0, 1);
         s.a.texCoord = convert<float>(tl) / (float) _size;
