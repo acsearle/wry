@@ -120,9 +120,8 @@
     WryMesh* _mine_mesh;
     WryMesh* _furnace_mesh;
     
-    // controls
-    
-    wry::Palette<wry::Value> _controls;
+    // The opcode palette's data and selection now live on
+    // _model->_palette_overlay; the renderer reads it for painting only.
 
     NSCursor* _cursor;
     
@@ -575,7 +574,7 @@
             
             NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
             
-            _atlas = new wry::SpriteAtlas(2048, device);
+            _atlas = new wry::SpriteAtlas(2048, (__bridge void*)device);
             _font = new wry::Font(build_font(*_atlas));
             
             
@@ -785,29 +784,31 @@
                 
             }
 
-            size_type nn = 24;
-            _controls._payload = wry::matrix<wry::Value>(nn, 2);
-            
-            i64 j = 0;
-            for (i64 i = 0; i != _name_to_opcode.size(); ++i) {
-                if (_opcode_to_coordinate.contains(i)) {
-                    
-                    _controls._payload[j % nn, j / nn] = value_make_opcode((int)i);
-                    ++j;
-                                        
-                } else {
-                    auto s = _opcode_to_name[i].chars.as_view();
-                    if (s.size())
-                        printf("Sprite not found for %.*s\n", (int) s.size(), (char*) s.data());
+            {
+                // Initialize the palette's grid and transform on the
+                // PaletteOverlay; the overlay owns this data from here on.
+                auto& controls = _model->_palette_overlay.controls();
+                size_type nn = 24;
+                controls._payload = wry::matrix<wry::Value>(nn, 2);
+
+                i64 j = 0;
+                for (i64 i = 0; i != _name_to_opcode.size(); ++i) {
+                    if (_opcode_to_coordinate.contains(i)) {
+                        controls._payload[j % nn, j / nn] = value_make_opcode((int)i);
+                        ++j;
+                    } else {
+                        auto s = _opcode_to_name[i].chars.as_view();
+                        if (s.size())
+                            printf("Sprite not found for %.*s\n",
+                                   (int) s.size(), (char*) s.data());
+                    }
                 }
+
+                controls._transform
+                =
+                simd_matrix_scale(1.0f / 16.0f)
+                * simd_matrix_translate(simd_make_float3(nn*-0.5f, -2.0f, 0.0f));
             }
-            
-            // printf("%lld\n", j);
-            
-            _controls._transform
-            =
-            simd_matrix_scale(1.0f / 16.0f)
-            * simd_matrix_translate(simd_make_float3(nn*-0.5f, -2.0f, 0.0f));
             
             {
                 int n = 64;
@@ -950,210 +951,143 @@
 }
 
 - (void) drawOverlay:(id<MTLRenderCommandEncoder>)encoder {
-    
+
     using namespace simd;
     using namespace wry;
-    
-    
+
     MyUniforms uniforms;
-    
+
+    // If the palette overlay selected a new opcode this frame, swap the
+    // platform cursor to its icon.  The overlay flagged this from its
+    // on_event during pump; we consume the flag here.
+    if (_model->_palette_overlay.cursor_needs_refresh()) {
+        auto coordinate = _opcode_to_coordinate[value_as_opcode(_model->_holding_value)];
+        matrix<RGBA8Unorm_sRGB> tile(64, 64);
+        MTLRegion region = MTLRegionMake2D(coordinate.x * _symbols.width,
+                                           coordinate.y * _symbols.height,
+                                           64, 64);
+        [_symbols getBytes:tile.data()
+               bytesPerRow:tile.stride_bytes()
+                fromRegion:region
+               mipmapLevel:0];
+        unsigned char* p[1];
+        p[0] = (unsigned char*) tile.data();
+        NSBitmapImageRep* a = [[NSBitmapImageRep alloc]
+                              initWithBitmapDataPlanes:p
+                                            pixelsWide:64
+                                            pixelsHigh:64
+                                         bitsPerSample:8
+                                       samplesPerPixel:4
+                                              hasAlpha:YES
+                                              isPlanar:NO
+                                        colorSpaceName:NSCalibratedRGBColorSpace
+                                           bytesPerRow:tile.stride_bytes()
+                                          bitsPerPixel:32];
+        NSImage* b = [[NSImage alloc] initWithSize:NSMakeSize(32.0, 32.0)];
+        [b addRepresentation:a];
+        NSCursor* c = [[NSCursor alloc] initWithImage:b
+                                              hotSpot:NSMakePoint(0.0f, 0.0f)];
+        [c set];
+        _cursor = c;
+        _model->_palette_overlay.clear_cursor_refresh();
+    }
+
     [encoder setRenderPipelineState:_overlayRenderPipelineState];
-    
+
+    // ----- Palette paint pass (projective transform; reads PaletteOverlay
+    // state for hover/selected highlights).
     {
-        // render Palettes
-        
+        auto& palette = _model->_palette_overlay;
+        auto& m = palette.controls()._payload;
+
         uniforms.position_transform = simd_mul(matrix_float4x4{{
             {1.0f, 0.0f, 0.0f},
             {0.0f, -_model->_viewport_size.x / _model->_viewport_size.y, 0.0f, 0.0f},
             { 0.0f, 0.0f, 1.0f, 0.0f },
             {0.0f, -1.0f, 0.0f, 1.0f},
-        }}, _controls._transform);
-        
+        }}, palette.controls()._transform);
+
         wry::ContiguousDeque<wry::SpriteVertex> v;
-        
-        simd_float4 b = make<float4>(_model->_mouse, 0.0f, 1.0f);
-        float2 mmm = project_screen_ray(uniforms.position_transform, b);
-        auto& m = _controls._payload;
-        
-        if (_model->_outstanding_click) {
-            
-            difference_type i = floor(mmm.x);
-            difference_type j = floor(mmm.y);
-            
-            if ((0 <= i) && (i < m.minor()) && (0 <= j) && (j < m.minor())) {
-                // we have clicked on the palette
-                _model->_selected_i = i;
-                _model->_selected_j = j;
-                _model->_holding_value = m[i, j];
-                printf(" Clicked palette (%td, %td)\n", i, j);
-                
-                // replace cursor
-                {
-                    
-                    // we need to swap the cursor image based on gui
-                                        
-                    auto coordinate = _opcode_to_coordinate[value_as_opcode(_model->_holding_value)];
-                    matrix<RGBA8Unorm_sRGB> tile(64, 64);
-                    
-                    MTLRegion region = MTLRegionMake2D(coordinate.x * _symbols.width, coordinate.y * _symbols.height, 64, 64);
-                    [_symbols getBytes:tile.data()
-                           bytesPerRow:tile.stride_bytes()
-                            fromRegion:region
-                           mipmapLevel:0];
-                    
-                    unsigned char* p[1];
-                    p[0] = (unsigned char*) tile.data();
-                    
-                    NSBitmapImageRep* a = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:p
-                                                                                  pixelsWide:64
-                                                                                  pixelsHigh:64
-                                                                               bitsPerSample:8
-                                                                             samplesPerPixel:4
-                                                                                    hasAlpha:YES
-                                                                                    isPlanar:NO
-                                                                              colorSpaceName:NSCalibratedRGBColorSpace
-                                                                                 bytesPerRow:tile.stride_bytes()
-                                                                                bitsPerPixel:32];
-                    NSImage* b = [[NSImage alloc] initWithSize:NSMakeSize(32.0, 32.0)];
-                    [b addRepresentation:a];
-                    NSCursor* c = [[NSCursor alloc] initWithImage:b hotSpot:NSMakePoint(0.0f, 0.0f)];
-                    [c set];
-                    _cursor = c;
-                    
-                }
-                
-                
-                
-            } else {
-                // we clicked outside the palette
-                int i = round(_model->_mouse4.x);
-                int j = round(_model->_mouse4.y);
-                Coordinate xy{i, j};
-                // auto& the_tile = new_world->_value_for_coordinate[xy];
-                // the_tile = _model->_holding_value;
-                // new_world->_value_for_coordinate.write(xy, _model->_holding_value);
-                
-                // these notifications happen logically between steps and are
-                // excused from transactions (hopefully)
-                
-                // the_tile.notify_occupant(&new_world);
-                // notify_by_world_coordinate(new_world, xy);
-                
-                {
-                    Player::Action a;
-                    a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
-                    a.coordinate = xy;
-                    a.value = _model->_holding_value;
-                    _model->_local_player->_queue.push_back(std::move(a));
-                }
-                
-                printf(" Clicked world (%d, %d)\n", i, j);
-            }
-            _model->_outstanding_click = false;
-            
-        }
-        
-        while (!_model->_outstanding_keysdown.empty()) {
-            char32_t ch = _model->_outstanding_keysdown.front_and_pop_front();
-            if (wry::isascii((int) ch) && isxdigit(ch)) {
-                int64_t k = wry::base36::from_base36_table[ch];
-                int i = round(_model->_mouse4.x);
-                int j = round(_model->_mouse4.y);
-                Coordinate xy{i, j};
-                // auto& the_tile = new_world->_value_for_coordinate[xy];
-                // the_tile = k;
-                //new_world->_value_for_coordinate.write(xy, k);
-                // the_tile.notify_occupant(&new_world);
-                // notify_by_world_coordinate(new_world, xy);
-                Player::Action a;
-                a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
-                a.coordinate = xy;
-                a.value = k;
-                _model->_local_player->_queue.push_back(std::move(a));
-            }
-        }
-        
-        
+
         for (difference_type j = 0; j != m.major(); ++j) {
             for (difference_type i = 0; i != m.minor(); ++i) {
                 Value a = m[i, j];
                 if (a.is_opcode()) {
-                    
+
                     SpriteVertex c;
-                    
+
                     simd_float4 position = make<float4>(i, j, 0, 1);
                     float2 texCoord;
-                    
+
                     c.color = RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.875f);
                     texCoord = simd_make_float2(9, 9) / 32.0f;
-                    
-                    if ((floor(mmm.x) == i) && floor(mmm.y) == j) {
+
+                    if ((palette.hover_i() == (int)i) && (palette.hover_j() == (int)j)) {
                         c.color.g.write(0.5f);
                     }
-                    
-                    if ((_model->_selected_i == i) && _model->_selected_j == j) {
+
+                    if ((palette.selected_i() == (int)i) && (palette.selected_j() == (int)j)) {
                         c.color.r.write(0.5f);
                     }
-                    
-                    
+
                     c.v.position = make<float4>(0, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
                     v.push_back(c);
-                    
+
                     c.v.position = make<float4>(1, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 0) / 32.0f + texCoord;
                     v.push_back(c);
-                    
+
                     c.v.position = make<float4>(1, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
                     v.push_back(c);
-                    
+
                     c.v.position = make<float4>(0, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
                     v.push_back(c);
-                    
+
                     c.v.position = make<float4>(1, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
                     v.push_back(c);
-                    
+
                     c.v.position = make<float4>(0, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 1) / 32.0f + texCoord;
                     v.push_back(c);
-                    
+
                     texCoord = _opcode_to_coordinate[value_as_opcode(a)].xy;
                     c.color = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f);
-                    
+
                     c.v.position = make<float4>(0, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
                     v.push_back(c);
-                    
+
                     c.v.position = make<float4>(1, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 0) / 32.0f + texCoord;
                     v.push_back(c);
-                    
+
                     c.v.position = make<float4>(1, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
                     v.push_back(c);
-                    
+
                     c.v.position = make<float4>(0, 0, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
                     v.push_back(c);
-                    
+
                     c.v.position = make<float4>(1, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
                     v.push_back(c);
-                    
+
                     c.v.position = make<float4>(0, 1, 0, 0) + position;
                     c.v.texCoord = simd_make_float2(0, 1) / 32.0f + texCoord;
                     v.push_back(c);
                 }
             }
         }
-        
-        id<MTLBuffer> vb = [_device newBufferWithLength:v.size_in_bytes() options:MTLStorageModeShared];
+
+        id<MTLBuffer> vb = [_device newBufferWithLength:v.size_in_bytes()
+                                                options:MTLStorageModeShared];
         memcpy(vb.contents, v.data(), v.size_in_bytes());
-        
-        
+
         [encoder setVertexBytes:&uniforms
                          length:sizeof(uniforms)
                         atIndex:AAPLBufferIndexUniforms ];
@@ -1165,11 +1099,42 @@
         [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                     vertexStart:0
                     vertexCount:v.size()];
-        
-        
     }
-    
-    
+
+    // ----- World actions.  PaletteOverlay claims palette-area clicks
+    // before pump_legacy ever sets _outstanding_click, so anything here is
+    // for the world tile under the cursor.  Same logic for hex-key writes.
+    // These move into a WorldOverlay in a later phase.
+    if (_model->_outstanding_click) {
+        int i = round(_model->_mouse4.x);
+        int j = round(_model->_mouse4.y);
+        Coordinate xy{i, j};
+        Player::Action a;
+        a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
+        a.coordinate = xy;
+        a.value = _model->_holding_value;
+        _model->_local_player->_queue.push_back(std::move(a));
+        printf(" Clicked world (%d, %d)\n", i, j);
+        _model->_outstanding_click = false;
+    }
+
+    while (!_model->_outstanding_keysdown.empty()) {
+        char32_t ch = _model->_outstanding_keysdown.front_and_pop_front();
+        if (wry::isascii((int) ch) && isxdigit(ch)) {
+            int64_t k = wry::base36::from_base36_table[ch];
+            int i = round(_model->_mouse4.x);
+            int j = round(_model->_mouse4.y);
+            Coordinate xy{i, j};
+            Player::Action a;
+            a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
+            a.coordinate = xy;
+            a.value = k;
+            _model->_local_player->_queue.push_back(std::move(a));
+        }
+    }
+
+    // ----- Screen-space overlays.  Set the screen-space transform on the
+    // encoder; the sprite atlas accumulates and commits below.
     uniforms.position_transform = matrix_float4x4{{
         {2.0f / _model->_viewport_size.x, 0.0f, 0.0f},
         {0.0f, -2.0f / _model->_viewport_size.y, 0.0f, 0.0f},
@@ -1179,50 +1144,19 @@
     [encoder setVertexBytes:&uniforms
                      length:sizeof(uniforms)
                     atIndex:AAPLBufferIndexUniforms ];
-    
 
-    
+    // Let the overlay stack paint itself.  Bottom-up: log, palette
+    // (no-op paint for now), then console on top when active.
     {
-        wry::RGBA8Unorm_sRGB color(0.5f, 0.5f, 0.5f, 1.0f);
-        // draw logs
-        float y = _font->height / 2;
-        float2 z;
-        auto t = std::chrono::steady_clock::now();
-        for (auto p = _model->_logs.begin(); p != _model->_logs.end();) {
-            if (p->first < t) {
-                p = _model->_logs.erase(p);
-            } else {
-                // TODO: actual window size
-                z = wry::drawOverlay_draw_text(_font, _atlas, {_font->height / 2, y, 1920, 1080}, p->second, color);
-                // TODO: detect multiline (draw backwards? shift? prep the size?  linebreak?)
-                // There are a lot of ways to skin a line...
-                
-                // A spite atlas might be associated with multiple fonts
-                
-                y += _font->height;
-                ++p;
-            }
-        }
+        wry::gui::Painter painter;
+        painter.atlas = _atlas;
+        painter.font = _font;
+        painter.viewport_size_pt = _model->_viewport_size;
+        painter.frame_count = (uint64_t)_frame_count;
+        _model->_stack.paint(painter);
     }
-    
-    
-    if (_model->_console_active) {
-        // draw console
-        wry::RGBA8Unorm_sRGB color(1.0f, 1.0f, 1.0f, 1.0f);
-        float y = 1080 - _font->height / 2;
-        float2 z;
-        bool first = true;
-        for (auto p = _model->_console.end(); (y >= 0) && (p != _model->_console.begin());) {
-            --p;
-            y -= _font->height;
-            z = wry::drawOverlay_draw_text(_font, _atlas, {_font->height / 2, y, 1920, 1080}, *p, color);
-            if (first) {
-                wry::drawOverlay_draw_text(_font, _atlas, wry::rect<float>{z.x, z.y, 1920, 1080 }, (_frame_count & 0x40) ? "_" : " ", color);
-                first = false;
-            }
-        }
-    }
-    _atlas->commit(encoder);
+
+    _atlas->commit((__bridge void*)encoder);
 }
 
 -(void)resetCursor {

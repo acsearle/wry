@@ -536,13 +536,16 @@ namespace {
 
 -(void)render {
     // Drain everything the NSResponder callbacks queued since the last
-    // frame, updating the model's legacy fields that the renderer reads.
-    // Runs on the main thread between NSEvent dispatch and the renderer,
-    // so the queue is always seen consistently.
+    // frame.  Each event is walked through the overlay stack (top down);
+    // whatever no overlay consumed falls back to the transitional legacy
+    // bookkeeping (still backing the world click / scroll-pan paths until
+    // those move into a WorldOverlay).  Runs on the main thread between
+    // NSEvent dispatch and the renderer, so the queue is always seen
+    // consistently.
     NSSize sz = _metalView.bounds.size;
-    wry::gui::pump_legacy(*_model,
-                          simd_make_float2((float)sz.width,
-                                           (float)sz.height));
+    wry::gui::pump(*_model,
+                   simd_make_float2((float)sz.width,
+                                    (float)sz.height));
     [_renderer render];
 }
 

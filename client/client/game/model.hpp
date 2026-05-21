@@ -17,6 +17,7 @@
 #include "contiguous_deque.hpp"
 #include "entity.hpp"
 #include "gui_event.hpp"
+#include "gui_overlay.hpp"
 #include "hash.hpp"
 #include "machine.hpp"
 #include "palette.hpp"
@@ -54,30 +55,38 @@ namespace wry {
         
         Player* _local_player;
 
-        
+
         // debug state
-        
-        ContiguousDeque<String> _console;
-        std::multimap<std::chrono::steady_clock::time_point, String> _logs;
-        
-        bool _console_active = false;        
+
         bool _show_jacobian = false;
         bool _show_points = false;
         bool _show_wireframe = false;
-        
+
 
         // user interface state
 
         // Raw NSEvents arrive on the main thread via WryDelegate, which
         // translates each into a wry::gui::Event and pushes it here.  The
-        // per-frame pump in [WryDelegate render] drains this queue before
-        // the renderer runs.  Single-threaded; no lock needed.
+        // per-frame pump in [WryDelegate render] drains this queue, walking
+        // each event through `_stack` and (for whatever the stack hasn't
+        // claimed) into the legacy fields below.  Single-threaded; no lock.
         gui::EventQueue _events;
 
+        // Persistent GUI elements.  Each owns its own state (console lines,
+        // floating log entries, palette selection / hover); the stack
+        // borrows pointers to them and runs the dispatch + paint walks.
+        gui::LogOverlay _log_overlay;
+        gui::ConsoleOverlay _console_overlay;
+        gui::PaletteOverlay _palette_overlay;
+        gui::OverlayStack _stack;
+
+        // Legacy fields still read by WryRenderer.  These shrink as
+        // overlays take over their responsibilities:
+        //   _outstanding_click / _mouse4   -> WorldOverlay (later phase)
+        //   _outstanding_keysdown          -> WorldOverlay (later phase)
+        //   _looking_at                    -> WorldOverlay (later phase)
         bool _outstanding_click = false;
         Root<Value> _holding_value = {};
-        difference_type _selected_i = -1;
-        difference_type _selected_j = -1;
         float2 _looking_at = {};
         float2 _mouse = {};
         simd_float4 _mouse4 = {};
@@ -94,12 +103,18 @@ namespace wry {
         MeshUniforms _uniforms;
 
         model() {
-            
+
+            // Overlay wiring.  Stack order, bottom up: floating log,
+            // palette, console (modal-on-top).  Push order = paint order;
+            // dispatch is the reverse walk.
+            _console_overlay.set_log(&_log_overlay);
+            _palette_overlay.set_model(this);
+            _stack.push(&_log_overlay);
+            _stack.push(&_palette_overlay);
+            _stack.push(&_console_overlay);
+
             World* world = new World;
 
-            _console.emplace_back("WryApplication");
-            _console.emplace_back("");
-            
             {
                 // new player
                 Player* p = new Player;
@@ -206,7 +221,7 @@ namespace wry {
         
         void append_log(StringView v,
                         std::chrono::steady_clock::duration endurance = std::chrono::seconds(5)) {
-            _logs.emplace(std::chrono::steady_clock::now() + endurance, v);
+            _log_overlay.append(v, endurance);
         }
         
         void shade_roots();

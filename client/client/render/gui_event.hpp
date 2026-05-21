@@ -153,21 +153,17 @@ namespace wry::gui {
         void clear() { events.clear(); }
     };
 
-    // Transitional pump.  Drains EventQueue into the existing model bag
-    // of booleans / counters (_mouse, _outstanding_click, _console_*, etc.),
-    // exactly preserving the pre-event-queue behavior of WryDelegate's
-    // inline keyDown / mouse* switches.
+    // Per-frame event pump.  Drains EventQueue, walking each event through
+    // the model's OverlayStack (top-down) and falling back -- for events
+    // that no overlay claimed -- to a transitional legacy handler that
+    // still backs the world click / scroll-pan / debug-toggle paths.  As
+    // more overlays come online (WorldOverlay, MainMenu, ...) the legacy
+    // fallback shrinks and is eventually deleted.
     //
-    // This function exists only so that step 1 (delegate -> Event -> queue)
-    // can land without yet building the overlay stack.  As subsequent steps
-    // turn the palette, console, log, and main menu into real widgets, the
-    // corresponding clauses here disappear; the function shrinks toward
-    // nothing and is eventually deleted.
-    //
-    //   view_size_pt: bounds of the metal view in logical points, used only
-    //   to map event.location into the model's NDC `_mouse` field while the
-    //   renderer still expects NDC there.
-    void pump_legacy(model& m, float2 view_size_pt);
+    //   view_size_pt: bounds of the metal view in logical points, used by
+    //   the legacy fallback to map event.location into the model's NDC
+    //   `_mouse` field while the renderer still expects NDC there.
+    void pump(model& m, float2 view_size_pt);
 
 } // namespace wry::gui
 
