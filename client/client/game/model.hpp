@@ -75,9 +75,12 @@ namespace wry {
         // Persistent GUI elements.  Each owns its own state (console lines,
         // floating log entries, palette selection / hover); the stack
         // borrows pointers to them and runs the dispatch + paint walks.
+        // The main menu lives here so its lifetime spans push/pop cycles
+        // -- the stack only borrows pointers, it doesn't own them.
         gui::LogOverlay _log_overlay;
         gui::ConsoleOverlay _console_overlay;
         gui::PaletteOverlay _palette_overlay;
+        gui::MainMenuOverlay _main_menu_overlay;
         gui::OverlayStack _stack;
 
         // Legacy fields still read by WryRenderer.  These shrink as

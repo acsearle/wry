@@ -1146,13 +1146,21 @@
                     atIndex:AAPLBufferIndexUniforms ];
 
     // Let the overlay stack paint itself.  Bottom-up: log, palette
-    // (no-op paint for now), then console on top when active.
+    // (no-op paint for now), then console on top when active, then any
+    // dynamically-pushed overlays (main menu) above that.
     {
         wry::gui::Painter painter;
         painter.atlas = _atlas;
         painter.font = _font;
         painter.viewport_size_pt = _model->_viewport_size;
         painter.frame_count = (uint64_t)_frame_count;
+        painter.white_sprite = _atlas->_white;
+        // Default clip: the full viewport.  Widgets push tighter clips
+        // around their own contents via Painter::push_clip / pop_clip.
+        painter.clip = wry::rect<float>{
+            0.0f, 0.0f,
+            _model->_viewport_size.x, _model->_viewport_size.y,
+        };
         _model->_stack.paint(painter);
     }
 
@@ -1878,7 +1886,15 @@
         
         {
             [self drawOverlay:encoder];
-            [self drawBezier:encoder];
+            // [self drawBezier:encoder];
+            //   The Sphinx pangram was useful while the OTF outline path
+            //   wasn't yet feeding the atlas; now that build_font (font.mm)
+            //   does the rasterisation through the same otf::Handle, the
+            //   live mesh-shader pass is just visual noise covering up the
+            //   GUI.  Method body is preserved as the reference for how to
+            //   pack otf::GlyphData / otf::PlacedGlyph / CubicBezier into
+            //   mesh and fragment buffers and dispatch a draw -- re-enable
+            //   this line if you want to bring it back.
         }
          
         [encoder endEncoding];

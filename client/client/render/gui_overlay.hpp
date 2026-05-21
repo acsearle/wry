@@ -37,30 +37,150 @@
 #include <memory>
 #include <vector>
 
+#include <limits>
+
 #include "contiguous_deque.hpp"
+#include "font.hpp"
 #include "gui_event.hpp"
 #include "palette.hpp"
+#include "rect.hpp"
 #include "simd.hpp"
+#include "SpriteAtlas.hpp"
 #include "string.hpp"
+#include "text.hpp"
 #include "value.hpp"
 
 namespace wry {
 
-    // Forward decls so Painter can hold pointers without dragging the full
-    // headers into every TU that includes us.
-    struct SpriteAtlas;
-    struct Font;
+    namespace gui {
+        class Widget;
+    }
 
     namespace gui {
 
         // Things an Overlay needs to draw itself in screen space.  Pure
         // data; no Metal types leak in.  Constructed afresh each frame by
         // the renderer.
+        //
+        // All drawing helpers respect the current `clip` rect: sprites
+        // fully outside are discarded, partially overlapping ones are
+        // CPU-cropped on both position and texCoord.  Parents push a
+        // tighter clip before drawing children and pop it afterwards.
         struct Painter {
+
             SpriteAtlas* atlas = nullptr;
             Font* font = nullptr;
             float2 viewport_size_pt = {0.0f, 0.0f};
             uint64_t frame_count = 0;   // for cursor blink, etc.
+
+            // A copy of the atlas's reserved white sprite.  Lets widgets
+            // draw solid-color rectangles cheaply via fill_rect.  The
+            // renderer sets this when constructing the Painter each frame.
+            Sprite white_sprite = {};
+
+            // Current clip rect in screen-space (logical points).  The
+            // renderer initialises this to the viewport rect each frame;
+            // widgets push tighter clips via push_clip / pop_clip.
+            rect<float> clip = {
+                -std::numeric_limits<float>::infinity(),
+                -std::numeric_limits<float>::infinity(),
+                +std::numeric_limits<float>::infinity(),
+                +std::numeric_limits<float>::infinity(),
+            };
+
+
+            // -- Clip stack --------------------------------------------------
+            //
+            // Hierarchical clipping is just "intersect on push, restore on
+            // pop"; callers pass the returned previous value back to
+            // pop_clip themselves (no implicit stack).  Widgets can also
+            // read `clip` directly to do their own coarse culling (e.g.
+            // text-run bails when the pen passes clip.b.x).
+
+            rect<float> push_clip(rect<float> r) {
+                rect<float> prev = clip;
+                clip = intersection(prev, r);
+                return prev;
+            }
+
+            void pop_clip(rect<float> previous) {
+                clip = previous;
+            }
+
+
+            // -- Clipped sprite emission ------------------------------------
+
+            // CPU-crop an axis-aligned sprite against `clip` and push it
+            // to the atlas.  Adjusts position and texCoord proportionally
+            // so partially-clipped sprites render correctly.  Degenerate
+            // sprites (zero extent) and fully-clipped sprites are dropped.
+            void push_sprite_clipped(Sprite s, RGBA8Unorm_sRGB color) {
+                if (!atlas) return;
+
+                const float sa_x = s.a.position.x, sa_y = s.a.position.y;
+                const float sb_x = s.b.position.x, sb_y = s.b.position.y;
+                const float ext_x = sb_x - sa_x;
+                const float ext_y = sb_y - sa_y;
+                if (ext_x <= 0.0f || ext_y <= 0.0f) return;
+
+                const float ca_x = std::max(sa_x, clip.a.x);
+                const float ca_y = std::max(sa_y, clip.a.y);
+                const float cb_x = std::min(sb_x, clip.b.x);
+                const float cb_y = std::min(sb_y, clip.b.y);
+                if (ca_x >= cb_x || ca_y >= cb_y) return;
+
+                // Fast path: fully inside, push as-is.
+                if (ca_x == sa_x && ca_y == sa_y &&
+                    cb_x == sb_x && cb_y == sb_y) {
+                    atlas->push_sprite(s, color);
+                    return;
+                }
+
+                // Partial crop: lerp texCoords by the same fractions we
+                // moved the corners.
+                const float2 t0 = s.a.texCoord;
+                const float2 t1 = s.b.texCoord;
+                const float2 ta = simd_make_float2(
+                    t0.x + (t1.x - t0.x) * (ca_x - sa_x) / ext_x,
+                    t0.y + (t1.y - t0.y) * (ca_y - sa_y) / ext_y);
+                const float2 tb = simd_make_float2(
+                    t0.x + (t1.x - t0.x) * (cb_x - sa_x) / ext_x,
+                    t0.y + (t1.y - t0.y) * (cb_y - sa_y) / ext_y);
+
+                Sprite cropped;
+                cropped.a.position = simd_make_float4(ca_x, ca_y, 0.0f, 1.0f);
+                cropped.a.texCoord = ta;
+                cropped.b.position = simd_make_float4(cb_x, cb_y, 0.0f, 1.0f);
+                cropped.b.texCoord = tb;
+                atlas->push_sprite(cropped, color);
+            }
+
+
+            // -- Higher-level helpers ---------------------------------------
+
+            // Solid-color rectangle.  Stretches and tints the atlas's white
+            // sprite, then routes through push_sprite_clipped.
+            void fill_rect(rect<float> r, RGBA8Unorm_sRGB color) {
+                if (!atlas) return;
+                Sprite s = white_sprite;
+                s.a.position.x = r.a.x;
+                s.a.position.y = r.a.y;
+                s.b.position.x = r.b.x;
+                s.b.position.y = r.b.y;
+                push_sprite_clipped(s, color);
+            }
+
+            // Draw a single line of text starting at the given baseline
+            // pen position.  No line breaks, no y-axis early-out.  Stops
+            // early when the pen passes the right edge of the current
+            // clip rect (everything further would be entirely clipped
+            // anyway).  Returns the pen position after the last glyph
+            // (useful e.g. for placing a cursor / caret).
+            //
+            // Defined in gui.mm; declaration only here.
+            float2 draw_text_run(float2 pen,
+                                 StringView text,
+                                 RGBA8Unorm_sRGB color);
         };
 
         class Overlay {
@@ -82,6 +202,13 @@ namespace wry {
             // its area without blocking the world from receiving keys.
             virtual bool modal_mouse() const { return false; }
             virtual bool modal_keyboard() const { return false; }
+
+            // Set by an overlay during its own on_event to request being
+            // popped from the stack.  OverlayStack::dispatch drains this
+            // flag from the top of the stack after each event, so popping
+            // is deferred until after dispatch returns -- safe to set from
+            // inside an event handler without invalidating iteration.
+            bool wants_close = false;
         };
 
         // Ordered, top-of-stack-last.  Non-owning: the stack just borrows
@@ -196,6 +323,36 @@ namespace wry {
             int _hover_j    = -1;
             bool _cursor_dirty = false;
             struct ::wry::model* _model = nullptr;
+        };
+
+        // ----------------------------------------------------------------
+        // Main menu overlay.  Modal in both mouse and keyboard.  Hosts a
+        // root Widget (built in its constructor) that lays out a column of
+        // buttons centered on the viewport.  Pressing ESC, or clicking the
+        // CONTINUE button, sets `wants_close` and the stack pops it after
+        // the dispatch returns.
+        //
+        // Pushed onto the OverlayStack by the pump's legacy fallback when
+        // ESC is unconsumed by anything above it.  When pushed it lives at
+        // the top of the stack; while there it eats every event that
+        // doesn't land on one of its buttons.
+
+        class MainMenuOverlay : public Overlay {
+        public:
+            MainMenuOverlay();
+            ~MainMenuOverlay() override;
+
+            bool on_event(Event const&) override;
+            void paint(Painter&) override;
+
+            bool modal_mouse()    const override { return true; }
+            bool modal_keyboard() const override { return true; }
+
+        private:
+            // unique_ptr to a forward-declared Widget so this header
+            // doesn't need to know the layout of the widget tree.  The
+            // tree is constructed in the .cpp (well, .mm).
+            std::unique_ptr<Widget> _root;
         };
 
     } // namespace gui

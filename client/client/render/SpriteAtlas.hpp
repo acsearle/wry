@@ -58,6 +58,12 @@ namespace wry {
         packer<std::size_t> _packer;
         ContiguousDeque<SpriteVertex> _vertices;
 
+        // A 1x1 white pixel reserved in the atlas at construction.  Lets
+        // widgets draw solid-color rectangles via push_sprite by stretching
+        // a copy of this sprite to the desired rect and passing the colour
+        // through the vertex tint.  See Painter::fill_rect.
+        Sprite _white = {};
+
         // Opaque pimpl pointer.  Holds id<MTLTexture> _texture and a ring
         // of id<MTLBuffer> _buffers[4].  Defined and constructed in
         // SpriteAtlas.mm so this header stays Metal-free.

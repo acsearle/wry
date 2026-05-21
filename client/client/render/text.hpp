@@ -13,11 +13,9 @@
 
 namespace wry {
 
-float2 drawOverlay_draw_text(const wry::Font* _font,
-                             wry::SpriteAtlas* _atlas,
-                             wry::rect<float> x,
-                             wry::StringView v,
-                             wry::RGBA8Unorm_sRGB color);
+    // Sum of glyph advances for `v` in `font`.  Unknown characters are
+    // skipped (advance 0).  Pure measurement -- no drawing.
+    float text_run_width(const Font* font, StringView v);
 
 } // namespace wry
 

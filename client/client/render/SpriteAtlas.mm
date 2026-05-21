@@ -50,6 +50,16 @@ namespace wry {
             x = [device newBufferWithLength:sizeof(SpriteVertex) * _vertices.capacity()
                                     options:MTLResourceStorageModeShared];
         }
+
+        // Reserve a 1x1 white pixel that widgets can stretch and tint to
+        // draw solid-color rectangles.  Allocated at construction so the
+        // sprite handle is stable for the lifetime of the atlas.
+        {
+            RGBA8Unorm_sRGB pixel(1.0f, 1.0f, 1.0f, 1.0f);
+            matrix<RGBA8Unorm_sRGB> one(1, 1);
+            one[0, 0] = pixel;
+            _white = place(one);
+        }
     }
 
     SpriteAtlas::~SpriteAtlas() {

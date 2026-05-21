@@ -9,42 +9,18 @@
 
 namespace wry {
 
-float2 drawOverlay_draw_text(const Font* _font,
-                             SpriteAtlas* _atlas,
-                             rect<float> x,
-                             StringView v,
-                             RGBA8Unorm_sRGB color) {
-    
-    auto valign = (_font->height + _font->ascender + _font->descender) / 2; // note descender is negative
-    
-    auto xy = x.a;
-    xy.y += valign;
-    while (!v.empty()) {
-        auto c = v.front();
-        v.pop_front();
-        auto q = _font->charmap.find(c);
-        if (q != _font->charmap.end()) {
-            
-            if (xy.x + q->second.advance > x.b.x) {
-                xy.x = x.a.x;
-                xy.y += _font->height;
+    float text_run_width(const Font* font, StringView v) {
+        if (!font) return 0.0f;
+        float w = 0.0f;
+        while (!v.empty()) {
+            auto c = v.front();
+            v.pop_front();
+            auto q = font->charmap.find(c);
+            if (q != font->charmap.end()) {
+                w += q->second.advance;
             }
-            if (xy.y - _font->descender > x.b.y) {
-                return xy;
-            }
-            
-            wry::Sprite s = q->second.sprite_;
-            _atlas->push_sprite(s + xy, color);
-            xy.x += q->second.advance;
-            
-        } else if (c == '\n') {
-            xy.x = x.a.x;
-            xy.y += _font->height;
         }
+        return w;
     }
-    xy.y -= valign;
-    return xy;
-}
-
 
 } // namespace wry
