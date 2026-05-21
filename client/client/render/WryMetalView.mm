@@ -65,4 +65,27 @@
     [super updateTrackingAreas];
 }
 
+// NSResponder overrides so this view can be the key window's first responder.
+// NSView's default returns NO, which forces NSWindow to be first responder
+// itself; that puts NSWindow.keyDown: in the dispatch path, and its built-in
+// special-case handling for Escape / Cmd-period diverts those keys through
+// -cancelOperation: instead of -keyDown:.  By becoming first responder and
+// forwarding key events directly to our delegate, we keep -keyDown: as the
+// single ingress point for every key.
+- (BOOL)acceptsFirstResponder {
+    return YES;
+}
+
+- (void)keyDown:(NSEvent *)event {
+    [_delegate keyDown:event];
+}
+
+- (void)keyUp:(NSEvent *)event {
+    [_delegate keyUp:event];
+}
+
+- (void)flagsChanged:(NSEvent *)event {
+    [_delegate flagsChanged:event];
+}
+
 @end

@@ -6,11 +6,21 @@
 //
 
 #import <AVFoundation/AVFoundation.h>
+#import <Carbon/Carbon.h>           // kVK_* hardware key codes
+
+#include <cstring>
 
 #include "WryRenderer.h"
 #include "WryMetalView.h"
 #include "WryDelegate.h"
 #include "WryAudio.h"
+
+#include "gui_event.hpp"
+
+// Carbon's umbrella header drags in a `typedef UInt16 EventKind` at global
+// scope, which is why our event-kind enum is named WryEventKind (declared
+// in gui_event.hpp) -- different name, no collision, no qualification
+// gymnastics needed.
 
 // [1] https://sarunw.com/posts/how-to-create-macos-app-without-storyboard/
 
@@ -20,6 +30,105 @@
 
 // Computation, network and render are (or will be) async; the main thread
 // will be lightly loaded and spend its time waiting for messages and vsync
+
+// NSEvent / AppKit types appear only inside this file; everything else sees
+// only wry::gui::Event.  Each NSResponder callback below translates its
+// NSEvent into one Event and pushes it onto the model's per-frame queue;
+// [WryDelegate render] drains the queue before the renderer runs.
+
+namespace {
+
+    wry::gui::Modifiers modifiers_from_ns_flags(NSEventModifierFlags flags) {
+        using M = wry::gui::Modifiers;
+        M m;
+        if (flags & NSEventModifierFlagShift)    m.bits |= M::Shift;
+        if (flags & NSEventModifierFlagControl)  m.bits |= M::Ctrl;
+        if (flags & NSEventModifierFlagOption)   m.bits |= M::Alt;
+        if (flags & NSEventModifierFlagCommand)  m.bits |= M::Cmd;
+        if (flags & NSEventModifierFlagCapsLock) m.bits |= M::Caps;
+        if (flags & NSEventModifierFlagFunction) m.bits |= M::Fn;
+        return m;
+    }
+
+    // Map an NSEvent to a wry::gui::key code.  Non-text keys (Escape,
+    // Enter, Tab, arrows, navigation, Backspace, Delete) are identified by
+    // NSEvent.keyCode against the kVK_* USB-HID constants from Carbon's
+    // HIToolbox.  This is the only Apple-supported API for layout-
+    // independent physical-key identification, and is robust against IME
+    // state, dead-key composition, and the various ways event.characters
+    // can come back empty for non-character keys.
+    //
+    // Text keys fall through to charactersByApplyingModifiers:0 (so 'a'
+    // is reported as 'a' regardless of Shift; layout-aware so Dvorak users
+    // still get Dvorak letters).
+    uint32_t key_from_event(NSEvent* event) {
+        namespace k = wry::gui::key;
+        switch (event.keyCode) {
+            case kVK_Escape:            return k::Escape;
+            case kVK_Return:            return k::Enter;
+            case kVK_ANSI_KeypadEnter:  return k::Enter;
+            case kVK_Tab:               return k::Tab;
+            case kVK_Delete:            return k::Backspace; // mac "delete" key
+            case kVK_ForwardDelete:     return k::Delete;    // forward-delete
+            case kVK_UpArrow:           return k::ArrowUp;
+            case kVK_DownArrow:         return k::ArrowDown;
+            case kVK_LeftArrow:         return k::ArrowLeft;
+            case kVK_RightArrow:        return k::ArrowRight;
+            case kVK_Home:              return k::Home;
+            case kVK_End:               return k::End;
+            case kVK_PageUp:            return k::PageUp;
+            case kVK_PageDown:          return k::PageDown;
+            default:
+                break;
+        }
+        NSString* unmod = [event charactersByApplyingModifiers:0];
+        if (unmod && unmod.length > 0) {
+            unichar ch = [unmod characterAtIndex:0];
+            if (ch >= 0x20 && ch <= 0x7E) {
+                if (ch >= 'A' && ch <= 'Z') {
+                    return (uint32_t)(ch - 'A' + 'a');
+                }
+                return (uint32_t)ch;
+            }
+        }
+        return k::Unknown;
+    }
+
+    // NSEvent.locationInWindow -> view-local logical points with top-left
+    // origin.  AppKit views default to bottom-left y-up; we flip y here so
+    // every event downstream agrees with the 2D overlay convention.
+    // Returned as simd_float2 (the C-visible vector type) and assigned
+    // implicitly into the Event::location float2 field.
+    simd_float2 location_in_view_pt(WryMetalView* view, NSEvent* event) {
+        NSPoint w = [event locationInWindow];
+        NSPoint v = [view convertPoint:w fromView:nil];
+        return simd_make_float2((float)v.x,
+                                (float)(view.bounds.size.height - v.y));
+    }
+
+    void fill_text_from_characters(wry::gui::Event& ev, NSString* characters) {
+        if (!characters || characters.length == 0)
+            return;
+        unichar first = [characters characterAtIndex:0];
+        // Only forward as insertable text if it looks like text.  Reject:
+        //   - ASCII control codes (0x00..0x1F) -- includes Enter, Tab, ESC
+        //   - DEL (0x7F)
+        //   - NSFunctionKey range (0xF700..0xF8FF) -- arrows, F-keys, etc.
+        bool is_printable = (first >= 0x20)
+                         && (first != 0x7F)
+                         && !(first >= 0xF700 && first <= 0xF8FF);
+        if (!is_printable)
+            return;
+        const char* utf8 = characters.UTF8String;
+        if (!utf8)
+            return;
+        size_t cap = sizeof(ev.text) - 1;
+        size_t n = strnlen(utf8, cap);
+        memcpy(ev.text, utf8, n);
+        ev.text[n] = '\0';
+    }
+
+} // anonymous namespace
 
 @implementation WryDelegate
 {
@@ -90,6 +199,14 @@
     // _audio = [[WryAudio alloc] init];
 
     _window.contentView = _metalView;
+
+    // Make the metal view the window's initial first responder so that
+    // -keyDown: arrives at the view (which forwards to us) instead of at
+    // NSWindow.  NSWindow's own -keyDown: special-cases ESC / Cmd-period
+    // and routes them through -cancelOperation: in a way that's hard to
+    // hook reliably; with the view as first responder, every key flows
+    // through one well-defined path.
+    _window.initialFirstResponder = _metalView;
 
 }
 
@@ -217,130 +334,52 @@
 }
 
 - (void)keyDown:(NSEvent *)event {
-                
-    // Forward the events where?
-    
-    // assert([self nextResponder]);
-    
-    
 
-    
-    using namespace wry;
-    
-    // [self interpretKeyEvents:@[event]];
-    
-    //if (!event.ARepeat) {
-        
-    //}
-    
-    /*
-     {
-     // random location on a line in front of the listener
-     AVAudio3DPoint location = AVAudioMake3DPoint(// rand() & 1 ? -1.0 : +1.0,
-     rand() * 2.0 / RAND_MAX - 1.0,
-     0.0, //rand() & 1 ? -1.0 : +1.0,
-     1.0 // rand() & 1 ? -1.0 : +1.0
-     );
-     
-     
-     NSString* name = ((event.characters.length
-     && ([event.characters characterAtIndex:0]
-     == NSCarriageReturnCharacter))
-     ? @"mixkit-typewriter-classic-return-1381"
-     : @"Keyboard-Button-Click-07-c-FesliyanStudios.com2");
-     
-     [_audio play:name at:location];
-     }
-     */
-    
-    
-    // UTF-16 code for key, such as private use 0xf700 = NSUpArrowFunctionKey
-    // printf("%x\n", [event.characters characterAtIndex:0]);
-    
-    // _model->_console.back().append(event.characters.UTF8String);
-    NSLog(@"keyDown: \"%@\" (\"%@\")\n",
+    NSLog(@"keyDown: keyCode=%u  characters=\"%@\"  unmodified=\"%@\"\n",
+          (unsigned)event.keyCode,
           event.characters,
           [event charactersByApplyingModifiers:0]);
-    if (event.characters.length) {
-        // NSLog(@"keyDown: (%x)\n", [event.characters characterAtIndex:0]);
-        
-        if (_model->_console_active) {
-            switch ([event.characters characterAtIndex:0]) {
-                case NSCarriageReturnCharacter:
-                    _model->_console.emplace_back();
-                    break;
-                case 0x001b: // ESC
-                    _model->_console_active = false;
-                    _model->append_log(u8"[ESC] Hide console");
-                    break;
-                case NSDeleteCharacter:
-                    if (!_model->_console.back().empty())
-                        _model->_console.back().pop_back();
-                    break;
-                case NSUpArrowFunctionKey:
-                    std::rotate(_model->_console.begin(), _model->_console.end() - 1, _model->_console.end());
-                    break;
-                case NSDownArrowFunctionKey:
-                    std::rotate(_model->_console.begin(), _model->_console.begin() + 1, _model->_console.end());
-                    break;
-                case NSLeftArrowFunctionKey:
-                    if (!_model->_console.back().empty()) {
-                        auto ch = _model->_console.back().back();
-                        _model->_console.back().pop_back();
-                        _model->_console.back().push_front(ch);
-                    }
-                    break;
-                case NSRightArrowFunctionKey:
-                    if (!_model->_console.back().empty()) {
-                        auto ch = _model->_console.back().front_and_pop_front();
-                        _model->_console.back().push_back(ch);
-                    }
-                    break;
-                default: {
-                    auto p = reinterpret_cast<const char8_t*>(event.characters.UTF8String);
-                    _model->_console.back().append(p);
-                } break;
-            }
-        } else {
-            auto toggle = [](auto& x) {
-                x = !x;
-            };
-            unichar ch = [[event charactersByApplyingModifiers:0] characterAtIndex:0];
-            char buffer[100];
-            switch (ch) {
-                case '`':
-                    _model->_console_active = true;
-                    _model->append_log("[~] Show console");
-                    break;
-                case 'j':
-                    toggle(_model->_show_jacobian);
-                    snprintf(buffer, 100, "%s [J]acobians", _model->_show_jacobian ? "Show" : "Hide");
-                    _model->append_log((char*) buffer);
-                    break;
-                case 'p':
-                    toggle(_model->_show_points);
-                    snprintf(buffer, 100, "%s [P]oints", _model->_show_points ? "Show" : "Hide");
-                    _model->append_log(buffer);
-                    break;
-                case 'w':
-                    toggle(_model->_show_wireframe);
-                    snprintf(buffer, 100, "%s [W]ireframe", _model->_show_wireframe ? "Show" : "Hide");
-                    _model->append_log(buffer);
-                    break;
-                default:
-                    if (isxdigit(ch)) {
-                        _model->_outstanding_keysdown.push_back((char32_t) ch);
-                    }
-                    break;
-            }
-        }
-    }
+
+    using namespace wry::gui;
+
+    Event ev{};
+    ev.kind = WryEventKindKeyDown;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.is_repeat = [event isARepeat];
+
+    // event.key: the unmodified logical key.  Named keys (Escape, arrows,
+    // ...) come from event.keyCode; text keys from charactersByApplyingModifiers.
+    ev.key = key_from_event(event);
+
+    // event.text: the modifier-applied insertable text, if any.  Drives
+    // text-entry handlers like the console line buffer.  Left empty for
+    // navigation, function, and other non-text keys.
+    fill_text_from_characters(ev, event.characters);
+
+    _model->_events.push(ev);
 }
 
 
 - (void)keyUp:(NSEvent *)event {
-    NSLog(@"keyUp: \"%@\"\n", event.characters);
+    NSLog(@"keyUp: keyCode=%u  characters=\"%@\"\n",
+          (unsigned)event.keyCode,
+          event.characters);
+
+    using namespace wry::gui;
+
+    Event ev{};
+    ev.kind = WryEventKindKeyUp;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.key = key_from_event(event);
+    _model->_events.push(ev);
 }
+
+
+// Note on ESC: when WryMetalView is the first responder (which it is,
+// thanks to _window.initialFirstResponder above), ESC arrives at our
+// -keyDown: like any other key.  No -cancelOperation: override is needed.
+// The action-method routing AppKit uses when NSWindow itself is first
+// responder is sidestepped by the view-as-first-responder path.
 
 - (void)flagsChanged:(NSEvent *)event {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
@@ -356,70 +395,139 @@
 }
 
 - (void) mouseMoved:(NSEvent *)event {
-    NSPoint location_in_window = [event locationInWindow];
-    NSPoint location_in_view = [_metalView convertPoint:location_in_window fromView:nil];
-    _model->_mouse.x = 2.0f * location_in_view.x / _metalView.bounds.size.width - 1.0f;
-    _model->_mouse.y = 2.0f * location_in_view.y / _metalView.bounds.size.height - 1.0f;
-    
-    //NSLog(@"(%g, %g)", _metalView.bounds.size.width, _metalView.bounds.size.height);
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindMouseMove;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    _model->_events.push(ev);
 }
 
 - (void) mouseEntered:(NSEvent *)event {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    // Platform-side cursor reset stays here; pure AppKit concern.  The
+    // logical hover-enter still flows through the queue so future widgets
+    // can react.
     [_renderer resetCursor];
+
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindMouseEnter;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    _model->_events.push(ev);
 }
 
 - (void) mouseExited:(NSEvent *)event {
-    // NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindMouseExit;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    _model->_events.push(ev);
 }
 
 - (void) mouseDown:(NSEvent *)event {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindMouseDown;
+    ev.button = MouseButton::Left;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    _model->_events.push(ev);
 }
+
 - (void) mouseDragged:(NSEvent *)event {
-    // NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    // Pre-event-queue code treated drag as a position update; preserve.
     [self mouseMoved:event];
 }
 
 - (void) mouseUp:(NSEvent *)event {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    NSPoint location_in_window = [event locationInWindow];
-    NSPoint location_in_view = [_metalView convertPoint:location_in_window fromView:nil];
-    _model->_mouse.x = 2.0f * location_in_view.x / _metalView.bounds.size.width - 1.0f;
-    _model->_mouse.y = 2.0f * location_in_view.y / _metalView.bounds.size.height - 1.0f;
-    _model->_outstanding_click = true;
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindMouseUp;
+    ev.button = MouseButton::Left;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    _model->_events.push(ev);
 }
 
 - (void) rightMouseDown:(NSEvent *)event {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindMouseDown;
+    ev.button = MouseButton::Right;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    _model->_events.push(ev);
 }
 
 - (void) rightMouseDragged:(NSEvent *)event {
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindMouseMove;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    _model->_events.push(ev);
 }
 
 - (void) rightMouseUp:(NSEvent *)event {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindMouseUp;
+    ev.button = MouseButton::Right;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    _model->_events.push(ev);
 }
 
 - (void) otherMouseDown:(NSEvent *)event {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindMouseDown;
+    ev.button = MouseButton::Middle;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    _model->_events.push(ev);
 }
 
 - (void) otherMouseDragged:(NSEvent *)event {
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindMouseMove;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    _model->_events.push(ev);
 }
 
-- (void) otherMouseUp:(NSEvent *)event {    
+- (void) otherMouseUp:(NSEvent *)event {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindMouseUp;
+    ev.button = MouseButton::Middle;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    _model->_events.push(ev);
 }
 
 -(void) scrollWheel:(NSEvent *)event {
-    NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    //auto lock = std::unique_lock{_model->_mutex};
-    _model->_looking_at.x += event.scrollingDeltaX * _window.screen.backingScaleFactor;
-    _model->_looking_at.y += event.scrollingDeltaY * _window.screen.backingScaleFactor;
-    // NSLog(@"(%g, %g)", _model->_yx.x, _model->_yx.y);
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindScroll;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    // The backingScaleFactor multiply preserves the units the legacy
+    // `_looking_at` accumulator used; flagged for cleanup in gui_event.hpp.
+    CGFloat scale = _window.screen.backingScaleFactor;
+    ev.scroll_delta.x = (float)(event.scrollingDeltaX * scale);
+    ev.scroll_delta.y = (float)(event.scrollingDeltaY * scale);
+    _model->_events.push(ev);
 }
 
 - (void)encodeWithCoder:(nonnull NSCoder *)coder {
@@ -427,6 +535,14 @@
 }
 
 -(void)render {
+    // Drain everything the NSResponder callbacks queued since the last
+    // frame, updating the model's legacy fields that the renderer reads.
+    // Runs on the main thread between NSEvent dispatch and the renderer,
+    // so the queue is always seen consistently.
+    NSSize sz = _metalView.bounds.size;
+    wry::gui::pump_legacy(*_model,
+                          simd_make_float2((float)sz.width,
+                                           (float)sz.height));
     [_renderer render];
 }
 

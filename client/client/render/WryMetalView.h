@@ -21,6 +21,17 @@
 - (void)viewDidChangeBoundsSize;
 - (void)viewDidMoveToWindow;
 
+// Keyboard event forwarding.  The view becomes first responder (see
+// WryMetalView.mm) so that it receives -keyDown: directly for every key.
+// If we left the window as first responder, NSWindow.keyDown: would
+// intercept ESC and Cmd-period and route them through -cancelOperation:
+// instead, which is unreliable in a custom-window setup.  The view's
+// overrides forward each NSEvent to the delegate, which translates it
+// into a wry::gui::Event and enqueues it.
+- (void)keyDown:(NSEvent *)event;
+- (void)keyUp:(NSEvent *)event;
+- (void)flagsChanged:(NSEvent *)event;
+
 @end
 
 @interface WryMetalView : NSView

@@ -16,6 +16,7 @@
 
 #include "contiguous_deque.hpp"
 #include "entity.hpp"
+#include "gui_event.hpp"
 #include "hash.hpp"
 #include "machine.hpp"
 #include "palette.hpp"
@@ -66,7 +67,13 @@ namespace wry {
         
 
         // user interface state
-        
+
+        // Raw NSEvents arrive on the main thread via WryDelegate, which
+        // translates each into a wry::gui::Event and pushes it here.  The
+        // per-frame pump in [WryDelegate render] drains this queue before
+        // the renderer runs.  Single-threaded; no lock needed.
+        gui::EventQueue _events;
+
         bool _outstanding_click = false;
         Root<Value> _holding_value = {};
         difference_type _selected_i = -1;
@@ -74,7 +81,7 @@ namespace wry {
         float2 _looking_at = {};
         float2 _mouse = {};
         simd_float4 _mouse4 = {};
-        
+
         String _outstanding_keysdown;
         
         // visualization state

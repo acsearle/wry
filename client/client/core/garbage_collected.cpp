@@ -956,11 +956,11 @@ namespace wry {
             
             auto t1 = std::chrono::steady_clock::now();
             
-            printf("C0: scanned=%zd,marked=%zd,deleted=%zd in %.3gs\n",
-                   scan_count,
-                   trace_count + mark_count,
-                   delete_count,
-                   std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+//            printf("C0: scanned=%zd,marked=%zd,deleted=%zd in %.3gs\n",
+//                   scan_count,
+//                   trace_count + mark_count,
+//                   delete_count,
+//                   std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
             
 
         } // void Collector::scan()

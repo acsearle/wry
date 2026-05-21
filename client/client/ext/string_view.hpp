@@ -82,13 +82,13 @@ namespace wry {
         }
         
     
-        template<size_type N>
-        StringView(char (&literal)[N])
-        : StringView(reinterpret_cast<const char8_t*>(literal), N - 1) {
-            assert(*chars._end == 0);
-            if (!_invariant())
-                throw EINVAL;
-        }
+//        template<size_type N>
+//        StringView(char (&literal)[N])
+//        : StringView(reinterpret_cast<const char8_t*>(literal), N - 1) {
+//            assert(*chars._end == 0);
+//            if (!_invariant())
+//                throw EINVAL;
+//        }
 
         // validating strlen
         StringView(const char* p)
