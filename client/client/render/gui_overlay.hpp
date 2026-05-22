@@ -348,11 +348,56 @@ namespace wry {
             bool modal_mouse()    const override { return true; }
             bool modal_keyboard() const override { return true; }
 
+            // The LOAD button needs to push the save-list overlay onto
+            // the model's stack; we get the model pointer set once at
+            // startup and the button's click lambda reads it via `this`.
+            void set_model(struct ::wry::model* m) { _model = m; }
+
         private:
             // unique_ptr to a forward-declared Widget so this header
             // doesn't need to know the layout of the widget tree.  The
             // tree is constructed in the .cpp (well, .mm).
             std::unique_ptr<Widget> _root;
+            struct ::wry::model* _model = nullptr;
+        };
+
+        // ----------------------------------------------------------------
+        // Save-game list overlay.  Pushed by MainMenuOverlay's LOAD button.
+        // Modal in both axes.  Hosts:
+        //
+        //   * a title Label,
+        //   * a ScrollView containing a Column of selectable Buttons (one
+        //     per save entry),
+        //   * a Row of action Buttons (Load / Delete / Cancel).
+        //
+        // The save data itself is mocked for phase 4; the actual savefile
+        // system slots in later by replacing make_mock_saves().
+
+        class SaveListOverlay : public Overlay {
+        public:
+            SaveListOverlay();
+            ~SaveListOverlay() override;
+
+            bool on_event(Event const&) override;
+            void paint(Painter&) override;
+
+            bool modal_mouse()    const override { return true; }
+            bool modal_keyboard() const override { return true; }
+
+        private:
+            std::unique_ptr<Widget> _root;
+            // Non-owning into the widget tree above; we need direct access
+            // to scroll arithmetic and to flip the selected state on rows.
+            class ScrollView*       _scroll = nullptr;
+            std::vector<class Button*> _row_buttons;
+
+            int _selected_index = 0;
+
+            void update_selection_visuals();
+            void move_selection(int delta);
+            void scroll_to_selected();
+            void load_selected();
+            void delete_selected();
         };
 
     } // namespace gui

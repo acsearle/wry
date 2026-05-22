@@ -49,6 +49,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -161,15 +162,26 @@ namespace wry::gui {
         bool on_event(Event const&) override;
         void paint(Painter&) override;
 
-    private:
-        // Padding around the label (left/right and overall height padding).
-        // Width is `text_width + 2 * kHorizPadding`, clamped to a sensible
-        // minimum so empty / very short labels still look like buttons.
-        // Height is `font_cell_height + 2 * kVertPadding`, computed in
-        // measure() so the button always fits its font.
+        // External selection state.  Buttons used as list rows toggle this
+        // from outside (the containing overlay maintains the selection
+        // index); plain action buttons leave it default-false.  When set,
+        // the button paints with a distinct background to mark the row.
+        void set_selected(bool s) { _selected = s; }
+        bool is_selected() const  { return _selected; }
+
+        // The rect this Button was last arranged into (screen-space).
+        // Used by parents that want to scroll a particular row into view.
+        // Degenerate {0,0,0,0} before the first arrange.
+        rect<float> arranged_rect() const { return _rect; }
+
+        // Padding constants are public so containers that need to size a
+        // ScrollView to "N + 0.5 rows" can ask for the row height without
+        // having to measure a sample button.
         static constexpr float kHorizPadding = 16.0f;
         static constexpr float kVertPadding  = 8.0f;
         static constexpr float kMinWidth     = 80.0f;
+
+    private:
         // Fallback height if measure() is called without a font (shouldn't
         // happen in practice but keeps the widget defensible).
         static constexpr float kFallbackHeight = 48.0f;
@@ -177,8 +189,9 @@ namespace wry::gui {
         String _label;
         std::function<void()> _on_click;
         rect<float> _rect = {0, 0, 0, 0};
-        bool _hover   = false;
-        bool _pressed = false;
+        bool _hover    = false;
+        bool _pressed  = false;
+        bool _selected = false;
     };
 
     // ----------------------------------------------------------------
@@ -209,6 +222,108 @@ namespace wry::gui {
         std::vector<std::unique_ptr<Widget>> _children;
         float _spacing = 8.0f;
         rect<float> _rect = {0, 0, 0, 0};
+    };
+
+    // ----------------------------------------------------------------
+    // Row: the horizontal sibling of Column.  Lays children left-to-right
+    // with uniform spacing.  Cross axis (height) stretches each child to
+    // the row's height; main axis (width) keeps each child's natural width.
+
+    class Row : public Widget {
+    public:
+        Row& add(std::unique_ptr<Widget> child) {
+            _children.push_back(std::move(child));
+            return *this;
+        }
+
+        void set_spacing(float s) { _spacing = s; }
+
+        Size measure(SizeConstraints, MeasureContext const&) override;
+        void arrange(rect<float>) override;
+        bool on_event(Event const&) override;
+        void paint(Painter&) override;
+
+    private:
+        std::vector<std::unique_ptr<Widget>> _children;
+        float _spacing = 8.0f;
+        rect<float> _rect = {0, 0, 0, 0};
+    };
+
+    // ----------------------------------------------------------------
+    // Label: a static line of text.  No background, no events, no states.
+    // Sized to the text's measured width and the font's glyph cell height.
+
+    class Label : public Widget {
+    public:
+        explicit Label(StringView text) : _text(text) {}
+
+        Size measure(SizeConstraints, MeasureContext const&) override;
+        void arrange(rect<float>) override;
+        void paint(Painter&) override;
+
+    private:
+        String _text;
+        rect<float> _rect = {0, 0, 0, 0};
+    };
+
+    // ----------------------------------------------------------------
+    // ScrollView: single-child widget that clips and translates its child.
+    //
+    // Sizing.  measure() picks a width matching the constraints' cross
+    // axis and a height that is the smallest of:
+    //   * the constraint's max.h,
+    //   * the height cap if one was set (set_height_cap; used by the save
+    //     list to pin the view to "N + 0.5 row heights"),
+    //   * the child's measured height (so we don't reserve dead space
+    //     when the content fits entirely).
+    //
+    // Layout.  The child is measured with a loose vertical constraint
+    // (it can be as tall as it needs to be) and a tight horizontal
+    // constraint (it fills our cross axis).  arrange() places the child
+    // at our top edge minus the current scroll offset, so the child rect
+    // lives in *our* screen-space (translated by -offset).
+    //
+    // Events.  Scroll events adjust the offset (only when the cursor is
+    // over us).  Other positional events are forwarded to the child only
+    // when the location is inside our rect, so clicks on the clipped
+    // portion of a partially-visible child don't activate.
+    //
+    // Painting.  push_clip(_rect) around the child paint, so children
+    // outside our bounds are CPU-cropped.
+
+    class ScrollView : public Widget {
+    public:
+        void set_child(std::unique_ptr<Widget> c) { _child = std::move(c); }
+        Widget* child() const { return _child.get(); }
+
+        // Upper bound on the view height in size-space.  See class comment.
+        void set_height_cap(float h) { _height_cap = h; }
+
+        // Inspection / programmatic scroll.
+        float content_height() const { return _content_h; }
+        float view_height()    const { return _rect.b.y - _rect.a.y; }
+        float scroll_offset()  const { return _offset; }
+        void  set_scroll_offset(float o);
+
+        // Adjust _offset so that `target` (a screen-space rect, typically
+        // a child widget's last-arranged rect) fits within the visible
+        // band.  No-op if `target` is degenerate or already visible.
+        void scroll_into_view(rect<float> target);
+
+        Size measure(SizeConstraints, MeasureContext const&) override;
+        void arrange(rect<float>) override;
+        bool on_event(Event const&) override;
+        void paint(Painter&) override;
+
+    private:
+        std::unique_ptr<Widget> _child;
+        rect<float> _rect = {0, 0, 0, 0};
+        float _offset = 0.0f;
+        float _content_h = 0.0f;
+        float _height_cap = std::numeric_limits<float>::infinity();
+
+        void clamp_offset();
+        void arrange_child();
     };
 
 } // namespace wry::gui

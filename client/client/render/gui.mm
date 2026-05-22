@@ -399,13 +399,25 @@ namespace wry {
         void Button::paint(Painter& p) {
             if (!p.atlas) return;
 
-            // Background.  Darker base, slightly lighter on hover, slightly
-            // darker again while pressed.
-            RGBA8Unorm_sRGB bg(0.20f, 0.20f, 0.20f, 1.0f);
-            if (_pressed) {
-                bg = RGBA8Unorm_sRGB(0.12f, 0.12f, 0.12f, 1.0f);
-            } else if (_hover) {
-                bg = RGBA8Unorm_sRGB(0.28f, 0.28f, 0.28f, 1.0f);
+            // Background.  Two palettes -- default (gray) and selected
+            // (blue-tinted) -- each with hover and pressed variants.
+            RGBA8Unorm_sRGB bg;
+            if (_selected) {
+                if (_pressed) {
+                    bg = RGBA8Unorm_sRGB(0.20f, 0.30f, 0.50f, 1.0f);
+                } else if (_hover) {
+                    bg = RGBA8Unorm_sRGB(0.35f, 0.45f, 0.65f, 1.0f);
+                } else {
+                    bg = RGBA8Unorm_sRGB(0.25f, 0.35f, 0.55f, 1.0f);
+                }
+            } else {
+                if (_pressed) {
+                    bg = RGBA8Unorm_sRGB(0.12f, 0.12f, 0.12f, 1.0f);
+                } else if (_hover) {
+                    bg = RGBA8Unorm_sRGB(0.28f, 0.28f, 0.28f, 1.0f);
+                } else {
+                    bg = RGBA8Unorm_sRGB(0.20f, 0.20f, 0.20f, 1.0f);
+                }
             }
             p.fill_rect(_rect, bg);
 
@@ -494,6 +506,195 @@ namespace wry {
         }
 
         // ================================================================
+        // Row
+        // ================================================================
+
+        Size Row::measure(SizeConstraints c, MeasureContext const& ctx) {
+            float total_w = 0.0f;
+            float max_h = 0.0f;
+            for (std::size_t i = 0; i < _children.size(); ++i) {
+                if (i > 0) total_w += _spacing;
+                Size cs = _children[i]->measure(c, ctx);
+                total_w += cs.w;
+                max_h = std::max(max_h, cs.h);
+            }
+            _last_measured_size = c.constrain(Size{ total_w, max_h });
+            return _last_measured_size;
+        }
+
+        void Row::arrange(rect<float> r) {
+            _rect = r;
+            const float row_h = r.b.y - r.a.y;
+            float x = r.a.x;
+            for (std::size_t i = 0; i < _children.size(); ++i) {
+                if (i > 0) x += _spacing;
+                const Size cs = _children[i]->last_measured_size();
+                // Stretch on cross axis (height) so all children align;
+                // keep natural width on main axis.
+                rect<float> child_rect{
+                    x, r.a.y, x + cs.w, r.a.y + row_h,
+                };
+                _children[i]->arrange(child_rect);
+                x += cs.w;
+            }
+        }
+
+        bool Row::on_event(Event const& e) {
+            for (auto& child : _children) {
+                if (child->on_event(e)) return true;
+            }
+            return false;
+        }
+
+        void Row::paint(Painter& p) {
+            for (auto& child : _children) {
+                child->paint(p);
+            }
+        }
+
+        // ================================================================
+        // Label
+        // ================================================================
+
+        Size Label::measure(SizeConstraints c, MeasureContext const& ctx) {
+            const float w = ctx.font ? wry::text_run_width(ctx.font, _text)
+                                     : 0.0f;
+            const float h = ctx.font
+                ? (ctx.font->ascender - ctx.font->descender)
+                : 20.0f;   // fallback; only hit if measure is called fontless
+            _last_measured_size = c.constrain(Size{ w, h });
+            return _last_measured_size;
+        }
+
+        void Label::arrange(rect<float> r) {
+            _rect = r;
+        }
+
+        void Label::paint(Painter& p) {
+            if (!p.font || !p.atlas) return;
+            const RGBA8Unorm_sRGB color(1.0f, 1.0f, 1.0f, 1.0f);
+            const float h = _rect.b.y - _rect.a.y;
+            const float baseline = _rect.a.y + h * 0.5f
+                + (p.font->ascender + p.font->descender) * 0.5f;
+            rect<float> prev = p.push_clip(_rect);
+            p.draw_text_run(simd_make_float2(_rect.a.x, baseline),
+                            _text, color);
+            p.pop_clip(prev);
+        }
+
+        // ================================================================
+        // ScrollView
+        // ================================================================
+
+        Size ScrollView::measure(SizeConstraints c, MeasureContext const& ctx) {
+            // Child gets a tight cross-axis (fills our width) and a fully
+            // loose main axis (it can be as tall as it likes).
+            SizeConstraints child_c{
+                Size{ c.min.w, 0.0f },
+                Size{ c.max.w, std::numeric_limits<float>::infinity() },
+            };
+            Size child_size = _child ? _child->measure(child_c, ctx) : Size{};
+            _content_h = child_size.h;
+
+            // Our height: bounded above by max.h, the cap, and the
+            // content's natural height; bounded below by min.h.  No need
+            // to reserve space we don't need when the content fits.
+            float h = std::min(c.max.h, _height_cap);
+            h = std::min(h, child_size.h);
+            h = std::max(h, c.min.h);
+
+            _last_measured_size = Size{ child_size.w, h };
+            return _last_measured_size;
+        }
+
+        void ScrollView::arrange(rect<float> r) {
+            _rect = r;
+            clamp_offset();
+            arrange_child();
+        }
+
+        void ScrollView::arrange_child() {
+            if (!_child) return;
+            const Size cs = _child->last_measured_size();
+            const float child_top = _rect.a.y - _offset;
+            rect<float> child_rect{
+                _rect.a.x, child_top,
+                _rect.a.x + cs.w, child_top + cs.h,
+            };
+            _child->arrange(child_rect);
+        }
+
+        void ScrollView::clamp_offset() {
+            const float view_h = view_height();
+            const float max_off = std::max(0.0f, _content_h - view_h);
+            _offset = std::clamp(_offset, 0.0f, max_off);
+        }
+
+        void ScrollView::set_scroll_offset(float o) {
+            _offset = o;
+            clamp_offset();
+            arrange_child();
+        }
+
+        void ScrollView::scroll_into_view(rect<float> target) {
+            // Degenerate (unarranged) target: nothing to do.  Notably this
+            // is what we see on the first frame after push, before paint
+            // has laid the children out.
+            if (target.b.y <= target.a.y) return;
+
+            float new_off = _offset;
+            if (target.a.y < _rect.a.y) {
+                new_off -= (_rect.a.y - target.a.y);
+            } else if (target.b.y > _rect.b.y) {
+                new_off += (target.b.y - _rect.b.y);
+            } else {
+                return;  // already on-screen
+            }
+            set_scroll_offset(new_off);
+        }
+
+        bool ScrollView::on_event(Event const& e) {
+            const float2 loc = e.location;
+            const bool inside = _rect.contains(loc);
+
+            if (e.kind == WryEventKindScroll) {
+                // Only scroll when the cursor is over us -- otherwise a
+                // background-world scroll would also drag our view.
+                if (!inside) return false;
+                _offset += e.scroll_delta.y;
+                clamp_offset();
+                arrange_child();
+                return true;
+            }
+
+            // Filter positional events to inside our bounds, so clicks /
+            // hovers on the *clipped* portion of a partially-visible
+            // child don't activate.
+            const bool is_positional =
+                (e.kind == WryEventKindMouseDown  ||
+                 e.kind == WryEventKindMouseUp    ||
+                 e.kind == WryEventKindMouseMove  ||
+                 e.kind == WryEventKindMouseEnter ||
+                 e.kind == WryEventKindMouseExit);
+            if (is_positional && !inside) return false;
+
+            if (_child) return _child->on_event(e);
+            return false;
+        }
+
+        void ScrollView::paint(Painter& p) {
+            if (!_child) return;
+            // Re-arrange the child against the current offset.  We do this
+            // every paint rather than only on offset change because the
+            // viewport size (and hence content layout) might also have
+            // changed between paints.
+            arrange_child();
+            rect<float> prev = p.push_clip(_rect);
+            _child->paint(p);
+            p.pop_clip(prev);
+        }
+
+        // ================================================================
         // MainMenuOverlay
         // ================================================================
 
@@ -508,10 +709,19 @@ namespace wry {
             col->add(std::make_unique<Button>(
                 "CONTINUE", [this] { this->wants_close = true; }));
 
+            // LOAD pushes the save-list overlay onto the model's stack.
+            // The lambda captures `this` and reads `_model` at click time
+            // (set_model is called by the model's constructor after both
+            // overlays are alive).
+            col->add(std::make_unique<Button>("LOAD", [this] {
+                if (_model) {
+                    _model->_stack.push(&_model->_save_list_overlay);
+                }
+            }));
+
             // Placeholder actions; real implementations land in later
-            // phases as save/load/settings get built out.
+            // phases as save/settings get built out.
             col->add(std::make_unique<Button>("NEW",      [] { /* TODO */ }));
-            col->add(std::make_unique<Button>("LOAD",     [] { /* TODO */ }));
             col->add(std::make_unique<Button>("SAVE",     [] { /* TODO */ }));
             col->add(std::make_unique<Button>("SETTINGS", [] { /* TODO */ }));
 
@@ -556,6 +766,190 @@ namespace wry {
         }
 
         // ================================================================
+        // SaveListOverlay
+        // ================================================================
+
+        namespace {
+
+            // Phase-4 mock data.  Replaced by real save-file enumeration
+            // when the savefile system lands.  Twelve entries so the list
+            // is comfortably longer than the visible window.
+            struct MockSave { char const* name; };
+            std::vector<MockSave> make_mock_saves() {
+                return {
+                    {"Slot 1 - Forest start"},
+                    {"Slot 2 - Build phase"},
+                    {"Slot 3 - Iron age"},
+                    {"Slot 4 - Late game"},
+                    {"Slot 5 - Empty"},
+                    {"Slot 6 - Tutorial finished"},
+                    {"Slot 7 - New experiment"},
+                    {"Slot 8 - 2026-05-22 backup"},
+                    {"Slot 9 - Stress test"},
+                    {"Slot 10 - Empty"},
+                    {"Slot 11 - Empty"},
+                    {"Slot 12 - Empty"},
+                };
+            }
+
+        } // anonymous namespace
+
+        SaveListOverlay::SaveListOverlay() {
+
+            auto title = std::make_unique<Label>("Load Game");
+
+            // Row column: one selectable Button per mock save.  Click sets
+            // the selection (doesn't load).  Capture by [this, i] so the
+            // lambda can flip the overlay's selection index.
+            auto saves = make_mock_saves();
+            auto rows_col = std::make_unique<Column>();
+            rows_col->set_spacing(2.0f);
+            _row_buttons.clear();
+            _row_buttons.reserve(saves.size());
+            for (int i = 0; i < (int)saves.size(); ++i) {
+                auto btn = std::make_unique<Button>(saves[i].name,
+                    [this, i] {
+                        _selected_index = i;
+                        update_selection_visuals();
+                    });
+                _row_buttons.push_back(btn.get());
+                rows_col->add(std::move(btn));
+            }
+
+            auto scroll = std::make_unique<ScrollView>();
+            scroll->set_child(std::move(rows_col));
+            _scroll = scroll.get();
+
+            // Bottom action bar.
+            auto action_bar = std::make_unique<Row>();
+            action_bar->set_spacing(8.0f);
+            action_bar->add(std::make_unique<Button>("Load",   [this] {
+                load_selected();
+            }));
+            action_bar->add(std::make_unique<Button>("Delete", [this] {
+                delete_selected();
+            }));
+            action_bar->add(std::make_unique<Button>("Cancel", [this] {
+                wants_close = true;
+            }));
+
+            auto root_col = std::make_unique<Column>();
+            root_col->set_spacing(12.0f);
+            root_col->add(std::move(title));
+            root_col->add(std::move(scroll));
+            root_col->add(std::move(action_bar));
+
+            _root = std::move(root_col);
+            update_selection_visuals();
+        }
+
+        SaveListOverlay::~SaveListOverlay() = default;
+
+        void SaveListOverlay::update_selection_visuals() {
+            for (int i = 0; i < (int)_row_buttons.size(); ++i) {
+                _row_buttons[i]->set_selected(i == _selected_index);
+            }
+        }
+
+        void SaveListOverlay::move_selection(int delta) {
+            if (_row_buttons.empty()) return;
+            _selected_index = std::clamp(
+                _selected_index + delta,
+                0, (int)_row_buttons.size() - 1);
+            update_selection_visuals();
+            scroll_to_selected();
+        }
+
+        void SaveListOverlay::scroll_to_selected() {
+            if (!_scroll) return;
+            if (_selected_index < 0 ||
+                _selected_index >= (int)_row_buttons.size()) return;
+            // Button rects are from the previous frame's arrange; if no
+            // paint has run yet they'll be degenerate and scroll_into_view
+            // will no-op.  After the first paint they're current enough.
+            _scroll->scroll_into_view(
+                _row_buttons[_selected_index]->arranged_rect());
+        }
+
+        void SaveListOverlay::load_selected() {
+            // TODO: invoke the real load path when the save system exists.
+            // For now: close the menu so the user can see something happens.
+            wants_close = true;
+        }
+
+        void SaveListOverlay::delete_selected() {
+            // TODO: real delete + list refresh when the save system exists.
+        }
+
+        bool SaveListOverlay::on_event(Event const& e) {
+            if (e.kind == WryEventKindKeyDown) {
+                switch (e.key) {
+                    case key::Escape:
+                        wants_close = true;
+                        return true;
+                    case key::Enter:
+                        load_selected();
+                        return true;
+                    case key::ArrowUp:
+                        move_selection(-1);
+                        return true;
+                    case key::ArrowDown:
+                        move_selection(+1);
+                        return true;
+                    case key::PageUp:
+                        move_selection(-5);
+                        return true;
+                    case key::PageDown:
+                        move_selection(+5);
+                        return true;
+                    case key::Home:
+                        move_selection(-(int)_row_buttons.size());
+                        return true;
+                    case key::End:
+                        move_selection(+(int)_row_buttons.size());
+                        return true;
+                    default:
+                        break;
+                }
+            }
+            // Mouse events, scroll events, etc. fall through to the widget
+            // tree.
+            return _root ? _root->on_event(e) : false;
+        }
+
+        void SaveListOverlay::paint(Painter& p) {
+            // Backdrop, same as MainMenuOverlay.
+            p.fill_rect(rect<float>{0.0f, 0.0f,
+                                    p.viewport_size_pt.x,
+                                    p.viewport_size_pt.y},
+                        RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.5f));
+
+            if (!_root) return;
+
+            MeasureContext mctx{ p.font };
+
+            // Cap the scroll view at "N + 0.5" rows.  Row height is the
+            // Button natural height with the same font; compute it the
+            // same way Button::measure does so the cap matches.
+            if (_scroll && p.font) {
+                const int n_visible = 5;
+                const float cell_h =
+                    p.font->ascender - p.font->descender;
+                const float row_h = cell_h + 2.0f * Button::kVertPadding;
+                _scroll->set_height_cap((n_visible + 0.5f) * row_h);
+            }
+
+            SizeConstraints c = SizeConstraints::loose(p.viewport_size_pt);
+            Size desired = _root->measure(c, mctx);
+
+            float x = (p.viewport_size_pt.x - desired.w) * 0.5f;
+            float y = (p.viewport_size_pt.y - desired.h) * 0.5f;
+            _root->arrange(rect<float>{x, y, x + desired.w, y + desired.h});
+
+            _root->paint(p);
+        }
+
+        // ================================================================
         // Event pump
         // ================================================================
 
@@ -564,27 +958,38 @@ namespace wry {
                                       float2 view_size_pt);
 
         void pump(model& m, float2 view_size_pt) {
-            const float w = (view_size_pt.x > 0.0f) ? view_size_pt.x : 1.0f;
-            const float h = (view_size_pt.y > 0.0f) ? view_size_pt.y : 1.0f;
+            // NSEvent locations arrive in *logical points* (what NSView's
+            // bounds.size and locationInWindow speak).  The widget tree
+            // and the renderer's screen-space overlay transform both run
+            // in *drawable pixels* (= points * backingScaleFactor; what
+            // _viewport_size holds).  Promote event.location from points
+            // to pixels once here, at the dispatch boundary, so widgets'
+            // _rect and event.location share a coordinate space.
+            const float w_pt = (view_size_pt.x > 0.0f) ? view_size_pt.x : 1.0f;
+            const float h_pt = (view_size_pt.y > 0.0f) ? view_size_pt.y : 1.0f;
+            const float scale_x = m._viewport_size.x / w_pt;
+            const float scale_y = m._viewport_size.y / h_pt;
 
             while (!m._events.empty()) {
                 Event e = m._events.pop_front();
 
-                // Keep _mouse (NDC, y-up) in lockstep with the event
-                // currently being dispatched.  Doing this once here, up
-                // front, means every overlay reads a current,
-                // consistently-converted value and no overlay needs its
-                // own screen-pt -> NDC plumbing.  Note view_size_pt is in
-                // logical points (the view's bounds.size); _viewport_size
-                // elsewhere on the model is in drawable pixels.
-                if (e.kind == WryEventKindMouseMove  ||
-                    e.kind == WryEventKindMouseDown  ||
-                    e.kind == WryEventKindMouseUp    ||
-                    e.kind == WryEventKindMouseEnter ||
-                    e.kind == WryEventKindMouseExit  ||
-                    e.kind == WryEventKindScroll) {
-                    m._mouse.x = 2.0f * e.location.x / w - 1.0f;
-                    m._mouse.y = 1.0f - 2.0f * e.location.y / h;
+                const bool is_positional =
+                    (e.kind == WryEventKindMouseMove  ||
+                     e.kind == WryEventKindMouseDown  ||
+                     e.kind == WryEventKindMouseUp    ||
+                     e.kind == WryEventKindMouseEnter ||
+                     e.kind == WryEventKindMouseExit  ||
+                     e.kind == WryEventKindScroll);
+
+                if (is_positional) {
+                    e.location.x *= scale_x;
+                    e.location.y *= scale_y;
+
+                    // Keep _mouse (NDC, y-up) in lockstep with the event
+                    // currently being dispatched.  Pixels in numerator and
+                    // denominator now match.
+                    m._mouse.x = 2.0f * e.location.x / m._viewport_size.x - 1.0f;
+                    m._mouse.y = 1.0f - 2.0f * e.location.y / m._viewport_size.y;
                 }
 
                 bool consumed = m._stack.dispatch(e);

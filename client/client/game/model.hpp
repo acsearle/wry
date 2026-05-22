@@ -75,12 +75,14 @@ namespace wry {
         // Persistent GUI elements.  Each owns its own state (console lines,
         // floating log entries, palette selection / hover); the stack
         // borrows pointers to them and runs the dispatch + paint walks.
-        // The main menu lives here so its lifetime spans push/pop cycles
-        // -- the stack only borrows pointers, it doesn't own them.
+        // The main menu and save-list both live here so their lifetimes
+        // span push/pop cycles -- the stack only borrows pointers, it
+        // doesn't own them.
         gui::LogOverlay _log_overlay;
         gui::ConsoleOverlay _console_overlay;
         gui::PaletteOverlay _palette_overlay;
         gui::MainMenuOverlay _main_menu_overlay;
+        gui::SaveListOverlay _save_list_overlay;
         gui::OverlayStack _stack;
 
         // Legacy fields still read by WryRenderer.  These shrink as
@@ -109,9 +111,12 @@ namespace wry {
 
             // Overlay wiring.  Stack order, bottom up: floating log,
             // palette, console (modal-on-top).  Push order = paint order;
-            // dispatch is the reverse walk.
+            // dispatch is the reverse walk.  The main menu and save-list
+            // overlays are pushed dynamically (by ESC and by the main
+            // menu's LOAD button respectively), not at startup.
             _console_overlay.set_log(&_log_overlay);
             _palette_overlay.set_model(this);
+            _main_menu_overlay.set_model(this);
             _stack.push(&_log_overlay);
             _stack.push(&_palette_overlay);
             _stack.push(&_console_overlay);
