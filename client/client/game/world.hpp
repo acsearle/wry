@@ -17,20 +17,25 @@
 
 #include "persistent_set.hpp"
 #include "persistent_map.hpp"
+#include "save_types.hpp"
 #include "waitable_map.hpp"
 
 
 namespace wry {
-    
+
     // somewhat abstracted interface
-    
+
     struct World;
     struct Entity;
-    
+    struct Saver;
+    struct Loader;
+
     Time world_get_time(const World* world);
-    
+
     struct World : GarbageCollected {
-        
+
+        static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::World");
+
         virtual void _garbage_collected_debug() const override {
             printf("%s\n", __PRETTY_FUNCTION__);
         }

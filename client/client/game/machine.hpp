@@ -14,17 +14,22 @@
 #include "debug.hpp"
 #include "opcode.hpp"
 #include "persistent_stack.hpp"
+#include "save_types.hpp"
 #include "vector.hpp"
 
 namespace wry {
-            
+
     struct Machine : Entity {
-        
+
+        static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Machine");
+
         virtual void _garbage_collected_debug() const override {
             printf("%s\n", __PRETTY_FUNCTION__);
         }
 
-        
+        virtual uint64_t _save_type_tag() const override { return SAVE_TYPE_TAG; }
+        virtual void _save_body(Saver& saver) const override;
+
         enum {
             PHASE_TRAVELLING,
             PHASE_WAITING_FOR_OLD,

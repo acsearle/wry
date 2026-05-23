@@ -13,6 +13,7 @@
 
 #include "atomic.hpp"
 #include "garbage_collected.hpp"
+#include "save_types.hpp"
 
 namespace wry {
     
@@ -129,8 +130,11 @@ namespace wry {
         
     
         
+    struct Saver;
+    struct Loader;
+
     struct HeapValue : GarbageCollected {
-                
+
         // TODO: is it useful to have a base class above the Value interface?
         virtual Value _value_insert_or_assign(Value key, Value value) const;
         virtual bool _value_empty() const;
@@ -145,7 +149,12 @@ namespace wry {
         virtual Value _value_mod(Value right) const;
         virtual Value _value_rshift(Value right) const;
         virtual Value _value_lshift(Value right) const;
-        
+
+        // Save format dispatch.  See entity.hpp for the parallel hook on
+        // Entity.
+        virtual uint64_t _save_type_tag() const = 0;
+        virtual void _save_body(Saver& saver) const = 0;
+
     };
     
     
@@ -194,7 +203,9 @@ namespace wry {
     
     // TODO: upgrade to array of limbs of arbitrary precision integer
     struct HeapInt64 final : HeapValue {
+        static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::HeapInt64");
         std::int64_t _integer;
+        HeapInt64() = default;
         explicit HeapInt64(std::int64_t z);
         virtual ~HeapInt64() final = default;
         std::int64_t as_int64_t() const;
@@ -202,6 +213,8 @@ namespace wry {
         virtual void _garbage_collected_debug() const override {
             printf("%s\n", __PRETTY_FUNCTION__);
         }
+        virtual uint64_t _save_type_tag() const override { return SAVE_TYPE_TAG; }
+        virtual void _save_body(Saver& saver) const override;
     };
     
     

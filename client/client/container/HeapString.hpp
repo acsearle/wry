@@ -19,6 +19,8 @@ namespace wry {
     
     struct HeapString final : HeapValue {
 
+        static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::HeapString");
+
         static void* operator new(std::size_t, void* ptr) noexcept { return ptr; }
 
         static const HeapString* make(std::size_t hash, std::string_view view);
@@ -35,6 +37,9 @@ namespace wry {
 
         virtual void _garbage_collected_scan() const override final;
         virtual void _garbage_collected_debug() const override final;
+
+        virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
+        virtual void _save_body(Saver& saver) const override final;
 
     }; // struct HeapString
 
