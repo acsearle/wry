@@ -1152,7 +1152,7 @@
         wry::gui::Painter painter;
         painter.atlas = _atlas;
         painter.font = _font;
-        painter.viewport_size_pt = _model->_viewport_size;
+        painter.viewport_size_px = _model->_viewport_size;
         painter.frame_count = (uint64_t)_frame_count;
         painter.white_sprite = _atlas->_white;
         // Default clip: the full viewport.  Widgets push tighter clips

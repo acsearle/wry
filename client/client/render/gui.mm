@@ -219,7 +219,7 @@ namespace wry {
             const float left   = p.font->height * 0.5f;
             const float slot_h = p.font->height;
             // Bottommost slot ends a half-line above the bottom edge.
-            float slot_top = p.viewport_size_pt.y - p.font->height * 0.5f;
+            float slot_top = p.viewport_size_px.y - p.font->height * 0.5f;
             bool first = true;
 
             for (auto it = _lines.end();
@@ -661,7 +661,12 @@ namespace wry {
                 // Only scroll when the cursor is over us -- otherwise a
                 // background-world scroll would also drag our view.
                 if (!inside) return false;
-                _offset += e.scroll_delta.y;
+                // NSEvent.scrollingDeltaY is positive when the user swipes
+                // *down* with two fingers (natural-scrolling default on
+                // macOS): the user is dragging the content downward, which
+                // reveals earlier content -- i.e., the scroll offset
+                // should DECREASE.  Subtract, not add.
+                _offset -= e.scroll_delta.y;
                 clamp_offset();
                 arrange_child();
                 return true;
@@ -744,8 +749,8 @@ namespace wry {
             // Translucent backdrop dims the world behind the menu and also
             // makes our "we ate that click" modality visually obvious.
             p.fill_rect(rect<float>{0.0f, 0.0f,
-                                    p.viewport_size_pt.x,
-                                    p.viewport_size_pt.y},
+                                    p.viewport_size_px.x,
+                                    p.viewport_size_px.y},
                         RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.5f));
 
             // Layout: ask the root for its natural size given the viewport
@@ -756,10 +761,10 @@ namespace wry {
             // we choose `x`, `y` here to turn it into the screen rect we
             // pass to arrange.
             MeasureContext mctx{ p.font };
-            SizeConstraints c = SizeConstraints::loose(p.viewport_size_pt);
+            SizeConstraints c = SizeConstraints::loose(p.viewport_size_px);
             Size desired = _root->measure(c, mctx);
-            float x = (p.viewport_size_pt.x - desired.w) * 0.5f;
-            float y = (p.viewport_size_pt.y - desired.h) * 0.5f;
+            float x = (p.viewport_size_px.x - desired.w) * 0.5f;
+            float y = (p.viewport_size_px.y - desired.h) * 0.5f;
             _root->arrange(rect<float>{x, y, x + desired.w, y + desired.h});
 
             _root->paint(p);
@@ -920,8 +925,8 @@ namespace wry {
         void SaveListOverlay::paint(Painter& p) {
             // Backdrop, same as MainMenuOverlay.
             p.fill_rect(rect<float>{0.0f, 0.0f,
-                                    p.viewport_size_pt.x,
-                                    p.viewport_size_pt.y},
+                                    p.viewport_size_px.x,
+                                    p.viewport_size_px.y},
                         RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.5f));
 
             if (!_root) return;
@@ -939,11 +944,11 @@ namespace wry {
                 _scroll->set_height_cap((n_visible + 0.5f) * row_h);
             }
 
-            SizeConstraints c = SizeConstraints::loose(p.viewport_size_pt);
+            SizeConstraints c = SizeConstraints::loose(p.viewport_size_px);
             Size desired = _root->measure(c, mctx);
 
-            float x = (p.viewport_size_pt.x - desired.w) * 0.5f;
-            float y = (p.viewport_size_pt.y - desired.h) * 0.5f;
+            float x = (p.viewport_size_px.x - desired.w) * 0.5f;
+            float y = (p.viewport_size_px.y - desired.h) * 0.5f;
             _root->arrange(rect<float>{x, y, x + desired.w, y + desired.h});
 
             _root->paint(p);

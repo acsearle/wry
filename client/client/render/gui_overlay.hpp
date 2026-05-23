@@ -70,7 +70,13 @@ namespace wry {
 
             SpriteAtlas* atlas = nullptr;
             Font* font = nullptr;
-            float2 viewport_size_pt = {0.0f, 0.0f};
+            // Drawable-pixel viewport size (= logical-point view size *
+            // backingScaleFactor).  The widget tree and the screen-space
+            // overlay transform both operate in drawable pixels, so this
+            // is the unit widgets see at layout / paint time.  The pump
+            // converts NSEvent point-locations to pixels at the dispatch
+            // boundary so event.location matches.
+            float2 viewport_size_px = {0.0f, 0.0f};
             uint64_t frame_count = 0;   // for cursor blink, etc.
 
             // A copy of the atlas's reserved white sprite.  Lets widgets
