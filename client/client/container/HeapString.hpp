@@ -38,6 +38,13 @@ namespace wry {
         virtual void _garbage_collected_scan() const override final;
         virtual void _garbage_collected_debug() const override final;
 
+        // Content equality / ordering / hash.  Two HeapStrings with the
+        // same bytes compare equal and hash equal even though they may
+        // sit at different addresses (interning is unwired in production).
+        virtual Value _value_eq(Value right) const override final;
+        virtual Value _value_less(Value right) const override final;
+        virtual Value _value_hash() const override final;
+
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override final;
 

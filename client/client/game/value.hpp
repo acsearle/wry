@@ -179,6 +179,36 @@ namespace wry {
     void value_pop_back(Value);
     Value value_back(Value);
     Value value_front(Value);
+
+    // ---- Equality / ordering / hash ----
+    //
+    // value_eq is TOTAL: always returns a clean boolean Value
+    // (true / false).  ERROR participates as an ordinary tag: an ERROR
+    // equals only itself.  Cross-tag non-ERROR comparisons return ERROR
+    // (incomparable).  Bitwise short-circuit makes the same-bits case
+    // cheap; the deep-eq path goes through HeapValue::_value_eq.
+    //
+    // value_less is PARTIAL: returns a boolean Value when ordering is
+    // defined, ERROR otherwise (cross-type, ERROR-input, unordered
+    // values).  Equal values return false.
+    //
+    // value_hash is PARTIAL: returns a hash Value (small_integer-tagged)
+    // for hashable inputs, ERROR otherwise.  Inline tags hash by mixing
+    // the _data word; OBJECT-tagged Values dispatch to _value_hash which
+    // defaults to ERROR (subclasses opt in).
+    Value value_eq(Value a, Value b);
+    Value value_less(Value a, Value b);
+    Value value_hash(Value);
+
+    // Convenience: most binary operators on Value want to return ERROR
+    // immediately if either argument is ERROR.  Use at the top of any
+    // op that participates in error propagation.  See the partial-op
+    // contract in the invariants block at the top of this file.
+#define VALUE_PROPAGATE_ERROR(a, b) \
+    do { \
+        if (value_is_error(a) || value_is_error(b)) \
+            return value_make_error(); \
+    } while (0)
     
     // Non-member operator overloads.
     //
@@ -212,7 +242,30 @@ namespace wry {
 
     struct HeapValue : GarbageCollected {
 
-        // TODO: is it useful to have a base class above the Value interface?
+        // Operator hooks.  All are const (Values are deeply immutable;
+        // operations return new Values).  Pass-by-value throughout.
+        // Defaults return ERROR (value_make_error) so a subclass that
+        // doesn't override an operator silently rejects it.
+        //
+        // value_eq / value_less / value_hash follow the predicate-vs-
+        // partial-op contract from the invariants block at the top of
+        // this file:
+        //   - _value_eq is TOTAL.  Default returns false (identity:
+        //     same-pointer was already caught by the bitwise short-
+        //     circuit in value_eq, so any remaining call has different
+        //     pointers, and identity-only types correctly answer false).
+        //     Content-comparable subclasses (HeapInt64, HeapString,
+        //     future HeapArray / HeapTable) override to compare bodies.
+        //   - _value_less is PARTIAL.  Default returns ERROR; orderable
+        //     subclasses override.
+        //   - _value_hash is PARTIAL.  Default returns ERROR; hashable
+        //     subclasses override (typically HeapString-style, with the
+        //     hash cached on the instance).
+
+        virtual Value _value_eq(Value right) const;
+        virtual Value _value_less(Value right) const;
+        virtual Value _value_hash() const;
+
         virtual Value _value_insert_or_assign(Value key, Value value) const;
         virtual bool _value_empty() const;
         virtual size_t _value_size() const;
@@ -232,10 +285,11 @@ namespace wry {
         virtual Value _value_band(Value right) const { return value_make_error(); }
         virtual Value _value_bor(Value right) const { return value_make_error(); }
         virtual Value _value_bxor(Value right) const { return value_make_error(); }
-        virtual Value _value_cmp(Value right) const { return value_make_error(); }
 
-        // Save format dispatch.  See entity.hpp for the parallel hook on
-        // Entity.
+        // ---- Save format dispatch ----
+        // Every HeapValue must declare a stable type tag and a body
+        // emitter.  See io/save_format.cpp for the registry.  See also
+        // the parallel hook on Entity (which now inherits HeapValue).
         virtual uint64_t _save_type_tag() const = 0;
         virtual void _save_body(Saver& saver) const = 0;
 
@@ -297,6 +351,12 @@ namespace wry {
         virtual void _garbage_collected_debug() const override {
             printf("%s\n", __PRETTY_FUNCTION__);
         }
+        // Content equality / ordering / hash.  Two HeapInt64s with the
+        // same _integer compare equal and hash equal even though they
+        // sit at different addresses (no interning).
+        virtual Value _value_eq(Value right) const override;
+        virtual Value _value_less(Value right) const override;
+        virtual Value _value_hash() const override;
         virtual uint64_t _save_type_tag() const override { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override;
     };
@@ -497,6 +557,14 @@ namespace wry {
 
     constexpr Value value_make_boolean_with(bool flag) {
         return value_make_enum(VALUE_ENUM_META_BOOLEAN, flag ? 1 : 0);
+    }
+
+    constexpr Value value_make_true() {
+        return value_make_boolean_with(true);
+    }
+
+    constexpr Value value_make_false() {
+        return value_make_boolean_with(false);
     }
 
     constexpr Value value_make_character_with(int utf32) {

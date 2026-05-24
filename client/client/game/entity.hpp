@@ -9,17 +9,27 @@
 #define entity_hpp
 
 #include "sim.hpp"
+#include "value.hpp"
 
 namespace wry {
-        
-    // This is the base class of things with behavior
+
+    // Entity is the base class of game objects with behavior.  It IS-A
+    // HeapValue: an Entity reference can travel as the OBJECT payload of
+    // a Value, participating in the wider persistent-data-structure /
+    // save-load ecosystem.  Identity is carried by EntityID (see
+    // entity_id.hpp); successive snapshots of the same entity are
+    // distinct Entity allocations sharing an EntityID.
     //
-    // They are GarbageCollected, but are they Values?
-        
+    // Operator hooks (_value_add / _value_call / _value_eq / ...) are
+    // inherited from HeapValue with ERROR-returning defaults.  Entity
+    // is identity-only by default: _value_eq returns false (no
+    // content-equality), _value_less and _value_hash return ERROR.
+    // Subclasses (Machine, ...) override what makes sense for them.
+
     struct Saver;
     struct Loader;
 
-    struct Entity : GarbageCollected {
+    struct Entity : HeapValue {
 
         virtual ~Entity() = default;
 
@@ -29,16 +39,11 @@ namespace wry {
 
         Entity();
 
-        // Save format dispatch.  Returns the SAVE_TYPE_TAG of the dynamic
-        // type.  Concrete subclasses must override.
-        virtual uint64_t _save_type_tag() const = 0;
-
-        // Emit this entity's record body to the saver.  Visits children
-        // (e.g. PersistentStack head) as part of body emission.
-        virtual void _save_body(Saver& saver) const = 0;
+        // _save_type_tag and _save_body are inherited as pure virtuals
+        // from HeapValue; concrete subclasses (Machine, ...) override.
 
     }; // struct Entity
-      
+
 };
 
 #endif /* entity_hpp */

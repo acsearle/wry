@@ -180,10 +180,9 @@ namespace wry {
     // emit_body free functions.  One per non-polymorphic concrete type.
     // -----------------------------------------------------------------------
 
-    // World ------------------------------------------------------------------
-
-    static void emit_body(const World* w, Saver& s);
-    // Forward decls for AMT Node bodies are below.
+    // World's _save_body is a method on the class (see further down,
+    // grouped with the other polymorphic save bodies).  Forward decls
+    // for AMT Node bodies are below.
 
     // PersistentStack<Value>::Node
     static void emit_body(const PersistentStack<Value>::Node* n, Saver& s) {
@@ -263,16 +262,21 @@ namespace wry {
     using NodeValue_U64       = array_mapped_trie::Node<Value, uint64_t>;
     using NodeSet_U128        = array_mapped_trie::Node<int, __uint128_t>;
 
-    static void emit_body(const World* w, Saver& s) {
-        SaveRef eid_for_coord_kv = s.visit<NodeEntityID_U64>(w->_entity_id_for_coordinate.kv._inner);
-        SaveRef eid_for_coord_ki = s.visit<NodeSet_U128>(w->_entity_id_for_coordinate.ki._inner);
-        SaveRef ent_for_eid_kv   = s.visit<NodeEntityPtr_U64>(w->_entity_for_entity_id.kv._inner);
-        SaveRef ent_for_eid_ki   = s.visit<NodeSet_U128>(w->_entity_for_entity_id.ki._inner);
-        SaveRef val_for_coord_kv = s.visit<NodeValue_U64>(w->_value_for_coordinate.kv._inner);
-        SaveRef val_for_coord_ki = s.visit<NodeSet_U128>(w->_value_for_coordinate.ki._inner);
-        SaveRef waiting_on_time  = s.visit<NodeSet_U128>(w->_waiting_on_time._inner);
+    // -----------------------------------------------------------------------
+    // Polymorphic _save_body implementations.  These live here, not in the
+    // class .cpp, to keep all save-format coupling localized to one file.
+    // -----------------------------------------------------------------------
 
-        s.write_u64((uint64_t)w->_time);
+    void World::_save_body(Saver& s) const {
+        SaveRef eid_for_coord_kv = s.visit<NodeEntityID_U64>(_entity_id_for_coordinate.kv._inner);
+        SaveRef eid_for_coord_ki = s.visit<NodeSet_U128>(_entity_id_for_coordinate.ki._inner);
+        SaveRef ent_for_eid_kv   = s.visit<NodeEntityPtr_U64>(_entity_for_entity_id.kv._inner);
+        SaveRef ent_for_eid_ki   = s.visit<NodeSet_U128>(_entity_for_entity_id.ki._inner);
+        SaveRef val_for_coord_kv = s.visit<NodeValue_U64>(_value_for_coordinate.kv._inner);
+        SaveRef val_for_coord_ki = s.visit<NodeSet_U128>(_value_for_coordinate.ki._inner);
+        SaveRef waiting_on_time  = s.visit<NodeSet_U128>(_waiting_on_time._inner);
+
+        s.write_u64((uint64_t)_time);
         s.write_ref(eid_for_coord_kv);
         s.write_ref(eid_for_coord_ki);
         s.write_ref(ent_for_eid_kv);
@@ -281,11 +285,6 @@ namespace wry {
         s.write_ref(val_for_coord_ki);
         s.write_ref(waiting_on_time);
     }
-
-    // -----------------------------------------------------------------------
-    // Polymorphic _save_body implementations.  These live here, not in the
-    // class .cpp, to keep all save-format coupling localized to one file.
-    // -----------------------------------------------------------------------
 
     void Machine::_save_body(Saver& s) const {
         // Visit stack first (post-order).
@@ -317,7 +316,11 @@ namespace wry {
     // -----------------------------------------------------------------------
 
     SaveRef Saver::save_world(const World* root) {
-        return visit<World>(root);
+        // World inherits HeapValue post-review, so it joins the
+        // polymorphic visit_heap_value path along with HeapInt64 /
+        // HeapString / Entity / Machine.  The registry entry for World
+        // (in g_saveable_traits) drives load.
+        return visit_heap_value(root);
     }
 
     void Saver::resolve_pending() {

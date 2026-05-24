@@ -26,36 +26,57 @@ namespace wry {
         return ((const _short_string_t&)self._data).as_string_view();
     }
     
-#define X(Y)\
-    Value operator Y (int64_t left, const Value& right) {\
-        switch (_value_tag(right)) {\
-            case VALUE_TAG_SMALL_INTEGER:\
-                return value_make_integer_with(left Y _value_as_small_integer(right));\
-            default:\
-                return value_make_error();\
-        }\
-    }\
+    // Arithmetic / bitwise binary operators on Value.
+    //
+    // Two macro arguments: NAME is the lowercase suffix of the
+    // HeapValue::_value_<NAME> virtual to dispatch to when the left
+    // operand is an OBJECT-tagged HeapValue; OP is the C++ operator
+    // symbol used in the integer fast-path.
+    //
+    // Each operator:
+    //   - returns ERROR immediately if either argument is ERROR
+    //     (VALUE_PROPAGATE_ERROR contract);
+    //   - takes the inline-integer fast-path when left is SMALL_INTEGER
+    //     (recurses via the int64_t overload);
+    //   - dispatches to the polymorphic _value_<NAME> virtual when left
+    //     is an OBJECT-tagged HeapValue;
+    //   - returns ERROR otherwise.
+#define X(NAME, OP) \
+    Value operator OP (int64_t left, const Value& right) { \
+        if (value_is_error(right)) return value_make_error(); \
+        switch (_value_tag(right)) { \
+            case VALUE_TAG_SMALL_INTEGER: \
+                return value_make_integer_with(left OP _value_as_small_integer(right)); \
+            default: \
+                return value_make_error(); \
+        } \
+    } \
     \
-    Value operator Y (const Value& left, const Value& right) {\
-        switch (_value_tag(left)) {\
-            case VALUE_TAG_SMALL_INTEGER:\
-                return _value_as_small_integer(left) Y right;\
-            default:\
-                return value_make_error();\
-        }\
+    Value operator OP (const Value& left, const Value& right) { \
+        VALUE_PROPAGATE_ERROR(left, right); \
+        switch (_value_tag(left)) { \
+            case VALUE_TAG_SMALL_INTEGER: \
+                return _value_as_small_integer(left) OP right; \
+            case VALUE_TAG_OBJECT: { \
+                HeapValue* p = _value_as_object(left); \
+                return p ? p->_value_##NAME(right) : value_make_error(); \
+            } \
+            default: \
+                return value_make_error(); \
+        } \
     }
-        
-    X(*)
-    X(/)
-    X(%)
-    X(-)
-    X(+)
-    X(&)
-    X(^)
-    X(|)
-    X(<<)
-    X(>>)
-    
+
+    X(mul,    *)
+    X(div,    /)
+    X(mod,    %)
+    X(sub,    -)
+    X(add,    +)
+    X(band,   &)
+    X(bxor,   ^)
+    X(bor,    |)
+    X(lshift, <<)
+    X(rshift, >>)
+
 #undef X
 
     Value value_make_string_with(const char* ntbs) {
@@ -351,9 +372,18 @@ namespace wry {
     Value HeapValue::_value_find(Value key) const { return value_make_error(); }
     Value HeapValue::_value_insert_or_assign(Value key, Value value) const { return value_make_error(); }
     Value HeapValue::_value_erase(Value key) const { return value_make_error(); }
-    
 
-    
+    // _value_eq: default is identity.  value_eq's bitwise short-circuit
+    // already returned true for same-pointer; any call to this default
+    // has different pointers, and identity-only subclasses (Entity,
+    // World, ...) correctly answer false.  Content-comparable
+    // subclasses override.
+    Value HeapValue::_value_eq(Value /*right*/) const { return value_make_false(); }
+
+    // _value_less and _value_hash are partial; defaults are ERROR.
+    Value HeapValue::_value_less(Value /*right*/) const { return value_make_error(); }
+    Value HeapValue::_value_hash() const { return value_make_error(); }
+
     Value HeapValue::_value_add(Value right) const { return value_make_error(); }
     Value HeapValue::_value_sub(Value right) const { return value_make_error(); }
     Value HeapValue::_value_mul(Value right) const { return value_make_error(); }
@@ -361,6 +391,130 @@ namespace wry {
     Value HeapValue::_value_mod(Value right) const { return value_make_error(); }
     Value HeapValue::_value_rshift(Value right) const { return value_make_error(); }
     Value HeapValue::_value_lshift(Value right) const { return value_make_error(); }
+
+    // ====================================================================
+    // value_eq / value_less / value_hash free-function dispatch.
+    //
+    // See the predicate-vs-partial-op contract in the invariants block at
+    // the top of value.hpp.
+    // ====================================================================
+
+    // Mix function for inline-tag Value hashing.  Variant of the
+    // splitmix64 finalizer; good distribution from a 64-bit input.
+    static constexpr uint64_t _value_inline_mix(uint64_t x) {
+        x ^= x >> 30;
+        x *= 0xbf58476d1ce4e5b9ULL;
+        x ^= x >> 27;
+        x *= 0x94d049bb133111ebULL;
+        x ^= x >> 31;
+        return x;
+    }
+
+    Value value_eq(Value a, Value b) {
+        // Bitwise short-circuit.  Catches identical inline values,
+        // identical pointers, identical SHORT_STRING encodings,
+        // (ERROR, ERROR), (null, null), (false, false), etc.
+        if (a._data == b._data) return value_make_true();
+
+        int tag_a = _value_tag(a);
+        int tag_b = _value_tag(b);
+
+        if (tag_a != tag_b) {
+            // ERROR is a type that's only equal to itself.  Comparing
+            // ERROR with anything else is a clean false, not an ERROR
+            // result (the test "if (x == ERROR) ..." must be useful).
+            if (tag_a == VALUE_TAG_ERROR || tag_b == VALUE_TAG_ERROR)
+                return value_make_false();
+            // Other cross-tag comparisons are genuinely incomparable.
+            return value_make_error();
+        }
+
+        // Same outer tag, different bits.
+        switch (tag_a) {
+            case VALUE_TAG_OBJECT: {
+                // Both OBJECT, both non-null (short-circuit would have
+                // fired for null == null), pointers differ.  Dispatch
+                // to deep eq.  The base default returns false (identity
+                // only); content-comparable subclasses override.
+                HeapValue* p = _value_as_object(a);
+                return p->_value_eq(b);
+            }
+            case VALUE_TAG_ENUMERATION: {
+                // Same outer tag but the meta could differ.  If meta
+                // matches, the values just have different codes -> false.
+                // If meta differs, this is a cross-type compare (e.g.
+                // boolean vs character) -> ERROR.
+                uint32_t low_a = (uint32_t)a._data;
+                uint32_t low_b = (uint32_t)b._data;
+                if (low_a != low_b)
+                    return value_make_error();
+                return value_make_false();
+            }
+            default:
+                // SHORT_STRING / SMALL_INTEGER / ENTITY_ID / reserved
+                // tags: one canonical bit pattern per value, so
+                // different bits == different value.
+                return value_make_false();
+        }
+    }
+
+    Value value_less(Value a, Value b) {
+        VALUE_PROPAGATE_ERROR(a, b);
+
+        // Strict less-than: equal values return false.
+        if (a._data == b._data) return value_make_false();
+
+        int tag_a = _value_tag(a);
+        int tag_b = _value_tag(b);
+
+        if (tag_a != tag_b)
+            // Cross-tag ordering is undefined.
+            return value_make_error();
+
+        switch (tag_a) {
+            case VALUE_TAG_SMALL_INTEGER:
+                return value_make_boolean_with(
+                    _value_as_small_integer(a) < _value_as_small_integer(b));
+            case VALUE_TAG_ENTITY_ID:
+                return value_make_boolean_with(
+                    value_as_entity_id(a).data < value_as_entity_id(b).data);
+            case VALUE_TAG_OBJECT: {
+                HeapValue* p = _value_as_object(a);
+                return p ? p->_value_less(b) : value_make_error();
+            }
+            // SHORT_STRING, ENUMERATION, reserved: no canonical ordering
+            // at the runtime level.  Containers that need an order should
+            // use hash or a domain-specific comparator.
+            default:
+                return value_make_error();
+        }
+    }
+
+    Value value_hash(Value v) {
+        switch (_value_tag(v)) {
+            case VALUE_TAG_OBJECT: {
+                if (!v._data) {
+                    // null OBJECT hashes to the same hash as
+                    // VALUE_DATA_NULL (i.e. mix(0)).
+                    return value_make_integer_with(
+                        (int64_t)(_value_inline_mix(0) >> 4));
+                }
+                HeapValue* p = _value_as_object(v);
+                return p->_value_hash();
+            }
+            // ERROR is intentionally not hashable: containers shouldn't
+            // be keyed on errors.  Falls through to the default ERROR
+            // return below.
+            case VALUE_TAG_ERROR:
+                return value_make_error();
+            default: {
+                // Inline tags: hash the _data word, narrow to 60 bits so
+                // it fits in a SMALL_INTEGER without overflow boxing.
+                uint64_t h = _value_inline_mix(v._data) >> 4;
+                return value_make_integer_with((int64_t)h);
+            }
+        }
+    }
 
 //    void HeapInt64::_garbage_collected_shade() const {
 //        abort();
@@ -372,6 +526,51 @@ namespace wry {
         // fprintf(stderr, "scanned a weak ");
         // _garbage_collected_debug();
         // abort();
+    }
+
+    Value HeapInt64::_value_eq(Value right) const {
+        // value_eq has already confirmed right is OBJECT-tagged with a
+        // different pointer than this.  Cross-subtype is ERROR; same
+        // subtype compares contents.
+        HeapValue* p = _value_as_object(right);
+        if (p && p->_save_type_tag() == HeapInt64::SAVE_TYPE_TAG) {
+            const HeapInt64* o = static_cast<const HeapInt64*>(p);
+            return value_make_boolean_with(_integer == o->_integer);
+        }
+        return value_make_error();
+    }
+
+    Value HeapInt64::_value_less(Value right) const {
+        // Also accept comparison with an inline SMALL_INTEGER.
+        if (_value_is_small_integer(right))
+            return value_make_boolean_with(_integer < _value_as_small_integer(right));
+        HeapValue* p = _value_as_object(right);
+        if (p && p->_save_type_tag() == HeapInt64::SAVE_TYPE_TAG) {
+            const HeapInt64* o = static_cast<const HeapInt64*>(p);
+            return value_make_boolean_with(_integer < o->_integer);
+        }
+        return value_make_error();
+    }
+
+    Value HeapInt64::_value_hash() const {
+        // Hash the int64 the same way value_hash hashes an inline
+        // SMALL_INTEGER, so that the rare value_make_integer_with
+        // overflow path doesn't change a value's hash relative to its
+        // pre-overflow representation.  Inline path hashes the entire
+        // _data word (tag included); we hash _data == (i << 4) | tag.
+        uint64_t bits = ((uint64_t)_integer << VALUE_SHIFT) | VALUE_TAG_SMALL_INTEGER;
+        uint64_t h = 0;
+        {
+            // Replicate _value_inline_mix's splitmix64 finalizer.
+            uint64_t x = bits;
+            x ^= x >> 30;
+            x *= 0xbf58476d1ce4e5b9ULL;
+            x ^= x >> 27;
+            x *= 0x94d049bb133111ebULL;
+            x ^= x >> 31;
+            h = x;
+        }
+        return value_make_integer_with((int64_t)(h >> 4));
     }
 
 
