@@ -31,6 +31,20 @@ namespace wry {
     struct Value;
 
     // ---------------------------------------------------------------------
+    // Save format version.  Bumped any time the in-RAM Value layout, the
+    // GarbageCollected header layout, or the record encoding changes in a
+    // way that would silently corrupt an older file.  The loader's
+    // [version u32] header field is compared against this; mismatch is a
+    // hard reject (no migration path in this sketch).
+    //
+    // Version 1: initial sketch (no shipped saves).
+    // Version 2: bumped 2026-05-24 alongside the Value tag renumber and
+    //            ENUMERATION-as-meta-tag fold (review commit 2/3).
+    // ---------------------------------------------------------------------
+
+    enum : uint32_t { VALUE_SAVE_VERSION = 2 };
+
+    // ---------------------------------------------------------------------
     // Load-order ID.  Dense uint32_t assigned in post-order DFS from World.
     // ID 0 is reserved for null references.  IDs are valid only within one
     // save file; they are NOT EntityID or any other game-domain identity.

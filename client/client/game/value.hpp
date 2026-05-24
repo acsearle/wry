@@ -13,6 +13,7 @@
 #include <span>
 
 #include "atomic.hpp"
+#include "entity_id.hpp"
 #include "garbage_collected.hpp"
 #include "save_types.hpp"
 
@@ -144,6 +145,13 @@ namespace wry {
     constexpr Value value_make_zero();
     constexpr Value value_make_one();
     constexpr Value value_make_opcode(int);
+
+    // EntityID is a weak reference: a stable 60-bit identity that may
+    // outlive any particular Entity snapshot.  Resolution to a live
+    // Entity goes through World's registry.  See entity_id.hpp.
+    constexpr Value value_make_entity_id(EntityID);
+    constexpr bool value_is_entity_id(Value);
+    constexpr EntityID value_as_entity_id(Value);
         
     constexpr bool value_is_boolean(Value);
     constexpr bool value_is_character(Value);
@@ -299,38 +307,95 @@ namespace wry {
     
     
     
+    // Outer tag, low 4 bits of _data.
+    //
+    // Tag 0 (OBJECT) is the pointer pun; load-bearing, do not renumber.
+    // Tags 1..5 are the inline payload tags.  ENUMERATION subsumes the
+    // small-discriminator families (boolean, character, opcode, sentinel,
+    // and future atom/mod-defined enums) via a second-level meta tag in
+    // bits 4..31; see _value_enum_meta_e.
+    //
+    // Tags 6..15 are reserved.  Do NOT use them without bumping
+    // VALUE_SAVE_VERSION in save_format.  Renumbering any committed tag
+    // is also a save-format break.
     enum _value_tag_e {
-        VALUE_TAG_OBJECT,
-        VALUE_TAG_BOOLEAN,
-        VALUE_TAG_CHARACTER,
-        VALUE_TAG_ENUMERATION,
-        VALUE_TAG_ERROR,
-        VALUE_TAG_SHORT_STRING,
-        VALUE_TAG_SMALL_INTEGER,
-        VALUE_TAG_OPCODE,
-        VALUE_TAG_SPECIAL = 15,
+        VALUE_TAG_OBJECT        = 0,   // HeapValue* in the high 60 bits
+        VALUE_TAG_ENUMERATION   = 1,   // meta:28 in bits 4..31, code:32 in bits 32..63
+        VALUE_TAG_ERROR         = 2,   // singleton; _data == VALUE_TAG_ERROR
+        VALUE_TAG_SHORT_STRING  = 3,   // len:4 in bits 4..7, chars[7] in bits 8..63
+        VALUE_TAG_SMALL_INTEGER = 4,   // 60-bit signed in bits 4..63
+        VALUE_TAG_ENTITY_ID     = 5,   // 60-bit EntityID in bits 4..63 (weak ref)
+        // 6..15 reserved.  Future candidates: COORDINATE (i30.i30.t4),
+        // TIME, WEAK_HANDLE generalization of ENTITY_ID.  None committed.
     };
-    
+
+    // Inner meta tag, bits 4..31 of _data when outer tag is ENUMERATION.
+    //
+    // VALUE_ENUM_META_BOOLEAN must be 0 so that the boolean `false`
+    // bit-pattern is (ENUMERATION | 0<<4 | 0<<32) and the falsey rule
+    // (_data >> 4 == 0) keeps `false` falsey.
+    enum _value_enum_meta_e {
+        VALUE_ENUM_META_BOOLEAN   = 0,
+        VALUE_ENUM_META_CHARACTER = 1,   // code is utf32 codepoint
+        VALUE_ENUM_META_OPCODE    = 2,   // code is opcode_t
+        VALUE_ENUM_META_SENTINEL  = 3,   // code is _value_sentinel_e
+        // 4..(2^28-1) reserved.  Candidates: ATOM (interned symbol id),
+        // mod-defined enums (engine reserves a range, game data another,
+        // mods a third).  Namespace governance is deferred.
+    };
+
+    // Sentinel codes within (ENUMERATION, SENTINEL_META).  Stored in
+    // bits 32..63 of _data.
+    enum _value_sentinel_e : int32_t {
+        VALUE_SENTINEL_TOMBSTONE = 0,
+        VALUE_SENTINEL_OK        = 1,
+        VALUE_SENTINEL_NOTFOUND  = 2,
+        VALUE_SENTINEL_RESTART   = 3,
+    };
+
     enum {
         VALUE_SHIFT = 4,
     };
-    
+
     enum : uint64_t {
         VALUE_MASK_TAG = 0x000000000000000F,
         VALUE_MASK_POINTER = 0x00007FFFFFFFFFF0,
+        // Mask for the 32-bit (outer-tag + inner-meta) compound discriminator
+        // used by enum predicates (value_is_boolean, value_is_character, ...).
+        VALUE_MASK_TAG_AND_META = 0x00000000FFFFFFFFull,
     };
-    
+
+    // Compose the low 32 bits of an ENUMERATION-tagged Value for a given
+    // meta.  Used as the right-hand side of `(v._data & MASK) == ...`.
+    inline constexpr uint64_t _value_enum_tag_meta_bits(uint32_t meta) {
+        return (uint64_t)VALUE_TAG_ENUMERATION | ((uint64_t)meta << VALUE_SHIFT);
+    }
+
     enum : uint64_t {
-        VALUE_DATA_NULL = 0,
-        VALUE_DATA_ZERO = VALUE_TAG_SMALL_INTEGER,
+        VALUE_DATA_NULL         = 0,
+        VALUE_DATA_ZERO         = VALUE_TAG_SMALL_INTEGER,
         VALUE_DATA_EMPTY_STRING = VALUE_TAG_SHORT_STRING,
-        VALUE_DATA_FALSE = VALUE_TAG_BOOLEAN,
-        VALUE_DATA_TRUE = VALUE_TAG_BOOLEAN | (1 << VALUE_SHIFT),
+
+        // BOOLEAN_META == 0, so boolean Values have all meta bits zero.
+        // false code == 0, true code == 1 (shifted to bit 32).
+        VALUE_DATA_FALSE = (uint64_t)VALUE_TAG_ENUMERATION,
+        VALUE_DATA_TRUE  = (uint64_t)VALUE_TAG_ENUMERATION | ((uint64_t)1 << 32),
+
         VALUE_DATA_ERROR = VALUE_TAG_ERROR,
-        VALUE_DATA_TOMBSTONE = VALUE_TAG_SPECIAL,
-        VALUE_DATA_OK = VALUE_TAG_SPECIAL | (1 << VALUE_SHIFT),
-        VALUE_DATA_NOTFOUND = VALUE_TAG_SPECIAL | (2 << VALUE_SHIFT),
-        VALUE_DATA_RESTART = VALUE_TAG_SPECIAL | (3 << VALUE_SHIFT),
+
+        // Sentinels: (ENUMERATION, SENTINEL_META, code).  Pre-folded.
+        VALUE_DATA_TOMBSTONE = (uint64_t)VALUE_TAG_ENUMERATION
+                             | ((uint64_t)VALUE_ENUM_META_SENTINEL << VALUE_SHIFT)
+                             | ((uint64_t)VALUE_SENTINEL_TOMBSTONE << 32),
+        VALUE_DATA_OK        = (uint64_t)VALUE_TAG_ENUMERATION
+                             | ((uint64_t)VALUE_ENUM_META_SENTINEL << VALUE_SHIFT)
+                             | ((uint64_t)VALUE_SENTINEL_OK        << 32),
+        VALUE_DATA_NOTFOUND  = (uint64_t)VALUE_TAG_ENUMERATION
+                             | ((uint64_t)VALUE_ENUM_META_SENTINEL << VALUE_SHIFT)
+                             | ((uint64_t)VALUE_SENTINEL_NOTFOUND  << 32),
+        VALUE_DATA_RESTART   = (uint64_t)VALUE_TAG_ENUMERATION
+                             | ((uint64_t)VALUE_ENUM_META_SENTINEL << VALUE_SHIFT)
+                             | ((uint64_t)VALUE_SENTINEL_RESTART   << 32),
     };
     
     struct _short_string_t {
@@ -353,71 +418,89 @@ namespace wry {
     
     
     constexpr Value::Value(std::nullptr_t) : _data(VALUE_DATA_NULL) {}
-    constexpr Value::Value(bool flag) : _data(((uint64_t)flag << VALUE_SHIFT) | VALUE_TAG_BOOLEAN) {}
+    // BOOLEAN folded under ENUMERATION (meta=0); see _value_tag_e.
+    constexpr Value::Value(bool flag) : _data(VALUE_DATA_FALSE | ((uint64_t)flag << 32)) {}
     constexpr Value::Value(const char* ntbs) { *this = value_make_string_with(ntbs); }
     constexpr Value::Value(int i) : _data(((int64_t)i << VALUE_SHIFT) | VALUE_TAG_SMALL_INTEGER) {}
 
-    
-    constexpr Value value_make_opcode(int code) {
+
+    // Generic ENUMERATION constructor.  Pack (meta, code) into a Value.
+    // meta occupies bits 4..31 (28 bits); code occupies bits 32..63 (32
+    // bits, treated as signed by some accessors).
+    constexpr Value value_make_enum(int meta, int code) {
         Value result;
-        result._data = ((int64_t)code << VALUE_SHIFT) | VALUE_TAG_OPCODE;
+        result._data = ((uint64_t)VALUE_TAG_ENUMERATION
+                        | ((uint64_t)(uint32_t)meta << VALUE_SHIFT)
+                        | ((uint64_t)(uint32_t)code << 32));
         return result;
     }
-    
+
+    constexpr Value value_make_opcode(int code) {
+        return value_make_enum(VALUE_ENUM_META_OPCODE, code);
+    }
+
     // TODO: fixme
     constexpr Value::Value(int64_t x) : _data(value_make_integer_with(x)._data) {}
 
-    
+
     constexpr int value_as_opcode(Value self) {
-        if (_value_tag(self) != VALUE_TAG_OPCODE)
-            abort();
-        return (int)((int64_t)(self._data) >> VALUE_SHIFT);
+        // Pre-condition: self is an ENUMERATION with meta == OPCODE.
+        // Extracts the 32-bit code, sign-extending if it was signed.
+        assert((self._data & VALUE_MASK_TAG_AND_META)
+               == _value_enum_tag_meta_bits(VALUE_ENUM_META_OPCODE));
+        return (int)(int32_t)(self._data >> 32);
     }
-    
+
     constexpr int64_t Value::as_int64_t() const {
         return (int64_t)_data >> VALUE_SHIFT;
     }
-    
-    constexpr  int Value::as_opcode() const {
-        return (int)as_int64_t();
+
+    constexpr int Value::as_opcode() const {
+        return value_as_opcode(*this);
     }
-    
-    constexpr  bool Value::is_opcode() const {
-        return _value_tag(*this) == VALUE_TAG_OPCODE;
+
+    constexpr bool Value::is_opcode() const {
+        return (_data & VALUE_MASK_TAG_AND_META)
+               == _value_enum_tag_meta_bits(VALUE_ENUM_META_OPCODE);
     }
-    
-    constexpr  bool Value::is_int64_t() const {
-        return _value_tag(*this) == VALUE_TAG_SMALL_INTEGER;
+
+    constexpr bool Value::is_int64_t() const {
+        return (_data & VALUE_MASK_TAG) == VALUE_TAG_SMALL_INTEGER;
     }
-    
-    constexpr  bool Value::is_Empty() const {
+
+    constexpr bool Value::is_Empty() const {
         return !_data;
     }
-    
-    
-    
-    constexpr bool value_is_enum(Value self) { return _value_tag(self) == VALUE_TAG_ENUMERATION; }
-    constexpr bool value_is_null(Value self) { return !self._data; }
-    constexpr bool value_is_error(Value self) { return _value_tag(self) == VALUE_TAG_ERROR; }
-    constexpr bool value_is_boolean(Value self) { return _value_tag(self) == VALUE_TAG_BOOLEAN; }
-    constexpr bool value_is_character(Value self) { return _value_tag(self) == VALUE_TAG_CHARACTER; }
-    
-    
+
+
+    // ENUMERATION subsumes BOOLEAN / CHARACTER / OPCODE / SENTINEL.  The
+    // value_is_* predicates discriminate by the (tag | meta<<4) compound
+    // discriminator in the low 32 bits.
+    constexpr bool value_is_enum(Value self)      { return (self._data & VALUE_MASK_TAG) == VALUE_TAG_ENUMERATION; }
+    constexpr bool value_is_null(Value self)      { return !self._data; }
+    constexpr bool value_is_error(Value self)     { return (self._data & VALUE_MASK_TAG) == VALUE_TAG_ERROR; }
+    constexpr bool value_is_boolean(Value self)   { return (self._data & VALUE_MASK_TAG_AND_META) == _value_enum_tag_meta_bits(VALUE_ENUM_META_BOOLEAN); }
+    constexpr bool value_is_character(Value self) { return (self._data & VALUE_MASK_TAG_AND_META) == _value_enum_tag_meta_bits(VALUE_ENUM_META_CHARACTER); }
+    constexpr bool value_is_opcode(Value self)    { return (self._data & VALUE_MASK_TAG_AND_META) == _value_enum_tag_meta_bits(VALUE_ENUM_META_OPCODE); }
+    constexpr bool value_is_sentinel(Value self)  { return (self._data & VALUE_MASK_TAG_AND_META) == _value_enum_tag_meta_bits(VALUE_ENUM_META_SENTINEL); }
+
+
     constexpr bool value_as_boolean(Value self) {
         assert(value_is_boolean(self));
-        return self._data >> VALUE_SHIFT;
+        return (bool)(self._data >> 32);
     }
-    
+
     constexpr int value_as_character(Value self) {
         assert(value_is_character(self));
-        return (int)((int64_t)self._data >> VALUE_SHIFT);
+        return (int)(uint32_t)(self._data >> 32);
     }
-    
+
     constexpr Value value_make_boolean_with(bool flag) {
-        Value result;
-        result._data = ((uint64_t)flag << VALUE_SHIFT) | VALUE_TAG_BOOLEAN;
-        assert(value_is_boolean(result));
-        return result;
+        return value_make_enum(VALUE_ENUM_META_BOOLEAN, flag ? 1 : 0);
+    }
+
+    constexpr Value value_make_character_with(int utf32) {
+        return value_make_enum(VALUE_ENUM_META_CHARACTER, utf32);
     }
     
     constexpr Value::operator bool() const {
@@ -490,23 +573,39 @@ namespace wry {
         assert(_value_is_small_integer(self));
         return (int64_t)self._data >> VALUE_SHIFT;
     }
-    
+
     constexpr bool _value_is_tombstone(Value self) {
         return self._data == VALUE_DATA_TOMBSTONE;
     }
-    
-    constexpr Value value_make_enum(int meta, int code) {
+
+    // EntityID packing: 60 bits of the underlying uint64_t identity, in
+    // bits 4..63, with VALUE_TAG_ENTITY_ID in the low 4 bits.  The
+    // unconditional assert documents that EntityID issuance must respect
+    // the 60-bit ceiling; the existing oracle()-based scheme will need to
+    // honour this (or saves must compact IDs at load time, per
+    // entity_id.hpp's note).
+    constexpr Value value_make_entity_id(EntityID eid) {
+        assert((eid.data >> 60) == 0 && "EntityID overflows 60-bit Value packing");
         Value result;
-        result._data = (VALUE_TAG_ENUMERATION
-                        | ((uint32_t)meta << VALUE_SHIFT)
-                        | ((int64_t)code << 32));
+        result._data = ((uint64_t)eid.data << VALUE_SHIFT) | VALUE_TAG_ENTITY_ID;
         return result;
+    }
+
+    constexpr bool value_is_entity_id(Value self) {
+        return (self._data & VALUE_MASK_TAG) == VALUE_TAG_ENTITY_ID;
+    }
+
+    constexpr EntityID value_as_entity_id(Value self) {
+        assert(value_is_entity_id(self));
+        return EntityID{ self._data >> VALUE_SHIFT };
     }
     
     constexpr std::pair<int, int> value_as_enum(Value self) {
         assert(value_is_enum(self));
-        int code = (int)(self._data >> 32);
-        int meta = ((int)self._data) >> VALUE_SHIFT;
+        int code = (int)(int32_t)(self._data >> 32);
+        // Meta lives in bits 4..31 of _data; extract as unsigned 28-bit
+        // and return as int (callers compare against VALUE_ENUM_META_*).
+        int meta = (int)(((uint32_t)self._data) >> VALUE_SHIFT);
         return {meta, code};
     }
     

@@ -290,37 +290,42 @@ namespace wry {
         
     void debug(Value self) {
         switch (_value_tag(self)) {
-            case VALUE_TAG_BOOLEAN:
-                return (void)printf("%s\n", value_as_boolean(self) ? "TRUE" : "FALSE");
-            case VALUE_TAG_CHARACTER:
-                return (void)printf("\'%lc\'\n", value_as_character(self));
-            case VALUE_TAG_ERROR:
-                return (void)printf("ERROR\n");
             case VALUE_TAG_OBJECT:
+                if (!self._data)
+                    return (void)printf("null\n");
                 return debug(_value_as_object(self));
             case VALUE_TAG_ENUMERATION: {
                 auto [meta, code] = value_as_enum(self);
-                return (void)printf("enum{%d, %d}\n", meta, code);
+                switch (meta) {
+                    case VALUE_ENUM_META_BOOLEAN:
+                        return (void)printf("%s\n", code ? "TRUE" : "FALSE");
+                    case VALUE_ENUM_META_CHARACTER:
+                        return (void)printf("\'%lc\'\n", code);
+                    case VALUE_ENUM_META_OPCODE:
+                        return (void)printf("opcode{%d}\n", code);
+                    case VALUE_ENUM_META_SENTINEL:
+                        switch (code) {
+                            case VALUE_SENTINEL_TOMBSTONE: return (void)printf("TOMBSTONE\n");
+                            case VALUE_SENTINEL_OK:        return (void)printf("OK\n");
+                            case VALUE_SENTINEL_NOTFOUND:  return (void)printf("NOTFOUND\n");
+                            case VALUE_SENTINEL_RESTART:   return (void)printf("RESTART\n");
+                            default:                       return (void)printf("SENTINEL{%d}\n", code);
+                        }
+                    default:
+                        return (void)printf("enum{meta=%d, code=%d}\n", meta, code);
+                }
             }
+            case VALUE_TAG_ERROR:
+                return (void)printf("ERROR\n");
             case VALUE_TAG_SHORT_STRING: {
                 auto v = _value_as_short_string(self);
                 return (void)printf("\"%.*s\"\n", (int)v.size(), v.data());
             }
             case VALUE_TAG_SMALL_INTEGER:
-                return (void)printf("%lld\n", _value_as_small_integer(self));
-            case VALUE_TAG_SPECIAL:
-                switch (self._data) {
-                    case VALUE_DATA_TOMBSTONE:
-                        return (void)printf("TOMBSTONE\n");
-                    case VALUE_DATA_OK:
-                        return (void)printf("OK\n");
-                    case VALUE_DATA_NOTFOUND:
-                        return (void)printf("NOTFOUND\n");
-                    case VALUE_DATA_RESTART:
-                        return (void)printf("RESTART\n");
-                    default:
-                        return (void)printf("SPECIAL{%llx}\n", self._data);
-                }
+                return (void)printf("%lld\n", (long long)_value_as_small_integer(self));
+            case VALUE_TAG_ENTITY_ID:
+                return (void)printf("entity_id{%llu}\n",
+                                    (unsigned long long)value_as_entity_id(self).data);
             default:
                 return (void)printf("Value{%#0." PRIx64 "}\n", self._data);
         }
