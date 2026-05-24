@@ -16,6 +16,66 @@
 #include "garbage_collected.hpp"
 #include "save_types.hpp"
 
+// ====================================================================
+// Value: tagged 64-bit word - pointer-or-inline-data
+// ====================================================================
+//
+// A Value is a 64-bit tagged word; the low 4 bits are a tag indicating
+// what the high 60 bits encode.  See _value_tag_e for the assignment.
+//
+// LOAD-BEARING INVARIANTS
+//
+// (1) VALUE_TAG_OBJECT == 0.  This makes the bit pattern of a non-null
+//     HeapValue* literally identical to a Value with that tag.  Many
+//     call paths rely on this punning.  Do not renumber.
+//
+// (2) The 4-bit tag space is closed by allocator-alignment convention.
+//     GarbageCollected::operator new returns 16-byte-aligned memory
+//     (via calloc), guaranteeing the low 4 bits of any HeapValue* are
+//     zero.  Widening the tag would require bumping GC alignment too.
+//
+// (3) A default-constructed Value is bitwise zero: tag == OBJECT,
+//     pointer == nullptr.  Value{}, Value{nullptr}, and value_make_null()
+//     are the same bit pattern.  An empty persistent container (the
+//     empty AMT representation) is also this pattern: empty == null
+//     OBJECT.
+//
+// (4) Values are deeply immutable.  Every HeapValue subclass is
+//     immutable post-construction; all _value_* virtuals are const and
+//     return new Values rather than mutating in place.  Cells holding
+//     Values may be mutated during their parent's construction (while
+//     the parent is mutator-private) but not after the parent is
+//     published to the collector.
+//
+// (5) Bit stealing is LOW-bit only.  The high bits of an OBJECT-tagged
+//     Value are the pointer as-stored; no transform is required to use
+//     it.  Future hardware features that mutate high bits (ARM PAC,
+//     MTE) would be handled at the single extraction site
+//     (_value_as_object) - never duplicate that conversion.
+//
+// (6) Falsey rule: bool(Value) iff (_data >> 4) != 0.  Equivalently,
+//     any Value whose payload bits are all zero is falsey, regardless
+//     of tag.  Examples that are falsey: null OBJECT, boolean false,
+//     small_integer(0), empty short_string, ERROR.  Non-zero payloads
+//     of any tag are truthy.
+//
+// (7) Predicate vs partial-op contract.  Total predicates (value_eq,
+//     value_is_*) always return a clean bool / Value-of-bool.  Partial
+//     operations (value_less, arithmetic, indexing, call) propagate
+//     ERROR when given ERROR input.  ERROR is a singleton bit pattern;
+//     value_eq(ERROR, ERROR) == true, value_eq(ERROR, x != ERROR) ==
+//     false.  No exceptions; no NaN-style "not equal to self".
+//
+// LAYOUT VERSIONING
+//
+// The in-RAM layout is documented in this file; a layout-altering
+// change is a flag-day and must be paired with a save-format version
+// bump (VALUE_SAVE_VERSION in save_format).  Today there are no
+// shipped saves, so the version counter is mental commitment more
+// than runtime code.
+//
+// ====================================================================
+
 namespace wry {
 
     struct HeapValue;
@@ -65,15 +125,21 @@ namespace wry {
     constexpr Value value_make_character_with(int utf32);
     constexpr Value value_make_enumeration_with(int64_t);
     constexpr Value value_make_error();
-    Value value_make_error_with(const char*);
     constexpr Value value_make_false();
     constexpr Value value_make_integer_with(int64_t z);
     constexpr Value value_make_null();
     constexpr Value value_make_empty();
     Value value_make_string_with(const char* ntbs);
     Value value_make_string_with(std::string_view);
+
+    // DEPRECATED.  HeapArray / HeapTable are attic'd.  These declarations
+    // survive only because io/json.hpp's parse_json_array / parse_json_object
+    // bodies reference them; nothing actually calls those code paths today,
+    // so the symbols never need to be defined.  Delete once json.hpp is
+    // rewritten against the eventual persistent associative type.
     Value value_make_array();
     Value value_make_table();
+
     constexpr Value value_make_true();
     constexpr Value value_make_zero();
     constexpr Value value_make_one();
@@ -106,33 +172,33 @@ namespace wry {
     Value value_back(Value);
     Value value_front(Value);
     
-    // non-member operator overloads
-    
+    // Non-member operator overloads.
+    //
+    // Equality and ordering are intentionally NOT overloaded as C++ operators.
+    // Use value_eq(a, b) (total, returns Value-of-bool) and value_less(a, b)
+    // (partial, may return ERROR).  C++ operator== / operator<=> cannot
+    // express the partial-op contract.
+
     Value operator+(const Value&) ;
     Value operator-(const Value&) ;
-    bool operator!(const Value&) ;
     Value operator~(const Value&) ;
-    
+
     Value operator*(const Value&, const Value&) ;
     Value operator/(const Value&, const Value&) ;
     Value operator%(const Value&, const Value&) ;
-    
+
     Value operator+(const Value&, const Value&) ;
     Value operator-(const Value&, const Value&) ;
-    
+
     Value operator<<(const Value&, const Value&) ;
     Value operator>>(const Value&, const Value&) ;
-    
-    std::partial_ordering operator<=>(const Value&, const Value&) ;
-    
-    bool operator==(const Value&, const Value&) ;
-    
+
     Value operator&(const Value&, const Value&) ;
     Value operator^(const Value&, const Value&) ;
     Value operator|(const Value&, const Value&) ;
-        
-    
-        
+
+
+
     struct Saver;
     struct Loader;
 
@@ -376,8 +442,11 @@ namespace wry {
     constexpr bool _value_is_small_integer(Value self) { return _value_tag(self) == VALUE_TAG_SMALL_INTEGER; }
     constexpr bool _value_is_object(Value self) { return _value_tag(self) == VALUE_TAG_OBJECT; }
     constexpr bool _value_is_short_string(Value self) { return _value_tag(self) == VALUE_TAG_SHORT_STRING; }
-    constexpr bool _vaue_is_tombstone(Value self) { return _value_tag(self) == VALUE_DATA_TOMBSTONE; }
-    
+    // (The canonical _value_is_tombstone lives a little further down,
+    // matching the encoding _data == VALUE_DATA_TOMBSTONE rather than
+    // tag-only.  A typo'd duplicate _vaue_is_tombstone was removed.)
+
+
     constexpr bool value_is_RESTART(Value self) {
         return self._data == VALUE_DATA_RESTART;
     }

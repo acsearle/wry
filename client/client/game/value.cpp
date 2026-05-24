@@ -26,52 +26,6 @@ namespace wry {
         return ((const _short_string_t&)self._data).as_string_view();
     }
     
-    bool operator!(Value const&) {
-        abort();
-    }
-    
-    /*
-    Value& operator++(Value& self) {
-        self += 1;
-        return self;
-    }
-
-    Value& operator--(Value& self) {
-        self -= 1;
-        return self;
-    }
-
-    Value operator++(Value& self, int) {
-        Value old = self;
-        ++self;
-        return old;
-    }
-
-    Value operator--(Value& self, int) {
-        Value old = self;
-        ++self;
-        return old;
-    }
-
-#define X(Y)\
-    Value& operator Y##=(Value& self, const Value& other) {\
-        return self = self Y other;\
-    }
-    
-    X(*)
-    X(/)
-    X(%)
-    X(-)
-    X(+)
-    X(&)
-    X(^)
-    X(|)
-    X(<<)
-    X(>>)
-    
-#undef X
-     */
-    
 #define X(Y)\
     Value operator Y (int64_t left, const Value& right) {\
         switch (_value_tag(right)) {\
@@ -103,29 +57,6 @@ namespace wry {
     X(>>)
     
 #undef X
-    
-    /*
-    size_t hash(const Value& self) {
-        switch (_value_tag(self)) {
-            case VALUE_TAG_OBJECT: {
-                const GarbageCollected* object = _value_as_object(self);
-                return object ? hash(object) : 0;
-            }
-            case VALUE_TAG_SMALL_INTEGER: {
-                std::int64_t a = _value_as_small_integer(self);
-                return hash(a);
-            }
-            case VALUE_TAG_SHORT_STRING: {
-                return std::hash<std::string_view>()(_value_as_short_string(self));
-            }
-            case VALUE_TAG_BOOLEAN: {
-                return std::hash<bool>()(value_as_boolean(self));
-            }
-            default:
-                abort();
-        }
-    }
-     */
 
     Value value_make_string_with(const char* ntbs) {
         Value result;
@@ -143,12 +74,8 @@ namespace wry {
         return result;
     }
     
-    Value _value_make_garbage_collected_with(const GarbageCollected* object) {
-        Value result;
-        result._data = (uint64_t)object;
-        assert(_value_is_object(result));
-        return result;
-    }
+    // _value_make_garbage_collected_with was an orphan duplicate of
+    // _value_make_with (declared in value.hpp).  Removed.
     
         
     
@@ -165,8 +92,19 @@ namespace wry {
   
     
       
+#if 0
+    // Aspirational smoke test for the persistent associative-container
+    // surface (value_make_table / value_insert_or_assign / value_find /
+    // value_erase / value_size / value_contains, plus the operator
+    // overloads).  Disabled because:
+    //   - HeapArray / HeapTable are attic'd; value_make_table()
+    //     currently returns a null Value, so most assertions don't hold.
+    //   - The tests use operator== which has been removed in favor of
+    //     value_eq(a, b) returning Value-of-bool.
+    // Restore as a real define_test once the persistent associative DS
+    // and value_eq land.
     void foo() {
-        
+
         Value t = value_make_table();
         
         if (!(::rand() % 100)) {
@@ -270,18 +208,7 @@ namespace wry {
         }
 
     }
-     
-    
-    bool operator==(const Value& a, const Value& b) {
-        // POINTER: identity; requires interned bigstrings, bignums etc.
-        //    - Containers are by identity
-        //    - Identity of empty containers?
-        // INLINE: requires that we make padding bits consistent
-        return a._data == b._data;
-    }
-    
-    
-   
+#endif // 0
 
     bool contains(const HeapValue* self, Value key) {
         return self ? self->_value_contains(key) : false;
@@ -399,71 +326,20 @@ namespace wry {
         }
     }
     
-#if 0
-    void debug(const Scan<Value>& self) {
-        debug(self._atomic_value.load_acquire());
-    }
-#endif
-    
-    
     Value _value_make_with(const GarbageCollected* p) {
         Value result;
         result._data = (uint64_t)p;
         return result;
     }
-    
+
+    // DEPRECATED.  See declaration in value.hpp.  Returns null so that
+    // accidental use (e.g. through io/json.hpp's currently-dormant
+    // parse_json_object) produces an obvious zero/error cascade rather
+    // than a broken table object.
     Value value_make_table() {
         return Value{};
     }
-    
-//    Value value_make_table() {
-//        Value result;
-//        result._data = (uint64_t)(new HeapHashMap);
-//        return result;
-//    }
-    
-    
-    
-//    struct ValueArray : HeapValue {
-//        
-//        GCArray<Scan<Value>> _inner;
-//        
-//        virtual void _garbage_collected_scan() const { garbage_collected_scan(_inner); }
-//        virtual void _garbage_collected_debug() const { any_debug(_inner); }
-//        
-//        virtual bool _value_empty() const { return _inner.empty(); }
-//        virtual size_t _value_size() const { return _inner.size(); }
-//
-//        // bad interface for arrays, but bad enough?
-//        // Lua notably avoids arrays to provide a table interface for everything
-//        // deques without indexing may be what we actually want
-//        virtual Value _value_insert_or_assign(Value key, Value value) {
-//            int64_t i = key.as_int64_t();
-//            Value old = value_make_null();
-//            if (0 <= i && i < _inner.size()) {
-//                old = _inner[i];
-//                _inner[i] = value;
-//            } else if (i == _inner.size()) {
-//                _inner.push_back(value);
-//            }
-//            return old;
-//        }
-//        virtual bool _value_contains(Value key) const { return key.as_int64_t() < _inner.size(); }
-//        virtual Value _value_find(Value key) const { abort(); }
-//        
-//    };
-//    
-//
-//    Value value_make_array() {
-//        Value result;
-//        result._data = (uint64_t)(new ValueArray);
-//        return result;
-//    }
-//    
-//    
-    
-    
-    
+
     bool HeapValue::_value_empty() const { abort(); }
     size_t HeapValue::_value_size() const { return 0; }
     bool HeapValue::_value_contains(Value key) const { return false; }
