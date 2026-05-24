@@ -10,13 +10,16 @@
 
 #include <cassert>
 #include <string_view>
+#include <span>
 
 #include "atomic.hpp"
 #include "garbage_collected.hpp"
 #include "save_types.hpp"
 
 namespace wry {
-    
+
+    struct HeapValue;
+
     struct Value {
         
         uint64_t _data = {};
@@ -25,26 +28,26 @@ namespace wry {
         
         // Implicit special member functions are fine
 
-        // implicit construction from vocabulary types
-        
+        // Implicit construction from vocabulary types
+
         constexpr Value(std::nullptr_t);
         constexpr Value(bool);
         constexpr Value(int);
         constexpr Value(int64_t);
         
         constexpr Value(const char*);
-        template<std::size_t N> requires (N > 0)
-        constexpr Value(const char (&ntbs)[N]);
         Value(std::string_view);
-        
-        // TODO: call syntax
-        // Value operator()(/* args type? */) const;
-        
-        Value operator[](Value) const;
-        
-        // implicit conversion
+
+        Value(HeapValue const*);
+
+
+        // Implicit conversion to vocabulary types
         constexpr explicit operator bool() const;
-        
+
+        // Member operators
+        Value operator()(Value) const;
+        Value operator[](Value) const;
+
         constexpr bool is_opcode() const;
         constexpr int as_opcode() const;
         
@@ -55,8 +58,8 @@ namespace wry {
         
     }; // struct Value
     
-    void garbage_collected_shade(const Value& value);
-    void garbage_collected_scan(const Value& value);
+    void garbage_collected_shade(Value const& value);
+    void garbage_collected_scan(Value const& value);
 
     constexpr Value value_make_boolean_with(bool flag);
     constexpr Value value_make_character_with(int utf32);
@@ -64,7 +67,7 @@ namespace wry {
     constexpr Value value_make_error();
     Value value_make_error_with(const char*);
     constexpr Value value_make_false();
-    Value value_make_integer_with(int64_t z);
+    constexpr Value value_make_integer_with(int64_t z);
     constexpr Value value_make_null();
     constexpr Value value_make_empty();
     Value value_make_string_with(const char* ntbs);
@@ -72,8 +75,8 @@ namespace wry {
     Value value_make_array();
     Value value_make_table();
     constexpr Value value_make_true();
-    Value value_make_zero();
-    Value value_make_one();
+    constexpr Value value_make_zero();
+    constexpr Value value_make_one();
     constexpr Value value_make_opcode(int);
         
     constexpr bool value_is_boolean(Value);
@@ -149,6 +152,13 @@ namespace wry {
         virtual Value _value_mod(Value right) const;
         virtual Value _value_rshift(Value right) const;
         virtual Value _value_lshift(Value right) const;
+        virtual Value _value_call(Value args) const { return value_make_error(); }
+        virtual Value _value_and(Value right) const { return value_make_error(); }
+        virtual Value _value_or(Value right) const { return value_make_error(); }
+        virtual Value _value_band(Value right) const { return value_make_error(); }
+        virtual Value _value_bor(Value right) const { return value_make_error(); }
+        virtual Value _value_bxor(Value right) const { return value_make_error(); }
+        virtual Value _value_cmp(Value right) const { return value_make_error(); }
 
         // Save format dispatch.  See entity.hpp for the parallel hook on
         // Entity.
@@ -240,8 +250,8 @@ namespace wry {
     };
     
     enum : uint64_t {
-        VALUE_MASK = 0x000000000000000F,
-        VALUE_POINTER_MASK = 0x00007FFFFFFFFFF0,
+        VALUE_MASK_TAG = 0x000000000000000F,
+        VALUE_MASK_POINTER = 0x00007FFFFFFFFFF0,
     };
     
     enum : uint64_t {
@@ -262,7 +272,7 @@ namespace wry {
         char _chars[7];
         char* data() { return _chars; }
         constexpr std::size_t size() const {
-            assert((_tag_and_len & VALUE_MASK) == VALUE_TAG_SHORT_STRING);
+            assert((_tag_and_len & VALUE_MASK_TAG) == VALUE_TAG_SHORT_STRING);
             return _tag_and_len >> VALUE_SHIFT;
         }
         constexpr std::string_view as_string_view() const {
@@ -289,8 +299,8 @@ namespace wry {
     }
     
     // TODO: fixme
-    constexpr Value::Value(int64_t x) : _data((x << VALUE_SHIFT) | VALUE_TAG_SMALL_INTEGER) {}
-    
+    constexpr Value::Value(int64_t x) : _data(value_make_integer_with(x)._data) {}
+
     
     constexpr int value_as_opcode(Value self) {
         if (_value_tag(self) != VALUE_TAG_OPCODE)
@@ -362,7 +372,7 @@ namespace wry {
     
     
     
-    constexpr int _value_tag(Value self) { return self._data & VALUE_MASK; }
+    constexpr int _value_tag(Value self) { return self._data & VALUE_MASK_TAG; }
     constexpr bool _value_is_small_integer(Value self) { return _value_tag(self) == VALUE_TAG_SMALL_INTEGER; }
     constexpr bool _value_is_object(Value self) { return _value_tag(self) == VALUE_TAG_OBJECT; }
     constexpr bool _value_is_short_string(Value self) { return _value_tag(self) == VALUE_TAG_SHORT_STRING; }
@@ -497,7 +507,33 @@ namespace wry {
         }
         
     }; // struct Root<Value>
-    
+
+
+
+    inline Value::Value(HeapValue const* ptr)
+    : _data((uint64_t)ptr) {
+        assert(_value_as_nullable_pointer(*this) == ptr);
+    }
+
+    constexpr Value value_make_integer_with(std::int64_t z) {
+        Value result;
+        std::int64_t y = z << 4;
+        if ((y >> 4) == z) {
+            result._data = y | VALUE_TAG_SMALL_INTEGER;
+        } else {
+            result._data = (uint64_t)new HeapInt64(z);
+        }
+        return result;
+    }
+
+    constexpr Value value_make_zero() {
+        return value_make_integer_with(0);
+    }
+
+    constexpr Value value_make_one() {
+        return value_make_integer_with(1);
+    }
+
     
 } // namespace wry
 

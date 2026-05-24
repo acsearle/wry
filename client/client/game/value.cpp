@@ -126,25 +126,6 @@ namespace wry {
         }
     }
      */
-    
-    Value value_make_integer_with(std::int64_t z) {
-        Value result;
-        std::int64_t y = z << 4;
-        if ((y >> 4) == z) {
-            result._data = y | VALUE_TAG_SMALL_INTEGER;
-        } else {
-            result._data = (uint64_t)new HeapInt64(z);
-        }
-        return result;
-    }
-    
-    Value value_make_zero() {
-        return value_make_integer_with(0);
-    }
-
-    Value value_make_one() {
-        return value_make_integer_with(1);
-    }
 
     Value value_make_string_with(const char* ntbs) {
         Value result;
@@ -291,43 +272,6 @@ namespace wry {
     }
      
     
-    
-    
-#if 0
-    Value Scan<Value>::get() const {
-        return _atomic_value.load_relaxed();
-    }
-        
-    Scan<Value>::Scan(const Value& value) 
-    : _atomic_value(value) {
-    }
-    
-    Scan<Value>::Scan(const Scan<Value>& value)
-    : Scan(value.get()) {
-    }
-        
-
-    Scan<Value>& Scan<Value>::operator=(const Value& desired) {
-        Value discovered = this->_atomic_value.exchange_release(desired);
-        garbage_collected_shade(desired);
-        garbage_collected_shade(discovered);
-        return *this;
-    }
-
-    Scan<Value>& Scan<Value>::operator=(const Scan<Value>& desired) {
-        return this->operator=(desired.get());
-    }
-    
-    Scan<Value>::operator bool() const {
-        return get().operator bool();
-    }
-    
-    Scan<Value>::operator Value() const {
-        return get();
-    }
-#endif
-   
-    
     bool operator==(const Value& a, const Value& b) {
         // POINTER: identity; requires interned bigstrings, bignums etc.
         //    - Containers are by identity
@@ -390,34 +334,8 @@ namespace wry {
             object_shade(_value_as_object(value));
         }
     }
-    
-    
-    
-    /*
-    _value_subscript_result_t::operator Value() && {
-        return find(_value_as_object(container), key);
-    }
-    
-    _value_subscript_result_t&& _value_subscript_result_t::operator=(Value desired) && {
-        insert_or_assign(_value_as_object(container), key, desired);
-        return std::move(*this);
-    }
-    
-    _value_subscript_result_t&& _value_subscript_result_t::operator=(_value_subscript_result_t&& desired) && {
-        return std::move(*this).operator=((Value)std::move(desired));
-    }
-     */
-    
 
-    
-   
 
-    
-    
-
-    
-    
-    
     HeapInt64::HeapInt64(std::int64_t z)
     : _integer(z) {
     }

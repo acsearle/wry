@@ -33,7 +33,12 @@ namespace wry {
 
                 
         virtual void notify(TransactionContext*) const override;
-        
+
+        static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Spawner");
+        virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
+        virtual void _save_body(Saver& saver) const override final { abort(); }
+
+
     };
 
     struct Source : LocalizedEntity {
@@ -50,6 +55,11 @@ namespace wry {
             garbage_collected_scan(_of_this);
         }
 
+        static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Source");
+        virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
+        virtual void _save_body(Saver& saver) const override final { abort(); }
+
+
     };
 
     struct Sink : LocalizedEntity {
@@ -62,7 +72,12 @@ namespace wry {
         virtual void notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {
         }
-        
+
+        static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Sink");
+        virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
+        virtual void _save_body(Saver& saver) const override final { abort(); }
+
+
     };
     
     struct Counter : LocalizedEntity {
@@ -75,6 +90,10 @@ namespace wry {
         virtual void notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {
         }
+        static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Counter");
+        virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
+        virtual void _save_body(Saver& saver) const override final { abort(); }
+
     };
     
     struct Evenator : LocalizedEntity {
@@ -86,6 +105,11 @@ namespace wry {
         virtual void notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {
         }
+
+        static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Evenator");
+        virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
+        virtual void _save_body(Saver& saver) const override final { abort(); }
+
     };
 
 } // namespace wry::sim

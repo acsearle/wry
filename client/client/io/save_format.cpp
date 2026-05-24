@@ -57,7 +57,7 @@ namespace wry {
 
     static Value decode_value(uint64_t word, Loader& L) {
         Value v;
-        if ((word & VALUE_MASK) == VALUE_TAG_OBJECT) {
+        if ((word & VALUE_MASK_TAG) == VALUE_TAG_OBJECT) {
             SaveRef ref = (SaveRef)(word >> VALUE_SHIFT);
             // Sketch: forward refs from Value would need fixup against the
             // address of v._data.  Assume DAG for now.
