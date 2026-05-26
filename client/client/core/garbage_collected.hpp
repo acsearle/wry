@@ -18,89 +18,39 @@
 #include "type_traits.hpp"
 
 namespace wry {
-    
-    // basic interface
-        
-    struct GarbageCollected;
-    
-    void garbage_collected_shade(GarbageCollected const* _Nullable);
-    void garbage_collected_scan(GarbageCollected const* _Nullable);
 
-    void collector_run_on_this_thread();
-    void collector_cancel();
+    // Mutator interface
 
     void mutator_pin();
     void mutator_repin();
     void mutator_unpin();
 
-    // Register a callback (function pointer + user) to be invoked exactly
-    // once after `k` full collection cycles have completed since this call.
-    // `k == 0` fires immediately on the calling thread.  Otherwise the
-    // callback runs on the collector thread and should be cheap and async-
-    // safe — typically just `global_work_queue_schedule`.  Thread-safe;
-    // multiple callers may register concurrently.
-    void register_collection_cycle_callback(uint64_t k,
-                                            void* _Nonnull callback) noexcept;
 
-    
-    
-    
-    
-    
-    // bit operations
-    
-    constexpr uint64_t rotate_left(uint64_t x, int y) {
-        return __builtin_rotateleft64(x, y);
-    }
-    
-    constexpr uint64_t rotate_right(uint64_t x, int y) {
-        return __builtin_rotateright64(x, y);
-    }
-    
-    constexpr bool is_subset_of(uint16_t a, uint16_t b) {
-        return !(a & ~b);
-    }
+    // Garbage collector interface
+
+    void collector_run_on_this_thread();
+    void collector_cancel();
+    void collector_register_cycle_callback(uint64_t number_of_cycles,
+                                           void* _Nonnull callback) noexcept;
 
 
-    // Tricolor abstraction, split into two 16-bit words.  Every
-    // GarbageCollected object carries an atomic _gray word and a plain
-    // _black word; each concurrent collection claims one bit in each:
-    //
-    //     gray  black   meaning
-    //      0      0     k-white   (unreachable candidate)
-    //      1      0     k-gray    (reachable, not yet traced)
-    //      1      1     k-black   (reachable, traced)
-    //      0      1     not produced in steady state
-    //
-    // Gray bits are set by mutator shading (via fetch_or) and also by
-    // the collector.  Black bits are set only by the collector.  Up to
-    // 16 concurrent collections can coexist.
+    // Garbage collected base
+
+    struct GarbageCollected;
+    void garbage_collected_shade(GarbageCollected const* _Nullable);
+    void garbage_collected_scan(GarbageCollected const* _Nullable);
 
 
-    
-    
     struct GarbageCollected {
         
-        // Gray bits: set by mutator shading (fetch_or) and by the collector.
         mutable Atomic<uint16_t> _gray;
-
-        // Black bits: written only by the collector after the object has
-        // been published to it.  The constructor and deferred-registration
-        // path stamp this field while the object is still visible only to
-        // the allocating thread, so a plain (mutable) store is race-free in
-        // steady state.
         mutable uint16_t _black;
-
         mutable Atomic<int32_t> _count;
         
         uint16_t _debug_allocation_gray;
         uint16_t _debug_allocation_black;
         uint16_t _debug_allocation_epoch;
 
-        // TODO: _gray (16 bits) and _count (32 bits) now fit in a single
-        // 64-bit atomic word together with room to spare; _black can remain
-        // a separate plain 16-bit field.
-        
         static void* _Nonnull operator new(std::size_t count);
         static void operator delete(void* _Nullable pointer);
 
@@ -115,7 +65,6 @@ namespace wry {
         constexpr bool operator==(const GarbageCollected&);
         
         virtual void _garbage_collected_debug() const = 0;
-        virtual void _garbage_collected_shade() const;
         virtual void _garbage_collected_scan() const = 0;
         virtual void _garbage_collected_decide_weak(uint16_t mask, uint16_t gray, uint16_t black) const {};
 
@@ -151,6 +100,9 @@ namespace wry {
     // is done by the collector we most closely resemble).  This lets us scan
     // less; but since we simultaneously sweep, does it help?
 
+    template<typename> struct Root;
+    template<typename> struct GarbageCollectedSlot;
+
 } // namespace wry
 
 namespace wry {
@@ -160,7 +112,7 @@ namespace wry {
         return calloc(count, 1);
     }
     
-    inline void GarbageCollected::operator delete(void* _Nonnull pointer) {
+    inline void GarbageCollected::operator delete(void* _Nullable pointer) {
         free(pointer);
     }
     
@@ -193,12 +145,6 @@ namespace wry {
         return true;
     }
 
-    inline void
-    garbage_collected_shade(GarbageCollected const* _Nullable ptr) {
-        if (ptr)
-            ptr->_garbage_collected_shade();
-    }
-    
     inline void
     debug(GarbageCollected const* _Nullable self) {
         self->_garbage_collected_debug();
@@ -235,7 +181,7 @@ namespace wry {
             int32_t before = ptr->_count.fetch_sub_relaxed(1);
             assert(before > 0);
             if (before == 1)
-                ptr->_garbage_collected_shade();
+                garbage_collected_shade(ptr);
         }
     }
     
@@ -264,10 +210,7 @@ namespace wry {
     // Root must never be called on destruction
     
     void assert_this_thread_is_mutator();
-    
-    template<typename>
-    struct Root;
-    
+
     template<typename T>
     struct Root<T*> {
         
@@ -592,8 +535,6 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
     // a vanilla Atomic<T*> (no barrier) via the slot_for customization
     // point.
 
-    template<typename> struct GarbageCollectedSlot;
-
     template<typename T>
     struct GarbageCollectedSlot<T*> {
 
@@ -616,7 +557,7 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
         // "no edge exists" to "edge points at desired".  The pointee's
         // reachability is established when the collector eventually traces
         // the parent (which is still being constructed, so not yet reachable).
-        explicit constexpr GarbageCollectedSlot(T* desired) noexcept
+        explicit constexpr GarbageCollectedSlot(T* _Nullable desired) noexcept
         : raw(desired) {
             static_assert(std::is_base_of_v<GarbageCollected, T>);
         }
@@ -636,7 +577,7 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
         // caller can dereference what they get back.
 
 #define MAKE_WRY_ATOMIC_GC_LOAD(public_order, internal_order) \
-T* load_##public_order() const noexcept {\
+T* _Nullable load_##public_order() const noexcept {\
     return raw.load_##internal_order();\
 }
 
@@ -649,11 +590,11 @@ T* load_##public_order() const noexcept {\
         // by nonatomic_store: the precondition (object not yet
         // escaped to other threads) means the collector cannot have
         // observed the displaced pointer, so nothing to preserve.
-        T* nonatomic_load() const noexcept {
+        T* _Nullable nonatomic_load() const noexcept {
             return raw.nonatomic_load();
         }
 
-        void nonatomic_store(T* desired) noexcept {
+        void nonatomic_store(T* _Nullable desired) noexcept {
             raw.nonatomic_store(desired);
         }
 
@@ -662,8 +603,8 @@ T* load_##public_order() const noexcept {\
         // shade can dereference the displaced pointer's _gray field.
 
 #define MAKE_WRY_ATOMIC_GC_STORE(public_order, internal_order) \
-void store_##public_order(T* desired) noexcept {\
-    T* old = raw.exchange_##internal_order(desired);\
+void store_##public_order(T* _Nullable desired) noexcept {\
+    T* _Nullable old = raw.exchange_##internal_order(desired);\
     garbage_collected_shade(old);\
 }
 
@@ -675,8 +616,8 @@ void store_##public_order(T* desired) noexcept {\
         // also returned to the caller (after being shaded).
 
 #define MAKE_WRY_ATOMIC_GC_EXCHANGE(public_order, internal_order) \
-T* exchange_##public_order(T* desired) noexcept {\
-    T* old = raw.exchange_##internal_order(desired);\
+T* _Nullable exchange_##public_order(T* _Nullable desired) noexcept {\
+    T* _Nullable old = raw.exchange_##internal_order(desired);\
     garbage_collected_shade(old);\
     return old;\
 }
@@ -698,7 +639,7 @@ T* exchange_##public_order(T* desired) noexcept {\
         // updated expected).  seq_cst stays seq_cst.
 
 #define MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strength, public_succ, public_fail, internal_succ, internal_fail) \
-bool compare_exchange_##strength##_##public_succ##_##public_fail(T*& expected, T* desired) noexcept {\
+bool compare_exchange_##strength##_##public_succ##_##public_fail(T* _Nullable& expected, T* _Nullable desired) noexcept {\
     bool ok = raw.compare_exchange_##strength##_##internal_succ##_##internal_fail(expected, desired);\
     if (ok)\
         garbage_collected_shade(expected);\
@@ -864,6 +805,37 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
 
 
 
+    // Register a callback (function pointer + user) to be invoked exactly
+    // once after `k` full collection cycles have completed since this call.
+    // `k == 0` fires immediately on the calling thread.  Otherwise the
+    // callback runs on the collector thread and should be cheap and async-
+    // safe — typically just `global_work_queue_schedule`.  Thread-safe;
+    // multiple callers may register concurrently.
+
+
+
+
+    // Tricolor abstraction, split into two 16-bit words.  Every
+    // GarbageCollected object carries an atomic _gray word and a plain
+    // _black word; each concurrent collection claims one bit in each:
+    //
+    //     gray  black   meaning
+    //      0      0     k-white   (unreachable candidate)
+    //      1      0     k-gray    (reachable, not yet traced)
+    //      1      1     k-black   (reachable, traced)
+    //      0      1     not produced in steady state
+    //
+    // Gray bits are set by mutator shading (via fetch_or) and also by
+    // the collector.  Black bits are set only by the collector.  Up to
+    // 16 concurrent collections can coexist.
+
+
+    // Gray bits: set by mutator shading (fetch_or) and by the collector.
+    // Black bits: written only by the collector after the object has
+    // been published to it.  The constructor and deferred-registration
+    // path stamp this field while the object is still visible only to
+    // the allocating thread, so a plain (mutable) store is race-free in
+    // steady state.
 
 } // namespace wry
 

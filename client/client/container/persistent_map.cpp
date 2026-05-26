@@ -22,55 +22,12 @@ namespace wry {
             m.set(k, v);
             
             assert(m.contains(k));
-            assert(!m.contains(k+1));
-            // auto q = p->clone_and_erase(k);
-            //decltype(p) q = nullptr;
-            //assert(!q);
-            //auto r = Node<int>::make_with_key_value(k+100,v+1);
-            /*
-            auto s = Node<int>::merge(p, r);
-            assert(s->contains(k));
-            assert(!s->contains(k+1));
-            assert(s->contains(k+100));
-            q = Node<int>::make_with_key_value(k+2,v+2);
-            s = Node<int>::merge(s, q);
-            assert(s->contains(k));
-            assert(!s->contains(k+1));
-            assert(s->contains(k+2));
-            assert(s->contains(k+100));
-            int u = 0;
-            assert(s->try_get(k, u));
-            assert(u == v);
-            assert(!s->try_get(k+1, u));
-            assert(s->try_get(k+2, u));
-            assert(u == v+2);
-            assert(s->try_get(k+100, u));
-            assert(u == v+1);
-             */
+            assert(!m.contains(k+1));            
         }
         
         mutator_repin();
         
         // stress test
-        /*
-         {
-         const Node<int>* p = nullptr;
-         for (int i = 0; i != 1 << 20; ++i) {
-         int a = rand() & 0xFF;
-         int b = rand() & 0xFF;
-         uint64_t k = (uint64_t)a * (uint64_t)b;
-         auto q = Node<int>::make_with_key_value(k, a);
-         p = p ? Node<int>::merge(p, q) : q;
-         //garbage_collected_shade(p);
-         //garbage_collected_shade(q);
-         mutator_handshake();
-         // garbage_collected_shade p because we use it after the handshake
-         p->_garbage_collected_shade();
-         //garbage_collected_shade(p);
-         //garbage_collected_shade(q);
-         }
-         }
-         */
         {
             PersistentMap<uint64_t, int> p;
             std::map<uint64_t, int> m;

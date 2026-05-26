@@ -515,17 +515,9 @@ namespace wry {
             }
         }
     }
-
-//    void HeapInt64::_garbage_collected_shade() const {
-//        abort();
-//        //Color expected = Color::WHITE;
-//        //(void) color.compare_exchange(expected, Color::BLACK);
-//    }
     
     void HeapInt64::_garbage_collected_scan() const {
-        // fprintf(stderr, "scanned a weak ");
-        // _garbage_collected_debug();
-        // abort();
+        
     }
 
     Value HeapInt64::_value_eq(Value right) const {

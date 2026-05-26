@@ -29,7 +29,7 @@ namespace wry {
 
     // Defined in garbage_collected.cpp; forward-declared here so the
     // WaitForCollectionCycles awaitable below can be header-only.
-    void register_collection_cycle_callback(uint64_t k,
+    void collector_register_cycle_callback(uint64_t k,
                                             void* callback) noexcept;
 
 }
@@ -80,7 +80,7 @@ namespace wry::Coroutine {
         uint64_t cycles;
         bool await_ready() const noexcept { return cycles == 0; }
         void await_suspend(std::coroutine_handle<> handle) const noexcept {
-            register_collection_cycle_callback(cycles, handle.address());
+            collector_register_cycle_callback(cycles, handle.address());
         }
         void await_resume() const noexcept {}
     };

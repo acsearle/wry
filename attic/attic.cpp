@@ -3030,26 +3030,6 @@ inline constexpr _detail::_##NAME NAME;\
             garbage_collected_scan(a);
         }
         
-        template<PointerConvertibleTo<GarbageCollected> T>
-        void garbage_collected_shade(const Scan<T* const>& self) {
-            if (self._object)
-                self._object->_garbage_collected_shade();
-        }
-        
-        template<PointerConvertibleTo<GarbageCollected> T>
-        void garbage_collected_shade(const Scan<T*>& self) {
-            const T* a = self.get();
-            if (a)
-                a->_garbage_collected_shade();
-        }
-        
-        template<PointerConvertibleTo<GarbageCollected> T>
-        void garbage_collected_shade(const Scan<Atomic<T*>>& self) {
-            const T* a = self.load_acquire();
-            if (a)
-                a->_garbage_collected_shade();
-        }
-        
         template<typename T>
         T* any_read(const Scan<T* const>& self) {
             return self._object;

@@ -196,11 +196,13 @@ namespace wry {
         _thread_local_new_objects.push(this);
     }
 
-    void GarbageCollected::_garbage_collected_shade() const {
-        const uint16_t gray = _thread_local_gray_for_allocation;
-        const uint16_t before = _gray.fetch_or_relaxed(gray);
-        const uint16_t did_shade = gray & ~before;
-        _thread_local_gray_did_shade |= did_shade;
+    void garbage_collected_shade(GarbageCollected const* ptr) {
+        if (ptr) {
+            const uint16_t gray = _thread_local_gray_for_allocation;
+            const uint16_t before = ptr->_gray.fetch_or_relaxed(gray);
+            const uint16_t did_shade = gray & ~before;
+            _thread_local_gray_did_shade |= did_shade;
+        }
     }
 
     constinit Stack<GarbageCollected const*> global_children;
@@ -394,7 +396,7 @@ namespace wry {
         // time any kbit transitions CLEARING → UNUSED (i.e., one full cycle
         // of that bit completed).  Waiters drain after each bump.
         //
-        // Public entry: `register_collection_cycle_callback` (declared in
+        // Public entry: `collector_register_cycle_callback` (declared in
         // garbage_collected.hpp).  Used to test that a piece of work has
         // had a chance to be observed and acted on by the collector.
         struct CycleWaiter {
@@ -978,7 +980,7 @@ namespace wry {
         collector._is_canceled.store_relaxed(true);
     }
 
-    void register_collection_cycle_callback(uint64_t k,
+    void collector_register_cycle_callback(uint64_t k,
                                             void* callback) noexcept {
         if (k == 0) {
             global_work_queue_schedule(callback);
