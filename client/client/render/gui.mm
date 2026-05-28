@@ -171,7 +171,7 @@ namespace wry {
                     break;
                 case key::Escape:
                     _active = false;
-                    if (_log) _log->append(u8"[ESC] Hide console");
+                    if (_log) _log->append("[ESC] Hide console");
                     break;
                 case key::Backspace:
                     if (!_lines.back().empty()) {
@@ -203,8 +203,7 @@ namespace wry {
                     break;
                 default:
                     if (e.text[0] != '\0') {
-                        auto p = reinterpret_cast<const char8_t*>(e.text);
-                        _lines.back().append(p);
+                        _lines.back().append(e.text);
                     }
                     break;
             }

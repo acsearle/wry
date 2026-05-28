@@ -206,10 +206,12 @@ namespace wry {
         Font result;
 
         // Load the font file and parse with our bespoke OTF/CFF stack.
-        String bytes = string_from_file("Futura Medium Condensed.otf");
+        // OTF is a binary container, so go through bytes_from_file rather
+        // than the UTF-8-validating string_from_file.
+        ContiguousDeque<byte> bytes = bytes_from_file("Futura Medium Condensed.otf");
         auto handle = otf::Handle::parse({
-            (byte const*)bytes.chars.data(),
-            bytes.chars.size()
+            bytes.data(),
+            bytes.size()
         });
 
         int upem = handle.units_per_em();
@@ -252,12 +254,13 @@ namespace wry {
         Font2 result;
 
         // Load the font file and parse with our bespoke OTF/CFF stack.
-        // String bytes = string_from_file("Futura Medium Condensed.otf");
-        String bytes = string_from_file("OpenSans_Condensed-Light.ttf");
-        // String bytes = string_from_file("OpenSans-VariableFont_wdth,wght.ttf");
+        // TTF/OTF is binary; go through bytes_from_file.
+        // ContiguousDeque<byte> bytes = bytes_from_file("Futura Medium Condensed.otf");
+        ContiguousDeque<byte> bytes = bytes_from_file("OpenSans_Condensed-Light.ttf");
+        // ContiguousDeque<byte> bytes = bytes_from_file("OpenSans-VariableFont_wdth,wght.ttf");
         auto handle = otf::Handle::parse({
-            (byte const*)bytes.chars.data(),
-            bytes.chars.size()
+            bytes.data(),
+            bytes.size()
         });
 
         // All design-unit values are normalized by 1 / unitsPerEm.

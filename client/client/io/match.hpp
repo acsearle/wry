@@ -18,9 +18,10 @@ namespace wry {
     // Matchers look for a pattern at the start of their View argument,
     // and if found, advance the beginning of the view and return Truthy
     //
-    // string_views or ContiguousView<char8_t> views are the canonical arguments;
-    // since many formats are specified in terms of ASCII characters the same
-    // code can parse both, passing multibyte UTF-8 through unaltered.
+    // StringViews or ContiguousView<const char> views are the canonical
+    // arguments; since many formats are specified in terms of ASCII
+    // characters the same code can parse both, passing multibyte UTF-8
+    // through unaltered.
 
     /*
     template<typename T>
@@ -219,7 +220,7 @@ namespace wry {
 
     
     // this is an exact match with whatever the view yields, which
-    // may be a char32_t code point or merely char8_t byte
+    // may be a char32_t code point or merely a char byte
     constexpr auto match_character(auto character) {
         return [character](auto& v) -> bool {
             if (v.empty())

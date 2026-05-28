@@ -23,7 +23,7 @@
 namespace wry::Wavefront {
     
     auto match_comment() {
-        return match_and(match_character(u8'#'),
+        return match_and(match_character('#'),
                          match_line());
     }
     

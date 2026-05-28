@@ -43,10 +43,10 @@ namespace wry::json {
     // predicates
     
     inline constexpr bool is_json_whitespace(auto ch) {
-        return ((ch == u8'\t') ||
-                (ch == u8'\n') ||
-                (ch == u8'\r') ||
-                (ch == u8' ' ));
+        return ((ch == '\t') ||
+                (ch == '\n') ||
+                (ch == '\r') ||
+                (ch == ' ' ));
     }
     
     // matchers
@@ -86,15 +86,15 @@ namespace wry::json {
     }
     
     inline auto match_json_true() {
-        return match_zstr(u8"true");
+        return match_zstr("true");
     }
-    
+
     inline auto match_json_false() {
-        return match_zstr(u8"false");
+        return match_zstr("false");
     }
-    
+
     inline auto match_json_null() {
-        return match_zstr(u8"null");
+        return match_zstr("null");
     }
     
     inline auto match_json_number() {
@@ -157,9 +157,9 @@ namespace wry::json {
         
     };
     
-    inline bool _json_string_parse_XXXX(ContiguousView<const char8_t>& v, char16_t& x) {
-        auto first = reinterpret_cast<const char*>(v.begin());
-        auto last = reinterpret_cast<const char*>(v.end());
+    inline bool _json_string_parse_XXXX(ContiguousView<const char>& v, char16_t& x) {
+        const char* first = v.begin();
+        const char* last = v.end();
         if (last - first < 4)
             return false;
         last = first + 4;
@@ -169,15 +169,15 @@ namespace wry::json {
         v._begin += 4;
         return true;
     }
-    
+
     inline auto parse_json_string(String& x) {
-        return [&x](ContiguousView<const char8_t>& v) -> bool {
+        return [&x](ContiguousView<const char>& v) -> bool {
             auto u(v);
             if (u.empty())
                 return false;
-            char8_t a = u.front();
+            char a = u.front();
             u.pop_front();
-            if (a != u8'\"')
+            if (a != '\"')
                 return false;
             // -- fast path -----------------------------------------------
         expect_leading:
@@ -185,14 +185,14 @@ namespace wry::json {
                 return false;
             a = u.front();
             u.pop_front();
-            switch (_json_string_codeunit_class[a]) {
+            switch (_json_string_codeunit_class[(u8)a]) {
                 case 0: // simple bytewise copy
                     x.chars.push_back(a);
                     goto expect_leading;
                     // -- -------------------------------------------------
                 case 1: // unescaped double-quote ends string
                     v.reset(u);
-                    x.chars.push_back(u8'\0');
+                    x.chars.push_back('\0');
                     x.chars.pop_back();
                     return true;
                 case 2:
@@ -208,27 +208,27 @@ namespace wry::json {
             u.pop_front();
             switch (a) {
                     // self-escaping sequences
-                case u8'\"':
-                case u8'\\':
-                case u8'/':
+                case '\"':
+                case '\\':
+                case '/':
                     x.chars.push_back(a);
                     goto expect_leading;
-                case u8'b':
-                    x.chars.push_back(u8'\b');
+                case 'b':
+                    x.chars.push_back('\b');
                     goto expect_leading;
-                case u8'f':
-                    x.chars.push_back(u8'\f');
+                case 'f':
+                    x.chars.push_back('\f');
                     goto expect_leading;
-                case u8'n':
-                    x.chars.push_back(u8'\n');
+                case 'n':
+                    x.chars.push_back('\n');
                     goto expect_leading;
-                case u8'r':
-                    x.chars.push_back(u8'\r');
+                case 'r':
+                    x.chars.push_back('\r');
                     goto expect_leading;
-                case u8't':
-                    x.chars.push_back(u8'\t');
+                case 't':
+                    x.chars.push_back('\t');
                     goto expect_leading;
-                case u8'u': {
+                case 'u': {
                     char16_t y[2] = {};
                     if (!_json_string_parse_XXXX(u, y[0]))
                         return false;
@@ -236,15 +236,15 @@ namespace wry::json {
                     if (utf16::islowsurrogate(y[0]))
                         return false;
                     if (!utf16::ishighsurrogate(y[0])) {
-                        x.chars.push_back(u8'\0');
+                        x.chars.push_back('\0');
                         x.chars.pop_back();
                         x.push_back(y[0]);
                         goto expect_leading;
                     }
-                    if (u.empty() || (u.front() != u8'\\'))
+                    if (u.empty() || (u.front() != '\\'))
                         return false;
                     u.pop_front();
-                    if (u.empty() || (u.front() != u8'u'))
+                    if (u.empty() || (u.front() != 'u'))
                         return false;
                     u.pop_front();
                     if (!_json_string_parse_XXXX(u, y[1]))
@@ -252,7 +252,7 @@ namespace wry::json {
                     // printf("Got \\u%0.4X\n", y[1]);
                     if (!utf16::islowsurrogate(y[1]))
                         return false;
-                    x.chars.push_back(u8'\0');
+                    x.chars.push_back('\0');
                     x.chars.pop_back();
                     x.push_back(utf16::decodesurrogatepair(y));
                     goto expect_leading;
@@ -261,7 +261,7 @@ namespace wry::json {
                     // invalid escape sequence
                     return false;
             }
-            
+
         };
     }
     
@@ -309,18 +309,18 @@ namespace wry::json {
         return [&x](auto& v) -> bool {
             String s;
             if (parse_json_string(s)(v)) {
-                x = std::string_view((const char*)s.data(), s.chars.size());
+                x = std::string_view(s.data(), s.chars.size());
                 return true;
             }
             return false;
         };
     }
-    
+
     inline auto parse_json_number(Value& x) {
         return [&x](auto& v) -> bool {
             String s;
             if (parse_json_number(s)(v)) {
-                x = std::string_view((const char*)s.data(), s.chars.size());
+                x = std::string_view(s.data(), s.chars.size());
                 return true;
             }
             return false;
@@ -495,13 +495,13 @@ namespace wry::json {
         template<typename E>
         Value visit_string(String x) {
             // return Value(std::move(x));
-            return Value(std::string_view((char*)x.data(), x.chars.size()));
+            return Value(std::string_view(x.data(), x.chars.size()));
         }
-        
+
         template<typename E>
         Value visit_string_view(StringView x) {
             // return Value(String(x));
-            return Value(std::string_view((char*)x.chars.data(), x.chars.size()));
+            return Value(std::string_view(x.chars.data(), x.chars.size()));
         }
         
         template<typename A>
@@ -534,7 +534,7 @@ namespace wry::json {
                     // if (!flag)
                         // throw ERANGE;
                     auto y = std::move(x).unwrap();
-                    value_insert_or_assign(t, Value(std::string_view((char*)y.first.chars.data(), y.first.chars.size())), y.second);
+                    value_insert_or_assign(t, Value(std::string_view(y.first.chars.data(), y.first.chars.size())), y.second);
                 } else {
                     return t; // Value(std::move(z));
                 }
@@ -559,7 +559,7 @@ namespace wry::json {
         String s;
         
         void serialize_bool(bool x) {
-            s.append(x ? u8"true" : u8"false");
+            s.append(x ? "true" : "false");
         }
         
         void serialize_i8(int8_t x) {
@@ -576,8 +576,8 @@ namespace wry::json {
         
         void serialize_i64(int64_t x) {
             s.chars.may_write_back(32);
-            auto first = reinterpret_cast<char*>(s.chars._end);
-            auto last = reinterpret_cast<char*>(s.chars._allocation_end);
+            char* first = s.chars._end;
+            char* last = s.chars._allocation_end;
             std::to_chars_result result = std::to_chars(first, last, x);
             if (result.ptr == last)
                 throw result.ec;
@@ -601,8 +601,8 @@ namespace wry::json {
         
         void serialize_uint64_t(uint64_t x) {
             s.chars.may_write_back(32);
-            auto first = reinterpret_cast<char*>(s.chars._end);
-            auto last = reinterpret_cast<char*>(s.chars._allocation_end);
+            char* first = s.chars._end;
+            char* last = s.chars._allocation_end;
             std::to_chars_result result = std::to_chars(first, last, x);
             if (result.ptr == last)
                 throw result.ec;
@@ -618,8 +618,8 @@ namespace wry::json {
         
         void serialize_float64_t(float64_t x) {
             s.chars.may_write_back(32);
-            auto first = reinterpret_cast<char*>(s.chars._end);
-            auto last = reinterpret_cast<char*>(s.chars._allocation_end);
+            char* first = s.chars._end;
+            char* last = s.chars._allocation_end;
             std::to_chars_result result = std::to_chars(first, last, x);
             if (result.ptr == last)
                 throw result.ec;
@@ -630,32 +630,32 @@ namespace wry::json {
         }
         
         void serialize_string(StringView x) {
-            s.push_back(u8'\"');
+            s.push_back('\"');
             s.append(x);
-            s.push_back(u8'\"');
+            s.push_back('\"');
         }
-        
+
         struct SerializeSeq {
-            
+
             serializer* _context;
             bool _need_delimiter = false;
-            
+
             template<typename T>
             void serialize_element(T&& x) {
                 if (_need_delimiter)
-                    _context->s.push_back(u8',');
+                    _context->s.push_back(',');
                 _need_delimiter = true;
                 serialize(std::forward<T>(x), *_context);
             }
-            
+
             void end() {
-                _context->s.push_back(u8']');
+                _context->s.push_back(']');
             }
-            
+
         };
-        
+
         SerializeSeq serialize_seq(Option<size_type>) {
-            s.push_back(u8'[');
+            s.push_back('[');
             return SerializeSeq{this};
         }
         

@@ -61,17 +61,17 @@ namespace wry {
     constexpr auto parse_number(auto& x) {
         return overloaded{
             [&x](StringView& v) -> bool {
-                auto first = reinterpret_cast<const char*>(v.chars.begin());
-                auto last = reinterpret_cast<const char*>(v.chars.end());
+                const char* first = v.chars.begin();
+                const char* last = v.chars.end();
                 std::from_chars_result result = std::from_chars(first, last, x);
                 if (result.ptr == first)
                     return false;
                 v.chars._begin += (result.ptr - first);
                 return true;
             },
-            [&x](ContiguousView<const char8_t>& v) -> bool {
-                auto first = reinterpret_cast<const char*>(v.begin());
-                auto last = reinterpret_cast<const char*>(v.end());
+            [&x](ContiguousView<const char>& v) -> bool {
+                const char* first = v.begin();
+                const char* last = v.end();
                 std::from_chars_result result = std::from_chars(first, last, x);
                 if (result.ptr == first)
                     return false;

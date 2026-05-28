@@ -52,11 +52,23 @@ namespace wry {
     // typically 16 bits and UTF-16 on Windows, and 32 bits and UTF-32
     // otherwise.
     //
-    // `char8_t`, `char16_t` and `char32_t` are distict types with underlying
-    // types unsigned char, uint_least16_t and uint_least32_t.  They provide
-    // a type system marker for the encoding.  They should only be used for
-    // valid sequences of valid code units.  For example, untrusted input
-    // should be represented as char until validated.
+    // `char8_t`, `char16_t` and `char32_t` are distinct types with underlying
+    // types unsigned char, uint_least16_t and uint_least32_t.  In principle
+    // they provide a type-system marker for the encoding, but UTF-8 validity
+    // is a property of sequences of bytes, not of individual bytes, and so
+    // cannot be enforced by an element type.  We do not use char8_t.
+    //
+    // Doctrine:
+    //   - char is the storage type for UTF-8 bytes.
+    //   - UTF-8 validity is an invariant of the *container* types String and
+    //     StringView (and ContiguousView<const char> when used as a UTF-8
+    //     view), not of individual char values.
+    //   - char16_t is used for UTF-16 code units (JSON \uXXXX escapes,
+    //     surrogate-pair handling).
+    //   - char32_t is used for Unicode scalar values (code points).
+    //   - std::byte is used for opaque binary data (file blobs, network
+    //     buffers).  Bytes become char only after passing the UTF-8 invariant
+    //     check at the boundary.
     //
     // Many text-based formats like JSON, CSV, OBJ, MTL have their delimiting
     // characters entirely within the ASCII character set and can thus be
@@ -188,32 +200,84 @@ namespace wry {
             return _isutf8_table[ch];
         }
         
-        inline constexpr bool isleading(char8_t ch) {
-            assert(isvalid(ch));
-            return (ch & 0xC0) != 0x80;
+        // Byte-level UTF-8 predicates.
+        //
+        // These accept char (the storage type), but reason in terms of the
+        // unsigned byte value to avoid signed-char sign-extension surprises
+        // when masking the high bit.
+
+        inline constexpr bool isleading(char ch) {
+            u8 b = (u8)ch;
+            assert(isvalid(b));
+            return (b & 0xC0) != 0x80;
         }
-        
-        inline constexpr bool iscontinuation(char8_t ch) {
-            assert(isvalid(ch));
-            return (ch & 0xC0) == 0x80;
+
+        inline constexpr bool iscontinuation(char ch) {
+            u8 b = (u8)ch;
+            assert(isvalid(b));
+            return (b & 0xC0) == 0x80;
         }
-        
-        inline constexpr int width(char8_t ch) {
-            assert(isvalid(ch));
+
+        inline constexpr int width(char ch) {
+            u8 b = (u8)ch;
+            assert(isvalid(b));
             assert(!iscontinuation(ch));
-            return (0x4322000011111111 >> ((ch & 0xF0) >> 2)) & 0x0000000000000007;
+            return (0x4322000011111111 >> ((b & 0xF0) >> 2)) & 0x0000000000000007;
+        }
+
+        inline constexpr u32 payload(char ch) {
+            u8 b = (u8)ch;
+            assert(isvalid(b));
+            if (!(0x80 & b)) return b       ; // 0xxxxxxx
+            if (!(0x40 & b)) return b & 0x3F; // 10xxxxxx
+            if (!(0x20 & b)) return b & 0x1F; // 110xxxxx
+            if (!(0x10 & b)) return b & 0x0F; // 1110xxxx
+            return b & 0x07; // 11110xxx
         }
         
-        inline constexpr u32 payload(char8_t ch) {
-            assert(isvalid(ch));
-            if (!(0x80 & ch)) return ch       ; // 0xxxxxxx
-            if (!(0x40 & ch)) return ch & 0x3F; // 10xxxxxx
-            if (!(0x20 & ch)) return ch & 0x1F; // 110xxxxx
-            if (!(0x10 & ch)) return ch & 0x0F; // 1110xxxx
-            return ch & 0x07; // 11110xxx
+        
+        // Constexpr-friendly UTF-8 range validator.  Straight-line loop, no
+        // goto, so it works in a consteval context (which is how
+        // StringView's literal ctor uses it).  Slower than the goto-driven
+        // runtime isvalid below, but called at compile time so cost doesn't
+        // matter.
+        inline constexpr bool isvalid_range(const char* first, const char* last) {
+            while (first != last) {
+                u8 b = (u8)*first++;
+                int extra;
+                u32 cp;
+                if (b < 0x80) {
+                    continue;
+                } else if (b < 0xC2) {
+                    // 10xxxxxx (continuation) or overlong 2-byte (0xC0/0xC1)
+                    return false;
+                } else if (b < 0xE0) {
+                    extra = 1; cp = b & 0x1F;
+                } else if (b < 0xF0) {
+                    extra = 2; cp = b & 0x0F;
+                } else if (b < 0xF5) {
+                    extra = 3; cp = b & 0x07;
+                } else {
+                    // 0xF5+: would encode cp > 0x10FFFF
+                    return false;
+                }
+                for (int i = 0; i < extra; ++i) {
+                    if (first == last) return false;
+                    u8 c = (u8)*first++;
+                    if ((c & 0xC0) != 0x80) return false;
+                    cp = (cp << 6) | (c & 0x3F);
+                }
+                // overlong / OOB / surrogate
+                u32 min_cp = (extra == 1) ? 0x80u
+                           : (extra == 2) ? 0x800u
+                                          : 0x10000u;
+                if (cp < min_cp) return false;
+                if (cp > 0x10FFFFu) return false;
+                if (cp >= 0xD800u && cp <= 0xDFFFu) return false;
+            }
+            return true;
         }
-        
-        
+
         inline bool isvalid(auto v) {
 
             // printf("%.*s", (int)v.size(), v.data());
@@ -361,17 +425,17 @@ namespace wry {
         }
         
         
-        // precondition: p points to the beginning of a character
-        inline char32_t decode_one(const char8_t*& p) {
-            
+        // precondition: p points to the beginning of a valid UTF-8 character
+        inline char32_t decode_one(const char*& p) {
+
             // -- hot path ----------------------------------------------------
-            
-            char8_t c = *p++;
+
+            u8 c = (u8)*p++;
             if (!(c & 0x80))
                 return c;
-            
+
             // ---------------------------------------------------------------
-            
+
             char32_t u;
             if (!(c & 0x20)) {
                 u = c & 0x1F;
@@ -381,84 +445,84 @@ namespace wry {
                 } else {
                     u = c & 0x07;
                     u <<= 6;
-                    u |= *p++ & 0x3F;
+                    u |= (u8)*p++ & 0x3F;
                 }
                 u <<= 6;
-                u |= *p++ & 0x3F;
+                u |= (u8)*p++ & 0x3F;
             }
             u <<= 6;
-            u |= *p++ & 0x3F;
+            u |= (u8)*p++ & 0x3F;
             return u;
-            
+
         }
         
         
         struct iterator {
-            
-            const char8_t* base;
-            
+
+            const char* base;
+
             using difference_type = difference_type;
             using value_type = char32_t;
             using reference = char32_t;
             using pointer = void;
             using iterator_category = std::bidirectional_iterator_tag;
-            
+
             iterator() = default;
 
-            explicit iterator(const char8_t* ptr)
+            explicit iterator(const char* ptr)
             : base(ptr) {
             }
-            
+
             explicit iterator(std::nullptr_t)
             : base(nullptr) {
             }
-            
+
             iterator operator++(int) {
                 iterator a(*this);
                 operator++();
                 return a;
             }
-            
-            
+
+
             iterator operator--(int) {
                 iterator a(*this);
                 operator--();
                 return a;
             }
-            
+
             iterator& operator++() {
                 // safety: relies on precondition that we can increment and that
-                // the char8_t range is valid
-                base += (0x4322000011111111 >> ((*base & 0xF0) >> 2)) & 0x0000000000000007;
+                // the byte range is valid UTF-8
+                base += (0x4322000011111111 >> (((u8)*base & 0xF0) >> 2)) & 0x0000000000000007;
                 return *this;
             }
-                        
+
             iterator& operator--() {
-                while ((*--base & 0xC0) == 0x80)
+                while (((u8)*--base & 0xC0) == 0x80)
                     ;
                 return *this;
             }
-            
+
             bool operator!() const {
                 return !base;
             }
-            
+
             explicit operator bool() const {
                 return static_cast<bool>(base);
             }
-            
+
             char32_t operator*() const {
-                const char8_t* p = base;
+                const char* p = base;
                 return decode_one(p);
             }
-            
+
             // *--it
             char32_t next();
-            
+
             // *it++
             char32_t prev() {
                 // parse UTF-8 backwards
-                char8_t b = *--base;
+                u8 b = (u8)*--base;
                 if ((b & 0x80) == 0x00) { // ascii
                     return static_cast<char32_t>(b);
                 }
@@ -489,10 +553,10 @@ namespace wry {
                 assert(c <= 0x0010FFFF); // <-- else too large
                 return c;
             }
-        
+
             auto operator<=>(const iterator& other) const = default;
             bool operator==(const iterator& other) const = default;
-            
+
         }; // utf8_iterator
         
     } // namespace utf8
@@ -504,7 +568,7 @@ namespace wry {
     // transcoders
 
     inline bool utf32_to_utf8(const char32_t* first, const char32_t* last,
-                              char8_t*& d_first, char8_t* d_last) {
+                              char*& d_first, char* d_last) {
         for (;;) {
             if (first == last)
                 return true;
@@ -514,30 +578,30 @@ namespace wry {
             if (!(ch & 0xFFFFFF80)) {
                 // a is 7 bits, encode to 0xxxxxxx
                 if (n < 1) return false; // short output
-                *d_first++ = ch;
+                *d_first++ = (char)ch;
             } else if (!(ch & 0xFFFFF800)) {
                 // a is 11 bits, encode to 110xxxxx 10xxxxxx
                 if (n < 2) return false; // short output
-                *d_first++ = 0xC0 | (ch >> 6);
-                *d_first++ = 0x80 | (ch & 0x3F);
+                *d_first++ = (char)(0xC0 | (ch >> 6));
+                *d_first++ = (char)(0x80 | (ch & 0x3F));
             } else if (!(ch & 0xFFFF0000)) {
                 // a is 16 bits, encode to 1110xxxx 10xxxxxx 10xxxxxx
                 if (n < 3) return false; // short output
-                *d_first++ = 0xE0 | (ch >> 12);
-                *d_first++ = 0x80 | ((ch >> 6) & 0x3F);
-                *d_first++ = 0x80 | (ch & 0x3F);
+                *d_first++ = (char)(0xE0 | (ch >> 12));
+                *d_first++ = (char)(0x80 | ((ch >> 6) & 0x3F));
+                *d_first++ = (char)(0x80 | (ch & 0x3F));
             } else {
                 // a is 21 bits, encode to 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
                 if (n < 4) return false; // short output
-                *d_first++ = 0xF0 | (ch >> 18);
-                *d_first++ = 0x80 | ((ch >> 12) & 0x3F);
-                *d_first++ = 0x80 | ((ch >> 6) & 0x3F);
-                *d_first++ = 0x80 | (ch & 0x3F);
+                *d_first++ = (char)(0xF0 | (ch >> 18));
+                *d_first++ = (char)(0x80 | ((ch >> 12) & 0x3F));
+                *d_first++ = (char)(0x80 | ((ch >> 6) & 0x3F));
+                *d_first++ = (char)(0x80 | (ch & 0x3F));
             }
             ++first;
         }
     }
-    
+
     inline bool utf32_to_utf16(const char32_t* first, const char32_t* last, char16_t*& d_first, char16_t* d_last) {
         for (;;) {
             if (first == last)
@@ -546,7 +610,7 @@ namespace wry {
             assert(utf32::isvalid(ch));
             if (!(ch & 0xFFFF0000)) {
                 if (d_first == d_last) return false; // short output
-                *d_first++ = ch;
+                *d_first++ = (char16_t)ch;
             } else {
                 if ((last - first) < 2) return false; // short output
                 ch -= 0x00010000;
@@ -558,7 +622,7 @@ namespace wry {
         }
     }
     
-    inline bool utf16_to_utf8(const char16_t*& first, const char16_t* last, char8_t*& d_first, char8_t* d_last) {
+    inline bool utf16_to_utf8(const char16_t*& first, const char16_t* last, char*& d_first, char* d_last) {
         for (;;) {
             if (first == last)
                 return true;
@@ -585,23 +649,25 @@ namespace wry {
         }
     }
     
-    inline bool utf8_to_utf32(const char8_t*& first, const char8_t* last, char32_t& ch) {
+    inline bool utf8_to_utf32(const char*& first, const char* last, char32_t& ch) {
 
         // TODO: This function needs to decide if it is validating or not.
-        // char8_t argument implies valid utf-8
-        // bool implies validation
-        // last implies we might hit the end before extracting a character
+        // A char range here is, by doctrine, valid UTF-8; but `last` implies
+        // we might hit the end before extracting a character.  Decide whether
+        // we trust the input or check it.
 
-        const char8_t* p = first;
-        
+        const char* p = first;
+
         if (p == last)
             return false;
-        
-        char8_t b = *first;
+
+        u8 b = (u8)*first;
 
         if ((b & 0x80) == 0x00) [[likely]] {
             // 0xxxxxxx: single-byte encoded character
             ch = b;
+            ++p;
+            first = p;
             return true;
         }
 
@@ -624,12 +690,12 @@ namespace wry {
             // not a valid header byte
             return false;
         }
-        
+
         for (;;) {
             ++p;
             if (p == last)
                 return false;
-            char8_t d = *p;
+            u8 d = (u8)*p;
             if ((d & 0xC0) != 0x80) {
                 // !10xxxxxx
                 // unexpected noncontinuation byte
@@ -643,8 +709,7 @@ namespace wry {
 
         assert(utf32::isvalid(ch));
 
-
-        first = p;
+        first = p + 1;
         return true;
     }
     

@@ -196,7 +196,7 @@ namespace wry {
         }
 
         // todo: steal the repr for rvalue construction from arrays of
-        // representation-interconvertible types such as {byte, char, char8_t},
+        // representation-interconvertible types such as {byte, char, unsigned char},
         // {intN_t and uintN_t}, {T*, intptr_t, uintptr_t, size_t, difference_t}
 
         ContiguousDeque(wry::with_capacity_t, size_type count)

@@ -17,14 +17,14 @@ namespace wry {
     // On macOS, this may point to a bundle?
 
     std::filesystem::path path_for_resource(StringView name) {
-        String s(u8"");
+        String s;
         s.append(name);
         return std::filesystem::path(s.begin(), s.end());
     }
 
     std::filesystem::path path_for_resource(StringView name, StringView ext) {
         String s(name);
-        s.push_back(u8'.');
+        s.push_back('.');
         s.append(ext);
         return path_for_resource(s);
     }

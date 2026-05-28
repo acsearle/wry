@@ -22,11 +22,11 @@ namespace wry {
         
         // to RFC4648
         
-        inline constexpr char8_t to_base64_table[65] =
-        u8"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        u8"abcdefghijklmnopqrstuvwxyz"
-        u8"0123456789"
-        u8"+/"
+        inline constexpr char to_base64_table[65] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz"
+        "0123456789"
+        "+/"
         ;
         
         // from RFC4648 and minor variants

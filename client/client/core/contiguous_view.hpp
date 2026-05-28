@@ -59,13 +59,13 @@ namespace wry {
             return _begin <= _end;
         }
                                 
-        ContiguousView() = default;
-        
+        constexpr ContiguousView() = default;
+
         // reference semantics: copy is a shallow
-        
-        ContiguousView(const ContiguousView&) = default;
-        ContiguousView(ContiguousView&&) = default;
-                
+
+        constexpr ContiguousView(const ContiguousView&) = default;
+        constexpr ContiguousView(ContiguousView&&) = default;
+
         ~ContiguousView() = default;
         
         // reference semantics: assignment is deep
@@ -90,13 +90,13 @@ namespace wry {
         
         // sequence constructors
         
-        ContiguousView(iterator first, iterator last)
+        constexpr ContiguousView(iterator first, iterator last)
         : _begin(first)
         , _end(last) {
             assert(invariant());
         }
-        
-        ContiguousView(pointer first, size_type count)
+
+        constexpr ContiguousView(pointer first, size_type count)
         : _begin(first)
         , _end(first + count) {
         }

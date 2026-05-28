@@ -753,7 +753,7 @@
                             for (char32_t charcode : z) {
                                 auto [offset, view, advance] = get_glyph(charcode);
                                 cursor.y += advance.y;
-                                if (charcode == u8'_') {
+                                if (charcode == U'_') {
                                     cursor.x = 0;
                                     cursor.y += 4;
                                     continue;
