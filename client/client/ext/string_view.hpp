@@ -94,7 +94,7 @@ namespace wry {
         // hazard that an array-reference ctor would have.
         constexpr StringView(const char* zstr)
         : chars(zstr, _zstr_end(zstr)) {
-            if (!utf8::isvalid_range(chars.begin(), chars.end()))
+            if (!utf8::isvalid(chars.begin(), chars.end()))
                 throw std::invalid_argument("StringView: invalid UTF-8");
         }
 
