@@ -215,12 +215,13 @@ namespace wry {
         
         
         inline bool isvalid(auto v) {
-            
+
+            // printf("%.*s", (int)v.size(), v.data());
+
             // replace me with simdutf?
             
             u32 u = 0;
             auto b = 0;
-            char8_t c = 0;
             
             goto expect_boundary;
             
@@ -265,7 +266,8 @@ namespace wry {
             }
             
             u = (u << 6) | (b & 0x3F);
-            
+
+            // TODO: Bug if this is actually a 4 byte thing.  Needs restructure.
             if (!(u & 0xFFFFFFE0)) {
                 // 0000000000xxxxxxxxxxx, overlong encoding
                 goto error;
@@ -277,7 +279,12 @@ namespace wry {
             }
             
         expect_ultimate_continuation_byte:
-            
+
+            if (v.empty()) {
+                // ends in middle of multibyte character
+                goto error;
+            }
+
             b = v.front();
             v.pop_front();
             
@@ -311,34 +318,34 @@ namespace wry {
             b = v.front();
             v.pop_front();
             
-            if (!(c & 0x80)) {
+            if (!(b & 0x80)) {
                 // 0xxxxxxx, ASCII, don't need to extract or validate the character
                 goto expect_boundary;
             }
             
             // ----------------------------------------------------------------
             
-            if (!(c & 0x40)) {
+            if (!(b & 0x40)) {
                 // 10xxxxxx, unexpected continuation byte
                 return false;
             }
-            if (!(c & 0x20)) {
+            if (!(b & 0x20)) {
                 // 110xxxxx, two-byte encoded character
-                if (!(c & 0x01C)) {
+                if (!(b & 0x01E)) {
                     // 110000xx, overlong
                     return false;
                 }
-                u = c & 0x1F;
+                u = b & 0x1F;
                 goto expect_ultimate_continuation_byte;
             }
-            if (!(c & 0x10)) {
+            if (!(b & 0x10)) {
                 // 1110xxxx, three-byte encoded character
-                u = c & 0x0F;
+                u = b & 0x0F;
                 goto expect_penultimate_continuation_byte;
             }
-            if (!(c & 0x080)) {
+            if (!(b & 0x08)) {
                 // 11110xxx, four-byte encoded character
-                u = c & 0x03;
+                u = b & 0x03;
                 goto expect_antipenultimate_continuation_byte;
             } else {
                 // 11111xxx, invalid
@@ -580,28 +587,40 @@ namespace wry {
     
     inline bool utf8_to_utf32(const char8_t*& first, const char8_t* last, char32_t& ch) {
 
+        // TODO: This function needs to decide if it is validating or not.
+        // char8_t argument implies valid utf-8
+        // bool implies validation
+        // last implies we might hit the end before extracting a character
+
         const char8_t* p = first;
         
         if (p == last)
             return false;
         
-        char b = *first;
+        char8_t b = *first;
 
-        if ((b & 0x80) == 0x00) {
-            // 0xxxxxxx
-            return static_cast<uint32_t>(b);
+        if ((b & 0x80) == 0x00) [[likely]] {
+            // 0xxxxxxx: single-byte encoded character
+            ch = b;
+            return true;
         }
-        
+
+        if ((b & 0xE0) == 0x80) [[unlikely]] {
+            // 10xxxxxx: unexpected continuation byte
+            return false;
+        }
+
         if ((b & 0xE0) == 0xC0) {
-            // 110xxxxx 10xxxxxx
+            // 110xxxxx
             ch = b & 0x0000001F;
         } else if ((b & 0xF0) == 0xE0) {
-            // 1110xxxx 10xxxxxx 10xxxxxx
+            // 1110xxxx
             ch = b & 0x0000000F;
         } else if ((b & 0xF8) == 0xF0) {
-            // 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+            // 11110xxx
             ch = b & 0x00000007;
         } else {
+            // 11111xxx
             // not a valid header byte
             return false;
         }
@@ -610,9 +629,10 @@ namespace wry {
             ++p;
             if (p == last)
                 return false;
-            char d = *p;
+            char8_t d = *p;
             if ((d & 0xC0) != 0x80) {
-                // expected continuation byte
+                // !10xxxxxx
+                // unexpected noncontinuation byte
                 return false;
             }
             ch = (ch << 6) | (d & 0x0000003F);
@@ -622,7 +642,8 @@ namespace wry {
         }
 
         assert(utf32::isvalid(ch));
-        
+
+
         first = p;
         return true;
     }

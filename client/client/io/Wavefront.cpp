@@ -53,8 +53,8 @@ namespace wry::Wavefront {
     auto parse_u_vw(auto u_vw[3]) {
         return [u_vw](StringView& sv) {
             return match_and(parse_number_relaxed(u_vw[0]),
-                             match_optional(parse_number_relaxed(u_vw[1]),
-                                            parse_number_relaxed(u_vw[2])))(sv);
+                             match_each_optional(parse_number_relaxed(u_vw[1]),
+                                                 parse_number_relaxed(u_vw[2])))(sv);
         };
     }
     
@@ -386,9 +386,8 @@ namespace wry::Wavefront {
             // TODO: static sized face array?
             //       - require triangles?
             //       - subdivide on load?
-            ContiguousDeque<Index> indices;
-            return [this, indices=std::move(indices)](StringView& v) mutable -> bool {
-                indices.clear();
+            return [this](StringView& v) -> bool {
+                ContiguousDeque<Index> indices;
                 bool flag = match_and(match_character('f'),
                                       match_star(parse_face_indices(indices)))(v);
                 if (flag) {

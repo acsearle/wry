@@ -9,13 +9,14 @@
 #define ctype_hpp
 
 #include <cctype>
+#include <cstdio>
 
 #include "assert.hpp"
 
 namespace wry {
     
     // Additional character predicates
-    
+
     constexpr int isascii(int ch) {
         return !(ch & 0xFFFFFF80);
     }
@@ -23,7 +24,12 @@ namespace wry {
     constexpr int isuchar(int ch) {
         return !(ch & 0xFFFFFF00);
     }
-        
+
+    // Characters passing this test are safe to pass to <cctype> functions
+    constexpr int issafe(int ch) {
+        return isuchar(ch) || (ch == EOF);
+    }
+
     constexpr int isunderscore(int ch) {
         return ch == '_';
     }
@@ -33,13 +39,12 @@ namespace wry {
     }
     
     constexpr int isalnum_(int ch) {
-        precondition(isuchar(ch));
-        return isalnum(ch) || isunderscore(ch);
+        return (issafe(ch) && isalnum(ch)) || isunderscore(ch);
     }
     
     constexpr int isalpha_(int ch) {
-        precondition(isuchar(ch));
-        return isalpha(ch) || isunderscore(ch);
+        precondition(issafe(ch));
+        return (issafe(ch) && isalpha(ch)) || isunderscore(ch);
     }
 
 } // namespace wry

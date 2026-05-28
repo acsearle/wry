@@ -19,7 +19,7 @@ namespace wry {
     
     constexpr auto parse(auto&& matcher, auto&& effect) {
         return [matcher=std::forward<decltype(matcher)>(matcher),
-                effect=std::forward<decltype(effect)>(effect)](StringView& v) mutable -> bool {
+                effect=std::forward<decltype(effect)>(effect)](StringView& v) -> bool {
             StringView u = v;
             return matcher(v) && ((void) effect(u / v), true);
         };
@@ -27,7 +27,7 @@ namespace wry {
     
     constexpr auto parse_into(auto&& matcher, StringView& target) {
         return [matcher=std::forward<decltype(matcher)>(matcher),
-                &target](StringView& v) mutable -> bool {
+                &target](StringView& v) -> bool {
             StringView u = v;
             return matcher(v) && (target.reset(u / v), true);
         };
@@ -35,7 +35,7 @@ namespace wry {
     
     constexpr auto action(auto&& matcher, auto&& effect) {
         return [matcher=std::forward<decltype(matcher)>(matcher),
-                effect=std::forward<decltype(effect)>(effect)](auto& v) mutable -> bool {
+                effect=std::forward<decltype(effect)>(effect)](auto& v) -> bool {
             return matcher(v) && ((void) effect(), true);
         };
     };
@@ -43,7 +43,7 @@ namespace wry {
     constexpr auto parse_until(auto&& many, auto&& once, auto&& action) {
         return [many=std::forward<decltype(many)>(many),
                 once=std::forward<decltype(once)>(once),
-                action=std::forward<decltype(action)>(action)](auto& v) mutable -> bool {
+                action=std::forward<decltype(action)>(action)](auto& v) -> bool {
             auto w(v);
             for (auto u(v); ; ) {
                 if (once(u)) {

@@ -21,21 +21,24 @@ namespace wry {
     // string_views or ContiguousView<char8_t> views are the canonical arguments;
     // since many formats are specified in terms of ASCII characters the same
     // code can parse both, passing multibyte UTF-8 through unaltered.
-    //
-    // Views must support
-    // .empty
-    // .pop_front
-    // .reset
-    // CopyConstuctible
-    //
-        
-    // template<typename T>
-    // concept Matcher = requires(T matcher, std::string_view v) {
-    //     { matcher(v) } -> std::convertible_to<bool>;
-    // };
-        
+
+    /*
+    template<typename T>
+    concept Matcher = requires(T const& matcher, std::string_view& v) {
+        { matcher(v) } -> std::convertible_to<bool>;
+    };
+
+    template<typename T>
+    concept View = requires(T& v, T const& u) {
+        { u.empty() } -> std::convertible_to<bool>;
+        { u.front() } -> std::convertible_to<char32_t>;
+        { v.pop_front() };
+        { v.reset(u) };
+    };
+     */
+
     constexpr auto match_and(auto&&... matchers) {
-        return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) mutable -> bool {
+        return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) -> bool {
             auto u(v);
             if (!(... && matchers(u)))
                 return false;
@@ -45,20 +48,27 @@ namespace wry {
     }
     
     constexpr auto match_or(auto&&... matchers) {
-        return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) mutable -> bool {
+        return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) -> bool {
             return (... || matchers(v));
         };
     }
     
-    constexpr auto match_optional(auto&&... matchers) {
-        return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) mutable -> bool {
+    constexpr auto match_optional(auto&& matchers) {
+        return [matchers=std::forward<decltype(matchers)>(matchers)](auto& v) -> bool {
+            (void) matchers(v);
+            return true;
+        };
+    }
+
+    constexpr auto match_each_optional(auto&&... matchers) {
+        return [...matchers=std::forward<decltype(matchers)>(matchers)](auto& v) -> bool {
             (..., (void) matchers(v));
             return true;
         };
     }
-            
+
     constexpr auto match_star(auto&& matcher) {
-        return [matcher=std::forward<decltype(matcher)>(matcher)](auto& v) mutable -> bool {
+        return [matcher=std::forward<decltype(matcher)>(matcher)](auto& v) -> bool {
             while (matcher(v))
                 ;
             return true;
@@ -66,7 +76,7 @@ namespace wry {
     }
     
     auto constexpr match_plus(auto&& matcher) {
-        return [matcher=std::forward<decltype(matcher)>(matcher)](auto& v) mutable -> bool {
+        return [matcher=std::forward<decltype(matcher)>(matcher)](auto& v) -> bool {
             if (!matcher(v))
                 return false;
             while (matcher(v))
@@ -105,16 +115,16 @@ namespace wry {
     // value (delimiter value)*
     auto match_delimited(auto&& value, auto&& delimiter) {
         return [value=std::forward<decltype(value)>(value),
-                delimiter=std::forward<decltype(delimiter)>(delimiter)](auto& v) {
+                delimiter=std::forward<decltype(delimiter)>(delimiter)](auto& v) -> bool {
             int count = 0;
             auto u(v);
             for (;;) {
                 if (!value(u))
-                    return count;
+                    return (bool)count;
                 ++count;
                 v.reset(u);
                 if (!delimiter(u))
-                    return count;
+                    return (bool)count;
             }
         };
     }
@@ -129,7 +139,7 @@ namespace wry {
     // - misnamed
     //
     // Matchers that match empty can't advance, and when combined with
-    // match_star or similar constructs, won't termimnate
+    // match_star or similar constructs, won't terminate
     //
     // Negation can't really happen without an alternative, and when we advance
     // due to not-match, we are implicitly proposing match_any_char
@@ -144,7 +154,7 @@ namespace wry {
 
     // match, regardless of value, the first character of a view that has a
     // first element
-    // alernative name:  match_any_character?
+    // alternative name:  match_any_character?
     constexpr auto match_not_empty() {
         return [](auto& v) -> bool {
             if (v.empty())
@@ -176,7 +186,7 @@ namespace wry {
     // with it
     constexpr auto match_until(auto&& many, auto&& once) {
         return [many=std::forward<decltype(many)>(many),
-                once=std::forward<decltype(once)>(once)](auto& v) mutable -> bool {
+                once=std::forward<decltype(once)>(once)](auto& v) -> bool {
             for (auto u(v); ; ) {
                 //printf("match_until considers \"%.*s...\"\n",
                 //       std::min((int)u.chars.size(), 10),
@@ -220,22 +230,20 @@ namespace wry {
             return true;
         };
     }
-    
+
     constexpr auto match_character_case_insensitive(auto character) {
-        assert(isuchar(character));
-        return [character=tolower(character)](auto& v) -> bool {
+        return [character=issafe(character) ? tolower(character) : character](auto& v) -> bool {
             if (v.empty())
                 return false;
             auto a = v.front();
-            assert(isuchar(a));
-            if (tolower(a) != character)
+            if ((issafe(a) ? tolower(a) : a) != character)
                 return false;
             v.pop_front();
             return true;
         };
     }
     
-    // exact match a zero-terminated string, usually a literal
+    // exact match a zero-terminated string
     constexpr auto match_zstr(auto zstr) {
         return [zstr](auto& v) -> bool {
             auto u(v);
@@ -306,6 +314,7 @@ namespace wry {
             while (*a) {
                 if (ch == *a)
                     return false;
+                ++a;
             }
             v.pop_front();
             return true;
@@ -321,7 +330,7 @@ namespace wry {
             if (v.empty())
                 return false;
             int ch = v.front();
-            if (!isuchar(ch) || !predicate(ch))
+            if (!issafe(ch) || !predicate(ch))
                 return false;
             v.pop_front();
             return true;
@@ -336,10 +345,6 @@ namespace wry {
     
     constexpr auto match_alpha() {
         return match_cctype(&isalpha);
-    }
-
-    constexpr auto match_ascii() {
-        return match_cctype(&isascii);
     }
 
     constexpr auto match_blank() {
@@ -379,7 +384,11 @@ namespace wry {
     }
     
     // extended character classes
-    
+
+    constexpr auto match_ascii() {
+        return match_cctype(&isascii);
+    }
+
     constexpr auto match_alnum_() {
         return match_cctype(&isalnum_);
     }
@@ -389,13 +398,13 @@ namespace wry {
     }
 
     constexpr auto match_nonzero_digit() {
-        return match_predicate([](auto character) {
-            return (isuchar(character) && isdigit(character)) && (character != '0');
+        return match_predicate([](auto character) -> bool {
+            return (issafe(character) && isdigit(character)) && (character != '0');
         });
     }
 
     constexpr auto match_hspace() {
-        return match_predicate([](auto character) {
+        return match_predicate([](auto character) -> bool {
             return (character == ' ') || (character == '\t');
         });
     }
@@ -422,7 +431,7 @@ namespace wry {
     // match a float literal of the form (+|-)?[0-9]+(.[0-9]+)?((e|E)[0-9]+)?
     
     constexpr auto match_sign() {
-        return match_or(match_from("+-"));
+        return match_from("+-");
     }
     
     constexpr auto match_digits() {
@@ -451,10 +460,11 @@ namespace wry {
                          match_optional(match_exponent()));
     }
     
-    // match a string literal of the form "\""
+    // match a string literal that may contain escaped double quotes
     constexpr auto match_quotation() {
         return match_and(match_character('"'),
                          match_until(match_or(match_zstr("\\\""),
+                                              match_zstr("\\\\"),
                                               match_not_empty()),
                                      match_character('"')));
     }

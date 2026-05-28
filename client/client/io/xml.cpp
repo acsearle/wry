@@ -74,7 +74,7 @@ namespace wry::xml {
         
         // TODO: Separate Y-combinator and curry
         auto y_combinator(auto&& f, auto&... g) {
-            return [f, &g...](auto&&... args) mutable {
+            return [f, &g...](auto&&... args) {
                 return f(f, g..., std::forward<decltype(args)>(args)...);
             };
         }

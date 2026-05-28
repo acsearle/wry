@@ -200,14 +200,9 @@ namespace wry {
             chars.clear();
         }
         
-        template<size_type N>
-        void append(const char8_t (&x)[N]) {
-            chars.append(std::begin(x), std::end(x));
-        }
-        
-        void append(const char8_t* p) {
-            if (p)
-                for (char ch; (ch = *p); ++p)
+        void append(const char8_t* zstr) {
+            if (zstr)
+                for (char8_t ch; (ch = *zstr); ++zstr)
                     chars.push_back(ch);
         }
 
