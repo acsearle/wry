@@ -21,7 +21,9 @@
 #include "utility.hpp"
 
 namespace wry {
-    
+
+    // TODO: Replace global_work_queue with thread_local work stealing queues
+
     constexpr size_t CACHE_LINE_BYTES = 64;
     
     namespace _blocking_work_stealing_queue {

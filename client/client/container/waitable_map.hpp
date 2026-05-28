@@ -82,31 +82,6 @@ namespace wry {
         garbage_collected_scan(x.ki);
     }
     
-    /*
-    template<typename Key, typename T, typename H, typename U, typename F>
-    WaitableMap<Key, T, H> parallel_rebuild(const WaitableMap<Key, T, H>& w,
-                                         const ConcurrentMap<Key, U>& value_modifications,
-                                         F&& action_for_key) {
-        return WaitableMap<Key, T, H>{
-            parallel_rebuild(w.inner,
-                             value_modifications,
-                             std::forward<F>(action_for_key))
-        };
-    }
-
-    template<typename Key, typename T, typename H, typename U, typename F>
-    Coroutine::Future<WaitableMap<Key, T, H>>
-    coroutine_parallel_rebuild(const WaitableMap<Key, T, H>& w,
-                               const ConcurrentMap<Key, U>& value_modifications,
-                               F&& action_for_key) {
-        co_return WaitableMap<Key, T, H>{
-            co_await coroutine_parallel_rebuild(w.inner,
-                                                value_modifications,
-                                                std::forward<F>(action_for_key))
-        };
-    }
-     */
-    
     template<typename Key, typename T, typename H, typename U, typename F>
     Coroutine::Future<WaitableMap<Key, T, H>>
     coroutine_parallel_rebuild2(const WaitableMap<Key, T, H>& source,

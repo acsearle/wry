@@ -7,10 +7,6 @@
    <FileRef
       location = "group:README.md">
    </FileRef>
-   <FileSystemSynchronizedGroup
-      location = "group:attic"
-      name = "attic">
-   </FileSystemSynchronizedGroup>
    <Group
       location = "group:docs"
       name = "docs">
