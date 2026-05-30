@@ -20,13 +20,6 @@ namespace wry {
         // TODO: We are bloating WaitableMap by allocating a waitset pointer
         // for every entry even though they will be rare
 
-        /*
-        PersistentMap<Key, T> valuemap;
-        PersistentMap<Key, PersistentSet<EntityID>> waitset;
-         */
-        // PersistentMap<Key, std::pair<T, PersistentSet<EntityID>>, H> inner;
-        // PersistentSet<std::pair<Key, EntityID>>
-        
         PersistentMap<Key, T> kv;
         PersistentSet<std::pair<Key, EntityID>> ki;
         
@@ -37,42 +30,6 @@ namespace wry {
         void set(Key key, T desired) {
             kv.set(key, std::move(desired));
         }
-        
-        /*
-        void try_get(Key key, std::pair<std::optional<T>, std::optional<PersistentSet<EntityID>>>& victim) const {
-            T a;
-            if (valuemap.try_get(key, a)) {
-                victim.first = a;
-            } else {
-                victim.first.reset();
-            }
-            PersistentSet<EntityID> b;
-            if (waitset.try_get(key, b)) {
-                victim.second = b;
-            } else {
-                victim.second.reset();
-            }
-        }
-        
-        void set(Key key, std::pair<std::optional<T>, std::optional<PersistentSet<EntityID>>>& desired) {
-            if (desired.first) {
-                valuemap.set(key, *(desired.first));
-            } else {
-                T victim{};
-                if (valuemap.try_erase(key, victim)) {
-                    desired.first = victim;
-                }
-            }
-            if (desired.second) {
-                waitset.set(key, *(desired.second));
-            } else {
-                PersistentSet<EntityID> victim{};
-                if (waitset.try_erase(key, victim)) {
-                    desired.second = victim;
-                }
-            }
-        }
-         */
         
     };
     
@@ -130,7 +87,6 @@ namespace wry {
         co_return result;
     }
 
-    
-}
+} // namespace wry
 
 #endif /* waitable_map_hpp */

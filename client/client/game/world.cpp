@@ -18,7 +18,8 @@ namespace wry {
         garbage_collected_scan(_waiting_on_time);
         
     } // World::_garbage_collected_scan
-    
+
+    /*
     template<typename Key, typename H>
     struct AwaitablePersistentSet {
         PersistentSet<Key, H> _inner;
@@ -28,7 +29,8 @@ namespace wry {
             _inner.set(key);
         }
     };
-            
+     */
+
     Coroutine::Future<Root<World*>> World::step() const {
         
         TransactionContext context{._world = this};

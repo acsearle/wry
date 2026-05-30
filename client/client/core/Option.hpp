@@ -394,19 +394,4 @@ namespace rust::option {
     
 } // namespace rust
 
-namespace wry {
-    
-    /*
-    template<typename T>
-    struct Option {
-        enum struct Tag {
-            NONE = 0,
-            SOME = 1,
-        };
-        Tag tag;
-    };
-     */
-    
-} // namespace wry
-
 #endif /* Option_hpp */
