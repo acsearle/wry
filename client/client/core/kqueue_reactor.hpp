@@ -26,8 +26,10 @@
 namespace wry {
     
     void global_reactor_cancel();
+    bool global_reactor_kevent64_change(kevent64_s const* changelist, int nchanges);
+
     void global_reactor_service();
-    
+
     // We use a dedicated thread waiting on a platform-specific mechanism for
     // asynchronous event handling, notably IO, and run the callback run on
     // that thread, trusting it to return promptly.
@@ -38,9 +40,7 @@ namespace wry {
     // Fallback : select
     
     // kqueue
-    
-    bool global_reactor_kevent64_change(kevent64_s*, int);
-        
+
     template<typename Receiver>
     struct _kevent64_operation {
         void (*_callback)(kevent64_s);
@@ -93,9 +93,6 @@ namespace wry {
                 return event.data;
             });
     }
-    
-    
-    
 
 } // namespace wry
 

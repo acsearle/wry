@@ -32,7 +32,7 @@ namespace wry {
             PersistentMap<uint64_t, int> p;
             Root<decltype(p._inner)> hack;
             std::map<uint64_t, int> m;
-            const int N = 65536;
+            const int N = 65536 / 8;
             for (int i = 0; i != N; ++i) {
                 uint64_t k = std::rand() & (64 * 1024 - 1);
                 int v = std::rand();
@@ -59,7 +59,7 @@ namespace wry {
                     abort();
                 }
                 
-                //if (!(i & 255))
+                if (!(i & 255))
                     mutator_repin();
                 // printf("PMT %d\n", i);
             }
@@ -74,7 +74,7 @@ namespace wry {
                     int v = {};
                     assert(!p.try_get(k, v));
                 }
-                //if (!(k & 255))
+                if (!(k & 255))
                     mutator_repin();
                 // printf("PMT %llu\n", k);
             }

@@ -58,6 +58,10 @@
             argument = "--test-only"
             isEnabled = "NO">
          </CommandLineArgument>
+         <CommandLineArgument
+            argument = "PersistentMap"
+            isEnabled = "NO">
+         </CommandLineArgument>
       </CommandLineArguments>
    </LaunchAction>
    <ProfileAction

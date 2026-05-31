@@ -146,7 +146,7 @@ namespace wry {
         };
         
         auto just(auto&&... args) {
-            return _just_sender<decltype(args)...>{{FWD(args)...}};
+            return _just_sender<decltype(args)...>{{FORWARD(args)...}};
         }
         
         
@@ -155,7 +155,7 @@ namespace wry {
         struct _then_receiver : Receiver {
             Invocable _invocable;
             void set_value(auto&&... args) && {
-                std::move(*(Receiver*)this).set_value(std::move(_invocable)(FWD(args)...));
+                std::move(*(Receiver*)this).set_value(std::move(_invocable)(FORWARD(args)...));
             }
         };
         

@@ -175,7 +175,7 @@ namespace wry {
         
         inline auto translate(float2 xy) {
             return [xy](auto&& f) {
-                return [xy, f=FWD(f)](float2 xy_) {
+                return [xy, f=FORWARD(f)](float2 xy_) {
                     return f(xy_ + xy);
                 };
             };
@@ -213,7 +213,7 @@ namespace wry {
         }
 
         inline auto negate_(auto&& f) {
-            return [f=FWD(f)](float2 xy) {
+            return [f=FORWARD(f)](float2 xy) {
                 return -xy;
             };
         }
