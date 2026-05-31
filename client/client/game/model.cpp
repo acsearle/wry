@@ -112,10 +112,4 @@ namespace wry {
         
     }
 
-    void model::shade_roots() {
-        garbage_collected_shade(_holding_value);
-        // garbage_collected_shade(_worlds);
-    }
-    
-    
 } // namespace wry

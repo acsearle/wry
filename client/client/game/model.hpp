@@ -232,8 +232,6 @@ namespace wry {
             _log_overlay.append(v, endurance);
         }
         
-        void shade_roots();
-                
     };
     
 } // namespace wry

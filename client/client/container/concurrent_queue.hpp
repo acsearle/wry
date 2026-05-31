@@ -149,8 +149,8 @@ namespace wry {
         
         struct Node : GarbageCollected {
             
-            Atomic<Node*> _next{nullptr};
-            
+            GarbageCollectedSlot<Node*> _next{nullptr};
+
             // The garbage collector scans the payload concurrently with pop,
             // so it has to be constant
             T const _payload{};
@@ -167,8 +167,8 @@ namespace wry {
             
         };
         
-        alignas(64) Atomic<Node*> _head;
-        alignas(64) Atomic<Node*> _tail;
+        alignas(64) GarbageCollectedSlot<Node*> _head;
+        alignas(64) GarbageCollectedSlot<Node*> _tail;
         
         explicit ObstructionFreeQueue(Node* sentinel)
         : _head(sentinel)
@@ -184,16 +184,15 @@ namespace wry {
                 if (!c) {
                     // _tail is up to date, race to install the next node
                     if (b->_next.compare_exchange_strong_release_acquire(c, a)) {
-                        // race to advance the tail
-                        if (_tail.compare_exchange_weak_release_relaxed(b, a)) {
-                            garbage_collected_shade(b);
-                        }
+                        // race to advance the tail; the slot shades the
+                        // displaced node
+                        (void) _tail.compare_exchange_weak_release_relaxed(b, a);
                         return;
                     }
                 } else {
-                    // race to advance the tail
+                    // race to advance the tail; the slot shades the displaced
+                    // node
                     if (_tail.compare_exchange_strong_release_acquire(b, c)) {
-                        garbage_collected_shade(b);
                         b = c;
                     }
                 }
@@ -209,7 +208,7 @@ namespace wry {
                     return false;
                 // race to advance head
                 if (_head.compare_exchange_strong_release_acquire(a, b)) {
-                    garbage_collected_shade(a);
+                    // the slot shades the displaced (retired) head node
                     // We did advance head and thus claim the payload of the new
                     // head node.
                     item = b->_payload;

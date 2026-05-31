@@ -1178,7 +1178,6 @@
     using namespace ::wry;
 
     // Service the garbage collector
-    _model->shade_roots();
     wry::mutator_repin();
 
     // Advance the world state
@@ -1193,7 +1192,6 @@
         nursery.soon(new_world, old_world->step());
         sync_wait(nursery.join());
         _model->_worlds.emplace_back(new_world);
-        // _model->shade_roots();
     }
     assert(new_world);
 
