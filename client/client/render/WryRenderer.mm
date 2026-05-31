@@ -1370,9 +1370,9 @@
                 
                 // now make the stack
                 location.z += 0.8;
-                for (int i = (int) p->_stack.size(); i--;) {
+                for (int i = (int) wry::PersistentStack<wry::Value>::size(p->_stack); i--;) {
                     location.z += 0.5;
-                    wry::Value value = p->_stack[i];
+                    wry::Value value = wry::PersistentStack<wry::Value>::at(p->_stack, i);
                     simd_float4 coordinate;
                     if (value.is_opcode()) {
                         coordinate = _opcode_to_coordinate[value.as_opcode()];

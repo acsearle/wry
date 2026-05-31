@@ -13,153 +13,108 @@
 #include "utility.hpp"
 
 namespace wry {
-    
-    // Persistent stack implemented with a classic functional cons list
+
+    // Persistent stack: a classic functional cons list.
+    //
+    // There is no wrapper object -- a stack IS a (possibly null) pointer to
+    // its top node, owned by the caller.  The caller stores that pointer
+    // however its lifetime demands:
+    //
+    //   - a plain `PersistentStack<T> const*` local, while building a
+    //     logically-immutable object that has not yet been published to the
+    //     collector (no write barrier needed; the collector cannot have
+    //     observed the displaced edge);
+    //   - a `GarbageCollectedSlot<PersistentStack<T> const*>` field inside a
+    //     live garbage-collected object (the slot barriers each overwrite);
+    //   - a `Root<PersistentStack<T> const*>` on a stack or coroutine frame.
+    //
+    // The operations are static methods that never mutate a node; they only
+    // build new nodes and return a new top pointer.  Because the node is
+    // reached through a pointer-to-const, immutability is enforced by the
+    // type rather than by convention.  Scanning is the ordinary
+    // GarbageCollected base behaviour; shading, if any, belongs to whichever
+    // slot the caller stores the top pointer in.
 
     template<typename T>
-    struct PersistentStack {
-        
-        struct Node : GarbageCollected {
-            
-            virtual void _garbage_collected_debug() const override {
-                printf("%s\n", __PRETTY_FUNCTION__);
-            }
+    struct PersistentStack : GarbageCollected {
 
-            
-            Node const* _Nullable _next;
-            T _payload;
-            
-            explicit
-            Node(Node const* _Nullable next, auto&&... args)
-            : _next{next}
-            , _payload{FORWARD(args)...} {
-            }
-            
-            virtual void _garbage_collected_scan() const override {
-                using wry::garbage_collected_scan;
-                garbage_collected_scan(_next);
-                garbage_collected_scan(_payload);
-            }
-            
-        };
-                
-        Node const* _Nullable _head = nullptr;
-        
-        PersistentStack() = default;
-        PersistentStack(PersistentStack const& other) = default;
-        PersistentStack& operator=(PersistentStack const& other) = default;
+        PersistentStack const* _Nullable _next;
+        T _payload;
 
-        // Wrap an existing (possibly null) node chain.  The functional methods
-        // below use this to build a new handle over shared nodes.
-        explicit PersistentStack(Node const* _Nullable head) : _head{head} {}
-
-        [[nodiscard]] auto
-        tail() const -> PersistentStack {
-            assert(_head);
-            return PersistentStack{_head->_next};
+        explicit
+        PersistentStack(PersistentStack const* _Nullable next, auto&&... args)
+        : _next{next}
+        , _payload{FORWARD(args)...} {
         }
 
-//        [[nodiscard]] auto
-//        pop() const -> std::pair<T, PersistentStack> {
-//            assert(_head);
-//            return { _head->_payload, PersistentStack{_head->_next} };
-//        }
-//        
-//        [[nodiscard]] auto
-//        pop_else(T alternative) const -> std::pair<T, PersistentStack> {
-//            return _head ? pop() : std::pair<T, PersistentStack>{ alternative, PersistentStack{} };
-//        }
-        
-        auto
-        pop() -> T {
-            assert(_head);
-            return std::exchange(_head, _head->_next)->_payload;
-        }
-        
-        auto pop_else(T alternative) -> T {
-            return _head ? pop() : alternative;
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
         }
 
-        
-//        [[nodiscard]] auto
-//        push(auto&& desired) const -> PersistentStack {
-//            return PersistentStack{new Node(_head, FWD(desired))};
-//        }
-        
-        auto
-        push(auto&& desired) -> void {
-            _head = new Node(_head, FORWARD(desired));
+        virtual void _garbage_collected_scan() const override {
+            using wry::garbage_collected_scan;
+            garbage_collected_scan(_next);
+            garbage_collected_scan(_payload);
         }
-                        
-        [[nodiscard]] auto
-        peek() const -> T {
-            assert(_head);
-            return _head->_payload;
-        }
-        
-        [[nodiscard]] auto
-        peek_else(T alternative) const {
-            return _head ? peek() : alternative;
-        }
-        
-        [[nodiscard]] auto
-        is_empty() const -> bool {
-            return !_head;
-        }
-        
-        [[nodiscard]] auto
-        emplace(auto&&... args) const -> PersistentStack {
-            return PersistentStack{new Node(_head, FORWARD(args)...)};
-        }
-        
+
+        // Push a value, returning the new top.
         [[nodiscard]] static auto
-        singleton(auto&&... args) -> PersistentStack {
-            return PersistentStack{ new Node(nullptr, FORWARD(args)...) };
+        push(PersistentStack const* _Nullable top, auto&&... args) -> PersistentStack const* _Nonnull {
+            return new PersistentStack(top, FORWARD(args)...);
         }
-        
-        [[nodiscard]] auto
-        drop(size_t n) const -> PersistentStack {
-            auto a = _head;
-            for (;;) {
-                if (!a || !n)
-                    return PersistentStack{a};
+
+        // The stack below the top.  Precondition: non-empty.
+        [[nodiscard]] static auto
+        tail(PersistentStack const* _Nonnull top) -> PersistentStack const* _Nullable {
+            assert(top);
+            return top->_next;
+        }
+
+        // The top value.  Precondition: non-empty.
+        [[nodiscard]] static auto
+        peek(PersistentStack const* _Nonnull top) -> T {
+            assert(top);
+            return top->_payload;
+        }
+
+        [[nodiscard]] static auto
+        is_empty(PersistentStack const* _Nullable top) -> bool {
+            return !top;
+        }
+
+        // Drop up to n leading elements.
+        [[nodiscard]] static auto
+        drop(PersistentStack const* _Nullable top, size_t n) -> PersistentStack const* _Nullable {
+            while (top && n) {
+                top = top->_next;
                 --n;
-                a = a->_next;                
             }
+            return top;
         }
-        
-        // some gross debugging methods
-        
-        size_t size() const {
+
+        static auto
+        size(PersistentStack const* _Nullable top) -> size_t {
             size_t n = 0;
-            Node const* p = _head;
-            while (p) {
+            for (; top; top = top->_next)
                 ++n;
-                p = p->_next;
-            }
             return n;
         }
-        
-        T operator[](ptrdiff_t i) const {
+
+        // Indexed access from the top outward.  Debugging convenience.
+        [[nodiscard]] static auto
+        at(PersistentStack const* _Nonnull top, ptrdiff_t i) -> T {
             assert(i >= 0);
-            Node const* p = _head;
             while (i) {
-                assert(p);
-                p = p->_next;
+                assert(top);
+                top = top->_next;
                 --i;
             }
-            assert(p);
-            return p->_payload;
+            assert(top);
+            return top->_payload;
         }
-                
-    };
-    
-    template<typename T>
-    void garbage_collected_scan(PersistentStack<T> const& x) {
-        garbage_collected_scan(x._head);
-    }
-    
-} // namespace wry
 
+    };
+
+} // namespace wry
 
 #endif /* persistent_stack_hpp */

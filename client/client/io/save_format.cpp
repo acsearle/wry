@@ -13,7 +13,7 @@
 //    - array_mapped_trie::Node<EntityID, uint64_t>       // entity-id-for-coordinate map leaves
 //    - array_mapped_trie::Node<const Entity*, uint64_t>  // entity-for-entity-id map leaves
 //    - array_mapped_trie::Node<int, uint64_t>            // PersistentSet payload-less node
-//    - PersistentStack<Value>::Node                      // machine stack cells
+//    - PersistentStack<Value>                      // machine stack cells
 //
 //  Other AMT instantiations needed by World (e.g. for the pair<Time,EntityID>
 //  set inside PersistentSet) are listed in the registry; their emit/load
@@ -81,8 +81,8 @@ namespace wry {
     template<> struct save_type_traits<HeapInt64> { static constexpr uint64_t value = HeapInt64::SAVE_TYPE_TAG; };
     template<> struct save_type_traits<HeapString>{ static constexpr uint64_t value = HeapString::SAVE_TYPE_TAG; };
 
-    template<> struct save_type_traits<PersistentStack<Value>::Node> {
-        static constexpr uint64_t value = save_type_tag_fnv1a("wry::PersistentStack<Value>::Node");
+    template<> struct save_type_traits<PersistentStack<Value>> {
+        static constexpr uint64_t value = save_type_tag_fnv1a("wry::PersistentStack<Value>");
     };
 
     // Leaf traits for primitive value types that appear as T in AMT Nodes.
@@ -184,9 +184,9 @@ namespace wry {
     // grouped with the other polymorphic save bodies).  Forward decls
     // for AMT Node bodies are below.
 
-    // PersistentStack<Value>::Node
-    static void emit_body(const PersistentStack<Value>::Node* n, Saver& s) {
-        SaveRef next_ref = s.visit<PersistentStack<Value>::Node>(n->_next);
+    // PersistentStack<Value>
+    static void emit_body(const PersistentStack<Value>* n, Saver& s) {
+        SaveRef next_ref = s.visit<PersistentStack<Value>>(n->_next);
         uint64_t payload = encode_value(n->_payload, s);
         s.write_ref(next_ref);
         s.write_u64(payload);
@@ -288,7 +288,7 @@ namespace wry {
 
     void Machine::_save_body(Saver& s) const {
         // Visit stack first (post-order).
-        SaveRef stack_head_ref = s.visit<PersistentStack<Value>::Node>(_stack._head);
+        SaveRef stack_head_ref = s.visit<PersistentStack<Value>>(_stack);
 
         s.write_u64(_entity_id.data);
         s.write_u32((uint32_t)_phase);
@@ -375,7 +375,7 @@ namespace wry {
         m->_new_location = L.read_pod<Coordinate>();
         m->_old_time = (Time)L.read_u64();
         m->_new_time = (Time)L.read_u64();
-        m->_stack._head = (PersistentStack<Value>::Node*)L._ptrs[stack_ref];
+        m->_stack = (PersistentStack<Value>*)L._ptrs[stack_ref];
     }
 
     static void load_into_heap_int64(Loader& L, SaveRef id) {
@@ -397,9 +397,9 @@ namespace wry {
         uint64_t payload = L.read_u64();
         // Allocate via the GC operator new.  We can't use the existing
         // constructor (which forwards args); poke fields directly.
-        auto* n = new PersistentStack<Value>::Node(nullptr);
+        auto* n = new PersistentStack<Value>(nullptr);
         L._ptrs[id] = n;
-        n->_next = (PersistentStack<Value>::Node*)L._ptrs[next_ref];
+        n->_next = (PersistentStack<Value>*)L._ptrs[next_ref];
         n->_payload = decode_value(payload, L);
     }
 
@@ -470,7 +470,7 @@ namespace wry {
         { save_type_tag_v<Machine>,                                          "wry::Machine",                        &load_into_machine },
         { save_type_tag_v<HeapInt64>,                                        "wry::HeapInt64",                      &load_into_heap_int64 },
         { save_type_tag_v<HeapString>,                                       "wry::HeapString",                     &load_into_heap_string },
-        { save_type_tag_v<PersistentStack<Value>::Node>,                     "wry::PersistentStack<Value>::Node",   &load_into_persistent_stack_node },
+        { save_type_tag_v<PersistentStack<Value>>,                     "wry::PersistentStack<Value>",   &load_into_persistent_stack_node },
         { save_type_tag_v<NodeValue_U64>,                                    "Node<Value,u64>",                     &load_into_amt_node_value_u64 },
         { save_type_tag_v<NodeEntityID_U64>,                                 "Node<EntityID,u64>",                  &load_into_amt_node_entity_id_u64 },
         { save_type_tag_v<NodeEntityPtr_U64>,                                "Node<Entity*,u64>",                   &load_into_amt_node_entity_ptr_u64 },

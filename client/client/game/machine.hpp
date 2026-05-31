@@ -38,7 +38,7 @@ namespace wry {
         
         i64 _on_arrival = OPCODE_NOOP;
         
-        PersistentStack<Value> _stack;
+        PersistentStack<Value> const* _stack = nullptr;
         
 
         // The _old_* and _new_* states represent the beginning and end states
@@ -57,15 +57,21 @@ namespace wry {
         
         void push(Value x) {
             if (!value_is_null(x))
-                _stack.push(x);
+                _stack = PersistentStack<Value>::push(_stack, x);
         }
-        
+
         Value pop() {
-            return _stack.pop_else(Value{});
+            if (PersistentStack<Value>::is_empty(_stack))
+                return Value{};
+            Value result = PersistentStack<Value>::peek(_stack);
+            _stack = PersistentStack<Value>::tail(_stack);
+            return result;
         }
-        
+
         Value peek() const {
-            return _stack.peek_else(Value{});
+            return PersistentStack<Value>::is_empty(_stack)
+                ? Value{}
+                : PersistentStack<Value>::peek(_stack);
         }
         
         std::pair<Value, Value> pop2() {
@@ -76,18 +82,18 @@ namespace wry {
         
         std::pair<Value, Value> peek2() const {
             std::pair<Value, Value> result = {};
-            if (_stack._head) {
-                result.second = _stack._head->_payload;
-                if (_stack._head->_next)
-                    result.first = _stack._head->_next->_payload;
+            if (_stack) {
+                result.second = _stack->_payload;
+                if (_stack->_next)
+                    result.first = _stack->_next->_payload;
             }
             return result;
         }
-        
+
         void pop2push1(Value x) {
-            _stack.pop();
-            _stack.pop();
-            _stack.push(x);
+            _stack = PersistentStack<Value>::tail(_stack);
+            _stack = PersistentStack<Value>::tail(_stack);
+            _stack = PersistentStack<Value>::push(_stack, x);
         }
         
         virtual void notify(TransactionContext* context) const override;
