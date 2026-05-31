@@ -113,12 +113,7 @@ namespace wry {
     void garbage_collected_scan(const PersistentMap<Key, T, H>& x) {
         garbage_collected_scan(x._inner);
     }
-    
-    template<typename Key, typename T, typename H>
-    void garbage_collected_shade(const PersistentMap<Key, T, H>& x) {
-        garbage_collected_shade(x._inner);
-    }
-    
+        
     template<typename T>
     struct ParallelRebuildAction {
         enum {

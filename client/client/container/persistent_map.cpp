@@ -30,8 +30,9 @@ namespace wry {
         // stress test
         {
             PersistentMap<uint64_t, int> p;
+            Root<decltype(p._inner)> hack;
             std::map<uint64_t, int> m;
-            const int N = 65536 / 8;
+            const int N = 65536;
             for (int i = 0; i != N; ++i) {
                 uint64_t k = std::rand() & (64 * 1024 - 1);
                 int v = std::rand();
@@ -39,40 +40,41 @@ namespace wry {
                 uint64_t h = std::rand() & (64 * 1024 - 1);
                 m.erase(h);
                 int _ = {};
-                garbage_collected_shade(p);
                 (void) p.try_erase(h, _);
-                                
+                hack = p._inner;
+
                 m.insert_or_assign(k, v);
-                garbage_collected_shade(p);
                 p.set(k, v);
-                
+                hack = p._inner;
+
                 
                 int u = {};
                 if (!p.try_get(k, u)) {
                     printf("expected to find {%llx, %x}\n", k, v);
                     abort();
                 }
+                hack = p._inner;
                 if (u != v) {
                     printf("expected to find {%llx, %x}, found {%llx, %x}\n", k, v, k, u);
                     abort();
                 }
                 
-                if (!(i & 255))
+                //if (!(i & 255))
                     mutator_repin();
                 // printf("PMT %d\n", i);
             }
             for (uint64_t k = 0; k != N; ++k) {
-                garbage_collected_shade(p);
                 if (m.count(k)) {
                     int v = {};
                     bool result = p.try_get(k, v);
+                    hack = p._inner;
                     assert(result);
                     assert(v == m[k]);
                 } else {
                     int v = {};
                     assert(!p.try_get(k, v));
                 }
-                if (!(k & 255))
+                //if (!(k & 255))
                     mutator_repin();
                 // printf("PMT %llu\n", k);
             }
