@@ -49,6 +49,10 @@ namespace wry {
         PersistentStack(PersistentStack const& other) = default;
         PersistentStack& operator=(PersistentStack const& other) = default;
 
+        // Wrap an existing (possibly null) node chain.  The functional methods
+        // below use this to build a new handle over shared nodes.
+        explicit PersistentStack(Node const* _Nullable head) : _head{head} {}
+
         [[nodiscard]] auto
         tail() const -> PersistentStack {
             assert(_head);
@@ -105,12 +109,12 @@ namespace wry {
         
         [[nodiscard]] auto
         emplace(auto&&... args) const -> PersistentStack {
-            return PersistentStack{new Node(_head, FWD(args)...)};
+            return PersistentStack{new Node(_head, FORWARD(args)...)};
         }
         
         [[nodiscard]] static auto
         singleton(auto&&... args) -> PersistentStack {
-            return PersistentStack{ new Node(nullptr, FWD(args)...) };
+            return PersistentStack{ new Node(nullptr, FORWARD(args)...) };
         }
         
         [[nodiscard]] auto
@@ -137,6 +141,7 @@ namespace wry {
         }
         
         T operator[](ptrdiff_t i) const {
+            assert(i >= 0);
             Node const* p = _head;
             while (i) {
                 assert(p);
