@@ -19,7 +19,7 @@ namespace wry {
     define_test("skiplist") {
                    
         {
-            ConcurrentSkiplistSet<int> a;
+            ConcurrentSkiplistSet<int, DefaultKeyService<int>, EpochDiscipline> a;
             std::set<int> b;
             
             int N = 1 << 7;
@@ -41,7 +41,7 @@ namespace wry {
         {
             
             
-            ConcurrentSkiplistMap<int, int> a;
+            ConcurrentSkiplistMap<int, int, DefaultKeyService<int>, EpochDiscipline> a;
             std::map<int, int> b;
             
             int N = 1 << 7;

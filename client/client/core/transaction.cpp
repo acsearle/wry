@@ -50,7 +50,7 @@ namespace wry {
 
     template<typename Key, typename T>
     void transaction_verb_generic(Transaction* self,
-                                   ConcurrentMap<Key, Atomic<const Transaction::Node*>>* map,
+                                   ConcurrentMap<Key, Atomic<const Transaction::Node*>, DefaultKeyService<Key>, EpochDiscipline>* map,
                                    Key key,
                                    T desired,
                                    int operation) {

@@ -48,26 +48,18 @@ namespace wry {
         return x;
     }
     
-    template<typename Key, typename Compare = DefaultKeyService<Key>, typename IntrusiveAllocator = EpochAllocated>
+    template<typename Key, typename Compare, typename Discipline>
     struct ConcurrentSkiplistSet {
 
         struct Node;
 
-        // The slot type for in-skiplist edges to Nodes.  We dispatch on
-        // IntrusiveAllocator (complete at this point) rather than going
-        // through Slot<Node*> (which would invoke slot_for<Node*> and need
-        // Node complete — Node is mid-definition where _next[] is
-        // declared).  AtomicScanSlot's class body must be parsable
-        // even with Node forward-only, which is why its static_assert
-        // lives in the ctor.
-        using NextSlot = std::conditional_t<
-            std::is_base_of_v<GarbageCollected, IntrusiveAllocator>,
-            AtomicScanSlot<Node*>,
-            Atomic<Node*>
-        >;
+        using IntrusiveAllocator = Discipline::IntrusiveAllocator;
+
+        template<typename T> using Slot = Discipline::template Slot<T>;
+        template<typename T> using AtomicSlot = Discipline::template AtomicSlot<T>;
 
         struct Node : IntrusiveAllocator {
-            
+
             // Local placement-new: GarbageCollected's `operator new(size_t)`
             // would otherwise hide the global placement form via class-scope
             // name lookup, breaking `new(raw) Node` inside `with_size_emplace()`.
@@ -77,19 +69,19 @@ namespace wry {
             
             Key _key;
             size_t _size;
-            NextSlot _next[] __counted_by(_size);
+            AtomicSlot<Node* _Nullable> _next[] __counted_by(_size);
 
             explicit Node(size_t n, auto&&... args)
-            : IntrusiveAllocator()
+            : Discipline::IntrusiveAllocator()
             , _key(FORWARD(args)...)
             , _size(n) {
             }
 
             static Node* _Nonnull with_size_emplace(size_t n, auto&&... args) {
-                size_t number_of_bytes = sizeof(Node) + sizeof(NextSlot) * n;
+                size_t number_of_bytes = sizeof(Node) + sizeof(*_next) * n;
                 // Not checked; we accept crashing on OOM.
-                void* _Nonnull raw = IntrusiveAllocator::operator new(number_of_bytes,
-                                                                      std::align_val_t{alignof(Node)});
+                void* _Nonnull raw = Discipline::IntrusiveAllocator::operator new(number_of_bytes,
+                                                                                  std::align_val_t{alignof(Node)});
                 std::memset(raw, 0, number_of_bytes);
                 return new(raw) Node(n, FORWARD(args)...);
             }
@@ -163,8 +155,8 @@ namespace wry {
         }; // struct iterator
         
         
-        struct Head : IntrusiveAllocator {
-            
+        struct Head : Discipline::IntrusiveAllocator {
+
             static constexpr size_t HEAD_LEVELS = 64;
             
             // Local placement-new: GarbageCollected's `operator new(size_t)`
@@ -176,16 +168,16 @@ namespace wry {
 
             Compare _compare;
             Atomic<size_t> _top;
-            NextSlot _next[] __counted_by(HEAD_LEVELS);
-            
+            Discipline::template AtomicSlot<Node* _Nullable> _next[] __counted_by(HEAD_LEVELS);
+
             explicit Head(Compare comp) : _compare(std::move(comp)), _top(1) {}
 
             static Head* _Nonnull make(Compare comp) {
                 size_t n = HEAD_LEVELS;
-                size_t number_of_bytes = sizeof(Head) + sizeof(NextSlot) * n;
+                size_t number_of_bytes = sizeof(Head) + sizeof(*_next) * n;
                 // Not checked; we accept crashing on OOM.
-                void* _Nonnull raw = IntrusiveAllocator::operator new(number_of_bytes,
-                                                                  std::align_val_t{alignof(Head)});
+                void* _Nonnull raw = Discipline::IntrusiveAllocator::operator new(number_of_bytes,
+                                                                                  std::align_val_t{alignof(Head)});
                 std::memset(raw, 0, number_of_bytes);
                 return new(raw) Head(std::move(comp));
             }
@@ -218,12 +210,12 @@ namespace wry {
             find(const Query& query) const;
             
             [[nodiscard]] std::pair<Node* _Nullable, bool>
-            _link_level(size_t i, NextSlot* _Nonnull left, Node* _Nullable expected, Node* _Nonnull desired);
+            _link_level(size_t i, AtomicSlot<Node* _Nullable>* _Nonnull left, Node* _Nullable expected, Node* _Nonnull desired);
 
             template<typename Keylike, typename... Args>
             std::pair<Node* _Nullable, bool>
-            _try_emplace(size_t i, NextSlot* _Nonnull left, Keylike&& keylike, Args&&... args);
-            
+            _try_emplace(size_t i, AtomicSlot<Node* _Nullable>* _Nonnull left, Keylike&& keylike, Args&&... args);
+
             template<typename Keylike, typename... Args>
             std::pair<iterator, bool>
             try_emplace(Keylike&& keylike, Args&&... args);
@@ -241,7 +233,7 @@ namespace wry {
         // arrays have the same element type, so the cursor is unaware
         // which kind of object it currently sits in.
         struct FrozenCursor {
-            NextSlot const* _Nullable _next;
+            AtomicSlot<Node* _Nullable> const* _Nullable _next;
             size_t _level;
 
             bool bottom() const {
@@ -318,17 +310,17 @@ namespace wry {
     }; // ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>
 
     
-    template<typename Key, typename Compare, typename IntrusiveAllocator>
+    template<typename Key, typename Compare, typename Discipline>
     template<typename Query>
-    [[nodiscard]] ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::iterator
-    ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::Head
+    [[nodiscard]] ConcurrentSkiplistSet<Key, Compare, Discipline>::iterator
+    ConcurrentSkiplistSet<Key, Compare, Discipline>::Head
     ::find(Query const& query) const
     {
         size_t i = _top.load_relaxed() - 1;
         assert((i + 1) > 0);
-        NextSlot const* _Nonnull left = _next + i;
+        auto left = _next + i;
         for (;;) {
-            Node* candidate = left->load_acquire();
+            Node* _Nullable candidate = left->load_acquire();
             if (!candidate || _compare(query, candidate->_key)) {
                 if (i == 0)
                     return iterator{nullptr};
@@ -342,11 +334,13 @@ namespace wry {
         }
     }
     
-    template<typename Key, typename Compare, typename IntrusiveAllocator>
-    [[nodiscard]] std::pair<typename ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::Node* _Nullable, bool>
-    ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::Head
-    ::_link_level(size_t i, NextSlot* _Nonnull left,
-                  Node* _Nullable expected, Node* _Nonnull desired)
+    template<typename Key, typename Compare, typename Discipline>
+    [[nodiscard]] std::pair<typename ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nullable, bool>
+    ConcurrentSkiplistSet<Key, Compare, Discipline>::Head
+    ::_link_level(size_t i,
+                  ConcurrentSkiplistSet<Key, Compare, Discipline>::template AtomicSlot<ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nullable>* _Nonnull left,
+                  ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nullable expected,
+                  ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nonnull desired)
     {
         // STYLE: GOTO considered helpful for concurrent code that
         // handles failure by restarting from an earlier step.
@@ -372,14 +366,17 @@ namespace wry {
         goto beta;
     }
     
-    template<typename Key, typename Compare, typename IntrusiveAllocator>
+    template<typename Key, typename Compare, typename Discipline>
     template<typename Keylike, typename... Args>
-    std::pair<typename ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::Node* _Nullable, bool>
-    ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::Head
+    std::pair<typename ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nullable, bool>
+    ConcurrentSkiplistSet<Key, Compare, Discipline>::Head
     ::_try_emplace(size_t i,
-                   NextSlot* _Nonnull left,
+                   ConcurrentSkiplistSet<Key, Compare, Discipline>::template AtomicSlot<
+                       ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nullable
+                   >* _Nonnull left,
                    Keylike&& keylike,
-                   Args&&... args) {
+                   Args&&... args)
+    {
     alpha:
         Node* _Nullable candidate = left->load_acquire();
         if (!candidate || std::as_const(_compare)(keylike, candidate->_key))
@@ -414,11 +411,12 @@ namespace wry {
     // For other concurrent map use, prefer a different primitive that can
     // delegate the decision of what ends up in the structure.
     // `java.util.concurrentConcurrentHashMap.compute` is an example
-    template<typename Key, typename Compare, typename IntrusiveAllocator>
+    template<typename Key, typename Compare, typename Discipline>
     template<typename Keylike, typename... Args>
-    std::pair<typename ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::iterator, bool>
-    ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>::Head
-    ::try_emplace(Keylike&& keylike, Args&&... args) {
+    std::pair<typename ConcurrentSkiplistSet<Key, Compare, Discipline>::iterator, bool>
+    ConcurrentSkiplistSet<Key, Compare, Discipline>::Head
+    ::try_emplace(Keylike&& keylike, Args&&... args)
+    {
         size_t i = _top.load_relaxed();
         assert(i > 0);
         auto result = _try_emplace(i - 1, _next + (i - 1), FORWARD(keylike), FORWARD(args)...);
@@ -443,9 +441,9 @@ namespace wry {
     //
     // GC mode: recurse into _head; the spine is then traced via the
     // virtual overrides on Head and each Node.
-    template<typename Key, typename H, typename Allocator>
-    requires (std::is_base_of_v<GarbageCollected, Allocator>)
-    void garbage_collected_scan(ConcurrentSkiplistSet<Key, H, Allocator> const& self) {
+    template<typename Key, typename H, typename Discipline>
+    requires (std::is_base_of_v<GarbageCollected, typename Discipline::IntrusiveAllocator>)
+    void garbage_collected_scan(ConcurrentSkiplistSet<Key, H, Discipline> const& self) {
         garbage_collected_scan(self._head);
     }
 
@@ -453,9 +451,9 @@ namespace wry {
     // already be reachable to the collector via some independent path
     // (otherwise they'd already have been collected), so there's no need
     // to trace through the bump skiplist.
-    template<typename Key, typename H, typename Allocator>
-    requires (std::is_base_of_v<BumpAllocated, Allocator>)
-    void garbage_collected_scan(ConcurrentSkiplistSet<Key, H, Allocator> const&) {
+    template<typename Key, typename H, typename Discipline>
+    requires (std::is_base_of_v<BumpAllocated, typename Discipline::IntrusiveAllocator>)
+    void garbage_collected_scan(ConcurrentSkiplistSet<Key, H, Discipline> const&) {
         // no-op
     }
 
@@ -466,7 +464,7 @@ namespace wry {
     // existing element yet.  In general, it would require T to be atomic.
     
     
-    template<typename Key, typename T, typename H = DefaultKeyService<Key>>
+    template<typename Key, typename T, typename H, typename Discipline>
     struct ConcurrentSkiplistMap {
         
         using P = std::pair<Key, T>;
@@ -492,7 +490,7 @@ namespace wry {
             
         };
         
-        using S = ConcurrentSkiplistSet<P, ComparePair>;
+        using S = ConcurrentSkiplistSet<P, ComparePair, Discipline>;
         using iterator = S::iterator;
         
         S _set;

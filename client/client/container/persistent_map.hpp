@@ -129,9 +129,9 @@ namespace wry {
         T value;
     };
     
-    template<typename Key, typename T, typename H, typename D, typename U, typename F>
+    template<typename Key, typename T, typename H, typename D, typename U, typename F, typename S, typename D2>
     PersistentMap<Key, T, H, D> parallel_rebuild(const PersistentMap<Key, T, H, D>& source,
-                                           const ConcurrentMap<Key, U>& modifier,
+                                           const ConcurrentMap<Key, U, S, D2>& modifier,
                                            F&& action_for_key) {
         // Simple single-threaded implementation
         

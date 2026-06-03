@@ -168,10 +168,10 @@ namespace wry {
     
     
     
-    template<typename Key, typename H, typename Key2, typename U, typename F>
+    template<typename Key, typename H, typename Key2, typename U, typename F, typename S2, typename D2>
     Coroutine::Future<PersistentSet<Key, H>>
     coroutine_parallel_rebuild(const PersistentSet<Key, H>& source,
-                               const ConcurrentMap<Key2, U>& modifier,
+                               const ConcurrentMap<Key2, U, S2, D2>& modifier,
                                F&& action_for_key) {
         PersistentSet<Key, H> result{source};
         auto first = modifier.begin();

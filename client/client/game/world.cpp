@@ -49,7 +49,7 @@ namespace wry {
         PersistentSet<std::pair<Time, EntityID>> ready ;
         PersistentSet<std::pair<Time, EntityID>> new_waiting_on_time;
         std::tie(ready, new_waiting_on_time) = partition_first(_waiting_on_time, _time);
-        ConcurrentSkiplistSet<EntityID> next_ready;
+        ConcurrentSkiplistSet<EntityID, DefaultKeyService<EntityID>, EpochDiscipline> next_ready;
 
         // In parallel, notify each Entity.  Entities will typically examine
         // the World and may propose a Transaction to change it.

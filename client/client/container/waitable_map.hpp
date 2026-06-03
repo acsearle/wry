@@ -39,10 +39,10 @@ namespace wry {
         garbage_collected_scan(x.ki);
     }
     
-    template<typename Key, typename T, typename U, typename F>
+    template<typename Key, typename T, typename U, typename F, typename S2, typename D2>
     Coroutine::Future<WaitableMap<Key, T>>
     coroutine_parallel_rebuild2(const WaitableMap<Key, T>& source,
-                               const ConcurrentMap<Key, U>& modifier,
+                               const ConcurrentMap<Key, U, S2, D2>& modifier,
                                F&& action_for_key) {
         // Simple single-threaded implementation
         

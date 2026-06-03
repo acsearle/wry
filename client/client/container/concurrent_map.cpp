@@ -17,7 +17,7 @@ namespace wry::concurrent_map {
     define_test("ConcurrentMap") {
                         
         {
-            ConcurrentMap<int, int> a;
+            ConcurrentMap<int, int, DefaultKeyService<int>, EpochDiscipline> a;
             std::map<int, int> b;
         
             int N = 1000;

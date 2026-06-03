@@ -213,7 +213,7 @@ namespace wry {
         const World* _world = nullptr;
         
         template<typename Key>
-        using Map = ConcurrentMap<Key, Atomic<const Transaction::Node*>>;
+        using Map = ConcurrentMap<Key, Atomic<const Transaction::Node*>, DefaultKeyService<Key>, EpochDiscipline>;
         
         // "write" to a map-key is exclusive; at most one transaction will
         // COMMIT and write its value, all others will ABORT.
