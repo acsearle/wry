@@ -44,7 +44,8 @@ namespace wry {
         
         using U = typename H::hash_type;
 
-        using Slot = D::template Slot<ArrayMappedTrie<T, U> const*>;
+        using AMT = ArrayMappedTrie<T, U, std::uint32_t, 5, ScanDiscipline::InnerDiscipline>;
+        using Slot = D::template Slot<AMT const*>;
         Slot _inner{};
 
         // const ArrayMappedTrie<T, U>* _inner = nullptr;
@@ -66,7 +67,7 @@ namespace wry {
             return PersistentMap{Slot{
                 _inner
                 ? _inner->clone_and_insert_or_assign_key_value(j, value, _).first
-                : ArrayMappedTrie<T>::make_singleton(j, value)
+                : AMT::make_singleton(j, value)
             }};
         }
         

@@ -21,10 +21,11 @@ namespace wry {
 
     template<
     typename T,
-    typename Key = uint64_t,
-    typename Bitmap = uint32_t,
-    int SYMBOL_WIDTH = 5>
-    struct ArrayMappedTrie : GarbageCollected {
+    typename Key,
+    typename Bitmap,
+    int SYMBOL_WIDTH,
+    typename Discipline>
+    struct ArrayMappedTrie : Discipline::IntrusiveAllocator {
 
         static constexpr size_t KEY_WIDTH = sizeof(Key) * CHAR_BIT;
         static constexpr size_t BITMAP_WIDTH = sizeof(Bitmap) * CHAR_BIT;
@@ -149,12 +150,12 @@ namespace wry {
 
         virtual void _garbage_collected_debug() const override {
             printf("%s\n", __PRETTY_FUNCTION__);
-            printf("    _gray %04x\n", _gray.load_relaxed());
-            printf("    _black %04x\n", _black);
-            printf("    _count %u\n", _count.load_relaxed());
-            printf("    _debug_allocation_gray %04x\n", _debug_allocation_gray);
-            printf("    _debug_allocation_black %04x\n", _debug_allocation_black);
-            printf("    _debug_allocation_epoch %d\n", _debug_allocation_epoch);
+            printf("    _gray %04x\n", this->_gray.load_relaxed());
+            printf("    _black %04x\n", this->_black);
+            printf("    _count %u\n", this->_count.load_relaxed());
+            printf("    _debug_allocation_gray %04x\n", this->_debug_allocation_gray);
+            printf("    _debug_allocation_black %04x\n", this->_debug_allocation_black);
+            printf("    _debug_allocation_epoch %d\n", this->_debug_allocation_epoch);
         }
 
         virtual void _garbage_collected_scan() const override {
@@ -857,8 +858,8 @@ namespace wry {
 
     }; // ArrayMappedTrie
 
-    template<typename T>
-    void print(ArrayMappedTrie<T> const* _Nullable s) {
+    template<typename T, typename Key, typename Bitmap, int SYMBOL_WIDTH, typename Discipline>
+    void print(ArrayMappedTrie<T, Key, Bitmap, SYMBOL_WIDTH, Discipline> const* _Nullable s) {
         if (!s) {
             printf("nullptr\n");
         }

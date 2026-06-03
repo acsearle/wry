@@ -96,7 +96,7 @@ namespace wry {
     // AMT Node specializations.  Each (T, U) pair gets a structural tag from
     // the leaf-type traits above.
     template<typename T, typename U>
-    struct save_type_traits<ArrayMappedTrie<T, U>> {
+    struct save_type_traits<ArrayMappedTrie<T, U, std::uint32_t, 5, ScanDiscipline>> {
         static constexpr uint64_t value = save_type_tag_combine(
             save_type_tag_combine(
                 save_type_tag_fnv1a("wry::ArrayMappedTrie"),
@@ -197,8 +197,8 @@ namespace wry {
     // a referenced GC object).
 
     template<typename T, typename U, typename EmitLeaf>
-    static void emit_amt_body(const ArrayMappedTrie<T, U>* n, Saver& s, EmitLeaf&& emit_leaf) {
-        using N = ArrayMappedTrie<T, U>;
+    static void emit_amt_body(const ArrayMappedTrie<T, U, std::uint32_t, 5, ScanDiscipline>* n, Saver& s, EmitLeaf&& emit_leaf) {
+        using N = ArrayMappedTrie<T, U, std::uint32_t, 5, ScanDiscipline>;
         int count = __builtin_popcountg(n->_bitmap);
 
         if (n->has_children()) {
@@ -232,22 +232,22 @@ namespace wry {
     // AMT Node<Value, uint64_t>: leaf Values; OBJECT-tagged ones reference
     // HeapValues, which we visit and replace with SaveRefs inside the encoded
     // word.
-    static void emit_body(const ArrayMappedTrie<Value, uint64_t>* n, Saver& s) {
+    static void emit_body(const ArrayMappedTrie<Value, uint64_t, std::uint32_t, 5, ScanDiscipline>* n, Saver& s) {
         emit_amt_body(n, s, [&s](const Value& v) { return encode_value(v, s); });
     }
 
     // AMT Node<EntityID, uint64_t>: leaf values are 64-bit ids, no references.
-    static void emit_body(const ArrayMappedTrie<EntityID, uint64_t>* n, Saver& s) {
+    static void emit_body(const ArrayMappedTrie<EntityID, uint64_t, std::uint32_t, 5, ScanDiscipline>* n, Saver& s) {
         emit_amt_body(n, s, [](EntityID e) { return e.data; });
     }
 
     // AMT Node<const Entity*, uint64_t>: leaves are polymorphic Entity refs.
-    static void emit_body(const ArrayMappedTrie<const Entity*, uint64_t>* n, Saver& s) {
+    static void emit_body(const ArrayMappedTrie<const Entity*, uint64_t, std::uint32_t, 5, ScanDiscipline>* n, Saver& s) {
         emit_amt_body(n, s, [&s](const Entity* p) { return s.visit_entity(p); });
     }
 
     // AMT Node<int, __uint128_t>: PersistentSet of pair<...,EntityID> keys.
-    static void emit_body(const ArrayMappedTrie<int, __uint128_t>* n, Saver& s) {
+    static void emit_body(const ArrayMappedTrie<int, __uint128_t, std::uint32_t, 5, ScanDiscipline>* n, Saver& s) {
         // Set-style leaves: int dummy payload carries no information.  Write
         // zero so encoded width is well defined; loader ignores it.
         emit_amt_body(n, s, [](int) { return (int32_t)0; });
@@ -257,10 +257,10 @@ namespace wry {
     // DefaultKeyService hashes to a 16-byte (u128) hash, so the ki AMTs use
     // Node<int, __uint128_t>.  The kv side hashes Coordinate / EntityID to
     // u64.
-    using NodeEntityID_U64    = ArrayMappedTrie<EntityID, uint64_t>;
-    using NodeEntityPtr_U64   = ArrayMappedTrie<const Entity*, uint64_t>;
-    using NodeValue_U64       = ArrayMappedTrie<Value, uint64_t>;
-    using NodeSet_U128        = ArrayMappedTrie<int, __uint128_t>;
+    using NodeEntityID_U64    = ArrayMappedTrie<EntityID, uint64_t, std::uint32_t, 5, ScanDiscipline>;
+    using NodeEntityPtr_U64   = ArrayMappedTrie<const Entity*, uint64_t, std::uint32_t, 5, ScanDiscipline>;
+    using NodeValue_U64       = ArrayMappedTrie<Value, uint64_t, std::uint32_t, 5, ScanDiscipline>;
+    using NodeSet_U128        = ArrayMappedTrie<int, __uint128_t, std::uint32_t, 5, ScanDiscipline>;
 
     // -----------------------------------------------------------------------
     // Polymorphic _save_body implementations.  These live here, not in the
@@ -408,7 +408,7 @@ namespace wry {
     // leaf case.
     template<typename T, typename U, typename FillValues>
     static void load_amt_node(Loader& L, SaveRef id, FillValues&& fill_values) {
-        using N = ArrayMappedTrie<T, U>;
+        using N = ArrayMappedTrie<T, U, std::uint32_t, 5, ScanDiscipline>;
         U prefix = L.read_pod<U>();
         uint32_t shift  = L.read_u32();
         uint32_t bitmap = L.read_u32();

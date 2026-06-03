@@ -30,7 +30,7 @@ namespace wry {
         using U = typename H::hash_type;
         using T = int;
         
-        using N = ArrayMappedTrie<T, U>;
+        using N = ArrayMappedTrie<T, U, std::uint32_t, 5, typename Discipline::InnerDiscipline>;
         Discipline::template Slot<N const*> _inner = nullptr;
 
         bool contains(Key key) const {
@@ -46,7 +46,7 @@ namespace wry {
             return PersistentSet{
                 _inner
                 ? _inner->clone_and_insert_or_assign_key_value(j, value, _).first
-                : ArrayMappedTrie<int, U>::make_singleton(j, value)
+                : N::make_singleton(j, value)
             };
         }
         
