@@ -14,7 +14,7 @@
 
 namespace wry {
     
-    template<typename Key, typename T, typename H = DefaultKeyService<Key>>
+    template<typename Key, typename T>
     struct WaitableMap {
         
         // TODO: We are bloating WaitableMap by allocating a waitset pointer
@@ -33,15 +33,15 @@ namespace wry {
         
     };
     
-    template<typename Key, typename T, typename H>
-    void garbage_collected_scan(const WaitableMap<Key, T, H>& x) {
+    template<typename Key, typename T>
+    void garbage_collected_scan(const WaitableMap<Key, T>& x) {
         garbage_collected_scan(x.kv);
         garbage_collected_scan(x.ki);
     }
     
-    template<typename Key, typename T, typename H, typename U, typename F>
-    Coroutine::Future<WaitableMap<Key, T, H>>
-    coroutine_parallel_rebuild2(const WaitableMap<Key, T, H>& source,
+    template<typename Key, typename T, typename U, typename F>
+    Coroutine::Future<WaitableMap<Key, T>>
+    coroutine_parallel_rebuild2(const WaitableMap<Key, T>& source,
                                const ConcurrentMap<Key, U>& modifier,
                                F&& action_for_key) {
         // Simple single-threaded implementation
@@ -49,7 +49,7 @@ namespace wry {
         // TODO: Descend the two trees and rebuild up from the leaves.
         // This can be made highly parallel.
         
-        WaitableMap<Key, T, H> result{source};
+        WaitableMap<Key, T> result{source};
         // SAFETY: We can iterate the concurrent map here because it is
         // immutable in this phase
         auto first = modifier.begin();

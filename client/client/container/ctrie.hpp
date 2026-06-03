@@ -100,7 +100,7 @@ namespace wry {
         // -- Helpers (K, V bound from enclosing scope) -----------------------
 
         // Atomic load-ACQUIRE with read barrier.
-        static MainNode const* READ(GarbageCollectedSlot<MainNode const*> const& main) {
+        static MainNode const* READ(AtomicScanSlot<MainNode const*> const& main) {
             return main.load_acquire();
         }
 
@@ -108,13 +108,13 @@ namespace wry {
         //
         // Safety: we have already ACQUIRED the expected value.  The slot's CAS
         // internally upgrades to acq_rel and shades the displaced MainNode
-        // (Yuasa); see GarbageCollectedSlot.
+        // (Yuasa); see AtomicScanSlot.
         //
         // We do not expose the unexpected value on failure because the higher
         // level operation must RESTART from the root if this CAS fails.  We
         // use the `strong` form so we only take this expensive path for
         // non-spurious failures.
-        static bool CAS(GarbageCollectedSlot<MainNode const*>& main,
+        static bool CAS(AtomicScanSlot<MainNode const*>& main,
                         MainNode const* expected,
                         MainNode const* desired) {
             return main.compare_exchange_strong_release_relaxed(expected, desired);
@@ -172,7 +172,7 @@ namespace wry {
             // INode::main automatically Yuasa-shades the displaced
             // MainNode (CNode/TNode/LNode), preserving any in-flight
             // tracing.  See [garbage_collected.hpp:608] for the slot.
-            mutable GarbageCollectedSlot<MainNode const*> main;
+            mutable AtomicScanSlot<MainNode const*> main;
 
             explicit INode(MainNode const* mn) : main(mn) {}
 

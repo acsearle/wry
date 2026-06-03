@@ -20,9 +20,7 @@
 #include "hash.hpp"
 
 namespace wry {
-        
-    
-    
+
     // PersistentMap provides key-value mapping backed by an array_mapped_trie
     //
     // Requires the key be mapped to a 64-bit index.  Optimal for blocks of
@@ -32,19 +30,25 @@ namespace wry {
     // It is efficient to look up the subtrees bounding index ranges.
     // For coordinates represented in Z-order, the data structure operates
     // somewhat like a quadtree.
-    
+
     // TODO: index range lookup
-    
+
     // TODO: bottom-up rebuild
-    
-    
-    template<typename Key, typename T, typename H = DefaultKeyService<Key>>
+
+    // TODO: move disciplines out to associated headers
+    // TODO: rationalize policy types for slots, allocators and key services
+
+
+    template<typename Key, typename T, typename H = DefaultKeyService<Key>, typename D = ScanDiscipline>
     struct PersistentMap {
         
         using U = typename H::hash_type;
-        
-        const array_mapped_trie::Node<T, U>* _inner = nullptr;
-        
+
+        using Slot = D::template Slot<ArrayMappedTrie<T, U> const*>;
+        Slot _inner{};
+
+        // const ArrayMappedTrie<T, U>* _inner = nullptr;
+
         bool contains(Key key) const {
             U j = H{}.hash(key);
             return _inner && _inner->contains(j);
@@ -59,11 +63,11 @@ namespace wry {
         [[nodiscard]] PersistentMap clone_and_set(Key key, T value) const {
             U j = H{}.hash(key);
             T _ = {};
-            return PersistentMap{
+            return PersistentMap{Slot{
                 _inner
                 ? _inner->clone_and_insert_or_assign_key_value(j, value, _).first
-                : array_mapped_trie::Node<T>::make_singleton(j, value)
-            };
+                : ArrayMappedTrie<T>::make_singleton(j, value)
+            }};
         }
         
         [[nodiscard]] std::pair<PersistentMap, bool> clone_and_try_erase(Key key, T& victim) const {
@@ -109,8 +113,8 @@ namespace wry {
 
     };
     
-    template<typename Key, typename T, typename H>
-    void garbage_collected_scan(const PersistentMap<Key, T, H>& x) {
+    template<typename Key, typename T, typename H, typename D>
+    void garbage_collected_scan(const PersistentMap<Key, T, H, D>& x) {
         garbage_collected_scan(x._inner);
     }
         
@@ -125,8 +129,8 @@ namespace wry {
         T value;
     };
     
-    template<typename Key, typename T, typename H, typename U, typename F>
-    PersistentMap<Key, T, H> parallel_rebuild(const PersistentMap<Key, T, H>& source,
+    template<typename Key, typename T, typename H, typename D, typename U, typename F>
+    PersistentMap<Key, T, H, D> parallel_rebuild(const PersistentMap<Key, T, H, D>& source,
                                            const ConcurrentMap<Key, U>& modifier,
                                            F&& action_for_key) {
         // Simple single-threaded implementation
@@ -134,7 +138,7 @@ namespace wry {
         // TODO: Descend the two trees and rebuild up from the leaves.
         // This can be made highly parallel.
         
-        PersistentMap<Key, T, H> result{source};
+        PersistentMap<Key, T, H, ScanDiscipline> result{source};
         // SAFETY: We can iterate the concurrent map here because it is
         // immutable in this phase
         auto first = modifier.begin();
@@ -157,10 +161,10 @@ namespace wry {
     }
     
     
-    
-    template<typename Key, typename T, typename H, typename U, typename F>
-    Coroutine::Future<PersistentMap<Key, T, H>>
-    coroutine_parallel_rebuild(const PersistentMap<Key, T, H>& source,
+    /*
+    template<typename Key, typename T, typename H, typename D, typename U, typename F>
+    Coroutine::Future<PersistentMap<Key, T, H, D>>
+    coroutine_parallel_rebuild(const PersistentMap<Key, T, H, D>& source,
                                const ConcurrentMap<Key, U>& modifier,
                                F&& action_for_key) {
         
@@ -168,7 +172,7 @@ namespace wry {
         // TODO: Descend the two trees and rebuild up from the leaves.
         // This can be made highly parallel.
         
-        PersistentMap<Key, T, H> result{source};
+        PersistentMap<Key, T, H, RootDiscipline> result{source};
         // SAFETY: We can iterate the concurrent map here because it is
         // immutable in this phase
         auto first = modifier.begin();
@@ -188,21 +192,23 @@ namespace wry {
         }
         co_return result;
     }
-    
-    
-    template<typename Key, typename T, typename H, typename U, typename F>
-    Coroutine::Future<PersistentMap<Key, T, H>>
-    coroutine_parallel_rebuild2(const PersistentMap<Key, T, H>& source,
+     */
+
+    /*
+    template<typename Key, typename T, typename H, typename D, typename U, typename F>
+    Coroutine::Future<PersistentMap<Key, T, H, D>>
+    coroutine_parallel_rebuild2(const PersistentMap<Key, T, H, D>& source,
                                 const ConcurrentMap<Key, U>& modifier,
                                 F&& action_for_key) {
         
-        co_return PersistentMap<Key, T, H>{
-            coroutine_parallel_rebuild2(source.inner,
+        co_return PersistentMap<Key, T, H, D>{
+            coroutine_parallel_rebuild2(source._inner,
                                         modifier,
                                         std::forward<F>(action_for_key))
         };
     }
-    
+     */
+
 } // namespace wry
 
 #endif /* persistent_map_hpp */

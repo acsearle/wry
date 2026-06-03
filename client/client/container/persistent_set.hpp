@@ -30,7 +30,7 @@ namespace wry {
         using U = typename H::hash_type;
         using T = int;
         
-        using N = array_mapped_trie::Node<T, U>;
+        using N = ArrayMappedTrie<T, U>;
         N const* _inner = nullptr;
         
         bool contains(Key key) const {
@@ -46,7 +46,7 @@ namespace wry {
             return PersistentSet{
                 _inner
                 ? _inner->clone_and_insert_or_assign_key_value(j, value, _).first
-                : array_mapped_trie::Node<int, U>::make_singleton(j, value)
+                : ArrayMappedTrie<int, U>::make_singleton(j, value)
             };
         }
         

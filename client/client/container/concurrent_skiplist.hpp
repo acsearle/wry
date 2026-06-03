@@ -57,12 +57,12 @@ namespace wry {
         // IntrusiveAllocator (complete at this point) rather than going
         // through Slot<Node*> (which would invoke slot_for<Node*> and need
         // Node complete — Node is mid-definition where _next[] is
-        // declared).  GarbageCollectedSlot's class body must be parsable
+        // declared).  AtomicScanSlot's class body must be parsable
         // even with Node forward-only, which is why its static_assert
         // lives in the ctor.
         using NextSlot = std::conditional_t<
             std::is_base_of_v<GarbageCollected, IntrusiveAllocator>,
-            GarbageCollectedSlot<Node*>,
+            AtomicScanSlot<Node*>,
             Atomic<Node*>
         >;
 

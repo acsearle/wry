@@ -149,7 +149,7 @@ namespace wry {
         
         struct Node : GarbageCollected {
             
-            GarbageCollectedSlot<Node*> _next{nullptr};
+            AtomicScanSlot<Node*> _next{nullptr};
 
             // The garbage collector scans the payload concurrently with pop,
             // so it has to be constant
@@ -167,8 +167,8 @@ namespace wry {
             
         };
         
-        alignas(64) GarbageCollectedSlot<Node*> _head;
-        alignas(64) GarbageCollectedSlot<Node*> _tail;
+        alignas(64) AtomicScanSlot<Node*> _head;
+        alignas(64) AtomicScanSlot<Node*> _tail;
         
         explicit ObstructionFreeQueue(Node* sentinel)
         : _head(sentinel)

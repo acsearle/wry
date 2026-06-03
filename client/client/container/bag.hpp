@@ -16,22 +16,33 @@ namespace wry {
     // A simple and fast unordered collection for plain old data types,
     // implemented as an unrolled linked list.  Push and pop are usually
     // trivial, and in the worst case still O(1), so this data structure is
-    // suitable for soft-real-time contexts.
+    // somewhat suitable for soft-real-time contexts.
 
     // Used by the garbage collector to receive and manage pointers.  The
     // bag nodes are not themselves garbage collected.
-    
+
+    // Performance hazard: Push/pop at a chunk boundary will thrash node
+    // creation and destruction
+
+    // Naming: Merging is important.  We currently concatenate singly linked
+    // lists; this requires an object that manages the tail.  It also means that
+    // it's not guaranteed that internal nodes are full.
+
     // TODO: Consider flexible array member instead of finessing the struct
     
     enum : std::size_t { BAG_PAGE_SIZE = 4096 };
 
-    enum class poisoned_e { POISONED };
+    struct poisoned_t { explicit poisoned_t() = default; };
+    inline constexpr poisoned_t poisoned{};
 
     template<typename T>
     struct SinglyLinkedListOfInlineStacksBag {
         
         struct Node {
-            
+
+            static_assert(BAG_PAGE_SIZE - 16 >= sizeof(T));
+            constexpr static size_t CAPACITY = (BAG_PAGE_SIZE - 16) / sizeof(T);
+
             static void* operator new(std::size_t count) {
                 void* ptr = std::aligned_alloc(BAG_PAGE_SIZE, count);
                 if (!ptr) [[unlikely]] {
@@ -43,10 +54,7 @@ namespace wry {
             static void operator delete(void* ptr) {
                 std::free(ptr);
             }
-            
-            static_assert(BAG_PAGE_SIZE - 16 >= sizeof(T));            
-            constexpr static size_t CAPACITY = (BAG_PAGE_SIZE - 16) / sizeof(T);
-            
+
             Node* _next = nullptr;
             size_t _size = 0;
             T _elements[CAPACITY];
@@ -113,8 +121,8 @@ namespace wry {
         {
         }
 
-        constexpr SinglyLinkedListOfInlineStacksBag(poisoned_e)
-        : _head((Node*)alignof(Node*))
+        constexpr SinglyLinkedListOfInlineStacksBag(poisoned_t)
+        : _head((Node*)alignof(Node*)) // <-- probably doesn't work?
         , _tail(nullptr)
 #ifndef NDEBUG
         , _debug_size(0)

@@ -24,7 +24,7 @@ namespace wry {
     //     logically-immutable object that has not yet been published to the
     //     collector (no write barrier needed; the collector cannot have
     //     observed the displaced edge);
-    //   - a `GarbageCollectedSlot<PersistentStack<T> const*>` field inside a
+    //   - a `AtomicScanSlot<PersistentStack<T> const*>` field inside a
     //     live garbage-collected object (the slot barriers each overwrite);
     //   - a `Root<PersistentStack<T> const*>` on a stack or coroutine frame.
     //

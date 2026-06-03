@@ -29,8 +29,7 @@ namespace wry {
         
         // stress test
         {
-            PersistentMap<uint64_t, int> p;
-            Root<decltype(p._inner)> hack;
+            PersistentMap<uint64_t, int, DefaultKeyService<uint64_t>, RootDiscipline> p;
             std::map<uint64_t, int> m;
             const int N = 65536 / 8;
             for (int i = 0; i != N; ++i) {
@@ -41,11 +40,9 @@ namespace wry {
                 m.erase(h);
                 int _ = {};
                 (void) p.try_erase(h, _);
-                hack = p._inner;
 
                 m.insert_or_assign(k, v);
                 p.set(k, v);
-                hack = p._inner;
 
                 
                 int u = {};
@@ -53,7 +50,6 @@ namespace wry {
                     printf("expected to find {%llx, %x}\n", k, v);
                     abort();
                 }
-                hack = p._inner;
                 if (u != v) {
                     printf("expected to find {%llx, %x}, found {%llx, %x}\n", k, v, k, u);
                     abort();
@@ -67,7 +63,6 @@ namespace wry {
                 if (m.count(k)) {
                     int v = {};
                     bool result = p.try_get(k, v);
-                    hack = p._inner;
                     assert(result);
                     assert(v == m[k]);
                 } else {

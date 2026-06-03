@@ -123,8 +123,19 @@ namespace wry {
 
     } // namespace wry::epoch
 
-    using EpochAllocated = BumpAllocated;
-    template<typename T> using EpochAllocator = BumpAllocator<T>;
+    // using EpochAllocated = BumpAllocated;
+    struct EpochAllocated : BumpAllocated {};
+
+    // template<typename T> using EpochAllocator = BumpAllocator<T>;
+    template<typename T>
+    struct EpochAllocator : BumpAllocator<T> {};
+
+    struct EpochDiscipline {
+        using IntrusiveAllocator = EpochAllocated;
+        template<typename T> using Slot = T;
+        template<typename T> using AtomicSlot = Atomic<T>;
+        using InnerDiscipline = EpochDiscipline;
+    };
 
 } // namespace wry
 #endif /* epoch_allocator_hpp */

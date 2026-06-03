@@ -48,8 +48,8 @@ namespace wry {
     }
     
     // A compressed array is a bitmap and an array of T that compactly
-    // represents std::array<std::optional<T>, 64>
-    
+    // represents std::array<std::optional<T>, 1 << N>
+
     // The T for a given index, if it exists, is located in the underlying
     // array at the compressed_index = popcount(bitmap & ~(~0 << index))
     

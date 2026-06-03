@@ -101,7 +101,7 @@ namespace wry {
     // less; but since we simultaneously sweep, does it help?
 
     template<typename> struct Root;
-    template<typename> struct GarbageCollectedSlot;
+    template<typename> struct AtomicScanSlot;
 
 } // namespace wry
 
@@ -507,7 +507,7 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
     
     void assert_this_thread_is_collector();
     
-    // GarbageCollectedSlot<T> — atomic strong edge to a GC object T.
+    // AtomicScanSlot<T> — atomic strong edge to a GC object T.
     //
     // Implements a Yuasa-style snapshot-at-the-beginning (deletion) write
     // barrier: any pointer overwritten by a store/exchange/CAS has its
@@ -536,20 +536,20 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
     // point.
 
     template<typename T>
-    struct GarbageCollectedSlot<T*> {
+    struct AtomicScanSlot<T*> {
 
         // The constraint sits in the constructors rather than the class
-        // body so that merely *naming* GarbageCollectedSlot<T*> (e.g. as
+        // body so that merely *naming* AtomicScanSlot<T*> (e.g. as
         // the unselected branch of a std::conditional_t over an incomplete
         // T) does not require T to be complete.  The check fires the
-        // first time any GarbageCollectedSlot is actually constructed.
+        // first time any AtomicScanSlot is actually constructed.
 
         using value_type = T*;
         static constexpr bool is_always_lock_free = true;
 
         Atomic<T*> raw;
 
-        constexpr GarbageCollectedSlot() noexcept : raw{} {
+        constexpr AtomicScanSlot() noexcept : raw{} {
             static_assert(std::is_base_of_v<GarbageCollected, T>);
         }
 
@@ -557,21 +557,21 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
         // "no edge exists" to "edge points at desired".  The pointee's
         // reachability is established when the collector eventually traces
         // the parent (which is still being constructed, so not yet reachable).
-        explicit constexpr GarbageCollectedSlot(T* _Nullable desired) noexcept
+        explicit constexpr AtomicScanSlot(T* _Nullable desired) noexcept
         : raw(desired) {
             static_assert(std::is_base_of_v<GarbageCollected, T>);
         }
 
-        ~GarbageCollectedSlot() {
-            // GarbageCollectedSlot lives in a GC-derived parent and is
+        ~AtomicScanSlot() {
+            // AtomicScanSlot lives in a GC-derived parent and is
             // destroyed only by the collector on the collector thread; no
             // barrier is needed (and the pointee may already be destroyed,
             // so loading it would be unsafe).  Trap any other thread.
             assert_this_thread_is_collector();
         }
 
-        GarbageCollectedSlot(const GarbageCollectedSlot&) = delete;
-        GarbageCollectedSlot& operator=(const GarbageCollectedSlot&) = delete;
+        AtomicScanSlot(const AtomicScanSlot&) = delete;
+        AtomicScanSlot& operator=(const AtomicScanSlot&) = delete;
 
         // Load: returns the raw pointer.  Inner load runs at ≥ acquire so the
         // caller can dereference what they get back.
@@ -673,11 +673,35 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
         // TODO: wait variants — same shape as elsewhere; left until a
         // concrete need arises.
 
-    }; // struct GarbageCollectedSlot<T*>
+    }; // struct AtomicScanSlot<T*>
+
+
+
+
+    struct ScanDiscipline {
+        using IntrusiveAllocator = GarbageCollected;
+        template<typename T> using Slot = T;
+        template<typename T> using AtomicSlot = AtomicScanSlot<T>;
+        using InnerDiscipline = ScanDiscipline;
+    };
+
+    struct RootDiscipline {
+        using IntrusiveAllocator = GarbageCollected;
+        template<typename T> using Slot = Root<T>;
+        template<typename T> using AtomicSlot = Atomic<Root<T>>;
+        using InnerDiscipline = ScanDiscipline;
+    };
+
+
+
+
+
+
+
 
     // Scan: load-acquire so the recursing scan can safely dereference.
     template<typename T>
-    void garbage_collected_scan(GarbageCollectedSlot<T*> const& x) {
+    void garbage_collected_scan(AtomicScanSlot<T*> const& x) {
         garbage_collected_scan(x.raw.load_acquire());
     }
 
@@ -685,31 +709,7 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
         // no-op
     }
 
-    // slot_for<T*>::type — customization point for picking a slot
-    // implementation appropriate to the pointee's allocation regime.
-    //
-    // Specializations live near the marker class they dispatch on, so
-    // adding a new regime (e.g. ReferenceCounted) is a new partial
-    // specialization in a new file rather than an edit here.
-    //
-    // Slot<T*> is the public alias.  Misuse with an unsupported T is a
-    // compile error: the primary template has no definition.
-
-    template<typename> struct slot_for;
-
-    template<typename T>
-    requires (std::is_base_of_v<GarbageCollected, T>)
-    struct slot_for<T*> { using type = GarbageCollectedSlot<T*>; };
-
-    template<typename T>
-    requires (std::is_base_of_v<BumpAllocated, T>)
-    struct slot_for<T*> { using type = Atomic<T*>; };
-
-    template<typename T> using Slot = typename slot_for<T>::type;
-
-
-
-
+    
     template<typename T>
     struct WeakHolder : GarbageCollected {
 
