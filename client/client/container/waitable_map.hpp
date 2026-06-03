@@ -20,9 +20,9 @@ namespace wry {
         // TODO: We are bloating WaitableMap by allocating a waitset pointer
         // for every entry even though they will be rare
 
-        PersistentMap<Key, T> kv;
-        PersistentSet<std::pair<Key, EntityID>> ki;
-        
+        PersistentMap<Key, T, DefaultKeyService<Key>, ScanDiscipline> kv;
+        PersistentSet<std::pair<Key, EntityID>, DefaultKeyService<std::pair<Key, EntityID>>, ScanDiscipline> ki;
+
         bool try_get(Key key, T& victim) const {
             return kv.try_get(key, victim);
         }

@@ -45,9 +45,10 @@ namespace wry {
 //        });
         
         // Take the set of EntityIDs that are ready to run
-        
-        PersistentSet<std::pair<Time, EntityID>> ready ;
-        PersistentSet<std::pair<Time, EntityID>> new_waiting_on_time;
+
+        using Set = PersistentSet<std::pair<Time, EntityID>, DefaultKeyService<std::pair<Time, EntityID>>, ScanDiscipline>;
+        Set ready ;
+        Set new_waiting_on_time;
         std::tie(ready, new_waiting_on_time) = partition_first(_waiting_on_time, _time);
         ConcurrentSkiplistSet<EntityID, DefaultKeyService<EntityID>, EpochDiscipline> next_ready;
 
@@ -238,11 +239,11 @@ namespace wry {
         auto action_for_waiting_on_time
         = [new_waiting_on_time, this]
         (const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<ParallelRebuildAction<PersistentSet<std::pair<Time, EntityID>>>> {
+        -> Coroutine::Future<ParallelRebuildAction<Set>> {
             // TODO: We need to special-case waits for new_time
             assert(kv.first > _time);
-            ParallelRebuildAction<PersistentSet<std::pair<Time, EntityID>>> result{};
-            result.tag = ParallelRebuildAction<PersistentSet<std::pair<Time, EntityID>>>::MERGE_VALUE;
+            ParallelRebuildAction<Set> result{};
+            result.tag = ParallelRebuildAction<Set>::MERGE_VALUE;
             // new_waiting_on_time.try_get(kv.first, result.value);
             const Transaction::Node* head = kv.second.load_relaxed();
             for (; head; head = head->_next) {

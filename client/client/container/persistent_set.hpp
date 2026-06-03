@@ -24,15 +24,15 @@ namespace wry {
     
     using Coroutine::Task;
         
-    template<typename Key, typename H = DefaultKeyService<Key>>
+    template<typename Key, typename H, typename Discipline>
     struct PersistentSet {
         
         using U = typename H::hash_type;
         using T = int;
         
         using N = ArrayMappedTrie<T, U>;
-        N const* _inner = nullptr;
-        
+        Discipline::template Slot<N const*> _inner = nullptr;
+
         bool contains(Key key) const {
             U j = H{}.hash(key);
             uint64_t _ = {};
@@ -107,17 +107,17 @@ namespace wry {
     
     
     
-    template<typename Key, typename H>
-    void garbage_collected_scan(const PersistentSet<Key, H>& x) {
+    template<typename Key, typename H, typename D>
+    void garbage_collected_scan(const PersistentSet<Key, H, D>& x) {
         garbage_collected_scan(x._inner);
     }
     
     
-    template<typename A, typename B, typename H>
+    template<typename A, typename B, typename H, typename D>
     auto
-    partition_first(PersistentSet<std::pair<A, B>, H> const& x, A a) {
+    partition_first(PersistentSet<std::pair<A, B>, H, D> const& x, A a) {
         using Key = std::pair<A, B>;
-        using S = PersistentSet<Key, H>;
+        using S = PersistentSet<Key, H, D>;
         auto z = H{}.hash(Key{a, B{}});
         auto mask = H{}.mask_first();
         std::pair<S, S> result;
@@ -127,10 +127,10 @@ namespace wry {
         return result;
     };
     
-    template<typename A, typename B, typename H, typename F>
-    void for_each_if_first(PersistentSet<std::pair<A, B>, H> const& x, A a, F&& action) {
+    template<typename A, typename B, typename H, typename D, typename F>
+    void for_each_if_first(PersistentSet<std::pair<A, B>, H, D> const& x, A a, F&& action) {
         using Key = std::pair<A, B>;
-        using S = PersistentSet<Key, H>;
+        using S = PersistentSet<Key, H, D>;
         auto z = H{}.hash(Key{a, B{}});
         auto mask = H{}.mask_first();
         x._inner->for_each_mask(x._inner, z, mask, [action=std::forward<F>(action)](H::hash_type key, int dummy) {
@@ -138,20 +138,20 @@ namespace wry {
         });
     }
     
-    template<typename A, typename B, typename H>
-    PersistentSet<std::pair<A, B>, H>
-    as_multimap_erase(PersistentSet<std::pair<A, B>, H> const& x, A a) {
+    template<typename A, typename B, typename H, typename D>
+    PersistentSet<std::pair<A, B>, H, D>
+    as_multimap_erase(PersistentSet<std::pair<A, B>, H, D> const& x, A a) {
         using Key = std::pair<A, B>;
-        using S = PersistentSet<Key, H>;
+        using S = PersistentSet<Key, H, D>;
         auto z = H{}.hash(Key{a, B{}});
         auto mask = H{}.mask_first();
         auto c = x._inner->partition_mask(x._inner, z, mask);
         return S{c.second};
     };
 
-    template<typename A, typename B, typename H>
-    PersistentSet<std::pair<A, B>, H>
-    as_multimap_merge(PersistentSet<std::pair<A, B>, H> const& x, A a, std::vector<B> values) {
+    template<typename A, typename B, typename H, typename D>
+    PersistentSet<std::pair<A, B>, H, D>
+    as_multimap_merge(PersistentSet<std::pair<A, B>, H, D> const& x, A a, std::vector<B> values) {
         auto y = x;
         for (auto v : values) {
             y.set({a, v});
@@ -159,25 +159,25 @@ namespace wry {
         return y;
     };
 
-    template<typename A, typename B, typename H>
-    PersistentSet<std::pair<A, B>, H>
-    as_multimap_replace(PersistentSet<std::pair<A, B>, H> const& x, A a, std::vector<B> values) {
+    template<typename A, typename B, typename H, typename D>
+    PersistentSet<std::pair<A, B>, H, D>
+    as_multimap_replace(PersistentSet<std::pair<A, B>, H, D> const& x, A a, std::vector<B> values) {
         return as_multimap_merge(as_multimap_erase(x, a), a, std::move(values));
     };
 
     
     
     
-    template<typename Key, typename H, typename Key2, typename U, typename F, typename S2, typename D2>
-    Coroutine::Future<PersistentSet<Key, H>>
-    coroutine_parallel_rebuild(const PersistentSet<Key, H>& source,
+    template<typename Key, typename H, typename D, typename Key2, typename U, typename F, typename S2, typename D2>
+    Coroutine::Future<PersistentSet<Key, H, D>>
+    coroutine_parallel_rebuild(const PersistentSet<Key, H, D>& source,
                                const ConcurrentMap<Key2, U, S2, D2>& modifier,
                                F&& action_for_key) {
-        PersistentSet<Key, H> result{source};
+        PersistentSet<Key, H, D> result{source};
         auto first = modifier.begin();
         auto last = modifier.end();
         for (; first != last; ++first) {
-            using P = ParallelRebuildAction<PersistentSet<Key, H>>;
+            using P = ParallelRebuildAction<PersistentSet<Key, H, D>>;
             P action = co_await action_for_key(*first);
             switch (action.tag) {
                 case P::NONE:

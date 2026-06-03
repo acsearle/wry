@@ -55,8 +55,8 @@ namespace wry {
         WaitableMap<EntityID, const Entity*> _entity_for_entity_id;
         WaitableMap<Coordinate, Value> _value_for_coordinate;
 
-
-        PersistentSet<std::pair<Time, EntityID>> _waiting_on_time;
+        using Set = PersistentSet<std::pair<Time, EntityID>, DefaultKeyService<std::pair<Time, EntityID>>, ScanDiscipline>;
+        Set _waiting_on_time;
 
 
         World()
@@ -72,7 +72,7 @@ namespace wry {
               WaitableMap<Coordinate, EntityID> entity_id_for_coordinate,
               WaitableMap<EntityID, const Entity*> entity_for_entity_id,
               WaitableMap<Coordinate, Value> value_for_coordinate,
-              PersistentSet<std::pair<Time, EntityID>> waiting_on_time)
+              Set waiting_on_time)
         : _time(time)
         , _entity_id_for_coordinate(entity_id_for_coordinate)
         , _entity_for_entity_id(entity_for_entity_id)
