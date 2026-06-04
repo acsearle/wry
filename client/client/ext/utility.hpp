@@ -197,7 +197,7 @@ namespace wry {
    
     
 
-    // Trace for <utility> types
+    // Scan for <utility> types
     
     template<typename A, typename B>
     void garbage_collected_scan(const std::pair<A, B>& p) {

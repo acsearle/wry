@@ -12,8 +12,8 @@
 
 namespace wry {
     
-    template<typename T>
-    void garbage_collected_scan(std::vector<T> const& values) {
+    template<typename T, typename Allocator>
+    void garbage_collected_scan(std::vector<T, Allocator> const& values) {
         for (T const& value : values)
             garbage_collected_scan(value);
     }

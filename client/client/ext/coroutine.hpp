@@ -12,7 +12,6 @@
 #include <coroutine>
 #include <deque>
 #include <exception>
-#include <variant>
 #include <semaphore>
 
 #include "atomic.hpp"

@@ -13,7 +13,6 @@
 #include "tile.hpp"
 #include "utility.hpp"
 #include "machine.hpp"
-#include "queue.hpp"
 #include "value.hpp"
 
 #include "persistent_set.hpp"

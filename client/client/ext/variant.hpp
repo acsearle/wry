@@ -11,10 +11,18 @@
 #include <variant>
 
 namespace wry {
-    
+
+    // Scan for std::variant types
+
     inline void garbage_collected_scan(std::monostate) {
+        // no-op
     }
-    
+
+    template<typename... Args>
+    inline void garbage_collected_scan(std::variant<Args...> const& x) {
+        std::visit([](auto const& y){ garbage_collected_scan(y); }, x);
+    }
+
 } // namespace wry
 
 #endif /* variant_hpp */
