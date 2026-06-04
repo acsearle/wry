@@ -170,12 +170,12 @@ namespace wry {
             return new(raw) Transaction(context, entity, count);
         }
 
-        bool try_read_value_for_coordinate(Coordinate, Value&) const;
+        bool try_read_value_for_coordinate(Coordinate, Term&) const;
         bool try_read_entity_id_for_coordinate(Coordinate, EntityID&) const;
         bool try_read_entity_for_entity_id(EntityID, const Entity*&) const;
 
     
-        void write_value_for_coordinate(Coordinate, Value, int = WRITE_ON_COMMIT);
+        void write_value_for_coordinate(Coordinate, Term, int = WRITE_ON_COMMIT);
         //void erase_value_for_coordinate(Coordinate, int = ERASE_ON_COMMIT);
         void wait_on_value_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
 
@@ -238,7 +238,7 @@ namespace wry {
         
         uint64_t entity_get_priority(const Entity*);
         
-        bool try_read_value_for_coordinate(Coordinate, Value&);
+        bool try_read_value_for_coordinate(Coordinate, Term&);
         bool try_read_entity_id_for_coordinate(Coordinate, EntityID&);
         bool try_read_entity_for_entity_id(EntityID, const Entity*&);
 

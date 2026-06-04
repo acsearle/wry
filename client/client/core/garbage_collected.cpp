@@ -22,7 +22,7 @@
 #include "HeapString.hpp"
 #include "stack.hpp"
 #include "utility.hpp"
-#include "value.hpp"
+#include "term.hpp"
 #include "inline_ring_buffer.hpp"
 
 #include "test.hpp"

@@ -16,8 +16,8 @@ namespace wry {
 
         Transaction* tx = Transaction::make(context, this, 10);
 
-        Value a = {};
-        Value b = {};
+        Term a = {};
+        Term b = {};
 
         Machine* new_this = make_mutable_clone();
         assert(new_this->_entity_id == _entity_id);
@@ -63,7 +63,7 @@ namespace wry {
 
                 // now we need to work out what other cells are needed
                 
-                Value new_value = {};
+                Term new_value = {};
                 i64 next_action = OPCODE_NOOP;
                 switch (_on_arrival) {
                     case OPCODE_SKIP:
@@ -239,7 +239,7 @@ namespace wry {
                         break;
                         
                     case OPCODE_HEADING_LOAD:
-                        new_this->push(Value(_new_heading));
+                        new_this->push(Term(_new_heading));
                         break;
                         
                     case OPCODE_DROP:
@@ -445,13 +445,13 @@ namespace wry {
                     case OPCODE_FLIP_FLOP:
                         tx->write_value_for_coordinate(
                                                    _new_location,
-                                                   value_make_opcode(OPCODE_FLOP_FLIP));
+                                                   term_make_opcode(OPCODE_FLOP_FLIP));
                         break;
                     case OPCODE_FLOP_FLIP:
                         //assert(wants_write_new_tile);
                         tx->write_value_for_coordinate(
                                                    _new_location,
-                                                   value_make_opcode(OPCODE_FLIP_FLOP));
+                                                   term_make_opcode(OPCODE_FLIP_FLOP));
                         break;
                                                 
                 } // switch (next_action)

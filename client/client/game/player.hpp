@@ -31,7 +31,7 @@ namespace wry {
             union {
                 struct {
                     Coordinate coordinate;
-                    Value value = {};
+                    Term value = {};
                 };
             };
         };

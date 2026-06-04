@@ -9,27 +9,27 @@
 #define entity_hpp
 
 #include "sim.hpp"
-#include "value.hpp"
+#include "term.hpp"
 
 namespace wry {
 
     // Entity is the base class of game objects with behavior.  It IS-A
-    // HeapValue: an Entity reference can travel as the OBJECT payload of
-    // a Value, participating in the wider persistent-data-structure /
+    // HeapTerm: an Entity reference can travel as the OBJECT payload of
+    // a Term, participating in the wider persistent-data-structure /
     // save-load ecosystem.  Identity is carried by EntityID (see
     // entity_id.hpp); successive snapshots of the same entity are
     // distinct Entity allocations sharing an EntityID.
     //
-    // Operator hooks (_value_add / _value_call / _value_eq / ...) are
-    // inherited from HeapValue with ERROR-returning defaults.  Entity
-    // is identity-only by default: _value_eq returns false (no
-    // content-equality), _value_less and _value_hash return ERROR.
+    // Operator hooks (_term_add / _term_call / _term_eq / ...) are
+    // inherited from HeapTerm with ERROR-returning defaults.  Entity
+    // is identity-only by default: _term_eq returns false (no
+    // content-equality), _term_less and _term_hash return ERROR.
     // Subclasses (Machine, ...) override what makes sense for them.
 
     struct Saver;
     struct Loader;
 
-    struct Entity : HeapValue {
+    struct Entity : HeapTerm {
 
         virtual ~Entity() = default;
 
@@ -40,7 +40,7 @@ namespace wry {
         Entity();
 
         // _save_type_tag and _save_body are inherited as pure virtuals
-        // from HeapValue; concrete subclasses (Machine, ...) override.
+        // from HeapTerm; concrete subclasses (Machine, ...) override.
 
     }; // struct Entity
 

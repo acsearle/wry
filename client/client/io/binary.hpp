@@ -310,7 +310,7 @@ return std::forward<V>(visitor).visit_##T (x);\
         };
         
         template<typename V>
-        typename std::decay_t<V>::V deserialize_sequence(V&& visitor) {
+        typename std::decay_t<V>::Value deserialize_sequence(V&& visitor) {
             while (_buffer.size() < sizeof(uint64_t)) {
                 _buffer.may_write_back(sizeof(uint64_t));
                 _byte_source.get_bytes(_buffer);

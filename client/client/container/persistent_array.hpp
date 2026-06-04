@@ -38,7 +38,7 @@ namespace wry {
     // setup-then-freeze discipline in miniature.
     //
     // T is assumed nothrow-constructible; the multi-step builds below are not
-    // exception-safe for a throwing T (the realistic payloads -- Value,
+    // exception-safe for a throwing T (the realistic payloads -- Term,
     // pointers, trivials -- are fine).
 
     template<typename T>

@@ -13,7 +13,7 @@
 #include "tile.hpp"
 #include "utility.hpp"
 #include "machine.hpp"
-#include "value.hpp"
+#include "term.hpp"
 
 #include "persistent_set.hpp"
 #include "persistent_map.hpp"
@@ -32,14 +32,14 @@ namespace wry {
 
     Time world_get_time(const World* world);
 
-    // World IS-A HeapValue.  It can travel as the OBJECT payload of a
-    // Value, which unifies the save-format polymorphic dispatch path
+    // World IS-A HeapTerm.  It can travel as the OBJECT payload of a
+    // Term, which unifies the save-format polymorphic dispatch path
     // (every snapshotable thing reaches the registry through
     // Saver::visit_heap_value) and lets the simulation root be a
-    // Value-shaped reference if/when that's wanted.  Operator hooks
-    // inherit ERROR defaults from HeapValue; World is identity-only
-    // (does not override _value_eq / _value_less / _value_hash).
-    struct World : HeapValue {
+    // Term-shaped reference if/when that's wanted.  Operator hooks
+    // inherit ERROR defaults from HeapTerm; World is identity-only
+    // (does not override _term_eq / _term_less / _term_hash).
+    struct World : HeapTerm {
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::World");
 
@@ -52,7 +52,7 @@ namespace wry {
 
         WaitableMap<Coordinate, EntityID> _entity_id_for_coordinate;
         WaitableMap<EntityID, const Entity*> _entity_for_entity_id;
-        WaitableMap<Coordinate, Value> _value_for_coordinate;
+        WaitableMap<Coordinate, Term> _term_for_coordinate;
 
         using Set = PersistentSet<std::pair<Time, EntityID>, DefaultKeyService<std::pair<Time, EntityID>>, ScanDiscipline>;
         Set _waiting_on_time;
@@ -62,7 +62,7 @@ namespace wry {
         : _time{0}
         , _entity_id_for_coordinate{}
         , _entity_for_entity_id{}
-        , _value_for_coordinate{}
+        , _term_for_coordinate{}
         , _waiting_on_time{}
         {
         }
@@ -70,12 +70,12 @@ namespace wry {
         World(Time time,
               WaitableMap<Coordinate, EntityID> entity_id_for_coordinate,
               WaitableMap<EntityID, const Entity*> entity_for_entity_id,
-              WaitableMap<Coordinate, Value> value_for_coordinate,
+              WaitableMap<Coordinate, Term> value_for_coordinate,
               Set waiting_on_time)
         : _time(time)
         , _entity_id_for_coordinate(entity_id_for_coordinate)
         , _entity_for_entity_id(entity_for_entity_id)
-        , _value_for_coordinate(value_for_coordinate)
+        , _term_for_coordinate(value_for_coordinate)
         , _waiting_on_time(waiting_on_time)
         {}
 

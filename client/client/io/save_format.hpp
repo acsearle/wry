@@ -26,23 +26,23 @@ namespace wry {
 
     struct GarbageCollected;
     struct Entity;
-    struct HeapValue;
+    struct HeapTerm;
     struct World;
-    struct Value;
+    struct Term;
 
     // ---------------------------------------------------------------------
-    // Save format version.  Bumped any time the in-RAM Value layout, the
+    // Save format version.  Bumped any time the in-RAM Term layout, the
     // GarbageCollected header layout, or the record encoding changes in a
     // way that would silently corrupt an older file.  The loader's
     // [version u32] header field is compared against this; mismatch is a
     // hard reject (no migration path in this sketch).
     //
     // Version 1: initial sketch (no shipped saves).
-    // Version 2: bumped 2026-05-24 alongside the Value tag renumber and
+    // Version 2: bumped 2026-05-24 alongside the Term tag renumber and
     //            ENUMERATION-as-meta-tag fold (review commit 2/3).
     // ---------------------------------------------------------------------
 
-    enum : uint32_t { VALUE_SAVE_VERSION = 2 };
+    enum : uint32_t { TERM_SAVE_VERSION = 2 };
 
     // ---------------------------------------------------------------------
     // Load-order ID.  Dense uint32_t assigned in post-order DFS from World.
@@ -67,7 +67,7 @@ namespace wry {
         // Pending back-edges: when a cycle is detected mid-walk, the saver
         // emits a placeholder and records (offset_in_stream, target_ptr).
         // After the walk completes, _resolve_pending() patches the stream.
-        // Expected empty in the DAG case (Value cycles are the only source).
+        // Expected empty in the DAG case (Term cycles are the only source).
         struct Pending { size_t offset; const void* target; };
         std::vector<Pending> _pending;
 
@@ -113,7 +113,7 @@ namespace wry {
         // Implementation lives in save_format.cpp because it dispatches via
         // virtual functions.
         SaveRef visit_entity(const Entity* _Nullable p);
-        SaveRef visit_heap_value(const HeapValue* _Nullable p);
+        SaveRef visit_heap_value(const HeapTerm* _Nullable p);
 
         // Visit a non-polymorphic GC object of statically-known type T.
         // T must specialize save_type_traits<T> with ::value (the tag) and

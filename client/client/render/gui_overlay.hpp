@@ -48,7 +48,7 @@
 #include "SpriteAtlas.hpp"
 #include "string.hpp"
 #include "text.hpp"
-#include "value.hpp"
+#include "term.hpp"
 
 namespace wry {
 
@@ -306,8 +306,8 @@ namespace wry {
             // Bring-up: WryRenderer fills this at init from assets.json.
             // The struct name `Palette<T>` reads as "a grid of T values";
             // this particular grid is "the controls", hence `_controls`.
-            wry::Palette<wry::Value>& controls()             { return _controls; }
-            wry::Palette<wry::Value> const& controls() const { return _controls; }
+            wry::Palette<wry::Term>& controls()             { return _controls; }
+            wry::Palette<wry::Term> const& controls() const { return _controls; }
 
             // Renderer reads these to draw the highlights.  -1 means none.
             int selected_i() const { return _selected_i; }
@@ -322,7 +322,7 @@ namespace wry {
             void clear_cursor_refresh()      { _cursor_dirty = false; }
 
         private:
-            wry::Palette<wry::Value> _controls;
+            wry::Palette<wry::Term> _controls;
             int _selected_i = -1;
             int _selected_j = -1;
             int _hover_i    = -1;

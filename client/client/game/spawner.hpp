@@ -48,7 +48,7 @@ namespace wry {
         }
 
         
-        Value _of_this;
+        Term _of_this;
         
         virtual void notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {

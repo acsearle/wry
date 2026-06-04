@@ -7,13 +7,13 @@
 //  The worked type universe in this sketch:
 //    - World (root, non-polymorphic)
 //    - Machine (Entity subclass, polymorphic via Entity*)
-//    - HeapInt64 (HeapValue subclass, polymorphic via HeapValue*)
-//    - HeapString (HeapValue subclass; SKETCH stubs, factory-based load)
-//    - ArrayMappedTrie<Value, uint64_t>          // value-for-coordinate map leaves
+//    - HeapInt64 (HeapTerm subclass, polymorphic via HeapTerm*)
+//    - HeapString (HeapTerm subclass; SKETCH stubs, factory-based load)
+//    - ArrayMappedTrie<Term, uint64_t>          // value-for-coordinate map leaves
 //    - ArrayMappedTrie<EntityID, uint64_t>       // entity-id-for-coordinate map leaves
 //    - ArrayMappedTrie<const Entity*, uint64_t>  // entity-for-entity-id map leaves
 //    - ArrayMappedTrie<int, uint64_t>            // PersistentSet payload-less node
-//    - PersistentStack<Value>                      // machine stack cells
+//    - PersistentStack<Term>                      // machine stack cells
 //
 //  Other AMT instantiations needed by World (e.g. for the pair<Time,EntityID>
 //  set inside PersistentSet) are listed in the registry; their emit/load
@@ -30,39 +30,39 @@
 #include "machine.hpp"
 #include "persistent_set.hpp"
 #include "persistent_stack.hpp"
-#include "value.hpp"
+#include "term.hpp"
 #include "world.hpp"
 
 namespace wry {
 
     // -----------------------------------------------------------------------
-    // Value encoding.  Values are 64-bit tagged words.  In the OBJECT case
-    // the high bits are an in-memory HeapValue pointer; on disk we replace
+    // Term encoding.  Values are 64-bit tagged words.  In the OBJECT case
+    // the high bits are an in-memory HeapTerm pointer; on disk we replace
     // those bits with a SaveRef.  All other tags travel as-is.
     //
-    // NOTE: this assumes no Value cycles.  A self-referential container would
-    // require the fixup path (because the HeapValue is not yet emitted when
-    // we try to encode a Value pointing to it).  Cycle handling is sketched
+    // NOTE: this assumes no Term cycles.  A self-referential container would
+    // require the fixup path (because the HeapTerm is not yet emitted when
+    // we try to encode a Term pointing to it).  Cycle handling is sketched
     // in Saver::record_back_edge / Loader::Fixup but not driven here.
     // -----------------------------------------------------------------------
 
-    static uint64_t encode_value(const Value& v, Saver& s) {
-        if (_value_is_object(v)) {
-            const HeapValue* p = _value_as_object(v);
+    static uint64_t encode_value(const Term& v, Saver& s) {
+        if (_term_is_object(v)) {
+            const HeapTerm* p = _term_as_object(v);
             SaveRef ref = s.visit_heap_value(p);
-            return ((uint64_t)ref << VALUE_SHIFT) | VALUE_TAG_OBJECT;
+            return ((uint64_t)ref << TERM_SHIFT) | TERM_TAG_OBJECT;
         }
         return v._data;
     }
 
-    static Value decode_value(uint64_t word, Loader& L) {
-        Value v;
-        if ((word & VALUE_MASK_TAG) == VALUE_TAG_OBJECT) {
-            SaveRef ref = (SaveRef)(word >> VALUE_SHIFT);
-            // Sketch: forward refs from Value would need fixup against the
+    static Term decode_value(uint64_t word, Loader& L) {
+        Term v;
+        if ((word & TERM_MASK_TAG) == TERM_TAG_OBJECT) {
+            SaveRef ref = (SaveRef)(word >> TERM_SHIFT);
+            // Sketch: forward refs from Term would need fixup against the
             // address of v._data.  Assume DAG for now.
-            HeapValue* p = (HeapValue*)L._ptrs[ref];
-            v._data = (uint64_t)p | VALUE_TAG_OBJECT;
+            HeapTerm* p = (HeapTerm*)L._ptrs[ref];
+            v._data = (uint64_t)p | TERM_TAG_OBJECT;
         } else {
             v._data = word;
         }
@@ -81,12 +81,12 @@ namespace wry {
     template<> struct save_type_traits<HeapInt64> { static constexpr uint64_t value = HeapInt64::SAVE_TYPE_TAG; };
     template<> struct save_type_traits<HeapString>{ static constexpr uint64_t value = HeapString::SAVE_TYPE_TAG; };
 
-    template<> struct save_type_traits<PersistentStack<Value>> {
-        static constexpr uint64_t value = save_type_tag_fnv1a("wry::PersistentStack<Value>");
+    template<> struct save_type_traits<PersistentStack<Term>> {
+        static constexpr uint64_t value = save_type_tag_fnv1a("wry::PersistentStack<Term>");
     };
 
     // Leaf traits for primitive value types that appear as T in AMT Nodes.
-    template<> struct save_type_traits<Value>           { static constexpr uint64_t value = save_type_tag_fnv1a("wry::Value"); };
+    template<> struct save_type_traits<Term>           { static constexpr uint64_t value = save_type_tag_fnv1a("wry::Term"); };
     template<> struct save_type_traits<EntityID>        { static constexpr uint64_t value = save_type_tag_fnv1a("wry::EntityID"); };
     template<> struct save_type_traits<const Entity*>   { static constexpr uint64_t value = save_type_tag_fnv1a("wry::Entity*"); };
     template<> struct save_type_traits<int>             { static constexpr uint64_t value = save_type_tag_fnv1a("int"); };
@@ -134,7 +134,7 @@ namespace wry {
         return id;
     }
 
-    SaveRef Saver::visit_heap_value(const HeapValue* p) {
+    SaveRef Saver::visit_heap_value(const HeapTerm* p) {
         if (!p) return SAVE_REF_NULL;
         auto it = _seen.find((const void*)p);
         if (it != _seen.end()) {
@@ -184,9 +184,9 @@ namespace wry {
     // grouped with the other polymorphic save bodies).  Forward decls
     // for AMT Node bodies are below.
 
-    // PersistentStack<Value>
-    static void emit_body(const PersistentStack<Value>* n, Saver& s) {
-        SaveRef next_ref = s.visit<PersistentStack<Value>>(n->_next);
+    // PersistentStack<Term>
+    static void emit_body(const PersistentStack<Term>* n, Saver& s) {
+        SaveRef next_ref = s.visit<PersistentStack<Term>>(n->_next);
         uint64_t payload = encode_value(n->_payload, s);
         s.write_ref(next_ref);
         s.write_u64(payload);
@@ -213,7 +213,7 @@ namespace wry {
             for (SaveRef r : child_refs)
                 s.write_ref(r);
         } else {
-            // For leaf values that may carry sub-references (Value, Entity*),
+            // For leaf values that may carry sub-references (Term, Entity*),
             // visit them first.  emit_leaf returns the bytes-or-ref to write
             // and may have triggered child record emissions as a side effect.
             using Encoded = decltype(emit_leaf(n->_values[0]));
@@ -229,11 +229,11 @@ namespace wry {
         }
     }
 
-    // AMT Node<Value, uint64_t>: leaf Values; OBJECT-tagged ones reference
+    // AMT Node<Term, uint64_t>: leaf Values; OBJECT-tagged ones reference
     // HeapValues, which we visit and replace with SaveRefs inside the encoded
     // word.
-    static void emit_body(const ArrayMappedTrie<Value, uint64_t, std::uint32_t, 5, ScanDiscipline>* n, Saver& s) {
-        emit_amt_body(n, s, [&s](const Value& v) { return encode_value(v, s); });
+    static void emit_body(const ArrayMappedTrie<Term, uint64_t, std::uint32_t, 5, ScanDiscipline>* n, Saver& s) {
+        emit_amt_body(n, s, [&s](const Term& v) { return encode_value(v, s); });
     }
 
     // AMT Node<EntityID, uint64_t>: leaf values are 64-bit ids, no references.
@@ -259,7 +259,7 @@ namespace wry {
     // u64.
     using NodeEntityID_U64    = ArrayMappedTrie<EntityID, uint64_t, std::uint32_t, 5, ScanDiscipline>;
     using NodeEntityPtr_U64   = ArrayMappedTrie<const Entity*, uint64_t, std::uint32_t, 5, ScanDiscipline>;
-    using NodeValue_U64       = ArrayMappedTrie<Value, uint64_t, std::uint32_t, 5, ScanDiscipline>;
+    using NodeValue_U64       = ArrayMappedTrie<Term, uint64_t, std::uint32_t, 5, ScanDiscipline>;
     using NodeSet_U128        = ArrayMappedTrie<int, __uint128_t, std::uint32_t, 5, ScanDiscipline>;
 
     // -----------------------------------------------------------------------
@@ -272,8 +272,8 @@ namespace wry {
         SaveRef eid_for_coord_ki = s.visit<NodeSet_U128>(_entity_id_for_coordinate.ki._inner);
         SaveRef ent_for_eid_kv   = s.visit<NodeEntityPtr_U64>(_entity_for_entity_id.kv._inner);
         SaveRef ent_for_eid_ki   = s.visit<NodeSet_U128>(_entity_for_entity_id.ki._inner);
-        SaveRef val_for_coord_kv = s.visit<NodeValue_U64>(_value_for_coordinate.kv._inner);
-        SaveRef val_for_coord_ki = s.visit<NodeSet_U128>(_value_for_coordinate.ki._inner);
+        SaveRef val_for_coord_kv = s.visit<NodeValue_U64>(_term_for_coordinate.kv._inner);
+        SaveRef val_for_coord_ki = s.visit<NodeSet_U128>(_term_for_coordinate.ki._inner);
         SaveRef waiting_on_time  = s.visit<NodeSet_U128>(_waiting_on_time._inner);
 
         s.write_u64((uint64_t)_time);
@@ -288,7 +288,7 @@ namespace wry {
 
     void Machine::_save_body(Saver& s) const {
         // Visit stack first (post-order).
-        SaveRef stack_head_ref = s.visit<PersistentStack<Value>>(_stack);
+        SaveRef stack_head_ref = s.visit<PersistentStack<Term>>(_stack);
 
         s.write_u64(_entity_id.data);
         s.write_u32((uint32_t)_phase);
@@ -316,7 +316,7 @@ namespace wry {
     // -----------------------------------------------------------------------
 
     SaveRef Saver::save_world(const World* root) {
-        // World inherits HeapValue post-review, so it joins the
+        // World inherits HeapTerm post-review, so it joins the
         // polymorphic visit_heap_value path along with HeapInt64 /
         // HeapString / Entity / Machine.  The registry entry for World
         // (in g_saveable_traits) drives load.
@@ -357,8 +357,8 @@ namespace wry {
         w->_entity_id_for_coordinate.ki._inner = (NodeSet_U128*)L._ptrs[eid_ki];
         w->_entity_for_entity_id.kv._inner     = (NodeEntityPtr_U64*)L._ptrs[ent_kv];
         w->_entity_for_entity_id.ki._inner     = (NodeSet_U128*)L._ptrs[ent_ki];
-        w->_value_for_coordinate.kv._inner     = (NodeValue_U64*)L._ptrs[val_kv];
-        w->_value_for_coordinate.ki._inner     = (NodeSet_U128*)L._ptrs[val_ki];
+        w->_term_for_coordinate.kv._inner     = (NodeValue_U64*)L._ptrs[val_kv];
+        w->_term_for_coordinate.ki._inner     = (NodeSet_U128*)L._ptrs[val_ki];
         w->_waiting_on_time._inner             = (NodeSet_U128*)L._ptrs[wait];
     }
 
@@ -375,7 +375,7 @@ namespace wry {
         m->_new_location = L.read_pod<Coordinate>();
         m->_old_time = (Time)L.read_u64();
         m->_new_time = (Time)L.read_u64();
-        m->_stack = (PersistentStack<Value>*)L._ptrs[stack_ref];
+        m->_stack = (PersistentStack<Term>*)L._ptrs[stack_ref];
     }
 
     static void load_into_heap_int64(Loader& L, SaveRef id) {
@@ -397,9 +397,9 @@ namespace wry {
         uint64_t payload = L.read_u64();
         // Allocate via the GC operator new.  We can't use the existing
         // constructor (which forwards args); poke fields directly.
-        auto* n = new PersistentStack<Value>(nullptr);
+        auto* n = new PersistentStack<Term>(nullptr);
         L._ptrs[id] = n;
-        n->_next = (PersistentStack<Value>*)L._ptrs[next_ref];
+        n->_next = (PersistentStack<Term>*)L._ptrs[next_ref];
         n->_payload = decode_value(payload, L);
     }
 
@@ -428,7 +428,7 @@ namespace wry {
     }
 
     static void load_into_amt_node_value_u64(Loader& L, SaveRef id) {
-        load_amt_node<Value, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
+        load_amt_node<Term, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
             for (uint32_t i = 0; i < count; ++i) {
                 uint64_t word = L.read_u64();
                 n->_values[i] = decode_value(word, L);
@@ -470,8 +470,8 @@ namespace wry {
         { save_type_tag_v<Machine>,                                          "wry::Machine",                        &load_into_machine },
         { save_type_tag_v<HeapInt64>,                                        "wry::HeapInt64",                      &load_into_heap_int64 },
         { save_type_tag_v<HeapString>,                                       "wry::HeapString",                     &load_into_heap_string },
-        { save_type_tag_v<PersistentStack<Value>>,                     "wry::PersistentStack<Value>",   &load_into_persistent_stack_node },
-        { save_type_tag_v<NodeValue_U64>,                                    "Node<Value,u64>",                     &load_into_amt_node_value_u64 },
+        { save_type_tag_v<PersistentStack<Term>>,                     "wry::PersistentStack<Term>",   &load_into_persistent_stack_node },
+        { save_type_tag_v<NodeValue_U64>,                                    "Node<Term,u64>",                     &load_into_amt_node_value_u64 },
         { save_type_tag_v<NodeEntityID_U64>,                                 "Node<EntityID,u64>",                  &load_into_amt_node_entity_id_u64 },
         { save_type_tag_v<NodeEntityPtr_U64>,                                "Node<Entity*,u64>",                   &load_into_amt_node_entity_ptr_u64 },
         { save_type_tag_v<NodeSet_U128>,                                     "Node<int,u128>",                      &load_into_amt_node_int_u128 },

@@ -10,8 +10,8 @@
 
 namespace wry {
     
-    bool TransactionContext::try_read_value_for_coordinate(Coordinate key, Value& victim) {
-        return this->_world->_value_for_coordinate.try_get(key, victim);
+    bool TransactionContext::try_read_value_for_coordinate(Coordinate key, Term& victim) {
+        return this->_world->_term_for_coordinate.try_get(key, victim);
     }
     
     bool TransactionContext::try_read_entity_id_for_coordinate(Coordinate key, EntityID& victim) {
@@ -36,7 +36,7 @@ namespace wry {
         return _parent->_context->entity_get_priority(_parent->_entity);
     }
     
-    bool Transaction::try_read_value_for_coordinate(Coordinate key, Value& victim) const {
+    bool Transaction::try_read_value_for_coordinate(Coordinate key, Term& victim) const {
         return _context->try_read_value_for_coordinate(key, victim);
     }
 
@@ -95,7 +95,7 @@ namespace wry {
 
     auto Transaction::
     write_value_for_coordinate(Coordinate key,
-                               Value desired,
+                               Term desired,
                                int operation)
     -> void {
         transaction_verb_generic(this,
@@ -121,7 +121,7 @@ namespace wry {
     wait_on_value_for_coordinate(Coordinate key,
                                  int operation)
     -> void {
-        transaction_verb_generic<Coordinate, Value>(this,
+        transaction_verb_generic<Coordinate, Term>(this,
                                  &(_context->_verb_value_for_coordinate),
                                  key,
                                  {},

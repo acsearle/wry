@@ -21,7 +21,7 @@
 #include "Option.hpp"
 #include "stddef.hpp"
 
-#include "value.hpp"
+#include "term.hpp"
 
 namespace wry::json {
     
@@ -281,13 +281,13 @@ namespace wry::json {
         return parse_number(x);
     }
     
-    // parse into type-erased Value
+    // parse into type-erased Term
     
-    using wry::Value;
+    using wry::Term;
     
-    bool parse_json_value(Value& x, auto& y);
+    bool parse_json_value(Term& x, auto& y);
     
-    inline auto parse_json_null(Value& x) {
+    inline auto parse_json_null(Term& x) {
         return [&x](auto& v) {
             if (!match_json_null()(v))
                 return false;
@@ -295,7 +295,7 @@ namespace wry::json {
         };
     }
     
-    inline auto parse_json_boolean(Value& x) {
+    inline auto parse_json_boolean(Term& x) {
         return [&x](auto& v) {
             bool y;
             if (!parse_json_boolean(y)(v))
@@ -305,7 +305,7 @@ namespace wry::json {
         };
     }
     
-    inline auto parse_json_string(Value& x) {
+    inline auto parse_json_string(Term& x) {
         return [&x](auto& v) -> bool {
             String s;
             if (parse_json_string(s)(v)) {
@@ -316,7 +316,7 @@ namespace wry::json {
         };
     }
 
-    inline auto parse_json_number(Value& x) {
+    inline auto parse_json_number(Term& x) {
         return [&x](auto& v) -> bool {
             String s;
             if (parse_json_number(s)(v)) {
@@ -327,11 +327,11 @@ namespace wry::json {
         };
     }
     
-    inline auto parse_json_array(Value& x) {
+    inline auto parse_json_array(Term& x) {
         return [&x](auto& v) -> bool {
-            //Array<Value> a;
-            Value a = value_make_array();
-            Value y;
+            //Array<Term> a;
+            Term a = term_make_array();
+            Term y;
             auto u = v;
             if (!match_json_array_begin()(u))
                 return false;
@@ -341,8 +341,8 @@ namespace wry::json {
             if (!parse_json_value(y, u))
                 return false;
             // a.push_back(std::move(y));
-            // value_insert_or_assign(a, k++, y);
-            value_push_back(a, y);
+            // term_insert_or_assign(a, k++, y);
+            term_push_back(a, y);
             if (match_json_comma()(u))
                 goto expect_value;
             if (!match_json_array_end()(u))
@@ -354,15 +354,15 @@ namespace wry::json {
         };
     }
     
-    inline auto parse_json_object(Value& x) {
+    inline auto parse_json_object(Term& x) {
         return [&x](auto& v) -> bool {
-            // Table<String, Value> o;
-            Value o = value_make_table();
+            // Table<String, Term> o;
+            Term o = term_make_table();
             // String key;
-            Value key;
-            Value value;
-            // std::pair<typename Table<String, Value>::iterator, bool> result;
-            Value result;
+            Term key;
+            Term value;
+            // std::pair<typename Table<String, Term>::iterator, bool> result;
+            Term result;
             auto u = v;
             if (!match_json_object_begin()(u))
                 return false;
@@ -376,9 +376,9 @@ namespace wry::json {
             if (!parse_json_value(value, u))
                 return false;
             // result = o.emplace(std::move(key), std::move(value));
-            result = value_insert_or_assign(o, key, value);
+            result = term_insert_or_assign(o, key, value);
             // if (!result.second) // duplicate key
-            if (!value_is_null(result))
+            if (!term_is_null(result))
                 return false;
             if (match_json_comma()(u))
                 goto expect_key;
@@ -391,7 +391,7 @@ namespace wry::json {
         };
     }
     
-    inline auto parse_json_value(Value& x) {
+    inline auto parse_json_value(Term& x) {
         return [&x](auto& v) -> bool {
             return match_and(match_json_whitespace(),
                              match_or(parse_json_string(x),
@@ -403,7 +403,7 @@ namespace wry::json {
         };
     }
     
-    bool parse_json_value(Value& x, auto& y) {
+    bool parse_json_value(Term& x, auto& y) {
         return parse_json_value(x)(y);
     }
     
@@ -427,96 +427,96 @@ namespace wry::json {
     
     struct ValueVisitor {
         
-        using Value = Value;
+        using Term = Term;
         
         template<typename E>
-        Value visit_none() {
-            return Value();
+        Term visit_none() {
+            return Term();
         }
         
         template<typename E>
-        Value visit_bool(bool x) {
-            return Value(x);
+        Term visit_bool(bool x) {
+            return Term(x);
         }
         
         template<typename E>
-        Value visit_int8_t(int8_t x) {
-            return Value((int64_t) x);
+        Term visit_int8_t(int8_t x) {
+            return Term((int64_t) x);
         }
         
         template<typename E>
-        Value visit_int16_t(int16_t x) {
-            return Value((int64_t) x);
+        Term visit_int16_t(int16_t x) {
+            return Term((int64_t) x);
         }
         
         template<typename E>
-        Value visit_int32_t(int32_t x) {
-            return Value((int64_t) x);
+        Term visit_int32_t(int32_t x) {
+            return Term((int64_t) x);
         }
         
         template<typename E>
-        Value visit_int64_t(int64_t x) {
-            return Value(x);
+        Term visit_int64_t(int64_t x) {
+            return Term(x);
         }
         
         template<typename E>
-        Value visit_uint8_t(uint8_t x) {
-            return Value((int64_t) x);
+        Term visit_uint8_t(uint8_t x) {
+            return Term((int64_t) x);
         }
         
         template<typename E>
-        Value visit_uint16_t(uint16_t x) {
-            return Value((int64_t) x);
+        Term visit_uint16_t(uint16_t x) {
+            return Term((int64_t) x);
         }
         
         template<typename E>
-        Value visit_uint32_t(uint32_t x) {
-            return Value((int64_t) x);
+        Term visit_uint32_t(uint32_t x) {
+            return Term((int64_t) x);
         }
         
         template<typename E>
-        Value visit_uint64_t(uint64_t x) {
-            // return Value(x);
-            return value_make_error();
+        Term visit_uint64_t(uint64_t x) {
+            // return Term(x);
+            return term_make_error();
         }
         
         template<typename E>
-        Value visit_float32_t(float32_t x) {
-            // return Value((double) x);
-            return value_make_error();
+        Term visit_float32_t(float32_t x) {
+            // return Term((double) x);
+            return term_make_error();
         }
         
         template<typename E>
-        Value visit_float64_t(float64_t x) {
-            // return Value(x);
-            return value_make_error();
+        Term visit_float64_t(float64_t x) {
+            // return Term(x);
+            return term_make_error();
         }
         
         template<typename E>
-        Value visit_string(String x) {
-            // return Value(std::move(x));
-            return Value(std::string_view(x.data(), x.chars.size()));
+        Term visit_string(String x) {
+            // return Term(std::move(x));
+            return Term(std::string_view(x.data(), x.chars.size()));
         }
 
         template<typename E>
-        Value visit_string_view(StringView x) {
-            // return Value(String(x));
-            return Value(std::string_view(x.chars.data(), x.chars.size()));
+        Term visit_string_view(StringView x) {
+            // return Term(String(x));
+            return Term(std::string_view(x.chars.data(), x.chars.size()));
         }
         
         template<typename A>
-        Value visit_seq(A&& accessor) {
-            // Array<Value> y;
-            // Value t = value_make_table();
-            Value a = value_make_array();
-            // Value key = 0;
+        Term visit_seq(A&& accessor) {
+            // Array<Term> y;
+            // Term t = term_make_table();
+            Term a = term_make_array();
+            // Term key = 0;
             for (;;) {
-                Option<Value> x(accessor.template next_element<Value>());
+                Option<Term> x(accessor.template next_element<Term>());
                 if (x.is_some()) {
                     printf("got a seq element\n");
                     // y.push_back(std::move(x).unwrap());
-                    // value_insert_or_assign(t, key++, std::move(x).unwrap());
-                    value_push_back(a, std::move(x).unwrap());
+                    // term_insert_or_assign(t, key++, std::move(x).unwrap());
+                    term_push_back(a, std::move(x).unwrap());
                 }
                 else
                     return a;
@@ -524,19 +524,19 @@ namespace wry::json {
         }
         
         template<typename A>
-        Value visit_map(A&& accessor) {
-            // Table<String, Value> z;
-            Value t = value_make_table();
+        Term visit_map(A&& accessor) {
+            // Table<String, Term> z;
+            Term t = term_make_table();
             for (;;) {
-                Option<std::pair<String, Value>> x(accessor.template next_entry<String, Value>());
+                Option<std::pair<String, Term>> x(accessor.template next_entry<String, Term>());
                 if (x.is_some()) {
                     // auto [at, flag] = z.insert(std::move(x).unwrap());
                     // if (!flag)
                         // throw ERANGE;
                     auto y = std::move(x).unwrap();
-                    value_insert_or_assign(t, Value(std::string_view(y.first.chars.data(), y.first.chars.size())), y.second);
+                    term_insert_or_assign(t, Term(std::string_view(y.first.chars.data(), y.first.chars.size())), y.second);
                 } else {
-                    return t; // Value(std::move(z));
+                    return t; // Term(std::move(z));
                 }
             }
         }
@@ -548,7 +548,7 @@ namespace wry::json {
     using wry::deserialize;
     
     template<typename D>
-    Value deserialize(std::in_place_type_t<Value>, D&& deserializer) {
+    Term deserialize(std::in_place_type_t<Term>, D&& deserializer) {
         return std::forward<D>(deserializer).deserialize_any(ValueVisitor{});
     }
     
@@ -721,7 +721,7 @@ namespace wry::json {
         
         template<typename V>
         typename std::decay_t<V>::Value deserialize_any(V&& visitor) {
-            
+
             match_json_whitespace()(v);
             
             if (match_zstr("null")(v))

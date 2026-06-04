@@ -34,34 +34,34 @@ namespace wry {
         printf("\"%.*s\"", (int)_size, (const char*)_bytes);
     }
 
-    Value HeapString::_value_eq(Value right) const {
-        // value_eq has already confirmed right is OBJECT-tagged with a
+    Term HeapString::_term_eq(Term right) const {
+        // term_eq has already confirmed right is OBJECT-tagged with a
         // different pointer.  Cross-subtype is ERROR; same subtype
         // compares the cached hash first (cheap negative), then bytes.
-        HeapValue* p = _value_as_object(right);
+        HeapTerm* p = _term_as_object(right);
         if (!p || p->_save_type_tag() != HeapString::SAVE_TYPE_TAG)
-            return value_make_error();
+            return term_make_error();
         const HeapString* o = static_cast<const HeapString*>(p);
-        if (_hash != o->_hash) return value_make_false();
-        if (_size != o->_size) return value_make_false();
-        return value_make_boolean_with(std::memcmp(_bytes, o->_bytes, _size) == 0);
+        if (_hash != o->_hash) return term_make_false();
+        if (_size != o->_size) return term_make_false();
+        return term_make_boolean_with(std::memcmp(_bytes, o->_bytes, _size) == 0);
     }
 
-    Value HeapString::_value_less(Value right) const {
-        HeapValue* p = _value_as_object(right);
+    Term HeapString::_term_less(Term right) const {
+        HeapTerm* p = _term_as_object(right);
         if (!p || p->_save_type_tag() != HeapString::SAVE_TYPE_TAG)
-            return value_make_error();
+            return term_make_error();
         const HeapString* o = static_cast<const HeapString*>(p);
         std::size_t n = std::min(_size, o->_size);
         int c = std::memcmp(_bytes, o->_bytes, n);
-        if (c != 0) return value_make_boolean_with(c < 0);
-        return value_make_boolean_with(_size < o->_size);
+        if (c != 0) return term_make_boolean_with(c < 0);
+        return term_make_boolean_with(_size < o->_size);
     }
 
-    Value HeapString::_value_hash() const {
+    Term HeapString::_term_hash() const {
         // _hash is set at construction and never mutates; return it as
         // a SMALL_INTEGER (narrowed to 60 bits to fit inline).
-        return value_make_integer_with((int64_t)(_hash >> 4));
+        return term_make_integer_with((int64_t)(_hash >> 4));
     }
 //
 //    HeapString const* HeapString::make(std::size_t hc, std::string_view view) {

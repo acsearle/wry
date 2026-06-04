@@ -11,13 +11,13 @@
 #include <string>
 #include <string_view>
 
-#include "value.hpp"
+#include "term.hpp"
 #include "ctrie.hpp"
 #include "garbage_collected.hpp"
 
 namespace wry {
     
-    struct HeapString final : HeapValue {
+    struct HeapString final : HeapTerm {
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::HeapString");
 
@@ -41,9 +41,9 @@ namespace wry {
         // Content equality / ordering / hash.  Two HeapStrings with the
         // same bytes compare equal and hash equal even though they may
         // sit at different addresses (interning is unwired in production).
-        virtual Value _value_eq(Value right) const override final;
-        virtual Value _value_less(Value right) const override final;
-        virtual Value _value_hash() const override final;
+        virtual Term _term_eq(Term right) const override final;
+        virtual Term _term_less(Term right) const override final;
+        virtual Term _term_hash() const override final;
 
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override final;
@@ -55,12 +55,12 @@ namespace wry {
     }
 
 //    template<size_t N> requires (N > 0)
-//    constexpr Value::Value(const char (&ntbs)[N]) {
+//    constexpr Term::Term(const char (&ntbs)[N]) {
 //        const size_t M = N - 1;
 //        assert(ntbs[M] == '\0');
 //        if (M < 8) {
 //            _short_string_t s;
-//            s._tag_and_len = (M << VALUE_SHIFT) | VALUE_TAG_SHORT_STRING;
+//            s._tag_and_len = (M << TERM_SHIFT) | TERM_TAG_SHORT_STRING;
 //            // builtin for constexpr
 //            __builtin_memcpy(s._chars, ntbs, M);
 //            __builtin_memcpy(&_data, &s, 8);
@@ -76,9 +76,9 @@ namespace wry {
     //
     // We can imagine genericising this to a memo system where we need
     //
-    // memo for foo(Key) -> Value
+    // memo for foo(Key) -> Term
     //
-    // need Key, Value, foo, KeyHasher, KeyEqual
+    // need Key, Term, foo, KeyHasher, KeyEqual
     //
     // WeakHolder has to be able to provide a key to erase
     //
@@ -88,13 +88,13 @@ namespace wry {
     // WeakHolder needs to have a Key to erase itself.
     //    If being erased by the collector, it can rely on the HeapString still being alive
     //    If being replaced by the mutator, the Key is not needed
-    // SNode needs to hold a Key and a Value
+    // SNode needs to hold a Key and a Term
     //    If being replaced by the mutator, this is the Key used.
     // LNodes lists hold SNodes all with the same hash, but different Keys
     // LNodes are rare but also expensive when they get hit.
 
     // Does the trie need to know anything about Keys and Values or is it a
-    // structure mapping hash to a list of (Key, Value) pairs?
+    // structure mapping hash to a list of (Key, Term) pairs?
 
     template<typename> struct WeakHolder;
     void _heap_string_ctrie_collector_try_erase(WeakHolder<HeapString> const* victim);

@@ -16,7 +16,7 @@ namespace wry {
     void Source::notify(TransactionContext* context) const {
         // printf("%s\n", __PRETTY_FUNCTION__);
         Transaction* tx = Transaction::make(context, this, 2);
-        Value _ = {};
+        Term _ = {};
         if (!tx->try_read_value_for_coordinate(this->_location, _))
             tx->write_value_for_coordinate(this->_location, this->_of_this);
         tx->wait_on_value_for_coordinate(this->_location, Transaction::Operation::WAIT_ALWAYS);
@@ -24,9 +24,9 @@ namespace wry {
     
     void Sink::notify(TransactionContext* context) const {
         Transaction* tx = Transaction::make(context, this, 2);
-        Value x = {};
+        Term x = {};
         if (tx->try_read_value_for_coordinate(this->_location, x))
-            tx->write_value_for_coordinate(this->_location, value_make_empty());
+            tx->write_value_for_coordinate(this->_location, term_make_empty());
         tx->wait_on_value_for_coordinate(this->_location, Transaction::Operation::WAIT_ALWAYS);
     }
         
@@ -55,7 +55,7 @@ namespace wry {
         // A counter increments the value at its location
                 
         // Read the value at the location
-        Value value = value_make_zero(); // Unchanged if there is no value at the location yet
+        Term value = term_make_zero(); // Unchanged if there is no value at the location yet
         (void) context->try_read_value_for_coordinate(this->_location, value);
 
         // Create a transaction
@@ -80,7 +80,7 @@ namespace wry {
     void Evenator::notify(TransactionContext* context) const {
         // An evenator reads the value at its loccation, and increments it if it is odd
         
-        Value value = value_make_zero(); // Unchanged if there is no value at the location yet
+        Term value = term_make_zero(); // Unchanged if there is no value at the location yet
         (void) context->try_read_value_for_coordinate(this->_location, value);
         
         // Create a transaction

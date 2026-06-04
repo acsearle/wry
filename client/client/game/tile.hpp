@@ -44,7 +44,7 @@ namespace wry {
     struct Tile {
 
         // Transactor _transaction;
-        Value _value;
+        Term _value;
         // Entity* _occupant;
         
         // void notify_occupant(World* world);

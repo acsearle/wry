@@ -91,7 +91,7 @@ namespace wry {
         //   _outstanding_keysdown          -> WorldOverlay (later phase)
         //   _looking_at                    -> WorldOverlay (later phase)
         bool _outstanding_click = false;
-        Root<Value> _holding_value = {};
+        Root<Term> _holding_value = {};
         float2 _looking_at = {};
         float2 _mouse = {};
         simd_float4 _mouse4 = {};
@@ -164,7 +164,7 @@ namespace wry {
                 // value source
                 Source* q = new Source;
                 q->_location = Coordinate{2, 2};
-                q->_of_this = Value(1);
+                q->_of_this = Term(1);
                 // _world->_entities.push_back(q);
                 // entity_ready_on_world(q, _world);
                 insert_localized_entity(q);
@@ -198,21 +198,21 @@ namespace wry {
 //                insert_localized_entity(s);
 //            }
 
-            //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_integer_with(7));
-            world->_value_for_coordinate.set(Coordinate{-2, -2},
-                                              value_make_integer_with((7)));
-            //_world->_value_for_coordinate.write(Coordinate{-2, -2}, value_make_array());
-            // _world->_value_for_coordinate.set(Coordinate{-2, -2}, value_make_array());
-            world->_value_for_coordinate.set(Coordinate{0, +1},
-                                              value_make_integer_with((1)));
-            world->_value_for_coordinate.set(Coordinate{0, +2},
-                                              value_make_integer_with((2)));
-            world->_value_for_coordinate.set(Coordinate{0, +3},
-                                              value_make_integer_with((3)));
-            world->_value_for_coordinate.set(Coordinate{0, +4},
-                                              value_make_opcode(OPCODE_FLIP_FLOP));
-            world->_value_for_coordinate.set(Coordinate{0, +5},
-                                              value_make_integer_with((5)));
+            //_world->_term_for_coordinate.write(Coordinate{-2, -2}, term_make_integer_with(7));
+            world->_term_for_coordinate.set(Coordinate{-2, -2},
+                                              term_make_integer_with((7)));
+            //_world->_term_for_coordinate.write(Coordinate{-2, -2}, term_make_array());
+            // _world->_term_for_coordinate.set(Coordinate{-2, -2}, term_make_array());
+            world->_term_for_coordinate.set(Coordinate{0, +1},
+                                              term_make_integer_with((1)));
+            world->_term_for_coordinate.set(Coordinate{0, +2},
+                                              term_make_integer_with((2)));
+            world->_term_for_coordinate.set(Coordinate{0, +3},
+                                              term_make_integer_with((3)));
+            world->_term_for_coordinate.set(Coordinate{0, +4},
+                                              term_make_opcode(OPCODE_FLIP_FLOP));
+            world->_term_for_coordinate.set(Coordinate{0, +5},
+                                              term_make_integer_with((5)));
             
             _worlds.emplace_back(world);
             

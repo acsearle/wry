@@ -14,7 +14,7 @@ namespace wry {
         // printf("%s\n", __PRETTY_FUNCTION__);
         garbage_collected_scan(_entity_id_for_coordinate);
         garbage_collected_scan(_entity_for_entity_id);
-        garbage_collected_scan(_value_for_coordinate);
+        garbage_collected_scan(_term_for_coordinate);
         garbage_collected_scan(_waiting_on_time);
         
     } // World::_garbage_collected_scan
@@ -70,7 +70,7 @@ namespace wry {
         // implementing the resulting mutations
         
        
-        WaitableMap<Coordinate, Value> new_value_for_coordinate;
+        WaitableMap<Coordinate, Term> new_value_for_coordinate;
         WaitableMap<Coordinate, EntityID> new_entity_id_for_coordinate;
         WaitableMap<EntityID, Entity const*> new_entity_for_entity_id;
 
@@ -78,9 +78,9 @@ namespace wry {
         auto value_for_coordinate_action
         = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<std::pair<ParallelRebuildAction<Value>, ParallelRebuildAction<std::vector<EntityID>>>> {
+        -> Coroutine::Future<std::pair<ParallelRebuildAction<Term>, ParallelRebuildAction<std::vector<EntityID>>>> {
             
-            using A = std::pair<ParallelRebuildAction<Value>, ParallelRebuildAction<std::vector<EntityID>>>;
+            using A = std::pair<ParallelRebuildAction<Term>, ParallelRebuildAction<std::vector<EntityID>>>;
             
             A result = {};
             const Transaction::Node* writer = nullptr;
@@ -103,15 +103,15 @@ namespace wry {
             
             if (writer) {
                 assert(writer->_operation & Transaction::Operation::WRITE_ON_COMMIT);
-                result.first.value = get<Value>(writer->_desired);
-                result.first.tag = ParallelRebuildAction<Value>::WRITE_VALUE;
+                result.first.value = get<Term>(writer->_desired);
+                result.first.tag = ParallelRebuildAction<Term>::WRITE_VALUE;
                 if (writer->_operation & Transaction::Operation::WAIT_ON_COMMIT) {
                     result.second.value.push_back(writer->_parent->_entity->_entity_id);
                     result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::WRITE_VALUE;
                 } else {
                     result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::CLEAR_VALUE;
                 }
-                for_each_if_first(_value_for_coordinate.ki,
+                for_each_if_first(_term_for_coordinate.ki,
                                   kv.first,
                                   [coordinate=kv.first, &next_ready](std::pair<Coordinate, EntityID> key) {
                     assert(key.first == coordinate);
@@ -259,7 +259,7 @@ namespace wry {
         Coroutine::Nursery nursery;
         
         co_await nursery.fork(new_value_for_coordinate,
-                              coroutine_parallel_rebuild2(_value_for_coordinate,
+                              coroutine_parallel_rebuild2(_term_for_coordinate,
                                                          context._verb_value_for_coordinate,
                                                          value_for_coordinate_action));
         
@@ -336,10 +336,10 @@ namespace wry {
 // The key-value mapping can be dense and large
 // The key-waitset mapping is expected to sparse and small
 
-// Thus we don't want to store it as a map of Key -> (Value, Set) because
+// Thus we don't want to store it as a map of Key -> (Term, Set) because
 // the Set storage is almost always wasted
 
-// (We could store Value + indirection Value x Set)
+// (We could store Term + indirection Term x Set)
 
 // The value and the waitset change together
 // (OR, we record that a change happened and clear/use the waitset in the

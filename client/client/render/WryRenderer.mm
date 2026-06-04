@@ -789,12 +789,12 @@
                 // PaletteOverlay; the overlay owns this data from here on.
                 auto& controls = _model->_palette_overlay.controls();
                 size_type nn = 24;
-                controls._payload = wry::matrix<wry::Value>(nn, 2);
+                controls._payload = wry::matrix<wry::Term>(nn, 2);
 
                 i64 j = 0;
                 for (i64 i = 0; i != _name_to_opcode.size(); ++i) {
                     if (_opcode_to_coordinate.contains(i)) {
-                        controls._payload[j % nn, j / nn] = value_make_opcode((int)i);
+                        controls._payload[j % nn, j / nn] = term_make_opcode((int)i);
                         ++j;
                     } else {
                         auto s = _opcode_to_name[i].chars.as_view();
@@ -961,7 +961,7 @@
     // platform cursor to its icon.  The overlay flagged this from its
     // on_event during pump; we consume the flag here.
     if (_model->_palette_overlay.cursor_needs_refresh()) {
-        auto coordinate = _opcode_to_coordinate[value_as_opcode(_model->_holding_value)];
+        auto coordinate = _opcode_to_coordinate[term_as_opcode(_model->_holding_value)];
         matrix<RGBA8Unorm_sRGB> tile(64, 64);
         MTLRegion region = MTLRegionMake2D(coordinate.x * _symbols.width,
                                            coordinate.y * _symbols.height,
@@ -1011,7 +1011,7 @@
 
         for (difference_type j = 0; j != m.major(); ++j) {
             for (difference_type i = 0; i != m.minor(); ++i) {
-                Value a = m[i, j];
+                Term a = m[i, j];
                 if (a.is_opcode()) {
 
                     SpriteVertex c;
@@ -1054,7 +1054,7 @@
                     c.v.texCoord = simd_make_float2(0, 1) / 32.0f + texCoord;
                     v.push_back(c);
 
-                    texCoord = _opcode_to_coordinate[value_as_opcode(a)].xy;
+                    texCoord = _opcode_to_coordinate[term_as_opcode(a)].xy;
                     c.color = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f);
 
                     c.v.position = make<float4>(0, 0, 0, 0) + position;
@@ -1370,9 +1370,9 @@
                 
                 // now make the stack
                 location.z += 0.8;
-                for (int i = (int) wry::PersistentStack<wry::Value>::size(p->_stack); i--;) {
+                for (int i = (int) wry::PersistentStack<wry::Term>::size(p->_stack); i--;) {
                     location.z += 0.5;
-                    wry::Value value = wry::PersistentStack<wry::Value>::at(p->_stack, i);
+                    wry::Term value = wry::PersistentStack<wry::Term>::at(p->_stack, i);
                     simd_float4 coordinate;
                     if (value.is_opcode()) {
                         coordinate = _opcode_to_coordinate[value.as_opcode()];
@@ -1487,9 +1487,9 @@
                 simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
                 
                 {
-                    //wry::Value q = new_world->_value_for_coordinate.read(wry::Coordinate{i, j});
-                    wry::Value q = {};
-                    (void) new_world->_value_for_coordinate.try_get(wry::Coordinate{i, j}, q);
+                    //wry::Term q = new_world->_term_for_coordinate.read(wry::Coordinate{i, j});
+                    wry::Term q = {};
+                    (void) new_world->_term_for_coordinate.try_get(wry::Coordinate{i, j}, q);
                     // printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::Coordinate{i, j}.data(), q._data);
                     if (q.is_int64_t()) {
                         coordinate = make<float4>((q.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);

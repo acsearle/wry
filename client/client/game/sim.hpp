@@ -51,7 +51,7 @@ namespace wry {
     
 }
 
-#include "value.hpp"
+#include "term.hpp"
 
 
 #endif /* sim_hpp */

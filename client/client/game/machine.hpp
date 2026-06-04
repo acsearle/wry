@@ -38,7 +38,7 @@ namespace wry {
         
         i64 _on_arrival = OPCODE_NOOP;
         
-        PersistentStack<Value> const* _stack = nullptr;
+        PersistentStack<Term> const* _stack = nullptr;
         
 
         // The _old_* and _new_* states represent the beginning and end states
@@ -55,33 +55,33 @@ namespace wry {
             return new Machine(*this);
         }
         
-        void push(Value x) {
-            if (!value_is_null(x))
-                _stack = PersistentStack<Value>::push(_stack, x);
+        void push(Term x) {
+            if (!term_is_null(x))
+                _stack = PersistentStack<Term>::push(_stack, x);
         }
 
-        Value pop() {
-            if (PersistentStack<Value>::is_empty(_stack))
-                return Value{};
-            Value result = PersistentStack<Value>::peek(_stack);
-            _stack = PersistentStack<Value>::tail(_stack);
+        Term pop() {
+            if (PersistentStack<Term>::is_empty(_stack))
+                return Term{};
+            Term result = PersistentStack<Term>::peek(_stack);
+            _stack = PersistentStack<Term>::tail(_stack);
             return result;
         }
 
-        Value peek() const {
-            return PersistentStack<Value>::is_empty(_stack)
-                ? Value{}
-                : PersistentStack<Value>::peek(_stack);
+        Term peek() const {
+            return PersistentStack<Term>::is_empty(_stack)
+                ? Term{}
+                : PersistentStack<Term>::peek(_stack);
         }
         
-        std::pair<Value, Value> pop2() {
-            Value z = pop();
-            Value y = pop();
+        std::pair<Term, Term> pop2() {
+            Term z = pop();
+            Term y = pop();
             return {y, z};
         }
         
-        std::pair<Value, Value> peek2() const {
-            std::pair<Value, Value> result = {};
+        std::pair<Term, Term> peek2() const {
+            std::pair<Term, Term> result = {};
             if (_stack) {
                 result.second = _stack->_payload;
                 if (_stack->_next)
@@ -90,10 +90,10 @@ namespace wry {
             return result;
         }
 
-        void pop2push1(Value x) {
-            _stack = PersistentStack<Value>::tail(_stack);
-            _stack = PersistentStack<Value>::tail(_stack);
-            _stack = PersistentStack<Value>::push(_stack, x);
+        void pop2push1(Term x) {
+            _stack = PersistentStack<Term>::tail(_stack);
+            _stack = PersistentStack<Term>::tail(_stack);
+            _stack = PersistentStack<Term>::push(_stack, x);
         }
         
         virtual void notify(TransactionContext* context) const override;
