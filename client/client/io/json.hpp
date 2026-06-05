@@ -15,7 +15,6 @@
 #include "parse.hpp"
 #include "serialize.hpp"
 #include "deserialize.hpp"
-#include "table.hpp"
 #include "cstring.hpp"
 
 #include "Option.hpp"

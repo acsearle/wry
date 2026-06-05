@@ -25,7 +25,6 @@
 #include "sim.hpp"
 #include "spawner.hpp"
 #include "string.hpp"
-#include "table.hpp"
 #include "world.hpp"
 #include "player.hpp"
 
