@@ -23,9 +23,9 @@ namespace wry {
     template<std::integral T>
     struct DefaultKeyService<T> {
         using key_type = T;
-        using hash_type = std::make_unsigned_t<T>;
-        constexpr hash_type hash(key_type key) const { return key; }
-        constexpr key_type unhash(hash_type z) const { return z; }
+        using code_type = std::make_unsigned_t<T>;
+        constexpr code_type encode(key_type key) const { return key; }
+        constexpr key_type decode(code_type z) const { return z; }
         
         constexpr bool operator()(key_type a, key_type b) const {
             return a < b;
@@ -37,25 +37,25 @@ namespace wry {
     template<typename A, typename B>
     struct DefaultKeyService<std::pair<A, B>> {
         using key_type = std::pair<A, B>;
-        using hash_type = unsigned_integer_of_byte_width_t<sizeof(A) + sizeof(B)>;
-        constexpr hash_type hash(key_type key) const {
-            hash_type z = {};
+        using code_type = unsigned_integer_of_byte_width_t<sizeof(A) + sizeof(B)>;
+        constexpr code_type encode(key_type key) const {
+            code_type z = {};
             // Assemble respecting little-endianness
             __builtin_memcpy(&z, &key.second, sizeof(B));
             __builtin_memcpy((char*)&z + sizeof(B), &key.first, sizeof(A));
             return z;
         }
-        constexpr hash_type mask_first() {
-            hash_type z{};
+        constexpr code_type mask_first() {
+            code_type z{};
             __builtin_memset((char*)&z + sizeof(B), -1, sizeof(A));
             return z;
         }
-        constexpr hash_type mask_second() {
-            hash_type z{};
+        constexpr code_type mask_second() {
+            code_type z{};
             __builtin_memset(&z, -1, sizeof(B));
             return z;
         }
-        constexpr key_type unhash(hash_type z) const {
+        constexpr key_type decode(code_type z) const {
             key_type key{};
             // Assemble respecting little-endianness
             __builtin_memcpy(&key.second, &z, sizeof(B));
@@ -63,7 +63,7 @@ namespace wry {
             return key;
         }
         constexpr bool operator()(key_type a, key_type b) const {
-            return hash(a) < hash(b);
+            return encode(a) < encode(b);
         }
     };
     

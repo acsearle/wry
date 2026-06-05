@@ -42,27 +42,27 @@ namespace wry {
     template<typename Key, typename T, typename H = DefaultKeyService<Key>, typename D = ScanDiscipline>
     struct PersistentMap {
         
-        using U = typename H::hash_type;
+        using U = typename H::code_type;
 
-        using AMT = ArrayMappedTrie<T, U, std::uint32_t, 5, ScanDiscipline::InnerDiscipline>;
+        using AMT = ArrayMappedTrie<U, T, ScanDiscipline::InnerDiscipline>;
         using Slot = D::template Slot<AMT const*>;
         Slot _inner{};
 
-        // const ArrayMappedTrie<T, U>* _inner = nullptr;
+        // const ArrayMappedTrie<U, T>* _inner = nullptr;
 
         bool contains(Key key) const {
-            U j = H{}.hash(key);
+            U j = H{}.encode(key);
             return _inner && _inner->contains(j);
         }
                 
         bool try_get(Key key, T& victim) const {
-            U j = H{}.hash(key);
+            U j = H{}.encode(key);
             return _inner && _inner->try_get(j,
                                              victim);
         }
                         
         [[nodiscard]] PersistentMap clone_and_set(Key key, T value) const {
-            U j = H{}.hash(key);
+            U j = H{}.encode(key);
             T _ = {};
             return PersistentMap{Slot{
                 _inner
@@ -72,7 +72,7 @@ namespace wry {
         }
         
         [[nodiscard]] std::pair<PersistentMap, bool> clone_and_try_erase(Key key, T& victim) const {
-            U j = H{}.hash(key);
+            U j = H{}.encode(key);
             std::pair<PersistentMap, bool> result = { *this, false };
             if (_inner) {
                 std::tie(result.first._inner,
@@ -98,7 +98,7 @@ namespace wry {
         void parallel_for_each(auto&& action) const {
             if (_inner) {
                 _inner->parallel_for_each([&action](uint64_t key, T value) {
-                    action(H{}.unhash(key), value);
+                    action(H{}.decode(key), value);
                 });
             }
         }
@@ -106,7 +106,7 @@ namespace wry {
         void for_each(auto&& action) const {
             if (_inner) {
                 _inner->for_each([&action](uint64_t key, T value) {
-                    action(H{}.unhash(key), value);
+                    action(H{}.decode(key), value);
                 });
             }
         }

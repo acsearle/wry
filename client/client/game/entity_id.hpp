@@ -37,18 +37,18 @@ namespace wry {
     template<>
     struct DefaultKeyService<EntityID> {
         using key_type = EntityID;
-        using hash_type = uint64_t;
-        
-        constexpr hash_type hash(key_type key) const {
+        using code_type = uint64_t;
+
+        constexpr code_type encode(key_type key) const {
             return key.data;
         }
-        
-        constexpr key_type unhash(hash_type h) const {
+
+        constexpr key_type decode(code_type h) const {
             return EntityID{.data = h};
         }
-        
+
         constexpr bool operator()(key_type a, key_type b) const {
-            return hash(a) < hash(b);
+            return encode(a) < encode(b);
         }
 
     

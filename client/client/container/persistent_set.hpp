@@ -27,20 +27,20 @@ namespace wry {
     template<typename Key, typename H, typename Discipline>
     struct PersistentSet {
         
-        using U = typename H::hash_type;
+        using U = typename H::code_type;
         using T = int;
         
-        using N = ArrayMappedTrie<T, U, std::uint32_t, 5, typename Discipline::InnerDiscipline>;
+        using N = ArrayMappedTrie<U, T, typename Discipline::InnerDiscipline>;
         Discipline::template Slot<N const*> _inner = nullptr;
 
         bool contains(Key key) const {
-            U j = H{}.hash(key);
+            U j = H{}.encode(key);
             uint64_t _ = {};
             return _inner && _inner->try_get(j, _);
         }
         
         [[nodiscard]] PersistentSet clone_and_set(Key key) const {
-            U j = H{}.hash(key);
+            U j = H{}.encode(key);
             int value = {};
             int _ = {};
             return PersistentSet{
@@ -61,7 +61,7 @@ namespace wry {
                 _inner->parallel_for_each([&action](U key, int) {
                     // TODO: we need a better way of mapping the Key type to
                     // and from the integer type
-                    action(H{}.unhash(key));
+                    action(H{}.decode(key));
                 });
             }
         }
@@ -74,7 +74,7 @@ namespace wry {
         Task coroutine_parallel_for_each(auto&& action) const {
             if (_inner) {
                 co_await _inner->coroutine_parallel_for_each([&action](U key, int) {
-                    action(H{}.unhash(key));
+                    action(H{}.decode(key));
                 });
             }
         }
@@ -82,7 +82,7 @@ namespace wry {
         Task coroutine_parallel_for_each_coroutine(auto&& action) const {
             if (_inner) {
                 co_await _inner->coroutine_parallel_for_each_coroutine([&action](U key, int) -> Task {
-                    co_await action(H{}.unhash(key));
+                    co_await action(H{}.decode(key));
                 });
             }
         }
@@ -118,7 +118,7 @@ namespace wry {
     partition_first(PersistentSet<std::pair<A, B>, H, D> const& x, A a) {
         using Key = std::pair<A, B>;
         using S = PersistentSet<Key, H, D>;
-        auto z = H{}.hash(Key{a, B{}});
+        auto z = H{}.encode(Key{a, B{}});
         auto mask = H{}.mask_first();
         std::pair<S, S> result;
         auto c = x._inner->partition_mask(x._inner, z, mask);
@@ -131,10 +131,10 @@ namespace wry {
     void for_each_if_first(PersistentSet<std::pair<A, B>, H, D> const& x, A a, F&& action) {
         using Key = std::pair<A, B>;
         using S = PersistentSet<Key, H, D>;
-        auto z = H{}.hash(Key{a, B{}});
+        auto z = H{}.encode(Key{a, B{}});
         auto mask = H{}.mask_first();
-        x._inner->for_each_mask(x._inner, z, mask, [action=std::forward<F>(action)](H::hash_type key, int dummy) {
-            return action(H{}.unhash(key));
+        x._inner->for_each_mask(x._inner, z, mask, [action=std::forward<F>(action)](H::code_type key, int dummy) {
+            return action(H{}.decode(key));
         });
     }
     
@@ -143,7 +143,7 @@ namespace wry {
     as_multimap_erase(PersistentSet<std::pair<A, B>, H, D> const& x, A a) {
         using Key = std::pair<A, B>;
         using S = PersistentSet<Key, H, D>;
-        auto z = H{}.hash(Key{a, B{}});
+        auto z = H{}.encode(Key{a, B{}});
         auto mask = H{}.mask_first();
         auto c = x._inner->partition_mask(x._inner, z, mask);
         return S{c.second};

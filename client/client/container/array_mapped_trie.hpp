@@ -15,54 +15,60 @@
 #include "variant.hpp"
 #include "coroutine.hpp"
 #include "bit.hpp"
+#include "stdint.hpp"
 
 
 namespace wry {
 
+    // A radix trie over a fixed-width unsigned Word, branching SYMBOL_WIDTH
+    // bits at a time.  Key-first to match the project's container convention.
+    // Bitmap is derived (one presence bit per child slot), not a free knob;
+    // SYMBOL_WIDTH defaults to 5 (32-way nodes).
     template<
+    typename Word,
     typename T,
-    typename Key,
-    typename Bitmap,
-    int SYMBOL_WIDTH,
-    typename Discipline>
+    typename Discipline,
+    int SYMBOL_WIDTH = 5>
     struct ArrayMappedTrie : Discipline::IntrusiveAllocator {
 
-        static constexpr size_t KEY_WIDTH = sizeof(Key) * CHAR_BIT;
+        using Bitmap = unsigned_integer_of_bit_width_t<((std::size_t)1 << SYMBOL_WIDTH)>;
+
+        static constexpr size_t WORD_WIDTH = sizeof(Word) * CHAR_BIT;
         static constexpr size_t BITMAP_WIDTH = sizeof(Bitmap) * CHAR_BIT;
 
-        static constexpr Key PREFIX_MASK = ~(Key)0 << SYMBOL_WIDTH;
-        static constexpr Key INDEX_MASK = ~PREFIX_MASK;
+        static constexpr Word PREFIX_MASK = ~(Word)0 << SYMBOL_WIDTH;
+        static constexpr Word INDEX_MASK = ~PREFIX_MASK;
 
         static_assert(BITMAP_WIDTH >= ((size_t)1 << SYMBOL_WIDTH));
 
         static void assert_valid_shift(int shift) {
             assert(0 <= shift); // non-negative
-            assert(shift < KEY_WIDTH); // non-wrapping
+            assert(shift < WORD_WIDTH); // non-wrapping
             assert(!(shift % SYMBOL_WIDTH)); // a multiple of log2(M)
         }
 
-        static void assert_valid_prefix_and_shift(Key prefix, int shift) {
+        static void assert_valid_prefix_and_shift(Word prefix, int shift) {
             assert_valid_shift(shift);
             assert((prefix & ~(PREFIX_MASK << shift)) == 0);
         }
 
-        static Key prefix_mask_for_shift(int shift) {
+        static Word prefix_mask_for_shift(int shift) {
             return PREFIX_MASK << shift;
         }
 
-        static Key prefix_from_key_and_shift(Key key, int shift) {
+        static Word prefix_from_key_and_shift(Word key, int shift) {
             assert_valid_shift(shift);
             return key & prefix_mask_for_shift(shift);
         }
 
-        static int shift_from_keys(Key a, Key b) {
-            Key d = a ^ b;
+        static int shift_from_keys(Word a, Word b) {
+            Word d = a ^ b;
             assert(d);
             using bit::clz;
             // shift is the position of the most significant differing bit,
             // rounded down to a multiple of SYMBOL_WIDTH;
             // SYMBOL_WIDTH may not be a power of two
-            int shift = ((unsigned)(KEY_WIDTH - 1 - clz(d)) / SYMBOL_WIDTH) * SYMBOL_WIDTH;
+            int shift = ((unsigned)(WORD_WIDTH - 1 - clz(d)) / SYMBOL_WIDTH) * SYMBOL_WIDTH;
             assert_valid_shift(shift);
             assert(!(d & (PREFIX_MASK << shift))); // prefix is common
             assert((d >> shift) & INDEX_MASK);     // indices are disjoint
@@ -73,7 +79,7 @@ namespace wry {
             return ptr;
         }
 
-        Key _prefix;
+        Word _prefix;
         int _shift;
         size_t _debug_capacity;
         size_t _debug_count;
@@ -84,7 +90,7 @@ namespace wry {
             T _values[] __counted_by(_debug_count);
         };
 
-        Key get_prefix_mask() const {
+        Word get_prefix_mask() const {
             return PREFIX_MASK << _shift;
         }
 
@@ -93,16 +99,16 @@ namespace wry {
             return (a->_prefix ^ b->_prefix) & (a->get_prefix_mask() & b->get_prefix_mask());
         }
 
-        bool prefix_includes_key(Key key) const {
+        bool prefix_includes_key(Word key) const {
             return _prefix == (key & get_prefix_mask());
         }
 
-        int get_index_for_key(Key key) const {
+        int get_index_for_key(Word key) const {
             assert(prefix_includes_key(key));
             return (int)((key >> _shift) & INDEX_MASK);
         }
 
-        bool bitmap_includes_key(Key key) const {
+        bool bitmap_includes_key(Word key) const {
             int index = get_index_for_key(key);
             return bitmap_get_for_index(_bitmap, index);
         }
@@ -111,7 +117,7 @@ namespace wry {
             return compressed_array_get_compressed_index_for_index(_bitmap, index);
         }
 
-        int get_compressed_index_for_key(Key key) const {
+        int get_compressed_index_for_key(Word key) const {
             int index = get_index_for_key(key);
             return get_compressed_index_for_index(index);
         }
@@ -132,7 +138,7 @@ namespace wry {
 
 
 
-        ArrayMappedTrie(Key prefix,
+        ArrayMappedTrie(Word prefix,
                         int shift,
                         size_t debug_capacity,
                         size_t debug_count,
@@ -172,7 +178,7 @@ namespace wry {
 
 
         [[nodiscard]] static ArrayMappedTrie* _Nonnull
-        make(Key prefix,
+        make(Word prefix,
              int shift,
              size_t capacity,
              size_t count,
@@ -188,14 +194,14 @@ namespace wry {
         }
 
         [[nodiscard]] static ArrayMappedTrie* _Nonnull
-        make_singleton(Key key,
+        make_singleton(Word key,
                        T value)
         {
-            Key prefix = key & PREFIX_MASK;
+            Word prefix = key & PREFIX_MASK;
             int shift = 0;
             size_t capacity = 1;
             size_t count = 1;
-            Key index = key & INDEX_MASK;
+            Word index = key & INDEX_MASK;
             Bitmap bitmap = (Bitmap)1 << (Bitmap)(index);
             ArrayMappedTrie* _Nonnull new_node = ArrayMappedTrie::make(prefix,
                                                                        shift,
@@ -208,7 +214,7 @@ namespace wry {
 
 
 
-        [[nodiscard]] bool contains(Key key) const {
+        [[nodiscard]] bool contains(Word key) const {
             if (!prefix_includes_key(key)) {
                 return false; // key is excluded by the prefix
             }
@@ -221,7 +227,7 @@ namespace wry {
             return _children[get_compressed_index_for_key(key)]->contains(key);
         }
 
-        [[nodiscard]] bool try_get(Key key, T& victim) const {
+        [[nodiscard]] bool try_get(Word key, T& victim) const {
             if (!prefix_includes_key(key)) {
                 return false; // key is excluded by the prefix
             }
@@ -236,7 +242,7 @@ namespace wry {
             return _children[compressed_index]->try_get(key, victim);
         }
 
-        [[nodiscard]] bool contains_any(Key key, Key mask) const {
+        [[nodiscard]] bool contains_any(Word key, Word mask) const {
             if ((_prefix ^ key) & get_prefix_mask() & mask) {
                 return false; // masked key is excluded by the masked prefix
             }
@@ -269,7 +275,7 @@ namespace wry {
             } else {
                 c_shift = std::max(a->_shift, b->_shift);
             }
-            Key c_prefix = prefix_from_key_and_shift(a->_prefix, c_shift);
+            Word c_prefix = prefix_from_key_and_shift(a->_prefix, c_shift);
 
             Bitmap a_bitmap{};
             void const* a_array{};
@@ -278,7 +284,7 @@ namespace wry {
                 a_array = a->_children;
             } else {
                 // By mocking up a trivial c-level array we can uniformly handle all cases
-                a_bitmap = (Key)1 << ((a->_prefix >> c_shift) & INDEX_MASK);
+                a_bitmap = (Word)1 << ((a->_prefix >> c_shift) & INDEX_MASK);
                 a_array = &a;
             }
 
@@ -288,7 +294,7 @@ namespace wry {
                 b_bitmap = b->_bitmap;
                 b_array = b->_children;
             } else {
-                b_bitmap = (Key)1 << ((b->_prefix >> c_shift) & INDEX_MASK);
+                b_bitmap = (Word)1 << ((b->_prefix >> c_shift) & INDEX_MASK);
                 b_array = &b;
             }
 
@@ -332,7 +338,7 @@ namespace wry {
 
         [[nodiscard]] static ArrayMappedTrie const* _Nonnull
         insert(ArrayMappedTrie const* _Nullable ArrayMappedTrie,
-               Key key, T value) {
+               Word key, T value) {
             // TODO: Defer make_singleton until is confirmed to be necessary
             return merge(make_singleton(key, value), ArrayMappedTrie);
         }
@@ -342,8 +348,8 @@ namespace wry {
 
         [[nodiscard]] static ArrayMappedTrie const* _Nullable
         erase(ArrayMappedTrie const* _Nullable a,
-              Key key,
-              Key mask = ~(Key)0) {
+              Word key,
+              Word mask = ~(Word)0) {
 
             if (!a)
                 // nothing to erase
@@ -400,7 +406,7 @@ namespace wry {
                 auto a_values = a->_values;
                 Bitmap c_bitmap = {};
                 auto c_values = c->_values;
-                Key im = mask & INDEX_MASK;
+                Word im = mask & INDEX_MASK;
                 // Compact while filtering because
                 // - T has no null value
                 // - We don't want to parallelize this simple bounded loop
@@ -409,7 +415,7 @@ namespace wry {
                     Bitmap select = a_bitmap ^ next;
                     int index = ctz(a_bitmap);
                     assert((Bitmap(1) << index) == select);
-                    if (((Key)index ^ key) & mask) {
+                    if (((Word)index ^ key) & mask) {
                         // no match; no erase
                         c_bitmap |= select;
                         *c_values++ = *a_values;
@@ -432,8 +438,8 @@ namespace wry {
 
         static std::pair<ArrayMappedTrie const* _Nullable, ArrayMappedTrie const* _Nullable>
         partition_mask(ArrayMappedTrie const* _Nullable node,
-                       Key key,
-                       Key mask) {
+                       Word key,
+                       Word mask) {
             if (!node)
                 return {nullptr, nullptr};
 
@@ -484,7 +490,7 @@ namespace wry {
 
         [[nodiscard]] ArrayMappedTrie* _Nonnull clone_and_insert_child(const ArrayMappedTrie* _Nonnull new_child) const {
             assert(has_children());
-            Key key = new_child->_prefix;
+            Word key = new_child->_prefix;
             assert(prefix_includes_key(key));
             ArrayMappedTrie* _Nonnull new_node = clone_with_capacity(popcount(_bitmap) + 1);
             ArrayMappedTrie const* _Nullable _ = nullptr;
@@ -499,7 +505,7 @@ namespace wry {
 
         [[nodiscard]] ArrayMappedTrie* _Nonnull clone_and_assign_child(ArrayMappedTrie const* _Nonnull new_child) const {
             assert(has_children());
-            Key key = new_child->_prefix;
+            Word key = new_child->_prefix;
             assert(prefix_includes_key(key));
             ArrayMappedTrie* _Nonnull new_node = clone_with_capacity(std::popcount(_bitmap));
             (void) compressed_array_exchange_for_index(new_node->_bitmap,
@@ -509,7 +515,7 @@ namespace wry {
             return new_node;
         }
 
-        [[nodiscard]] ArrayMappedTrie* _Nonnull clone_and_erase_child_containing_key(Key key) const {
+        [[nodiscard]] ArrayMappedTrie* _Nonnull clone_and_erase_child_containing_key(Word key) const {
             assert(has_children());
             ArrayMappedTrie* new_node = clone_with_capacity(popcount(_bitmap));
             [[maybe_unused]] ArrayMappedTrie const* _ = nullptr;
@@ -525,7 +531,7 @@ namespace wry {
 
 
 
-        [[nodiscard]] std::pair<ArrayMappedTrie* _Nonnull, bool> clone_and_insert_or_assign_key_value(Key key, T value, T& victim) const {
+        [[nodiscard]] std::pair<ArrayMappedTrie* _Nonnull, bool> clone_and_insert_or_assign_key_value(Word key, T value, T& victim) const {
             if (!prefix_includes_key(key)) {
                 return {
                     merge_disjoint(this,
@@ -535,7 +541,7 @@ namespace wry {
                 };
             }
             int index = get_index_for_key(key);
-            Key select = bitmask_for_index<Bitmap>(index);
+            Word select = bitmask_for_index<Bitmap>(index);
             int compressed_index = get_compressed_index_for_index(index);
             ArrayMappedTrie* _Nonnull new_node = clone_with_capacity(std::popcount(_bitmap | select));
             new_node->_debug_count = std::popcount(_bitmap | select);
@@ -567,12 +573,12 @@ namespace wry {
             return { new_node, leaf_did_assign };
         }
 
-        [[nodiscard]] std::pair<ArrayMappedTrie const* _Nullable, bool> clone_and_erase_key(Key key, T& victim) const {
+        [[nodiscard]] std::pair<ArrayMappedTrie const* _Nullable, bool> clone_and_erase_key(Word key, T& victim) const {
             // TODO: Do we handle all cases correctly?
             // - Replacing a count one ArrayMappedTrie with nullptr
             // - Replacing a count two ArrayMappedTrie with surviving child
             if (!prefix_includes_key(key) || !bitmap_includes_key(key))
-                // Key not present
+                // Word not present
                 return { this, false };
             int compressed_index = get_compressed_index_for_key(key);
             if (has_children()) {
@@ -611,7 +617,7 @@ namespace wry {
                 Bitmap b = _bitmap;
                 for (int i = 0; b != 0; ++i, (b &= (b-1))) {
                     int j = bit::ctz(b);
-                    Key key = _prefix | j;
+                    Word key = _prefix | j;
                     action(key, _values[i]);
                 }
             }
@@ -626,7 +632,7 @@ namespace wry {
                 Bitmap b = _bitmap;
                 for (int i = 0; b != 0; ++i, (b &= (b-1))) {
                     int j = bit::ctz(b);
-                    Key key = _prefix | j;
+                    Word key = _prefix | j;
                     action(key, _values[i]);
                 }
             }
@@ -643,7 +649,7 @@ namespace wry {
                 Bitmap b = _bitmap;
                 for (int i = 0; b != 0; ++i, (b &= (b-1))) {
                     int j = bit::ctz(b);
-                    Key key = _prefix | j;
+                    Word key = _prefix | j;
                     action(key, _values[i]);
                 }
             }
@@ -659,7 +665,7 @@ namespace wry {
                 Bitmap b = _bitmap;
                 for (int i = 0; b != 0; ++i, (b &= (b-1))) {
                     int j = bit::ctz(b);
-                    Key key = _prefix | j;
+                    Word key = _prefix | j;
                     co_await nursery.fork(action(key, _values[i]));
                 }
             }
@@ -668,16 +674,16 @@ namespace wry {
 
 
         template<typename Action>
-        static void for_each_mask(ArrayMappedTrie const* _Nullable node, Key key, Key mask, Action&& action) {
+        static void for_each_mask(ArrayMappedTrie const* _Nullable node, Word key, Word mask, Action&& action) {
             if (!node)
                 return;
             if ((node->_prefix ^ key) & (node->get_prefix_mask() & mask))
                 return;
             Bitmap a = node->_bitmap;
-            Key m = (INDEX_MASK << node->_shift) & mask;
+            Word m = (INDEX_MASK << node->_shift) & mask;
             for (; a; a &= (a-1)) {
                 int i = bit::ctz(a);
-                auto key2 = ((Key)i << node->_shift) | node->_prefix;
+                auto key2 = ((Word)i << node->_shift) | node->_prefix;
                 if ((key2 ^ key) & m)
                     continue;
                 Bitmap j = (Bitmap)1 << i;
@@ -700,11 +706,11 @@ namespace wry {
             if (first == last)
                 return nullptr;
             auto first2 = first;
-            Key prefix = {};
+            Word prefix = {};
             int shift = 0;
             size_t count;
             Bitmap bitmap = {};
-            Key key = first2->first & ~INDEX_MASK;
+            Word key = first2->first & ~INDEX_MASK;
             prefix = key & ~INDEX_MASK;
             for (;;) {
                 ++count;
@@ -761,7 +767,7 @@ namespace wry {
             assert(count <= _debug_capacity);
             assert(count == _debug_count);
             if (has_children()) {
-                Key get_prefix_mask = ~INDEX_MASK << _shift;
+                Word get_prefix_mask = ~INDEX_MASK << _shift;
                 for (int j = 0; j != count; ++j) {
                     const ArrayMappedTrie* child = _children[j];
                     assert(child->_shift < _shift);
@@ -771,7 +777,7 @@ namespace wry {
                     }
                     assert((child->_prefix & get_prefix_mask) == _prefix);
                     int child_index = get_index_for_key(child->_prefix);
-                    Key select = (Key)1 << child_index;
+                    Word select = (Word)1 << child_index;
                     assert(_bitmap & select);
                     if (popcount(_bitmap & (select - 1)) != j) {
                         printf("%llx : %d\n", _prefix, _shift);
@@ -814,7 +820,7 @@ namespace wry {
 
         void insert_child(ArrayMappedTrie const* _Nonnull new_child) {
             assert(has_children());
-            Key key = new_child->_prefix;
+            Word key = new_child->_prefix;
             assert(prefix_includes_key(key));
             ++_debug_count;
             compressed_array_insert_for_index(_debug_capacity,
@@ -826,7 +832,7 @@ namespace wry {
 
         ArrayMappedTrie const* _Nonnull exchange_child(ArrayMappedTrie const* _Nonnull new_child) {
             assert(has_children());
-            Key key = new_child->_prefix;
+            Word key = new_child->_prefix;
             assert(prefix_includes_key(key));
             return compressed_array_exchange_for_index(_bitmap,
                                                        _children,
@@ -834,7 +840,7 @@ namespace wry {
                                                        new_child);
         }
 
-        void insert_key_value(Key key, T value) {
+        void insert_key_value(Word key, T value) {
             assert(has_values());
             assert(prefix_includes_key(key));
             ++_debug_count;
@@ -845,7 +851,7 @@ namespace wry {
                                               value);
         }
 
-        T exchange_key_value(Key key, T value) {
+        T exchange_key_value(Word key, T value) {
             assert(has_values());
             assert(prefix_includes_key(key));
             return compressed_array_insert_for_index(_bitmap,
@@ -858,8 +864,8 @@ namespace wry {
 
     }; // ArrayMappedTrie
 
-    template<typename T, typename Key, typename Bitmap, int SYMBOL_WIDTH, typename Discipline>
-    void print(ArrayMappedTrie<T, Key, Bitmap, SYMBOL_WIDTH, Discipline> const* _Nullable s) {
+    template<typename Word, typename T, typename Discipline, int SYMBOL_WIDTH>
+    void print(ArrayMappedTrie<Word, T, Discipline, SYMBOL_WIDTH> const* _Nullable s) {
         if (!s) {
             printf("nullptr\n");
         }

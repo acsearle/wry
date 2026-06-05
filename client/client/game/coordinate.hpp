@@ -44,13 +44,13 @@ namespace wry {
     struct DefaultKeyService<Coordinate> {
         
         using key_type = Coordinate;
-        using hash_type = uint64_t;
-        
-        hash_type hash(key_type xy) const {
+        using code_type = uint64_t;
+
+        code_type encode(key_type xy) const {
             return _morton_from_xy_neon(xy.x, xy.y);
         }
-        
-        constexpr key_type unhash(hash_type h) const {
+
+        constexpr key_type decode(code_type h) const {
             // __builtin_memcpy(&key, &h, 8); // constexpr
             //return key;
             uint64_t xy = morton2_reverse(h);
@@ -61,9 +61,9 @@ namespace wry {
         }
         
         constexpr bool operator()(key_type a, key_type b) const {
-            return hash(a) < hash(b);
+            return encode(a) < encode(b);
         }
-        
+
     }; // DefaultKeyService<Coordinate>
     
     inline void garbage_collected_scan(const Coordinate&) {}

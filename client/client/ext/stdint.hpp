@@ -109,7 +109,18 @@ namespace wry {
     template<std::size_t N>
     using unsigned_integer_of_byte_width_t = std::make_unsigned_t<integer_of_byte_width_t<N>>;
 
-    
+    template<std::size_t N>
+    struct integer_of_bit_width {
+        using type = typename integer_of_byte_width<((N + 7) >> 3)>::type;
+    };
+
+    template<std::size_t N>
+    using integer_of_bit_width_t = typename integer_of_bit_width<N>::type;
+
+    template<std::size_t N>
+    using unsigned_integer_of_bit_width_t = std::make_unsigned_t<integer_of_bit_width_t<N>>;
+
+
 } // namespace wry
 
 
