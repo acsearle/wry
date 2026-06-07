@@ -134,10 +134,20 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
   PersistentMap.  Differential test `persistentmap_parallel_rebuild` (real
   `ConcurrentSkiplistMap` vs `std::map` oracle, plus source immutability) passes.
   This is the dense-kv rebuild primitive `World::step()` will use.
-- Remaining for Stage 1: wire into `World::step()`.  Proposed scope -- the
-  `WaitableMap` rebuild has two outputs from one pass (dense kv map + sparse ki
-  waiter-index multimap); parallelize the kv map via the wrapper and keep the
-  sparse ki and the small time-wheel `PersistentSet` serial (per world.cpp's own
-  "kv dense/large, ki sparse/small" note).  Then swap the bodies and add a
-  Stage-0-vs-Stage-1 world-level differential test.
-- Stage 2 (cursor co-descent): not started.
+- Stage 1 wired into `World::step()`: `WaitableMap::coroutine_parallel_rebuild2`
+  (the body `world.cpp` already calls -- no call-site change) now does one serial
+  pass that applies the sparse `ki` waiter-index multimap in place and collects
+  the dense `kv` value actions, then rebuilds `kv` in parallel via
+  `coroutine_parallel_rebuild_from_mods`.  The old serial body is kept as
+  `coroutine_parallel_rebuild2_serial` (the Stage-0 oracle).  The time-wheel
+  `PersistentSet` rebuild stays serial.  Differential test
+  `waitablemap_parallel_rebuild` (parallel kv == serial kv == `std::map` oracle,
+  ki path exercised) passes; full suite green.
+  - Coverage gap: the suite does not drive an actual `World::step()`, so the live
+    integration (the real conflict-resolving `action_for_key` + its side effects)
+    is compiled but not runtime-tested.  The differential test covers the changed
+    rebuild code at the function level.
+- Stage 2 (cursor co-descent): not started.  This is the mechanical swap -- the
+  AMT recursion is unchanged; only `coroutine_parallel_rebuild_from_mods` (and the
+  AMT core's `std::lower_bound` over the vector) get replaced by reading the
+  frozen skiplist directly via `FrozenCursor` + `lower_bound`.
