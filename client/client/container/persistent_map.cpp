@@ -155,6 +155,79 @@ namespace wry {
         co_return;
 
     };
+
+    // Stage 1 end-to-end: materialize a real ConcurrentSkiplistMap modifier and
+    // rebuild a PersistentMap, vs a std::map oracle (+ source immutability).
+    define_test("persistentmap_parallel_rebuild") {
+
+        using PM = PersistentMap<uint64_t, int>;
+        using Action = ParallelRebuildAction<int>;
+        const uint64_t key_domain = 200;
+
+        for (int iter = 0; iter != 200; ++iter) {
+
+            std::map<uint64_t, int> oracle;
+            PM src;
+            int ns = std::rand() % 80;
+            for (int s = 0; s != ns; ++s) {
+                uint64_t k = std::rand() % key_domain;
+                int v = std::rand();
+                src.set(k, v);
+                oracle[k] = v;
+            }
+
+            // Build a real skiplist modifier with WRITE / CLEAR / NONE actions.
+            ConcurrentMap<uint64_t, Action, DefaultKeyService<uint64_t>, EpochDiscipline> modifier;
+            std::map<uint64_t, Action> mm;
+            int nm = std::rand() % 40;
+            for (int m = 0; m != nm; ++m) {
+                uint64_t k = std::rand() % key_domain;
+                int r = std::rand() % 3;
+                Action a = (r == 0) ? Action{Action::WRITE_VALUE, std::rand()}
+                         : (r == 1) ? Action{Action::CLEAR_VALUE, 0}
+                                    : Action{Action::NONE, 0};
+                mm[k] = a;
+            }
+            for (auto& [k, a] : mm)
+                modifier.try_emplace(k, a);
+
+            std::map<uint64_t, int> expect = oracle;
+            for (auto& [k, a] : mm) {
+                if (a.tag == Action::WRITE_VALUE)
+                    expect[k] = a.value;
+                else if (a.tag == Action::CLEAR_VALUE)
+                    expect.erase(k);
+                // NONE: no change
+            }
+
+            auto action_for_key = [](auto&& kv) -> Coroutine::Future<Action> {
+                co_return kv.second;
+            };
+
+            PM result = co_await coroutine_parallel_rebuild(src, modifier, action_for_key);
+
+            for (uint64_t k = 0; k != key_domain; ++k) {
+                int v = 0;
+                bool has = result.try_get(k, v);
+                auto it = expect.find(k);
+                assert(has == (it != expect.end()));
+                if (has)
+                    assert(v == it->second);
+                int sv = 0;
+                bool shas = src.try_get(k, sv);
+                auto sit = oracle.find(k);
+                assert(shas == (sit != oracle.end()));
+                if (shas)
+                    assert(sv == sit->second);
+            }
+
+            if (!(iter & 7))
+                mutator_repin();
+        }
+
+        co_return;
+
+    };
 }
 
 

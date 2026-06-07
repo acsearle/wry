@@ -128,9 +128,16 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
   2 primitive and is not yet on this path.  The test checks content equivalence
   (try_get over the key domain), not byte-identical trie shape -- shape is a
   derived structure (see `core/docs/transaction.md` on determinism).
-- Remaining for Stage 1: wire it into `World::step()` -- adapt the heterogeneous
-  action callbacks (kv value WRITE/CLEAR; ki multimap MERGE; time-wheel set) to
-  the (materialized mods vector + `combine`) shape, swap the serial `WaitableMap`
-  / `PersistentSet` rebuild bodies, and add a Stage-0-vs-Stage-1 differential
-  test at the world level.
+- Stage 1 wrapper: `coroutine_parallel_rebuild(PersistentMap, ConcurrentMap,
+  action_for_key)` in `persistent_map.hpp` materializes a *real* skiplist
+  modifier (NONE-filtered) and drives the AMT core, returning a new
+  PersistentMap.  Differential test `persistentmap_parallel_rebuild` (real
+  `ConcurrentSkiplistMap` vs `std::map` oracle, plus source immutability) passes.
+  This is the dense-kv rebuild primitive `World::step()` will use.
+- Remaining for Stage 1: wire into `World::step()`.  Proposed scope -- the
+  `WaitableMap` rebuild has two outputs from one pass (dense kv map + sparse ki
+  waiter-index multimap); parallelize the kv map via the wrapper and keep the
+  sparse ki and the small time-wheel `PersistentSet` serial (per world.cpp's own
+  "kv dense/large, ki sparse/small" note).  Then swap the bodies and add a
+  Stage-0-vs-Stage-1 world-level differential test.
 - Stage 2 (cursor co-descent): not started.

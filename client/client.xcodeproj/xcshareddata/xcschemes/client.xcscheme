@@ -56,11 +56,11 @@
       <CommandLineArguments>
          <CommandLineArgument
             argument = "--test-only"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </CommandLineArgument>
          <CommandLineArgument
             argument = "skiplist"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </CommandLineArgument>
          <CommandLineArgument
             argument = "PersistentMap"

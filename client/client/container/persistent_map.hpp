@@ -129,7 +129,46 @@ namespace wry {
         } tag;
         T value;
     };
-    
+
+    // Parallel rebuild (Stage 1): materialize the frozen modifier skiplist into
+    // a code-ordered vector (dropping NONE so untouched subtrees stay shared),
+    // then apply it to `source` via the AMT co-recursion.  The materialized keys
+    // come out sorted by H's code because the modifier's comparator agrees with
+    // H -- the rebuild precondition (see container/docs/parallel_rebuild.md).
+    template<typename Key, typename T, typename H, typename D,
+             typename U, typename F, typename S2, typename D2>
+    [[nodiscard]] Coroutine::Future<PersistentMap<Key, T, H, D>>
+    coroutine_parallel_rebuild(const PersistentMap<Key, T, H, D>& source,
+                               const ConcurrentMap<Key, U, S2, D2>& modifier,
+                               F&& action_for_key) {
+        using PM = PersistentMap<Key, T, H, D>;
+        using AMT = typename PM::AMT;
+        using Action = ParallelRebuildAction<T>;
+
+        std::vector<std::pair<typename H::code_type, Action>> mods;
+        for (auto it = modifier.begin(); it != modifier.end(); ++it) {
+            Action a = co_await action_for_key(*it);
+            if (a.tag == Action::NONE)
+                continue; // no-op: leave the subtree shared
+            mods.emplace_back(H{}.encode(it->first), std::move(a));
+        }
+
+        auto combine = [](const T* old, const Action& a) -> std::optional<T> {
+            switch (a.tag) {
+                case Action::WRITE_VALUE: return a.value;
+                case Action::CLEAR_VALUE: return std::nullopt;
+                case Action::MERGE_VALUE: abort(); // not meaningful for a plain map
+                case Action::NONE:        break;   // filtered above
+            }
+            return old ? std::optional<T>(*old) : std::nullopt;
+        };
+
+        const AMT* inner = source._inner ? &*source._inner : nullptr;
+        const AMT* result = co_await AMT::coroutine_parallel_rebuild(
+            inner, mods, 0, mods.size(), combine);
+        co_return PM{ typename PM::Slot{ result } };
+    }
+
 } // namespace wry
 
 #endif /* persistent_map_hpp */
