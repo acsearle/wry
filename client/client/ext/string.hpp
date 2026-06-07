@@ -267,6 +267,10 @@ namespace wry {
             chars.append(v);
         }
 
+        void append(String const& v) {
+            chars.append(v.chars.begin(), v.chars.end());
+        }
+
 
          bool operator==(const String& other) const {
              return std::equal(begin(), end(), other.begin(), other.end());

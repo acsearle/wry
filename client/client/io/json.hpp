@@ -16,6 +16,8 @@
 #include "serialize.hpp"
 #include "deserialize.hpp"
 #include "cstring.hpp"
+#include "table.hpp"
+#include "contiguous_deque.hpp"
 
 #include "Option.hpp"
 #include "stddef.hpp"
@@ -279,277 +281,16 @@ namespace wry::json {
     inline auto parse_json_number(auto& x) {
         return parse_number(x);
     }
-    
-    // parse into type-erased Term
-    
-    using wry::Term;
-    
-    bool parse_json_value(Term& x, auto& y);
-    
-    inline auto parse_json_null(Term& x) {
-        return [&x](auto& v) {
-            if (!match_json_null()(v))
-                return false;
-            x = nullptr;
-        };
-    }
-    
-    inline auto parse_json_boolean(Term& x) {
-        return [&x](auto& v) {
-            bool y;
-            if (!parse_json_boolean(y)(v))
-                return false;
-            x = y;
-            return true;
-        };
-    }
-    
-    inline auto parse_json_string(Term& x) {
-        return [&x](auto& v) -> bool {
-            String s;
-            if (parse_json_string(s)(v)) {
-                x = std::string_view(s.data(), s.chars.size());
-                return true;
-            }
-            return false;
-        };
-    }
 
-    inline auto parse_json_number(Term& x) {
-        return [&x](auto& v) -> bool {
-            String s;
-            if (parse_json_number(s)(v)) {
-                x = std::string_view(s.data(), s.chars.size());
-                return true;
-            }
-            return false;
-        };
-    }
-    
-    inline auto parse_json_array(Term& x) {
-        return [&x](auto& v) -> bool {
-            //Array<Term> a;
-            Term a = term_make_array();
-            Term y;
-            auto u = v;
-            if (!match_json_array_begin()(u))
-                return false;
-            if (match_json_array_end()(u))
-                goto success;
-        expect_value:
-            if (!parse_json_value(y, u))
-                return false;
-            // a.push_back(std::move(y));
-            // term_insert_or_assign(a, k++, y);
-            term_push_back(a, y);
-            if (match_json_comma()(u))
-                goto expect_value;
-            if (!match_json_array_end()(u))
-                return false;
-        success:
-            v = u;
-            x = std::move(a);
-            return true;
-        };
-    }
-    
-    inline auto parse_json_object(Term& x) {
-        return [&x](auto& v) -> bool {
-            // Table<String, Term> o;
-            Term o = term_make_table();
-            // String key;
-            Term key;
-            Term value;
-            // std::pair<typename Table<String, Term>::iterator, bool> result;
-            Term result;
-            auto u = v;
-            if (!match_json_object_begin()(u))
-                return false;
-            if (match_json_object_end()(u))
-                goto success;
-        expect_key:
-            if (!parse_json_string(key)(u))
-                return false;
-            if (!match_json_colon()(u))
-                return false;
-            if (!parse_json_value(value, u))
-                return false;
-            // result = o.emplace(std::move(key), std::move(value));
-            result = term_insert_or_assign(o, key, value);
-            // if (!result.second) // duplicate key
-            if (!term_is_null(result))
-                return false;
-            if (match_json_comma()(u))
-                goto expect_key;
-            if (!match_json_object_end()(u))
-                return false;
-        success:
-            v = u;
-            x = std::move(o);
-            return true;
-        };
-    }
-    
-    inline auto parse_json_value(Term& x) {
-        return [&x](auto& v) -> bool {
-            return match_and(match_json_whitespace(),
-                             match_or(parse_json_string(x),
-                                      parse_json_number(x),
-                                      parse_json_object(x),
-                                      parse_json_array(x),
-                                      parse_json_boolean(x),
-                                      parse_json_null(x)))(v);
-        };
-    }
-    
-    bool parse_json_value(Term& x, auto& y) {
-        return parse_json_value(x)(y);
-    }
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     
     // Rust Serde inspired [de]serialization
     
     using rust::usize;
-    
+    using wry::deserialize;
+
     struct Error {
         // ?
     };
-    
-    struct ValueVisitor {
-        
-        using Term = Term;
-        
-        template<typename E>
-        Term visit_none() {
-            return Term();
-        }
-        
-        template<typename E>
-        Term visit_bool(bool x) {
-            return Term(x);
-        }
-        
-        template<typename E>
-        Term visit_int8_t(int8_t x) {
-            return Term((int64_t) x);
-        }
-        
-        template<typename E>
-        Term visit_int16_t(int16_t x) {
-            return Term((int64_t) x);
-        }
-        
-        template<typename E>
-        Term visit_int32_t(int32_t x) {
-            return Term((int64_t) x);
-        }
-        
-        template<typename E>
-        Term visit_int64_t(int64_t x) {
-            return Term(x);
-        }
-        
-        template<typename E>
-        Term visit_uint8_t(uint8_t x) {
-            return Term((int64_t) x);
-        }
-        
-        template<typename E>
-        Term visit_uint16_t(uint16_t x) {
-            return Term((int64_t) x);
-        }
-        
-        template<typename E>
-        Term visit_uint32_t(uint32_t x) {
-            return Term((int64_t) x);
-        }
-        
-        template<typename E>
-        Term visit_uint64_t(uint64_t x) {
-            // return Term(x);
-            return term_make_error();
-        }
-        
-        template<typename E>
-        Term visit_float32_t(float32_t x) {
-            // return Term((double) x);
-            return term_make_error();
-        }
-        
-        template<typename E>
-        Term visit_float64_t(float64_t x) {
-            // return Term(x);
-            return term_make_error();
-        }
-        
-        template<typename E>
-        Term visit_string(String x) {
-            // return Term(std::move(x));
-            return Term(std::string_view(x.data(), x.chars.size()));
-        }
-
-        template<typename E>
-        Term visit_string_view(StringView x) {
-            // return Term(String(x));
-            return Term(std::string_view(x.chars.data(), x.chars.size()));
-        }
-        
-        template<typename A>
-        Term visit_seq(A&& accessor) {
-            // Array<Term> y;
-            // Term t = term_make_table();
-            Term a = term_make_array();
-            // Term key = 0;
-            for (;;) {
-                Option<Term> x(accessor.template next_element<Term>());
-                if (x.is_some()) {
-                    printf("got a seq element\n");
-                    // y.push_back(std::move(x).unwrap());
-                    // term_insert_or_assign(t, key++, std::move(x).unwrap());
-                    term_push_back(a, std::move(x).unwrap());
-                }
-                else
-                    return a;
-            }
-        }
-        
-        template<typename A>
-        Term visit_map(A&& accessor) {
-            // Table<String, Term> z;
-            Term t = term_make_table();
-            for (;;) {
-                Option<std::pair<String, Term>> x(accessor.template next_entry<String, Term>());
-                if (x.is_some()) {
-                    // auto [at, flag] = z.insert(std::move(x).unwrap());
-                    // if (!flag)
-                        // throw ERANGE;
-                    auto y = std::move(x).unwrap();
-                    term_insert_or_assign(t, Term(std::string_view(y.first.chars.data(), y.first.chars.size())), y.second);
-                } else {
-                    return t; // Term(std::move(z));
-                }
-            }
-        }
-        
-        
-    };
-    
-    // import deserialize for primitives, or it will be shadowed
-    using wry::deserialize;
-    
-    template<typename D>
-    Term deserialize(std::in_place_type_t<Term>, D&& deserializer) {
-        return std::forward<D>(deserializer).deserialize_any(ValueVisitor{});
-    }
     
     // serialization
     
@@ -793,7 +534,54 @@ namespace wry::json {
         StringView v = s;
         return wry::deserialize<T>(deserializer{v});
     }
-    
+
+
+
+    struct _json_value;
+
+    struct Json {
+
+        _json_value* _ptr;
+
+        Json() : _ptr(nullptr) {}
+        explicit Json(_json_value* p) : _ptr(p) {}
+        Json(Json const&);
+        Json(Json&& x) : _ptr(std::exchange(x._ptr, nullptr)) {}
+        ~Json();
+        Json& operator=(Json const&);
+        Json& operator=(Json&& x) { Json tmp(std::move(x)); std::swap(_ptr, tmp._ptr); return *this; }
+
+        static Json from(StringView&);
+        static Json from(StringView&&);
+        static Json from_file(FILE*);
+
+        size_t size() const;
+
+        Json const& operator[](size_t i) const;
+        Json const& operator[](StringView s) const;
+
+        StringView as_string() const;
+        bool as_bool() const;
+        double as_number() const;
+        Table<String, Json> const& as_object() const;
+        ContiguousDeque<Json> const& as_array() const;
+
+        long as_long() const;
+
+        void swap(Json& other) {
+            std::swap(_ptr, other._ptr);
+        }
+
+    }; // Json
+
+    inline void swap(Json& x, Json& y) {
+        x.swap(y);
+    }
+
+    std::ostream& operator<<(std::ostream&, Json const&);
+
+
+
 } // namespace wry::json
 
 #endif /* json_hpp */

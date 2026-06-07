@@ -787,7 +787,7 @@ namespace wry {
         }
         
         const T& at(auto&& keylike) const {
-            Entry* p = to(FORWARD(keylike));
+            Entry const* p = to(FORWARD(keylike));
             assert(p);
             return p->_kv.second;
         }

@@ -133,14 +133,6 @@ namespace wry {
     Term term_make_string_with(const char* ntbs);
     Term term_make_string_with(std::string_view);
 
-    // DEPRECATED.  HeapArray / HeapTable are attic'd.  These declarations
-    // survive only because io/json.hpp's parse_json_array / parse_json_object
-    // bodies reference them; nothing actually calls those code paths today,
-    // so the symbols never need to be defined.  Delete once json.hpp is
-    // rewritten against the eventual persistent associative type.
-    Term term_make_array();
-    Term term_make_table();
-
     constexpr Term term_make_true();
     constexpr Term term_make_zero();
     constexpr Term term_make_one();

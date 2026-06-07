@@ -358,13 +358,6 @@ namespace wry {
         return result;
     }
 
-    // DEPRECATED.  See declaration in term.hpp.  Returns null so that
-    // accidental use (e.g. through io/json.hpp's currently-dormant
-    // parse_json_object) produces an obvious zero/error cascade rather
-    // than a broken table object.
-    Term term_make_table() {
-        return Term{};
-    }
 
     bool HeapTerm::_term_empty() const { abort(); }
     size_t HeapTerm::_term_size() const { return 0; }

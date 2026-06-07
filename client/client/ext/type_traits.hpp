@@ -44,9 +44,11 @@ namespace wry {
     
     template<typename T>
     struct is_relocatable 
-    : std::is_nothrow_move_constructible<T> {
+    // : std::is_nothrow_move_constructible<T> {
+    // };
+    : std::true_type {
     };
-    
+
     template<typename T>
     constexpr bool is_relocatable_v = is_relocatable<T>::value;
     

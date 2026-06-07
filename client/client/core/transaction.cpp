@@ -201,26 +201,44 @@ namespace wry {
                 const Node* head = _nodes[i]._head->load_relaxed();
                 // Consider each action
                 for (; head; head = head->_next) {
-                    // If that transaction is higher priority than us
-                    //   AND
-                    // it proposes a write operation
-                    if ((head->_operation & Operation::WRITE_ON_COMMIT)
-                        && (head->priority() < priority))
-                    {
-                        // A higher priority transaction conflicts with us.  We
-                        // must resolve it, to see if it aborts us, or is aborted by
-                        // a third even higher priority transaction on some other
-                        // collision
+                    // Waiters never displace a writer; only other proposed
+                    // writes can conflict with us.
+                    if (!(head->_operation & Operation::WRITE_ON_COMMIT))
+                        continue;
+                    uint64_t head_priority = head->priority();
+                    // Priority is a bijection of the unique EntityID
+                    // (hash(uint64_t) is invertible; see hash.hpp), so two
+                    // distinct entities can never share a priority.  Equal
+                    // priority between different entities therefore means the
+                    // EntityID-uniqueness invariant has been violated, which
+                    // would let both writers commit to this key and break
+                    // mutual exclusion.  Fail hard rather than corrupt state.
+                    if ((head_priority == priority)
+                        && (head->_parent->_entity->_entity_id
+                            != _entity->_entity_id)) {
+                        printf("FATAL: priority collision %llu between EntityID "
+                               "%llu and %llu at time %lld\n",
+                               (unsigned long long)priority,
+                               (unsigned long long)_entity->_entity_id.data,
+                               (unsigned long long)head->_parent->_entity->_entity_id.data,
+                               (long long)_context->_world->_time);
+                        abort();
+                    }
+                    // If that transaction is higher priority than us, we must
+                    // resolve it, to see if it aborts us, or is itself aborted
+                    // by a third even higher priority transaction on some other
+                    // collision.
+                    if (head_priority < priority) {
                         observed = head->resolve();
                         assert(observed != INITIAL);
                         if (observed == COMMITTED) {
                             // other transaction aborts us
                             return abort();
                         }
-                        // else, other transaction ABORTED and we may continue resolving
+                        // else, other transaction ABORTED and we may continue
                     }
                     // else, the transaction is lower priority (or it is our
-                    // own entry in the list, and the same priority).  We don't
+                    // own entry in the list, at the same priority).  We don't
                     // need to resolve it, and eagerly attempting to do so
                     // would cause a cyclic dependency.
                 }

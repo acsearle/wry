@@ -28,6 +28,7 @@
 #include "palette.hpp"
 #include "platform.hpp"
 #include "sdf.hpp"
+#include "term.hpp"
 #include "text.hpp"
 #include "Wavefront.hpp"
 #include "world.hpp"
