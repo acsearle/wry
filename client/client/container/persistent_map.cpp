@@ -76,7 +76,84 @@ namespace wry {
             
         }
         co_return;
-                
+
+    };
+
+    // Differential test: AMT parallel rebuild vs a std::map oracle, also
+    // checking the source trie is left unchanged (structural-sharing safety).
+    define_test("amt_parallel_rebuild") {
+
+        using A = PersistentMap<uint64_t, int>::AMT;
+
+        struct Mod { enum Tag { Write, Clear } tag; int value; };
+        auto combine = [](const int* old, const Mod& m) -> std::optional<int> {
+            (void) old;
+            if (m.tag == Mod::Write)
+                return m.value;
+            return std::nullopt; // CLEAR
+        };
+
+        const uint64_t key_domain = 200; // small domain forces collisions and depth
+
+        for (int iter = 0; iter != 300; ++iter) {
+
+            // Random source trie + oracle.
+            std::map<uint64_t, int> oracle;
+            const A* src = nullptr;
+            int ns = std::rand() % 80;
+            for (int s = 0; s != ns; ++s) {
+                uint64_t k = std::rand() % key_domain;
+                int v = std::rand();
+                src = A::insert(src, k, v);
+                oracle[k] = v;
+            }
+
+            // Random modifiers: unique keys (std::map dedups), sorted ascending.
+            std::map<uint64_t, Mod> mm;
+            int nm = std::rand() % 40;
+            for (int m = 0; m != nm; ++m) {
+                uint64_t k = std::rand() % key_domain;
+                if (std::rand() & 1)
+                    mm[k] = Mod{Mod::Write, std::rand()};
+                else
+                    mm[k] = Mod{Mod::Clear, 0};
+            }
+            std::vector<std::pair<uint64_t, Mod>> mods(mm.begin(), mm.end());
+
+            // Expected result.
+            std::map<uint64_t, int> expect = oracle;
+            for (auto& [k, m] : mm) {
+                if (m.tag == Mod::Write)
+                    expect[k] = m.value;
+                else
+                    expect.erase(k);
+            }
+
+            const A* result = co_await A::coroutine_parallel_rebuild(
+                src, mods, 0, mods.size(), combine);
+
+            for (uint64_t k = 0; k != key_domain; ++k) {
+                int v = 0;
+                bool has = result && result->try_get(k, v);
+                auto it = expect.find(k);
+                assert(has == (it != expect.end()));
+                if (has)
+                    assert(v == it->second);
+                // source must be untouched by the rebuild
+                int sv = 0;
+                bool shas = src && src->try_get(k, sv);
+                auto sit = oracle.find(k);
+                assert(shas == (sit != oracle.end()));
+                if (shas)
+                    assert(sv == sit->second);
+            }
+
+            if (!(iter & 7))
+                mutator_repin();
+        }
+
+        co_return;
+
     };
 }
 

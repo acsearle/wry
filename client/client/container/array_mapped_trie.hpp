@@ -8,7 +8,10 @@
 #ifndef array_mapped_trie_hpp
 #define array_mapped_trie_hpp
 
+#include <algorithm>
 #include <memory>
+#include <optional>
+#include <vector>
 
 #include "compressed_array.hpp"
 #include "garbage_collected.hpp"
@@ -700,6 +703,154 @@ namespace wry {
 
 
 
+
+
+        // ---- Parallel rebuild (Stage 1) ----------------------------------
+        //
+        // Rebuild `source` (which may be null) by applying, for each modifier
+        // key, the change produced by `combine`.  `mods` is sorted ascending by
+        // key (.first) with no duplicate keys; [i, j) is the slice this call
+        // owns.
+        //
+        //   combine(const T* old_or_null, const Action&) -> std::optional<T>
+        //     old_or_null : existing value at this key in `source`, or null
+        //     returns      : the new value, or nullopt to leave the key absent
+        //
+        // Parallel over the trie via a Nursery; a subtree with no modifier key
+        // in its range is returned by pointer, unchanged (the dominant saving).
+        // Frozen-phase only: `source` must stay immutable for the call.
+
+        template<typename Action, typename Combine>
+        [[nodiscard]] static const ArrayMappedTrie* _Nullable
+        rebuild_serial(const ArrayMappedTrie* _Nullable source,
+                       const std::vector<std::pair<Word, Action>>& mods,
+                       size_t i, size_t j,
+                       const Combine& combine) {
+            // Apply each modifier in turn.  Uses try_get + insert/erase, which
+            // are correct for arbitrary keys (insert/merge handle disjoint
+            // prefixes), so this is a valid base case for any node -- including
+            // a leaf that only covers part of the modifier range.
+            const ArrayMappedTrie* acc = source;
+            for (; i != j; ++i) {
+                Word key = mods[i].first;
+                T old;
+                bool has = acc && acc->try_get(key, old);
+                std::optional<T> next = combine(has ? &old : nullptr, mods[i].second);
+                if (next) {
+                    acc = insert(acc, key, std::move(*next));
+                } else if (has) {
+                    T victim;
+                    acc = acc->clone_and_erase_key(key, victim).first;
+                }
+            }
+            return acc;
+        }
+
+        template<typename Action, typename Combine>
+        [[nodiscard]] static Coroutine::Future<const ArrayMappedTrie*>
+        _rebuild_inrange(const ArrayMappedTrie* source, // internal; mods in range; a<b
+                         const std::vector<std::pair<Word, Action>>& mods,
+                         size_t a, size_t b,
+                         const Combine& combine) {
+            const int sh = source->_shift;
+            const Word prefix = source->_prefix;
+            const int nchild = std::popcount(source->_bitmap);
+            auto index_of = [sh](Word key) -> int {
+                return (int)((key >> sh) & INDEX_MASK);
+            };
+
+            // Merge-walk the source's children (in index order) against runs of
+            // modifier keys grouped by their index at this level.  Deriving the
+            // index straight from the key avoids any (c+1)<<sh overflow.
+            struct Work { const ArrayMappedTrie* child; size_t lo, hi; };
+            std::vector<Work> work;
+            size_t p = a;
+            int kc = 0;
+            while (p < b || kc < nchild) {
+                int mod_index = (p < b) ? index_of(mods[p].first) : (1 << SYMBOL_WIDTH);
+                int child_index = (kc < nchild)
+                    ? index_of(source->_children[kc]->_prefix) : (1 << SYMBOL_WIDTH);
+                int c = mod_index < child_index ? mod_index : child_index;
+                size_t q = p;
+                while (q < b && index_of(mods[q].first) == c)
+                    ++q;
+                const ArrayMappedTrie* child = nullptr;
+                if (child_index == c) {
+                    child = source->_children[kc];
+                    ++kc;
+                }
+                work.push_back(Work{child, p, q});
+                p = q;
+            }
+
+            std::vector<const ArrayMappedTrie*> outs(work.size(), nullptr);
+            {
+                Coroutine::Nursery nursery;
+                for (size_t t = 0; t != work.size(); ++t)
+                    co_await nursery.fork(outs[t],
+                        coroutine_parallel_rebuild(work[t].child, mods,
+                                                   work[t].lo, work[t].hi, combine));
+                co_await nursery.join();
+            }
+
+            // Assemble the surviving disjoint children (already in index order),
+            // collapsing to honour the ">= 2 children" invariant.
+            int nz = 0;
+            const ArrayMappedTrie* only = nullptr;
+            for (const ArrayMappedTrie* c : outs)
+                if (c) { ++nz; only = c; }
+            if (nz == 0)
+                co_return nullptr;
+            if (nz == 1)
+                co_return only;
+            ArrayMappedTrie* node = make(prefix, sh, nz, 0, 0);
+            for (const ArrayMappedTrie* c : outs)
+                if (c) node->insert_child(c);
+            co_return node;
+        }
+
+        template<typename Action, typename Combine>
+        [[nodiscard]] static Coroutine::Future<const ArrayMappedTrie*>
+        coroutine_parallel_rebuild(const ArrayMappedTrie* _Nullable source,
+                                   const std::vector<std::pair<Word, Action>>& mods,
+                                   size_t i, size_t j,
+                                   const Combine& combine) {
+            if (i == j)
+                co_return source;                              // share, no mods
+            if (!source || source->has_values() || (j - i) < 2)
+                co_return rebuild_serial(source, mods, i, j, combine);
+
+            const int sh = source->_shift;
+            const Word prefix = source->_prefix;
+            auto lb = [&](size_t lo, size_t hi, Word bound) -> size_t {
+                return (size_t)(std::lower_bound(
+                    mods.begin() + lo, mods.begin() + hi, bound,
+                    [](const std::pair<Word, Action>& e, Word v) { return e.first < v; })
+                    - mods.begin());
+            };
+
+            // Split mods into the part inside this node's prefix range [a, b)
+            // and the disjoint parts to either side.
+            size_t a = lb(i, j, prefix);
+            size_t b;
+            if ((size_t)sh + (size_t)SYMBOL_WIDTH >= WORD_WIDTH) {
+                b = j;                                         // node reaches the top of the word
+            } else {
+                Word upper = prefix + ((Word)1 << (sh + SYMBOL_WIDTH));
+                b = (upper <= prefix) ? j : lb(a, j, upper);   // upper<=prefix => it wrapped
+            }
+
+            const ArrayMappedTrie* inside =
+                (a == b) ? source
+                         : co_await _rebuild_inrange(source, mods, a, b, combine);
+
+            const ArrayMappedTrie* result = inside;
+            if (a > i)
+                result = merge(rebuild_serial(nullptr, mods, i, a, combine), result);
+            if (j > b)
+                result = merge(result, rebuild_serial(nullptr, mods, b, j, combine));
+            co_return result;
+        }
 
 
         [[nodiscard]] static ArrayMappedTrie* _Nullable make_leaf_with_leading_pairs(auto& first, auto last) {

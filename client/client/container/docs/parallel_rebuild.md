@@ -118,4 +118,19 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
 
 - `lower_bound` (Set + Map) and its test: implemented in
   `concurrent_skiplist.{hpp,cpp}`.
-- Stages 1 and 2: not started.
+- Stage 1 core: `ArrayMappedTrie::coroutine_parallel_rebuild` (co-recursion,
+  structural-sharing short-circuit, per-index fork/assemble, with
+  `rebuild_serial` as the base case) implemented in `array_mapped_trie.hpp`,
+  plus a differential test vs a `std::map` oracle (`amt_parallel_rebuild` in
+  `persistent_map.cpp`) that also checks source immutability.  Builds and passes
+  the full suite.  Note: this core takes a *materialized* sorted `mods` vector
+  and slices it with `std::lower_bound`; the skiplist `lower_bound` is the Stage
+  2 primitive and is not yet on this path.  The test checks content equivalence
+  (try_get over the key domain), not byte-identical trie shape -- shape is a
+  derived structure (see `core/docs/transaction.md` on determinism).
+- Remaining for Stage 1: wire it into `World::step()` -- adapt the heterogeneous
+  action callbacks (kv value WRITE/CLEAR; ki multimap MERGE; time-wheel set) to
+  the (materialized mods vector + `combine`) shape, swap the serial `WaitableMap`
+  / `PersistentSet` rebuild bodies, and add a Stage-0-vs-Stage-1 differential
+  test at the world level.
+- Stage 2 (cursor co-descent): not started.
