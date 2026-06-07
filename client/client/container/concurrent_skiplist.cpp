@@ -34,6 +34,12 @@ namespace wry {
                     if (c != a.end()) {
                         assert(*c == *d);
                     }
+                    auto cl = a.lower_bound(k);
+                    auto dl = b.lower_bound(k);
+                    assert((cl == a.end()) == (dl == b.end()));
+                    if (cl != a.end()) {
+                        assert(*cl == *dl);
+                    }
                 }
             }
         }
@@ -58,6 +64,12 @@ namespace wry {
                         assert(c->first == d->first);
                         assert(c->second == d->second);
                         // printf("[%d] = %d\n", c->first, c->second);
+                    }
+                    auto cl = a.lower_bound(k);
+                    auto dl = b.lower_bound(k);
+                    assert((cl == a.end()) == (dl == b.end()));
+                    if (cl != a.end()) {
+                        assert(cl->first == dl->first);
                     }
                 }
             }

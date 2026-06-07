@@ -208,7 +208,12 @@ namespace wry {
             
             template<typename Query> [[nodiscard]] iterator
             find(const Query& query) const;
-            
+
+            // First node whose key is not less than `query` (i.e. >= query),
+            // or end() if every key is less.  Mirrors `find`'s descent.
+            template<typename Query> [[nodiscard]] iterator
+            lower_bound(const Query& query) const;
+
             [[nodiscard]] std::pair<Node* _Nullable, bool>
             _link_level(size_t i, AtomicSlot<Node* _Nullable>* _Nonnull left, Node* _Nullable expected, Node* _Nonnull desired);
 
@@ -298,7 +303,13 @@ namespace wry {
             assert(_head);
             return _head->find(query);
         }
-        
+
+        template<typename Query>
+        [[nodiscard]] iterator lower_bound(Query const& query) const {
+            assert(_head);
+            return _head->lower_bound(query);
+        }
+
         template<typename Keylike, typename... Args>
         std::pair<iterator, bool> try_emplace(Keylike&& keylike, Args&&... args) {
             assert(_head);
@@ -333,7 +344,39 @@ namespace wry {
             }
         }
     }
-    
+
+    template<typename Key, typename Compare, typename Discipline>
+    template<typename Query>
+    [[nodiscard]] typename ConcurrentSkiplistSet<Key, Compare, Discipline>::iterator
+    ConcurrentSkiplistSet<Key, Compare, Discipline>::Head
+    ::lower_bound(const Query& query) const
+    {
+        // First node whose key is not less than query (>= query), or end().
+        // Same top-down descent as find(); the only difference is what we
+        // return when there is no exact match: the level-0 successor of the
+        // last node strictly less than query, which is the first key > query.
+        size_t i = _top.load_relaxed() - 1;
+        assert((i + 1) > 0);
+        auto left = _next + i;
+        for (;;) {
+            Node* _Nullable candidate = left->load_acquire();
+            if (!candidate || _compare(query, candidate->_key)) {
+                // candidate is null or strictly greater than query; no equal
+                // key was found at a higher level, so at level 0 this is the
+                // lower bound (possibly end()).
+                if (i == 0)
+                    return iterator{candidate};
+                --i;
+                --left;
+            } else if (_compare(candidate->_key, query)) {
+                left = candidate->_next + i;
+            } else {
+                // exact match: an equal key is its own lower bound
+                return iterator{candidate};
+            }
+        }
+    }
+
     template<typename Key, typename Compare, typename Discipline>
     [[nodiscard]] std::pair<typename ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nullable, bool>
     ConcurrentSkiplistSet<Key, Compare, Discipline>::Head
@@ -506,7 +549,11 @@ namespace wry {
         [[nodiscard]] iterator find(auto&& keylike) const {
             return _set.find(FORWARD(keylike));
         }
-        
+
+        [[nodiscard]] iterator lower_bound(auto&& keylike) const {
+            return _set.lower_bound(FORWARD(keylike));
+        }
+
         std::pair<iterator, bool> try_emplace(auto&& keylike, auto&&... args) {
             return _set.try_emplace(FORWARD(keylike), FORWARD(args)...);
         }
