@@ -111,10 +111,41 @@ namespace wry {
         co_return result;
     }
 
-    // Stage 1: the dense kv value map is rebuilt in parallel via the AMT
-    // co-recursion; the sparse ki waiter-index multimap is rebuilt serially (its
-    // representation is slated to change -- not worth parallelizing this pass).
-    // World::step() calls this; the name is unchanged, so its call sites are not.
+    // Combine for the ki waiter index: WRITE replaces a key's waitset, CLEAR
+    // erases it, MERGE is the read-modify-write union (the combine's `old` arg is
+    // the RMW read), NONE keeps it.
+    struct WaitSetMergeCombine {
+        std::optional<WaitSet> operator()(const WaitSet* old,
+                                          const ParallelRebuildAction<std::vector<EntityID>>& a) const {
+            using A = ParallelRebuildAction<std::vector<EntityID>>;
+            switch (a.tag) {
+                case A::WRITE_VALUE: {
+                    WaitSet ws;
+                    for (EntityID e : a.value)
+                        ws.set(e);
+                    return ws;
+                }
+                case A::CLEAR_VALUE:
+                    return std::nullopt;
+                case A::MERGE_VALUE: {
+                    WaitSet ws = old ? *old : WaitSet{};
+                    for (EntityID e : a.value)
+                        ws.set(e);
+                    return ws;
+                }
+                case A::NONE:
+                    break;
+            }
+            return old ? std::optional<WaitSet>(*old) : std::nullopt;
+        }
+    };
+
+    // The dense kv value map and the (now nested, sparse) ki waiter index are
+    // both rebuilt in parallel via the AMT co-recursion, forked concurrently.
+    // One serial pass splits each key's bundled action into a kv value action and
+    // a ki waiter action (NONE dropped to keep subtree sharing); both vectors are
+    // code-ordered because the modifier is.  World::step() calls this; the name
+    // is unchanged, so its call sites are not.
     template<typename Key, typename T, typename U, typename F, typename S2, typename D2>
     Coroutine::Future<WaitableMap<Key, T>>
     coroutine_parallel_rebuild2(const WaitableMap<Key, T>& source,
@@ -122,19 +153,25 @@ namespace wry {
                                F&& action_for_key) {
         WaitableMap<Key, T> result{source};
         using Code = typename DefaultKeyService<Key>::code_type;
-        // One serial pass: apply the sparse ki actions in place, and collect the
-        // dense kv actions (NONE dropped to preserve subtree sharing) for the
-        // parallel rebuild.  The modifier is code-ordered, so kv_mods is too.
         std::vector<std::pair<Code, ParallelRebuildAction<T>>> kv_mods;
+        std::vector<std::pair<Code, ParallelRebuildAction<std::vector<EntityID>>>> ki_mods;
         for (auto first = modifier.begin(); first != modifier.end(); ++first) {
             std::pair<ParallelRebuildAction<T>, ParallelRebuildAction<std::vector<EntityID>>> p
                 = co_await action_for_key(*first);
-            apply_ki_action(result.ki, first->first, p.second);
+            Code code = DefaultKeyService<Key>{}.encode(first->first);
             if (p.first.tag != ParallelRebuildAction<T>::NONE)
-                kv_mods.emplace_back(DefaultKeyService<Key>{}.encode(first->first),
-                                     std::move(p.first));
+                kv_mods.emplace_back(code, std::move(p.first));
+            if (p.second.tag != ParallelRebuildAction<std::vector<EntityID>>::NONE)
+                ki_mods.emplace_back(code, std::move(p.second));
         }
-        result.kv = co_await coroutine_parallel_rebuild_from_mods(source.kv, kv_mods);
+        Coroutine::Nursery nursery;
+        co_await nursery.fork(result.kv,
+            coroutine_parallel_rebuild_from_mods(source.kv, kv_mods,
+                                                 ParallelRebuildValueCombine<T>{}));
+        co_await nursery.fork(result.ki,
+            coroutine_parallel_rebuild_from_mods(source.ki, ki_mods,
+                                                 WaitSetMergeCombine{}));
+        co_await nursery.join();
         co_return result;
     }
 

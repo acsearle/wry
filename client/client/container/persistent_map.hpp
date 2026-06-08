@@ -130,38 +130,47 @@ namespace wry {
         T value;
     };
 
-    // Apply a code-ordered, NONE-free vector of value actions to `source` via
-    // the AMT co-recursion.  Shared by the skiplist-driven wrapper below and by
-    // WaitableMap's rebuild (which materializes its own dual actions).  `mods`
-    // must be sorted by code (the rebuild precondition; see
+    // Combine for a plain value map: WRITE replaces, CLEAR erases, NONE keeps;
+    // MERGE is not meaningful (no value-level union).  The combine's `old` arg is
+    // the read in a read-modify-write -- a map whose values are themselves
+    // mergeable (e.g. a set) supplies a combine that uses it (see WaitableMap).
+    template<typename T>
+    struct ParallelRebuildValueCombine {
+        std::optional<T> operator()(const T* old, const ParallelRebuildAction<T>& a) const {
+            using A = ParallelRebuildAction<T>;
+            switch (a.tag) {
+                case A::WRITE_VALUE: return a.value;
+                case A::CLEAR_VALUE: return std::nullopt;
+                case A::MERGE_VALUE: abort(); // not meaningful for a plain map
+                case A::NONE:        break;   // callers drop NONE before here
+            }
+            return old ? std::optional<T>(*old) : std::nullopt;
+        }
+    };
+
+    // Apply a code-ordered, NONE-free vector of actions to `source` via the AMT
+    // co-recursion, using a caller-supplied combine.  Shared by the skiplist
+    // wrapper below and by WaitableMap's rebuild (which materializes its own dual
+    // actions).  `mods` must be sorted by code (the rebuild precondition; see
     // container/docs/parallel_rebuild.md).
-    template<typename Key, typename T, typename H, typename D>
+    template<typename Key, typename T, typename H, typename D, typename Action, typename Combine>
     [[nodiscard]] Coroutine::Future<PersistentMap<Key, T, H, D>>
     coroutine_parallel_rebuild_from_mods(
             const PersistentMap<Key, T, H, D>& source,
-            const std::vector<std::pair<typename H::code_type, ParallelRebuildAction<T>>>& mods) {
+            const std::vector<std::pair<typename H::code_type, Action>>& mods,
+            const Combine& combine) {
         using PM = PersistentMap<Key, T, H, D>;
         using AMT = typename PM::AMT;
-        using Action = ParallelRebuildAction<T>;
-        auto combine = [](const T* old, const Action& a) -> std::optional<T> {
-            switch (a.tag) {
-                case Action::WRITE_VALUE: return a.value;
-                case Action::CLEAR_VALUE: return std::nullopt;
-                case Action::MERGE_VALUE: abort(); // not meaningful for a plain map
-                case Action::NONE:        break;   // callers drop NONE before here
-            }
-            return old ? std::optional<T>(*old) : std::nullopt;
-        };
         const AMT* inner = source._inner ? &*source._inner : nullptr;
         const AMT* result = co_await AMT::coroutine_parallel_rebuild(
             inner, mods, 0, mods.size(), combine);
         co_return PM{ typename PM::Slot{ result } };
     }
 
-    // Stage 1: materialize the frozen modifier skiplist into a code-ordered
-    // vector (dropping NONE so untouched subtrees stay shared), then apply it
-    // via the AMT co-recursion.  Keys come out sorted by H's code because the
-    // modifier's comparator agrees with H (the rebuild precondition).
+    // Materialize the frozen modifier skiplist into a code-ordered vector
+    // (dropping NONE so untouched subtrees stay shared), then apply it via the
+    // AMT co-recursion.  Keys come out sorted by H's code because the modifier's
+    // comparator agrees with H (the rebuild precondition).
     template<typename Key, typename T, typename H, typename D,
              typename U, typename F, typename S2, typename D2>
     [[nodiscard]] Coroutine::Future<PersistentMap<Key, T, H, D>>
@@ -176,7 +185,8 @@ namespace wry {
                 continue; // no-op: leave the subtree shared
             mods.emplace_back(H{}.encode(it->first), std::move(a));
         }
-        co_return co_await coroutine_parallel_rebuild_from_mods(source, mods);
+        co_return co_await coroutine_parallel_rebuild_from_mods(
+            source, mods, ParallelRebuildValueCombine<T>{});
     }
 
 } // namespace wry

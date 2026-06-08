@@ -162,13 +162,17 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
     SYMBOL_WIDTH-aligned, so it straddles).
   - Now nested: `ki : PersistentMap<Key, WaitSet>`, `WaitSet = PersistentSet<
     EntityID>` (sparse: only keys with waiters).  Per-key ops become single-key:
-    WRITE=replace, CLEAR=erase, MERGE=read-modify-write upsert (union).  Done via
-    `apply_ki_action` in `waitable_map.hpp`; wake-on-write is now
-    `source.ki.try_get(key)` + `for_each` (world.cpp).  `as_multimap_*` and
-    `for_each_if_first` removed.  Builds; full suite green.
-  - Still serial (the upsert fold).  Parallelizing it is the next step and is now
-    unblocked: feed the ki actions to `coroutine_parallel_rebuild_from_mods` with a
-    `WaitSet`-union combine (the combine's `old` arg is the RMW read -- no new AMT
-    primitive).  `kv` and `ki` could then fork concurrently.
+    WRITE=replace, CLEAR=erase, MERGE=read-modify-write upsert (union).  Wake-on-
+    write is now `source.ki.try_get(key)` + `for_each` (world.cpp).
+    `as_multimap_*` and `for_each_if_first` removed.
+  - Now parallel: `ki` actions feed `coroutine_parallel_rebuild_from_mods` with a
+    `WaitSet`-union combine (`WaitSetMergeCombine`; the combine's `old` arg is the
+    RMW read -- no new AMT primitive), and `kv` + `ki` are forked concurrently in
+    `coroutine_parallel_rebuild2`.  `from_mods` was generalized to take a caller-
+    supplied combine (`ParallelRebuildValueCombine` for kv).  The serial
+    `apply_ki_action` path stays as the oracle.  Differential test extended to
+    assert `parallel.ki == serial.ki == oracle` (WaitSet contents, all action
+    kinds, non-empty source ki); builds; full suite green.  The whole
+    `WaitableMap` rebuild is now parallel.
   - Save/load of the nested `ki` is **stubbed with a TODO** (round-trips as empty;
     `io/` has no save round-trip test and the rep may still change).
