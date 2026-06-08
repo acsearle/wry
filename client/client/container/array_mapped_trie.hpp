@@ -41,6 +41,7 @@ namespace wry {
 
         static constexpr Word PREFIX_MASK = ~(Word)0 << SYMBOL_WIDTH;
         static constexpr Word INDEX_MASK = ~PREFIX_MASK;
+        static constexpr int RADIX_LOG2 = SYMBOL_WIDTH; // bits consumed per level
 
         static_assert(BITMAP_WIDTH >= ((size_t)1 << SYMBOL_WIDTH));
 

@@ -123,25 +123,30 @@ namespace wry {
 
             WM parallel = co_await coroutine_parallel_rebuild2(source, modifier, action_for_key);
             WM serial   = co_await coroutine_parallel_rebuild2_serial(source, modifier, action_for_key);
+            WM unified  = co_await coroutine_parallel_rebuild2_unified(source, modifier, action_for_key);
 
             for (uint64_t k = 0; k != key_domain; ++k) {
-                // kv: parallel == serial == oracle
+                // kv: parallel == serial == unified == oracle
                 int pv = 0; bool ph = parallel.kv.try_get(k, pv);
                 int sv = 0; bool sh = serial.kv.try_get(k, sv);
+                int uv = 0; bool uh = unified.kv.try_get(k, uv);
                 auto it = kv_expect.find(k);
                 assert(ph == (it != kv_expect.end()));
                 assert(ph == sh && (!ph || pv == sv));
+                assert(ph == uh && (!ph || pv == uv));
                 if (ph)
                     assert(pv == it->second);
 
-                // ki: parallel == serial == oracle
+                // ki: parallel == serial == unified == oracle
                 std::set<uint64_t> ps = ki_set(parallel, k);
                 std::set<uint64_t> ss = ki_set(serial, k);
+                std::set<uint64_t> us = ki_set(unified, k);
                 auto kit = ki_expect.find(k);
                 std::set<uint64_t> es = (kit != ki_expect.end()) ? kit->second
                                                                  : std::set<uint64_t>{};
                 assert(ps == ss);
                 assert(ps == es);
+                assert(us == es);
             }
 
             if (!(iter & 7))

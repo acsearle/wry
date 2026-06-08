@@ -147,13 +147,47 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
     integration (the real conflict-resolving `action_for_key` + its side effects)
     is compiled but not runtime-tested.  The differential test covers the changed
     rebuild code at the function level.
-- Stage 2 (cursor co-descent over the skiplist): **shelved as low-value.** On the
-  live path it buys ~nothing: `action_for_key` bundles kv+ki and has side effects,
-  so it must be called once per key, and the ki fold is serial -- which means the
-  kv actions get materialized regardless.  There is also no live plain-
-  `PersistentMap` rebuild.  If the per-tick rebuild ever profiles hot, the better
-  lever is parallelizing the action-*resolution* pass, not the skiplist read.
-  (`lower_bound` remains a useful, tested skiplist primitive regardless.)
+- Stage 2 (cursor co-descent): the *narrow* version (just swap the kv modifier
+  read for a cursor) was shelved as low-value -- bundling forces materialization
+  regardless.  But the **fused** version below revives it for the right reason: by
+  rebuilding kv+ki together and reading the modifier via cursor, it parallelizes
+  `action_for_key` (i.e. conflict *resolution*) -- the lever worth pulling -- and
+  drops materialization.
+
+  **Unified tri-recursion (per WaitableMap).** One modifier-driven co-recursion
+  over kv (`AMT<code,T>`), ki (`AMT<code,WaitSet>`), and the modifier skiplist,
+  descending in lockstep by AMT prefix frames:
+  ```
+  rebuild(frame{prefix,shift}, const kv*, const ki*, mod-locator)
+    -> (const kv*, const ki*)     // returns input ptr when a subtree is unchanged
+  ```
+  Per frame, for each of <=32 child slots: extract the kv/ki child (a slot child,
+  or the whole node if it is deeper and lands in this slot, or null); ask the
+  locator "any mods in the child range?"; if none, share the children; if a leaf,
+  `co_await action_for_key` per in-range modifier entry and apply both the value
+  combine (kv) and the WaitSet-union combine (ki); else fork and recurse.  Assemble
+  with collapse.  `action_for_key`'s side effects (`resolve()`, `next_ready`) now
+  run in the parallel leaf phase -- safe because `resolve()` is idempotent and
+  `next_ready` is concurrent and order-independent, but the differential test must
+  assert the resulting `next_ready` set matches.
+
+  Staging (de-risk by isolating the novel cursor): (1) tri-recursion with the
+  modifier sliced by `lower_bound` (no cursor yet, no materialization), diffed
+  against the current `coroutine_parallel_rebuild2` oracle (kv', ki', next_ready);
+  (2) swap `lower_bound` slicing for the `FrozenCursor` co-descent (bug surface
+  isolated to the cursor); (3) wire into `world.cpp`.  The current (materialize +
+  fork kv + fork ki) path is kept as the oracle throughout.
+
+  Status: step (1) done -- `coroutine_parallel_rebuild2_unified` in
+  `waitable_map.hpp` (helpers `unified_frame` / `unified_leaf` /
+  `unified_extract_child` / `unified_assemble`; AMT gained `RADIX_LOG2`).  The
+  differential test asserts unified kv'/ki' == the serial/parallel/std oracles
+  across all action kinds with a non-empty source ki; builds, full suite green.
+  Caveat: `next_ready` equivalence is not *directly* asserted (the unit test's
+  `action_for_key` is side-effect-free).  It follows from `action_for_key` being
+  invoked exactly once per modifier key (which the kv'/ki' match implies) plus
+  set semantics, and gets exercised for real at the world level (step 3).
+  Steps (2) FrozenCursor swap and (3) world wiring: not started.
 
 - Waiter index (`ki`) nesting -- the real blocker on full-rebuild parallelism:
   - The old flat `PersistentSet<pair<Key, EntityID>>` made a key's waitset a
