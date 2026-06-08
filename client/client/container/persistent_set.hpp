@@ -127,46 +127,12 @@ namespace wry {
         return result;
     };
     
-    template<typename A, typename B, typename H, typename D, typename F>
-    void for_each_if_first(PersistentSet<std::pair<A, B>, H, D> const& x, A a, F&& action) {
-        using Key = std::pair<A, B>;
-        using S = PersistentSet<Key, H, D>;
-        auto z = H{}.encode(Key{a, B{}});
-        auto mask = H{}.mask_first();
-        x._inner->for_each_mask(x._inner, z, mask, [action=std::forward<F>(action)](H::code_type key, int dummy) {
-            return action(H{}.decode(key));
-        });
-    }
-    
-    template<typename A, typename B, typename H, typename D>
-    PersistentSet<std::pair<A, B>, H, D>
-    as_multimap_erase(PersistentSet<std::pair<A, B>, H, D> const& x, A a) {
-        using Key = std::pair<A, B>;
-        using S = PersistentSet<Key, H, D>;
-        auto z = H{}.encode(Key{a, B{}});
-        auto mask = H{}.mask_first();
-        auto c = x._inner->partition_mask(x._inner, z, mask);
-        return S{c.second};
-    };
+    // NB: the flat-pair multimap helpers (for_each_if_first, as_multimap_*) were
+    // removed when the waiter index became a nested PersistentMap<Key, WaitSet>;
+    // see container/docs/parallel_rebuild.md.  partition_first above is still
+    // used by the time wheel.
 
-    template<typename A, typename B, typename H, typename D>
-    PersistentSet<std::pair<A, B>, H, D>
-    as_multimap_merge(PersistentSet<std::pair<A, B>, H, D> const& x, A a, std::vector<B> values) {
-        auto y = x;
-        for (auto v : values) {
-            y.set({a, v});
-        }
-        return y;
-    };
 
-    template<typename A, typename B, typename H, typename D>
-    PersistentSet<std::pair<A, B>, H, D>
-    as_multimap_replace(PersistentSet<std::pair<A, B>, H, D> const& x, A a, std::vector<B> values) {
-        return as_multimap_merge(as_multimap_erase(x, a), a, std::move(values));
-    };
-
-    
-    
     
     template<typename Key, typename H, typename D, typename Key2, typename U, typename F, typename S2, typename D2>
     Coroutine::Future<PersistentSet<Key, H, D>>

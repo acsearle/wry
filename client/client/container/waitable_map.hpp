@@ -14,31 +14,72 @@
 
 namespace wry {
     
+    // A key's set of waiting entities.  Nested as the *value* of the ki map
+    // (rather than flattened into pair<Key, EntityID> keys) so that per-key
+    // waitset operations are single-key, which is what the parallel rebuild
+    // eats; see container/docs/parallel_rebuild.md.  Sparse: only keys that
+    // actually have waiters get an entry, so the dense kv map stays lean.
+    using WaitSet = PersistentSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline>;
+
     template<typename Key, typename T>
     struct WaitableMap {
-        
-        // TODO: We are bloating WaitableMap by allocating a waitset pointer
-        // for every entry even though they will be rare
 
         PersistentMap<Key, T, DefaultKeyService<Key>, ScanDiscipline> kv;
-        PersistentSet<std::pair<Key, EntityID>, DefaultKeyService<std::pair<Key, EntityID>>, ScanDiscipline> ki;
+        PersistentMap<Key, WaitSet, DefaultKeyService<Key>, ScanDiscipline> ki;
 
         bool try_get(Key key, T& victim) const {
             return kv.try_get(key, victim);
         }
-        
+
         void set(Key key, T desired) {
             kv.set(key, std::move(desired));
         }
-        
+
     };
-    
+
     template<typename Key, typename T>
     void garbage_collected_scan(const WaitableMap<Key, T>& x) {
         garbage_collected_scan(x.kv);
         garbage_collected_scan(x.ki);
     }
-    
+
+    // Apply one ki (waiter-index) action to the nested map, in place.  WRITE
+    // replaces a key's waitset, CLEAR erases it, MERGE is the read-modify-write
+    // upsert (union the new waiters into the existing set).  Serial for now (the
+    // ki map is sparse); the same WRITE/CLEAR/MERGE semantics will move into a
+    // combine when ki is parallelized.
+    template<typename Key>
+    void apply_ki_action(PersistentMap<Key, WaitSet, DefaultKeyService<Key>, ScanDiscipline>& ki,
+                         Key key,
+                         const ParallelRebuildAction<std::vector<EntityID>>& action) {
+        using A = ParallelRebuildAction<std::vector<EntityID>>;
+        switch (action.tag) {
+            case A::NONE:
+                break;
+            case A::WRITE_VALUE: {
+                WaitSet ws;
+                for (EntityID e : action.value)
+                    ws.set(e);
+                ki.set(key, ws);
+                break;
+            }
+            case A::CLEAR_VALUE: {
+                assert(action.value.empty());
+                WaitSet victim;
+                (void) ki.try_erase(key, victim);
+                break;
+            }
+            case A::MERGE_VALUE: {
+                WaitSet ws;
+                (void) ki.try_get(key, ws); // empty if absent
+                for (EntityID e : action.value)
+                    ws.set(e);
+                ki.set(key, ws);
+                break;
+            }
+        }
+    }
+
     // Stage 0 (serial) -- kept as the oracle for the differential test.
     template<typename Key, typename T, typename U, typename F, typename S2, typename D2>
     Coroutine::Future<WaitableMap<Key, T>>
@@ -65,20 +106,7 @@ namespace wry {
                 case ParallelRebuildAction<T>::MERGE_VALUE:
                     abort();
             }
-            switch (p.second.tag) {
-                case ParallelRebuildAction<T>::NONE:
-                    break;
-                case ParallelRebuildAction<T>::WRITE_VALUE:
-                    result.ki = as_multimap_replace(result.ki, first->first, std::move(p.second.value));
-                    break;
-                case ParallelRebuildAction<T>::CLEAR_VALUE:
-                    assert(p.second.value.empty());
-                    result.ki = as_multimap_erase(result.ki, first->first);
-                    break;
-                case ParallelRebuildAction<T>::MERGE_VALUE:
-                    result.ki = as_multimap_merge(result.ki, first->first, std::move(p.second.value));
-                    break;
-            }
+            apply_ki_action(result.ki, first->first, p.second);
         }
         co_return result;
     }
@@ -101,20 +129,7 @@ namespace wry {
         for (auto first = modifier.begin(); first != modifier.end(); ++first) {
             std::pair<ParallelRebuildAction<T>, ParallelRebuildAction<std::vector<EntityID>>> p
                 = co_await action_for_key(*first);
-            switch (p.second.tag) {
-                case ParallelRebuildAction<T>::NONE:
-                    break;
-                case ParallelRebuildAction<T>::WRITE_VALUE:
-                    result.ki = as_multimap_replace(result.ki, first->first, std::move(p.second.value));
-                    break;
-                case ParallelRebuildAction<T>::CLEAR_VALUE:
-                    assert(p.second.value.empty());
-                    result.ki = as_multimap_erase(result.ki, first->first);
-                    break;
-                case ParallelRebuildAction<T>::MERGE_VALUE:
-                    result.ki = as_multimap_merge(result.ki, first->first, std::move(p.second.value));
-                    break;
-            }
+            apply_ki_action(result.ki, first->first, p.second);
             if (p.first.tag != ParallelRebuildAction<T>::NONE)
                 kv_mods.emplace_back(DefaultKeyService<Key>{}.encode(first->first),
                                      std::move(p.first));

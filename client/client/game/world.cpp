@@ -111,12 +111,13 @@ namespace wry {
                 } else {
                     result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::CLEAR_VALUE;
                 }
-                for_each_if_first(_term_for_coordinate.ki,
-                                  kv.first,
-                                  [coordinate=kv.first, &next_ready](std::pair<Coordinate, EntityID> key) {
-                    assert(key.first == coordinate);
-                    next_ready.try_emplace(key.second);
-                });
+                {
+                    WaitSet ws;
+                    if (_term_for_coordinate.ki.try_get(kv.first, ws))
+                        ws.for_each([&next_ready](EntityID waiter) {
+                            next_ready.try_emplace(waiter);
+                        });
+                }
                 for (EntityID key : waiters) {
                     next_ready.try_emplace(key);
                 }
@@ -165,12 +166,13 @@ namespace wry {
                 } else {
                     result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::CLEAR_VALUE;
                 }
-                for_each_if_first(_entity_id_for_coordinate.ki,
-                                  kv.first,
-                                  [coordinate=kv.first, &next_ready](std::pair<Coordinate, EntityID> key) {
-                    assert(key.first == coordinate);
-                    next_ready.try_emplace(key.second);
-                });
+                {
+                    WaitSet ws;
+                    if (_entity_id_for_coordinate.ki.try_get(kv.first, ws))
+                        ws.for_each([&next_ready](EntityID waiter) {
+                            next_ready.try_emplace(waiter);
+                        });
+                }
                 for (EntityID key : waiters) {
                     next_ready.try_emplace(key);
                 }
@@ -219,12 +221,13 @@ namespace wry {
                 } else {
                     result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::CLEAR_VALUE;
                 }
-                for_each_if_first(_entity_for_entity_id.ki,
-                                  kv.first,
-                                  [coordinate=kv.first, &next_ready](std::pair<EntityID, EntityID> key) {
-                    assert(key.first == coordinate);
-                    next_ready.try_emplace(key.second);
-                });
+                {
+                    WaitSet ws;
+                    if (_entity_for_entity_id.ki.try_get(kv.first, ws))
+                        ws.for_each([&next_ready](EntityID waiter) {
+                            next_ready.try_emplace(waiter);
+                        });
+                }
                 for (EntityID key : waiters) {
                     next_ready.try_emplace(key);
                 }

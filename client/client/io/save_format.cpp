@@ -269,12 +269,19 @@ namespace wry {
 
     void World::_save_body(Saver& s) const {
         SaveRef eid_for_coord_kv = s.visit<NodeEntityID_U64>(_entity_id_for_coordinate.kv._inner);
-        SaveRef eid_for_coord_ki = s.visit<NodeSet_U128>(_entity_id_for_coordinate.ki._inner);
         SaveRef ent_for_eid_kv   = s.visit<NodeEntityPtr_U64>(_entity_for_entity_id.kv._inner);
-        SaveRef ent_for_eid_ki   = s.visit<NodeSet_U128>(_entity_for_entity_id.ki._inner);
         SaveRef val_for_coord_kv = s.visit<NodeValue_U64>(_term_for_coordinate.kv._inner);
-        SaveRef val_for_coord_ki = s.visit<NodeSet_U128>(_term_for_coordinate.ki._inner);
         SaveRef waiting_on_time  = s.visit<NodeSet_U128>(_waiting_on_time._inner);
+
+        // TODO: the ki waiter index is now a nested PersistentMap<Key, WaitSet>,
+        // whose save/load is not yet implemented -- it round-trips as empty.  The
+        // index is normally regenerated as entities re-register, so a loaded game
+        // just misses already-registered waiters until then.  Wire this up (two
+        // new AMT node types: outer u64->WaitSet, inner u64-set) once the multimap
+        // representation settles.
+        SaveRef eid_for_coord_ki = SAVE_REF_NULL;
+        SaveRef ent_for_eid_ki   = SAVE_REF_NULL;
+        SaveRef val_for_coord_ki = SAVE_REF_NULL;
 
         s.write_u64((uint64_t)_time);
         s.write_ref(eid_for_coord_kv);
@@ -354,12 +361,16 @@ namespace wry {
         SaveRef wait    = L.read_u32();
 
         w->_entity_id_for_coordinate.kv._inner = (NodeEntityID_U64*)L._ptrs[eid_kv];
-        w->_entity_id_for_coordinate.ki._inner = (NodeSet_U128*)L._ptrs[eid_ki];
         w->_entity_for_entity_id.kv._inner     = (NodeEntityPtr_U64*)L._ptrs[ent_kv];
-        w->_entity_for_entity_id.ki._inner     = (NodeSet_U128*)L._ptrs[ent_ki];
         w->_term_for_coordinate.kv._inner     = (NodeValue_U64*)L._ptrs[val_kv];
-        w->_term_for_coordinate.ki._inner     = (NodeSet_U128*)L._ptrs[val_ki];
         w->_waiting_on_time._inner             = (NodeSet_U128*)L._ptrs[wait];
+
+        // TODO: nested ki save/load not implemented; loads as empty (see
+        // World::_save_body).  The refs are read above to keep the stream layout.
+        (void)eid_ki; (void)ent_ki; (void)val_ki;
+        w->_entity_id_for_coordinate.ki._inner = nullptr;
+        w->_entity_for_entity_id.ki._inner     = nullptr;
+        w->_term_for_coordinate.ki._inner     = nullptr;
     }
 
     static void load_into_machine(Loader& L, SaveRef id) {
