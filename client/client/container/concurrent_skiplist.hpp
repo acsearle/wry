@@ -9,6 +9,8 @@
 #define concurrent_skiplist_hpp
 
 
+#include <optional>
+
 #include "assert.hpp"
 #include "epoch_allocator.hpp"
 #include "garbage_collected.hpp"
@@ -564,8 +566,66 @@ namespace wry {
         }
         
     }; // struct concurrent_skiplist_map
-    
-    
+
+
+    // ---- Frozen-cursor frame partition --------------------------------------
+    //
+    // Given a FrozenCursor `c` covering an AMT frame [frame_lo, frame_lo +
+    // n_slots*2^shift) of a *frozen* skiplist, assign to each non-empty child
+    // slot a covering cursor (high level where possible), so the child's
+    // sub-recursion continues from there rather than re-seeking from the head.
+    // `code_of(key) -> uint64_t` projects a skiplist key to its AMT code.
+    //
+    // Express lanes hop over lower-level nodes, so a level-L `right()` cannot by
+    // itself prove a child empty; we descend exactly where a sub-range has no
+    // representative at the current level.  Each child of [lo, hi) is assigned at
+    // most once: the recursion splits into [lo, b_kc) (finer level), the child kc
+    // holding the first representative, and [b_kc1, hi) (same level).
+    template<typename Cur, typename CodeOf>
+    void skiplist_partition_assign(Cur c, uint64_t lo, uint64_t hi,
+                                   uint64_t frame_lo, int shift,
+                                   std::optional<Cur>* result, CodeOf code_of) {
+        auto codeof = [&](const Cur& x) -> uint64_t {
+            auto* k = x.key();
+            return k ? code_of(*k) : ~(uint64_t)0;
+        };
+        if (lo >= hi)
+            return;
+        while (codeof(c) < lo)
+            c = c.right();
+        uint64_t k = codeof(c);
+        if (k >= hi) {
+            // No representative at this level in [lo, hi); descend to find any
+            // lower-level mods (none if we are already at the bottom).
+            if (!c.bottom())
+                skiplist_partition_assign(c.down(), lo, hi, frame_lo, shift, result, code_of);
+            return;
+        }
+        int kc = (int)((k - frame_lo) >> shift);
+        uint64_t b_kc  = frame_lo + ((uint64_t)kc << shift);
+        uint64_t b_kc1 = b_kc + ((uint64_t)1 << shift);
+        // children strictly before kc may still hold lower-level-only mods
+        if (!c.bottom() && b_kc > lo)
+            skiplist_partition_assign(c.down(), lo, b_kc, frame_lo, shift, result, code_of);
+        // child kc has at least one mod; hand it a covering cursor
+        if (!result[kc])
+            result[kc] = c;
+        // advance past child kc at this level and continue
+        Cur cc = c;
+        while (codeof(cc) < b_kc1)
+            cc = cc.right();
+        skiplist_partition_assign(cc, b_kc1, hi, frame_lo, shift, result, code_of);
+    }
+
+    template<typename Cur, typename CodeOf>
+    void skiplist_partition_frame(Cur entry, uint64_t frame_lo, int shift, int n_slots,
+                                  std::optional<Cur>* result, CodeOf code_of) {
+        uint64_t span = (uint64_t)n_slots << shift;
+        uint64_t frame_hi = span ? frame_lo + span : ~(uint64_t)0; // span==0 => top wraps
+        skiplist_partition_assign(entry, frame_lo, frame_hi, frame_lo, shift, result, code_of);
+    }
+
+
 } // namespace wry
 
 

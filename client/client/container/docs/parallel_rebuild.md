@@ -210,6 +210,27 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
   invariants) is the natural validation -- it's an integration test (GC rooting,
   real entity behavior), tracked as a follow-up.
 
+  Cursor descent (revisiting the "FrozenCursor unnecessary" finding): the forward
+  sweep is correct but has an **O(N) serial** delimiting prefix per frame (the top
+  frame scans all N mods before the deepest fork) and O(N log M) total -- the
+  express lanes *do* fix this.  Implementation finding: a level-L `right()` hops
+  over lower-level mods, so it cannot by itself prove a child empty; the clean form
+  is a **recursive descend-just-enough split** (`skiplist_partition_{assign,frame}`
+  in `concurrent_skiplist.hpp`), not the iterative q-stack.  It splits [lo,hi) into
+  [lo,b_kc) (finer level), the child holding the first representative, and [b_kc1,
+  hi) (same level), descending only where a sub-range has no representative at the
+  current level; each child is assigned at most once.
+  - Step (cursor-1) done: partitioner + a randomized correctness harness
+    (`skiplist_partition` test -- recurse to leaves via the partitioner, assert
+    collected keys == brute-force set, 200 random frozen skiplists).  Builds, full
+    suite green.  Tightness (high-level cursors / no re-descent) is by construction
+    (descend only where needed) but not separately asserted -- best seen by
+    profiling or an op-count bound.
+  - Remaining: thread the `FrozenCursor` through `unified_frame`/`unified_leaf`
+    (entry cursor in, per-child cursors out from the partitioner, leaf enumerates
+    level-0 from its cursor), re-validated by the existing unified-vs-oracle diff
+    test.  No `world.cpp` change.
+
 - Waiter index (`ki`) nesting -- the real blocker on full-rebuild parallelism:
   - The old flat `PersistentSet<pair<Key, EntityID>>` made a key's waitset a
     prefix *subtree*, so per-key replace/erase were subtree ops that don't fit the
