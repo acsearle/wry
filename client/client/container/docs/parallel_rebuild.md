@@ -198,7 +198,17 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
   Step (2) done -- `unified_frame`/`unified_leaf` now thread a forward iterator
   (`[first, last)` sub-ranges) and bucket by child index in one sweep; no
   `lower_bound`, no re-seek, no materialization.  Diff test still green, full suite
-  green.  Step (3) world wiring: not started.
+  green.
+  Step (3) done -- `world.cpp`'s three `WaitableMap` rebuilds now call
+  `coroutine_parallel_rebuild2_unified` (the time-wheel `PersistentSet` rebuild is
+  unchanged).  So the live tick now resolves conflicts (`action_for_key`, incl.
+  `resolve()` and `next_ready`) in the parallel leaf phase, across one fused kv+ki
+  traversal per map.  Builds; full suite green.
+  Runtime gap: the suite still does not drive `World::step()`, so the live path is
+  compile- and diff-validated but not runtime-exercised.  A world smoke test
+  (build a populated `World` a la `model.hpp`, step it N times, assert no crash +
+  invariants) is the natural validation -- it's an integration test (GC rooting,
+  real entity behavior), tracked as a follow-up.
 
 - Waiter index (`ki`) nesting -- the real blocker on full-rebuild parallelism:
   - The old flat `PersistentSet<pair<Key, EntityID>>` made a key's waitset a

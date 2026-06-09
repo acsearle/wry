@@ -262,17 +262,17 @@ namespace wry {
         Coroutine::Nursery nursery;
         
         co_await nursery.fork(new_value_for_coordinate,
-                              coroutine_parallel_rebuild2(_term_for_coordinate,
+                              coroutine_parallel_rebuild2_unified(_term_for_coordinate,
                                                          context._verb_value_for_coordinate,
                                                          value_for_coordinate_action));
         
         co_await nursery.fork(new_entity_id_for_coordinate,
-                              coroutine_parallel_rebuild2(_entity_id_for_coordinate,
+                              coroutine_parallel_rebuild2_unified(_entity_id_for_coordinate,
                                                          context._verb_entity_id_for_coordinate,
                                                          action_for_entity_id_for_coordinate));
         
         co_await nursery.fork(new_entity_for_entity_id,
-                              coroutine_parallel_rebuild2(_entity_for_entity_id,
+                              coroutine_parallel_rebuild2_unified(_entity_for_entity_id,
                                                          context._verb_entity_for_entity_id,
                                                          action_for_entity_for_entity_id));
         
