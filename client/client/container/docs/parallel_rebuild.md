@@ -174,9 +174,17 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
   Staging (de-risk by isolating the novel cursor): (1) tri-recursion with the
   modifier sliced by `lower_bound` (no cursor yet, no materialization), diffed
   against the current `coroutine_parallel_rebuild2` oracle (kv', ki', next_ready);
-  (2) swap `lower_bound` slicing for the `FrozenCursor` co-descent (bug surface
-  isolated to the cursor); (3) wire into `world.cpp`.  The current (materialize +
-  fork kv + fork ki) path is kept as the oracle throughout.
+  (2) replace the per-child `lower_bound` slicing with a threaded forward sweep
+  (see the finding below -- the `FrozenCursor`'s express lanes are unnecessary
+  here); (3) wire into `world.cpp`.  The current (materialize + fork kv + fork ki)
+  path is kept as the oracle throughout.
+
+  Finding (why not the FrozenCursor): the modifier skiplist is *sparse* -- it
+  holds only the touched keys -- so a level-0 forward iterator visits exactly the
+  mods, in order, with nothing to skip.  The express lanes would buy nothing.  The
+  scaffold's real waste was the per-child `lower_bound` re-seek from the head (up
+  to 32 per frame); threading a single forward position as `[first, last)`
+  sub-ranges removes it (empty children cost O(1)) with no materialization.
 
   Status: step (1) done -- `coroutine_parallel_rebuild2_unified` in
   `waitable_map.hpp` (helpers `unified_frame` / `unified_leaf` /
@@ -187,7 +195,10 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
   `action_for_key` is side-effect-free).  It follows from `action_for_key` being
   invoked exactly once per modifier key (which the kv'/ki' match implies) plus
   set semantics, and gets exercised for real at the world level (step 3).
-  Steps (2) FrozenCursor swap and (3) world wiring: not started.
+  Step (2) done -- `unified_frame`/`unified_leaf` now thread a forward iterator
+  (`[first, last)` sub-ranges) and bucket by child index in one sweep; no
+  `lower_bound`, no re-seek, no materialization.  Diff test still green, full suite
+  green.  Step (3) world wiring: not started.
 
 - Waiter index (`ki`) nesting -- the real blocker on full-rebuild parallelism:
   - The old flat `PersistentSet<pair<Key, EntityID>>` made a key's waitset a

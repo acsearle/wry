@@ -227,14 +227,13 @@ namespace wry {
         return node;
     }
 
-    // Apply the modifier entries in one 32-key leaf range [lo, lo+32) to the kv
-    // and ki leaves.
-    template<typename Key, typename T, typename Modifier, typename F>
+    // Apply the modifier entries [first, last) -- the mods of one 32-key leaf
+    // range -- to the kv and ki leaves.
+    template<typename Key, typename T, typename It, typename F>
     Coroutine::Future<std::pair<const UnifiedKvAMT<Key, T>*, const UnifiedKiAMT<Key>*>>
-    unified_leaf(typename DefaultKeyService<Key>::code_type lo,
-                 const UnifiedKvAMT<Key, T>* kv,
+    unified_leaf(const UnifiedKvAMT<Key, T>* kv,
                  const UnifiedKiAMT<Key>* ki,
-                 const Modifier& modifier,
+                 It first, It last,
                  const F& action_for_key) {
         using KvAMT = UnifiedKvAMT<Key, T>;
         using KiAMT = UnifiedKiAMT<Key>;
@@ -244,12 +243,8 @@ namespace wry {
         using KiA = ParallelRebuildAction<std::vector<EntityID>>;
         const KvAMT* kv2 = kv;
         const KiAMT* ki2 = ki;
-        Code hi = lo + 32;
-        bool hi_wrap = (hi < lo);
-        for (auto it = modifier.lower_bound(H{}.decode(lo)); it != modifier.end(); ++it) {
+        for (It it = first; it != last; ++it) {
             Code code = H{}.encode(it->first);
-            if (!hi_wrap && code >= hi)
-                break;
             std::pair<ValA, KiA> p = co_await action_for_key(*it);
             if (p.first.tag != ValA::NONE) {
                 T old{};
@@ -277,12 +272,16 @@ namespace wry {
         co_return std::pair<const KvAMT*, const KiAMT*>{kv2, ki2};
     }
 
-    template<typename Key, typename T, typename Modifier, typename F>
+    // Co-recurse over kv, ki and the modifier entries [first, last) for this frame
+    // (sorted by code, all within the frame's range).  A single forward sweep
+    // buckets the mods into child slots -- no re-seek, no materialization, and
+    // empty children cost O(1).
+    template<typename Key, typename T, typename It, typename F>
     Coroutine::Future<std::pair<const UnifiedKvAMT<Key, T>*, const UnifiedKiAMT<Key>*>>
     unified_frame(typename DefaultKeyService<Key>::code_type prefix, int shift,
                   const UnifiedKvAMT<Key, T>* kv,
                   const UnifiedKiAMT<Key>* ki,
-                  const Modifier& modifier,
+                  It first, It last,
                   const F& action_for_key) {
         using KvAMT = UnifiedKvAMT<Key, T>;
         using KiAMT = UnifiedKiAMT<Key>;
@@ -293,28 +292,33 @@ namespace wry {
         constexpr int SLOTS = 1 << SW;
 
         if (shift == 0)
-            co_return co_await unified_leaf<Key, T>(prefix, kv, ki, modifier, action_for_key);
+            co_return co_await unified_leaf<Key, T>(kv, ki, first, last, action_for_key);
 
         int child_shift = shift - SW;
         int n_slots = (shift + SW >= WW) ? (1 << (WW - shift)) : SLOTS;
 
         std::pair<const KvAMT*, const KiAMT*> results[SLOTS] = {};
         Coroutine::Nursery nursery;
+        It it = first;
         for (int c = 0; c < n_slots; ++c) {
             Code child_prefix = prefix | ((Code)c << shift);
             const KvAMT* kv_c = unified_extract_child(kv, c, shift);
             const KiAMT* ki_c = unified_extract_child(ki, c, shift);
-            Code hi = child_prefix + ((Code)1 << shift);
-            bool hi_wrap = (hi <= child_prefix);
-            auto it = modifier.lower_bound(H{}.decode(child_prefix));
-            bool any = (it != modifier.end())
-                       && (hi_wrap || (H{}.encode(it->first) < hi));
-            if (!any) {
-                results[c] = {kv_c, ki_c};
+            // Bucket: advance `it` over the mods belonging to child c.
+            It child_begin = it;
+            if (c == n_slots - 1) {
+                it = last; // the final child gets the remaining mods
+            } else {
+                Code child_hi = prefix | ((Code)(c + 1) << shift);
+                while (it != last && H{}.encode(it->first) < child_hi)
+                    ++it;
+            }
+            if (child_begin == it) {
+                results[c] = {kv_c, ki_c}; // no mods: share
             } else {
                 co_await nursery.fork(results[c],
                     unified_frame<Key, T>(child_prefix, child_shift, kv_c, ki_c,
-                                          modifier, action_for_key));
+                                          child_begin, it, action_for_key));
             }
         }
         co_await nursery.join();
@@ -346,7 +350,8 @@ namespace wry {
         constexpr int WW = (int)KvAMT::WORD_WIDTH;
         int top_shift = ((WW - 1) / SW) * SW; // largest multiple of SW below WW
         std::pair<const KvAMT*, const KiAMT*> roots =
-            co_await unified_frame<Key, T>((Code)0, top_shift, kv, ki, modifier, action_for_key);
+            co_await unified_frame<Key, T>((Code)0, top_shift, kv, ki,
+                                           modifier.begin(), modifier.end(), action_for_key);
         WaitableMap<Key, T> result;
         result.kv = KvMap{ typename KvMap::Slot{ roots.first } };
         result.ki = KiMap{ typename KiMap::Slot{ roots.second } };
