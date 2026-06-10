@@ -581,19 +581,22 @@ namespace wry {
     // representative at the current level.  Each child of [lo, hi) is assigned at
     // most once: the recursion splits into [lo, b_kc) (finer level), the child kc
     // holding the first representative, and [b_kc1, hi) (same level).
+    // Ranges are carried in __uint128_t so the top frame [0, 2^64) and its child
+    // boundaries (e.g. 16 << 60 == 2^64) do not overflow; codes are uint64.
     template<typename Cur, typename CodeOf>
-    void skiplist_partition_assign(Cur c, uint64_t lo, uint64_t hi,
-                                   uint64_t frame_lo, int shift,
+    void skiplist_partition_assign(Cur c, __uint128_t lo, __uint128_t hi,
+                                   __uint128_t frame_lo, int shift,
                                    std::optional<Cur>* result, CodeOf code_of) {
-        auto codeof = [&](const Cur& x) -> uint64_t {
+        const __uint128_t BEYOND = ((__uint128_t)1 << 64); // > any uint64 code
+        auto codeof = [&](const Cur& x) -> __uint128_t {
             auto* k = x.key();
-            return k ? code_of(*k) : ~(uint64_t)0;
+            return k ? (__uint128_t)code_of(*k) : BEYOND;
         };
         if (lo >= hi)
             return;
         while (codeof(c) < lo)
             c = c.right();
-        uint64_t k = codeof(c);
+        __uint128_t k = codeof(c);
         if (k >= hi) {
             // No representative at this level in [lo, hi); descend to find any
             // lower-level mods (none if we are already at the bottom).
@@ -601,9 +604,9 @@ namespace wry {
                 skiplist_partition_assign(c.down(), lo, hi, frame_lo, shift, result, code_of);
             return;
         }
-        int kc = (int)((k - frame_lo) >> shift);
-        uint64_t b_kc  = frame_lo + ((uint64_t)kc << shift);
-        uint64_t b_kc1 = b_kc + ((uint64_t)1 << shift);
+        int kc = (int)(uint64_t)((k - frame_lo) >> shift);
+        __uint128_t b_kc  = frame_lo + ((__uint128_t)kc << shift);
+        __uint128_t b_kc1 = b_kc + ((__uint128_t)1 << shift);
         // children strictly before kc may still hold lower-level-only mods
         if (!c.bottom() && b_kc > lo)
             skiplist_partition_assign(c.down(), lo, b_kc, frame_lo, shift, result, code_of);
@@ -620,9 +623,9 @@ namespace wry {
     template<typename Cur, typename CodeOf>
     void skiplist_partition_frame(Cur entry, uint64_t frame_lo, int shift, int n_slots,
                                   std::optional<Cur>* result, CodeOf code_of) {
-        uint64_t span = (uint64_t)n_slots << shift;
-        uint64_t frame_hi = span ? frame_lo + span : ~(uint64_t)0; // span==0 => top wraps
-        skiplist_partition_assign(entry, frame_lo, frame_hi, frame_lo, shift, result, code_of);
+        __uint128_t lo = frame_lo;
+        __uint128_t hi = lo + ((__uint128_t)n_slots << shift);
+        skiplist_partition_assign(entry, lo, hi, lo, shift, result, code_of);
     }
 
 

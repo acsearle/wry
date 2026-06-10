@@ -226,10 +226,16 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
     suite green.  Tightness (high-level cursors / no re-descent) is by construction
     (descend only where needed) but not separately asserted -- best seen by
     profiling or an op-count bound.
-  - Remaining: thread the `FrozenCursor` through `unified_frame`/`unified_leaf`
-    (entry cursor in, per-child cursors out from the partitioner, leaf enumerates
-    level-0 from its cursor), re-validated by the existing unified-vs-oracle diff
-    test.  No `world.cpp` change.
+  - Step (cursor-2) done: `unified_frame`/`unified_leaf` now thread the
+    `FrozenCursor` -- the entry is `modifier.make_cursor()`, each frame calls
+    `skiplist_partition_frame` to hand its non-empty children covering cursors,
+    and the leaf walks level-0 from its own cursor.  The partitioner's frame
+    arithmetic moved to `__uint128_t` so the top frame `[0, 2^64)` and boundaries
+    like `16<<60` don't overflow.  The existing unified-vs-oracle differential test
+    re-passes (kv' and ki'); full suite green.  `world.cpp` is unchanged (same
+    `coroutine_parallel_rebuild2_unified` signature), so the **live tick now runs
+    the cursor descent** -- no per-frame `lower_bound` and no O(N) serial delimiting
+    prefix.  The forward-iterator scaffold is fully replaced.
 
 - Waiter index (`ki`) nesting -- the real blocker on full-rebuild parallelism:
   - The old flat `PersistentSet<pair<Key, EntityID>>` made a key's waitset a
