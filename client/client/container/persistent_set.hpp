@@ -35,7 +35,7 @@ namespace wry {
 
         bool contains(Key key) const {
             U j = H{}.encode(key);
-            uint64_t _ = {};
+            T _ = {};
             return _inner && _inner->try_get(j, _);
         }
         

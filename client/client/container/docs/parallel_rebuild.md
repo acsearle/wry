@@ -256,5 +256,8 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
     assert `parallel.ki == serial.ki == oracle` (WaitSet contents, all action
     kinds, non-empty source ki); builds; full suite green.  The whole
     `WaitableMap` rebuild is now parallel.
-  - Save/load of the nested `ki` is **stubbed with a TODO** (round-trips as empty;
-    `io/` has no save round-trip test and the rep may still change).
+  - Save/load of the nested `ki` is implemented (2026-06-10): two AMT node
+    types in `io/save_format.cpp` (outer `Node<WaitSet,u64>` whose leaves
+    reference inner `Node<int,u64>` set roots), driven by a round-trip test
+    (`save_format_ki_roundtrip`).  The ki index is semantic state -- waiters
+    must survive a load, they are not regenerated.

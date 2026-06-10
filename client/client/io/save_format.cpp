@@ -12,15 +12,16 @@
 //    - ArrayMappedTrie<uint64_t, Term>          // value-for-coordinate map leaves
 //    - ArrayMappedTrie<uint64_t, EntityID>       // entity-id-for-coordinate map leaves
 //    - ArrayMappedTrie<uint64_t, const Entity*>  // entity-for-entity-id map leaves
-//    - ArrayMappedTrie<__uint128_t, int>            // PersistentSet payload-less node
+//    - ArrayMappedTrie<__uint128_t, int>            // time wheel set node
+//    - ArrayMappedTrie<uint64_t, WaitSet>        // ki waiter-index outer map
+//    - ArrayMappedTrie<uint64_t, int>            // ki waitset inner set node
 //    - PersistentStack<Term>                      // machine stack cells
-//
-//  Other AMT instantiations needed by World (e.g. for the pair<Time,EntityID>
-//  set inside PersistentSet) are listed in the registry; their emit/load
-//  bodies follow the same pattern and are left as TODO in this sketch.
 //
 
 #include <cstdio>
+#include <cstdlib>
+#include <map>
+#include <set>
 
 #include "save_format.hpp"
 
@@ -31,6 +32,8 @@
 #include "persistent_set.hpp"
 #include "persistent_stack.hpp"
 #include "term.hpp"
+#include "test.hpp"
+#include "waitable_map.hpp"
 #include "world.hpp"
 
 namespace wry {
@@ -89,6 +92,7 @@ namespace wry {
     template<> struct save_type_traits<Term>           { static constexpr uint64_t value = save_type_tag_fnv1a("wry::Term"); };
     template<> struct save_type_traits<EntityID>        { static constexpr uint64_t value = save_type_tag_fnv1a("wry::EntityID"); };
     template<> struct save_type_traits<const Entity*>   { static constexpr uint64_t value = save_type_tag_fnv1a("wry::Entity*"); };
+    template<> struct save_type_traits<WaitSet>         { static constexpr uint64_t value = save_type_tag_fnv1a("wry::WaitSet"); };
     template<> struct save_type_traits<int>             { static constexpr uint64_t value = save_type_tag_fnv1a("int"); };
     template<> struct save_type_traits<uint64_t>        { static constexpr uint64_t value = save_type_tag_fnv1a("u64"); };
     template<> struct save_type_traits<__uint128_t>     { static constexpr uint64_t value = save_type_tag_fnv1a("u128"); };
@@ -123,12 +127,12 @@ namespace wry {
         }
         _seen[(const void*)p] = SAVE_REF_NULL;  // in-progress sentinel
 
-        size_t len_off = begin_record(p->_save_type_tag());
+        begin_record(p->_save_type_tag());
         p->_save_body(*this);
 
         SaveRef id = _next_ref++;
         _seen[(const void*)p] = id;
-        end_record(len_off);
+        end_record();
         // The record header includes the assigned id implicitly by position
         // in the file.  The loader counts records as it reads.
         return id;
@@ -146,12 +150,12 @@ namespace wry {
         }
         _seen[(const void*)p] = SAVE_REF_NULL;
 
-        size_t len_off = begin_record(p->_save_type_tag());
+        begin_record(p->_save_type_tag());
         p->_save_body(*this);
 
         SaveRef id = _next_ref++;
         _seen[(const void*)p] = id;
-        end_record(len_off);
+        end_record();
         return id;
     }
 
@@ -167,12 +171,12 @@ namespace wry {
         }
         _seen[(const void*)p] = SAVE_REF_NULL;
 
-        size_t len_off = begin_record(save_type_tag_v<T>);
+        begin_record(save_type_tag_v<T>);
         emit_body(p, *this);  // ADL or namespace lookup
 
         SaveRef id = _next_ref++;
         _seen[(const void*)p] = id;
-        end_record(len_off);
+        end_record();
         return id;
     }
 
@@ -253,14 +257,32 @@ namespace wry {
         emit_amt_body(n, s, [](int) { return (int32_t)0; });
     }
 
-    // The set-flavor PersistentSet is keyed by pair<X, EntityID>, which the
-    // DefaultKeyService hashes to a 16-byte (u128) hash, so the ki AMTs use
-    // Node<int, __uint128_t>.  The kv side hashes Coordinate / EntityID to
-    // u64.
+    // AMT Node<int, uint64_t>: the inner waitset of a ki entry; a
+    // PersistentSet of EntityID codes.  Set-style, as above.
+    static void emit_body(const ArrayMappedTrie<uint64_t, int, ScanDiscipline>* n, Saver& s) {
+        emit_amt_body(n, s, [](int) { return (int32_t)0; });
+    }
+
+    // AMT Node<WaitSet, uint64_t>: the ki waiter-index outer map.  Leaves
+    // are nested WaitSets, emitted as refs to their inner set root nodes.
+    static void emit_body(const ArrayMappedTrie<uint64_t, WaitSet, ScanDiscipline>* n, Saver& s) {
+        emit_amt_body(n, s, [&s](const WaitSet& ws) {
+            return s.visit<ArrayMappedTrie<uint64_t, int, ScanDiscipline>>(ws._inner);
+        });
+    }
+
+    // The kv side hashes Coordinate / EntityID keys to u64 codes.  The time
+    // wheel (_waiting_on_time) is keyed by pair<Time, EntityID>, which the
+    // DefaultKeyService packs into a u128 code, so its set nodes are
+    // Node<int, u128>.  The ki waiter index is a nested map: an outer
+    // Node<WaitSet, u64> whose leaves reference inner Node<int, u64> set
+    // roots holding EntityID codes.
     using NodeEntityID_U64    = ArrayMappedTrie<uint64_t, EntityID, ScanDiscipline>;
     using NodeEntityPtr_U64   = ArrayMappedTrie<uint64_t, const Entity*, ScanDiscipline>;
     using NodeValue_U64       = ArrayMappedTrie<uint64_t, Term, ScanDiscipline>;
     using NodeSet_U128        = ArrayMappedTrie<__uint128_t, int, ScanDiscipline>;
+    using NodeWaitSet_U64     = ArrayMappedTrie<uint64_t, WaitSet, ScanDiscipline>;
+    using NodeSet_U64         = ArrayMappedTrie<uint64_t, int, ScanDiscipline>;
 
     // -----------------------------------------------------------------------
     // Polymorphic _save_body implementations.  These live here, not in the
@@ -273,15 +295,13 @@ namespace wry {
         SaveRef val_for_coord_kv = s.visit<NodeValue_U64>(_term_for_coordinate.kv._inner);
         SaveRef waiting_on_time  = s.visit<NodeSet_U128>(_waiting_on_time._inner);
 
-        // TODO: the ki waiter index is now a nested PersistentMap<Key, WaitSet>,
-        // whose save/load is not yet implemented -- it round-trips as empty.  The
-        // index is normally regenerated as entities re-register, so a loaded game
-        // just misses already-registered waiters until then.  Wire this up (two
-        // new AMT node types: outer u64->WaitSet, inner u64-set) once the multimap
-        // representation settles.
-        SaveRef eid_for_coord_ki = SAVE_REF_NULL;
-        SaveRef ent_for_eid_ki   = SAVE_REF_NULL;
-        SaveRef val_for_coord_ki = SAVE_REF_NULL;
+        // The ki waiter index is semantic state, not a regenerable cache: a
+        // waiter registered before the save must still be registered after a
+        // load, or its wake is silently lost.  Nested map: the outer
+        // Node<WaitSet,u64> leaves reference inner Node<int,u64> set roots.
+        SaveRef eid_for_coord_ki = s.visit<NodeWaitSet_U64>(_entity_id_for_coordinate.ki._inner);
+        SaveRef ent_for_eid_ki   = s.visit<NodeWaitSet_U64>(_entity_for_entity_id.ki._inner);
+        SaveRef val_for_coord_ki = s.visit<NodeWaitSet_U64>(_term_for_coordinate.ki._inner);
 
         s.write_u64((uint64_t)_time);
         s.write_ref(eid_for_coord_kv);
@@ -365,12 +385,11 @@ namespace wry {
         w->_term_for_coordinate.kv._inner     = (NodeValue_U64*)L._ptrs[val_kv];
         w->_waiting_on_time._inner             = (NodeSet_U128*)L._ptrs[wait];
 
-        // TODO: nested ki save/load not implemented; loads as empty (see
-        // World::_save_body).  The refs are read above to keep the stream layout.
-        (void)eid_ki; (void)ent_ki; (void)val_ki;
-        w->_entity_id_for_coordinate.ki._inner = nullptr;
-        w->_entity_for_entity_id.ki._inner     = nullptr;
-        w->_term_for_coordinate.ki._inner     = nullptr;
+        // Pre-ki saves wrote SAVE_REF_NULL for these three refs; _ptrs[0] is
+        // nullptr, so such files load with an empty waiter index.
+        w->_entity_id_for_coordinate.ki._inner = (NodeWaitSet_U64*)L._ptrs[eid_ki];
+        w->_entity_for_entity_id.ki._inner     = (NodeWaitSet_U64*)L._ptrs[ent_ki];
+        w->_term_for_coordinate.ki._inner     = (NodeWaitSet_U64*)L._ptrs[val_ki];
     }
 
     static void load_into_machine(Loader& L, SaveRef id) {
@@ -474,6 +493,24 @@ namespace wry {
         });
     }
 
+    static void load_into_amt_node_int_u64(Loader& L, SaveRef id) {
+        load_amt_node<int, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
+            for (uint32_t i = 0; i < count; ++i) {
+                (void)L.read_u32();
+                n->_values[i] = 0;
+            }
+        });
+    }
+
+    static void load_into_amt_node_wait_set_u64(Loader& L, SaveRef id) {
+        load_amt_node<WaitSet, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
+            for (uint32_t i = 0; i < count; ++i) {
+                SaveRef r = L.read_u32();
+                n->_values[i] = WaitSet{ (const NodeSet_U64*)L._ptrs[r] };
+            }
+        });
+    }
+
     // The registry table.
 
     static const SaveableTraits g_saveable_traits[] = {
@@ -486,6 +523,8 @@ namespace wry {
         { save_type_tag_v<NodeEntityID_U64>,                                 "Node<EntityID,u64>",                  &load_into_amt_node_entity_id_u64 },
         { save_type_tag_v<NodeEntityPtr_U64>,                                "Node<Entity*,u64>",                   &load_into_amt_node_entity_ptr_u64 },
         { save_type_tag_v<NodeSet_U128>,                                     "Node<int,u128>",                      &load_into_amt_node_int_u128 },
+        { save_type_tag_v<NodeWaitSet_U64>,                                  "Node<WaitSet,u64>",                   &load_into_amt_node_wait_set_u64 },
+        { save_type_tag_v<NodeSet_U64>,                                      "Node<int,u64>",                       &load_into_amt_node_int_u64 },
     };
 
     const SaveableTraits* find_saveable_traits(uint64_t tag) {
@@ -541,5 +580,94 @@ namespace wry {
         }
         _fixups.clear();
     }
+
+    // -----------------------------------------------------------------------
+    // Round-trip test for the ki waiter index.  In-memory; the framing
+    // (header, records, root ref) mirrors save_game/load_game in save.cpp.
+    // -----------------------------------------------------------------------
+
+    define_test("save_format_ki_roundtrip") {
+
+        World* w = new World;
+        w->_time = Time{77};
+
+        // Random waiters on the EntityID-keyed map, against an oracle.  The
+        // key domain is small enough to collide (multi-entity waitsets) and
+        // the entity values spread enough to force multi-level inner sets.
+        std::map<uint64_t, std::set<uint64_t>> oracle;
+        for (int i = 0; i != 200; ++i) {
+            uint64_t k = 1 + std::rand() % 64;
+            uint64_t e = 1 + (uint64_t)std::rand();
+            WaitSet ws;
+            (void) w->_entity_for_entity_id.ki.try_get(EntityID{k}, ws);
+            ws.set(EntityID{e});
+            w->_entity_for_entity_id.ki.set(EntityID{k}, ws);
+            oracle[k].insert(e);
+        }
+
+        // Coordinate-keyed waiters on the other two maps, plus kv and time
+        // wheel entries so the ki records interleave with the other types.
+        {
+            WaitSet ws;
+            ws.set(EntityID{101});
+            ws.set(EntityID{202});
+            w->_term_for_coordinate.ki.set(Coordinate{1, -2}, ws);
+        }
+        {
+            WaitSet ws;
+            ws.set(EntityID{303});
+            w->_entity_id_for_coordinate.ki.set(Coordinate{-3, 4}, ws);
+        }
+        w->_term_for_coordinate.set(Coordinate{1, -2}, term_make_integer_with(7));
+        w->_waiting_on_time.set({Time{5}, EntityID{101}});
+
+        // Save.
+        Saver s;
+        s.write_u32(0x57525953);  // 'WRYS', as save_game writes
+        s.write_u32(1);
+        size_t record_count_offset = s._stream.size();
+        s.write_u32(0);  // placeholder
+        SaveRef root_ref = s.save_world(w);
+        s.resolve_pending();
+        uint32_t record_count = s._next_ref - 1;
+        std::memcpy(s._stream.data() + record_count_offset, &record_count, sizeof(uint32_t));
+        s.write_ref(root_ref);
+
+        // Load.
+        Loader L;
+        L._cursor = s._stream.data();
+        L._end    = s._stream.data() + s._stream.size();
+        World* w2 = L.load_world();
+        assert(w2);
+        assert(w2->_time == w->_time);
+
+        auto ki_as_set = [](const auto& ki, auto key) {
+            std::set<uint64_t> out;
+            WaitSet ws;
+            if (ki.try_get(key, ws))
+                ws.for_each([&out](EntityID e) { out.insert(e.data); });
+            return out;
+        };
+
+        for (uint64_t k = 1; k != 65; ++k) {
+            std::set<uint64_t> expected;
+            if (auto it = oracle.find(k); it != oracle.end())
+                expected = it->second;
+            assert(ki_as_set(w2->_entity_for_entity_id.ki, EntityID{k}) == expected);
+        }
+        assert((ki_as_set(w2->_term_for_coordinate.ki, Coordinate{1, -2})
+                == std::set<uint64_t>{101, 202}));
+        assert((ki_as_set(w2->_entity_id_for_coordinate.ki, Coordinate{-3, 4})
+                == std::set<uint64_t>{303}));
+        assert(ki_as_set(w2->_term_for_coordinate.ki, Coordinate{9, 9}).empty());
+
+        Term t;
+        bool has = w2->_term_for_coordinate.try_get(Coordinate{1, -2}, t);
+        assert(has);
+        assert(t._data == term_make_integer_with(7)._data);
+        assert(w2->_waiting_on_time.contains({Time{5}, EntityID{101}}));
+
+        co_return;
+    };
 
 }  // namespace wry

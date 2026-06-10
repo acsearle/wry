@@ -65,17 +65,35 @@ namespace wry {
         SaveRef _next_ref = 1;  // 0 reserved for null
 
         // Pending back-edges: when a cycle is detected mid-walk, the saver
-        // emits a placeholder and records (offset_in_stream, target_ptr).
-        // After the walk completes, _resolve_pending() patches the stream.
-        // Expected empty in the DAG case (Term cycles are the only source).
+        // emits a placeholder and records (offset, target_ptr).  Offsets in
+        // an OpenRecord are body-relative and translated to stream offsets
+        // when the record is flattened; _pending holds stream-relative
+        // entries, patched by resolve_pending().  Expected empty in the DAG
+        // case (Term cycles are the only source).
         struct Pending { size_t offset; const void* target; };
         std::vector<Pending> _pending;
+
+        // Records nest during the walk (every _save_body visits its children
+        // mid-emission) but the file format is flat post-order records, and
+        // the loader counts on it: a record's positional index is its id.
+        // So each begin_record opens a separate body buffer; writes land in
+        // the innermost open body; end_record pops it and appends the
+        // completed (tag, len, body) record to _stream -- after the records
+        // of any children visited while it was open.  Writes outside any
+        // open record (file header, root ref) go straight to _stream.
+        struct OpenRecord {
+            uint64_t tag;
+            std::vector<uint8_t> body;
+            std::vector<Pending> pending;  // body-relative offsets
+        };
+        std::vector<OpenRecord> _open;
 
         // Raw byte writers.
 
         void write_bytes(const void* data, size_t n) {
+            std::vector<uint8_t>& out = _open.empty() ? _stream : _open.back().body;
             const uint8_t* p = (const uint8_t*)data;
-            _stream.insert(_stream.end(), p, p + n);
+            out.insert(out.end(), p, p + n);
         }
 
         template<typename T>
@@ -90,10 +108,12 @@ namespace wry {
         // Write a LEB128 varint.  Most tags and lengths compress small.
         void write_varint(uint64_t x) {
             while (x >= 0x80) {
-                _stream.push_back((uint8_t)(x & 0x7f) | 0x80);
+                uint8_t b = (uint8_t)(x & 0x7f) | 0x80;
+                write_bytes(&b, 1);
                 x >>= 7;
             }
-            _stream.push_back((uint8_t)x);
+            uint8_t b = (uint8_t)x;
+            write_bytes(&b, 1);
         }
 
         // Write a SaveRef.  In the common path, callers already resolved the
@@ -105,7 +125,11 @@ namespace wry {
         }
 
         void record_back_edge(const void* target) {
-            _pending.push_back({ _stream.size(), target });
+            if (_open.empty()) {
+                _pending.push_back({ _stream.size(), target });
+            } else {
+                _open.back().pending.push_back({ _open.back().body.size(), target });
+            }
             write_u32(SAVE_REF_NULL);  // placeholder
         }
 
@@ -121,20 +145,32 @@ namespace wry {
         template<typename T>
         SaveRef visit(const T* _Nullable p);
 
-        // Begin a record: writes (tag, body length placeholder).  Returns
-        // the stream offset where the body starts, so caller can patch the
-        // length once the body is done.  Internal use by visit_*().
-        size_t begin_record(uint64_t type_tag) {
-            write_varint(type_tag);
-            size_t len_offset = _stream.size();
-            uint32_t placeholder = 0;
-            write_pod(placeholder);  // 4-byte fixed-size length, patched later
-            return len_offset;
+        // Begin a record: opens a fresh body buffer that subsequent writes
+        // land in.  Internal use by visit_*().
+        void begin_record(uint64_t type_tag) {
+            _open.push_back({ type_tag, {}, {} });
         }
 
-        void end_record(size_t len_offset) {
-            uint32_t body_len = (uint32_t)(_stream.size() - len_offset - sizeof(uint32_t));
-            std::memcpy(_stream.data() + len_offset, &body_len, sizeof(uint32_t));
+        // Finish a record: append its (tag, len, body) to the flat stream.
+        // Deliberately bypasses write_bytes -- the completed record must go
+        // to _stream, not to the (possibly still open) parent body, so that
+        // children precede parents in the file.
+        void end_record() {
+            OpenRecord r = std::move(_open.back());
+            _open.pop_back();
+            uint64_t x = r.tag;
+            while (x >= 0x80) {
+                _stream.push_back((uint8_t)(x & 0x7f) | 0x80);
+                x >>= 7;
+            }
+            _stream.push_back((uint8_t)x);
+            uint32_t body_len = (uint32_t)r.body.size();
+            const uint8_t* p = (const uint8_t*)&body_len;
+            _stream.insert(_stream.end(), p, p + sizeof(uint32_t));
+            size_t body_start = _stream.size();
+            _stream.insert(_stream.end(), r.body.begin(), r.body.end());
+            for (const Pending& q : r.pending)
+                _pending.push_back({ body_start + q.offset, q.target });
         }
 
         // Top-level: walk the World snapshot, returning the SaveRef of the
