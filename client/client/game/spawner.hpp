@@ -36,7 +36,7 @@ namespace wry {
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Spawner");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
-        virtual void _save_body(Saver& saver) const override final { abort(); }
+        virtual void _save_body(Saver& saver) const override final;
 
 
     };
@@ -57,7 +57,7 @@ namespace wry {
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Source");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
-        virtual void _save_body(Saver& saver) const override final { abort(); }
+        virtual void _save_body(Saver& saver) const override final;
 
 
     };
@@ -75,7 +75,7 @@ namespace wry {
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Sink");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
-        virtual void _save_body(Saver& saver) const override final { abort(); }
+        virtual void _save_body(Saver& saver) const override final;
 
 
     };
@@ -92,7 +92,7 @@ namespace wry {
         }
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Counter");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
-        virtual void _save_body(Saver& saver) const override final { abort(); }
+        virtual void _save_body(Saver& saver) const override final;
 
     };
     
@@ -108,7 +108,7 @@ namespace wry {
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Evenator");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
-        virtual void _save_body(Saver& saver) const override final { abort(); }
+        virtual void _save_body(Saver& saver) const override final;
 
     };
 

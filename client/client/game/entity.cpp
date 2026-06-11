@@ -22,6 +22,12 @@ namespace wry {
     EntityID EntityID::oracle() {
         return EntityID{_entity_id_oracle_state.add_fetch_relaxed(1)};
     }
+
+    void EntityID::oracle_advance_past(EntityID id) {
+        // Atomic max; relaxed suffices because uniqueness needs only the
+        // per-location RMW total order, not cross-location ordering.
+        _entity_id_oracle_state.fetch_max_relaxed(id.data);
+    }
     
     Entity::Entity() {
         _entity_id = EntityID::oracle();

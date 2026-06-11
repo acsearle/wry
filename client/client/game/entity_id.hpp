@@ -38,6 +38,11 @@ namespace wry {
         // IDs are never reused, setting a hard scaling limit
         // TODO: We can compact IDs and times when loading, reducing this limit
         // to a per-session limit
+
+        // The oracle restarts at zero each process, but loaded entities
+        // carry their saved IDs; the loader calls this for every loaded ID
+        // so that post-load spawns cannot collide with them.
+        static void oracle_advance_past(EntityID);
     };
     
     inline u64 hash(const EntityID& x) {

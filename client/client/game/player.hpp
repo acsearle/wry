@@ -45,7 +45,7 @@ namespace wry {
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Player");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
-        virtual void _save_body(Saver& saver) const override final {}
+        virtual void _save_body(Saver& saver) const override final;
 
 
     };

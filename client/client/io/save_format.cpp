@@ -7,6 +7,8 @@
 //  The worked type universe in this sketch:
 //    - World (root, non-polymorphic)
 //    - Machine (Entity subclass, polymorphic via Entity*)
+//    - Spawner / Source / Sink / Counter / Evenator (LocalizedEntity subclasses)
+//    - Player (Entity subclass; persists identity only)
 //    - HeapInt64 (HeapTerm subclass, polymorphic via HeapTerm*)
 //    - HeapString (HeapTerm subclass; SKETCH stubs, factory-based load)
 //    - ArrayMappedTrie<uint64_t, Term>          // value-for-coordinate map leaves
@@ -31,6 +33,8 @@
 #include "machine.hpp"
 #include "persistent_set.hpp"
 #include "persistent_stack.hpp"
+#include "player.hpp"
+#include "spawner.hpp"
 #include "term.hpp"
 #include "test.hpp"
 #include "waitable_map.hpp"
@@ -81,6 +85,12 @@ namespace wry {
 
     template<> struct save_type_traits<World>     { static constexpr uint64_t value = World::SAVE_TYPE_TAG; };
     template<> struct save_type_traits<Machine>   { static constexpr uint64_t value = Machine::SAVE_TYPE_TAG; };
+    template<> struct save_type_traits<Spawner>   { static constexpr uint64_t value = Spawner::SAVE_TYPE_TAG; };
+    template<> struct save_type_traits<Source>    { static constexpr uint64_t value = Source::SAVE_TYPE_TAG; };
+    template<> struct save_type_traits<Sink>      { static constexpr uint64_t value = Sink::SAVE_TYPE_TAG; };
+    template<> struct save_type_traits<Counter>   { static constexpr uint64_t value = Counter::SAVE_TYPE_TAG; };
+    template<> struct save_type_traits<Evenator>  { static constexpr uint64_t value = Evenator::SAVE_TYPE_TAG; };
+    template<> struct save_type_traits<Player>    { static constexpr uint64_t value = Player::SAVE_TYPE_TAG; };
     template<> struct save_type_traits<HeapInt64> { static constexpr uint64_t value = HeapInt64::SAVE_TYPE_TAG; };
     template<> struct save_type_traits<HeapString>{ static constexpr uint64_t value = HeapString::SAVE_TYPE_TAG; };
 
@@ -329,6 +339,31 @@ namespace wry {
         s.write_u64((uint64_t)_new_time);
     }
 
+    // LocalizedEntity subclasses.  Spawner, Sink, Counter and Evenator carry
+    // no state beyond identity and location; Source adds the Term it emits.
+    static void save_localized_entity_fields(const LocalizedEntity* p, Saver& s) {
+        s.write_u64(p->_entity_id.data);
+        s.write_pod(p->_location);
+    }
+
+    void Spawner::_save_body(Saver& s) const { save_localized_entity_fields(this, s); }
+    void Sink::_save_body(Saver& s) const { save_localized_entity_fields(this, s); }
+    void Counter::_save_body(Saver& s) const { save_localized_entity_fields(this, s); }
+    void Evenator::_save_body(Saver& s) const { save_localized_entity_fields(this, s); }
+
+    void Source::_save_body(Saver& s) const {
+        // Visit first (post-order); _of_this may reference a HeapTerm.
+        uint64_t of_this = encode_value(_of_this, s);
+        save_localized_entity_fields(this, s);
+        s.write_u64(of_this);
+    }
+
+    void Player::_save_body(Saver& s) const {
+        // _queue is client-local pending input, consumed by notify(); it is
+        // not simulation state.  Only identity persists.
+        s.write_u64(_entity_id.data);
+    }
+
     void HeapInt64::_save_body(Saver& s) const {
         s.write_u64((uint64_t)_integer);
     }
@@ -392,10 +427,19 @@ namespace wry {
         w->_term_for_coordinate.ki._inner     = (NodeWaitSet_U64*)L._ptrs[val_ki];
     }
 
+    // Loaded entities carry their saved EntityIDs, but the oracle that mints
+    // new IDs restarts at zero each process; advance it past every loaded ID
+    // so post-load spawns cannot collide (IDs are never reused).
+    static EntityID read_entity_id(Loader& L) {
+        EntityID id{ L.read_u64() };
+        EntityID::oracle_advance_past(id);
+        return id;
+    }
+
     static void load_into_machine(Loader& L, SaveRef id) {
         Machine* m = new Machine;
         L._ptrs[id] = m;
-        m->_entity_id = EntityID{ L.read_u64() };
+        m->_entity_id = read_entity_id(L);
         m->_phase = (decltype(m->_phase))L.read_u32();
         m->_on_arrival = (int64_t)L.read_u64();
         SaveRef stack_ref = L.read_u32();
@@ -406,6 +450,28 @@ namespace wry {
         m->_old_time = (Time)L.read_u64();
         m->_new_time = (Time)L.read_u64();
         m->_stack = (PersistentStack<Term>*)L._ptrs[stack_ref];
+    }
+
+    template<typename T>
+    static void load_into_localized_entity(Loader& L, SaveRef id) {
+        T* p = new T;
+        L._ptrs[id] = p;
+        p->_entity_id = read_entity_id(L);
+        p->_location = L.read_pod<Coordinate>();
+    }
+
+    static void load_into_source(Loader& L, SaveRef id) {
+        Source* p = new Source;
+        L._ptrs[id] = p;
+        p->_entity_id = read_entity_id(L);
+        p->_location = L.read_pod<Coordinate>();
+        p->_of_this = decode_value(L.read_u64(), L);
+    }
+
+    static void load_into_player(Loader& L, SaveRef id) {
+        Player* p = new Player;
+        L._ptrs[id] = p;
+        p->_entity_id = read_entity_id(L);
     }
 
     static void load_into_heap_int64(Loader& L, SaveRef id) {
@@ -516,6 +582,12 @@ namespace wry {
     static const SaveableTraits g_saveable_traits[] = {
         { save_type_tag_v<World>,                                            "wry::World",                          &load_into_world },
         { save_type_tag_v<Machine>,                                          "wry::Machine",                        &load_into_machine },
+        { save_type_tag_v<Spawner>,                                          "wry::Spawner",                        &load_into_localized_entity<Spawner> },
+        { save_type_tag_v<Source>,                                           "wry::Source",                         &load_into_source },
+        { save_type_tag_v<Sink>,                                             "wry::Sink",                           &load_into_localized_entity<Sink> },
+        { save_type_tag_v<Counter>,                                          "wry::Counter",                        &load_into_localized_entity<Counter> },
+        { save_type_tag_v<Evenator>,                                         "wry::Evenator",                       &load_into_localized_entity<Evenator> },
+        { save_type_tag_v<Player>,                                           "wry::Player",                         &load_into_player },
         { save_type_tag_v<HeapInt64>,                                        "wry::HeapInt64",                      &load_into_heap_int64 },
         { save_type_tag_v<HeapString>,                                       "wry::HeapString",                     &load_into_heap_string },
         { save_type_tag_v<PersistentStack<Term>>,                     "wry::PersistentStack<Term>",   &load_into_persistent_stack_node },
@@ -582,9 +654,30 @@ namespace wry {
     }
 
     // -----------------------------------------------------------------------
-    // Round-trip test for the ki waiter index.  In-memory; the framing
-    // (header, records, root ref) mirrors save_game/load_game in save.cpp.
+    // Round-trip tests.  In-memory; the framing (header, records, root ref)
+    // mirrors save_game/load_game in save.cpp.
     // -----------------------------------------------------------------------
+
+    static std::vector<uint8_t> test_save_to_buffer(const World* w) {
+        Saver s;
+        s.write_u32(0x57525953);  // 'WRYS', as save_game writes
+        s.write_u32(1);
+        size_t record_count_offset = s._stream.size();
+        s.write_u32(0);  // placeholder
+        SaveRef root_ref = s.save_world(w);
+        s.resolve_pending();
+        uint32_t record_count = s._next_ref - 1;
+        std::memcpy(s._stream.data() + record_count_offset, &record_count, sizeof(uint32_t));
+        s.write_ref(root_ref);
+        return std::move(s._stream);
+    }
+
+    static World* test_load_from_buffer(const std::vector<uint8_t>& buffer) {
+        Loader L;
+        L._cursor = buffer.data();
+        L._end    = buffer.data() + buffer.size();
+        return L.load_world();
+    }
 
     define_test("save_format_ki_roundtrip") {
 
@@ -621,23 +714,8 @@ namespace wry {
         w->_term_for_coordinate.set(Coordinate{1, -2}, term_make_integer_with(7));
         w->_waiting_on_time.set({Time{5}, EntityID{101}});
 
-        // Save.
-        Saver s;
-        s.write_u32(0x57525953);  // 'WRYS', as save_game writes
-        s.write_u32(1);
-        size_t record_count_offset = s._stream.size();
-        s.write_u32(0);  // placeholder
-        SaveRef root_ref = s.save_world(w);
-        s.resolve_pending();
-        uint32_t record_count = s._next_ref - 1;
-        std::memcpy(s._stream.data() + record_count_offset, &record_count, sizeof(uint32_t));
-        s.write_ref(root_ref);
-
-        // Load.
-        Loader L;
-        L._cursor = s._stream.data();
-        L._end    = s._stream.data() + s._stream.size();
-        World* w2 = L.load_world();
+        std::vector<uint8_t> buffer = test_save_to_buffer(w);
+        World* w2 = test_load_from_buffer(buffer);
         assert(w2);
         assert(w2->_time == w->_time);
 
@@ -666,6 +744,69 @@ namespace wry {
         assert(has);
         assert(t._data == term_make_integer_with(7)._data);
         assert(w2->_waiting_on_time.contains({Time{5}, EntityID{101}}));
+
+        co_return;
+    };
+
+    define_test("save_format_entity_roundtrip") {
+
+        // Mirrors the model() startup population: a Player plus localized
+        // entities, all reachable through the entity-for-entity-id map.
+        World* w = new World;
+
+        Player* player = new Player;
+        Spawner* spawner = new Spawner;
+        Source* source = new Source;
+        Sink* sink = new Sink;
+
+        spawner->_location = Coordinate{0, 0};
+        source->_location = Coordinate{2, 2};
+        source->_of_this = Term(new HeapInt64(1234567));
+        sink->_location = Coordinate{4, 2};
+
+        // Simulate a long-lived game: a saved ID far past this process's
+        // oracle, to check the loader advances it (no post-load collisions).
+        sink->_entity_id = EntityID{1000000};
+
+        for (const Entity* e : { (const Entity*)player, (const Entity*)spawner,
+                                 (const Entity*)source, (const Entity*)sink })
+            w->_entity_for_entity_id.set(e->_entity_id, e);
+
+        std::vector<uint8_t> buffer = test_save_to_buffer(w);
+        World* w2 = test_load_from_buffer(buffer);
+        assert(w2);
+
+        auto get = [w2](EntityID id) -> const Entity* {
+            const Entity* e = nullptr;
+            bool has = w2->_entity_for_entity_id.try_get(id, e);
+            assert(has);
+            assert(e);
+            assert(e->_entity_id == id);
+            return e;
+        };
+
+        const Entity* p2 = get(player->_entity_id);
+        assert(p2->_save_type_tag() == Player::SAVE_TYPE_TAG);
+
+        const Entity* sp2 = get(spawner->_entity_id);
+        assert(sp2->_save_type_tag() == Spawner::SAVE_TYPE_TAG);
+        assert((static_cast<const Spawner*>(sp2)->_location == Coordinate{0, 0}));
+
+        const Entity* so2 = get(source->_entity_id);
+        assert(so2->_save_type_tag() == Source::SAVE_TYPE_TAG);
+        const Source* loaded_source = static_cast<const Source*>(so2);
+        assert((loaded_source->_location == Coordinate{2, 2}));
+        assert(_term_is_object(loaded_source->_of_this));
+        const HeapTerm* h = _term_as_object(loaded_source->_of_this);
+        assert(h && h->_save_type_tag() == HeapInt64::SAVE_TYPE_TAG);
+        assert(static_cast<const HeapInt64*>(h)->as_int64_t() == 1234567);
+
+        const Entity* sk2 = get(sink->_entity_id);
+        assert(sk2->_save_type_tag() == Sink::SAVE_TYPE_TAG);
+        assert((static_cast<const Sink*>(sk2)->_location == Coordinate{4, 2}));
+
+        // The oracle must have advanced past every loaded ID.
+        assert(EntityID::oracle().data > 1000000);
 
         co_return;
     };
