@@ -811,4 +811,124 @@ namespace wry {
         co_return;
     };
 
+    define_test("save_format_world_roundtrip") {
+
+        // A world that is a superset of the model() starting content: all
+        // three WaitableMaps populated on both kv and ki sides, the time
+        // wheel, a Machine with a stack, and a heap object shared across
+        // several parents (so saver dedup and load-time sharing are
+        // exercised).  Two layers of checking: targeted semantic asserts for
+        // debuggability, then the strong backstop -- save -> load -> save
+        // byte-equality.  If the loader faithfully rebuilds everything the
+        // saver emits (same records, same sharing, same order), re-saving the
+        // loaded world reproduces the stream exactly; any dropped field,
+        // wrong type, or broken sharing diverges the bytes.
+
+        World* w = new World;
+        w->_time = Time{42};
+
+        // Heap object referenced by a coordinate term, the Source, and the
+        // Machine stack -- one record, three refs, dedup'd by the saver.
+        HeapInt64* shared = new HeapInt64(9001);
+        Term shared_term = Term((const HeapTerm*)shared);
+
+        Player* player = new Player;
+        Spawner* spawner = new Spawner;  spawner->_location = Coordinate{0, 0};
+        Source* source = new Source;     source->_location = Coordinate{2, 2};
+                                         source->_of_this = shared_term;
+        Sink* sink = new Sink;           sink->_location = Coordinate{4, 2};
+        Counter* counter = new Counter;  counter->_location = Coordinate{-2, 2};
+        Evenator* even = new Evenator;   even->_location = Coordinate{3, 3};
+
+        Machine* machine = new Machine;
+        machine->_phase = Machine::PHASE_TRAVELLING;
+        machine->_on_arrival = OPCODE_NOOP;
+        machine->_old_heading = HEADING_EAST;
+        machine->_new_heading = HEADING_NORTH;
+        machine->_old_location = Coordinate{5, 5};
+        machine->_new_location = Coordinate{6, 5};
+        machine->_old_time = Time{40};
+        machine->_new_time = Time{41};
+        machine->push(term_make_integer_with(7));
+        machine->push(shared_term);  // share the heap int into the stack too
+        machine->push(term_make_opcode(OPCODE_FLIP_FLOP));
+
+        const Entity* entities[] = { player, spawner, source, sink,
+                                     counter, even, machine };
+        for (const Entity* e : entities)
+            w->_entity_for_entity_id.set(e->_entity_id, e);
+
+        w->_entity_id_for_coordinate.set(spawner->_location, spawner->_entity_id);
+        w->_entity_id_for_coordinate.set(source->_location, source->_entity_id);
+        w->_entity_id_for_coordinate.set(machine->_new_location, machine->_entity_id);
+
+        w->_term_for_coordinate.set(Coordinate{0, 1}, term_make_integer_with(1));
+        w->_term_for_coordinate.set(Coordinate{0, 2}, term_make_integer_with(2));
+        w->_term_for_coordinate.set(Coordinate{0, 4}, term_make_opcode(OPCODE_FLIP_FLOP));
+        w->_term_for_coordinate.set(Coordinate{-2, -2}, shared_term);
+        w->_term_for_coordinate.set(Coordinate{7, 7}, term_make_string_with("hello save"));
+
+        { WaitSet ws; ws.set(player->_entity_id);
+          w->_term_for_coordinate.ki.set(Coordinate{0, 1}, ws); }
+        { WaitSet ws; ws.set(sink->_entity_id); ws.set(counter->_entity_id);
+          w->_entity_id_for_coordinate.ki.set(Coordinate{0, 0}, ws); }
+        { WaitSet ws; ws.set(machine->_entity_id);
+          w->_entity_for_entity_id.ki.set(source->_entity_id, ws); }
+
+        w->_waiting_on_time.set({Time{1}, player->_entity_id});
+        w->_waiting_on_time.set({Time{2}, machine->_entity_id});
+
+        std::vector<uint8_t> b1 = test_save_to_buffer(w);
+        World* w2 = test_load_from_buffer(b1);
+        assert(w2);
+
+        // Maps / terms / entities / wait set: targeted semantic checks.
+        assert(w2->_time == w->_time);
+
+        Term t;
+        assert(w2->_term_for_coordinate.try_get(Coordinate{0, 2}, t));
+        assert(t._data == term_make_integer_with(2)._data);
+
+        EntityID eid;
+        assert(w2->_entity_id_for_coordinate.try_get(Coordinate{2, 2}, eid));
+        assert(eid == source->_entity_id);
+
+        // The shared heap object survives and is STILL shared (one pointer)
+        // across the coordinate term and the Source after reload.
+        Term tv_coord;
+        assert(w2->_term_for_coordinate.try_get(Coordinate{-2, -2}, tv_coord));
+        const Entity* se = nullptr;
+        assert(w2->_entity_for_entity_id.try_get(source->_entity_id, se));
+        assert(se->_save_type_tag() == Source::SAVE_TYPE_TAG);
+        Term tv_source = static_cast<const Source*>(se)->_of_this;
+        assert(_term_is_object(tv_coord) && _term_is_object(tv_source));
+        assert(_term_as_object(tv_coord) == _term_as_object(tv_source));
+        assert(static_cast<const HeapInt64*>(_term_as_object(tv_coord))
+                   ->as_int64_t() == 9001);
+
+        const Entity* me = nullptr;
+        assert(w2->_entity_for_entity_id.try_get(machine->_entity_id, me));
+        assert(me->_save_type_tag() == Machine::SAVE_TYPE_TAG);
+        const Machine* m2 = static_cast<const Machine*>(me);
+        assert(m2->_phase == Machine::PHASE_TRAVELLING);
+        assert((m2->_new_location == Coordinate{6, 5}));
+        assert(m2->_new_time == Time{41});
+        assert(PersistentStack<Term>::size(m2->_stack) == 3);
+
+        assert(w2->_waiting_on_time.contains({Time{2}, machine->_entity_id}));
+
+        WaitSet ws;
+        assert(w2->_entity_id_for_coordinate.ki.try_get(Coordinate{0, 0}, ws));
+        std::set<uint64_t> got;
+        ws.for_each([&got](EntityID e) { got.insert(e.data); });
+        assert((got == std::set<uint64_t>{ sink->_entity_id.data,
+                                           counter->_entity_id.data }));
+
+        // Strong backstop: re-saving the loaded world reproduces the stream.
+        std::vector<uint8_t> b2 = test_save_to_buffer(w2);
+        assert(b1 == b2);
+
+        co_return;
+    };
+
 }  // namespace wry
