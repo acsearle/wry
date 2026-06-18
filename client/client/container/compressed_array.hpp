@@ -80,8 +80,9 @@ namespace wry {
                                             std::remove_const_t<T>& victim) {
         bool result = compressed_array_contains_for_index(bitmap, index);
         if (result) {
-            victim = array[compressed_array_get_compressed_index_for_index(bitmap,
-                                                                           index)];
+            if constexpr (!std::is_empty_v<T>)
+                victim = array[compressed_array_get_compressed_index_for_index(bitmap,
+                                                                               index)];
         }
         return result;
     }
@@ -115,8 +116,12 @@ namespace wry {
                                           int index,
                                           std::type_identity_t<T> value) {
         assert(compressed_array_contains_for_index(bitmap, index));
-        int compressed_index = compressed_array_get_compressed_index_for_index(bitmap, index);
-        return std::exchange(array[compressed_index], std::move(value));
+        if constexpr (std::is_empty_v<T>) {
+            return T{};
+        } else {
+            int compressed_index = compressed_array_get_compressed_index_for_index(bitmap, index);
+            return std::exchange(array[compressed_index], std::move(value));
+        }
     }
     
     template<typename Bitmap, typename T>
@@ -127,20 +132,22 @@ namespace wry {
                                                        std::type_identity_t<T> value,
                                                        std::type_identity_t<T>& victim) {
         bool was_found = compressed_array_contains_for_index(bitmap, index);
-        int compressed_index = compressed_array_get_compressed_index_for_index(bitmap, index);
+        [[maybe_unused]] int compressed_index = compressed_array_get_compressed_index_for_index(bitmap, index);
         if (was_found) {
             // Preserve the old value
-            victim = std::move(array[compressed_index]);
+            if constexpr (!std::is_empty_v<T>) victim = std::move(array[compressed_index]);
         } else {
             // Make a hole
-            int compressed_size = compressed_array_get_compressed_size(bitmap);
-            assert(debug_capacity > compressed_size);
-            std::copy_backward(array + compressed_index,
-                               array + compressed_size,
-                               array + compressed_size + 1);
+            if constexpr (!std::is_empty_v<T>) {
+                int compressed_size = compressed_array_get_compressed_size(bitmap);
+                assert(debug_capacity > compressed_size);
+                std::copy_backward(array + compressed_index,
+                                   array + compressed_size,
+                                   array + compressed_size + 1);
+            }
             bitmap_set_for_index(bitmap, index);
         }
-        array[compressed_index] = std::move(value);
+        if constexpr (!std::is_empty_v<T>) array[compressed_index] = std::move(value);
         return was_found;
     }
     
@@ -149,12 +156,14 @@ namespace wry {
                                           T* _Nonnull array,
                                           int index,
                                           std::type_identity_t<T>& victim) {
-        int compressed_index = compressed_array_get_compressed_index_for_index(bitmap, index);
-        int compressed_size = compressed_array_get_compressed_size(bitmap);
-        victim = std::move(array[compressed_index]);
-        std::copy(array + compressed_index + 1,
-                  array + compressed_size,
-                  array + compressed_index);
+        if constexpr (!std::is_empty_v<T>) {
+            int compressed_index = compressed_array_get_compressed_index_for_index(bitmap, index);
+            int compressed_size = compressed_array_get_compressed_size(bitmap);
+            victim = std::move(array[compressed_index]);
+            std::copy(array + compressed_index + 1,
+                      array + compressed_size,
+                      array + compressed_index);
+        }
         bitmap_clear_for_index(bitmap, index);
     }
     
@@ -166,12 +175,14 @@ namespace wry {
                                               std::type_identity_t<T>& victim) {
         bool was_found = compressed_array_contains_for_index(bitmap, index);
         if (was_found) {
-            int compressed_index = compressed_array_get_compressed_index_for_index(bitmap, index);
-            int compressed_size = compressed_array_get_compressed_size(bitmap);
-            victim = std::move(array[compressed_index]);
-            std::copy(array + compressed_index + 1,
-                      array + compressed_size,
-                      array + compressed_index);
+            if constexpr (!std::is_empty_v<T>) {
+                int compressed_index = compressed_array_get_compressed_index_for_index(bitmap, index);
+                int compressed_size = compressed_array_get_compressed_size(bitmap);
+                victim = std::move(array[compressed_index]);
+                std::copy(array + compressed_index + 1,
+                          array + compressed_size,
+                          array + compressed_index);
+            }
             bitmap_clear_for_index(bitmap, index);
         }
         return was_found;

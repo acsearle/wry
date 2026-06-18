@@ -37,8 +37,7 @@ namespace wry {
 
         bool contains(Key key) const {
             U j = H{}.encode(key);
-            T _ = {};
-            return _inner && _inner->try_get(j, _);
+            return _inner && _inner->contains(j);
         }
         
         [[nodiscard]] PersistentSet clone_and_set(Key key) const {

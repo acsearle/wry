@@ -36,6 +36,12 @@ namespace wry {
 
         using Bitmap = unsigned_integer_of_bit_width_t<((std::size_t)1 << SYMBOL_WIDTH)>;
 
+        // A set (empty value type) carries no per-leaf payload: the bitmap is
+        // the membership, so leaves allocate zero value bytes and the value
+        // operations below collapse to bitmap work.
+        static constexpr bool _is_set = std::is_empty_v<T>;
+        static constexpr size_t _leaf_item_bytes = _is_set ? 0 : sizeof(T);
+
         static constexpr size_t WORD_WIDTH = sizeof(Word) * CHAR_BIT;
         static constexpr size_t BITMAP_WIDTH = sizeof(Bitmap) * CHAR_BIT;
 
@@ -90,8 +96,8 @@ namespace wry {
         Bitmap _bitmap; // bitmap of which items are present
         union {
             // compressed flexible member array of children or values
-            ArrayMappedTrie const* _Nonnull _children[] __counted_by(_debug_count);
-            T _values[] __counted_by(_debug_count);
+            ArrayMappedTrie const* _Nonnull _children[];
+            T _values[];
         };
 
         Word get_prefix_mask() const {
@@ -175,8 +181,9 @@ namespace wry {
                 for (int i = 0; i != compressed_size; ++i)
                     garbage_collected_scan(_children[i]);
             } else {
-                for (int i = 0; i != compressed_size; ++i)
-                    garbage_collected_scan(_values[i]);
+                if constexpr (!_is_set)
+                    for (int i = 0; i != compressed_size; ++i)
+                        garbage_collected_scan(_values[i]);
             }
         }
 
@@ -188,7 +195,7 @@ namespace wry {
              size_t count,
              Bitmap bitmap)
         {
-            size_t item_bytes = shift ? sizeof(const ArrayMappedTrie*) : sizeof(T);
+            size_t item_bytes = shift ? sizeof(const ArrayMappedTrie*) : _leaf_item_bytes;
             void* _Nonnull pointer = GarbageCollected::operator new(sizeof(ArrayMappedTrie) + (capacity * item_bytes));
             return new(pointer) ArrayMappedTrie(prefix,
                                                 shift,
@@ -212,7 +219,7 @@ namespace wry {
                                                                        capacity,
                                                                        count,
                                                                        bitmap);
-            new_node->_values[0] = std::move(value);
+            if constexpr (!_is_set) new_node->_values[0] = std::move(value);
             return new_node;
         }
 
@@ -240,7 +247,7 @@ namespace wry {
             }
             int compressed_index = get_compressed_index_for_key(key);
             if (!has_children()) {
-                victim = _values[compressed_index];
+                if constexpr (!_is_set) victim = _values[compressed_index];
                 return true; // bitmap is authoritative for leaves
             }
             return _children[compressed_index]->try_get(key, victim);
@@ -321,7 +328,7 @@ namespace wry {
                                                     ArrayMappedTrie const* _Nonnull b) {
                     return merge(a, b, resolver);
                 });
-            } else {
+            } else if constexpr (!_is_set) {
                 merge_compressed_arrays(a_bitmap,
                                         b_bitmap,
                                         (T const* _Nonnull)a_array,
@@ -620,7 +627,7 @@ namespace wry {
                 for (int i = 0; b != 0; ++i, (b &= (b-1))) {
                     int j = bit::ctz(b);
                     Word key = _prefix | j;
-                    action(key, _values[i]);
+                    if constexpr (_is_set) action(key, T{}); else action(key, _values[i]);
                 }
             }
         }
@@ -637,7 +644,7 @@ namespace wry {
                 for (int i = 0; b != 0; ++i, (b &= (b-1))) {
                     int j = bit::ctz(b);
                     Word key = _prefix | j;
-                    action(key, _values[i]);
+                    if constexpr (_is_set) action(key, T{}); else action(key, _values[i]);
                 }
             }
         }
@@ -653,7 +660,8 @@ namespace wry {
                 for (int i = 0; b != 0; ++i, (b &= (b-1))) {
                     int j = bit::ctz(b);
                     Word key = _prefix | j;
-                    co_await nursery.fork(action(key, _values[i]));
+                    if constexpr (_is_set) co_await nursery.fork(action(key, T{}));
+                    else co_await nursery.fork(action(key, _values[i]));
                 }
             }
             co_await nursery.join();
@@ -678,7 +686,7 @@ namespace wry {
                 if (node->has_children()) {
                     for_each_mask(node->_children[k], key, mask, action);
                 } else {
-                    action(key2, node->_values[k]);
+                    if constexpr (_is_set) action(key2, T{}); else action(key2, node->_values[k]);
                 }
             }
         }
@@ -942,7 +950,7 @@ namespace wry {
             int count = std::popcount(_bitmap);
             assert((int)capacity >= count);
             ArrayMappedTrie* _Nonnull node = make(_prefix, _shift, (uint32_t)capacity, count, _bitmap);
-            size_t item_size = has_children() ? sizeof(const ArrayMappedTrie*) : sizeof(T);
+            size_t item_size = has_children() ? sizeof(const ArrayMappedTrie*) : _leaf_item_bytes;
             memcpy(node->_children, _children, count * item_size);
             return node;
         }

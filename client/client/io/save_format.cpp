@@ -227,6 +227,12 @@ namespace wry {
             s.write_u32((uint32_t)count);
             for (SaveRef r : child_refs)
                 s.write_ref(r);
+        } else if constexpr (std::is_empty_v<T>) {
+            // Set leaf: the bitmap is the membership; no per-member payload.
+            s.write_pod(n->_prefix);
+            s.write_u32((uint32_t)n->_shift);
+            s.write_u32((uint32_t)n->_bitmap);
+            s.write_u32((uint32_t)count);
         } else {
             // For leaf values that may carry sub-references (Term, Entity*),
             // visit them first.  emit_leaf returns the bytes-or-ref to write
@@ -550,22 +556,14 @@ namespace wry {
     }
 
     static void load_into_amt_node_int_u128(Loader& L, SaveRef id) {
-        load_amt_node<std::monostate, __uint128_t>(L, id, [&L](auto* n, uint32_t count) {
-            // The saver writes a 4-byte zero per leaf slot for set-style
-            // nodes; consume them so framing stays consistent.
-            for (uint32_t i = 0; i < count; ++i) {
-                (void)L.read_u32();
-                n->_values[i] = {};
-            }
+        load_amt_node<std::monostate, __uint128_t>(L, id, [](auto*, uint32_t) {
+            // Set leaf: membership is fully in the bitmap; no per-member bytes.
         });
     }
 
     static void load_into_amt_node_int_u64(Loader& L, SaveRef id) {
-        load_amt_node<std::monostate, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
-            for (uint32_t i = 0; i < count; ++i) {
-                (void)L.read_u32();
-                n->_values[i] = {};
-            }
+        load_amt_node<std::monostate, uint64_t>(L, id, [](auto*, uint32_t) {
+            // Set leaf: membership is fully in the bitmap; no per-member bytes.
         });
     }
 
