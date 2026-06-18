@@ -14,9 +14,9 @@
 //    - ArrayMappedTrie<uint64_t, Term>          // value-for-coordinate map leaves
 //    - ArrayMappedTrie<uint64_t, EntityID>       // entity-id-for-coordinate map leaves
 //    - ArrayMappedTrie<uint64_t, const Entity*>  // entity-for-entity-id map leaves
-//    - ArrayMappedTrie<__uint128_t, int>            // time wheel set node
+//    - ArrayMappedTrie<__uint128_t, std::monostate>            // time wheel set node
 //    - ArrayMappedTrie<uint64_t, WaitSet>        // ki waiter-index outer map
-//    - ArrayMappedTrie<uint64_t, int>            // ki waitset inner set node
+//    - ArrayMappedTrie<uint64_t, std::monostate>            // ki waitset inner set node
 //    - PersistentStack<Term>                      // machine stack cells
 //
 
@@ -104,6 +104,7 @@ namespace wry {
     template<> struct save_type_traits<const Entity*>   { static constexpr uint64_t value = save_type_tag_fnv1a("wry::Entity*"); };
     template<> struct save_type_traits<WaitSet>         { static constexpr uint64_t value = save_type_tag_fnv1a("wry::WaitSet"); };
     template<> struct save_type_traits<int>             { static constexpr uint64_t value = save_type_tag_fnv1a("int"); };
+    template<> struct save_type_traits<std::monostate>   { static constexpr uint64_t value = save_type_tag_fnv1a("unit"); };
     template<> struct save_type_traits<uint64_t>        { static constexpr uint64_t value = save_type_tag_fnv1a("u64"); };
     template<> struct save_type_traits<__uint128_t>     { static constexpr uint64_t value = save_type_tag_fnv1a("u128"); };
 
@@ -261,23 +262,23 @@ namespace wry {
     }
 
     // AMT Node<int, __uint128_t>: PersistentSet of pair<...,EntityID> keys.
-    static void emit_body(const ArrayMappedTrie<__uint128_t, int, ScanDiscipline>* n, Saver& s) {
+    static void emit_body(const ArrayMappedTrie<__uint128_t, std::monostate, ScanDiscipline>* n, Saver& s) {
         // Set-style leaves: int dummy payload carries no information.  Write
         // zero so encoded width is well defined; loader ignores it.
-        emit_amt_body(n, s, [](int) { return (int32_t)0; });
+        emit_amt_body(n, s, [](std::monostate) { return (int32_t)0; });
     }
 
     // AMT Node<int, uint64_t>: the inner waitset of a ki entry; a
     // PersistentSet of EntityID codes.  Set-style, as above.
-    static void emit_body(const ArrayMappedTrie<uint64_t, int, ScanDiscipline>* n, Saver& s) {
-        emit_amt_body(n, s, [](int) { return (int32_t)0; });
+    static void emit_body(const ArrayMappedTrie<uint64_t, std::monostate, ScanDiscipline>* n, Saver& s) {
+        emit_amt_body(n, s, [](std::monostate) { return (int32_t)0; });
     }
 
     // AMT Node<WaitSet, uint64_t>: the ki waiter-index outer map.  Leaves
     // are nested WaitSets, emitted as refs to their inner set root nodes.
     static void emit_body(const ArrayMappedTrie<uint64_t, WaitSet, ScanDiscipline>* n, Saver& s) {
         emit_amt_body(n, s, [&s](const WaitSet& ws) {
-            return s.visit<ArrayMappedTrie<uint64_t, int, ScanDiscipline>>(ws._inner);
+            return s.visit<ArrayMappedTrie<uint64_t, std::monostate, ScanDiscipline>>(ws._inner);
         });
     }
 
@@ -290,9 +291,9 @@ namespace wry {
     using NodeEntityID_U64    = ArrayMappedTrie<uint64_t, EntityID, ScanDiscipline>;
     using NodeEntityPtr_U64   = ArrayMappedTrie<uint64_t, const Entity*, ScanDiscipline>;
     using NodeValue_U64       = ArrayMappedTrie<uint64_t, Term, ScanDiscipline>;
-    using NodeSet_U128        = ArrayMappedTrie<__uint128_t, int, ScanDiscipline>;
+    using NodeSet_U128        = ArrayMappedTrie<__uint128_t, std::monostate, ScanDiscipline>;
     using NodeWaitSet_U64     = ArrayMappedTrie<uint64_t, WaitSet, ScanDiscipline>;
-    using NodeSet_U64         = ArrayMappedTrie<uint64_t, int, ScanDiscipline>;
+    using NodeSet_U64         = ArrayMappedTrie<uint64_t, std::monostate, ScanDiscipline>;
 
     // -----------------------------------------------------------------------
     // Polymorphic _save_body implementations.  These live here, not in the
@@ -549,21 +550,21 @@ namespace wry {
     }
 
     static void load_into_amt_node_int_u128(Loader& L, SaveRef id) {
-        load_amt_node<int, __uint128_t>(L, id, [&L](auto* n, uint32_t count) {
+        load_amt_node<std::monostate, __uint128_t>(L, id, [&L](auto* n, uint32_t count) {
             // The saver writes a 4-byte zero per leaf slot for set-style
             // nodes; consume them so framing stays consistent.
             for (uint32_t i = 0; i < count; ++i) {
                 (void)L.read_u32();
-                n->_values[i] = 0;
+                n->_values[i] = {};
             }
         });
     }
 
     static void load_into_amt_node_int_u64(Loader& L, SaveRef id) {
-        load_amt_node<int, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
+        load_amt_node<std::monostate, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
             for (uint32_t i = 0; i < count; ++i) {
                 (void)L.read_u32();
-                n->_values[i] = 0;
+                n->_values[i] = {};
             }
         });
     }
@@ -594,9 +595,9 @@ namespace wry {
         { save_type_tag_v<NodeValue_U64>,                                    "Node<Term,u64>",                     &load_into_amt_node_value_u64 },
         { save_type_tag_v<NodeEntityID_U64>,                                 "Node<EntityID,u64>",                  &load_into_amt_node_entity_id_u64 },
         { save_type_tag_v<NodeEntityPtr_U64>,                                "Node<Entity*,u64>",                   &load_into_amt_node_entity_ptr_u64 },
-        { save_type_tag_v<NodeSet_U128>,                                     "Node<int,u128>",                      &load_into_amt_node_int_u128 },
+        { save_type_tag_v<NodeSet_U128>,                                     "Node<unit,u128>",                      &load_into_amt_node_int_u128 },
         { save_type_tag_v<NodeWaitSet_U64>,                                  "Node<WaitSet,u64>",                   &load_into_amt_node_wait_set_u64 },
-        { save_type_tag_v<NodeSet_U64>,                                      "Node<int,u64>",                       &load_into_amt_node_int_u64 },
+        { save_type_tag_v<NodeSet_U64>,                                      "Node<unit,u64>",                       &load_into_amt_node_int_u64 },
     };
 
     const SaveableTraits* find_saveable_traits(uint64_t tag) {

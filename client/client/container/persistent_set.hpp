@@ -28,7 +28,9 @@ namespace wry {
     struct PersistentSet {
         
         using U = typename H::code_type;
-        using T = int;
+        // A set carries no value; std::monostate is the empty-value convention
+        // (its no-op garbage_collected_scan lives in ext/variant.hpp).
+        using T = std::monostate;
         
         using N = ArrayMappedTrie<U, T, typename Discipline::InnerDiscipline>;
         Discipline::template Slot<N const*> _inner = nullptr;
@@ -41,8 +43,8 @@ namespace wry {
         
         [[nodiscard]] PersistentSet clone_and_set(Key key) const {
             U j = H{}.encode(key);
-            int value = {};
-            int _ = {};
+            T value = {};
+            T _ = {};
             return PersistentSet{
                 _inner
                 ? _inner->clone_and_insert_or_assign_key_value(j, value, _).first
@@ -58,7 +60,7 @@ namespace wry {
                 
         void for_each(auto&& action) const {
             if (_inner) {
-                _inner->for_each([&action](U key, int) {
+                _inner->for_each([&action](U key, T) {
                     // TODO: we need a better way of mapping the Key type to
                     // and from the integer type
                     action(H{}.decode(key));
@@ -68,7 +70,7 @@ namespace wry {
         
         Task coroutine_parallel_for_each(auto&& action) const {
             if (_inner) {
-                co_await _inner->coroutine_parallel_for_each([&action](U key, int) {
+                co_await _inner->coroutine_parallel_for_each([&action](U key, T) {
                     action(H{}.decode(key));
                 });
             }
@@ -76,7 +78,7 @@ namespace wry {
 
         Task coroutine_parallel_for_each_coroutine(auto&& action) const {
             if (_inner) {
-                co_await _inner->coroutine_parallel_for_each_coroutine([&action](U key, int) -> Task {
+                co_await _inner->coroutine_parallel_for_each_coroutine([&action](U key, T) -> Task {
                     co_await action(H{}.decode(key));
                 });
             }
