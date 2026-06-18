@@ -355,89 +355,6 @@ namespace wry {
         }
 
 
-        // Erase all elements that match "key", under an optional mask
-
-        [[nodiscard]] static ArrayMappedTrie const* _Nullable
-        erase(ArrayMappedTrie const* _Nullable a,
-              Word key,
-              Word mask = ~(Word)0) {
-
-            if (!a)
-                // nothing to erase
-                return nullptr;
-
-            auto pm = a->get_prefix_mask();
-            if ((a->_prefix ^ key) & mask & pm)
-                // ArrayMappedTrie doesn't cover any possible keys; nothing is erased
-                return a;
-            // prefix is compatible with key, under masking
-
-            if (!(~pm & mask))
-                // the mask ignores all non-prefix bits, so everything is erased
-                return nullptr;
-            // we have to descend to resolve erasure
-
-            // TODO: We may be able to exclude some children purely by their
-            // indices at this level
-
-            // allocate a new branch with worst-case capacity
-            ArrayMappedTrie* c = make(a->_prefix,
-                                      a->_shift,
-                                      popcount(a->_bitmap),
-                                      0,
-                                      0);
-
-            if (a->has_children()) {
-                auto first = a->_children;
-                auto last = first + popcount(a->_bitmap);
-                auto d_first = c->_children;
-                // We can do this in parallel
-                for (; first != last; ++first, ++d_first)
-                    *d_first = erase(*first, key, mask);
-                first = d_first = c->_children;
-                Bitmap a_bitmap = {};
-                Bitmap c_bitmap = {};
-                while (a_bitmap) {
-                    Bitmap next = a_bitmap & (a_bitmap - 1);
-                    Bitmap select = a_bitmap ^ next;
-                    if (*first) {
-                        c_bitmap |= select;
-                        if (d_first != first) {
-                            *d_first = *first;
-                        }
-                        ++d_first;
-                    }
-                    ++first;
-                    a_bitmap = next;
-                }
-                c->_debug_count = popcount(c_bitmap);
-                c->_bitmap = c_bitmap;
-            } else {
-                Bitmap a_bitmap = a->_bitmap;
-                auto a_values = a->_values;
-                Bitmap c_bitmap = {};
-                auto c_values = c->_values;
-                Word im = mask & INDEX_MASK;
-                // Compact while filtering because
-                // - T has no null value
-                // - We don't want to parallelize this simple bounded loop
-                while (a_bitmap) {
-                    Bitmap next = a_bitmap & (a_bitmap - 1);
-                    Bitmap select = a_bitmap ^ next;
-                    int index = ctz(a_bitmap);
-                    assert((Bitmap(1) << index) == select);
-                    if (((Word)index ^ key) & mask) {
-                        // no match; no erase
-                        c_bitmap |= select;
-                        *c_values++ = *a_values;
-                    } else {
-                        // match; erase
-                    }
-                    ++a_values;
-                }
-            }
-        }
-
 
 
 
@@ -845,45 +762,6 @@ namespace wry {
         }
 
 
-        [[nodiscard]] static ArrayMappedTrie* _Nullable make_leaf_with_leading_pairs(auto& first, auto last) {
-            if (first == last)
-                return nullptr;
-            auto first2 = first;
-            Word prefix = {};
-            int shift = 0;
-            size_t count;
-            Bitmap bitmap = {};
-            Word key = first2->first & ~INDEX_MASK;
-            prefix = key & ~INDEX_MASK;
-            for (;;) {
-                ++count;
-                auto index = key & INDEX_MASK;
-                auto mask = (Bitmap)1 << (key & INDEX_MASK);
-                assert(mask > bitmap); // i.e. sorted
-                bitmap |= mask;
-                ++first2;
-                if (first2 == last)
-                    break;
-                key = first2->first;
-                if ((prefix ^ key) & ~INDEX_MASK)
-                    break;
-            }
-            assert(popcount(bitmap) == count);
-            auto result = make(prefix, shift, count, bitmap);
-            auto d_first = result->_values;
-            for (;first != first2; ++first, ++d_first) {
-                d_first = first->second;
-            }
-            return result;
-        }
-
-        [[nodiscard]] static ArrayMappedTrie* _Nullable make_with_pairs(auto first, auto last) {
-            std::vector<ArrayMappedTrie* const> leafs;
-            while (first != last)
-                leafs.push_back(make_leaf_with_leading_pairs(first, last));
-
-        }
-
         // Merge two disjoint ArrayMappedTries by making them the children of a higher
         // level ArrayMappedTrie
         [[nodiscard]] static ArrayMappedTrie* _Nonnull merge_disjoint(ArrayMappedTrie const* _Nonnull a, ArrayMappedTrie const* _Nonnull b) {
@@ -981,26 +859,6 @@ namespace wry {
                                                        _children,
                                                        get_index_for_key(key),
                                                        new_child);
-        }
-
-        void insert_key_value(Word key, T value) {
-            assert(has_values());
-            assert(prefix_includes_key(key));
-            ++_debug_count;
-            compressed_array_insert_for_index(_debug_capacity,
-                                              _bitmap,
-                                              _values,
-                                              get_index_for_key(key),
-                                              value);
-        }
-
-        T exchange_key_value(Word key, T value) {
-            assert(has_values());
-            assert(prefix_includes_key(key));
-            return compressed_array_insert_for_index(_bitmap,
-                                                     _values,
-                                                     get_index_for_key(key),
-                                                     value);
         }
 
 
