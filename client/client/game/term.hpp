@@ -67,6 +67,40 @@
 //     term_eq(ERROR, ERROR) == true, term_eq(ERROR, x != ERROR) ==
 //     false.  No exceptions; no NaN-style "not equal to self".
 //
+// DESIGN RATIONALE
+//
+// Why two tags (a 4-bit outer tag AND a second-level enum kind tag,
+// see _term_enum_meta_e).  A Term must be renderable - turned into a
+// human-facing representation - with no context beyond the 64 bits
+// themselves.  The outer 4-bit tag alone answers "pointer or inline?";
+// the inner kind answers "inline as what?", so that a boolean, a
+// character, an opcode and a sentinel are self-describing rather than
+// indistinguishable integers.  OCaml gets away with a single
+// "integer or pointer" bit because static type information at every
+// use site supplies the rest; its garbage collector, which - like our
+// renderer - must interpret MLValues with no other context, only ever
+// needs that one bit (pointer or not).  We carry the kind tag because
+// we have no static type to lean on at render time.
+//
+// Why we do NOT Term-ify everything.  Interpreted languages tend to
+// build their containers, keys, and plumbing out of their own value
+// type - as a point of pride and proof of fitness, for extensibility,
+// and for commonality with user code.  Our simulation is language-like
+// but runs against a fancy transactional system rather than flat RAM,
+// and that system is best kept in C++ - in both its code and its
+// types.  So container Key types, internal node pointers, hashes and
+// the like stay as ordinary unerased C++ types with full static type
+// safety; we do not box them into Terms even though it could be made
+// to work.  Terms are, however, often the right choice for the *Value*
+// (mapped) side of those containers.
+//
+// What Terms are NOT optimized for.  EntityID, hashes and Coordinate
+// are first-class simulation concepts, but they are rarely - if ever -
+// reified into Terms that Entities manipulate within the simulation
+// itself.  We therefore do not optimize the Term layout for their
+// presentation: any inline encodings they get are a convenience, not a
+// hot path worth contorting the representation to serve.
+//
 // LAYOUT VERSIONING
 //
 // The in-RAM layout is documented in this file; a layout-altering

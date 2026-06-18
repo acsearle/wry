@@ -610,26 +610,9 @@ namespace wry {
             }
         }
 
-
-
-        void parallel_for_each(auto&& action) const {
-            if (has_children()) {
-                int n = std::popcount(_bitmap);
-                for (int i = 0; i != n; ++i)
-                    _children[i]->parallel_for_each(action);
-            } else {
-                Bitmap b = _bitmap;
-                for (int i = 0; b != 0; ++i, (b &= (b-1))) {
-                    int j = bit::ctz(b);
-                    Word key = _prefix | j;
-                    action(key, _values[i]);
-                }
-            }
-        }
-
         void for_each(auto&& action) const {
             if (has_children()) {
-                int n = popcount(_bitmap);
+                int n = std::popcount(_bitmap);
                 for (int i = 0; i != n; ++i)
                     _children[i]->for_each(action);
             } else {

@@ -1288,7 +1288,7 @@
         
         // kludge out the contents of the entity mapping
         std::vector<Entity const*> ptrs;
-        entities.kv.parallel_for_each([&ptrs](auto&& k, auto&& v) {
+        entities.kv.for_each([&ptrs](auto&& k, auto&& v) {
             ptrs.push_back(v);
         });
         // TODO:

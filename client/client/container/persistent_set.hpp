@@ -58,17 +58,12 @@ namespace wry {
                 
         void for_each(auto&& action) const {
             if (_inner) {
-                _inner->parallel_for_each([&action](U key, int) {
+                _inner->for_each([&action](U key, int) {
                     // TODO: we need a better way of mapping the Key type to
                     // and from the integer type
                     action(H{}.decode(key));
                 });
             }
-        }
-
-        void parallel_for_each(auto&& action) const {
-            // TODO: parallel implementation
-            for_each(std::forward<decltype(action)>(action));
         }
         
         Task coroutine_parallel_for_each(auto&& action) const {

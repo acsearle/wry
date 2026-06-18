@@ -32,15 +32,14 @@ namespace wry {
     
     // hash map
     
-    // basic_table is concerned with probing and resizing
+    // BasicTable is concerned with probing and resizing
     //
     // the internal structure of slots, hashing and key comparison are
-    // delegated to Entry and Hasher
+    // delegated to Entry and EntryService
     //
-    // basic_table uses Robin Hood hashing
+    // BasicTable uses Robin Hood hashing
     //
-    // Entry must be convertible to bool to indicate occupancy, and default
-    // construct to an empty state
+    // Entry must default construct to an empty state
     //
     // Examples:
     // - std::optional<Key, Value>
@@ -48,12 +47,13 @@ namespace wry {
     // - struct {
     //       uint64_t _hash;
     //       std::pair<Key, Value> _kv;
-    //       explicit operator bool() const { return static_cast<bool>(_hash); }
     //   };
     //
-    // Hasher must be able to compute a hash for Keylikes and compute or retrive
-    // a stored hash for an Entry
-    
+    // EntryService must
+    // - determine if an Entry is empty
+    // - compute a hash for Keylikes
+    // - compute or retrive a stored hash for a nonempty Entry
+
     // we resize by two and therefore don't strive for a particularly high load
     // factor, because even if we permit full load, the median load will be
     // 71%, aka we're only slightly delaying resizes?
@@ -65,7 +65,7 @@ namespace wry {
     // first?
 
     // Just like we moved keymatching up to a predicate, can we replace the
-    // Hasher object with an argument to calls that need it, or bake it into
+    // EntryService object with an argument to calls that need it, or bake it into
     // a function passed to those?
     
     
@@ -73,8 +73,8 @@ namespace wry {
     // generation which is not great.  Pointers, for example, might want to
     // be rotr64(x, 4) & _mask
         
-    template<typename Entry, typename Hasher>
-    struct basic_table {
+    template<typename Entry, typename EntryService>
+    struct BasicTable {
         
         using value_type = Entry;
         using iterator = value_type*;
@@ -83,8 +83,8 @@ namespace wry {
         
         // an array of Entries
                 
-        Hasher _hasher;
-        Entry* _begin;
+        [[no_unique_address]] EntryService _service;
+        Entry* _entries;
         std::uint64_t _mask;
         int _shift;
         std::uint64_t _count;
@@ -98,73 +98,69 @@ namespace wry {
             return _mask + 1;
         }
         
-        iterator begin() { return _begin; }
-        iterator end() { return _begin + size(); }
-        const_iterator begin() const { return _begin; }
-        const_iterator end() const { return _begin + size(); }
-        const_iterator cbegin() const { return _begin; }
-        const_iterator cend() const { return _begin + size(); }
+        iterator begin() { return _entries; }
+        iterator end() { return _entries + size(); }
+        const_iterator begin() const { return _entries; }
+        const_iterator end() const { return _entries + size(); }
+        const_iterator cbegin() const { return _entries; }
+        const_iterator cend() const { return _entries + size(); }
         
         void clear() noexcept {
-            for (auto& e : *this) {
-                if (e) {
-                    std::destroy_at(&e);
-                    std::construct_at(&e);
-                }
-            }
+            for (auto& e : *this)
+                _service.clear_entry(e);
             _count = 0;
         }
         
-        void swap(basic_table& other) {
+        void swap(BasicTable& other) {
             using std::swap;
-            swap(_hasher, other._hasher);
-            swap(_begin, other._begin);
+            swap(_service, other._service);
+            swap(_entries, other._entries);
             swap(_mask, other._mask);
             swap(_shift, other._shift);
             swap(_count, other._count);
             swap(_trigger, other._trigger);
         }
                 
-        basic_table(with_capacity_t, std::uint64_t capacity)
-        : basic_table() {
+        BasicTable(with_capacity_t, std::uint64_t capacity)
+        : BasicTable() {
             if (capacity) {
                 _shift = __builtin_clzll((capacity | 15) - 1);
                 _mask = ((std::uint64_t) -1) >> _shift;
                 _trigger = _mask ^ (_mask >> 3);
-                _begin = (Entry*) ::operator new(sizeof(Entry) * size());
+                _entries = (Entry*) ::operator new(sizeof(Entry) * size());
                 _count = 0;
-                std::uninitialized_value_construct_n(_begin, size());
+                std::uninitialized_value_construct_n(_entries, size());
             }
         }
 
-        basic_table()
-        : _hasher()
-        , _begin(nullptr)
+        BasicTable()
+        : _service()
+        , _entries(nullptr)
         , _mask(-1)
         , _shift(61)
         , _count(0)
         , _trigger(0) {
         }
         
-        basic_table(basic_table&& other)
-        : basic_table() {
+        BasicTable(BasicTable&& other)
+        : BasicTable() {
             swap(other);
         }
 
-        ~basic_table() {
-            std::destroy_n(_begin, size());
-            ::operator delete(static_cast<void*>(_begin));
+        ~BasicTable() {
+            std::destroy_n(_entries, size());
+            ::operator delete(static_cast<void*>(_entries));
         }
         
-        basic_table& operator=(basic_table&& other) {
-            basic_table(std::move(other)).swap(*this);
+        BasicTable& operator=(BasicTable&& other) {
+            BasicTable(std::move(other)).swap(*this);
             return *this;
         }
                                         
         std::uint64_t _get_index(std::uint64_t h) const {
             // we index by the top bits so resize has a linear access pattern
             // TODO: but, this means we rely on the hash having good high bits
-            // Make this a choice by the Hasher?
+            // Make this a choice by the EntryService?
             return h >> _shift;
         }
         
@@ -175,19 +171,20 @@ namespace wry {
         std::uint64_t _displacement(std::uint64_t desired, std::uint64_t actual) const {
             return (actual - desired) & _mask;
         }
-        
+
+        // Find any entry with hash h for which predicate is true
         Entry* find(std::uint64_t h, auto&& predicate) const {
             if (!_count)
                 return nullptr;
-            std::uint64_t ih = _get_index(h); // ideal
+            std::uint64_t ih = _get_index(h); // preferred index
             std::uint64_t i = ih;
             for (;;) {
-                if (!_begin[i])
+                if (_service.entry_is_empty(_entries[i]))
                     return nullptr; // found vacancy
-                std::uint64_t g = _hasher.get_hash(_begin[i]);
+                std::uint64_t g = _service.get_hash(_entries[i]);
                 assert(g);
-                if ((g == h) && predicate(_begin[i]))
-                    return _begin + i; // found exact match
+                if ((g == h) && predicate(_entries[i]))
+                    return _entries + i; // found a match
                 std::uint64_t ig = _get_index(g);
                 if (_displacement(ih, i) > _displacement(ig, i))
                     return nullptr; // the key would have evicted this entry
@@ -198,21 +195,21 @@ namespace wry {
         void _relocate_backward_from(std::uint64_t i) {
             // SAFETY: This is a relocate.  Explicit casts to void suppresses
             // warning for non-trivially copyable types
-            assert((i <= _mask) && _begin[i]);
+            assert((i <= _mask) && _entries[i]);
             // find next empty slot
             std::uint64_t j = i;
             do {
                 j = _next_index(j);
                 assert(j != i);
-            } while (_begin[j]);
-            std::destroy_at(_begin + j);
+            } while (_entries[j]);
+            std::destroy_at(_entries + j);
             if (j < i) {
-                std::memmove((void*)(_begin + 1), _begin, j * sizeof(Entry));
-                std::memcpy((void*)_begin, _begin + _mask, sizeof(Entry));
+                std::memmove((void*)(_entries + 1), _entries, j * sizeof(Entry));
+                std::memcpy((void*)_entries, _entries + _mask, sizeof(Entry));
                 j = _mask;
             }
-            std::memmove((void*)(_begin + i + 1), _begin + i, (j - i) * sizeof(Entry));
-            std::construct_at(_begin + i); // was relocated from and destroyed
+            std::memmove((void*)(_entries + i + 1), _entries + i, (j - i) * sizeof(Entry));
+            std::construct_at(_entries + i); // was relocated from and destroyed
         }
                         
         std::uint64_t _insert_uninitialized(std::uint64_t h, auto&& predicate) {
@@ -221,12 +218,12 @@ namespace wry {
             std::uint64_t ih = _get_index(h);
             std::uint64_t i = ih;
             for (;;) {
-                if (!_begin[i]) {
+                if (_service.entry_is_empty(_entries[i])) {
                     ++_count;
                     return i;
                 }
-                std::uint64_t g = _hasher.get_hash(_begin[i]);
-                if ((g == h) && predicate(_begin[i])) {
+                std::uint64_t g = _service.get_hash(_entries[i]);
+                if ((g == h) && predicate(_entries[i])) {
                     return i;
                 }
                 std::uint64_t ig = _get_index(g);
@@ -243,14 +240,14 @@ namespace wry {
             // SAFETY: This is a relocate.  Explicit casts to void suppresses
             // warning for non-trivially copyable types
             assert(i <= _mask);
-            assert(_begin[i]);
-            std::destroy_at(_begin + i); // will be relocated over
+            assert(_entries[i]);
+            std::destroy_at(_entries + i); // will be relocated over
             std::uint64_t j = i, k;
             for (;;) {
                 k = _next_index(j);
-                if (!_begin[k])
+                if (!_entries[k])
                     break;
-                std::uint64_t g = _hasher.get_hash(_begin[k]);
+                std::uint64_t g = _service.get_hash(_entries[k]);
                 if (k == _get_index(g))
                     break;
                 j = k;
@@ -258,61 +255,59 @@ namespace wry {
             // now we have [i] to overwrite, (i, j] to move and [j] to zero
             if (j < i) {
                 // we have wrapped
-                std::memmove((void*)(_begin + i), _begin + i + 1, sizeof(Entry) * (_mask - i));
-                std::memcpy((void*)(_begin + _mask), _begin, sizeof(Entry));
+                std::memmove((void*)(_entries + i), _entries + i + 1, sizeof(Entry) * (_mask - i));
+                std::memcpy((void*)(_entries + _mask), _entries, sizeof(Entry));
                 i = 0;
             }
-            std::memmove((void*)(_begin + i), _begin + i + 1, sizeof(Entry) * (j - i));
-            std::construct_at(_begin + j);
+            std::memmove((void*)(_entries + i), _entries + i + 1, sizeof(Entry) * (j - i));
+            std::construct_at(_entries + j);
         }
         
         std::size_t erase(std::uint64_t h, auto&& predicate) {
             Entry* p = find(h, predicate);
             if (!p)
                 return 0;
-            _relocate_forward_into(p - _begin);
+            _relocate_forward_into(p - _entries);
             --_count;
             return 1;
         }
         
         void resize() {
-            
-            // we could change hash function every resize?
-            
+
             size_t n = size();
             
-            Entry* first = _begin;
-            Entry* last = _begin + n;
+            Entry* first = _entries;
+            Entry* last = _entries + n;
             
             n = n ? (n << 1) : 16;
-            _begin = (Entry*) operator new(n * sizeof(Entry));
+            _entries = (Entry*) operator new(n * sizeof(Entry));
             _mask = n - 1;
             --_shift;
             assert((((uint64_t) -1) >> _shift) == _mask);
             _trigger = _mask ^ (_mask >> 3);
             assert(_count < _trigger);
             
-            std::uninitialized_value_construct_n(_begin, n);
+            std::uninitialized_value_construct_n(_entries, n);
             
             for (Entry* p = first; p != last; ++p) {
                 if (*p) {
-                    uint64_t h = _hasher.get_hash(*p);
+                    uint64_t h = _service.get_hash(*p);
                     uint64_t ih = _get_index(h);
                     uint64_t j = ih;
-                    while (_begin[j]) {
-                        uint64_t g = _hasher.get_hash(_begin[j]);
+                    while (_service.entry_is_nonempty(_entries[j])) {
+                        uint64_t g = _service.get_hash(_entries[j]);
                         uint64_t ig = _get_index(g);
                         // there should be no duplicates in the input
-                        // assert((g != h) || _hasher.key_compare(_begin[j], *p));
+                        // assert((g != h) || _hasher.key_compare(_entries[j], *p));
                         if (_displacement(ih, j) > _displacement(ig, j)) {
                             using std::swap;
-                            swap(_begin[j], *p);
+                            swap(_entries[j], *p);
                             h = g;
                             ih = ig;
                         }
                         j = _next_index(j);
                     }
-                    _begin[j] = std::move(*p);
+                    _entries[j] = std::move(*p);
                 }
                 std::destroy_at(p); // <-- relocate instead?
             }
@@ -329,11 +324,11 @@ namespace wry {
             uint64_t i = 0;
             do {
                 uint64_t j = _next_index(i);
-                if (_begin[j]) {
-                    uint64_t g = _hasher.get_hash(_begin[j]);
+                if (_service.entry_is_nonempty(_entries[j])) {
+                    uint64_t g = _service.get_hash(_entries[j]);
                     uint64_t ig = _get_index(g);
-                    if (_begin[i]) {
-                        uint64_t h = _hasher.get_hash(_begin[i]);
+                    if (_service.entry_is_nonempty(_entries[i])) {
+                        uint64_t h = _service.get_hash(_entries[i]);
                         uint64_t ih = _get_index(h);
                         // if the slot before is occupied, we must not be
                         // entitled to it, i.e. we can't improve the average
@@ -355,8 +350,8 @@ namespace wry {
         std::uint64_t total_displacement() const {
             std::uint64_t n = 0;
             for (std::uint64_t i = 0; i != size(); ++i) {
-                if (_begin[i]) {
-                    std::uint64_t h = _hasher.get_hash(_begin[i]);
+                if (_service.entry_is_nonempty(_entries[i])) {
+                    std::uint64_t h = _service.get_hash(_entries[i]);
                     // printf("displaced %llu\n", _displacement(_get_index(h), i));
                     n += _displacement(_get_index(h), i);
                 }
@@ -367,7 +362,7 @@ namespace wry {
     };
     
 
-    // TODO: parameter Hasher
+    // TODO: parameter EntryService
     template<typename Key, typename T>
     struct Table {
         
@@ -420,7 +415,7 @@ namespace wry {
                     if (other._hash) {
                         std::construct_at(&_kv, std::move(other._kv));
                     } else {
-                        //
+                        // no-op
                     }
                 }
                 _hash = other._hash;
@@ -439,10 +434,17 @@ namespace wry {
             explicit operator bool() const {
                 return static_cast<bool>(_hash);
             }
-                        
+
+            void clear() {
+                if (_hash) {
+                    _hash = 0;
+                    std::destroy_at(&_kv);
+                }
+            }
+
         };
         
-        struct Hasher {
+        struct EntryService {
                         
             std::uint64_t get_hash(const Entry& e) const {
                 return e._hash;
@@ -456,7 +458,19 @@ namespace wry {
             std::uint64_t get_hash(const std::pair<K, U>& valuelike) const {
                 return get_hash(valuelike.first);
             }
-            
+
+            void clear_entry(Entry& e) const {
+                e.clear();
+            }
+
+            bool entry_is_empty(Entry const& e) const {
+                return !e;
+            }
+
+            bool entry_is_nonempty(Entry const& e) const {
+                return (bool)e;
+            }
+
 
         };
         
@@ -469,7 +483,7 @@ namespace wry {
         struct iterator {
             
             Entry* _pointer;
-            basic_table<Entry, Hasher>* _context;
+            BasicTable<Entry, EntryService>* _context;
             
             Entry* _begin() {
                 return _context->begin();
@@ -493,7 +507,7 @@ namespace wry {
             
             iterator() = default;
             
-            iterator(Entry* b, basic_table<Entry, Hasher>* c)
+            iterator(Entry* b, BasicTable<Entry, EntryService>* c)
             : _pointer(b)
             , _context(c) {
             }
@@ -534,7 +548,7 @@ namespace wry {
         struct const_iterator {
             
             const Entry* _pointer;
-            const basic_table<Entry, Hasher>* _context;
+            const BasicTable<Entry, EntryService>* _context;
             
             const Entry* _begin() {
                 return _context->begin();
@@ -556,7 +570,7 @@ namespace wry {
                 } while (!*_pointer);
             }
             
-            const_iterator(const Entry* b, const basic_table<Entry, Hasher>* c)
+            const_iterator(const Entry* b, const BasicTable<Entry, EntryService>* c)
             : _pointer(b)
             , _context(c) {
             }
@@ -606,7 +620,7 @@ namespace wry {
         
     
         
-        basic_table<Entry, Hasher> _inner;
+        BasicTable<Entry, EntryService> _inner;
         
         Table& swap(Table& other) {
             _inner.swap(other._inner);
@@ -671,7 +685,7 @@ namespace wry {
         }
 
         Entry* _to(auto&& keylike) const {
-            return _inner.find(_inner._hasher.get_hash(keylike),
+            return _inner.find(_inner._service.get_hash(keylike),
                                    [&](const Entry& e) {
                 return e._kv.first == keylike;
             });
@@ -696,11 +710,11 @@ namespace wry {
         }
 
         std::pair<iterator, bool> emplace(auto&& key, auto&& value) {
-            std::uint64_t h = _inner._hasher.get_hash(key);
+            std::uint64_t h = _inner._service.get_hash(key);
             std::uint64_t i = _inner._insert_uninitialized(h, [&key](Entry& e) {
                 return e._kv.first == key;
             });
-            Entry* p = _inner._begin + i;
+            Entry* p = _inner._entries + i;
             if (p->_hash) {
                 return {iterator{p, &_inner}, false};
             } else {
@@ -713,12 +727,12 @@ namespace wry {
         }
 
         std::pair<iterator, bool> insert(auto&& value) {
-            std::uint64_t h = _inner._hasher.get_hash(value);
+            std::uint64_t h = _inner._service.get_hash(value);
             std::uint64_t i = _inner._insert_uninitialized(h,
                                                            [&](Entry& e) {
                 return e._kv.first == value.first;
             });
-            Entry* p = _inner._begin + i;
+            Entry* p = _inner._entries + i;
             if (p->_hash) {
                 return {iterator{p, &_inner}, false};
             } else {
@@ -735,12 +749,12 @@ namespace wry {
         }
 
         std::pair<iterator, bool> insert_or_assign(auto&& k, auto&& v) {
-            std::uint64_t h = _inner._hasher.get_hash(k);
+            std::uint64_t h = _inner._service.get_hash(k);
             std::uint64_t i = _inner._insert_uninitialized(h,
                                                            [&](Entry& e) {
                 return e._kv.first == k;
             });
-            Entry* p = _inner._begin + i;
+            Entry* p = _inner._entries + i;
             if (p->_hash) {
                 p->_kv.first = std::forward<decltype(k)>(k);
                 p->_kv.second = std::forward<decltype(v)>(v);
@@ -756,7 +770,7 @@ namespace wry {
         
         std::size_t erase(iterator pos) {
             assert(pos._pointer->_hash);
-            _inner._relocate_forward_into(pos._pointer - _inner._begin);
+            _inner._relocate_forward_into(pos._pointer - _inner._entries);
             --_inner._count;
             return 1;
         }
@@ -764,18 +778,18 @@ namespace wry {
         // range erase makes no sense for unordered map
         
         std::size_t erase(const auto& keylike) {
-            return _inner.erase(_inner._hasher.get_hash(keylike),
+            return _inner.erase(_inner._service.get_hash(keylike),
                                 [&](const Entry& e) {
                 return e._kv.first == keylike;
             });
         }
         
         T& operator[](auto&& keylike) {
-            std::uint64_t h = _inner._hasher.get_hash(keylike);
+            std::uint64_t h = _inner._service.get_hash(keylike);
             std::uint64_t i = _inner._insert_uninitialized(h, [&](const Entry& e) {
                 return e._kv.first == keylike;
             });
-            Entry* p = _inner._begin + i;
+            Entry* p = _inner._entries + i;
             if (!(p->_hash)) {
                 p->_hash = h;
                 std::construct_at(&(p->_kv),

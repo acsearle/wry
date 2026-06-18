@@ -18,6 +18,7 @@
 #include "utility.hpp"
 #include "coroutine.hpp"
 #include "hash.hpp"
+#include "parallel_rebuild.hpp"
 
 namespace wry {
 
@@ -94,15 +95,7 @@ namespace wry {
             _inner = node._inner;
             return flag;
         }
-        
-        void parallel_for_each(auto&& action) const {
-            if (_inner) {
-                _inner->parallel_for_each([&action](uint64_t key, T value) {
-                    action(H{}.decode(key), value);
-                });
-            }
-        }
-        
+                
         void for_each(auto&& action) const {
             if (_inner) {
                 _inner->for_each([&action](uint64_t key, T value) {
@@ -118,35 +111,6 @@ namespace wry {
     void garbage_collected_scan(const PersistentMap<Key, T, H, D>& x) {
         garbage_collected_scan(x._inner);
     }
-        
-    template<typename T>
-    struct ParallelRebuildAction {
-        enum {
-            NONE = 0,
-            WRITE_VALUE,
-            CLEAR_VALUE,
-            MERGE_VALUE,
-        } tag;
-        T value;
-    };
-
-    // Combine for a plain value map: WRITE replaces, CLEAR erases, NONE keeps;
-    // MERGE is not meaningful (no value-level union).  The combine's `old` arg is
-    // the read in a read-modify-write -- a map whose values are themselves
-    // mergeable (e.g. a set) supplies a combine that uses it (see WaitableMap).
-    template<typename T>
-    struct ParallelRebuildValueCombine {
-        std::optional<T> operator()(const T* old, const ParallelRebuildAction<T>& a) const {
-            using A = ParallelRebuildAction<T>;
-            switch (a.tag) {
-                case A::WRITE_VALUE: return a.value;
-                case A::CLEAR_VALUE: return std::nullopt;
-                case A::MERGE_VALUE: abort(); // not meaningful for a plain map
-                case A::NONE:        break;   // callers drop NONE before here
-            }
-            return old ? std::optional<T>(*old) : std::nullopt;
-        }
-    };
 
     // Apply a code-ordered, NONE-free vector of actions to `source` via the AMT
     // co-recursion, using a caller-supplied combine.  Shared by the skiplist
