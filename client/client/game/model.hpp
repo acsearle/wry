@@ -49,10 +49,15 @@ namespace wry {
         // World* _world;
         // BlockingDeque<World const*> _worlds;
         BlockingDeque<Root<World const*>> _worlds;
-        
-        
-        
-        Player* _local_player;
+
+
+
+        // Borrowed from the displayed world's entity map (which holds it as
+        // const Entity*); the model drives input through its mutable _queue.
+        // Re-pointed whenever the displayed world is replaced wholesale
+        // (new_game / load_from_save); across ordinary World::step() it stays
+        // valid because the Player entry is shared, not rebuilt.
+        Player const* _local_player = nullptr;
 
 
         // debug state
@@ -116,110 +121,34 @@ namespace wry {
             _console_overlay.set_log(&_log_overlay);
             _palette_overlay.set_model(this);
             _main_menu_overlay.set_model(this);
+            _save_list_overlay.set_model(this);
             _stack.push(&_log_overlay);
             _stack.push(&_palette_overlay);
             _stack.push(&_console_overlay);
 
-            World* world = new World;
+            // Install the starting world as the displayed world.  Same path
+            // the NEW button uses; at construction _worlds is empty, so the
+            // drain inside is a no-op.
+            new_game();
 
-            {
-                // new player
-                Player* p = new Player;
-                world->_entity_for_entity_id.set(p->_entity_id, p);
-                // PersistentSet<EntityID> q;
-                // world->_waiting_on_time.try_get(Time{0}, q);
-                // q.set(p->_entity_id);
-                // world->_waiting_on_time.set(Time{0}, q);
-                world->_waiting_on_time.set({Time{0}, p->_entity_id});
-                _local_player = p;
-            }
-                        
-            auto insert_localized_entity = [&](LocalizedEntity const* entity_ptr) {
-                EntityID entity_id = entity_ptr->_entity_id;
-                // printf("insert_localized_entity %lld\n", entity_id.data);
-                world->_entity_for_entity_id.set(entity_id,
-                                                  entity_ptr);
-                //_world->_entity_id_for_coordinate.set(entity_ptr->_location,
-                //                                      entity_id);
-                // _world->_ready.set(entity_id);
-                // TODO: clumsy
-                // PersistentSet<EntityID> q;
-                // world->_waiting_on_time.try_get(Time{0}, q);
-                // q.set(entity_id);
-                // world->_waiting_on_time.set(Time{0}, q);
-                world->_waiting_on_time.set({Time{0}, entity_id});
-            };
-            
-            {
-                // new machine spawner at origin
-                Spawner* p = new Spawner;
-                p->_location = Coordinate{0, 0};
-                //_world->_entities.push_back(p);
-                // entity_ready_on_world(p, _world);
-                insert_localized_entity(p);
-            }
-            
-            {
-                // value source
-                Source* q = new Source;
-                q->_location = Coordinate{2, 2};
-                q->_of_this = Term(1);
-                // _world->_entities.push_back(q);
-                // entity_ready_on_world(q, _world);
-                insert_localized_entity(q);
-            }
-            
-            {
-                // value sink
-                Sink* r = new Sink;
-                r->_location = Coordinate{4, 2};
-                // _world->_entities.push_back(r);
-                // entity_ready_on_world(r, _world);
-                insert_localized_entity(r);
-            }
-
-//            {
-//                Counter* s = new Counter;
-//                s->_location = Coordinate{-2, 2};
-//                insert_localized_entity(s);
-//            }
-//
-//            {
-//                // a second counter to contest the transaction
-//                Counter* s = new Counter;
-//                s->_location = Coordinate{-2, 2};
-//                insert_localized_entity(s);
-//            }
-//            
-//            {
-//                Evenator* s = new Evenator;
-//                s->_location = Coordinate{-2, 2};
-//                insert_localized_entity(s);
-//            }
-
-            //_world->_term_for_coordinate.write(Coordinate{-2, -2}, term_make_integer_with(7));
-            world->_term_for_coordinate.set(Coordinate{-2, -2},
-                                              term_make_integer_with((7)));
-            //_world->_term_for_coordinate.write(Coordinate{-2, -2}, term_make_array());
-            // _world->_term_for_coordinate.set(Coordinate{-2, -2}, term_make_array());
-            world->_term_for_coordinate.set(Coordinate{0, +1},
-                                              term_make_integer_with((1)));
-            world->_term_for_coordinate.set(Coordinate{0, +2},
-                                              term_make_integer_with((2)));
-            world->_term_for_coordinate.set(Coordinate{0, +3},
-                                              term_make_integer_with((3)));
-            world->_term_for_coordinate.set(Coordinate{0, +4},
-                                              term_make_opcode(OPCODE_FLIP_FLOP));
-            world->_term_for_coordinate.set(Coordinate{0, +5},
-                                              term_make_integer_with((5)));
-            
-            _worlds.emplace_back(world);
-            
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();
 
         }
-        
+
+        // Replace the displayed world wholesale, re-pointing _local_player at
+        // the new world's Player.  new_game builds the starting scenario;
+        // load_from_save deserializes a save file.  Both run on the main
+        // thread between the event pump and the renderer, when _worlds holds
+        // exactly the one displayed world, so draining and refilling it is
+        // race-free.  Defined in model.cpp (needs io/save.hpp).
+        void new_game();
+        void load_from_save(int id);
+
+        // Serialize the displayed world to a new save file.  Synchronous for
+        // now; the world is read non-destructively (popped and re-pushed).
+        void save_current();
+
         void _regenerate_uniforms();
         
         ~model() {

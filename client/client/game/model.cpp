@@ -7,9 +7,113 @@
 
 #include "model.hpp"
 
+#include "save.hpp"
+
 namespace wry {
-    
-    
+
+    namespace {
+
+        // The starting scenario.  Extracted verbatim from the original model
+        // constructor so NEW, restart, and the round-trip tests can all build
+        // the same world.  The player is just one of the entities; callers
+        // recover the local-player handle via find_local_player below.
+        World* make_starting_world() {
+            World* world = new World;
+
+            {
+                Player* p = new Player;
+                world->_entity_for_entity_id.set(p->_entity_id, p);
+                world->_waiting_on_time.set({Time{0}, p->_entity_id});
+            }
+
+            auto insert_localized_entity = [&](LocalizedEntity const* entity_ptr) {
+                EntityID entity_id = entity_ptr->_entity_id;
+                world->_entity_for_entity_id.set(entity_id, entity_ptr);
+                world->_waiting_on_time.set({Time{0}, entity_id});
+            };
+
+            {
+                // new machine spawner at origin
+                Spawner* p = new Spawner;
+                p->_location = Coordinate{0, 0};
+                insert_localized_entity(p);
+            }
+
+            {
+                // value source
+                Source* q = new Source;
+                q->_location = Coordinate{2, 2};
+                q->_of_this = Term(1);
+                insert_localized_entity(q);
+            }
+
+            {
+                // value sink
+                Sink* r = new Sink;
+                r->_location = Coordinate{4, 2};
+                insert_localized_entity(r);
+            }
+
+            world->_term_for_coordinate.set(Coordinate{-2, -2}, term_make_integer_with(7));
+            world->_term_for_coordinate.set(Coordinate{0, +1}, term_make_integer_with(1));
+            world->_term_for_coordinate.set(Coordinate{0, +2}, term_make_integer_with(2));
+            world->_term_for_coordinate.set(Coordinate{0, +3}, term_make_integer_with(3));
+            world->_term_for_coordinate.set(Coordinate{0, +4}, term_make_opcode(OPCODE_FLIP_FLOP));
+            world->_term_for_coordinate.set(Coordinate{0, +5}, term_make_integer_with(5));
+
+            return world;
+        }
+
+        // The displayed world owns a single Player; the model borrows a handle
+        // to it for input routing.  The entity map holds entities as const
+        // Entity*; the const here reflects that storage, not the Player (whose
+        // input _queue is a mutable member).
+        Player const* find_local_player(World const* world) {
+            Player const* found = nullptr;
+            world->_entity_for_entity_id.kv.for_each(
+                [&found](EntityID, Entity const* e) {
+                    if (Player const* p = dynamic_cast<Player const*>(e))
+                        found = p;
+                });
+            return found;
+        }
+
+    } // anonymous namespace
+
+    // Swap in `world` as the only entry in _worlds, re-pointing the local
+    // player.  Single-threaded at the call sites (main thread, between pump
+    // and render), so the brief drain is unobservable to the renderer.
+    static void install_displayed_world(model& m, World* world) {
+        m._local_player = find_local_player(world);
+        Root<World const*> discard;
+        while (m._worlds.try_pop_front(discard)) { }
+        m._worlds.emplace_back(world);
+    }
+
+    void model::new_game() {
+        install_displayed_world(*this, make_starting_world());
+    }
+
+    void model::load_from_save(int id) {
+        install_displayed_world(*this, load_game(id));
+    }
+
+    void model::save_current() {
+        // Hand a rooted snapshot of the displayed world to the async saver and
+        // return to the frame immediately; the save no longer blocks the main
+        // thread.  The world is an immutable persistent structure that
+        // World::step() never mutates (it builds a fresh World), so the
+        // background walk reads a stable snapshot even as play continues, and
+        // the Root keeps it (and everything reachable) alive until the save
+        // finishes.
+        Root<World const*> w;
+        if (!_worlds.try_pop_front(w))
+            return;
+        save_game_async(w);  // copies the Root into the coroutine frame
+        _worlds.push_front(std::move(w));
+    }
+
+
     void model::_regenerate_uniforms() {
         
         // camera setup

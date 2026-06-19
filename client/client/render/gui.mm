@@ -15,6 +15,7 @@
 #include "gui_overlay.hpp"
 #include "gui_widget.hpp"
 #include "model.hpp"
+#include "save.hpp"
 #include "SpriteAtlas.hpp"
 #include "font.hpp"
 #include "text.hpp"
@@ -713,20 +714,35 @@ namespace wry {
             col->add(std::make_unique<Button>(
                 "CONTINUE", [this] { this->wants_close = true; }));
 
-            // LOAD pushes the save-list overlay onto the model's stack.
-            // The lambda captures `this` and reads `_model` at click time
-            // (set_model is called by the model's constructor after both
-            // overlays are alive).
+            // LOAD refreshes the save list from disk, then pushes it onto
+            // the model's stack.  The lambda captures `this` and reads
+            // `_model` at click time (set_model is called by the model's
+            // constructor after both overlays are alive).
             col->add(std::make_unique<Button>("LOAD", [this] {
                 if (_model) {
+                    _model->_save_list_overlay.refresh();
                     _model->_stack.push(&_model->_save_list_overlay);
                 }
             }));
 
-            // Placeholder actions; real implementations land in later
-            // phases as save/settings get built out.
-            col->add(std::make_unique<Button>("NEW",      [] { /* TODO */ }));
-            col->add(std::make_unique<Button>("SAVE",     [] { /* TODO */ }));
+            // NEW replaces the displayed world with a fresh starting world
+            // and closes the menu so the user drops straight into it.
+            col->add(std::make_unique<Button>("NEW", [this] {
+                if (_model) {
+                    _model->new_game();
+                    this->wants_close = true;
+                }
+            }));
+
+            // SAVE writes the displayed world to a new save file, leaving the
+            // menu open.
+            col->add(std::make_unique<Button>("SAVE", [this] {
+                if (_model)
+                    _model->save_current();
+            }));
+
+            // Placeholder action; real implementation lands when settings
+            // get built out.
             col->add(std::make_unique<Button>("SETTINGS", [] { /* TODO */ }));
 
             _root = std::move(col);
@@ -773,55 +789,13 @@ namespace wry {
         // SaveListOverlay
         // ================================================================
 
-        namespace {
-
-            // Phase-4 mock data.  Replaced by real save-file enumeration
-            // when the savefile system lands.  Twelve entries so the list
-            // is comfortably longer than the visible window.
-            struct MockSave { char const* name; };
-            std::vector<MockSave> make_mock_saves() {
-                return {
-                    {"Slot 1 - Forest start"},
-                    {"Slot 2 - Build phase"},
-                    {"Slot 3 - Iron age"},
-                    {"Slot 4 - Late game"},
-                    {"Slot 5 - Empty"},
-                    {"Slot 6 - Tutorial finished"},
-                    {"Slot 7 - New experiment"},
-                    {"Slot 8 - 2026-05-22 backup"},
-                    {"Slot 9 - Stress test"},
-                    {"Slot 10 - Empty"},
-                    {"Slot 11 - Empty"},
-                    {"Slot 12 - Empty"},
-                };
-            }
-
-        } // anonymous namespace
-
         SaveListOverlay::SaveListOverlay() {
 
             auto title = std::make_unique<Label>("Load Game");
 
-            // Row column: one selectable Button per mock save.  Click sets
-            // the selection (doesn't load).  Capture by [this, i] so the
-            // lambda can flip the overlay's selection index.
-            auto saves = make_mock_saves();
-            auto rows_col = std::make_unique<Column>();
-            rows_col->set_spacing(2.0f);
-            _row_buttons.clear();
-            _row_buttons.reserve(saves.size());
-            for (int i = 0; i < (int)saves.size(); ++i) {
-                auto btn = std::make_unique<Button>(saves[i].name,
-                    [this, i] {
-                        _selected_index = i;
-                        update_selection_visuals();
-                    });
-                _row_buttons.push_back(btn.get());
-                rows_col->add(std::move(btn));
-            }
-
+            // The rows live inside the scroll view; they are (re)built by
+            // rebuild_rows() / refresh() from the real save files.
             auto scroll = std::make_unique<ScrollView>();
-            scroll->set_child(std::move(rows_col));
             _scroll = scroll.get();
 
             // Bottom action bar.
@@ -844,10 +818,45 @@ namespace wry {
             root_col->add(std::move(action_bar));
 
             _root = std::move(root_col);
-            update_selection_visuals();
+
+            rebuild_rows();
         }
 
         SaveListOverlay::~SaveListOverlay() = default;
+
+        void SaveListOverlay::rebuild_rows() {
+            // One selectable Button per save file.  Clicking a row sets the
+            // selection (doesn't load); the action bar's Load/Delete act on
+            // the selection.  Capture by [this, i] so the lambda flips the
+            // overlay's selection index.
+            auto games = enumerate_games();  // (filename, id), newest first
+
+            auto rows_col = std::make_unique<Column>();
+            rows_col->set_spacing(2.0f);
+            _row_buttons.clear();
+            _save_ids.clear();
+            _row_buttons.reserve(games.size());
+            _save_ids.reserve(games.size());
+            for (int i = 0; i < (int)games.size(); ++i) {
+                auto btn = std::make_unique<Button>(games[i].first.c_str(),
+                    [this, i] {
+                        _selected_index = i;
+                        update_selection_visuals();
+                    });
+                _row_buttons.push_back(btn.get());
+                _save_ids.push_back(games[i].second);
+                rows_col->add(std::move(btn));
+            }
+            _scroll->set_child(std::move(rows_col));
+
+            _selected_index = std::clamp(_selected_index, 0,
+                                         std::max(0, (int)_row_buttons.size() - 1));
+            update_selection_visuals();
+        }
+
+        void SaveListOverlay::refresh() {
+            rebuild_rows();
+        }
 
         void SaveListOverlay::update_selection_visuals() {
             for (int i = 0; i < (int)_row_buttons.size(); ++i) {
@@ -876,13 +885,22 @@ namespace wry {
         }
 
         void SaveListOverlay::load_selected() {
-            // TODO: invoke the real load path when the save system exists.
-            // For now: close the menu so the user can see something happens.
+            if (_selected_index < 0 ||
+                _selected_index >= (int)_save_ids.size())
+                return;  // empty list / no selection
+            if (_model)
+                _model->load_from_save(_save_ids[_selected_index]);
+            // Pop the save list; the main menu below remains for the user to
+            // dismiss (CONTINUE / ESC) back into the freshly-loaded game.
             wants_close = true;
         }
 
         void SaveListOverlay::delete_selected() {
-            // TODO: real delete + list refresh when the save system exists.
+            if (_selected_index < 0 ||
+                _selected_index >= (int)_save_ids.size())
+                return;
+            delete_game(_save_ids[_selected_index]);
+            rebuild_rows();  // selection re-clamped to the shrunken list
         }
 
         bool SaveListOverlay::on_event(Event const& e) {

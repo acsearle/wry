@@ -376,8 +376,10 @@ namespace wry {
         //     per save entry),
         //   * a Row of action Buttons (Load / Delete / Cancel).
         //
-        // The save data itself is mocked for phase 4; the actual savefile
-        // system slots in later by replacing make_mock_saves().
+        // The rows are populated from the real save files (io/save.hpp
+        // enumerate_games) via refresh(); the MainMenuOverlay's LOAD button
+        // refreshes before showing this, and delete_selected refreshes after
+        // removing a file.
 
         class SaveListOverlay : public Overlay {
         public:
@@ -390,15 +392,29 @@ namespace wry {
             bool modal_mouse()    const override { return true; }
             bool modal_keyboard() const override { return true; }
 
+            // load_selected / delete_selected drive the model's world and the
+            // save files; set once at startup by the model constructor.
+            void set_model(struct ::wry::model* m) { _model = m; }
+
+            // Rebuild the row list from the current save files.  Call before
+            // showing the overlay (saves may have changed since last shown).
+            void refresh();
+
         private:
             std::unique_ptr<Widget> _root;
             // Non-owning into the widget tree above; we need direct access
             // to scroll arithmetic and to flip the selected state on rows.
             class ScrollView*       _scroll = nullptr;
             std::vector<class Button*> _row_buttons;
+            // File id for each row, parallel to _row_buttons; the selected
+            // row's id is what load/delete act on.
+            std::vector<int>           _save_ids;
+
+            struct ::wry::model* _model = nullptr;
 
             int _selected_index = 0;
 
+            void rebuild_rows();
             void update_selection_visuals();
             void move_selection(int delta);
             void scroll_to_selected();
