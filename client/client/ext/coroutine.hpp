@@ -116,6 +116,7 @@ namespace wry::Coroutine {
                     std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> handle) const noexcept {
                         std::coroutine_handle<> continuation = std::move(handle.promise()._continuation);
                         handle.destroy();
+                        assert(continuation);
                         return continuation;
                     }
                 };
@@ -214,6 +215,7 @@ namespace wry::Coroutine {
                     std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> handle) const noexcept {
                         std::coroutine_handle<> continuation = std::move(handle.promise()._continuation);
                         handle.destroy();
+                        assert(continuation);
                         return continuation;
                     }
                 };
@@ -438,22 +440,13 @@ namespace wry {
     // shutdown, leaking its frame and leaving a half-written file.
     //
     // It is inherently a single process-global instance (blocking; no other use
-    // case), so it is expressed as static methods over hidden state rather than
-    // an instantiable type: WaitGroup::add() / done() / wait().
-    struct WaitGroup {
-        static void add(std::ptrdiff_t n = 1);
-        static void done();
-        // Release the process sentinel and block until all work drains.  Call
-        // exactly once (main, at shutdown); a second call underflows.
-        static void wait();
-    };
+    // case), so it is expressed as static methods over hidden state
 
-    // Launch `task` detached on the work queue, anchored in the WaitGroup: the
-    // count is held from here until the task runs to completion (across all its
-    // internal yields).  Used for both the unit-test runner and background
-    // saves.  add()/done() are thread-safe; a spawn that races the shutdown
-    // wait() (which can never be joined) aborts rather than leaking the work.
+    // must call before wait is called
     void wait_group_spawn(Coroutine::Task task);
+
+    // must call exactly once
+    void wait_group_wait();
 
 } // namespace wry
 

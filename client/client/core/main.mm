@@ -138,7 +138,7 @@ int main(int argc, const char** argv) {
     // it.  Must precede global_work_queue_cancel below.
     printf("main is joining background work\n");
     wry::mutator_unpin();
-    wry::WaitGroup::wait();
+    wry::wait_group_wait();
     // Stay unpinned for shutdown.  If main re-pins here, the collector
     // can't ever advance the epoch past main's pin, so its `epoch::wait`
     // at the top of `loop_until_canceled` never returns and the
