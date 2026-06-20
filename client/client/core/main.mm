@@ -95,8 +95,10 @@ int main(int argc, const char** argv) {
     // tree of work.
 
 
-    wry::Coroutine::Nursery nursery;
-    nursery.soon(wry::run_tests(test_filter));
+    // Anchor the unit-test runner (and, later, any background saves) in the
+    // process-lifetime WaitGroup, which we block on before tearing down the
+    // thread pool.
+    wry::wait_group_spawn(wry::run_tests(test_filter));
 
 
     wry::mutator_pin();
@@ -130,11 +132,13 @@ int main(int argc, const char** argv) {
 
     printf("main is terminal\n");
 
-    // Blocking join unit test job
-    printf("main is joining unit tests\n");
-    // TODO: move inside thread
+    // Block until all WaitGroup-anchored work (the unit tests, any in-flight
+    // background saves) has finished -- the GUI loop has stopped, so nothing
+    // new is spawned past this point, and the workers are still alive to drain
+    // it.  Must precede global_work_queue_cancel below.
+    printf("main is joining background work\n");
     wry::mutator_unpin();
-    sync_wait(nursery.join());
+    wry::WaitGroup::wait();
     // Stay unpinned for shutdown.  If main re-pins here, the collector
     // can't ever advance the epoch past main's pin, so its `epoch::wait`
     // at the top of `loop_until_canceled` never returns and the

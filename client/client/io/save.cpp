@@ -123,16 +123,16 @@ namespace wry {
                 co_await Coroutine::SuspendAndSchedule{};  // yield between chunks
         }
 
-        // Detached: no continuation to resume, so destroy this frame directly
-        // (running the Root's destructor here, on a mutator worker).
-        co_await Coroutine::SuspendAndDestroy{};
+        // Fall off the end: final_suspend frees this frame (and the Root, on a
+        // mutator worker) and resumes the wait_group runner, which releases the
+        // WaitGroup count.
+        co_return;
     }
 
     void save_game_async(Root<World const*> snapshot) {
-        // Launch the detached coroutine by handing its handle to the work queue;
-        // the moved-from Future leaves the frame owning the only reference.
-        Coroutine::Task t = background_save_coroutine(std::move(snapshot));
-        global_work_queue_schedule(std::move(t)._into_handle());
+        // Anchor the save in the process-lifetime WaitGroup so a shutdown can't
+        // abandon it mid-yield; the coroutine owns the Root snapshot in its frame.
+        wait_group_spawn(background_save_coroutine(std::move(snapshot)));
     }
 
     World* load_game(int id) {

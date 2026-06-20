@@ -429,4 +429,32 @@ namespace wry::Coroutine {
     
 } // namespace wry::Coroutine
 
+namespace wry {
+
+    // Process-lifetime work anchor (a Go-style wait group).  Background tasks
+    // spawned onto the work queue register here so that main can block until
+    // they finish before cancelling the thread pool -- otherwise a task that has
+    // yielded mid-flight (e.g. a chunked background save) would be abandoned at
+    // shutdown, leaking its frame and leaving a half-written file.
+    //
+    // It is inherently a single process-global instance (blocking; no other use
+    // case), so it is expressed as static methods over hidden state rather than
+    // an instantiable type: WaitGroup::add() / done() / wait().
+    struct WaitGroup {
+        static void add(std::ptrdiff_t n = 1);
+        static void done();
+        // Release the process sentinel and block until all work drains.  Call
+        // exactly once (main, at shutdown); a second call underflows.
+        static void wait();
+    };
+
+    // Launch `task` detached on the work queue, anchored in the WaitGroup: the
+    // count is held from here until the task runs to completion (across all its
+    // internal yields).  Used for both the unit-test runner and background
+    // saves.  add()/done() are thread-safe; a spawn that races the shutdown
+    // wait() (which can never be joined) aborts rather than leaking the work.
+    void wait_group_spawn(Coroutine::Task task);
+
+} // namespace wry
+
 #endif /* coroutine_hpp */
