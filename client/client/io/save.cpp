@@ -10,13 +10,20 @@
 //
 
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <set>
 #include <vector>
+
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "coroutine.hpp"
 #include "save.hpp"
@@ -74,65 +81,149 @@ namespace wry {
         return std::move(s._stream);
     }
 
-    // Allocate the next save id and create an empty file to claim it, under a
-    // lock, so two concurrent saves can't pick the same id.  Returns the path
-    // to fill in (the writer truncates and overwrites it).
-    static std::filesystem::path reserve_new_save_path() {
-        static std::mutex save_id_mutex;
-        std::scoped_lock guard{save_id_mutex};
-        int next_id = 1;
-        for (auto& entry : std::filesystem::directory_iterator(saves_dir())) {
-            const auto& p = entry.path();
-            if (p.extension() != ".wry") continue;
-            int id = 0;
-            if (std::sscanf(p.filename().string().c_str(), "save_%d.wry", &id) == 1)
-                next_id = std::max(next_id, id + 1);
-        }
-        auto path = save_path_for_id(next_id);
-        std::ofstream{path, std::ios::binary};  // create empty -> reserves the id
-        return path;
+    // Atomic-save plumbing.  We never write the destination file in place: a
+    // reader (the load list, our own load_game) must only ever see a complete
+    // save, and a crash mid-write must not leave a corrupt one.  So we write to
+    // a uniquely-named temp file IN THE SAVES DIRECTORY, flush it to stable
+    // storage, then rename it into place under a lock.  The temp lives in the
+    // saves dir on purpose: rename is only atomic within one filesystem, so a
+    // temp in the OS's per-user temp dir (a likely different volume) would make
+    // the publish a non-atomic cross-device copy (EXDEV) -- exactly what we're
+    // avoiding.  A leftover temp from a crash is harmless: enumerate filters on
+    // the .wry extension, so it is never offered as a save.
+
+    // Create a unique temp file in the saves directory; returns an open fd and
+    // fills out_path.  fd < 0 on failure.
+    static int make_temp_save(std::filesystem::path& out_path) {
+        std::string templ = (saves_dir() / ".savetmp.XXXXXX").string();
+        int fd = mkstemp(templ.data());  // mutates the XXXXXX in place
+        if (fd >= 0)
+            out_path = templ;
+        return fd;
     }
 
-    void save_game(const World* world) {
+    static bool write_all(int fd, const uint8_t* data, size_t n) {
+        for (size_t off = 0; off < n; ) {
+            ssize_t w = ::write(fd, data + off, n - off);
+            if (w < 0) {
+                if (errno == EINTR) continue;
+                return false;
+            }
+            off += (size_t)w;
+        }
+        return true;
+    }
+
+    // Flush the temp to stable storage before publishing, so a crash can't leave
+    // a named-but-empty save.  On macOS plain fsync only reaches the drive;
+    // F_FULLFSYNC asks the drive to flush its own write cache to the platter.
+    // Returns false if the flush reports an error.
+    static bool flush_temp_save(int fd) {
+#ifdef F_FULLFSYNC
+        return fcntl(fd, F_FULLFSYNC) == 0;
+#else
+        return fsync(fd) == 0;
+#endif
+    }
+
+    // Close the temp -- which also surfaces deferred write errors -- and, only
+    // if every step succeeded, atomically rename it into the next free save id
+    // (picked here, under a lock, so concurrent saves can't collide).  On any
+    // failure the temp is removed and nothing is published: a failed save leaves
+    // no file rather than a corrupt one.  Returns whether a save was published.
+    static bool publish_or_discard(int fd, const std::filesystem::path& temp_path, bool ok) {
+        ok = (close(fd) == 0) && ok;  // close() always runs; its error counts
+        if (ok) {
+            static std::mutex save_id_mutex;
+            std::scoped_lock guard{save_id_mutex};
+            int next_id = 1;
+            for (auto& entry : std::filesystem::directory_iterator(saves_dir())) {
+                const auto& p = entry.path();
+                if (p.extension() != ".wry") continue;
+                int id = 0;
+                if (std::sscanf(p.filename().string().c_str(), "save_%d.wry", &id) == 1)
+                    next_id = std::max(next_id, id + 1);
+            }
+            std::error_code ec;
+            std::filesystem::rename(temp_path, save_path_for_id(next_id), ec);
+            ok = !ec;
+        }
+        if (!ok) {
+            std::error_code ec;
+            std::filesystem::remove(temp_path, ec);
+        }
+        return ok;
+    }
+
+    // Synchronous save: blocks on the flush -- fine, this is the synchronous API
+    // (only the round-trip test uses it now); callers that must not stall a pool
+    // worker use save_game_async.  Returns false on any I/O failure.
+    bool save_game(const World* world) {
         std::vector<uint8_t> buffer = serialize_world(world);
-        auto path = reserve_new_save_path();
-        std::ofstream out(path, std::ios::binary);
-        out.write((const char*)buffer.data(), (std::streamsize)buffer.size());
+        std::filesystem::path temp;
+        int fd = make_temp_save(temp);
+        if (fd < 0) return false;
+        bool ok = write_all(fd, buffer.data(), buffer.size()) && flush_temp_save(fd);
+        return publish_or_discard(fd, temp, ok);
     }
 
     // Detached coroutine form of save_game.  Holds the rooted snapshot in its
     // frame and yields (reschedules to the work queue) between the walk and the
-    // file write, and between file chunks -- so it never holds a worker's
-    // mutator pin across the whole save, letting the epoch advance in between,
-    // and stays a good work-queue citizen.  The Root keeps the immutable
-    // snapshot alive across every yield, regardless of which worker/epoch
-    // resumes it.  Launched detached by save_game_async; frees its own frame.
-    static Coroutine::Task background_save_coroutine(Root<World const*> snapshot) {
+    // file write, and between file chunks -- so it never holds a worker's mutator
+    // pin across the whole save, letting the epoch advance in between.  The
+    // blocking F_FULLFSYNC is offloaded to a throwaway thread.  When the save
+    // finishes, on_done(ok) reports the result.
+    static Coroutine::Task background_save_coroutine(Root<World const*> snapshot,
+                                                     std::function<void(bool)> on_done) {
         std::vector<uint8_t> buffer = serialize_world(&*snapshot);
 
         co_await Coroutine::SuspendAndSchedule{};  // yield after the walk
 
-        std::filesystem::path path = reserve_new_save_path();
-        std::ofstream out(path, std::ios::binary);
-        constexpr size_t CHUNK = size_t{1} << 16;
-        for (size_t off = 0; off < buffer.size(); ) {
-            size_t n = std::min(CHUNK, buffer.size() - off);
-            out.write((const char*)buffer.data() + off, (std::streamsize)n);
-            off += n;
-            if (off < buffer.size())
-                co_await Coroutine::SuspendAndSchedule{};  // yield between chunks
+        bool ok = false;
+        std::filesystem::path temp;
+        int fd = make_temp_save(temp);
+        if (fd >= 0) {
+            bool wrote = true;
+            constexpr size_t CHUNK = size_t{1} << 16;
+            for (size_t off = 0; off < buffer.size() && wrote; ) {
+                size_t n = std::min(CHUNK, buffer.size() - off);
+                wrote = write_all(fd, buffer.data() + off, n);
+                off += n;
+                if (wrote && off < buffer.size())
+                    co_await Coroutine::SuspendAndSchedule{};  // yield between chunks
+            }
+
+            bool flushed = false;
+            if (wrote) {
+#ifdef F_FULLFSYNC
+                // F_FULLFSYNC can block for tens of ms, so run it on a throwaway
+                // thread, then hop BACK to a pool worker.  The hop-back is
+                // load-bearing: when this coroutine completes its final_suspend
+                // destroys the frame and its Root, and ~Root asserts a mutator
+                // thread -- the throwaway thread is not one.
+                co_await Coroutine::SuspendAndScheduleOnTemporaryThread{};
+                flushed = flush_temp_save(fd);
+                co_await Coroutine::SuspendAndSchedule{};
+#else
+                flushed = flush_temp_save(fd);
+#endif
+            }
+            ok = publish_or_discard(fd, temp, wrote && flushed);
         }
 
+        if (on_done)
+            on_done(ok);
+
         // Fall off the end: final_suspend frees this frame (and the Root, on a
-        // mutator worker) and resumes the wait_group runner, which releases the
+        // mutator worker) and resumes the continuation, which releases the
         // WaitGroup count.
         co_return;
     }
 
-    void save_game_async(Root<World const*> snapshot) {
+    void save_game_async(Root<World const*> snapshot, std::function<void(bool)> on_done) {
         // Anchor the save in the process-lifetime WaitGroup so a shutdown can't
         // abandon it mid-yield; the coroutine owns the Root snapshot in its frame.
-        wait_group_spawn(background_save_coroutine(std::move(snapshot)));
+        wait_group_spawn(background_save_coroutine(std::move(snapshot), std::move(on_done)));
     }
 
     World* load_game(int id) {
@@ -216,7 +307,8 @@ namespace wry {
         // save_game is synchronous, so its file is complete on return; find it
         // by exact bytes (the sentinel content is unique amid concurrent saves).
         std::vector<uint8_t> ref = serialize_world(w);
-        save_game(w);
+        bool saved = save_game(w);
+        assert(saved);
 
         int new_id = -1;
         for (auto& [name, id] : enumerate_games())
@@ -251,20 +343,22 @@ namespace wry {
 
         std::vector<uint8_t> ref = serialize_world(w);
 
+        // The completion callback (-1 pending, 0 fail, 1 ok) fires once the save
+        // has fully published, so wait for it -- yielding so the saver gets
+        // worker time -- then confirm the file it wrote.
+        std::atomic<int> result{-1};
         Root<World const*> root(w);
-        save_game_async(root);
+        save_game_async(root, [&result](bool ok) {
+            result.store(ok ? 1 : 0, std::memory_order_release);
+        });
+
+        for (int iter = 0; iter < 200000 && result.load(std::memory_order_acquire) < 0; ++iter)
+            co_await Coroutine::SuspendAndSchedule{};  // let the saver run
+        assert(result.load(std::memory_order_acquire) == 1);
 
         int found = -1;
-        for (int iter = 0; iter < 200000 && found < 0; ++iter) {
-            for (auto& [name, id] : enumerate_games()) {
-                if (read_save_file(id) == ref) {
-                    found = id;
-                    break;
-                }
-            }
-            if (found < 0)
-                co_await Coroutine::SuspendAndSchedule{};  // let the saver run
-        }
+        for (auto& [name, id] : enumerate_games())
+            if (read_save_file(id) == ref) { found = id; break; }
         assert(found >= 0);
         delete_game(found);
 

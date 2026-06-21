@@ -980,6 +980,10 @@ namespace wry {
                                       float2 view_size_pt);
 
         void pump(model& m, float2 view_size_pt) {
+            // Surface any messages background work (e.g. an async save) posted
+            // since last frame, on the main thread.
+            m.drain_notifications();
+
             // NSEvent locations arrive in *logical points* (what NSView's
             // bounds.size and locationInWindow speak).  The widget tree
             // and the renderer's screen-space overlay transform both run

@@ -13,6 +13,7 @@
 #include <deque>
 #include <exception>
 #include <semaphore>
+#include <thread>
 
 #include "atomic.hpp"
 #include "utility.hpp"
@@ -62,6 +63,12 @@ namespace wry::Coroutine {
     struct SuspendAndSchedule : std::suspend_always {
         void await_suspend(std::coroutine_handle<> handle) const noexcept {
             global_work_queue_schedule(handle);
+        }
+    };
+
+    struct SuspendAndScheduleOnTemporaryThread : std::suspend_always {
+        void await_suspend(std::coroutine_handle<> handle) const noexcept {
+            std::thread{handle}.detach();
         }
     };
 

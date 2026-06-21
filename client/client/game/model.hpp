@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <map>
+#include <vector>
 
 #include "contiguous_deque.hpp"
 #include "entity.hpp"
@@ -159,7 +160,29 @@ namespace wry {
                         std::chrono::steady_clock::duration endurance = std::chrono::seconds(5)) {
             _log_overlay.append(v, endurance);
         }
-        
+
+        // Background work (e.g. an async save completing on a worker thread)
+        // can't touch the log overlay directly, so it posts a short message
+        // here; the per-frame pump drains them on the main thread.  Messages are
+        // string literals (static lifetime), so storing the pointer is safe.
+        std::mutex _notifications_mutex;
+        std::vector<const char*> _notifications;
+
+        void post_notification(const char* message) {  // any thread
+            std::scoped_lock lock{_notifications_mutex};
+            _notifications.push_back(message);
+        }
+
+        void drain_notifications() {  // main thread, once per frame
+            std::vector<const char*> pending;
+            {
+                std::scoped_lock lock{_notifications_mutex};
+                pending.swap(_notifications);
+            }
+            for (const char* m : pending)
+                append_log(m);
+        }
+
     };
     
 } // namespace wry

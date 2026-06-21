@@ -109,7 +109,11 @@ namespace wry {
         Root<World const*> w;
         if (!_worlds.try_pop_front(w))
             return;
-        save_game_async(w);  // copies the Root into the coroutine frame
+        // The callback runs on a worker thread when the save finishes; post the
+        // result for the main-thread pump to surface in the log.
+        save_game_async(w, [this](bool ok) {
+            post_notification(ok ? "Saved." : "Save failed.");
+        });
         _worlds.push_front(std::move(w));
     }
 
