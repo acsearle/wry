@@ -11,17 +11,19 @@
 {
     id<MTLDevice> _device;
     MeshInstanced* _instances;
-    
+    NSUInteger _instanceCapacity;
+
     NSMutableArray<id<MTLBuffer>>* _instanceBuffers;
-    
-    
+
+
 }
 
 - (instancetype)initWithDevice:(id<MTLDevice> _Nonnull)device
 {
     if (self = [super init]) {
         _device = device;
-        _instances = (MeshInstanced*) malloc(sizeof(MeshInstanced) * 100);
+        _instanceCapacity = 256;
+        _instances = (MeshInstanced*) malloc(sizeof(MeshInstanced) * _instanceCapacity);
         _instanceBuffers = [NSMutableArray new];
     }
     return self;
@@ -31,34 +33,47 @@
     return _instances;
 }
 
+-(void) addInstance:(MeshInstanced)instance {
+    if (_instanceCount >= _instanceCapacity) {
+        _instanceCapacity *= 2;
+        _instances = (MeshInstanced*) realloc(_instances, sizeof(MeshInstanced) * _instanceCapacity);
+    }
+    _instances[_instanceCount++] = instance;
+}
+
 - (void)drawWithRenderCommandEncoder:(id<MTLRenderCommandEncoder> _Nonnull)encoder commandBuffer:(id<MTLCommandBuffer> _Nonnull)buffer
 {
+    if (_instanceCount == 0)
+        return;
+
     [encoder setVertexBuffer:_vertexBuffer
                       offset:0
                      atIndex:AAPLBufferIndexVertices];
-    
+
+    size_t length = sizeof(MeshInstanced) * _instanceCount;
+
     id<MTLBuffer> instanceBuffer = nil;
     @synchronized (_instanceBuffers) {
         if ([_instanceBuffers count]) {
             instanceBuffer = [_instanceBuffers lastObject];
             [_instanceBuffers removeLastObject];
-        } else {
-            size_t length = sizeof(MeshInstanced) * 1000;
-            instanceBuffer = [_device newBufferWithLength:length options:MTLStorageModeShared];
         }
     }
-    
+    // Pooled buffers are recycled across frames; allocate a new one if this
+    // frame needs more instances than the recycled buffer can hold (nil.length
+    // is 0, so this also covers the empty-pool case).
+    if (instanceBuffer.length < length) {
+        instanceBuffer = [_device newBufferWithLength:length options:MTLStorageModeShared];
+    }
+
     [buffer addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
         @synchronized (self->_instanceBuffers) {
             [self->_instanceBuffers addObject:instanceBuffer];
         }
     }];
-    
-    assert(_instanceCount < 1000);
-    size_t length = sizeof(MeshInstanced) * _instanceCount;
 
     memcpy([instanceBuffer contents], _instances, length);
-        
+
     [encoder setVertexBuffer:instanceBuffer
                       offset:0
                      atIndex:AAPLBufferIndexInstanced];

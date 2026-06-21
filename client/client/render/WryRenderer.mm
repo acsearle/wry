@@ -1270,12 +1270,36 @@
         auto tnow = world_get_time(new_world._ptr);
         auto&& entities = new_world->_entity_for_entity_id;
         
-        NSUInteger quad_count = /*entities->data.size()*/ 10 * 4 + 1000 + 2;
+        // Gather the entities up front so the vertex/index buffers can be
+        // sized to exactly hold what we emit, instead of a fixed guess that
+        // overflowed once the world held more than a hard-coded entity count.
+        // kludge out the contents of the entity mapping
+        std::vector<Entity const*> ptrs;
+        entities.kv.for_each([&ptrs](auto&& k, auto&& v) {
+            ptrs.push_back(v);
+        });
+
+        // Count the textured quads the loops below emit.  Keep this in sync
+        // with the emission code:
+        //   - Machine: one quad per item on its stack
+        //   - Source:  one quad
+        //   - Sink:    none (drawn only as a 3D mesh instance)
+        //   - one quad per grid cell, plus the ground plane and mouse cursor
+        NSUInteger quad_count = 2; // ground plane + mouse cursor
+        quad_count += (NSUInteger)(grid_bounds.b.x - grid_bounds.a.x)
+                    * (NSUInteger)(grid_bounds.b.y - grid_bounds.a.y);
+        for (Entity const* q : ptrs) {
+            if (auto p = dynamic_cast<const wry::Machine*>(q)) {
+                quad_count += wry::PersistentStack<wry::Term>::size(p->_stack);
+            } else if (dynamic_cast<const Source*>(q)) {
+                quad_count += 1;
+            }
+        }
+
         NSUInteger vertex_count = quad_count * 4;
-        index_count = quad_count * 6;
         vertices = [_device newBufferWithLength:vertex_count * sizeof(MeshVertex) options:MTLStorageModeShared];
-        indices = [_device newBufferWithLength:index_count * sizeof(uint) options:MTLStorageModeShared];
-        
+        indices = [_device newBufferWithLength:quad_count * 6 * sizeof(uint) options:MTLStorageModeShared];
+
         MeshVertex* pv = (MeshVertex*) vertices.contents;
         uint* pi = (uint*) indices.contents;
         MeshVertex v;
@@ -1285,12 +1309,6 @@
         uint k = 0;
 
 #if 1
-        
-        // kludge out the contents of the entity mapping
-        std::vector<Entity const*> ptrs;
-        entities.kv.for_each([&ptrs](auto&& k, auto&& v) {
-            ptrs.push_back(v);
-        });
         // TODO:
         // Make a new entity-coordinate table that doesn't imply exclusive
         // ownership
@@ -1366,7 +1384,7 @@
                     m.model_transform = A;
                     m.inverse_transpose_model_transform = inverse(transpose(A));
                     m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
-                    _truck_mesh.instances[_truck_mesh.instanceCount++] = m;
+                    [_truck_mesh addInstance:m];
                 }
                 
                 // now make the stack
@@ -1444,7 +1462,7 @@
                     m.model_transform = A;
                     m.inverse_transpose_model_transform = inverse(transpose(A));
                     m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
-                    s.instances[s.instanceCount++] = m;
+                    [s addInstance:m];
                 }
 
                 
@@ -1595,11 +1613,17 @@
             //ulong value = new_world->get(z);
             //++value;
             //new_world->set(z, value);
-            
+
         }
-        
+
+        // The buffers were sized to exactly fit what the loops emit; draw only
+        // the indices we actually wrote.  The assert is a tripwire in case the
+        // quad_count computation above drifts out of sync with the emission.
+        assert(pv <= (MeshVertex*) vertices.contents + vertex_count);
+        index_count = (NSUInteger)(pi - (uint*) indices.contents);
+
     }
-    
+
     // Our relatively flat scene permits several simplifications to the
     // rendering engine.  We don't need to handle the horizon and large numbers
     // of tiny objects being obstructed by foreground geometry; everything

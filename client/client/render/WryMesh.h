@@ -27,6 +27,9 @@
 
 -(MeshInstanced* _Nonnull) instances;
 
+// Append one instance, growing the backing store as needed.
+-(void) addInstance:(MeshInstanced)instance;
+
 -(instancetype _Nonnull)initWithDevice:(id<MTLDevice> _Nonnull)device;
 
 -(void) drawWithRenderCommandEncoder:(id<MTLRenderCommandEncoder> _Nonnull)encoder commandBuffer:(id<MTLCommandBuffer> _Nonnull)buffer;
