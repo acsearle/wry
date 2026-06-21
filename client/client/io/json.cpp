@@ -10,6 +10,7 @@
 
 #include "debug.hpp"
 #include "json.hpp"
+#include "test.hpp"
 
 namespace wry::json {
 
@@ -30,10 +31,12 @@ namespace wry::json {
         virtual bool as_bool() const { unimplemented(); }
         virtual Table<String, Json> const& as_object() const { unimplemented(); }
         virtual ContiguousDeque<Json> const& as_array() const { unimplemented(); }
-        virtual bool is_string() const { unimplemented(); }
-        virtual bool is_number() const { unimplemented(); }
-        virtual bool is_array() const { unimplemented(); }
-        virtual bool is_object() const { unimplemented(); }
+        virtual bool is_string() const { return false; }
+        virtual bool is_number() const { return false; }
+        virtual bool is_array() const { return false; }
+        virtual bool is_object() const { return false; }
+        virtual bool is_bool() const { return false; }
+        virtual bool is_null() const { return false; }
         static _json_value* from(StringView&);
         virtual String debug() const = 0;
         virtual _json_value* clone() const = 0;
@@ -63,6 +66,13 @@ namespace wry::json {
     Table<String, Json> const& Json::as_object() const { return _ptr->as_object(); }
     ContiguousDeque<Json> const& Json::as_array() const { return _ptr->as_array(); }
     bool Json::as_bool() const { return _ptr->as_bool(); }
+
+    bool Json::is_string() const { return _ptr->is_string(); }
+    bool Json::is_number() const { return _ptr->is_number(); }
+    bool Json::is_array() const { return _ptr->is_array(); }
+    bool Json::is_object() const { return _ptr->is_object(); }
+    bool Json::is_bool() const { return _ptr->is_bool(); }
+    bool Json::is_null() const { return _ptr->is_null(); }
 
     long Json::as_long() const {
         double a = _ptr->as_number();
@@ -99,6 +109,8 @@ namespace wry::json {
         
         Table<String, Json> _table;
 
+        bool is_object() const override { return true; }
+
         virtual size_t size() const override {
             return _table.size();
         }
@@ -113,7 +125,7 @@ namespace wry::json {
             assert(v.front() == '{'); v.pop_front();
             while (is_json_whitespace(v.front())) v.pop_front();
             while (v.front() != '}') {
-                // _json_string::from
+                // parse the key string
                 String s;
                 if (!parse_json_string(s)(v.chars)) return nullptr;
                 while (is_json_whitespace(v.front())) v.pop_front();
@@ -165,6 +177,8 @@ namespace wry::json {
     struct _json_array : _json_value {
         
         ContiguousDeque<Json> _array;
+
+        bool is_array() const override { return true; }
 
         virtual Json const& at(size_t i) const override {
             return _array[i];
@@ -221,6 +235,8 @@ namespace wry::json {
         explicit _json_string(StringView v) : _string(v) {}
         explicit _json_string(String&& s) : _string(std::move(s)) {}
 
+        bool is_string() const override { return true; }
+
         virtual StringView as_string() const override {
             return _string;
         }
@@ -250,7 +266,9 @@ namespace wry::json {
         double _number;
         
         explicit _json_number(double d) : _number(d) {}
-        
+
+        bool is_number() const override { return true; }
+
         virtual double as_number() const override {
             return _number;
         }
@@ -276,7 +294,9 @@ namespace wry::json {
         bool _bool;
         
         explicit _json_bool(bool b) : _bool(b) {}
-        
+
+        bool is_bool() const override { return true; }
+
         virtual double as_number() const override {
             return _bool;
         }
@@ -304,7 +324,9 @@ namespace wry::json {
     };
     
     struct _json_null : _json_value {
-        
+
+        bool is_null() const override { return true; }
+
         virtual double as_number() const override {
             return 0;
         }
@@ -359,7 +381,30 @@ namespace wry::json {
         }
         
         return nullptr;
-        
+
     }
+
+    // Round-trip smoke test for the Json DOM (the Serde path is covered
+    // elsewhere; this exercises Json::from end to end: object/key parse,
+    // number, nested array, bool, null, and escape decoding).
+    define_test("json")
+    {
+        Json j = Json::from(StringView("{\"a\":1,\"b\":[true,null,\"x\\\"y\"]}"));
+
+        assert(j.is_object());
+        assert(!j.is_array());
+        assert(j.size() == 2);
+        assert(j[StringView("a")].is_number());
+        assert(j[StringView("a")].as_number() == 1.0);
+
+        Json const& b = j[StringView("b")];
+        assert(b.is_array());
+        assert(b.size() == 3);
+        assert(b[0].is_bool() && b[0].as_bool() == true);
+        assert(b[1].is_null());
+        assert(b[2].is_string() && b[2].as_string() == StringView("x\"y")); // escape decoded
+
+        co_return;
+    };
 
 } // namespace wry::json

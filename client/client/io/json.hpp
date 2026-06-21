@@ -22,8 +22,6 @@
 #include "Option.hpp"
 #include "stddef.hpp"
 
-#include "term.hpp"
-
 namespace wry::json {
     
     // JSON
@@ -559,6 +557,13 @@ namespace wry::json {
 
         Json const& operator[](size_t i) const;
         Json const& operator[](StringView s) const;
+
+        bool is_string() const;
+        bool is_number() const;
+        bool is_array() const;
+        bool is_object() const;
+        bool is_bool() const;
+        bool is_null() const;
 
         StringView as_string() const;
         bool as_bool() const;
