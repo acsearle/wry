@@ -1270,38 +1270,27 @@
         auto tnow = world_get_time(new_world._ptr);
         auto&& entities = new_world->_entity_for_entity_id;
         
-        // Gather the entities up front so the vertex/index buffers can be
-        // sized to exactly hold what we emit, instead of a fixed guess that
-        // overflowed once the world held more than a hard-coded entity count.
         // kludge out the contents of the entity mapping
         std::vector<Entity const*> ptrs;
         entities.kv.for_each([&ptrs](auto&& k, auto&& v) {
             ptrs.push_back(v);
         });
 
-        // Count the textured quads the loops below emit.  Keep this in sync
-        // with the emission code:
-        //   - Machine: one quad per item on its stack
-        //   - Source:  one quad
-        //   - Sink:    none (drawn only as a 3D mesh instance)
-        //   - one quad per grid cell, plus the ground plane and mouse cursor
-        NSUInteger quad_count = 2; // ground plane + mouse cursor
-        quad_count += (NSUInteger)(grid_bounds.b.x - grid_bounds.a.x)
-                    * (NSUInteger)(grid_bounds.b.y - grid_bounds.a.y);
-        for (Entity const* q : ptrs) {
-            if (auto p = dynamic_cast<const wry::Machine*>(q)) {
-                quad_count += wry::PersistentStack<wry::Term>::size(p->_stack);
-            } else if (dynamic_cast<const Source*>(q)) {
-                quad_count += 1;
-            }
-        }
+        // Accumulate the textured quads into growable buffers and upload them
+        // once below.  The buffers grow to fit whatever the loops emit, so no
+        // number of entities can overflow them the way the old fixed-size
+        // allocation did.
+        std::vector<MeshVertex> vbuf;
+        std::vector<uint> ibuf;
+        // Reserve a rough lower bound (one quad per grid cell and per entity,
+        // plus the ground plane and cursor) to avoid most reallocations; this
+        // is only a hint -- the vectors still grow past it as needed.
+        size_t quad_hint = 2
+            + (size_t)(grid_bounds.b.x - grid_bounds.a.x) * (size_t)(grid_bounds.b.y - grid_bounds.a.y)
+            + ptrs.size();
+        vbuf.reserve(quad_hint * 4);
+        ibuf.reserve(quad_hint * 6);
 
-        NSUInteger vertex_count = quad_count * 4;
-        vertices = [_device newBufferWithLength:vertex_count * sizeof(MeshVertex) options:MTLStorageModeShared];
-        indices = [_device newBufferWithLength:quad_count * 6 * sizeof(uint) options:MTLStorageModeShared];
-
-        MeshVertex* pv = (MeshVertex*) vertices.contents;
-        uint* pi = (uint*) indices.contents;
         MeshVertex v;
         v.tangent = make<float4>(1.0f, 0.0f, 0.0f, 0.0f);
         v.bitangent = make<float4>(0.0f, 1.0f, 0.0f, 0.0f);
@@ -1401,22 +1390,22 @@
                     }
                     v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
                     v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                    *pv++ = v;
+                    vbuf.push_back(v);
                     v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
                     v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                    *pv++ = v;
+                    vbuf.push_back(v);
                     v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
                     v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                    *pv++ = v;
+                    vbuf.push_back(v);
                     v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
                     v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                    *pv++ = v;
-                    *pi++ = k;
-                    *pi++ = k;
-                    *pi++ = k + 1;
-                    *pi++ = k + 3;
-                    *pi++ = k + 2;
-                    *pi++ = k + 2;
+                    vbuf.push_back(v);
+                    ibuf.push_back(k);
+                    ibuf.push_back(k);
+                    ibuf.push_back(k + 1);
+                    ibuf.push_back(k + 3);
+                    ibuf.push_back(k + 2);
+                    ibuf.push_back(k + 2);
                     k += 4;
                 }
                 
@@ -1425,29 +1414,6 @@
                 simd_float4 location = make<float4>(p->_location.x, p->_location.y + 1.0, 0.0, 1.0f);
                 auto A = simd_matrix_translate(location) * lookat_transform * simd_matrix_scale(0.5f);
 
-                /*
-                v.position = make<float4>(-0.5f, 0.0f, -0.5f, 0.0f) + location;
-                v.coordinate = make<float4>(4.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
-                *pv++ = v;
-                v.position = make<float4>(+0.5f, 0.0f, -0.5f, 0.0f) + location;
-                v.coordinate = make<float4>(5.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
-                *pv++ = v;
-                v.position = make<float4>(+0.5f, 0.0f, +0.5f, 0.0f) + location;
-                v.coordinate = make<float4>(5.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f);
-                *pv++ = v;
-                v.position = make<float4>(-0.5f, 0.0f, +0.5f, 0.0f) + location;
-                v.coordinate = make<float4>(4.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f);
-                *pv++ = v;
-                
-                *pi++ = k;
-                *pi++ = k;
-                *pi++ = k + 1;
-                *pi++ = k + 3;
-                *pi++ = k + 2;
-                *pi++ = k + 2;
-                k += 4;
-                 */
-                
                 WryMesh* s = nil;
                 
                 if (auto r = dynamic_cast<const Source*>(q)) {
@@ -1472,23 +1438,23 @@
                     
                     v.position = make<float4>(-0.5f, -0.1f, -0.5f, 0.0f) + location;
                     v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f) + coordinate;
-                    *pv++ = v;
+                    vbuf.push_back(v);
                     v.position = make<float4>(+0.5f, -0.1f, -0.5f, 0.0f) + location;
                     v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f) + coordinate;
-                    *pv++ = v;
+                    vbuf.push_back(v);
                     v.position = make<float4>(+0.5f, -0.1f, +0.5f, 0.0f) + location;
                     v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f) + coordinate;
-                    *pv++ = v;
+                    vbuf.push_back(v);
                     v.position = make<float4>(-0.5f, -0.1f, +0.5f, 0.0f) + location;
                     v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f) + coordinate;
-                    *pv++ = v;
+                    vbuf.push_back(v);
                     
-                    *pi++ = k;
-                    *pi++ = k;
-                    *pi++ = k + 1;
-                    *pi++ = k + 3;
-                    *pi++ = k + 2;
-                    *pi++ = k + 2;
+                    ibuf.push_back(k);
+                    ibuf.push_back(k);
+                    ibuf.push_back(k + 1);
+                    ibuf.push_back(k + 3);
+                    ibuf.push_back(k + 2);
+                    ibuf.push_back(k + 2);
                     k += 4;
                     
                 }
@@ -1528,23 +1494,23 @@
                 
                 v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
                 v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                *pv++ = v;
+                vbuf.push_back(v);
                 v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
                 v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                *pv++ = v;
+                vbuf.push_back(v);
                 v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
                 v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                *pv++ = v;
+                vbuf.push_back(v);
                 v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
                 v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                *pv++ = v;
+                vbuf.push_back(v);
                 
-                *pi++ = k;
-                *pi++ = k;
-                *pi++ = k + 1;
-                *pi++ = k + 3;
-                *pi++ = k + 2;
-                *pi++ = k + 2;
+                ibuf.push_back(k);
+                ibuf.push_back(k);
+                ibuf.push_back(k + 1);
+                ibuf.push_back(k + 3);
+                ibuf.push_back(k + 2);
+                ibuf.push_back(k + 2);
                 
                 k += 4;
             }
@@ -1556,20 +1522,20 @@
             
             v.coordinate = make<float4>(3.0 / 32.0f, 4.5f / 32.0f, 0.0f, 1.0f);
             v.position = make<float4>(grid_bounds.a.x - 1, grid_bounds.a.y - 1, 0.0, 1.0f);
-            *pv++ = v;
+            vbuf.push_back(v);
             v.position = make<float4>(grid_bounds.b.x, grid_bounds.a.y - 1, 0.0, 1.0f);
-            *pv++ = v;
+            vbuf.push_back(v);
             v.position = make<float4>(grid_bounds.b.x, grid_bounds.b.y, 0.0, 1.0f);
-            *pv++ = v;
+            vbuf.push_back(v);
             v.position = make<float4>(grid_bounds.a.x - 1, grid_bounds.b.y, 0.0, 1.0f);
-            *pv++ = v;
+            vbuf.push_back(v);
             
-            *pi++ = k;
-            *pi++ = k;
-            *pi++ = k + 1;
-            *pi++ = k + 3;
-            *pi++ = k + 2;
-            *pi++ = k + 2;
+            ibuf.push_back(k);
+            ibuf.push_back(k);
+            ibuf.push_back(k + 1);
+            ibuf.push_back(k + 3);
+            ibuf.push_back(k + 2);
+            ibuf.push_back(k + 2);
             
             k += 4;
             
@@ -1585,23 +1551,23 @@
             
             v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
             v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-            *pv++ = v;
+            vbuf.push_back(v);
             v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
             v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-            *pv++ = v;
+            vbuf.push_back(v);
             v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
             v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-            *pv++ = v;
+            vbuf.push_back(v);
             v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
             v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-            *pv++ = v;
+            vbuf.push_back(v);
             
-            *pi++ = k;
-            *pi++ = k;
-            *pi++ = k + 1;
-            *pi++ = k + 3;
-            *pi++ = k + 2;
-            *pi++ = k + 2;
+            ibuf.push_back(k);
+            ibuf.push_back(k);
+            ibuf.push_back(k + 1);
+            ibuf.push_back(k + 3);
+            ibuf.push_back(k + 2);
+            ibuf.push_back(k + 2);
             
             k += 4;
             
@@ -1616,11 +1582,12 @@
 
         }
 
-        // The buffers were sized to exactly fit what the loops emit; draw only
-        // the indices we actually wrote.  The assert is a tripwire in case the
-        // quad_count computation above drifts out of sync with the emission.
-        assert(pv <= (MeshVertex*) vertices.contents + vertex_count);
-        index_count = (NSUInteger)(pi - (uint*) indices.contents);
+        // Upload exactly what we accumulated.
+        index_count = ibuf.size();
+        vertices = [_device newBufferWithLength:vbuf.size() * sizeof(MeshVertex) options:MTLStorageModeShared];
+        indices = [_device newBufferWithLength:ibuf.size() * sizeof(uint) options:MTLStorageModeShared];
+        memcpy(vertices.contents, vbuf.data(), vbuf.size() * sizeof(MeshVertex));
+        memcpy(indices.contents, ibuf.data(), ibuf.size() * sizeof(uint));
 
     }
 
