@@ -21,6 +21,11 @@
                                       model:(std::shared_ptr<wry::model>)model_
                                        view:(nonnull NSView*)view;
 
+// Advance the simulation one step.  Call once per frame before -render; the
+// two are deliberately separate so a scene with no world (splash / menu) can
+// skip the step while still drawing.
+- (void)update;
+
 - (void)render;
 
 - (void)drawableResize:(CGSize)drawableSize;

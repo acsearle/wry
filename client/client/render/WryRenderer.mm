@@ -40,8 +40,14 @@
 {
     
     // link to rest of program
-    
+
     std::shared_ptr<wry::model> _model;
+
+    // The displayed world, advanced one simulation step by -update and read
+    // by -render that same frame.  The model's _worlds deque stays the source
+    // of truth (new_game / load_from_save replace its contents); this is just
+    // the handoff from the update phase to the draw phase.
+    wry::Root<wry::World*> _world_to_render;
     
     
     
@@ -1033,28 +1039,39 @@
     [_cursor set];
 }
 
+-(void)update
+{
+    using namespace ::wry;
+
+    // Service the garbage collector once per frame.
+    wry::mutator_repin();
+
+    // Advance the displayed world one simulation step.  The model's _worlds
+    // deque holds exactly the displayed world (new_game / load_from_save keep
+    // it that way); pop it, step it, push the result back, and stash it in
+    // _world_to_render for -render to draw.  Splitting this out of -render is
+    // the seam scenes rely on: a splash or menu scene has no world to step.
+    Root<World const*> old_world;
+    (void) _model->_worlds.try_pop_front(old_world);
+    assert(old_world);
+    // printf("old_world->_count %d\n", old_world->_count.load_relaxed());
+    Coroutine::Nursery nursery;
+    // the operation is bounded within the main thread's epoch
+    nursery.soon(_world_to_render, old_world->step());
+    sync_wait(nursery.join());
+    _model->_worlds.emplace_back(_world_to_render);
+    assert(_world_to_render);
+}
+
 - (void)render
 {
 
     using namespace ::simd;
     using namespace ::wry;
 
-    // Service the garbage collector
-    wry::mutator_repin();
-
-    // Advance the world state
-    Root<World*> new_world;
-    {
-        Root<World const*> old_world;
-        (void) _model->_worlds.try_pop_front(old_world);
-        assert(old_world);
-        // printf("old_world->_count %d\n", old_world->_count.load_relaxed());
-        Coroutine::Nursery nursery;
-        // the operation is bounded within the main thread's epoch
-        nursery.soon(new_world, old_world->step());
-        sync_wait(nursery.join());
-        _model->_worlds.emplace_back(new_world);
-    }
+    // -update advanced the displayed world (and serviced the GC) immediately
+    // before this -render, on the same thread and frame; we only read it here.
+    Root<World*>& new_world = _world_to_render;
     assert(new_world);
 
 

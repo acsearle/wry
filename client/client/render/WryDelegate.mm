@@ -546,6 +546,10 @@ namespace {
     wry::gui::pump(*_model,
                    simd_make_float2((float)sz.width,
                                     (float)sz.height));
+    // Advance the simulation, then draw it.  Splitting update from render is
+    // the seam scenes will use: a splash / menu scene has no world to step,
+    // so the step must not live inside the draw call.
+    [_renderer update];
     [_renderer render];
 }
 
