@@ -1,12 +1,12 @@
 //
-//  ClientRenderer.h
+//  WryWorldScene.h
 //  client
 //
 //  Created by Antony Searle on 1/7/2023.
 //
 
-#ifndef WryRenderer_h
-#define WryRenderer_h
+#ifndef WryWorldScene_h
+#define WryWorldScene_h
 
 #import <AVFoundation/AVFoundation.h>
 #import <Metal/Metal.h>
@@ -17,13 +17,12 @@
 #import "WryRenderContext.h"
 #import "WryScene.h"
 
-// WryRenderer is, in scene terms, the game-world scene: it owns the deferred
-// PBR pipelines, shadow / environment maps, meshes and G-buffers, steps the
-// simulation in -update, and draws it in -render.  It conforms to WryScene so
-// the host can drive it without knowing that.  (A rename to WryWorldScene is
-// a sensible later tidy-up once splash / menu scenes exist.)
+// WryWorldScene is the game-world scene: it owns the deferred PBR pipelines,
+// shadow / environment maps, meshes and G-buffers, steps the simulation in
+// -update, and encodes it in -encodeIntoCommandBuffer:.  It conforms to
+// WryScene so the host can drive it without knowing its concrete type.
 
-@interface WryRenderer : NSObject <WryScene>
+@interface WryWorldScene : NSObject <WryScene>
 
 // Built against the host-owned render context (device + shared 2D services).
 - (nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
@@ -42,4 +41,4 @@
 
 @end
 
-#endif /* WryRenderer_h */
+#endif /* WryWorldScene_h */

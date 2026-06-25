@@ -23,8 +23,8 @@
 // This is the seam between scene-specific code and the shared rendering
 // infrastructure: concrete scenes are built against a WryRenderContext (the
 // device + 2D services every scene shares) and own only what is unique to
-// them.  Today the sole scene is the game world (WryRenderer); splash and
-// menu scenes come later.
+// them.  The scenes are the game world (WryWorldScene), the splash
+// (WrySplashScene), and the main menu (WryMainMenuScene).
 //
 // The host owns the per-frame command buffer + drawable lifecycle: it creates
 // the command buffer, the scene encodes its passes into it and returns the
@@ -52,6 +52,11 @@
 @property (nonatomic, readonly, nullable) id<WryScene> nextScene;
 
 @optional
+
+// Scenes that own their input drain the model's event queue here, and the
+// host calls this instead of the world pump.  Scenes that don't implement it
+// fall through to the host's world pump (the model overlay-stack dispatch).
+- (void)handleEvents;
 
 // Platform cursor reset on mouse-enter.  Only scenes with a custom cursor
 // (the world's palette cursor) implement it; the host guards the call with

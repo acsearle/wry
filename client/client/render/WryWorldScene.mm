@@ -1,5 +1,5 @@
 //
-//  WryRenderer.mm
+//  WryWorldScene.mm
 //  client
 //
 //  Created by Antony Searle on 1/7/2023.
@@ -18,7 +18,7 @@
 
 #include "WryMesh.h"
 #include "WryRenderContext.h"
-#include "WryRenderer.h"
+#include "WryWorldScene.h"
 
 #include "SpriteAtlas.hpp"
 #include "csv.hpp"
@@ -36,7 +36,7 @@
 
 #include "save.hpp"
 
-@implementation WryRenderer
+@implementation WryWorldScene
 {
     
     // link to rest of program

@@ -20,11 +20,10 @@
 // atlas, font, overlay compositing pipeline).
 //
 // It is the seam between "basic rendering infrastructure needed by all
-// scenes" and the scene-specific code.  Today its only client is
-// WryRenderer; it exists so that future scenes (splash, main menu, world)
-// can each build their own pipelines against one shared device + library
-// and draw text / sprites through one shared atlas, without re-deriving any
-// of this.  This is purely an extraction -- no behaviour changes.
+// scenes" and the scene-specific code.  Every scene (WryWorldScene,
+// WrySplashScene, WryMainMenuScene) is built against one shared context, so
+// they share the device + library + command queue and can draw text / sprites
+// through one shared atlas without re-deriving any of this.
 
 @interface WryRenderContext : NSObject
 

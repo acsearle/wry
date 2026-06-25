@@ -11,7 +11,9 @@
 #include <cstring>
 
 #include "WryRenderContext.h"
-#include "WryRenderer.h"
+#include "WryWorldScene.h"
+#include "WrySplashScene.h"
+#include "WryMainMenuScene.h"
 #include "WryScene.h"
 #include "WryMetalView.h"
 #include "WryDelegate.h"
@@ -141,9 +143,9 @@ namespace {
     // The shared render context (device + 2D services), owned by this host and
     // borrowed by whatever scene is showing.
     WryRenderContext* _ctx;
-    // The current scene, driven through the WryScene protocol so this
-    // platform layer doesn't depend on which scene is showing.  Today it is
-    // always a WryRenderer (the world scene), constructed below.
+    // The current scene, driven through the WryScene protocol so this platform
+    // layer doesn't depend on which scene is showing.  Boots to a splash and
+    // transitions splash -> main menu -> world (see applicationWillFinishLaunching).
     id<WryScene> _scene;
     NSThread* _renderThread;
     WryAudio* _audio;
@@ -199,13 +201,24 @@ namespace {
     _metalView.layer = _metalLayer;
     _metalView.wantsLayer = YES;
 
-    // Build the shared render context, then the scene against it.  This host
-    // owns the context and the per-frame command buffer / drawable / present;
-    // the scene only encodes its passes (see -render below).
+    // Build the shared render context, then the boot scene chain against it.
+    // This host owns the context and the per-frame command buffer / drawable /
+    // present; scenes only encode their passes (see -render below).
     _ctx = [[WryRenderContext alloc] initWithDevice:_metalLayer.device
                                 drawablePixelFormat:_metalLayer.pixelFormat];
 
-    _scene = [[WryRenderer alloc] initWithContext:_ctx model:_model];
+    // Boot flow: splash -> main menu -> world.  The world scene is built lazily
+    // (its asset load is heavy) the moment the menu hands control on.
+    WryRenderContext* ctx = _ctx;
+    std::shared_ptr<wry::model> model = _model;
+    id<WryScene> (^makeWorld)(void) = ^id<WryScene>{
+        return [[WryWorldScene alloc] initWithContext:ctx model:model];
+    };
+    WryMainMenuScene* menu =
+        [[WryMainMenuScene alloc] initWithContext:_ctx model:_model next:makeWorld];
+    _scene = [[WrySplashScene alloc] initWithContext:_ctx
+                                      durationFrames:90
+                                                next:menu];
     
     // _audio = [[WryAudio alloc] init];
 
@@ -549,20 +562,23 @@ namespace {
 }
 
 -(void)render {
-    // Drain everything the NSResponder callbacks queued since the last
-    // frame.  Each event is walked through the overlay stack (top down);
-    // whatever no overlay consumed falls back to the transitional legacy
-    // bookkeeping (still backing the world click / scroll-pan paths until
-    // those move into a WorldOverlay).  Runs on the main thread between
-    // NSEvent dispatch and the renderer, so the queue is always seen
-    // consistently.
+    // Input.  Scenes that own their input (the menu) implement -handleEvents
+    // and drain the queue themselves; otherwise the world pump walks each
+    // queued event through the model's overlay stack (top down) and falls back
+    // to the transitional legacy bookkeeping (world click / scroll-pan paths).
+    // Runs on the main thread between NSEvent dispatch and the draw, so the
+    // queue is always seen consistently.
     NSSize sz = _metalView.bounds.size;
-    wry::gui::pump(*_model,
-                   simd_make_float2((float)sz.width,
-                                    (float)sz.height));
-    // Advance the simulation, then draw it.  Splitting update from render is
-    // the seam scenes will use: a splash / menu scene has no world to step,
-    // so the step must not live inside the draw call.
+    if ([_scene respondsToSelector:@selector(handleEvents)]) {
+        [_scene handleEvents];
+    } else {
+        wry::gui::pump(*_model,
+                       simd_make_float2((float)sz.width,
+                                        (float)sz.height));
+    }
+    // Advance the current scene, then draw it.  Splitting update from the draw
+    // is the seam scenes use: a splash / menu scene has no world to step, so
+    // the step must not live inside the draw call.
     [_scene update];
 
     // The host owns the per-frame command buffer + drawable + present, so every
@@ -582,6 +598,15 @@ namespace {
         }
     }
     [command_buffer commit];
+
+    // Scene transition: a scene requests its successor via -nextScene (mouse /
+    // key for the menu, a timer for the splash).  Swap after presenting, and
+    // size the incoming scene to the current drawable before its first frame.
+    id<WryScene> next = _scene.nextScene;
+    if (next) {
+        _scene = next;
+        [_scene drawableResize:_metalLayer.drawableSize];
+    }
 }
 
 @end
