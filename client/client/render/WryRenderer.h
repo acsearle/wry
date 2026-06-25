@@ -14,6 +14,7 @@
 
 #include "model.hpp"
 
+#import "WryRenderContext.h"
 #import "WryScene.h"
 
 // WryRenderer is, in scene terms, the game-world scene: it owns the deferred
@@ -24,17 +25,16 @@
 
 @interface WryRenderer : NSObject <WryScene>
 
-- (nonnull instancetype)initWithMetalDevice:(nonnull id<MTLDevice>)device
-                        drawablePixelFormat:(MTLPixelFormat)drawablePixelFormat
-                                      model:(std::shared_ptr<wry::model>)model_
-                                       view:(nonnull NSView*)view;
+// Built against the host-owned render context (device + shared 2D services).
+- (nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
+                                  model:(std::shared_ptr<wry::model>)model_;
 
 // Advance the simulation one step.  Call once per frame before -render; the
 // two are deliberately separate so a scene with no world (splash / menu) can
 // skip the step while still drawing.
 - (void)update;
 
-- (void)render;
+// -encodeIntoCommandBuffer: comes from the WryScene protocol.
 
 - (void)drawableResize:(CGSize)drawableSize;
 

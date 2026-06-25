@@ -10,6 +10,7 @@
 
 #include <cstring>
 
+#include "WryRenderContext.h"
 #include "WryRenderer.h"
 #include "WryScene.h"
 #include "WryMetalView.h"
@@ -137,6 +138,9 @@ namespace {
     NSWindow* _window;
     WryMetalView* _metalView;
     CAMetalLayer* _metalLayer;
+    // The shared render context (device + 2D services), owned by this host and
+    // borrowed by whatever scene is showing.
+    WryRenderContext* _ctx;
     // The current scene, driven through the WryScene protocol so this
     // platform layer doesn't depend on which scene is showing.  Today it is
     // always a WryRenderer (the world scene), constructed below.
@@ -194,11 +198,14 @@ namespace {
     _metalLayer.displaySyncEnabled = YES;
     _metalView.layer = _metalLayer;
     _metalView.wantsLayer = YES;
-    
-    _scene = [[WryRenderer alloc] initWithMetalDevice:_metalLayer.device
-                                     drawablePixelFormat:_metalLayer.pixelFormat
-                                                   model:_model
-                                                    view:_metalView];
+
+    // Build the shared render context, then the scene against it.  This host
+    // owns the context and the per-frame command buffer / drawable / present;
+    // the scene only encodes its passes (see -render below).
+    _ctx = [[WryRenderContext alloc] initWithDevice:_metalLayer.device
+                                drawablePixelFormat:_metalLayer.pixelFormat];
+
+    _scene = [[WryRenderer alloc] initWithContext:_ctx model:_model];
     
     // _audio = [[WryAudio alloc] init];
 
@@ -557,7 +564,24 @@ namespace {
     // the seam scenes will use: a splash / menu scene has no world to step,
     // so the step must not live inside the draw call.
     [_scene update];
-    [_scene render];
+
+    // The host owns the per-frame command buffer + drawable + present, so every
+    // scene shares one present path.  The scene encodes its passes into our
+    // command buffer and returns the texture to show; we acquire the drawable
+    // as late as possible (holding it only across the blit + present) and blit
+    // the scene's texture into it.
+    id<MTLCommandBuffer> command_buffer = [_ctx.commandQueue commandBuffer];
+    id<MTLTexture> presentable = [_scene encodeIntoCommandBuffer:command_buffer];
+    @autoreleasepool {
+        id<CAMetalDrawable> drawable = [_metalLayer nextDrawable];
+        if (drawable && presentable) {
+            id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+            [blit copyFromTexture:presentable toTexture:drawable.texture];
+            [blit endEncoding];
+            [command_buffer presentDrawable:drawable];
+        }
+    }
+    [command_buffer commit];
 }
 
 @end

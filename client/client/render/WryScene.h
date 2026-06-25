@@ -10,6 +10,7 @@
 
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <Metal/Metal.h>
 
 // A WryScene is one screenful of behavior the app can show: the game world,
 // a main menu, a splash screen.  The host (currently WryDelegate) drives the
@@ -25,11 +26,11 @@
 // them.  Today the sole scene is the game world (WryRenderer); splash and
 // menu scenes come later.
 //
-// The protocol deliberately names no Metal types -- the frame's command
-// buffer / drawable lifecycle still lives inside each scene's -render for
-// now.  Hoisting present into the host (so scenes only encode into a shared
-// target) is a later refactor, gated on a second scene forcing the issue and
-// on preserving the world scene's late nextDrawable acquisition.
+// The host owns the per-frame command buffer + drawable lifecycle: it creates
+// the command buffer, the scene encodes its passes into it and returns the
+// texture to show, and the host blits that into the drawable (acquired as late
+// as possible) and presents + commits.  This shares one drawable / present
+// path across every scene while preserving the world scene's late nextDrawable.
 
 @protocol WryScene <NSObject>
 
@@ -37,8 +38,10 @@
 // a static menu or splash does nothing.
 - (void)update;
 
-// Draw one frame.
-- (void)render;
+// Encode this frame's passes into the host-supplied command buffer and return
+// the texture to present (or nil to present nothing).  The host blits the
+// returned texture into the drawable and presents + commits.
+- (nullable id<MTLTexture>)encodeIntoCommandBuffer:(nonnull id<MTLCommandBuffer>)commandBuffer;
 
 // React to a drawable-size change (reallocate size-dependent targets).
 - (void)drawableResize:(CGSize)size;

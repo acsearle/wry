@@ -129,8 +129,6 @@
 
     NSCursor* _cursor;
     
-    NSView* _view;
-    
 }
 
 
@@ -318,10 +316,8 @@
     
 }
 
--(nonnull instancetype)initWithMetalDevice:(nonnull id<MTLDevice>)device
-                        drawablePixelFormat:(MTLPixelFormat)drawablePixelFormat
-                                      model:(std::shared_ptr<wry::model>)model_
-                                       view:(NSView*)view_
+-(nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
+                                 model:(std::shared_ptr<wry::model>)model_
 {
 
     using namespace ::wry;
@@ -340,13 +336,9 @@
         };
         
         _model = model_;
-        _view = view_;
-        // The shared device + 2D-services context.  It builds the device,
-        // command queue, shader library, depth-stencil states, the full-screen
-        // quad, and the sprite atlas / font / overlay pipeline; the renderer
-        // builds its world-specific resources against it below.
-        _ctx = [[WryRenderContext alloc] initWithDevice:device
-                                    drawablePixelFormat:drawablePixelFormat];
+        // The host owns the shared device + 2D-services context; we borrow it
+        // and build our world-specific resources against it below.
+        _ctx = context;
                         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
         
@@ -398,7 +390,7 @@
             
             // Render meshes to GBuffer
 
-            descriptor.colorAttachments[AAPLColorIndexColor].pixelFormat = drawablePixelFormat;
+            descriptor.colorAttachments[AAPLColorIndexColor].pixelFormat = _ctx.drawablePixelFormat;
             descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].pixelFormat = MTLPixelFormatRGBA16Float;
             descriptor.colorAttachments[AAPLColorIndexNormalRoughness].pixelFormat = MTLPixelFormatRGBA16Float;
             descriptor.colorAttachments[AAPLColorIndexDepth].pixelFormat = MTLPixelFormatR32Float;
@@ -457,7 +449,7 @@
             
             renderPipelineDescriptor.label = @"BezierRenderPipeline";
 
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].pixelFormat = drawablePixelFormat;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].pixelFormat = _ctx.drawablePixelFormat;
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].blendingEnabled = YES;
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].rgbBlendOperation = MTLBlendOperationAdd;
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].alphaBlendOperation = MTLBlendOperationAdd;
@@ -1068,19 +1060,22 @@
     assert(_world_to_render);
 }
 
-- (void)render
+// Encode this frame's passes into the host-supplied command buffer and return
+// the texture the host should present (it blits this into the late-acquired
+// drawable).  The host owns the command buffer's lifecycle -- it creates it,
+// presents, and commits -- so every scene can share one drawable / present
+// path.  Returning the texture (rather than taking a target up front) lets the
+// host acquire nextDrawable as late as possible, preserving the old behavior.
+- (id<MTLTexture>)encodeIntoCommandBuffer:(id<MTLCommandBuffer>)command_buffer
 {
 
     using namespace ::simd;
     using namespace ::wry;
 
     // -update advanced the displayed world (and serviced the GC) immediately
-    // before this -render, on the same thread and frame; we only read it here.
+    // before this -encode, on the same thread and frame; we only read it here.
     Root<World*>& new_world = _world_to_render;
     assert(new_world);
-
-
-    id<MTLCommandBuffer> command_buffer = [_ctx.commandQueue commandBuffer];
     
     // Construct camera transforms
     MeshUniforms uniforms = _model->_uniforms;
@@ -1798,36 +1793,15 @@
         
     }
     
-    @autoreleasepool {
-        
-        // TODO: autoreleasepool holds the currentDrawable as briefly as
-        // possible, does this matter though?
-        
-        // *** BLOCKING CALL ***
-        //
-        // This call will block if none of the triple? buffers are available;
-        // we should only be here because the display link expects it to be
-        // available
-        // id<CAMetalDrawable> currentDrawable = [update drawable];
-        //auto a = std::chrono::high_resolution_clock::now();
-        id<CAMetalDrawable> currentDrawable = [(CAMetalLayer*)(_view.layer) nextDrawable];
-        //auto b = std::chrono::high_resolution_clock::now();
-        //printf("Waited %lld us for nextDrawable\n", std::chrono::duration_cast<std::chrono::microseconds>(b - a).count());
-
-        // TODO: Release pin while thing?
-        
-        id<MTLBlitCommandEncoder> encoder =  [command_buffer blitCommandEncoder];
-        // [encoder copyFromTexture:_addedTexture toTexture:currentDrawable.texture];
-        [encoder copyFromTexture:_deferredLightColorAttachmentTexture toTexture:currentDrawable.texture];
-        [encoder endEncoding];
-        [command_buffer presentDrawable:currentDrawable];
-    }
-    
-    [command_buffer commit];
-    
     ++_frame_count;
-    
+
     //[_captureScope endScope];
+
+    // Hand the host the texture to show.  It blits this into the drawable
+    // (acquired as late as possible) and presents + commits the command buffer.
+    // Bloom is rendered into _addedTexture but, as before, we present the raw
+    // light texture; the _addedTexture path stays for when bloom is re-enabled.
+    return _deferredLightColorAttachmentTexture;
 
 }
 
