@@ -1039,6 +1039,11 @@
     [_cursor set];
 }
 
+// WryScene: the world scene runs until the app quits; no transitions yet.
+- (id<WryScene>)nextScene {
+    return nil;
+}
+
 -(void)update
 {
     using namespace ::wry;

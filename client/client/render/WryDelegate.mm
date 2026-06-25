@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "WryRenderer.h"
+#include "WryScene.h"
 #include "WryMetalView.h"
 #include "WryDelegate.h"
 #include "WryAudio.h"
@@ -136,7 +137,10 @@ namespace {
     NSWindow* _window;
     WryMetalView* _metalView;
     CAMetalLayer* _metalLayer;
-    WryRenderer* _renderer;
+    // The current scene, driven through the WryScene protocol so this
+    // platform layer doesn't depend on which scene is showing.  Today it is
+    // always a WryRenderer (the world scene), constructed below.
+    id<WryScene> _scene;
     NSThread* _renderThread;
     WryAudio* _audio;
     NSCursor* _cursor;
@@ -191,7 +195,7 @@ namespace {
     _metalView.layer = _metalLayer;
     _metalView.wantsLayer = YES;
     
-    _renderer = [[WryRenderer alloc] initWithMetalDevice:_metalLayer.device
+    _scene = [[WryRenderer alloc] initWithMetalDevice:_metalLayer.device
                                      drawablePixelFormat:_metalLayer.pixelFormat
                                                    model:_model
                                                     view:_metalView];
@@ -308,7 +312,7 @@ namespace {
     newSize.width *= scaleFactor;
     newSize.height *= scaleFactor;
     _metalLayer.drawableSize = newSize;
-    [_renderer drawableResize:newSize];
+    [_scene drawableResize:newSize];
 }
 
 #pragma mark NSResponder
@@ -408,7 +412,10 @@ namespace {
     // Platform-side cursor reset stays here; pure AppKit concern.  The
     // logical hover-enter still flows through the queue so future widgets
     // can react.
-    [_renderer resetCursor];
+    // resetCursor is an optional WryScene method (only the world scene's
+    // palette cursor needs it); guard for scenes that don't implement it.
+    if ([_scene respondsToSelector:@selector(resetCursor)])
+        [_scene resetCursor];
 
     using namespace wry::gui;
     Event ev{};
@@ -549,8 +556,8 @@ namespace {
     // Advance the simulation, then draw it.  Splitting update from render is
     // the seam scenes will use: a splash / menu scene has no world to step,
     // so the step must not live inside the draw call.
-    [_renderer update];
-    [_renderer render];
+    [_scene update];
+    [_scene render];
 }
 
 @end
