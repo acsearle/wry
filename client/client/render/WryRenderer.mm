@@ -17,6 +17,7 @@
 #include <sqlite3.h>
 
 #include "WryMesh.h"
+#include "WryRenderContext.h"
 #include "WryRenderer.h"
 
 #include "SpriteAtlas.hpp"
@@ -44,18 +45,19 @@
     
     
     
-    MTLPixelFormat _drawablePixelFormat;
+    // Shared device + 2D-services context: device, command queue, shader
+    // library, depth-stencil states, full-screen quad, sprite atlas, font,
+    // overlay pipeline, and the pipeline / texture factory helpers.  See
+    // WryRenderContext.h.  The renderer builds its world-specific resources
+    // against this and reads its services every frame.
+    WryRenderContext* _ctx;
 
     // view-only state
         
     size_t _frame_count;
             
-    id<MTLBuffer> _screenTriangleStripVertexBuffer;
-    id<MTLCommandQueue> _commandQueue;
-    id<MTLDepthStencilState> _disabledDepthStencilState;
-    id<MTLDepthStencilState> _enabledDepthStencilState;
-    id<MTLDevice> _device;
-    id<MTLLibrary> _library;
+    // (device / commandQueue / library / depth-stencil states / screen quad
+    //  now live on _ctx)
     
     // shadow map pass
     
@@ -82,12 +84,7 @@
     id<MTLTexture> _deferredLightImageBasedFresnelTexture;
         
     // conventional compositing for overlay
-    
-    id<MTLRenderPipelineState> _overlayRenderPipelineState;
-        
-    wry::SpriteAtlas* _atlas;
-    wry::Font* _font;
-    wry::Font2 _font2;
+    //   (_ctx.overlayRenderPipelineState / _ctx.atlas / _ctx.font / _ctx.font2 now live on _ctx)
 
     // Bezier font
     
@@ -135,92 +132,17 @@
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
-// TODO: All of these creation functions can and should be asynchronous
--(id<MTLFunction>) newFunctionWithName:(NSString*)name
-{
-    id <MTLFunction> function = [_library newFunctionWithName:name];
-    if (!function) {
-        NSLog(@"ERROR: newFunctionWithName:@\"%@\"", name);
-        abort();
-    }
-    function.label = name;
-    return function;
-}
-
--(id<MTLRenderPipelineState>) newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor*)descriptor
-{
-    id<MTLRenderPipelineState> state = nil;
-    NSError* error = nil;
-    state = [_device newRenderPipelineStateWithDescriptor:descriptor
-                                                    error:&error];
-    if (!state) {
-        NSLog(@"ERROR: Failed aquiring pipeline state: %@", error);
-        abort();
-    }
-    return state;
-}
-
--(id<MTLRenderPipelineState>) newRenderPipelineStateWithMeshDescriptor:(MTLMeshRenderPipelineDescriptor*)descriptor
-{
-    id<MTLRenderPipelineState> state = nil;
-    NSError* error = nil;
-//    state = [_device newRenderPipelineStateWithMeshDescriptor:descriptor
-//                                                    error:&error];
-    state =  [_device newRenderPipelineStateWithMeshDescriptor:descriptor
-                                                       options:MTLPipelineOptionNone
-                                                    reflection:nil
-                                                         error:&error];
-                                        
-    if (!state) {
-        NSLog(@"ERROR: Failed aquiring pipeline state: %@", error);
-        abort();
-    }
-    return state;
-}
--(id<MTLTexture>)newTextureFromResource:(NSString*)name
-                                 ofType:(NSString*)ext
-{
-    return [self newTextureFromResource:name ofType:ext withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
-}
-
-
--(id<MTLTexture>)newTextureFromResource:(NSString*)name
-                                 ofType:(NSString*)ext
-                        withPixelFormat:(MTLPixelFormat)pixelFormat
-{
-    wry::matrix<wry::RGBA8Unorm_sRGB> image = wry::from_png(wry::path_for_resource([name UTF8String], [ext UTF8String]).c_str());
-    wry::multiply_alpha_inplace(image);
-    
-    MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
-    descriptor.textureType = MTLTextureType2D;
-    descriptor.pixelFormat = pixelFormat;
-    descriptor.width = image.major();
-    descriptor.height = image.minor();
-    descriptor.mipmapLevelCount = std::countr_zero(descriptor.width | descriptor.height);
-    descriptor.storageMode = MTLStorageModeShared;
-    descriptor.usage = MTLTextureUsageShaderRead;
-    
-    id<MTLTexture> texture = [_device newTextureWithDescriptor:descriptor];
-    [texture replaceRegion:MTLRegionMake2D(0, 0, image.major(), image.minor())
-                    mipmapLevel:0
-                      withBytes:image.data()
-                    bytesPerRow:image.stride_bytes()];
-    texture.label = name;
-    
-    id<MTLCommandBuffer> buffer = [_commandQueue commandBuffer];
-    
-    id<MTLBlitCommandEncoder> encoder = [buffer blitCommandEncoder];
-    [encoder generateMipmapsForTexture:texture];
-    [encoder optimizeContentsForGPUAccess:texture];
-    [encoder endEncoding];    
-    return texture;
-}
+// The Metal device, command queue, shader library, depth-stencil states,
+// full-screen quad, sprite atlas / font, overlay pipeline, and the pipeline
+// and texture factory helpers (newFunctionWithName:, newRenderPipelineState...,
+// newTextureFromResource:) now live on WryRenderContext.  The renderer reaches
+// all of them through _ctx.
 
 -(id<MTLTexture>)prefilteredEnvironmentMapFromResource:(NSString*)name ofType:ext {
     
     using namespace simd;
     
-    id<MTLTexture> input = [self newTextureFromResource:name ofType:ext];
+    id<MTLTexture> input = [_ctx newTextureFromResource:name ofType:ext];
     
     id<MTLTexture> output = nil;
     {
@@ -232,7 +154,7 @@
         descriptor.mipmapLevelCount = 5; //__builtin_ctzl(descriptor.width) + 1;
         descriptor.usage = MTLTextureUsageShaderRead;
         descriptor.resourceOptions = MTLResourceStorageModePrivate;
-        output = [_device newTextureWithDescriptor:descriptor];
+        output = [_ctx.device newTextureWithDescriptor:descriptor];
         output.label = name;
     }
     
@@ -240,8 +162,8 @@
     {
         MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
         descriptor.label = @"CubeFilter3";
-        descriptor.vertexFunction = [self newFunctionWithName:@"CubeFilterVertex"];
-        descriptor.fragmentFunction = [self newFunctionWithName:@"CubeFilterAccumulate3"];
+        descriptor.vertexFunction = [_ctx newFunctionWithName:@"CubeFilterVertex"];
+        descriptor.fragmentFunction = [_ctx newFunctionWithName:@"CubeFilterAccumulate3"];
         descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA32Float;
         descriptor.colorAttachments[0].blendingEnabled = YES;
         descriptor.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
@@ -251,7 +173,7 @@
         descriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
         descriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
         descriptor.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
-        pipeline = [self newRenderPipelineStateWithDescriptor:descriptor];
+        pipeline = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
     }
     
     CubeFilterUniforms uniforms;
@@ -278,7 +200,7 @@
         = simd_mul(simd_matrix_rotate(M_PI, simd_make_float3(0.0f, 1.0f, 0.0f)), Z);
     }
     
-    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+    id<MTLCommandBuffer> commandBuffer = [_ctx.commandQueue commandBuffer];
     
     for (NSUInteger level = 0; level != output.mipmapLevelCount; ++level) {
         
@@ -291,7 +213,7 @@
             descriptor.height = output.height >> level;
             descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
             descriptor.resourceOptions = MTLResourceStorageModePrivate;
-            target = [_device newTextureWithDescriptor:descriptor];
+            target = [_ctx.device newTextureWithDescriptor:descriptor];
             target.label = @"Cube filter accumulate";
         }
         
@@ -310,7 +232,7 @@
             id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPass];
 
             [encoder setRenderPipelineState:pipeline];
-            [encoder setVertexBuffer:_screenTriangleStripVertexBuffer
+            [encoder setVertexBuffer:_ctx.screenTriangleStripVertexBuffer
                               offset:0
                              atIndex:AAPLBufferIndexVertices];
             [encoder setVertexBytes:&uniforms
@@ -362,27 +284,27 @@
     texture_descriptor.height = 256;
     texture_descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     texture_descriptor.resourceOptions = MTLStorageModeShared;
-    _deferredLightImageBasedFresnelTexture = [_device newTextureWithDescriptor:texture_descriptor];
+    _deferredLightImageBasedFresnelTexture = [_ctx.device newTextureWithDescriptor:texture_descriptor];
     _deferredLightImageBasedFresnelTexture.label = @"Fresnel integral look-up-table";
     
     id<MTLRenderPipelineState> render_pipeline_state = nil;
     MTLRenderPipelineDescriptor* render_pipeline_descriptor = [MTLRenderPipelineDescriptor new];
-    render_pipeline_descriptor.vertexFunction = [self newFunctionWithName:@"split_sum_vertex_function"];
-    render_pipeline_descriptor.fragmentFunction = [self newFunctionWithName:@"split_sum_fragment_function"];
+    render_pipeline_descriptor.vertexFunction = [_ctx newFunctionWithName:@"split_sum_vertex_function"];
+    render_pipeline_descriptor.fragmentFunction = [_ctx newFunctionWithName:@"split_sum_fragment_function"];
     render_pipeline_descriptor.colorAttachments[0].pixelFormat = _deferredLightImageBasedFresnelTexture.pixelFormat;
     render_pipeline_descriptor.label = @"SplitSum";
-    render_pipeline_state = [self newRenderPipelineStateWithDescriptor:render_pipeline_descriptor];
+    render_pipeline_state = [_ctx newRenderPipelineStateWithDescriptor:render_pipeline_descriptor];
         
     MTLRenderPassDescriptor* render_pass_descriptor = [MTLRenderPassDescriptor new];
     render_pass_descriptor.colorAttachments[0].loadAction = MTLLoadActionDontCare;
     render_pass_descriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
     render_pass_descriptor.colorAttachments[0].texture = _deferredLightImageBasedFresnelTexture;
     
-    id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
+    id<MTLCommandBuffer> command_buffer = [_ctx.commandQueue commandBuffer];
     
     id<MTLRenderCommandEncoder> command_encoder = [command_buffer renderCommandEncoderWithDescriptor:render_pass_descriptor];
     [command_encoder setRenderPipelineState:render_pipeline_state];
-    [command_encoder setVertexBuffer:_screenTriangleStripVertexBuffer offset:0 atIndex:AAPLBufferIndexVertices];
+    [command_encoder setVertexBuffer:_ctx.screenTriangleStripVertexBuffer offset:0 atIndex:AAPLBufferIndexVertices];
     [command_encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
     [command_encoder endEncoding];
     
@@ -406,45 +328,19 @@
         auto newBufferWithArray = [&](auto& a) {
             void* bytes = a.data();
             size_t length = a.size() * sizeof(typename std::decay_t<decltype(a)>::value_type);
-            id<MTLBuffer> buffer = [_device newBufferWithBytes:bytes length:length options:MTLStorageModeShared];
+            id<MTLBuffer> buffer = [_ctx.device newBufferWithBytes:bytes length:length options:MTLStorageModeShared];
             assert(buffer);
             return buffer;
         };
         
         _model = model_;
         _view = view_;
-        _drawablePixelFormat = drawablePixelFormat;
-                
-        _device = device;
-        _library = [_device newDefaultLibrary];
-
-        _commandQueue = [_device newCommandQueue];
-
-        // Make full-screen quad
-        {
-            float4 buffer[4] = {
-                { -1.0f, -1.0f, 0.0f, 1.0f, },
-                { -1.0f, +1.0f, 0.0f, 1.0f, },
-                { +1.0f, -1.0f, 0.0f, 1.0f, },
-                { +1.0f, +1.0f, 0.0f, 1.0f, },
-            };
-            _screenTriangleStripVertexBuffer = [_device newBufferWithBytes:buffer
-                                                                    length:sizeof(buffer)
-                                                                   options:MTLResourceStorageModeShared];
-        }
-
-        // Prepare depth-stencil states
-        {
-            MTLDepthStencilDescriptor* descriptor = [MTLDepthStencilDescriptor new];
-            descriptor.depthCompareFunction = MTLCompareFunctionLess;
-            descriptor.depthWriteEnabled = YES;
-            descriptor.label = @"Enabled depth test";
-            _enabledDepthStencilState = [_device newDepthStencilStateWithDescriptor:descriptor];
-            descriptor.depthCompareFunction = MTLCompareFunctionAlways;
-            descriptor.depthWriteEnabled = NO;
-            descriptor.label = @"Disabled depth test";
-            _disabledDepthStencilState = [_device newDepthStencilStateWithDescriptor:descriptor];
-        }
+        // The shared device + 2D-services context.  It builds the device,
+        // command queue, shader library, depth-stencil states, the full-screen
+        // quad, and the sprite atlas / font / overlay pipeline; the renderer
+        // builds its world-specific resources against it below.
+        _ctx = [[WryRenderContext alloc] initWithDevice:device
+                                    drawablePixelFormat:drawablePixelFormat];
                         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
         
@@ -462,7 +358,7 @@
             descriptor.pixelFormat = MTLPixelFormatDepth32Float;
             descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
             descriptor.resourceOptions = MTLResourceStorageModePrivate;
-            _shadowMapTarget = [_device newTextureWithDescriptor:descriptor];
+            _shadowMapTarget = [_ctx.device newTextureWithDescriptor:descriptor];
             _shadowMapTarget.label = @"Shadow map texture";
         }
         {
@@ -475,12 +371,12 @@
             
             MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
             descriptor.label = @"Shadow map pipeline";
-            descriptor.vertexFunction = [self newFunctionWithName:@"deferred::shadow_vertex_function"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred::shadow_fragment_function"];
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::shadow_vertex_function"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::shadow_fragment_function"];
             descriptor.vertexBuffers[AAPLBufferIndexVertices].mutability = MTLMutabilityImmutable;
             descriptor.vertexBuffers[AAPLBufferIndexUniforms].mutability = MTLMutabilityImmutable;
             descriptor.depthAttachmentPixelFormat = _shadowMapTarget.pixelFormat;
-            _shadowMapRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
+            _shadowMapRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
         }
         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
@@ -502,20 +398,20 @@
             descriptor.colorAttachments[AAPLColorIndexDepth].pixelFormat = MTLPixelFormatR32Float;
             descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
-            descriptor.vertexFunction = [self newFunctionWithName:@"deferred::vertex_function"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred::fragment_function"];
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::vertex_function"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::fragment_function"];
             descriptor.label = @"Deferred G-buffer";
-            _deferredGBufferRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
+            _deferredGBufferRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
             
-            descriptor.vertexFunction = [self newFunctionWithName:@"whiskerVertexShader"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"whiskerFragmentShader"];
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"whiskerVertexShader"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"whiskerFragmentShader"];
             descriptor.label = @"Deferred lines (DEBUG)";
-            _deferredLinesRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
+            _deferredLinesRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
 
-            descriptor.vertexFunction = [self newFunctionWithName:@"pointsVertexShader"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"pointsFragmentShader"];
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"pointsVertexShader"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"pointsFragmentShader"];
             descriptor.label = @"Deferred points (DEBUG)";
-            _deferredPointsRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
+            _deferredPointsRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
 
             // Full-screen deferred lighting passes
             descriptor.colorAttachments[AAPLColorIndexColor].blendingEnabled = YES;
@@ -526,63 +422,28 @@
             descriptor.colorAttachments[AAPLColorIndexColor].destinationRGBBlendFactor = MTLBlendFactorOne;
             descriptor.colorAttachments[AAPLColorIndexColor].destinationAlphaBlendFactor = MTLBlendFactorOne;
         
-            descriptor.vertexFunction = [self newFunctionWithName:@"deferred::lighting_vertex_function"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred::image_based_lighting_fragment_function"];
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::lighting_vertex_function"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::image_based_lighting_fragment_function"];
             descriptor.label = @"Deferred image-based light";
-            _deferredLightImageBasedRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
+            _deferredLightImageBasedRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
 
-            descriptor.vertexFunction = [self newFunctionWithName:@"deferred::lighting_vertex_function"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred::directional_lighting_fragment_function"];
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::lighting_vertex_function"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::directional_lighting_fragment_function"];
             descriptor.label = @"Deferred shadowcasting directional light";
-            _deferredLightDirectionalShadowcastingRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
+            _deferredLightDirectionalShadowcastingRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
 
-            descriptor.vertexFunction = [self newFunctionWithName:@"deferred::lighting_vertex_function"];
-            descriptor.fragmentFunction = [self newFunctionWithName:@"deferred::point_lighting_fragment_function"];
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::lighting_vertex_function"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::point_lighting_fragment_function"];
             descriptor.label = @"Deferred point light";
-            _deferredLightPointRenderPipelineState = [self newRenderPipelineStateWithDescriptor:descriptor];
+            _deferredLightPointRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
 
         }
         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
 
                 
-        {
-            // Create a pipeline state descriptor to create a compiled pipeline state object
-            MTLRenderPipelineDescriptor *renderPipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
-            
-            renderPipelineDescriptor.label                           = @"MyPipeline";
-            
-            renderPipelineDescriptor.vertexFunction                  = [self newFunctionWithName:@"vertexShader4"];
-            renderPipelineDescriptor.vertexBuffers[0].mutability = MTLMutabilityImmutable;
-            
-            renderPipelineDescriptor.fragmentFunction                =  [self newFunctionWithName:@"fragmentShader"];
-            renderPipelineDescriptor.fragmentBuffers[0].mutability = MTLMutabilityImmutable;
-            
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].pixelFormat = drawablePixelFormat;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].blendingEnabled = YES;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].rgbBlendOperation = MTLBlendOperationAdd;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].alphaBlendOperation = MTLBlendOperationAdd;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].sourceRGBBlendFactor = MTLBlendFactorOne;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].sourceAlphaBlendFactor = MTLBlendFactorOne;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].pixelFormat = MTLPixelFormatRGBA16Float;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexNormalRoughness].pixelFormat = MTLPixelFormatRGBA16Float;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexDepth].pixelFormat = MTLPixelFormatR32Float;
-            renderPipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
-                                    
-            _overlayRenderPipelineState = [self newRenderPipelineStateWithDescriptor:renderPipelineDescriptor];
-            
-            NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
-            
-            _atlas = new wry::SpriteAtlas(2048, (__bridge void*)device);
-            _font = new wry::Font(build_font(*_atlas));
-            
-            
-            _font2 = build_font2();
-            
-            
-        }
+        // The overlay compositing pipeline and the sprite atlas / font now
+        // live on _ctx (built in WryRenderContext's init).
         
         {
             // Create a pipeline state descriptor to create a compiled pipeline state object
@@ -602,7 +463,7 @@
             renderPipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
             renderPipelineDescriptor.fragmentBuffers[0].mutability = MTLMutabilityImmutable;
-            renderPipelineDescriptor.fragmentFunction  =  [self newFunctionWithName:@"otf::bezierFragmentFunction"];
+            renderPipelineDescriptor.fragmentFunction  =  [_ctx newFunctionWithName:@"otf::bezierFragmentFunction"];
 
 
             // ?
@@ -611,7 +472,7 @@
             // renderPipelineDescriptor.maxTotalThreadsPerObjectThreadgroup
             
             renderPipelineDescriptor.meshBuffers[0].mutability = MTLMutabilityImmutable;
-            renderPipelineDescriptor.meshFunction =  [self newFunctionWithName:@"otf::bezierMeshFunction"];
+            renderPipelineDescriptor.meshFunction =  [_ctx newFunctionWithName:@"otf::bezierMeshFunction"];
             // renderPipelineDescriptor.meshThreadgroupSizeIsMultipleOfThreadExecutionWidth = YES;
             
             // TODO: Profiling is not available on mesh shaders.  We should also
@@ -619,7 +480,7 @@
             // conventional vector shader and more CPU processing.
 
             // renderPipelineDescriptor.objectBuffers[0].mutability = MTLMutabilityImmutable;
-            // renderPipelineDescriptor.objectFunction =  [self newFunctionWithName:@"stroked::bezierObjectFunction"];
+            // renderPipelineDescriptor.objectFunction =  [_ctx newFunctionWithName:@"stroked::bezierObjectFunction"];
             // renderPipelineDescriptor.objectThreadgroupSizeIsMultipleOfThreadExecutionWidth = YES;
             
             // renderPipelineDescriptor.payloadMemoryLength = sizeof(BezierPayload);
@@ -628,7 +489,7 @@
             renderPipelineDescriptor.shaderValidation = MTLShaderValidationEnabled;
             
 
-            _bezierRenderPipelineState = [self newRenderPipelineStateWithMeshDescriptor:renderPipelineDescriptor];
+            _bezierRenderPipelineState = [_ctx newRenderPipelineStateWithMeshDescriptor:renderPipelineDescriptor];
 
             NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
             
@@ -637,29 +498,29 @@
 
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
         
-        _gaussianBlur = [[MPSImageGaussianBlur alloc] initWithDevice:_device sigma:32.0];
-        _imageAdd = [[MPSImageAdd alloc] initWithDevice:_device];
+        _gaussianBlur = [[MPSImageGaussianBlur alloc] initWithDevice:_ctx.device sigma:32.0];
+        _imageAdd = [[MPSImageAdd alloc] initWithDevice:_ctx.device];
         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
 
         {
-            _symbols = [self newTextureFromResource:@"assets" ofType:@"png"];
-            _hackmesh = [[WryMesh alloc] initWithDevice:_device];
-            _black = [self newTextureFromResource:@"black" ofType:@"png"];
-            _white = [self newTextureFromResource:@"white" ofType:@"png"];
-            _blue = [self newTextureFromResource:@"blue"
+            _symbols = [_ctx newTextureFromResource:@"assets" ofType:@"png"];
+            _hackmesh = [[WryMesh alloc] initWithDevice:_ctx.device];
+            _black = [_ctx newTextureFromResource:@"black" ofType:@"png"];
+            _white = [_ctx newTextureFromResource:@"white" ofType:@"png"];
+            _blue = [_ctx newTextureFromResource:@"blue"
                                           ofType:@"png"
                                  withPixelFormat:MTLPixelFormatRGBA8Unorm];
-            _darkgray = [self newTextureFromResource:@"gray_sRGB" ofType:@"png"];
-            //_darkgray = [self newTextureFromResource:@"darkgray" ofType:@"png"];
-            _orange = [self newTextureFromResource:@"orange" ofType:@"png"];
+            _darkgray = [_ctx newTextureFromResource:@"gray_sRGB" ofType:@"png"];
+            //_darkgray = [_ctx newTextureFromResource:@"darkgray" ofType:@"png"];
+            _orange = [_ctx newTextureFromResource:@"orange" ofType:@"png"];
 
             
             MeshInstanced i;
             i.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
             i.inverse_transpose_model_transform = simd_inverse(simd_transpose(i.model_transform));
             i.albedo = make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
-            _instanced_things = [_device newBufferWithBytes:&i length:sizeof(i) options:MTLStorageModeShared];
+            _instanced_things = [_ctx.device newBufferWithBytes:&i length:sizeof(i) options:MTLStorageModeShared];
             
         }
         
@@ -668,15 +529,15 @@
                 auto m = wry::from_obj(v);
                 m.MeshVertexify();
                 
-                p = [[WryMesh alloc] initWithDevice:_device];
+                p = [[WryMesh alloc] initWithDevice:_ctx.device];
                 p.vertexBuffer = newBufferWithArray(m.hack_MeshVertex);
                 p.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
                 
                 p.emissiveTexture = _black;
-                p.albedoTexture = _white; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Color" ofType:@"png"];
-                p.metallicTexture = _white; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Metalness" ofType:@"png"];
-                p.normalTexture = _blue; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_NormalGL" ofType:@"png" withPixelFormat:MTLPixelFormatRGBA8Unorm];
-                p.roughnessTexture = _darkgray; // [self newTextureFromResource:@"PaintedMetal009_1K-PNG_Roughness" ofType:@"png"];;
+                p.albedoTexture = _white; // [_ctx newTextureFromResource:@"PaintedMetal009_1K-PNG_Color" ofType:@"png"];
+                p.metallicTexture = _white; // [_ctx newTextureFromResource:@"PaintedMetal009_1K-PNG_Metalness" ofType:@"png"];
+                p.normalTexture = _blue; // [_ctx newTextureFromResource:@"PaintedMetal009_1K-PNG_NormalGL" ofType:@"png" withPixelFormat:MTLPixelFormatRGBA8Unorm];
+                p.roughnessTexture = _darkgray; // [_ctx newTextureFromResource:@"PaintedMetal009_1K-PNG_Roughness" ofType:@"png"];;
                 p.instanceCount = 0;
             };
             
@@ -823,7 +684,7 @@
                 
                 matrix<RGBA8Unorm_sRGB> nn(n, n);
                 nn = mm;
-                _atlas->place(nn);
+                _ctx.atlas->place(nn);
                 
             }
             
@@ -844,16 +705,16 @@
     [encoder setRenderPipelineState:_bezierRenderPipelineState];
         
     // These can be constants
-    std::vector<otf::CubicBezier> curves = _font2.cubic_bezier;
+    std::vector<otf::CubicBezier> curves = _ctx.font2.cubic_bezier;
     //curves.push_back({{0.0f, 0.0f},{0.5f, 0.0f},{0.5f, 0.5f},});
     //curves.push_back({{0.6f, 0.5f},{0.5f, 0.0f},{0.0f, -0.1f},});
-    id<MTLBuffer> buf_curves = [_device newBufferWithBytes:curves.data()
+    id<MTLBuffer> buf_curves = [_ctx.device newBufferWithBytes:curves.data()
                                              length:curves.size()*sizeof(otf::CubicBezier)
                                             options:MTLStorageModeShared];
     
-    std::vector<otf::GlyphData> gi = _font2.glyph_data;
+    std::vector<otf::GlyphData> gi = _ctx.font2.glyph_data;
     // gi.push_back({{-0.2, -0.2}, {0.7, 0.6}, 0, 2});
-    id<MTLBuffer> buf_gi = [_device newBufferWithBytes:gi.data()
+    id<MTLBuffer> buf_gi = [_ctx.device newBufferWithBytes:gi.data()
                                              length:gi.size()*sizeof(otf::GlyphData)
                                             options:MTLStorageModeShared];
 
@@ -866,14 +727,14 @@
     simd_float2 pos = {-4.0, -1.0};
     // pos += _model->_looking_at / 1024.0f * float2{1.0f, -1.0f};
     for (auto a = str; *a; ++a) {
-        // auto q = _font->charmap.find(*a);
-        auto q = _font2.charmap.find(*a);
+        // auto q = _ctx.font->charmap.find(*a);
+        auto q = _ctx.font2.charmap.find(*a);
         characters.push_back({pos, q->second.glyph_index});
         //pos.x += q->second.advance * 0.01;
         pos.x += q->second.advance;
     }
     
-    id<MTLBuffer> buf_ch = [_device newBufferWithBytes:characters.data()
+    id<MTLBuffer> buf_ch = [_ctx.device newBufferWithBytes:characters.data()
                                                length:characters.size()*sizeof(otf::PlacedGlyph)
                                               options:MTLStorageModeShared];
     
@@ -907,7 +768,7 @@
     
     /*
 
-    id<MTLBuffer> vb = [_device newBufferWithLength:v.size_in_bytes() options:MTLStorageModeShared];
+    id<MTLBuffer> vb = [_ctx.device newBufferWithLength:v.size_in_bytes() options:MTLStorageModeShared];
     memcpy(vb.contents, v.data(), v.size_in_bytes());
     
     
@@ -993,7 +854,7 @@
         _model->_palette_overlay.clear_cursor_refresh();
     }
 
-    [encoder setRenderPipelineState:_overlayRenderPipelineState];
+    [encoder setRenderPipelineState:_ctx.overlayRenderPipelineState];
 
     // ----- Palette paint pass (projective transform; reads PaletteOverlay
     // state for hover/selected highlights).
@@ -1085,7 +946,7 @@
             }
         }
 
-        id<MTLBuffer> vb = [_device newBufferWithLength:v.size_in_bytes()
+        id<MTLBuffer> vb = [_ctx.device newBufferWithLength:v.size_in_bytes()
                                                 options:MTLStorageModeShared];
         memcpy(vb.contents, v.data(), v.size_in_bytes());
 
@@ -1151,11 +1012,11 @@
     // dynamically-pushed overlays (main menu) above that.
     {
         wry::gui::Painter painter;
-        painter.atlas = _atlas;
-        painter.font = _font;
+        painter.atlas = _ctx.atlas;
+        painter.font = _ctx.font;
         painter.viewport_size_px = _model->_viewport_size;
         painter.frame_count = (uint64_t)_frame_count;
-        painter.white_sprite = _atlas->_white;
+        painter.white_sprite = _ctx.atlas->_white;
         // Default clip: the full viewport.  Widgets push tighter clips
         // around their own contents via Painter::push_clip / pop_clip.
         painter.clip = wry::rect<float>{
@@ -1165,7 +1026,7 @@
         _model->_stack.paint(painter);
     }
 
-    _atlas->commit((__bridge void*)encoder);
+    _ctx.atlas->commit((__bridge void*)encoder);
 }
 
 -(void)resetCursor {
@@ -1197,7 +1058,7 @@
     assert(new_world);
 
 
-    id<MTLCommandBuffer> command_buffer = [_commandQueue commandBuffer];
+    id<MTLCommandBuffer> command_buffer = [_ctx.commandQueue commandBuffer];
     
     // Construct camera transforms
     MeshUniforms uniforms = _model->_uniforms;
@@ -1584,8 +1445,8 @@
 
         // Upload exactly what we accumulated.
         index_count = ibuf.size();
-        vertices = [_device newBufferWithLength:vbuf.size() * sizeof(MeshVertex) options:MTLStorageModeShared];
-        indices = [_device newBufferWithLength:ibuf.size() * sizeof(uint) options:MTLStorageModeShared];
+        vertices = [_ctx.device newBufferWithLength:vbuf.size() * sizeof(MeshVertex) options:MTLStorageModeShared];
+        indices = [_ctx.device newBufferWithLength:ibuf.size() * sizeof(uint) options:MTLStorageModeShared];
         memcpy(vertices.contents, vbuf.data(), vbuf.size() * sizeof(MeshVertex));
         memcpy(indices.contents, ibuf.data(), ibuf.size() * sizeof(uint));
 
@@ -1612,7 +1473,7 @@
         id<MTLRenderCommandEncoder> render_command_encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
                 
         [render_command_encoder setRenderPipelineState:_shadowMapRenderPipelineState];
-        [render_command_encoder setDepthStencilState:_enabledDepthStencilState];
+        [render_command_encoder setDepthStencilState:_ctx.enabledDepthStencilState];
 
         // Tweak the depth somewhat to prevent shadow acne, seems to work
         // adequately
@@ -1727,7 +1588,7 @@
             {
                 [encoder setRenderPipelineState:_deferredGBufferRenderPipelineState];
                 
-                [encoder setDepthStencilState:_enabledDepthStencilState];
+                [encoder setDepthStencilState:_ctx.enabledDepthStencilState];
                 [encoder setCullMode:MTLCullModeBack];
 
                 bool show_jacobian, show_points, show_wireframe;
@@ -1812,10 +1673,10 @@
                 // On non-Apple Silicon/tiled, do we have to write and rebind the
                 // textures, or something else?
                                 
-                [encoder setVertexBuffer:_screenTriangleStripVertexBuffer
+                [encoder setVertexBuffer:_ctx.screenTriangleStripVertexBuffer
                                   offset:0
                                  atIndex:AAPLBufferIndexVertices];
-                [encoder setDepthStencilState:_disabledDepthStencilState];
+                [encoder setDepthStencilState:_ctx.disabledDepthStencilState];
 
                 // Image-based lights:
 
@@ -1974,35 +1835,35 @@
 
     descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
     descriptor.storageMode = MTLStorageModePrivate;
-    _deferredLightColorAttachmentTexture = [_device newTextureWithDescriptor:descriptor];
+    _deferredLightColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _deferredLightColorAttachmentTexture.label = @"Light G-buffer";
 
     descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
     descriptor.storageMode = MTLStorageModeMemoryless; // <--
-    _deferredAlbedoMetallicColorAttachmentTexture = [_device newTextureWithDescriptor:descriptor];
+    _deferredAlbedoMetallicColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _deferredAlbedoMetallicColorAttachmentTexture.label = @"Albedo-metallic G-buffer";
     
     descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
-    _deferredNormalRoughnessColorAttachmentTexture = [_device newTextureWithDescriptor:descriptor];
+    _deferredNormalRoughnessColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _deferredNormalRoughnessColorAttachmentTexture.label = @"Normal-roughness G-buffer";
     
     descriptor.pixelFormat = MTLPixelFormatR32Float;
-    _deferredDepthColorAttachmentTexture = [_device newTextureWithDescriptor:descriptor];
+    _deferredDepthColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _deferredDepthColorAttachmentTexture.label = @"Depth G-buffer";
     
     // depthAttachment
     descriptor.usage = MTLTextureUsageRenderTarget;
     descriptor.pixelFormat = MTLPixelFormatDepth32Float;
-    _deferredDepthAttachmentTexture = [_device newTextureWithDescriptor:descriptor];
+    _deferredDepthAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _deferredDepthAttachmentTexture.label = @"Depth buffer";
 
     descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
     descriptor.storageMode = MTLStorageModePrivate;
     descriptor.usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
-    _blurredTexture = [_device newTextureWithDescriptor:descriptor];
+    _blurredTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _blurredTexture.label = @"Blur target";
     
-    _addedTexture = [_device newTextureWithDescriptor:descriptor];
+    _addedTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _addedTexture.label = @"Addition target";
     
 }
