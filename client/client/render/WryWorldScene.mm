@@ -972,37 +972,8 @@
                     vertexCount:v.size()];
     }
 
-    // ----- World actions.  PaletteOverlay claims palette-area clicks
-    // before pump_legacy ever sets _outstanding_click, so anything here is
-    // for the world tile under the cursor.  Same logic for hex-key writes.
-    // These move into a WorldOverlay in a later phase.
-    if (_model->_outstanding_click) {
-        int i = round(_model->_mouse4.x);
-        int j = round(_model->_mouse4.y);
-        Coordinate xy{i, j};
-        Player::Action a;
-        a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
-        a.coordinate = xy;
-        a.value = _model->_holding_value;
-        _server->submit(std::move(a));
-        printf(" Clicked world (%d, %d)\n", i, j);
-        _model->_outstanding_click = false;
-    }
-
-    while (!_model->_outstanding_keysdown.empty()) {
-        char32_t ch = _model->_outstanding_keysdown.front_and_pop_front();
-        if (wry::isascii((int) ch) && isxdigit(ch)) {
-            int64_t k = wry::base36::from_base36_table[ch];
-            int i = round(_model->_mouse4.x);
-            int j = round(_model->_mouse4.y);
-            Coordinate xy{i, j};
-            Player::Action a;
-            a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
-            a.coordinate = xy;
-            a.value = k;
-            _server->submit(std::move(a));
-        }
-    }
+    // (World input -> commands moved out of the render path into
+    // -submitLocalCommands, driven from -update.)
 
     // ----- Screen-space overlays.  Set the screen-space transform on the
     // encoder; the sprite atlas accumulates and commits below.
@@ -1047,6 +1018,58 @@
     return nil;
 }
 
+// Build this frame's local-player commands from input and submit them to the
+// Server.  Pulled out of the render path (this used to live in -drawOverlay):
+// turning input into commands is a game-state concern, not a drawing one.  It
+// also computes the cursor's ground-plane projection (_model->_mouse4) the
+// renderer reads, so that projection no longer happens during -render either.
+- (void)submitLocalCommands
+{
+    using namespace ::simd;
+    using namespace ::wry;
+
+    // Cursor -> ground plane.  Same transform the renderer builds for the grid,
+    // recomputed here so input no longer depends on the render pass.
+    auto lookat = matrix_identity_float4x4;
+    lookat.columns[3].x += _model->_looking_at.x / 1024.0f;
+    lookat.columns[3].y -= _model->_looking_at.y / 1024.0f;
+    simd_float4x4 A = simd_mul(_model->_uniforms.viewprojection_transform, lookat);
+    simd_float4 b = make<float4>(_model->_mouse, 0.0f, 1.0f);
+    _model->_mouse4 = make<float4>(project_screen_ray(A, b), 0.0f, 1.0f);
+
+    // Click: write the held value at the tile under the cursor.  (PaletteOverlay
+    // claims palette-area clicks before pump ever sets _outstanding_click, so
+    // anything here is for the world tile.)
+    if (_model->_outstanding_click) {
+        int i = round(_model->_mouse4.x);
+        int j = round(_model->_mouse4.y);
+        Coordinate xy{i, j};
+        Player::Action a;
+        a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
+        a.coordinate = xy;
+        a.value = _model->_holding_value;
+        _server->submit(std::move(a));
+        printf(" Clicked world (%d, %d)\n", i, j);
+        _model->_outstanding_click = false;
+    }
+
+    // Hex keys: write the digit at the tile under the cursor.
+    while (!_model->_outstanding_keysdown.empty()) {
+        char32_t ch = _model->_outstanding_keysdown.front_and_pop_front();
+        if (wry::isascii((int) ch) && isxdigit(ch)) {
+            int64_t k = wry::base36::from_base36_table[ch];
+            int i = round(_model->_mouse4.x);
+            int j = round(_model->_mouse4.y);
+            Coordinate xy{i, j};
+            Player::Action a;
+            a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
+            a.coordinate = xy;
+            a.value = k;
+            _server->submit(std::move(a));
+        }
+    }
+}
+
 -(void)update:(double)dtSeconds
 {
     using namespace ::wry;
@@ -1078,6 +1101,11 @@
     sync_wait(nursery.join());
     _model->_worlds.emplace_back(_world_to_render);
     assert(_world_to_render);
+
+    // Process this frame's input into commands and submit them (this also
+    // projects the cursor).  After the step, so a submission applies next frame
+    // -- the same one-frame latency the old in-render path had.
+    [self submitLocalCommands];
 }
 
 // Encode this frame's passes into the host-supplied command buffer and return
@@ -1127,12 +1155,8 @@
         simd_float4x4 A = simd_mul(uniforms.viewprojection_transform,
                                    mesh_instanced_things.model_transform);
         
-        // Mouse
-        simd_float4 b = make<float4>(_model->_mouse, 0.0f, 1.0f);
-        _model->_mouse4 = make<float4>(project_screen_ray(A, b), 0.0f, 1.0f);
-        // b now contains the screen space coordinates of the
-        // intersection, aka b.z is now the depth
-        //assert((0.0f <= b.z) && (b.z <= 1.0f));
+        // (_model->_mouse4 -- the cursor's ground-plane projection -- is now
+        // computed in -submitLocalCommands during -update, not here.)
         
         // Screen corners
         simd_float4x2 c = project_screen_frustum(A);
