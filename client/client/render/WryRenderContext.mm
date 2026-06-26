@@ -9,7 +9,6 @@
 #include "ShaderTypes.h"
 
 #include <algorithm>
-#include <bit>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -224,7 +223,17 @@
     descriptor.pixelFormat = pixelFormat;
     descriptor.width = image.major();
     descriptor.height = image.minor();
-    descriptor.mipmapLevelCount = std::countr_zero(descriptor.width | descriptor.height);
+    // Single level: every current sampler reads the base level (mip_filter::none),
+    // so we don't generate mipmaps.  An earlier version allocated a mip chain and
+    // encoded generateMipmaps + optimizeContentsForGPUAccess but never committed
+    // the blit, so the mips were never filled.  Committing it as-is would be a
+    // trap: some textures (e.g. _symbols / "assets.png") are CPU-mutated by the
+    // caller right after loading, and optimizeContentsForGPUAccess on an
+    // async-in-flight texture would race those getBytes/replaceRegion calls.
+    // If a future sampler wants mips (e.g. trilinear for a minified backdrop),
+    // add an opt-in mipmapped path that excludes CPU-mutated textures and that
+    // commits its own blit.
+    descriptor.mipmapLevelCount = 1;
     descriptor.storageMode = MTLStorageModeShared;
     descriptor.usage = MTLTextureUsageShaderRead;
 
@@ -235,12 +244,6 @@
                bytesPerRow:image.stride_bytes()];
     texture.label = name;
 
-    id<MTLCommandBuffer> buffer = [_commandQueue commandBuffer];
-
-    id<MTLBlitCommandEncoder> encoder = [buffer blitCommandEncoder];
-    [encoder generateMipmapsForTexture:texture];
-    [encoder optimizeContentsForGPUAccess:texture];
-    [encoder endEncoding];
     return texture;
 }
 
