@@ -77,6 +77,25 @@
                                           ofType:(nonnull NSString*)ext
                                  withPixelFormat:(MTLPixelFormat)pixelFormat;
 
+// ---- Scene backdrop helpers --------------------------------------------
+
+// Load every "<prefix>*.<ext>" texture in the resource directory, sorted by
+// filename.  Scenes use this for their backdrop images (splash / main menu),
+// so dropping another matching file in just works.
+- (nonnull NSArray<id<MTLTexture>>*)loadTexturesWithPrefix:(nonnull NSString*)prefix
+                                                    ofType:(nonnull NSString*)ext;
+
+// Draw `texture` across the whole viewport into the current render pass,
+// sampling the texCoord sub-rect `window` = (u0, v0, u1, v1) and modulating
+// by `alpha` with straight (non-premultiplied) alpha blending.  This is the
+// backdrop primitive: `alpha` drives fades, `window` drives Ken-Burns
+// pan / zoom.  The caller owns the render pass (begin / clear / end).
+- (void)drawImage:(nonnull id<MTLTexture>)texture
+           window:(simd_float4)window
+            alpha:(float)alpha
+         viewport:(simd_float2)viewportPx
+      withEncoder:(nonnull id<MTLRenderCommandEncoder>)encoder;
+
 @end
 
 #endif /* WryRenderContext_h */

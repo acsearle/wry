@@ -1036,9 +1036,10 @@
     return nil;
 }
 
--(void)update
+-(void)update:(double)dtSeconds
 {
     using namespace ::wry;
+    (void) dtSeconds;   // world advances one step per frame, not by wall-clock
 
     // Service the garbage collector once per frame.
     wry::mutator_repin();

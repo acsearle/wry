@@ -1534,6 +1534,19 @@ fragmentShader(RasterizerData in [[stage_in]],
     // return float4(0.5, 0.5, 0.5, 0.5);
 }
 
+// Like fragmentShader, but linearly filtered.  Backdrop images (splash / menu)
+// are magnified on screen, where nearest filtering makes the slowly-panning
+// photo crawl / shimmer; bilinear sampling smooths it out.
+[[fragment]] basicFragmentShaderOut
+imageFragmentShader(RasterizerData in [[stage_in]],
+                    texture2d<half> colorTexture [[ texture(AAPLTextureIndexColor) ]])
+{
+    constexpr sampler textureSampler (mag_filter::linear,
+                                      min_filter::linear);
+    const half4 colorSample = colorTexture.sample(textureSampler, in.texCoord);
+    return { colorSample * half4(in.color) };
+}
+
 // Fragment function
 [[fragment]] float4
 fragmentShader_sdf(RasterizerData in [[stage_in]],

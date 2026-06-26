@@ -8,6 +8,8 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Carbon/Carbon.h>           // kVK_* hardware key codes
 
+#include <algorithm>
+#include <chrono>
 #include <cstring>
 
 #include "WryRenderContext.h"
@@ -150,6 +152,11 @@ namespace {
     NSThread* _renderThread;
     WryAudio* _audio;
     NSCursor* _cursor;
+
+    // Per-frame wall-clock delta, fed to the scene so its timing is in seconds
+    // and frame-rate independent.
+    std::chrono::steady_clock::time_point _lastFrameTime;
+    BOOL _haveLastFrameTime;
 }
 
 -(nonnull instancetype) init
@@ -221,7 +228,7 @@ namespace {
     WryMainMenuScene* menu =
         [[WryMainMenuScene alloc] initWithContext:_ctx model:_model next:makeWorld quit:quit];
     _scene = [[WrySplashScene alloc] initWithContext:_ctx
-                                      durationFrames:90
+                                     durationSeconds:2.5
                                                 next:menu];
     
     // _audio = [[WryAudio alloc] init];
@@ -582,8 +589,16 @@ namespace {
     }
     // Advance the current scene, then draw it.  Splitting update from the draw
     // is the seam scenes use: a splash / menu scene has no world to step, so
-    // the step must not live inside the draw call.
-    [_scene update];
+    // the step must not live inside the draw call.  Pass real elapsed seconds
+    // (clamped, so a stall or the first frame doesn't jump scene timers).
+    const auto now = std::chrono::steady_clock::now();
+    double dt = 0.0;
+    if (_haveLastFrameTime)
+        dt = std::clamp(std::chrono::duration<double>(now - _lastFrameTime).count(),
+                        0.0, 0.1);
+    _lastFrameTime = now;
+    _haveLastFrameTime = YES;
+    [_scene update:dt];
 
     // The host owns the per-frame command buffer + drawable + present, so every
     // scene shares one present path.  The scene encodes its passes into our

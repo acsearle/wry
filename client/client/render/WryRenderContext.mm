@@ -8,7 +8,11 @@
 // Shared Metal header first for no contamination
 #include "ShaderTypes.h"
 
+#include <algorithm>
 #include <bit>
+#include <filesystem>
+#include <string>
+#include <vector>
 
 #include <MetalKit/MetalKit.h>
 
@@ -18,6 +22,7 @@
 #include "font.hpp"
 #include "image.hpp"
 #include "platform.hpp"
+#include "vertex.hpp"
 
 @implementation WryRenderContext
 {
@@ -28,6 +33,9 @@
     wry::SpriteAtlas* _atlas;
     wry::Font* _font;
     wry::Font2 _font2;
+    // Single-attachment 2D pipeline with STRAIGHT (non-premultiplied) alpha
+    // blending, for backdrop images drawn via -drawImage:... (fade + pan).
+    id<MTLRenderPipelineState> _imageRenderPipelineState;
 }
 
 - (nonnull instancetype)initWithDevice:(nonnull id<MTLDevice>)device
@@ -121,6 +129,28 @@
                 _uiRenderPipelineState = [self newRenderPipelineStateWithDescriptor:ui];
             }
 
+            // Backdrop image pipeline: same shaders as the UI pipeline but with
+            // STRAIGHT alpha blending (src*srcAlpha + dst*(1-srcAlpha)), so a
+            // white vertex tint with alpha cleanly fades / crossfades an opaque
+            // image over whatever is already in the target.
+            {
+                MTLRenderPipelineDescriptor* img = [[MTLRenderPipelineDescriptor alloc] init];
+                img.label = @"Backdrop image pipeline";
+                img.vertexFunction = [self newFunctionWithName:@"vertexShader4"];
+                img.vertexBuffers[0].mutability = MTLMutabilityImmutable;
+                img.fragmentFunction = [self newFunctionWithName:@"imageFragmentShader"];
+                img.fragmentBuffers[0].mutability = MTLMutabilityImmutable;
+                img.colorAttachments[AAPLColorIndexColor].pixelFormat = drawablePixelFormat;
+                img.colorAttachments[AAPLColorIndexColor].blendingEnabled = YES;
+                img.colorAttachments[AAPLColorIndexColor].rgbBlendOperation = MTLBlendOperationAdd;
+                img.colorAttachments[AAPLColorIndexColor].alphaBlendOperation = MTLBlendOperationAdd;
+                img.colorAttachments[AAPLColorIndexColor].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+                img.colorAttachments[AAPLColorIndexColor].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+                img.colorAttachments[AAPLColorIndexColor].sourceAlphaBlendFactor = MTLBlendFactorOne;
+                img.colorAttachments[AAPLColorIndexColor].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+                _imageRenderPipelineState = [self newRenderPipelineStateWithDescriptor:img];
+            }
+
             _atlas = new wry::SpriteAtlas(2048, (__bridge void*)device);
             _font = new wry::Font(build_font(*_atlas));
 
@@ -212,6 +242,84 @@
     [encoder optimizeContentsForGPUAccess:texture];
     [encoder endEncoding];
     return texture;
+}
+
+// ---- Scene backdrop helpers --------------------------------------------
+
+- (NSArray<id<MTLTexture>>*)loadTexturesWithPrefix:(NSString*)prefix
+                                            ofType:(NSString*)ext
+{
+    const std::string pfx = prefix.UTF8String;
+    const std::string dotext = std::string(".") + ext.UTF8String;
+
+    // Resources resolve relative to the working directory (the assets folder;
+    // see main.mm).  Collect matching stems, sorted, so a stable cycle order.
+    std::vector<std::string> stems;
+    try {
+        for (auto const& entry :
+             std::filesystem::directory_iterator(std::filesystem::current_path())) {
+            const auto& p = entry.path();
+            if (p.extension() != dotext)
+                continue;
+            const std::string fname = p.filename().string();
+            if (fname.size() >= pfx.size() && fname.compare(0, pfx.size(), pfx) == 0)
+                stems.push_back(p.stem().string());
+        }
+    } catch (...) {
+        // Missing / unreadable directory: return whatever we have (maybe none).
+    }
+    std::sort(stems.begin(), stems.end());
+
+    NSMutableArray<id<MTLTexture>>* out =
+        [NSMutableArray arrayWithCapacity:stems.size()];
+    for (auto const& s : stems)
+        [out addObject:[self newTextureFromResource:@(s.c_str()) ofType:ext]];
+    return out;
+}
+
+- (void)drawImage:(id<MTLTexture>)texture
+           window:(simd_float4)window
+            alpha:(float)alpha
+         viewport:(simd_float2)viewportPx
+      withEncoder:(id<MTLRenderCommandEncoder>)encoder
+{
+    [encoder setRenderPipelineState:_imageRenderPipelineState];
+
+    // Pixel coords -> NDC, y-down (same transform the UI / overlay use).
+    MyUniforms uniforms;
+    uniforms.position_transform = matrix_float4x4{{
+        {2.0f / viewportPx.x, 0.0f, 0.0f},
+        {0.0f, -2.0f / viewportPx.y, 0.0f, 0.0f},
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        {-1.0f, +1.0f, 0.0f, 1.0f},
+    }};
+    [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:AAPLBufferIndexUniforms];
+
+    // Full-viewport quad; texCoords are the supplied (u0,v0)-(u1,v1) window.
+    const float w = viewportPx.x, h = viewportPx.y;
+    const float u0 = window.x, v0 = window.y, u1 = window.z, v1 = window.w;
+    const wry::RGBA8Unorm_sRGB tint(1.0f, 1.0f, 1.0f, alpha);
+    auto vert = [&](float px, float py, float u, float v) {
+        wry::SpriteVertex sv;
+        sv.v.position = simd_make_float4(px, py, 0.0f, 1.0f);
+        sv.v.texCoord = simd_make_float2(u, v);
+        sv.color = tint;
+        return sv;
+    };
+    const wry::SpriteVertex quad[6] = {
+        vert(0.0f, 0.0f, u0, v0),
+        vert(w,    0.0f, u1, v0),
+        vert(w,    h,    u1, v1),
+        vert(0.0f, 0.0f, u0, v0),
+        vert(w,    h,    u1, v1),
+        vert(0.0f, h,    u0, v1),
+    };
+    id<MTLBuffer> vb = [_device newBufferWithBytes:quad
+                                            length:sizeof(quad)
+                                           options:MTLStorageModeShared];
+    [encoder setVertexBuffer:vb offset:0 atIndex:AAPLBufferIndexVertices];
+    [encoder setFragmentTexture:texture atIndex:AAPLTextureIndexColor];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6];
 }
 
 @end

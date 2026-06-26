@@ -30,8 +30,9 @@
 
 // Advance the simulation one step.  Call once per frame before -render; the
 // two are deliberately separate so a scene with no world (splash / menu) can
-// skip the step while still drawing.
-- (void)update;
+// skip the step while still drawing.  dtSeconds is unused -- the world advances
+// one logical step per frame, not by wall-clock time.
+- (void)update:(double)dtSeconds;
 
 // -encodeIntoCommandBuffer: comes from the WryScene protocol.
 

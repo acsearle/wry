@@ -9,37 +9,45 @@
 
 #import "WrySplashScene.h"
 
+#include <algorithm>
+
+#include "scene_image.hpp"
+
 @implementation WrySplashScene
 {
     WryRenderContext* _ctx;
-    id<MTLTexture> _target;        // offscreen we clear and hand to the host
-    uint64_t _elapsedFrames;
-    uint64_t _durationFrames;
+    id<MTLTexture> _target;        // offscreen we hand to the host
+    id<MTLTexture> _image;         // the splash image (nil if none found)
+    simd_float2 _viewportPx;
+    double _elapsedSeconds;
+    double _durationSeconds;
     id<WryScene> _next;
 }
 
 - (nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
-                         durationFrames:(uint64_t)durationFrames
+                        durationSeconds:(double)durationSeconds
                                    next:(nonnull id<WryScene>)next
 {
     if ((self = [super init])) {
         _ctx = context;
-        _durationFrames = durationFrames;
+        _durationSeconds = durationSeconds;
         _next = next;
-        _elapsedFrames = 0;
+        _elapsedSeconds = 0.0;
+        _viewportPx = simd_make_float2(0.0f, 0.0f);
+        // Minimal asset: the first splash*.png in the resource folder.
+        _image = [context loadTexturesWithPrefix:@"splash" ofType:@"png"].firstObject;
     }
     return self;
 }
 
-- (void)update {
-    ++_elapsedFrames;
+- (void)update:(double)dtSeconds {
+    _elapsedSeconds += dtSeconds;
 }
 
 - (void)drawableResize:(CGSize)size {
     if (size.width < 1 || size.height < 1)
         return;
-    // The host blits our target into the (RGBA16Float) drawable, so the target
-    // must match the drawable's format and size.
+    _viewportPx = simd_make_float2((float)size.width, (float)size.height);
     MTLTextureDescriptor* d = [MTLTextureDescriptor new];
     d.textureType = MTLTextureType2D;
     d.pixelFormat = MTLPixelFormatRGBA16Float;
@@ -58,15 +66,30 @@
     rp.colorAttachments[0].texture = _target;
     rp.colorAttachments[0].loadAction = MTLLoadActionClear;
     rp.colorAttachments[0].storeAction = MTLStoreActionStore;
-    rp.colorAttachments[0].clearColor = MTLClearColorMake(0.05, 0.07, 0.12, 1.0);
+    rp.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
     id<MTLRenderCommandEncoder> enc = [commandBuffer renderCommandEncoderWithDescriptor:rp];
-    enc.label = @"Splash clear";
+    enc.label = @"Splash";
+
+    if (_image) {
+        // Fade in over the first ~45% of the splash, then hold.
+        const double fadeSeconds = std::max(0.001, _durationSeconds * 0.45);
+        const float alpha = (float)std::min(1.0, _elapsedSeconds / fadeSeconds);
+        const simd_float4 window = wry::image_cover_window((float)_image.width,
+                                                           (float)_image.height,
+                                                           _viewportPx.x, _viewportPx.y);
+        [_ctx drawImage:_image
+                 window:window
+                  alpha:alpha
+               viewport:_viewportPx
+            withEncoder:enc];
+    }
+
     [enc endEncoding];
     return _target;
 }
 
 - (id<WryScene>)nextScene {
-    return (_elapsedFrames >= _durationFrames) ? _next : nil;
+    return (_elapsedSeconds >= _durationSeconds) ? _next : nil;
 }
 
 @end

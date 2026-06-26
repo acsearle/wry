@@ -34,9 +34,11 @@
 
 @protocol WryScene <NSObject>
 
-// Advance scene-owned state one frame.  The world scene steps the simulation;
-// a static menu or splash does nothing.
-- (void)update;
+// Advance scene-owned state by `dtSeconds` of real time (seconds elapsed since
+// the previous frame).  The world scene steps the simulation; timed scenes
+// (splash, menu) accumulate dtSeconds so their behaviour is frame-rate
+// independent.
+- (void)update:(double)dtSeconds;
 
 // Encode this frame's passes into the host-supplied command buffer and return
 // the texture to present (or nil to present nothing).  The host blits the

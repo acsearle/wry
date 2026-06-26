@@ -23,7 +23,7 @@
 @interface WrySplashScene : NSObject <WryScene>
 
 - (nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
-                         durationFrames:(uint64_t)durationFrames
+                        durationSeconds:(double)durationSeconds
                                    next:(nonnull id<WryScene>)next;
 
 @end
