@@ -47,6 +47,12 @@
 @property (nonatomic, readonly, nonnull) wry::Font* font;
 @property (nonatomic, readonly, nonnull) id<MTLRenderPipelineState> overlayRenderPipelineState;
 
+// 2D UI pipeline for scenes that draw directly into their own single
+// RGBA16Float color target (splash, menu), as opposed to the overlay pipeline
+// which runs inside the world's deferred G-buffer pass.  Same shaders, one
+// color attachment, alpha blend, no depth.
+@property (nonatomic, readonly, nonnull) id<MTLRenderPipelineState> uiRenderPipelineState;
+
 // Returned by reference: callers read the cubic-bezier / glyph tables in
 // place rather than copying the (vector-backed) Font2 each access.
 - (wry::Font2&)font2;

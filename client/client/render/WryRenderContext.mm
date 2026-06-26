@@ -96,6 +96,31 @@
 
             _overlayRenderPipelineState = [self newRenderPipelineStateWithDescriptor:renderPipelineDescriptor];
 
+            // A 2D UI pipeline for scenes that draw directly into a single
+            // RGBA16Float color target (splash, menu), rather than into the
+            // world's deferred G-buffer pass.  Same shaders as the overlay
+            // pipeline, but only colorAttachments[Color] is declared, so it
+            // matches a one-attachment, depth-less render pass.  (fragmentShader
+            // writes only color(AAPLColorIndexColor), so the other G-buffer
+            // attachments aren't needed here.)
+            {
+                MTLRenderPipelineDescriptor* ui = [[MTLRenderPipelineDescriptor alloc] init];
+                ui.label = @"UI 2D pipeline";
+                ui.vertexFunction = [self newFunctionWithName:@"vertexShader4"];
+                ui.vertexBuffers[0].mutability = MTLMutabilityImmutable;
+                ui.fragmentFunction = [self newFunctionWithName:@"fragmentShader"];
+                ui.fragmentBuffers[0].mutability = MTLMutabilityImmutable;
+                ui.colorAttachments[AAPLColorIndexColor].pixelFormat = drawablePixelFormat;
+                ui.colorAttachments[AAPLColorIndexColor].blendingEnabled = YES;
+                ui.colorAttachments[AAPLColorIndexColor].rgbBlendOperation = MTLBlendOperationAdd;
+                ui.colorAttachments[AAPLColorIndexColor].alphaBlendOperation = MTLBlendOperationAdd;
+                ui.colorAttachments[AAPLColorIndexColor].sourceRGBBlendFactor = MTLBlendFactorOne;
+                ui.colorAttachments[AAPLColorIndexColor].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+                ui.colorAttachments[AAPLColorIndexColor].sourceAlphaBlendFactor = MTLBlendFactorOne;
+                ui.colorAttachments[AAPLColorIndexColor].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+                _uiRenderPipelineState = [self newRenderPipelineStateWithDescriptor:ui];
+            }
+
             _atlas = new wry::SpriteAtlas(2048, (__bridge void*)device);
             _font = new wry::Font(build_font(*_atlas));
 

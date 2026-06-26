@@ -214,8 +214,12 @@ namespace {
     id<WryScene> (^makeWorld)(void) = ^id<WryScene>{
         return [[WryWorldScene alloc] initWithContext:ctx model:model];
     };
+    __weak WryDelegate* weakSelf = self;
+    void (^quit)(void) = ^{
+        weakSelf.done = YES;  // ends main's run loop -> graceful shutdown
+    };
     WryMainMenuScene* menu =
-        [[WryMainMenuScene alloc] initWithContext:_ctx model:_model next:makeWorld];
+        [[WryMainMenuScene alloc] initWithContext:_ctx model:_model next:makeWorld quit:quit];
     _scene = [[WrySplashScene alloc] initWithContext:_ctx
                                       durationFrames:90
                                                 next:menu];
@@ -569,8 +573,8 @@ namespace {
     // Runs on the main thread between NSEvent dispatch and the draw, so the
     // queue is always seen consistently.
     NSSize sz = _metalView.bounds.size;
-    if ([_scene respondsToSelector:@selector(handleEvents)]) {
-        [_scene handleEvents];
+    if ([_scene respondsToSelector:@selector(handleEventsWithViewSize:)]) {
+        [_scene handleEventsWithViewSize:sz];
     } else {
         wry::gui::pump(*_model,
                        simd_make_float2((float)sz.width,

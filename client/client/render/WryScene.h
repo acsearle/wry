@@ -54,9 +54,12 @@
 @optional
 
 // Scenes that own their input drain the model's event queue here, and the
-// host calls this instead of the world pump.  Scenes that don't implement it
-// fall through to the host's world pump (the model overlay-stack dispatch).
-- (void)handleEvents;
+// host calls this instead of the world pump.  `viewSizePoints` is the view's
+// bounds in logical points; scenes that lay widgets out in drawable pixels
+// use it to promote event locations from points to pixels (as the world pump
+// does).  Scenes that don't implement this fall through to the host's world
+// pump (the model overlay-stack dispatch).
+- (void)handleEventsWithViewSize:(CGSize)viewSizePoints;
 
 // Platform cursor reset on mouse-enter.  Only scenes with a custom cursor
 // (the world's palette cursor) implement it; the host guards the call with
