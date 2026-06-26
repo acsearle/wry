@@ -35,6 +35,7 @@
 #include "world.hpp"
 
 #include "save.hpp"
+#include "server.hpp"
 
 @implementation WryWorldScene
 {
@@ -48,6 +49,11 @@
     // of truth (new_game / load_from_save replace its contents); this is just
     // the handoff from the update phase to the draw phase.
     wry::Root<wry::World*> _world_to_render;
+
+    // The command seam: local input is submitted here, and the ordered
+    // commands are polled back in -update before stepping.  A LocalServer for
+    // single player; a networked Server would swap in for a joined game.
+    std::unique_ptr<wry::Server> _server;
     
     
     
@@ -339,6 +345,11 @@
         // The host owns the shared device + 2D-services context; we borrow it
         // and build our world-specific resources against it below.
         _ctx = context;
+
+        // Single-player command seam: tag submitted actions with the local
+        // player's id.  new_game / load_from_save (run before this scene is
+        // built) have already installed _local_player.
+        _server = std::make_unique<wry::LocalServer>(_model->_local_player->_entity_id);
                         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
         
@@ -973,7 +984,7 @@
         a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
         a.coordinate = xy;
         a.value = _model->_holding_value;
-        _model->_local_player->_queue.push_back(std::move(a));
+        _server->submit(std::move(a));
         printf(" Clicked world (%d, %d)\n", i, j);
         _model->_outstanding_click = false;
     }
@@ -989,7 +1000,7 @@
             a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
             a.coordinate = xy;
             a.value = k;
-            _model->_local_player->_queue.push_back(std::move(a));
+            _server->submit(std::move(a));
         }
     }
 
@@ -1043,6 +1054,14 @@
 
     // Service the garbage collector once per frame.
     wry::mutator_repin();
+
+    // Apply this step's authoritative commands (from the Server) to the
+    // players' queues before stepping.  World::step() drains the queues exactly
+    // as before -- the Server is just who fills them.  Single player: these are
+    // the local player's own actions, round-tripped through LocalServer (so the
+    // one-frame submit->apply latency matches the previous direct push).
+    for (auto&& cmd : _server->poll())
+        _model->_local_player->_queue.push_back(std::move(cmd.action));
 
     // Advance the displayed world one simulation step.  The model's _worlds
     // deque holds exactly the displayed world (new_game / load_from_save keep
