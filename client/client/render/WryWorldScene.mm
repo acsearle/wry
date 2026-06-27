@@ -42,22 +42,11 @@
     
     // link to rest of program
 
+    // The world's state (MVC model): world pipeline, session view/input state,
+    // overlays, and the per-frame logic (update / input).  This scene is a thin
+    // Metal renderer over it -- _model->_world_to_render is the world the
+    // renderer draws, advanced by _model->update().
     std::shared_ptr<wry::WorldState> _model;
-
-    // The displayed world, advanced one simulation step by -update and read
-    // by -render that same frame.  The model's _worlds deque stays the source
-    // of truth (new_game / load_from_save replace its contents); this is just
-    // the handoff from the update phase to the draw phase.
-    wry::Root<wry::World*> _world_to_render;
-
-    // The command seam: local input is submitted here, and the ordered
-    // commands are polled back in -update before stepping.  A LocalServer for
-    // single player; a networked Server would swap in for a joined game.
-    std::unique_ptr<wry::Server> _server;
-
-    // (The world-session view/input state -- _show_*, _model->_looking_at, _model->_mouse4,
-    //  _model->_outstanding_click/_keysdown -- lives on the WorldState (_model), shared
-    //  with the overlays.  The logic that uses it moves into WorldState too.)
 
     
     
@@ -349,11 +338,6 @@
         // The host owns the shared device + 2D-services context; we borrow it
         // and build our world-specific resources against it below.
         _ctx = context;
-
-        // Single-player command seam: tag submitted actions with the local
-        // player's id.  new_game / load_from_save (run before this scene is
-        // built) have already installed _local_player.
-        _server = std::make_unique<wry::LocalServer>(_model->_local_player->_entity_id);
                         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
         
@@ -1022,198 +1006,16 @@
     return nil;
 }
 
-// Build this frame's local-player commands from input and submit them to the
-// Server.  Pulled out of the render path (this used to live in -drawOverlay):
-// turning input into commands is a game-state concern, not a drawing one.  It
-// also computes the cursor's ground-plane projection (_model->_mouse4) the
-// renderer reads, so that projection no longer happens during -render either.
-- (void)submitLocalCommands
-{
-    using namespace ::simd;
-    using namespace ::wry;
 
-    // Cursor -> ground plane.  Same transform the renderer builds for the grid,
-    // recomputed here so input no longer depends on the render pass.
-    auto lookat = matrix_identity_float4x4;
-    lookat.columns[3].x += _model->_looking_at.x / 1024.0f;
-    lookat.columns[3].y -= _model->_looking_at.y / 1024.0f;
-    simd_float4x4 A = simd_mul(_model->_uniforms.viewprojection_transform, lookat);
-    simd_float4 b = make<float4>(_model->_mouse, 0.0f, 1.0f);
-    _model->_mouse4 = make<float4>(project_screen_ray(A, b), 0.0f, 1.0f);
-
-    // Click: write the held value at the tile under the cursor.  (PaletteOverlay
-    // claims palette-area clicks before pump ever sets _model->_outstanding_click, so
-    // anything here is for the world tile.)
-    if (_model->_outstanding_click) {
-        int i = round(_model->_mouse4.x);
-        int j = round(_model->_mouse4.y);
-        Coordinate xy{i, j};
-        Player::Action a;
-        a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
-        a.coordinate = xy;
-        a.value = _model->_holding_value;
-        _server->submit(std::move(a));
-        printf(" Clicked world (%d, %d)\n", i, j);
-        _model->_outstanding_click = false;
-    }
-
-    // Hex keys: write the digit at the tile under the cursor.
-    while (!_model->_outstanding_keysdown.empty()) {
-        char32_t ch = _model->_outstanding_keysdown.front_and_pop_front();
-        if (wry::isascii((int) ch) && isxdigit(ch)) {
-            int64_t k = wry::base36::from_base36_table[ch];
-            int i = round(_model->_mouse4.x);
-            int j = round(_model->_mouse4.y);
-            Coordinate xy{i, j};
-            Player::Action a;
-            a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
-            a.coordinate = xy;
-            a.value = k;
-            _server->submit(std::move(a));
-        }
-    }
+// Per-frame logic lives on WorldState now (this scene is a thin Metal renderer
+// over it); -update and -handleEventsWithViewSize: just forward.
+-(void)update:(double)dtSeconds {
+    _model->update(dtSeconds);
 }
 
-// Whatever the overlay stack didn't claim: the world's ground-plane click,
-// scroll-pan, ESC-opens-the-in-game-menu, hex-key writes, and the debug
-// toggles.  These shrink as overlays take over (the click / hex-key flags are
-// consumed by -submitLocalCommands).
-- (void)pumpLegacyEvent:(wry::gui::Event const&)e {
-    using namespace ::wry;
-    using namespace ::wry::gui;
-
-    switch (e.kind) {
-
-        case WryEventKindMouseUp:
-            if (e.button == MouseButton::Left)
-                _model->_outstanding_click = true;
-            break;
-
-        case WryEventKindScroll:
-            _model->_looking_at.x += e.scroll_delta.x;
-            _model->_looking_at.y += e.scroll_delta.y;
-            break;
-
-        case WryEventKindKeyDown: {
-            char buffer[100];
-            switch (e.key) {
-                case key::Escape:
-                    // Nothing else claimed ESC -> open the in-game menu.
-                    _model->_stack.push(&_model->_main_menu_overlay);
-                    break;
-                case 'j':
-                    _model->_show_jacobian = !_model->_show_jacobian;
-                    std::snprintf(buffer, sizeof(buffer), "%s [J]acobians",
-                                  _model->_show_jacobian ? "Show" : "Hide");
-                    _model->_gui.append_log(buffer);
-                    break;
-                case 'p':
-                    _model->_show_points = !_model->_show_points;
-                    std::snprintf(buffer, sizeof(buffer), "%s [P]oints",
-                                  _model->_show_points ? "Show" : "Hide");
-                    _model->_gui.append_log(buffer);
-                    break;
-                case 'w':
-                    _model->_show_wireframe = !_model->_show_wireframe;
-                    std::snprintf(buffer, sizeof(buffer), "%s [W]ireframe",
-                                  _model->_show_wireframe ? "Show" : "Hide");
-                    _model->_gui.append_log(buffer);
-                    break;
-                default:
-                    if ((e.key >= '0' && e.key <= '9') ||
-                        (e.key >= 'a' && e.key <= 'f')) {
-                        _model->_outstanding_keysdown.push_back((char32_t)e.key);
-                    }
-                    break;
-            }
-            break;
-        }
-
-        default:
-            break;
-    }
-}
-
-// World input.  Moved here from the free gui::pump (5.4): the world scene owns
-// its own input.  Drains the shared event queue, promotes point locations to
-// drawable pixels, dispatches through the (still model-owned) overlay stack,
-// and routes whatever no overlay claimed to the legacy handler above.
 - (void)handleEventsWithViewSize:(CGSize)viewSizePoints {
-    using namespace ::wry;
-    using namespace ::wry::gui;
-
-    // Surface any messages background work (e.g. an async save) posted since
-    // last frame, on the main thread.
-    _model->_gui.drain_notifications();
-
-    // NSEvent locations arrive in logical points; the widget tree and the
-    // renderer's screen-space transform run in drawable pixels.  Promote
-    // event.location once here, at the dispatch boundary.
-    const float w_pt = (viewSizePoints.width  > 0.0) ? (float)viewSizePoints.width  : 1.0f;
-    const float h_pt = (viewSizePoints.height > 0.0) ? (float)viewSizePoints.height : 1.0f;
-    const float scale_x = _model->_gui.viewport_size.x / w_pt;
-    const float scale_y = _model->_gui.viewport_size.y / h_pt;
-
-    while (!_model->_gui.events.empty()) {
-        Event e = _model->_gui.events.pop_front();
-
-        const bool is_positional =
-            (e.kind == WryEventKindMouseMove  ||
-             e.kind == WryEventKindMouseDown  ||
-             e.kind == WryEventKindMouseUp    ||
-             e.kind == WryEventKindMouseEnter ||
-             e.kind == WryEventKindMouseExit  ||
-             e.kind == WryEventKindScroll);
-
-        if (is_positional) {
-            e.location.x *= scale_x;
-            e.location.y *= scale_y;
-            // Keep _mouse (NDC, y-up) in lockstep with the dispatched event.
-            _model->_mouse.x = 2.0f * e.location.x / _model->_gui.viewport_size.x - 1.0f;
-            _model->_mouse.y = 1.0f - 2.0f * e.location.y / _model->_gui.viewport_size.y;
-        }
-
-        if (!_model->_stack.dispatch(e))
-            [self pumpLegacyEvent:e];
-    }
-}
-
--(void)update:(double)dtSeconds
-{
-    using namespace ::wry;
-    (void) dtSeconds;   // world advances one step per frame, not by wall-clock
-
-    // Service the garbage collector once per frame.
-    wry::mutator_repin();
-
-    // Apply this step's authoritative commands (from the Server) to the
-    // players' queues before stepping.  World::step() drains the queues exactly
-    // as before -- the Server is just who fills them.  Single player: these are
-    // the local player's own actions, round-tripped through LocalServer (so the
-    // one-frame submit->apply latency matches the previous direct push).
-    for (auto&& cmd : _server->poll())
-        _model->_local_player->_queue.push_back(std::move(cmd.action));
-
-    // Advance the displayed world one simulation step.  The model's _worlds
-    // deque holds exactly the displayed world (new_game / load_from_save keep
-    // it that way); pop it, step it, push the result back, and stash it in
-    // _world_to_render for -render to draw.  Splitting this out of -render is
-    // the seam scenes rely on: a splash or menu scene has no world to step.
-    Root<World const*> old_world;
-    (void) _model->_worlds.try_pop_front(old_world);
-    assert(old_world);
-    // printf("old_world->_count %d\n", old_world->_count.load_relaxed());
-    Coroutine::Nursery nursery;
-    // the operation is bounded within the main thread's epoch
-    nursery.soon(_world_to_render, old_world->step());
-    sync_wait(nursery.join());
-    _model->_worlds.emplace_back(_world_to_render);
-    assert(_world_to_render);
-
-    // Process this frame's input into commands and submit them (this also
-    // projects the cursor).  After the step, so a submission applies next frame
-    // -- the same one-frame latency the old in-render path had.
-    [self submitLocalCommands];
+    _model->handle_events(simd_make_float2((float)viewSizePoints.width,
+                                           (float)viewSizePoints.height));
 }
 
 // Encode this frame's passes into the host-supplied command buffer and return
@@ -1230,7 +1032,7 @@
 
     // -update advanced the displayed world (and serviced the GC) immediately
     // before this -encode, on the same thread and frame; we only read it here.
-    Root<World*>& new_world = _world_to_render;
+    Root<World*>& new_world = _model->_world_to_render;
     assert(new_world);
     
     // Construct camera transforms

@@ -16,7 +16,7 @@
 #include "atomic.hpp"
 #include "vector.hpp"
 
-#include "model.hpp"
+#include "world_state.hpp"
 #include "test.hpp"
 #include "coroutine.hpp"
 

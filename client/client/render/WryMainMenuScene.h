@@ -11,7 +11,7 @@
 #import "WryRenderContext.h"
 #import "WryScene.h"
 
-#include "model.hpp"
+#include "world_state.hpp"
 
 // The top-level main menu, shown when no game is loaded.  Distinct from the
 // in-game ESC menu (gui::MainMenuOverlay): this one *creates* games.  It hosts
@@ -21,12 +21,12 @@
 
 @interface WryMainMenuScene : NSObject <WryScene>
 
-// `nextFactory` builds the scene to switch to once a game starts; it is invoked
-// lazily (after new_game / load) because the world's asset load is heavy.
-// `quit` is invoked by QUIT TO DESKTOP to ask the host to exit.
+// On NEW / LOAD the menu builds a fresh `WorldState` (borrowing `gui`) and hands
+// it to `nextFactory`, which wraps it in the world scene.  `quit` is invoked by
+// QUIT TO DESKTOP to ask the host to exit.
 - (nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
-                                  model:(std::shared_ptr<wry::WorldState>)model
-                                   next:(nonnull id<WryScene> (^)(void))nextFactory
+                                    gui:(nonnull wry::GuiContext*)gui
+                                   next:(nonnull id<WryScene> (^)(std::shared_ptr<wry::WorldState>))nextFactory
                                    quit:(nonnull void (^)(void))quit;
 
 @end

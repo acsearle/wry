@@ -140,10 +140,9 @@ namespace {
 @implementation WryDelegate
 {
     // Host-owned generic GUI state (events, viewport, log / console,
-    // notifications), borrowed by the model and the scenes.  Declared before
-    // _model so it outlives it.
+    // notifications), borrowed by every scene's WorldState.  Declared before
+    // _scene so it outlives the WorldStates that reference it.
     std::unique_ptr<wry::GuiContext> _gui;
-    std::shared_ptr<wry::WorldState> _model;
     NSWindow* _window;
     WryMetalView* _metalView;
     CAMetalLayer* _metalLayer;
@@ -169,7 +168,6 @@ namespace {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     if ((self = [super init])) {
         _gui = std::make_unique<wry::GuiContext>();
-        _model = std::make_shared<wry::WorldState>(*_gui);
     }
     return self;
 }
@@ -223,16 +221,21 @@ namespace {
     // Boot flow: splash -> main menu -> world.  The world scene is built lazily
     // (its asset load is heavy) the moment the menu hands control on.
     WryRenderContext* ctx = _ctx;
-    std::shared_ptr<wry::WorldState> model = _model;
-    id<WryScene> (^makeWorld)(void) = ^id<WryScene>{
-        return [[WryWorldScene alloc] initWithContext:ctx model:model];
-    };
+    // The menu builds a WorldState (NEW / LOAD) and hands it here to be wrapped
+    // in the world scene -- the host no longer owns the world state.
+    id<WryScene> (^makeWorld)(std::shared_ptr<wry::WorldState>) =
+        ^id<WryScene>(std::shared_ptr<wry::WorldState> world) {
+            return [[WryWorldScene alloc] initWithContext:ctx model:world];
+        };
     __weak WryDelegate* weakSelf = self;
     void (^quit)(void) = ^{
         weakSelf.done = YES;  // ends main's run loop -> graceful shutdown
     };
     WryMainMenuScene* menu =
-        [[WryMainMenuScene alloc] initWithContext:_ctx model:_model next:makeWorld quit:quit];
+        [[WryMainMenuScene alloc] initWithContext:_ctx
+                                              gui:_gui.get()
+                                             next:makeWorld
+                                             quit:quit];
     _scene = [[WrySplashScene alloc] initWithContext:_ctx
                                      durationSeconds:2.5
                                                 next:menu];

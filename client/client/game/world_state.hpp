@@ -1,12 +1,12 @@
 //
-//  model.hpp
+//  world_state.hpp
 //  client
 //
 //  Created by Antony Searle on 8/7/2023.
 //
 
-#ifndef model_hpp
-#define model_hpp
+#ifndef world_state_hpp
+#define world_state_hpp
 
 #include "ShaderTypes.h"
 
@@ -29,6 +29,7 @@
 #include "string.hpp"
 #include "world.hpp"
 #include "player.hpp"
+#include "server.hpp"
 
 namespace wry {
     
@@ -104,6 +105,14 @@ namespace wry {
 
         MeshUniforms _uniforms;
 
+        // The world advanced one step by update(), read by the renderer the
+        // same frame (the _worlds deque stays the source of truth).
+        Root<World*> _world_to_render;
+
+        // The command seam: input is submitted here; update() polls the ordered
+        // commands back and pushes them to the players' queues before stepping.
+        std::unique_ptr<Server> _server;
+
         explicit WorldState(GuiContext& gui) : _gui(gui) {
 
             // Overlay wiring.  Stack order, bottom up: floating log, palette,
@@ -124,6 +133,10 @@ namespace wry {
             // drain inside is a no-op.
             new_game();
 
+            // Single-player command sink, tagged with the local player's id
+            // (new_game just installed _local_player).
+            _server = std::make_unique<LocalServer>(_local_player->_entity_id);
+
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();
 
@@ -143,7 +156,15 @@ namespace wry {
         void save_current();
 
         void _regenerate_uniforms();
-        
+
+        // Per-frame logic, driven by the scene (which is now a thin Metal
+        // renderer over this state): advance the simulation and process input.
+        // Defined in model.cpp.
+        void update(double dt);
+        void handle_events(float2 view_size_pt);
+        void submit_local_commands();                 // input -> commands (from update)
+        void pump_legacy_event(gui::Event const& e);  // legacy world-input fallback
+
         ~WorldState() {
             fprintf(stderr, "%s\n", __PRETTY_FUNCTION__);
         }
@@ -157,4 +178,4 @@ namespace wry {
     
 } // namespace wry
 
-#endif /* model_hpp */
+#endif /* world_state_hpp */

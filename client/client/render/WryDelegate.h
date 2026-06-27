@@ -10,7 +10,7 @@
 
 #import <AppKit/AppKit.h>
 
-#include "model.hpp"
+#include "world_state.hpp"
 #include "WryMetalView.h"
 
 // WryDelegate receives all notifications from macOS and AppKit that were

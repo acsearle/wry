@@ -57,13 +57,14 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
 @implementation WryMainMenuScene
 {
     WryRenderContext* _ctx;
-    std::shared_ptr<wry::WorldState> _model;
+    wry::GuiContext* _gui;         // host-owned; the WorldStates we build borrow it
     id<MTLTexture> _target;
     simd_float2 _viewportPx;       // drawable pixels; widgets lay out in this
     uint64_t _frameCount;
     std::unique_ptr<wry::gui::Widget> _root;   // the button column
     id<WryScene> _pendingNext;     // set by NEW / LOAD; -nextScene returns it
-    id<WryScene> (^_nextFactory)(void);
+    // Wraps a freshly-built WorldState in the world scene.
+    id<WryScene> (^_nextFactory)(std::shared_ptr<wry::WorldState>);
     void (^_quit)(void);
 
     // Backdrop photo-album state: elapsed seconds drive a continuous pan with
@@ -73,13 +74,13 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
 }
 
 - (nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
-                                  model:(std::shared_ptr<wry::WorldState>)model
-                                   next:(nonnull id<WryScene> (^)(void))nextFactory
+                                    gui:(nonnull wry::GuiContext*)gui
+                                   next:(nonnull id<WryScene> (^)(std::shared_ptr<wry::WorldState>))nextFactory
                                    quit:(nonnull void (^)(void))quit
 {
     if ((self = [super init])) {
         _ctx = context;
-        _model = model;
+        _gui = gui;
         _nextFactory = [nextFactory copy];
         _quit = [quit copy];
         _viewportPx = simd_make_float2(0.0f, 0.0f);
@@ -102,8 +103,9 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
 
         // NEW GAME: fresh starting world, then drop into it.
         col->add(std::make_unique<Button>("NEW GAME", [uself] {
-            uself->_model->new_game();
-            uself->_pendingNext = uself->_nextFactory ? uself->_nextFactory() : nil;
+            // Fresh WorldState (its constructor installs the starting world).
+            auto world = std::make_shared<wry::WorldState>(*uself->_gui);
+            uself->_pendingNext = uself->_nextFactory ? uself->_nextFactory(world) : nil;
         }));
 
         // LOAD GAME: for now load the most recent save (enumerate_games returns
@@ -111,8 +113,9 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
         col->add(std::make_unique<Button>("LOAD GAME", [uself] {
             auto games = wry::enumerate_games();
             if (!games.empty()) {
-                uself->_model->load_from_save(games.front().second);
-                uself->_pendingNext = uself->_nextFactory ? uself->_nextFactory() : nil;
+                auto world = std::make_shared<wry::WorldState>(*uself->_gui);
+                world->load_from_save(games.front().second);
+                uself->_pendingNext = uself->_nextFactory ? uself->_nextFactory(world) : nil;
             }
         }));
 
@@ -137,8 +140,8 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
     float hpt = viewSizePoints.height > 0.0 ? (float)viewSizePoints.height : 1.0f;
     float sx = _viewportPx.x / wpt;
     float sy = _viewportPx.y / hpt;
-    while (!_model->_gui.events.empty()) {
-        wry::gui::Event e = _model->_gui.events.pop_front();
+    while (!_gui->events.empty()) {
+        wry::gui::Event e = _gui->events.pop_front();
         e.location.x *= sx;
         e.location.y *= sy;
         _root->on_event(e);

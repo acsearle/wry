@@ -14,7 +14,7 @@
 #include "gui_event.hpp"
 #include "gui_overlay.hpp"
 #include "gui_widget.hpp"
-#include "model.hpp"
+#include "world_state.hpp"
 #include "save.hpp"
 #include "SpriteAtlas.hpp"
 #include "font.hpp"

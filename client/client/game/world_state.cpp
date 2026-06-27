@@ -1,12 +1,20 @@
 //
-//  model.cpp
+//  world_state.cpp
 //  client
 //
 //  Created by Antony Searle on 8/7/2023.
 //
 
-#include "model.hpp"
+#include "world_state.hpp"
 
+#include <cctype>
+#include <cmath>
+#include <cstdio>
+
+#include "base36.hpp"
+#include "coroutine.hpp"
+#include "ctype.hpp"
+#include "garbage_collected.hpp"
 #include "save.hpp"
 
 namespace wry {
@@ -218,6 +226,178 @@ namespace wry {
         
         
         
+    }
+
+    // ---- Per-frame logic (moved out of WryWorldScene, which is now a thin
+    //      Metal renderer over this state) -----------------------------------
+
+    void WorldState::update(double dt) {
+        (void) dt;   // the world advances one step per frame, not by wall-clock
+
+        // Service the garbage collector once per frame.
+        mutator_repin();
+
+        // Apply this step's authoritative commands (from the Server) to the
+        // players' queues before stepping.  World::step() drains the queues
+        // exactly as before -- the Server is just who fills them.  Single
+        // player: the local player's own actions, round-tripped through
+        // LocalServer (the one-frame submit->apply latency, as before).
+        for (auto&& cmd : _server->poll())
+            _local_player->_queue.push_back(std::move(cmd.action));
+
+        // Advance the displayed world one simulation step: pop it, step it,
+        // push the result back, and stash it in _world_to_render for the
+        // renderer to draw this same frame.
+        Root<World const*> old_world;
+        (void) _worlds.try_pop_front(old_world);
+        assert(old_world);
+        Coroutine::Nursery nursery;
+        nursery.soon(_world_to_render, old_world->step());
+        sync_wait(nursery.join());
+        _worlds.emplace_back(_world_to_render);
+        assert(_world_to_render);
+
+        // Turn this frame's input into commands (this also projects the
+        // cursor).  After the step, so a submission applies next frame.
+        submit_local_commands();
+    }
+
+    void WorldState::submit_local_commands() {
+        using namespace ::simd;
+
+        // Cursor -> ground plane (the projection the renderer also reads).
+        auto lookat = matrix_identity_float4x4;
+        lookat.columns[3].x += _looking_at.x / 1024.0f;
+        lookat.columns[3].y -= _looking_at.y / 1024.0f;
+        simd_float4x4 A = simd_mul(_uniforms.viewprojection_transform, lookat);
+        simd_float4 b = make<float4>(_mouse, 0.0f, 1.0f);
+        _mouse4 = make<float4>(project_screen_ray(A, b), 0.0f, 1.0f);
+
+        // Click: write the held value at the tile under the cursor.  (The
+        // palette claims palette-area clicks before _outstanding_click is set,
+        // so anything here is for the world tile.)
+        if (_outstanding_click) {
+            int i = round(_mouse4.x);
+            int j = round(_mouse4.y);
+            Coordinate xy{i, j};
+            Player::Action a;
+            a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
+            a.coordinate = xy;
+            a.value = _holding_value;
+            _server->submit(std::move(a));
+            printf(" Clicked world (%d, %d)\n", i, j);
+            _outstanding_click = false;
+        }
+
+        // Hex keys: write the digit at the tile under the cursor.
+        while (!_outstanding_keysdown.empty()) {
+            char32_t ch = _outstanding_keysdown.front_and_pop_front();
+            if (wry::isascii((int) ch) && isxdigit(ch)) {
+                int64_t k = wry::base36::from_base36_table[ch];
+                int i = round(_mouse4.x);
+                int j = round(_mouse4.y);
+                Coordinate xy{i, j};
+                Player::Action a;
+                a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
+                a.coordinate = xy;
+                a.value = k;
+                _server->submit(std::move(a));
+            }
+        }
+    }
+
+    // Whatever the overlay stack didn't claim: the world's ground-plane click,
+    // scroll-pan, ESC-opens-the-in-game-menu, hex-key writes, and debug toggles.
+    void WorldState::pump_legacy_event(gui::Event const& e) {
+        using namespace ::wry::gui;
+
+        switch (e.kind) {
+
+            case WryEventKindMouseUp:
+                if (e.button == MouseButton::Left)
+                    _outstanding_click = true;
+                break;
+
+            case WryEventKindScroll:
+                _looking_at.x += e.scroll_delta.x;
+                _looking_at.y += e.scroll_delta.y;
+                break;
+
+            case WryEventKindKeyDown: {
+                char buffer[100];
+                switch (e.key) {
+                    case key::Escape:
+                        _stack.push(&_main_menu_overlay);
+                        break;
+                    case 'j':
+                        _show_jacobian = !_show_jacobian;
+                        std::snprintf(buffer, sizeof(buffer), "%s [J]acobians",
+                                      _show_jacobian ? "Show" : "Hide");
+                        _gui.append_log(buffer);
+                        break;
+                    case 'p':
+                        _show_points = !_show_points;
+                        std::snprintf(buffer, sizeof(buffer), "%s [P]oints",
+                                      _show_points ? "Show" : "Hide");
+                        _gui.append_log(buffer);
+                        break;
+                    case 'w':
+                        _show_wireframe = !_show_wireframe;
+                        std::snprintf(buffer, sizeof(buffer), "%s [W]ireframe",
+                                      _show_wireframe ? "Show" : "Hide");
+                        _gui.append_log(buffer);
+                        break;
+                    default:
+                        if ((e.key >= '0' && e.key <= '9') ||
+                            (e.key >= 'a' && e.key <= 'f')) {
+                            _outstanding_keysdown.push_back((char32_t)e.key);
+                        }
+                        break;
+                }
+                break;
+            }
+
+            default:
+                break;
+        }
+    }
+
+    // World input pump, moved here from the free gui::pump.  Drains the shared
+    // event queue, promotes point locations to drawable pixels, dispatches
+    // through the overlay stack, and routes the rest to pump_legacy_event.
+    void WorldState::handle_events(float2 view_size_pt) {
+        using namespace ::wry::gui;
+
+        // Surface any messages background work posted since last frame.
+        _gui.drain_notifications();
+
+        const float w_pt = (view_size_pt.x > 0.0f) ? view_size_pt.x : 1.0f;
+        const float h_pt = (view_size_pt.y > 0.0f) ? view_size_pt.y : 1.0f;
+        const float scale_x = _gui.viewport_size.x / w_pt;
+        const float scale_y = _gui.viewport_size.y / h_pt;
+
+        while (!_gui.events.empty()) {
+            Event e = _gui.events.pop_front();
+
+            const bool is_positional =
+                (e.kind == WryEventKindMouseMove  ||
+                 e.kind == WryEventKindMouseDown  ||
+                 e.kind == WryEventKindMouseUp    ||
+                 e.kind == WryEventKindMouseEnter ||
+                 e.kind == WryEventKindMouseExit  ||
+                 e.kind == WryEventKindScroll);
+
+            if (is_positional) {
+                e.location.x *= scale_x;
+                e.location.y *= scale_y;
+                // Keep _mouse (NDC, y-up) in lockstep with the dispatched event.
+                _mouse.x = 2.0f * e.location.x / _gui.viewport_size.x - 1.0f;
+                _mouse.y = 1.0f - 2.0f * e.location.y / _gui.viewport_size.y;
+            }
+
+            if (!_stack.dispatch(e))
+                pump_legacy_event(e);
+        }
     }
 
 } // namespace wry

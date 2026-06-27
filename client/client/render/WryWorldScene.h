@@ -12,7 +12,7 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
-#include "model.hpp"
+#include "world_state.hpp"
 
 #import "WryRenderContext.h"
 #import "WryScene.h"
