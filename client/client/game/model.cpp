@@ -112,7 +112,7 @@ namespace wry {
         // The callback runs on a worker thread when the save finishes; post the
         // result for the main-thread pump to surface in the log.
         save_game_async(w, [this](bool ok) {
-            post_notification(ok ? "Saved." : "Save failed.");
+            _gui.post_notification(ok ? "Saved." : "Save failed.");
         });
         _worlds.push_front(std::move(w));
     }
@@ -132,7 +132,7 @@ namespace wry {
         simd_float4x4 F = simd_mul(matrix_perspective_right_hand(M_PI_2, 1, 5, 50),
                                    simd_matrix_scale(1, 1, -1, 1));
         
-        float aspect_ratio = _viewport_size.x / _viewport_size.y;
+        float aspect_ratio = _gui.viewport_size.x / _gui.viewport_size.y;
         simd_float4x4 P = simd_mul(simd_matrix_scale(2, 2 * aspect_ratio, 1),
                                    F);
         
@@ -195,8 +195,8 @@ namespace wry {
         // :todo: what if the viewport is odd-sized?
         // :todo:
         
-        simd_float4x4 C = simd_matrix_scale(_viewport_size.x / 2048.0f,
-                                            _viewport_size.y / 2048.0f,
+        simd_float4x4 C = simd_matrix_scale(_gui.viewport_size.x / 2048.0f,
+                                            _gui.viewport_size.y / 2048.0f,
                                             1.0f);
         
         

@@ -17,6 +17,7 @@
 #include "WrySplashScene.h"
 #include "WryMainMenuScene.h"
 #include "WryScene.h"
+#include "gui_context.hpp"
 #include "WryMetalView.h"
 #include "WryDelegate.h"
 #include "WryAudio.h"
@@ -138,6 +139,10 @@ namespace {
 
 @implementation WryDelegate
 {
+    // Host-owned generic GUI state (events, viewport, log / console,
+    // notifications), borrowed by the model and the scenes.  Declared before
+    // _model so it outlives it.
+    std::unique_ptr<wry::GuiContext> _gui;
     std::shared_ptr<wry::model> _model;
     NSWindow* _window;
     WryMetalView* _metalView;
@@ -163,7 +168,8 @@ namespace {
 {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     if ((self = [super init])) {
-        _model = std::make_shared<wry::model>();
+        _gui = std::make_unique<wry::GuiContext>();
+        _model = std::make_shared<wry::model>(*_gui);
     }
     return self;
 }
@@ -391,7 +397,7 @@ namespace {
     // navigation, function, and other non-text keys.
     fill_text_from_characters(ev, event.characters);
 
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 
@@ -406,7 +412,7 @@ namespace {
     ev.kind = WryEventKindKeyUp;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.key = key_from_event(event);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 
@@ -435,7 +441,7 @@ namespace {
     ev.kind = WryEventKindMouseMove;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.location = location_in_view_pt(_metalView, event);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 - (void) mouseEntered:(NSEvent *)event {
@@ -453,7 +459,7 @@ namespace {
     ev.kind = WryEventKindMouseEnter;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.location = location_in_view_pt(_metalView, event);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 - (void) mouseExited:(NSEvent *)event {
@@ -462,7 +468,7 @@ namespace {
     ev.kind = WryEventKindMouseExit;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.location = location_in_view_pt(_metalView, event);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 - (void) mouseDown:(NSEvent *)event {
@@ -473,7 +479,7 @@ namespace {
     ev.button = MouseButton::Left;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.location = location_in_view_pt(_metalView, event);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 - (void) mouseDragged:(NSEvent *)event {
@@ -489,7 +495,7 @@ namespace {
     ev.button = MouseButton::Left;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.location = location_in_view_pt(_metalView, event);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 - (void) rightMouseDown:(NSEvent *)event {
@@ -500,7 +506,7 @@ namespace {
     ev.button = MouseButton::Right;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.location = location_in_view_pt(_metalView, event);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 - (void) rightMouseDragged:(NSEvent *)event {
@@ -509,7 +515,7 @@ namespace {
     ev.kind = WryEventKindMouseMove;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.location = location_in_view_pt(_metalView, event);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 - (void) rightMouseUp:(NSEvent *)event {
@@ -520,7 +526,7 @@ namespace {
     ev.button = MouseButton::Right;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.location = location_in_view_pt(_metalView, event);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 - (void) otherMouseDown:(NSEvent *)event {
@@ -531,7 +537,7 @@ namespace {
     ev.button = MouseButton::Middle;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.location = location_in_view_pt(_metalView, event);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 - (void) otherMouseDragged:(NSEvent *)event {
@@ -540,7 +546,7 @@ namespace {
     ev.kind = WryEventKindMouseMove;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.location = location_in_view_pt(_metalView, event);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 - (void) otherMouseUp:(NSEvent *)event {
@@ -551,7 +557,7 @@ namespace {
     ev.button = MouseButton::Middle;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.location = location_in_view_pt(_metalView, event);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 -(void) scrollWheel:(NSEvent *)event {
@@ -565,7 +571,7 @@ namespace {
     CGFloat scale = _window.screen.backingScaleFactor;
     ev.scroll_delta.x = (float)(event.scrollingDeltaX * scale);
     ev.scroll_delta.y = (float)(event.scrollingDeltaY * scale);
-    _model->_events.push(ev);
+    _gui->events.push(ev);
 }
 
 - (void)encodeWithCoder:(nonnull NSCoder *)coder {

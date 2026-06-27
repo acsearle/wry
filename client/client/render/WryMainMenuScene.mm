@@ -137,8 +137,8 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
     float hpt = viewSizePoints.height > 0.0 ? (float)viewSizePoints.height : 1.0f;
     float sx = _viewportPx.x / wpt;
     float sy = _viewportPx.y / hpt;
-    while (!_model->_events.empty()) {
-        wry::gui::Event e = _model->_events.pop_front();
+    while (!_model->_gui.events.empty()) {
+        wry::gui::Event e = _model->_gui.events.pop_front();
         e.location.x *= sx;
         e.location.y *= sy;
         _root->on_event(e);

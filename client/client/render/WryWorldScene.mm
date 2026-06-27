@@ -749,8 +749,8 @@
     
     otf::BezierUniforms un;
     
-    float aspect_ratio = _model->_viewport_size.x / _model->_viewport_size.y;
-    float scale_size = 48.0 * (4.0/3.0) * 2.0 * 2.0 / _model->_viewport_size.x;
+    float aspect_ratio = _model->_gui.viewport_size.x / _model->_gui.viewport_size.y;
+    float scale_size = 48.0 * (4.0/3.0) * 2.0 * 2.0 / _model->_gui.viewport_size.x;
     un.transformation = matrix_float4x4{{
         { 1.0f * scale_size, 0.5f * scale_size * aspect_ratio, 0.0f, 0.1f },
         {-0.5f * scale_size, 1.0f * scale_size * aspect_ratio, 0.0f, 0.0f },
@@ -762,7 +762,7 @@
     
     
     un.inverse_transformation = inverse(un.transformation);
-    un.pixel_size = 1.0 / _model->_viewport_size;
+    un.pixel_size = 1.0 / _model->_gui.viewport_size;
 
     [encoder setMeshBuffer:buf_gi offset:0 atIndex:0];
     [encoder setMeshBuffer:buf_ch offset:0 atIndex:1];
@@ -794,8 +794,8 @@
                 vertexCount:v.size()];
     
     uniforms.position_transform = matrix_float4x4{{
-        {2.0f / _model->_viewport_size.x, 0.0f, 0.0f},
-        {0.0f, -2.0f / _model->_viewport_size.y, 0.0f, 0.0f},
+        {2.0f / _model->_gui.viewport_size.x, 0.0f, 0.0f},
+        {0.0f, -2.0f / _model->_gui.viewport_size.y, 0.0f, 0.0f},
         { 0.0f, 0.0f, 1.0f, 0.0f },
         {-1.0f, +1.0f, 0.0f, 1.0f},
     }};
@@ -873,7 +873,7 @@
 
         uniforms.position_transform = simd_mul(matrix_float4x4{{
             {1.0f, 0.0f, 0.0f},
-            {0.0f, -_model->_viewport_size.x / _model->_viewport_size.y, 0.0f, 0.0f},
+            {0.0f, -_model->_gui.viewport_size.x / _model->_gui.viewport_size.y, 0.0f, 0.0f},
             { 0.0f, 0.0f, 1.0f, 0.0f },
             {0.0f, -1.0f, 0.0f, 1.0f},
         }}, palette.controls()._transform);
@@ -978,8 +978,8 @@
     // ----- Screen-space overlays.  Set the screen-space transform on the
     // encoder; the sprite atlas accumulates and commits below.
     uniforms.position_transform = matrix_float4x4{{
-        {2.0f / _model->_viewport_size.x, 0.0f, 0.0f},
-        {0.0f, -2.0f / _model->_viewport_size.y, 0.0f, 0.0f},
+        {2.0f / _model->_gui.viewport_size.x, 0.0f, 0.0f},
+        {0.0f, -2.0f / _model->_gui.viewport_size.y, 0.0f, 0.0f},
         { 0.0f, 0.0f, 1.0f, 0.0f },
         {-1.0f, +1.0f, 0.0f, 1.0f},
     }};
@@ -994,14 +994,14 @@
         wry::gui::Painter painter;
         painter.atlas = _ctx.atlas;
         painter.font = _ctx.font;
-        painter.viewport_size_px = _model->_viewport_size;
+        painter.viewport_size_px = _model->_gui.viewport_size;
         painter.frame_count = (uint64_t)_frame_count;
         painter.white_sprite = _ctx.atlas->_white;
         // Default clip: the full viewport.  Widgets push tighter clips
         // around their own contents via Painter::push_clip / pop_clip.
         painter.clip = wry::rect<float>{
             0.0f, 0.0f,
-            _model->_viewport_size.x, _model->_viewport_size.y,
+            _model->_gui.viewport_size.x, _model->_gui.viewport_size.y,
         };
         _model->_stack.paint(painter);
     }
@@ -1853,8 +1853,8 @@
 -(void)drawableResize:(CGSize)drawableSize
 {
     
-    _model->_viewport_size.x = drawableSize.width;
-    _model->_viewport_size.y = drawableSize.height;
+    _model->_gui.viewport_size.x = drawableSize.width;
+    _model->_gui.viewport_size.y = drawableSize.height;
     _model->_regenerate_uniforms();
     
     // TODO: The shadow map must be recreated at the new size PLUS some

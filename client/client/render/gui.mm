@@ -265,8 +265,8 @@ namespace wry {
                 e.button != MouseButton::Left)
                 return false;
 
-            const float vw = _model->_viewport_size.x;
-            const float vh = _model->_viewport_size.y;
+            const float vw = _model->_gui.viewport_size.x;
+            const float vh = _model->_gui.viewport_size.y;
             if (vw <= 0.0f || vh <= 0.0f) return false;
 
             // Same composition as WryRenderer's drawOverlay: aspect-correct
@@ -982,7 +982,7 @@ namespace wry {
         void pump(model& m, float2 view_size_pt) {
             // Surface any messages background work (e.g. an async save) posted
             // since last frame, on the main thread.
-            m.drain_notifications();
+            m._gui.drain_notifications();
 
             // NSEvent locations arrive in *logical points* (what NSView's
             // bounds.size and locationInWindow speak).  The widget tree
@@ -993,11 +993,11 @@ namespace wry {
             // _rect and event.location share a coordinate space.
             const float w_pt = (view_size_pt.x > 0.0f) ? view_size_pt.x : 1.0f;
             const float h_pt = (view_size_pt.y > 0.0f) ? view_size_pt.y : 1.0f;
-            const float scale_x = m._viewport_size.x / w_pt;
-            const float scale_y = m._viewport_size.y / h_pt;
+            const float scale_x = m._gui.viewport_size.x / w_pt;
+            const float scale_y = m._gui.viewport_size.y / h_pt;
 
-            while (!m._events.empty()) {
-                Event e = m._events.pop_front();
+            while (!m._gui.events.empty()) {
+                Event e = m._gui.events.pop_front();
 
                 const bool is_positional =
                     (e.kind == WryEventKindMouseMove  ||
@@ -1014,8 +1014,8 @@ namespace wry {
                     // Keep _mouse (NDC, y-up) in lockstep with the event
                     // currently being dispatched.  Pixels in numerator and
                     // denominator now match.
-                    m._mouse.x = 2.0f * e.location.x / m._viewport_size.x - 1.0f;
-                    m._mouse.y = 1.0f - 2.0f * e.location.y / m._viewport_size.y;
+                    m._mouse.x = 2.0f * e.location.x / m._gui.viewport_size.x - 1.0f;
+                    m._mouse.y = 1.0f - 2.0f * e.location.y / m._gui.viewport_size.y;
                 }
 
                 bool consumed = m._stack.dispatch(e);
@@ -1067,21 +1067,21 @@ namespace wry {
                             std::snprintf(buffer, sizeof(buffer),
                                           "%s [J]acobians",
                                           m._show_jacobian ? "Show" : "Hide");
-                            m.append_log(buffer);
+                            m._gui.append_log(buffer);
                             break;
                         case 'p':
                             m._show_points = !m._show_points;
                             std::snprintf(buffer, sizeof(buffer),
                                           "%s [P]oints",
                                           m._show_points ? "Show" : "Hide");
-                            m.append_log(buffer);
+                            m._gui.append_log(buffer);
                             break;
                         case 'w':
                             m._show_wireframe = !m._show_wireframe;
                             std::snprintf(buffer, sizeof(buffer),
                                           "%s [W]ireframe",
                                           m._show_wireframe ? "Show" : "Hide");
-                            m.append_log(buffer);
+                            m._gui.append_log(buffer);
                             break;
                         default:
                             if ((e.key >= '0' && e.key <= '9') ||
