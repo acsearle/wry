@@ -66,11 +66,8 @@ namespace wry {
         Player const* _local_player = nullptr;
 
 
-        // debug state
-
-        bool _show_jacobian = false;
-        bool _show_points = false;
-        bool _show_wireframe = false;
+        // (debug toggles _show_jacobian / _show_points / _show_wireframe moved
+        //  to WryWorldScene.)
 
 
         // user interface state
@@ -88,18 +85,12 @@ namespace wry {
         gui::SaveListOverlay _save_list_overlay;
         gui::OverlayStack _stack;
 
-        // Legacy fields still read by WryRenderer.  These shrink as
-        // overlays take over their responsibilities:
-        //   _outstanding_click / _mouse4   -> WorldOverlay (later phase)
-        //   _outstanding_keysdown          -> WorldOverlay (later phase)
-        //   _looking_at                    -> WorldOverlay (later phase)
-        bool _outstanding_click = false;
+        // _holding_value (the opcode in hand) and _mouse (NDC cursor) stay here
+        // for now: the palette overlay writes / reads them.  The other legacy
+        // world-input fields (_outstanding_click / _outstanding_keysdown,
+        // _looking_at, _mouse4) moved to WryWorldScene in 5.4b.
         Root<Term> _holding_value = {};
-        float2 _looking_at = {};
         float2 _mouse = {};
-        simd_float4 _mouse4 = {};
-
-        String _outstanding_keysdown;
         
         // visualization state
         

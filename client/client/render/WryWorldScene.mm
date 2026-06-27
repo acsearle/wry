@@ -54,7 +54,20 @@
     // commands are polled back in -update before stepping.  A LocalServer for
     // single player; a networked Server would swap in for a joined game.
     std::unique_ptr<wry::Server> _server;
-    
+
+    // World-session view/input state, owned here (moved off the model in 5.4b).
+    // _holding_value, _mouse and _uniforms still live on the model for now --
+    // they are shared with the palette overlay / _regenerate_uniforms.
+    // (no in-class initializers: ObjC ivars are zero-filled at alloc, which
+    //  gives false / {0,…} / empty String -- the same defaults as before.)
+    bool _show_jacobian;
+    bool _show_points;
+    bool _show_wireframe;
+    simd_float2 _looking_at;            // scroll-pan accumulator
+    simd_float4 _mouse4;               // cursor projected onto the ground plane
+    bool _outstanding_click;          // pending world click (-> -submitLocalCommands)
+    wry::String _outstanding_keysdown;// pending hex-key writes
+
     
     
     // Shared device + 2D-services context: device, command queue, shader
@@ -734,7 +747,7 @@
     //++oof; if (oof >= gi.size()) oof = 0;
     auto str = "Sphinx of black quartz, judge my rasterizer.";
     simd_float2 pos = {-4.0, -1.0};
-    // pos += _model->_looking_at / 1024.0f * float2{1.0f, -1.0f};
+    // pos += _looking_at / 1024.0f * float2{1.0f, -1.0f};
     for (auto a = str; *a; ++a) {
         // auto q = _ctx.font->charmap.find(*a);
         auto q = _ctx.font2.charmap.find(*a);
@@ -1021,7 +1034,7 @@
 // Build this frame's local-player commands from input and submit them to the
 // Server.  Pulled out of the render path (this used to live in -drawOverlay):
 // turning input into commands is a game-state concern, not a drawing one.  It
-// also computes the cursor's ground-plane projection (_model->_mouse4) the
+// also computes the cursor's ground-plane projection (_mouse4) the
 // renderer reads, so that projection no longer happens during -render either.
 - (void)submitLocalCommands
 {
@@ -1031,18 +1044,18 @@
     // Cursor -> ground plane.  Same transform the renderer builds for the grid,
     // recomputed here so input no longer depends on the render pass.
     auto lookat = matrix_identity_float4x4;
-    lookat.columns[3].x += _model->_looking_at.x / 1024.0f;
-    lookat.columns[3].y -= _model->_looking_at.y / 1024.0f;
+    lookat.columns[3].x += _looking_at.x / 1024.0f;
+    lookat.columns[3].y -= _looking_at.y / 1024.0f;
     simd_float4x4 A = simd_mul(_model->_uniforms.viewprojection_transform, lookat);
     simd_float4 b = make<float4>(_model->_mouse, 0.0f, 1.0f);
-    _model->_mouse4 = make<float4>(project_screen_ray(A, b), 0.0f, 1.0f);
+    _mouse4 = make<float4>(project_screen_ray(A, b), 0.0f, 1.0f);
 
     // Click: write the held value at the tile under the cursor.  (PaletteOverlay
     // claims palette-area clicks before pump ever sets _outstanding_click, so
     // anything here is for the world tile.)
-    if (_model->_outstanding_click) {
-        int i = round(_model->_mouse4.x);
-        int j = round(_model->_mouse4.y);
+    if (_outstanding_click) {
+        int i = round(_mouse4.x);
+        int j = round(_mouse4.y);
         Coordinate xy{i, j};
         Player::Action a;
         a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
@@ -1050,16 +1063,16 @@
         a.value = _model->_holding_value;
         _server->submit(std::move(a));
         printf(" Clicked world (%d, %d)\n", i, j);
-        _model->_outstanding_click = false;
+        _outstanding_click = false;
     }
 
     // Hex keys: write the digit at the tile under the cursor.
-    while (!_model->_outstanding_keysdown.empty()) {
-        char32_t ch = _model->_outstanding_keysdown.front_and_pop_front();
+    while (!_outstanding_keysdown.empty()) {
+        char32_t ch = _outstanding_keysdown.front_and_pop_front();
         if (wry::isascii((int) ch) && isxdigit(ch)) {
             int64_t k = wry::base36::from_base36_table[ch];
-            int i = round(_model->_mouse4.x);
-            int j = round(_model->_mouse4.y);
+            int i = round(_mouse4.x);
+            int j = round(_mouse4.y);
             Coordinate xy{i, j};
             Player::Action a;
             a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
@@ -1082,12 +1095,12 @@
 
         case WryEventKindMouseUp:
             if (e.button == MouseButton::Left)
-                _model->_outstanding_click = true;
+                _outstanding_click = true;
             break;
 
         case WryEventKindScroll:
-            _model->_looking_at.x += e.scroll_delta.x;
-            _model->_looking_at.y += e.scroll_delta.y;
+            _looking_at.x += e.scroll_delta.x;
+            _looking_at.y += e.scroll_delta.y;
             break;
 
         case WryEventKindKeyDown: {
@@ -1098,27 +1111,27 @@
                     _model->_stack.push(&_model->_main_menu_overlay);
                     break;
                 case 'j':
-                    _model->_show_jacobian = !_model->_show_jacobian;
+                    _show_jacobian = !_show_jacobian;
                     std::snprintf(buffer, sizeof(buffer), "%s [J]acobians",
-                                  _model->_show_jacobian ? "Show" : "Hide");
+                                  _show_jacobian ? "Show" : "Hide");
                     _model->_gui.append_log(buffer);
                     break;
                 case 'p':
-                    _model->_show_points = !_model->_show_points;
+                    _show_points = !_show_points;
                     std::snprintf(buffer, sizeof(buffer), "%s [P]oints",
-                                  _model->_show_points ? "Show" : "Hide");
+                                  _show_points ? "Show" : "Hide");
                     _model->_gui.append_log(buffer);
                     break;
                 case 'w':
-                    _model->_show_wireframe = !_model->_show_wireframe;
+                    _show_wireframe = !_show_wireframe;
                     std::snprintf(buffer, sizeof(buffer), "%s [W]ireframe",
-                                  _model->_show_wireframe ? "Show" : "Hide");
+                                  _show_wireframe ? "Show" : "Hide");
                     _model->_gui.append_log(buffer);
                     break;
                 default:
                     if ((e.key >= '0' && e.key <= '9') ||
                         (e.key >= 'a' && e.key <= 'f')) {
-                        _model->_outstanding_keysdown.push_back((char32_t)e.key);
+                        _outstanding_keysdown.push_back((char32_t)e.key);
                     }
                     break;
             }
@@ -1234,8 +1247,8 @@
     
     // Construct ground plane transforms
     auto lookat_transform =  matrix_identity_float4x4;
-    lookat_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
-    lookat_transform.columns[3].y -= _model->_looking_at.y / 1024.0f;
+    lookat_transform.columns[3].x += _looking_at.x / 1024.0f;
+    lookat_transform.columns[3].y -= _looking_at.y / 1024.0f;
 
     MeshInstanced mesh_instanced_things = {};
     {
@@ -1259,7 +1272,7 @@
         simd_float4x4 A = simd_mul(uniforms.viewprojection_transform,
                                    mesh_instanced_things.model_transform);
         
-        // (_model->_mouse4 -- the cursor's ground-plane projection -- is now
+        // (_mouse4 -- the cursor's ground-plane projection -- is now
         // computed in -submitLocalCommands during -update, not here.)
         
         // Screen corners
@@ -1569,7 +1582,7 @@
         
         {
             // mouse cursor thing
-            simd_float4 location = _model->_mouse4;
+            simd_float4 location = _mouse4;
             location.x = round(location.x);
             location.y = round(location.y);
             location.z = 0.1f;
@@ -1598,8 +1611,8 @@
             k += 4;
             
             int2 xy;
-            xy.x = round(_model->_mouse4.x);
-            xy.y = round(_model->_mouse4.z);
+            xy.x = round(_mouse4.x);
+            xy.y = round(_mouse4.z);
             ulong z = 0;
             memcpy(&z, &xy, 8);
             //ulong value = new_world->get(z);
@@ -1758,9 +1771,9 @@
 
                 bool show_jacobian, show_points, show_wireframe;
                 {
-                    show_jacobian = _model->_show_jacobian;
-                    show_points = _model->_show_points;
-                    show_wireframe = _model->_show_wireframe;
+                    show_jacobian = _show_jacobian;
+                    show_points = _show_points;
+                    show_wireframe = _show_wireframe;
 
                 }
 
