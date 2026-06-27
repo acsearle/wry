@@ -589,9 +589,9 @@ namespace {
     if ([_scene respondsToSelector:@selector(handleEventsWithViewSize:)]) {
         [_scene handleEventsWithViewSize:sz];
     } else {
-        wry::gui::pump(*_model,
-                       simd_make_float2((float)sz.width,
-                                        (float)sz.height));
+        // Scenes without an input handler (the splash) discard their input so
+        // it doesn't pile up and leak into the next scene.
+        _gui->events.clear();
     }
     // Advance the current scene, then draw it.  Splitting update from the draw
     // is the seam scenes use: a splash / menu scene has no world to step, so

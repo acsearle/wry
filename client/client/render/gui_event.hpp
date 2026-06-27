@@ -153,17 +153,10 @@ namespace wry::gui {
         void clear() { events.clear(); }
     };
 
-    // Per-frame event pump.  Drains EventQueue, walking each event through
-    // the model's OverlayStack (top-down) and falling back -- for events
-    // that no overlay claimed -- to a transitional legacy handler that
-    // still backs the world click / scroll-pan / debug-toggle paths.  As
-    // more overlays come online (WorldOverlay, MainMenu, ...) the legacy
-    // fallback shrinks and is eventually deleted.
-    //
-    //   view_size_pt: bounds of the metal view in logical points, used by
-    //   the legacy fallback to map event.location into the model's NDC
-    //   `_mouse` field while the renderer still expects NDC there.
-    void pump(model& m, float2 view_size_pt);
+    // The per-frame event pump moved into WryWorldScene
+    // (-handleEventsWithViewSize:) -- the world scene owns its own input now.
+    // Menu / splash scenes handle (or discard) their own input via the WryScene
+    // protocol.
 
 } // namespace wry::gui
 

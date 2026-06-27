@@ -1070,6 +1070,110 @@
     }
 }
 
+// Whatever the overlay stack didn't claim: the world's ground-plane click,
+// scroll-pan, ESC-opens-the-in-game-menu, hex-key writes, and the debug
+// toggles.  These shrink as overlays take over (the click / hex-key flags are
+// consumed by -submitLocalCommands).
+- (void)pumpLegacyEvent:(wry::gui::Event const&)e {
+    using namespace ::wry;
+    using namespace ::wry::gui;
+
+    switch (e.kind) {
+
+        case WryEventKindMouseUp:
+            if (e.button == MouseButton::Left)
+                _model->_outstanding_click = true;
+            break;
+
+        case WryEventKindScroll:
+            _model->_looking_at.x += e.scroll_delta.x;
+            _model->_looking_at.y += e.scroll_delta.y;
+            break;
+
+        case WryEventKindKeyDown: {
+            char buffer[100];
+            switch (e.key) {
+                case key::Escape:
+                    // Nothing else claimed ESC -> open the in-game menu.
+                    _model->_stack.push(&_model->_main_menu_overlay);
+                    break;
+                case 'j':
+                    _model->_show_jacobian = !_model->_show_jacobian;
+                    std::snprintf(buffer, sizeof(buffer), "%s [J]acobians",
+                                  _model->_show_jacobian ? "Show" : "Hide");
+                    _model->_gui.append_log(buffer);
+                    break;
+                case 'p':
+                    _model->_show_points = !_model->_show_points;
+                    std::snprintf(buffer, sizeof(buffer), "%s [P]oints",
+                                  _model->_show_points ? "Show" : "Hide");
+                    _model->_gui.append_log(buffer);
+                    break;
+                case 'w':
+                    _model->_show_wireframe = !_model->_show_wireframe;
+                    std::snprintf(buffer, sizeof(buffer), "%s [W]ireframe",
+                                  _model->_show_wireframe ? "Show" : "Hide");
+                    _model->_gui.append_log(buffer);
+                    break;
+                default:
+                    if ((e.key >= '0' && e.key <= '9') ||
+                        (e.key >= 'a' && e.key <= 'f')) {
+                        _model->_outstanding_keysdown.push_back((char32_t)e.key);
+                    }
+                    break;
+            }
+            break;
+        }
+
+        default:
+            break;
+    }
+}
+
+// World input.  Moved here from the free gui::pump (5.4): the world scene owns
+// its own input.  Drains the shared event queue, promotes point locations to
+// drawable pixels, dispatches through the (still model-owned) overlay stack,
+// and routes whatever no overlay claimed to the legacy handler above.
+- (void)handleEventsWithViewSize:(CGSize)viewSizePoints {
+    using namespace ::wry;
+    using namespace ::wry::gui;
+
+    // Surface any messages background work (e.g. an async save) posted since
+    // last frame, on the main thread.
+    _model->_gui.drain_notifications();
+
+    // NSEvent locations arrive in logical points; the widget tree and the
+    // renderer's screen-space transform run in drawable pixels.  Promote
+    // event.location once here, at the dispatch boundary.
+    const float w_pt = (viewSizePoints.width  > 0.0) ? (float)viewSizePoints.width  : 1.0f;
+    const float h_pt = (viewSizePoints.height > 0.0) ? (float)viewSizePoints.height : 1.0f;
+    const float scale_x = _model->_gui.viewport_size.x / w_pt;
+    const float scale_y = _model->_gui.viewport_size.y / h_pt;
+
+    while (!_model->_gui.events.empty()) {
+        Event e = _model->_gui.events.pop_front();
+
+        const bool is_positional =
+            (e.kind == WryEventKindMouseMove  ||
+             e.kind == WryEventKindMouseDown  ||
+             e.kind == WryEventKindMouseUp    ||
+             e.kind == WryEventKindMouseEnter ||
+             e.kind == WryEventKindMouseExit  ||
+             e.kind == WryEventKindScroll);
+
+        if (is_positional) {
+            e.location.x *= scale_x;
+            e.location.y *= scale_y;
+            // Keep _mouse (NDC, y-up) in lockstep with the dispatched event.
+            _model->_mouse.x = 2.0f * e.location.x / _model->_gui.viewport_size.x - 1.0f;
+            _model->_mouse.y = 1.0f - 2.0f * e.location.y / _model->_gui.viewport_size.y;
+        }
+
+        if (!_model->_stack.dispatch(e))
+            [self pumpLegacyEvent:e];
+    }
+}
+
 -(void)update:(double)dtSeconds
 {
     using namespace ::wry;
