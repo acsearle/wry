@@ -25,7 +25,7 @@
 #include "contiguous_deque.hpp"
 #include "simd.hpp"
 
-namespace wry { struct model; }
+namespace wry { struct WorldState; }
 
 // Apple-style discriminator at global scope: a non-scoped enum with a Wry
 // prefix on the type and on every value, matching the convention Cocoa /

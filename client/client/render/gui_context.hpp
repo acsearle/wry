@@ -20,9 +20,8 @@
 namespace wry {
 
     // Host-owned, scene-agnostic GUI state -- the generic "app" tier, lifted out
-    // of wry::model so it outlives any single scene and the model can eventually
-    // be dissolved.  The host (WryDelegate) owns one; the model and the scenes
-    // borrow it.
+    // of the world state so it outlives any single scene.  The host
+    // (WryDelegate) owns one; the WorldState and the scenes borrow it.
     struct GuiContext {
 
         // Raw input: WryDelegate's NSResponder callbacks translate each NSEvent

@@ -26,7 +26,7 @@
 
 // Built against the host-owned render context (device + shared 2D services).
 - (nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
-                                  model:(std::shared_ptr<wry::model>)model_;
+                                  model:(std::shared_ptr<wry::WorldState>)model_;
 
 // Advance the simulation one step.  Call once per frame before -render; the
 // two are deliberately separate so a scene with no world (splash / menu) can

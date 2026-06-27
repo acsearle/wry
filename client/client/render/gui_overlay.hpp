@@ -219,7 +219,7 @@ namespace wry {
 
         // Ordered, top-of-stack-last.  Non-owning: the stack just borrows
         // pointers to overlays whose lifetime is managed elsewhere (today,
-        // by direct membership in `wry::model`).
+        // by direct membership in `wry::WorldState`).
         class OverlayStack {
         public:
             void push(Overlay* o)    { _overlays.push_back(o); }
@@ -301,7 +301,7 @@ namespace wry {
             // palette projection (it needs the world / palette transform
             // and the screen-space cursor).  The model pointer is set
             // once at startup by the renderer / app glue.
-            void set_model(struct ::wry::model* m) { _model = m; }
+            void set_model(struct ::wry::WorldState* m) { _model = m; }
 
             // Bring-up: WryRenderer fills this at init from assets.json.
             // The struct name `Palette<T>` reads as "a grid of T values";
@@ -328,7 +328,7 @@ namespace wry {
             int _hover_i    = -1;
             int _hover_j    = -1;
             bool _cursor_dirty = false;
-            struct ::wry::model* _model = nullptr;
+            struct ::wry::WorldState* _model = nullptr;
         };
 
         // ----------------------------------------------------------------
@@ -357,14 +357,14 @@ namespace wry {
             // The LOAD button needs to push the save-list overlay onto
             // the model's stack; we get the model pointer set once at
             // startup and the button's click lambda reads it via `this`.
-            void set_model(struct ::wry::model* m) { _model = m; }
+            void set_model(struct ::wry::WorldState* m) { _model = m; }
 
         private:
             // unique_ptr to a forward-declared Widget so this header
             // doesn't need to know the layout of the widget tree.  The
             // tree is constructed in the .cpp (well, .mm).
             std::unique_ptr<Widget> _root;
-            struct ::wry::model* _model = nullptr;
+            struct ::wry::WorldState* _model = nullptr;
         };
 
         // ----------------------------------------------------------------
@@ -394,7 +394,7 @@ namespace wry {
 
             // load_selected / delete_selected drive the model's world and the
             // save files; set once at startup by the model constructor.
-            void set_model(struct ::wry::model* m) { _model = m; }
+            void set_model(struct ::wry::WorldState* m) { _model = m; }
 
             // Rebuild the row list from the current save files.  Call before
             // showing the overlay (saves may have changed since last shown).
@@ -410,7 +410,7 @@ namespace wry {
             // row's id is what load/delete act on.
             std::vector<int>           _save_ids;
 
-            struct ::wry::model* _model = nullptr;
+            struct ::wry::WorldState* _model = nullptr;
 
             int _selected_index = 0;
 

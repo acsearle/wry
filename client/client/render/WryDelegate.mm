@@ -143,7 +143,7 @@ namespace {
     // notifications), borrowed by the model and the scenes.  Declared before
     // _model so it outlives it.
     std::unique_ptr<wry::GuiContext> _gui;
-    std::shared_ptr<wry::model> _model;
+    std::shared_ptr<wry::WorldState> _model;
     NSWindow* _window;
     WryMetalView* _metalView;
     CAMetalLayer* _metalLayer;
@@ -169,7 +169,7 @@ namespace {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     if ((self = [super init])) {
         _gui = std::make_unique<wry::GuiContext>();
-        _model = std::make_shared<wry::model>(*_gui);
+        _model = std::make_shared<wry::WorldState>(*_gui);
     }
     return self;
 }
@@ -223,7 +223,7 @@ namespace {
     // Boot flow: splash -> main menu -> world.  The world scene is built lazily
     // (its asset load is heavy) the moment the menu hands control on.
     WryRenderContext* ctx = _ctx;
-    std::shared_ptr<wry::model> model = _model;
+    std::shared_ptr<wry::WorldState> model = _model;
     id<WryScene> (^makeWorld)(void) = ^id<WryScene>{
         return [[WryWorldScene alloc] initWithContext:ctx model:model];
     };

@@ -32,7 +32,7 @@
 
 namespace wry {
     
-    struct model {
+    struct WorldState {
         
         // The model holds all the app state, including the World, but
         // also the visualization-only parts of the app state
@@ -66,8 +66,10 @@ namespace wry {
         Player const* _local_player = nullptr;
 
 
-        // (debug toggles _show_jacobian / _show_points / _show_wireframe moved
-        //  to WryWorldScene.)
+        // debug toggles ('j' / 'p' / 'w')
+        bool _show_jacobian = false;
+        bool _show_points = false;
+        bool _show_wireframe = false;
 
 
         // user interface state
@@ -85,12 +87,13 @@ namespace wry {
         gui::SaveListOverlay _save_list_overlay;
         gui::OverlayStack _stack;
 
-        // _holding_value (the opcode in hand) and _mouse (NDC cursor) stay here
-        // for now: the palette overlay writes / reads them.  The other legacy
-        // world-input fields (_outstanding_click / _outstanding_keysdown,
-        // _looking_at, _mouse4) moved to WryWorldScene in 5.4b.
-        Root<Term> _holding_value = {};
-        float2 _mouse = {};
+        // Local player's session view / input state.
+        Root<Term> _holding_value = {};   // the opcode in hand (palette writes it)
+        float2 _mouse = {};               // NDC cursor (palette reads it)
+        float2 _looking_at = {};          // scroll-pan accumulator
+        simd_float4 _mouse4 = {};         // cursor projected onto the ground plane
+        bool _outstanding_click = false;  // pending world click
+        String _outstanding_keysdown;     // pending hex-key writes
         
         // visualization state
         
@@ -101,7 +104,7 @@ namespace wry {
 
         MeshUniforms _uniforms;
 
-        explicit model(GuiContext& gui) : _gui(gui) {
+        explicit WorldState(GuiContext& gui) : _gui(gui) {
 
             // Overlay wiring.  Stack order, bottom up: floating log, palette,
             // console (modal-on-top).  Push order = paint order; dispatch is
@@ -141,7 +144,7 @@ namespace wry {
 
         void _regenerate_uniforms();
         
-        ~model() {
+        ~WorldState() {
             fprintf(stderr, "%s\n", __PRETTY_FUNCTION__);
         }
         

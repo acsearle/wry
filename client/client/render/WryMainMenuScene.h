@@ -25,7 +25,7 @@
 // lazily (after new_game / load) because the world's asset load is heavy.
 // `quit` is invoked by QUIT TO DESKTOP to ask the host to exit.
 - (nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
-                                  model:(std::shared_ptr<wry::model>)model
+                                  model:(std::shared_ptr<wry::WorldState>)model
                                    next:(nonnull id<WryScene> (^)(void))nextFactory
                                    quit:(nonnull void (^)(void))quit;
 

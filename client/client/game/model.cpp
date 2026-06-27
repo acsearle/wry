@@ -83,22 +83,22 @@ namespace wry {
     // Swap in `world` as the only entry in _worlds, re-pointing the local
     // player.  Single-threaded at the call sites (main thread, between pump
     // and render), so the brief drain is unobservable to the renderer.
-    static void install_displayed_world(model& m, World* world) {
+    static void install_displayed_world(WorldState& m, World* world) {
         m._local_player = find_local_player(world);
         Root<World const*> discard;
         while (m._worlds.try_pop_front(discard)) { }
         m._worlds.emplace_back(world);
     }
 
-    void model::new_game() {
+    void WorldState::new_game() {
         install_displayed_world(*this, make_starting_world());
     }
 
-    void model::load_from_save(int id) {
+    void WorldState::load_from_save(int id) {
         install_displayed_world(*this, load_game(id));
     }
 
-    void model::save_current() {
+    void WorldState::save_current() {
         // Hand a rooted snapshot of the displayed world to the async saver and
         // return to the frame immediately; the save no longer blocks the main
         // thread.  The world is an immutable persistent structure that
@@ -118,7 +118,7 @@ namespace wry {
     }
 
 
-    void model::_regenerate_uniforms() {
+    void WorldState::_regenerate_uniforms() {
         
         // camera setup
         

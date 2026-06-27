@@ -57,7 +57,7 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
 @implementation WryMainMenuScene
 {
     WryRenderContext* _ctx;
-    std::shared_ptr<wry::model> _model;
+    std::shared_ptr<wry::WorldState> _model;
     id<MTLTexture> _target;
     simd_float2 _viewportPx;       // drawable pixels; widgets lay out in this
     uint64_t _frameCount;
@@ -73,7 +73,7 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
 }
 
 - (nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
-                                  model:(std::shared_ptr<wry::model>)model
+                                  model:(std::shared_ptr<wry::WorldState>)model
                                    next:(nonnull id<WryScene> (^)(void))nextFactory
                                    quit:(nonnull void (^)(void))quit
 {
