@@ -452,8 +452,11 @@ namespace wry {
     // must call before wait is called
     void wait_group_spawn(Coroutine::Task task);
 
-    // must call exactly once
+    // blocking; consumes main's sentinel, so call exactly once
     void wait_group_wait();
+
+    // consumes main's sentinel, so call exactly once
+    void wait_group_set_callback(void* callback);
 
 } // namespace wry
 

@@ -23,13 +23,23 @@ namespace wry {
 
     namespace {
 
+        // Initial count includes sentinel
         constinit wry::Atomic<std::ptrdiff_t> g_wait_group_count{1};
+
+        // Not atomic; protected by sentinel
+        void* g_wait_group_callback = nullptr;
 
         void (*g_wait_group_continuation)(void*) = [](void*) {
             std::ptrdiff_t n = g_wait_group_count.sub_fetch_release(1);
             assert(n >= 0);
-            if (n == 0)
-                g_wait_group_count.notify_all();
+            if (n == 0) {
+                std::atomic_thread_fence(std::memory_order::acquire);
+                (*((void(**)(void*))g_wait_group_callback))(g_wait_group_callback);
+            }
+        };
+
+        void (*g_wait_group_notify_all)(void*) = [](void*) {
+            g_wait_group_count.notify_all();
         };
 
     }
@@ -42,10 +52,25 @@ namespace wry {
     }
 
     void wait_group_wait() {
-        std::ptrdiff_t expected = g_wait_group_count.sub_fetch_relaxed(1);
-        while (expected)
+        g_wait_group_callback = &g_wait_group_notify_all;
+        std::ptrdiff_t expected = g_wait_group_count.sub_fetch_release(1);
+        assert(expected >= 0);
+        while (expected) {
             g_wait_group_count.wait(expected, Ordering::RELAXED);
-        std::atomic_thread_fence(std::memory_order_acquire);
+            assert(expected >= 0);
+        }
+        std::atomic_thread_fence(std::memory_order::acquire);
+    }
+
+    void wait_group_set_callback(void* callback) {
+        g_wait_group_callback = callback;
+        std::ptrdiff_t expected = g_wait_group_count.sub_fetch_release(1);
+        assert(expected >= 0);
+        if (expected == 0) {
+            // If all the tasks were finished, invoke immediately
+            std::atomic_thread_fence(std::memory_order_acquire);
+            (*((void(**)(void*))g_wait_group_callback))(g_wait_group_callback);
+        }
     }
 
 }

@@ -127,23 +127,73 @@ int main(int argc, const char** argv) {
                 }
             }
 
+            // Shutdown.  QUIT TO DESKTOP (and the window's own close button)
+            // took the window off screen and set `done`, ending the loop above.
+            printf("main is terminal\n");
+            printf("main is joining background work\n");
+            wry::mutator_unpin();
+            // Stay unpinned for the rest of shutdown.  If main re-pins, the
+            // collector can't advance the epoch past main's pin, so its
+            // `epoch::wait` in `loop_until_canceled` never returns and the
+            // collector_thread.join() below deadlocks.  main pumps the run loop
+            // below but never as a mutator; the tasks finishing on worker
+            // threads are the mutators the collector needs.
+
+            // AppKit only hands the window's removal to the Window Server when
+            // the run loop next sleeps (kCFRunLoopBeforeWaiting commits the
+            // pending transaction); after that one pass the Window Server takes
+            // the window down on its own timeline, independent of this thread.
+            // do/while so we always make at least one such pass, even when the
+            // wait group is already drained -- otherwise a QUIT with no
+            // background work in flight would fall straight into the blocking
+            // joins below with the window still on screen (the original bug).
+            // When work *is* in flight the loop keeps pumping so a long save
+            // doesn't strand a half-closed window; the 50ms timeout just bounds
+            // the poll.  (The terminating nil-returning nextEvent call is the
+            // one that sleeps and so commits the removal.)
+
+            // coroutine layout-compatible, with resume as first member
+            struct callback_t {
+                void (*resume)(void*);
+                wry::Atomic<bool> done{false};
+            };
+            callback_t c;
+            c.resume = [](void* p) {
+                NSEvent* event = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                                    location:NSMakePoint(0.0, 0.0)
+                                               modifierFlags:0
+                                                   timestamp:0
+                                                windowNumber:0
+                                                     context:nil
+                                                     subtype:0
+                                                       data1:0
+                                                       data2:0];
+                [[NSApplication sharedApplication] postEvent:event atStart:NO];
+                ((callback_t*)p)->done.store_release(true);
+            };
+
+            wry::wait_group_set_callback(&c);
+
+            do {
+                @autoreleasepool {
+                    while (NSEvent* event = [application nextEventMatchingMask:NSEventMaskAny
+                                                                     untilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]
+                                                                        inMode:NSDefaultRunLoopMode
+                                                                       dequeue:YES]) {
+                        [application sendEvent:event];
+                    }
+                }
+            } while (!c.done.load_acquire());
+
         } // @autoreleasepool
+    } else {
+        printf("main is terminal\n");
+        printf("main is joining background work\n");
+        // No run loop to service in headless test mode, so just block on the
+        // drain.  Stay unpinned afterwards for the same reason as the GUI branch.
+        wry::mutator_unpin();
+        wry::wait_group_wait();
     }
-
-    printf("main is terminal\n");
-
-    // Block until all WaitGroup-anchored work (the unit tests, any in-flight
-    // background saves) has finished -- the GUI loop has stopped, so nothing
-    // new is spawned past this point, and the workers are still alive to drain
-    // it.  Must precede global_work_queue_cancel below.
-    printf("main is joining background work\n");
-    wry::mutator_unpin();
-    wry::wait_group_wait();
-    // Stay unpinned for shutdown.  If main re-pins here, the collector
-    // can't ever advance the epoch past main's pin, so its `epoch::wait`
-    // at the top of `loop_until_canceled` never returns and the
-    // subsequent `collector_thread.join()` deadlocks.  None of the
-    // teardown calls below need main to be a mutator.
 
     if (test_only) {
         heartbeat_stop.store(true, std::memory_order_relaxed);

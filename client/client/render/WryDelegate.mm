@@ -229,7 +229,19 @@ namespace {
         };
     __weak WryDelegate* weakSelf = self;
     void (^quit)(void) = ^{
-        weakSelf.done = YES;  // ends main's run loop -> graceful shutdown
+        WryDelegate* strongSelf = weakSelf;
+        if (!strongSelf)
+            return;
+        // Take the window off screen and end main's render loop.  AppKit only
+        // hands the removal to the Window Server on a later run-loop pass, so
+        // the window does NOT vanish inside this call.  main's shutdown keeps
+        // pumping the run loop while it drains background work (see
+        // core/main.mm), which supplies that pass, so the window disappears
+        // promptly.  Earlier attempts froze it because main blocked the run loop
+        // the instant `done` flipped -- that starvation was the bug, not the
+        // choice of orderOut: / close / performClose:.
+        [strongSelf->_window orderOut:nil];
+        strongSelf.done = YES;  // ends main's render loop -> shutdown
     };
     WryMainMenuScene* menu =
         [[WryMainMenuScene alloc] initWithContext:_ctx
