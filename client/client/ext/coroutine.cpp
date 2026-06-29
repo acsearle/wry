@@ -15,6 +15,10 @@
 #include "execution.hpp"
 #include "test.hpp"
 
+#if __has_feature(thread_sanitizer)
+#include <sanitizer/tsan_interface.h>
+#endif
+
 namespace wry {
 
     void global_work_queue_schedule(std::coroutine_handle<> handle) {
@@ -22,6 +26,23 @@ namespace wry {
     }
 
     namespace {
+
+        // g_wait_group_callback is published by the waiter (a plain write) and
+        // read by whichever worker drives g_wait_group_count to zero.  The
+        // synchronization is real and C++20-correct: the waiter's release on
+        // g_wait_group_count (after writing the callback) is picked up by the
+        // worker's acquire fence, via the release sequence that runs through
+        // the workers' sub_fetch RMWs.  ThreadSanitizer does not reconstruct
+        // happens-before from a standalone acquire fence over a release
+        // sequence, so it false-positives on the non-atomic callback word.
+        // tsan_release / tsan_acquire on the callback's address hand TSan the
+        // edge it cannot derive (cf. kqueue_reactor, where the kernel hides
+        // the same edge).  No-ops outside a TSan build.
+#if __has_feature(thread_sanitizer)
+        void tsan_acquire(void* addr) { __tsan_acquire(addr); }
+#else
+        void tsan_acquire(void*) {}
+#endif
 
         // Initial count includes sentinel
         constinit wry::Atomic<std::ptrdiff_t> g_wait_group_count{1};
@@ -34,6 +55,7 @@ namespace wry {
             assert(n >= 0);
             if (n == 0) {
                 std::atomic_thread_fence(std::memory_order::acquire);
+                tsan_acquire(&g_wait_group_count);
                 (*((void(**)(void*))g_wait_group_callback))(g_wait_group_callback);
             }
         };
@@ -60,6 +82,7 @@ namespace wry {
             assert(expected >= 0);
         }
         std::atomic_thread_fence(std::memory_order::acquire);
+        tsan_acquire(&g_wait_group_count);
     }
 
     void wait_group_set_callback(void* callback) {
@@ -69,6 +92,7 @@ namespace wry {
         if (expected == 0) {
             // If all the tasks were finished, invoke immediately
             std::atomic_thread_fence(std::memory_order_acquire);
+            tsan_acquire(&g_wait_group_count);
             (*((void(**)(void*))g_wait_group_callback))(g_wait_group_callback);
         }
     }

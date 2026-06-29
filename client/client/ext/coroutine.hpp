@@ -318,7 +318,13 @@ namespace wry::Coroutine {
         
         static void static_resume(void* ptr) {
             auto self = (Nursery*)ptr;
-            auto count = self->_counter.sub_fetch_relaxed(1);
+            // Release: each completing child publishes its writes (e.g. the
+            // result it stored into its join target) into _counter's modification
+            // order.  The thread that drives the count to zero -- here, or the
+            // joiner's load_acquire / exchange_acquire -- acquires the whole
+            // chain of child releases (reference-count handoff).  A relaxed
+            // decrement here would leave the post-join reads unsynchronized.
+            auto count = self->_counter.sub_fetch_release(1);
             if (count == 0) {
                 (void) self->_counter.load_acquire();
                 ptr = self->_continuation.address();
