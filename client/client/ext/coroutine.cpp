@@ -10,6 +10,8 @@
 #include <cstddef>
 #include <mutex>
 
+#include <dispatch/dispatch.h>
+
 #include "coroutine.hpp"
 
 #include "execution.hpp"
@@ -95,6 +97,40 @@ namespace wry {
             tsan_acquire(&g_wait_group_count);
             (*((void(**)(void*))g_wait_group_callback))(g_wait_group_callback);
         }
+    }
+
+}
+
+namespace wry::Coroutine {
+
+    namespace {
+        // libdispatch invokes this with the suspended coroutine handle's address
+        // as its context argument; reconstruct the handle and resume.  The
+        // coroutine then runs on the dispatch worker thread until its next
+        // suspension or completion.
+        void resume_coroutine_from_dispatch(void* context) noexcept {
+            std::coroutine_handle<>::from_address(context).resume();
+        }
+    }
+
+    void Until::await_suspend(std::coroutine_handle<> handle) const noexcept {
+        // await_ready already handled the already-past case, but clamp anyway so
+        // a deadline that slipped between the two calls schedules at +0 rather
+        // than wrapping negative.
+        auto now = std::chrono::steady_clock::now();
+        int64_t ns = (_when > now)
+            ? std::chrono::duration_cast<std::chrono::nanoseconds>(_when - now).count()
+            : 0;
+        dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, ns),
+                         dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
+                         handle.address(),
+                         &resume_coroutine_from_dispatch);
+    }
+
+    void ScheduleOnBlockableThread::await_suspend(std::coroutine_handle<> handle) const noexcept {
+        dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
+                         handle.address(),
+                         &resume_coroutine_from_dispatch);
     }
 
 }

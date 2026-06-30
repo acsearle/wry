@@ -9,6 +9,7 @@
 #define coroutine_hpp
 
 #include <cassert>
+#include <chrono>
 #include <coroutine>
 #include <deque>
 #include <exception>
@@ -70,6 +71,33 @@ namespace wry::Coroutine {
         void await_suspend(std::coroutine_handle<> handle) const noexcept {
             std::thread{handle}.detach();
         }
+    };
+
+    // co_await Until(t): suspend until steady_clock time point `t`, then resume
+    // on a libdispatch global-queue thread.  Backed by dispatch_after_f (defined
+    // in coroutine.cpp so this header stays libdispatch-free).  NOTE: the
+    // coroutine resumes on a dispatch worker, NOT a GC-pinned mutator thread --
+    // co_await SuspendAndSchedule and re-pin before touching GC state after the
+    // wait.  If `t` is already past, await_ready short-circuits (no thread hop).
+    struct Until {
+        std::chrono::steady_clock::time_point _when;
+        bool await_ready() const noexcept {
+            return std::chrono::steady_clock::now() >= _when;
+        }
+        void await_suspend(std::coroutine_handle<>) const noexcept;  // coroutine.cpp
+        void await_resume() const noexcept {}
+    };
+
+    // co_await ScheduleOnBlockableThread: hop the coroutine onto a libdispatch
+    // global concurrent queue, whose threads may block (file IO, syscalls) and
+    // grow unbounded on demand -- the opposite of our bounded, non-blocking GC
+    // work queue.  Use for blocking work that must not occupy a mutator-pool
+    // thread (cf. SuspendAndSchedule, which keeps the coroutine on the GC pool).
+    // Backed by dispatch_async_f (coroutine.cpp).
+    struct ScheduleOnBlockableThread {
+        bool await_ready() const noexcept { return false; }
+        void await_suspend(std::coroutine_handle<>) const noexcept;  // coroutine.cpp
+        void await_resume() const noexcept {}
     };
 
     // Suspend until `cycles` full collection cycles have completed since
