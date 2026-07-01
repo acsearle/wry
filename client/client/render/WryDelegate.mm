@@ -232,14 +232,21 @@ namespace {
         WryDelegate* strongSelf = weakSelf;
         if (!strongSelf)
             return;
-        // Take the window off screen and end main's render loop.  AppKit only
-        // hands the removal to the Window Server on a later run-loop pass, so
-        // the window does NOT vanish inside this call.  main's shutdown keeps
-        // pumping the run loop while it drains background work (see
-        // core/main.mm), which supplies that pass, so the window disappears
-        // promptly.  Earlier attempts froze it because main blocked the run loop
-        // the instant `done` flipped -- that starvation was the bug, not the
-        // choice of orderOut: / close / performClose:.
+        // QUIT TO DESKTOP and the (X) button both HIDE the window (orderOut:)
+        // and end main's render loop; main's shutdown (core/main.mm) then pumps
+        // the run loop to commit the hide to the Window Server, drains
+        // background work, deactivates the app, and exits.
+        //
+        // We deliberately do NOT -close.  A real close tears down the metal
+        // view's CAMetalLayer, and doing that while main's hand-rolled drain
+        // pump is driving CA commits collides with it ("entangle context after
+        // pre-commit" / "Invalid attempt to open a new transaction during CA
+        // commit").  AppKit's own teardown ([NSApp run] + terminate:) would
+        // sequence it cleanly, but terminate: exit()s past our RAII teardown, so
+        // we can't use it.  orderOut: is the platform's hide primitive (it's
+        // what SDL's Cocoa_HideWindow uses); -close is orderOut: PLUS the
+        // teardown that bites us, and formally closing buys a dying process
+        // nothing.
         [strongSelf->_window orderOut:nil];
         strongSelf.done = YES;  // ends main's render loop -> shutdown
     };
@@ -325,13 +332,23 @@ namespace {
 
 - (BOOL)windowShouldClose:(NSWindow *)sender {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    return YES;
+    // Route the (X) button through the same shutdown as QUIT TO DESKTOP: hide
+    // the window (orderOut:) and end main's render loop, but VETO AppKit's real
+    // -close (return NO).  A real close tears down the CAMetalLayer and collides
+    // with main's shutdown drain pump -- see the quit block in
+    // -applicationWillFinishLaunching for the full rationale.  Vetoing means
+    // -windowWillClose: won't fire from here; we set `done` ourselves.
+    [sender orderOut:nil];
+    self.done = YES;
+    return NO;
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+    // Backstop only.  Both quit paths hide via orderOut: and veto the real
+    // close, so this normally never fires; if some other path ever does close
+    // the window, still end the render loop.
     self.done = YES;
-    // [[NSApplication sharedApplication] terminate:self];
 }
 
 #pragma mark WryMetalViewDelegate
@@ -608,6 +625,12 @@ namespace {
         // it doesn't pile up and leak into the next scene.
         _gui->events.clear();
     }
+    // A scene's input handler may have requested shutdown this frame: QUIT TO
+    // DESKTOP hides the window from here (quit block -> orderOut: + done).  Skip
+    // the encode/present -- no point drawing a final frame into a window that's
+    // being hidden for shutdown; main's drain takes it from here.
+    if (self.done)
+        return;
     // Advance the current scene, then draw it.  Splitting update from the draw
     // is the seam scenes use: a splash / menu scene has no world to step, so
     // the step must not live inside the draw call.  Pass real elapsed seconds

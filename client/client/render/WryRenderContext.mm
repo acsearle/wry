@@ -249,8 +249,8 @@
 
 // ---- Scene backdrop helpers --------------------------------------------
 
-- (NSArray<id<MTLTexture>>*)loadTexturesWithPrefix:(NSString*)prefix
-                                            ofType:(NSString*)ext
+- (NSArray<NSString*>*)textureStemsWithPrefix:(NSString*)prefix
+                                       ofType:(NSString*)ext
 {
     const std::string pfx = prefix.UTF8String;
     const std::string dotext = std::string(".") + ext.UTF8String;
@@ -273,10 +273,21 @@
     }
     std::sort(stems.begin(), stems.end());
 
-    NSMutableArray<id<MTLTexture>>* out =
+    NSMutableArray<NSString*>* out =
         [NSMutableArray arrayWithCapacity:stems.size()];
     for (auto const& s : stems)
-        [out addObject:[self newTextureFromResource:@(s.c_str()) ofType:ext]];
+        [out addObject:@(s.c_str())];
+    return out;
+}
+
+- (NSArray<id<MTLTexture>>*)loadTexturesWithPrefix:(NSString*)prefix
+                                            ofType:(NSString*)ext
+{
+    NSArray<NSString*>* stems = [self textureStemsWithPrefix:prefix ofType:ext];
+    NSMutableArray<id<MTLTexture>>* out =
+        [NSMutableArray arrayWithCapacity:stems.count];
+    for (NSString* s in stems)
+        [out addObject:[self newTextureFromResource:s ofType:ext]];
     return out;
 }
 

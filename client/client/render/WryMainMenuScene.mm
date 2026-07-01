@@ -13,9 +13,14 @@
 #import "WryMainMenuScene.h"
 
 #include <algorithm>
+#include <deque>
+#include <memory>
+
+#import "WryTextureLoader.h"
 
 #include "gui_event.hpp"
 #include "gui_widget.hpp"
+#include "platform.hpp"
 #include "save.hpp"
 #include "scene_image.hpp"
 
@@ -52,6 +57,31 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
                                  vp.x, vp.y, kZoom, sx, sy);
 }
 
+// One backdrop image's async-load slot.  The loader (on an MTK/dispatch
+// thread) fills `texture` then publishes via `ready` (store_release); the
+// render thread reads `ready` (load_acquire) and, once set, draws `texture`.
+// `in_flight` is render-thread-only and stops the same load being re-kicked.
+struct LoadSlot {
+    wry::Atomic<bool> ready{false};
+    id<MTLTexture> texture = nil;   // published via `ready`
+    bool in_flight = false;         // render-thread only
+};
+
+// Wrap the generic load_texture in a task that deposits into `slot`.  It takes
+// the slot by shared_ptr, so the slot (and its backing deque) stay alive until
+// the load completes -- even if the menu scene is torn down first, the result
+// just lands in an orphaned slot and is dropped.  No drain, no cancellation.
+// wait_group_spawn'd, which both anchors it for process shutdown and supplies
+// the continuation a Task requires.
+wry::Coroutine::Task load_into_slot(std::shared_ptr<LoadSlot> slot,
+                                    MTKTextureLoader* loader,
+                                    NSURL* url,
+                                    NSDictionary<MTKTextureLoaderOption, id>* options) {
+    id<MTLTexture> texture = co_await wry::load_texture(loader, url, options);
+    slot->texture = texture;                 // published by the release below
+    slot->ready.store_release(true);
+}
+
 } // namespace
 
 @implementation WryMainMenuScene
@@ -67,9 +97,14 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
     id<WryScene> (^_nextFactory)(std::shared_ptr<wry::WorldState>);
     void (^_quit)(void);
 
-    // Backdrop photo-album state: elapsed seconds drive a continuous pan with
-    // an overlapping crossfade (see -update / -encode...).
-    NSArray<id<MTLTexture>>* _images;
+    // Backdrop photo album.  The file stems are enumerated up front (cheap, no
+    // IO); each image streams in asynchronously the first time the timeline
+    // reaches it (-imageForIndex:), so init never blocks on decoding the album.
+    // _albumSeconds drives the continuous pan + overlapping crossfade (-encode).
+    NSArray<NSString*>* _imageStems;
+    std::shared_ptr<std::deque<LoadSlot>> _slots;   // one per stem; async-filled
+    MTKTextureLoader* _loader;                      // reused across loads
+    NSDictionary<MTKTextureLoaderOption, id>* _loaderOptions;
     double _albumSeconds;
 }
 
@@ -86,8 +121,18 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
         _viewportPx = simd_make_float2(0.0f, 0.0f);
         _frameCount = 0;
 
-        // Backdrop images (every mainMenu*.png), and the pan/crossfade state.
-        _images = [context loadTexturesWithPrefix:@"mainMenu" ofType:@"png"];
+        // Backdrop: enumerate the album's file stems now (no decode); each
+        // image loads on demand via MTKTextureLoader as -imageForIndex: reaches
+        // it, off the main thread.  One slot per stem, in a shared_ptr deque so
+        // an in-flight load can outlive this scene.
+        _imageStems = [context textureStemsWithPrefix:@"mainMenu" ofType:@"png"];
+        _slots = std::make_shared<std::deque<LoadSlot>>(_imageStems.count);
+        _loader = [[MTKTextureLoader alloc] initWithDevice:context.device];
+        _loaderOptions = @{
+            MTKTextureLoaderOptionSRGB:               @YES,
+            MTKTextureLoaderOptionTextureUsage:       @(MTLTextureUsageShaderRead),
+            MTKTextureLoaderOptionTextureStorageMode: @(MTLStorageModePrivate),
+        };
         _albumSeconds = 0.0;
 
         using namespace wry::gui;
@@ -151,8 +196,31 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
 - (void)update:(double)dtSeconds {
     ++_frameCount;
     // Continuous timeline; the pan / crossfade are derived from it in -encode.
-    if (_images.count > 0)
+    if (_imageStems.count > 0)
         _albumSeconds += dtSeconds;
+}
+
+// Backdrop texture for album index `i`, kicking its async load the first time
+// it's asked for.  Returns nil until the load lands; the caller skips a nil
+// layer (so the menu shows whatever is ready and fades the rest in as they
+// arrive) instead of blocking.  Render-thread only.
+- (nullable id<MTLTexture>)imageForIndex:(NSUInteger)i {
+    LoadSlot& slot = (*_slots)[i];
+    if (slot.ready.load_acquire())
+        return slot.texture;
+    if (!slot.in_flight) {
+        slot.in_flight = true;
+        std::filesystem::path p =
+            wry::path_for_resource(_imageStems[i].UTF8String, "png");
+        NSURL* url = [NSURL fileURLWithPath:@(p.c_str())];
+        // Aliasing shared_ptr: shares ownership of the whole deque while
+        // pointing at slot i, so the load can complete safely even if this
+        // scene is gone by then (the result lands in the orphaned slot).
+        std::shared_ptr<LoadSlot> owned{_slots, &slot};
+        wry::wait_group_spawn(load_into_slot(std::move(owned), _loader, url,
+                                             _loaderOptions));
+    }
+    return nil;
 }
 
 - (void)drawableResize:(CGSize)size {
@@ -189,35 +257,46 @@ simd_float4 menu_pan_window(id<MTLTexture> img, simd_float2 vp,
     // for the last kCrossfadeSeconds the next image dissolves in OVER it while
     // both keep panning -- so no stop-fade-start.  The pan params stay off the
     // borders (kPanMargin), so neither image ever has to freeze.
-    const NSUInteger n = _images.count;
+    const NSUInteger n = _imageStems.count;
     if (n > 0) {
         const double S = kSlideSeconds;
         const double X = kCrossfadeSeconds;
         const uint64_t slide = (uint64_t)(_albumSeconds / S);
         const double lt = _albumSeconds - (double)slide * S;   // seconds into slide
 
+        // Prefetch the next slide so its decode finishes before the crossfade
+        // begins (imageForIndex kicks the async load the first time it's asked).
+        if (n > 1)
+            (void)[self imageForIndex:(NSUInteger)((slide + 1) % n)];
+
         // Current image: visible since X seconds before its slide began, so it
         // pans continuously across its whole [fade-in, lead, fade-out] span.
-        id<MTLTexture> cur = _images[(NSUInteger)(slide % n)];
-        const float ti = (float)std::min(1.0, (lt + X) / (S + X));
-        [_ctx drawImage:cur
-                 window:menu_pan_window(cur, _viewportPx, slide, ti)
-                  alpha:1.0f
-               viewport:_viewportPx
-            withEncoder:enc];
+        // On the first pass over a slide it may still be loading; skip the layer
+        // until it lands rather than blocking.
+        id<MTLTexture> cur = [self imageForIndex:(NSUInteger)(slide % n)];
+        if (cur) {
+            const float ti = (float)std::min(1.0, (lt + X) / (S + X));
+            [_ctx drawImage:cur
+                     window:menu_pan_window(cur, _viewportPx, slide, ti)
+                      alpha:1.0f
+                   viewport:_viewportPx
+                withEncoder:enc];
+        }
 
         // During the tail of the slide, the next image dissolves in over the
         // current one, panning from the start of its own (continuing) path.
         if (n > 1 && lt >= S - X) {
             const uint64_t nslide = slide + 1;
-            id<MTLTexture> next = _images[(NSUInteger)(nslide % n)];
-            const float ct = (float)((lt - (S - X)) / X);          // fade-in
-            const float tj = (float)((lt - (S - X)) / (S + X));    // its pan
-            [_ctx drawImage:next
-                     window:menu_pan_window(next, _viewportPx, nslide, tj)
-                      alpha:ct
-                   viewport:_viewportPx
-                withEncoder:enc];
+            id<MTLTexture> next = [self imageForIndex:(NSUInteger)(nslide % n)];
+            if (next) {
+                const float ct = (float)((lt - (S - X)) / X);          // fade-in
+                const float tj = (float)((lt - (S - X)) / (S + X));    // its pan
+                [_ctx drawImage:next
+                         window:menu_pan_window(next, _viewportPx, nslide, tj)
+                          alpha:ct
+                       viewport:_viewportPx
+                    withEncoder:enc];
+            }
         }
     }
 

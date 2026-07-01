@@ -559,12 +559,14 @@ namespace wry {
                         printf("C: waiters=%zu epoch=%04x finalized=%04x",
                                _cycle_waiters_count.load_relaxed(),
                                current_epoch.raw, _finalized.raw);
+                        /*
                         for (int k = 0; k != 16; ++k)
                             if (kstate[k].kphase != UNUSED)
                                 printf(" k%d=%s/%04x/%d", k,
                                        _KPhase_names[kstate[k].kphase],
                                        kstate[k].since.raw, kstate[k].scans);
                         printf("%s\n", changed ? "" : " [STALLED]");
+                         */
                         _dbg_last_finalized_raw = _finalized.raw;
                         _dbg_last_phases = phases;
                         if (changed)

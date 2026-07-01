@@ -79,6 +79,13 @@
 
 // ---- Scene backdrop helpers --------------------------------------------
 
+// Enumerate the file stems of every "<prefix>*.<ext>" in the resource
+// directory, sorted by filename -- without loading anything.  Lets a scene
+// stream its backdrop images in on demand rather than decoding the whole
+// album up front.
+- (nonnull NSArray<NSString*>*)textureStemsWithPrefix:(nonnull NSString*)prefix
+                                               ofType:(nonnull NSString*)ext;
+
 // Load every "<prefix>*.<ext>" texture in the resource directory, sorted by
 // filename.  Scenes use this for their backdrop images (splash / main menu),
 // so dropping another matching file in just works.

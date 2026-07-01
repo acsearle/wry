@@ -122,16 +122,30 @@ int main(int argc, const char** argv) {
                                                                        dequeue:YES]) {
                         [application sendEvent:event];
                     }
+                    // The (X) button hides the window from within -sendEvent:
+                    // (windowShouldClose: -> orderOut: + done).  Skip the final
+                    // render -- no point drawing into a window that's going away.
+                    if ([delegate done])
+                        break;
                     [application updateWindows];
                     [delegate render];
                 }
             }
 
-            // Shutdown.  QUIT TO DESKTOP (and the window's own close button)
-            // took the window off screen and set `done`, ending the loop above.
+            // Shutdown.  The (X) button and QUIT TO DESKTOP both hid the window
+            // (orderOut:) and set `done`, ending the loop above.  (We hide
+            // rather than -close: a real close tears down the CAMetalLayer and
+            // collides with the drain pump below -- see the quit block in
+            // WryDelegate for the full rationale.)
             printf("main is terminal\n");
             printf("main is joining background work\n");
             wry::mutator_unpin();
+            // Hand the menu bar back / drop out of the foreground while we drain:
+            // closing the last window does NOT deactivate a window-less app, so
+            // otherwise the app would keep owning the menu bar until the process
+            // exits.  (We can't [NSApp terminate:] -- it would exit() past the
+            // RAII teardown below.)
+            [application hide:nil];
             // Stay unpinned for the rest of shutdown.  If main re-pins, the
             // collector can't advance the epoch past main's pin, so its
             // `epoch::wait` in `loop_until_canceled` never returns and the
