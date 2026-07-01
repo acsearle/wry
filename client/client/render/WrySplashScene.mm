@@ -8,16 +8,13 @@
 #import <Metal/Metal.h>
 
 #import "WrySplashScene.h"
-
-#include <algorithm>
-
-#include "scene_image.hpp"
+#import "WryBackdrop.h"
 
 @implementation WrySplashScene
 {
     WryRenderContext* _ctx;
     id<MTLTexture> _target;        // offscreen we hand to the host
-    id<MTLTexture> _image;         // the splash image (nil if none found)
+    WryBackdrop* _backdrop;        // single splash image, cover + fade-in
     simd_float2 _viewportPx;
     double _elapsedSeconds;
     double _durationSeconds;
@@ -34,14 +31,21 @@
         _next = next;
         _elapsedSeconds = 0.0;
         _viewportPx = simd_make_float2(0.0f, 0.0f);
-        // Minimal asset: the first splash*.png in the resource folder.
-        _image = [context loadTexturesWithPrefix:@"splash" ofType:@"png"].firstObject;
+        // Minimal asset, loaded synchronously so the splash shows ASAP: the
+        // first splash*.png in the resource folder, drawn as a single cover
+        // image fading in over the first ~45% of the splash.
+        id<MTLTexture> image =
+            [context loadTexturesWithPrefix:@"splash" ofType:@"png"].firstObject;
+        _backdrop = [[WryBackdrop alloc] initSingleImageWithContext:context
+                                                             image:image
+                                                     fadeInSeconds:durationSeconds * 0.45];
     }
     return self;
 }
 
 - (void)update:(double)dtSeconds {
     _elapsedSeconds += dtSeconds;
+    [_backdrop updateWithDelta:dtSeconds];
 }
 
 - (void)drawableResize:(CGSize)size {
@@ -70,19 +74,7 @@
     id<MTLRenderCommandEncoder> enc = [commandBuffer renderCommandEncoderWithDescriptor:rp];
     enc.label = @"Splash";
 
-    if (_image) {
-        // Fade in over the first ~45% of the splash, then hold.
-        const double fadeSeconds = std::max(0.001, _durationSeconds * 0.45);
-        const float alpha = (float)std::min(1.0, _elapsedSeconds / fadeSeconds);
-        const simd_float4 window = wry::image_cover_window((float)_image.width,
-                                                           (float)_image.height,
-                                                           _viewportPx.x, _viewportPx.y);
-        [_ctx drawImage:_image
-                 window:window
-                  alpha:alpha
-               viewport:_viewportPx
-            withEncoder:enc];
-    }
+    [_backdrop encodeInto:enc viewport:_viewportPx];
 
     [enc endEncoding];
     return _target;
