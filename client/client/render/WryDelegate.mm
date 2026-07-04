@@ -617,6 +617,11 @@ namespace {
     // to the transitional legacy bookkeeping (world click / scroll-pan paths).
     // Runs on the main thread between NSEvent dispatch and the draw, so the
     // queue is always seen consistently.
+    //
+    // First surface any messages background work posted since last frame into
+    // the app-tier log, once per frame regardless of scene (was in the world's
+    // handle_events; the log is app-tier now).
+    _gui->drain_notifications();
     NSSize sz = _metalView.bounds.size;
     if ([_scene respondsToSelector:@selector(handleEventsWithViewSize:)]) {
         [_scene handleEventsWithViewSize:sz];

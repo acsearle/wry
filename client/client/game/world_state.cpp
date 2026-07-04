@@ -368,9 +368,6 @@ namespace wry {
     void WorldState::handle_events(float2 view_size_pt) {
         using namespace ::wry::gui;
 
-        // Surface any messages background work posted since last frame.
-        _gui.drain_notifications();
-
         const float w_pt = (view_size_pt.x > 0.0f) ? view_size_pt.x : 1.0f;
         const float h_pt = (view_size_pt.y > 0.0f) ? view_size_pt.y : 1.0f;
         const float scale_x = _gui.viewport_size.x / w_pt;
@@ -395,8 +392,12 @@ namespace wry {
                 _mouse.y = 1.0f - 2.0f * e.location.y / _gui.viewport_size.y;
             }
 
-            if (!_stack.dispatch(e))
-                pump_legacy_event(e);
+            // App-tier overlays (console / log) get first crack -- the console
+            // swallows keystrokes when open -- then the world's palette stack
+            // (and any in-game menu pushed onto it), then the legacy fallback.
+            if (!_gui.overlays.dispatch(e))
+                if (!_stack.dispatch(e))
+                    pump_legacy_event(e);
         }
     }
 

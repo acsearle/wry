@@ -34,9 +34,21 @@ namespace wry {
 
         // Generic overlays, available regardless of scene: the floating log and
         // the drop-down console.  (Scene-specific overlays -- the palette, the
-        // in-game menu -- still live on the model for now.)
+        // in-game menu -- still live on the model.)
         gui::LogOverlay log_overlay;
         gui::ConsoleOverlay console_overlay;
+
+        // App-tier overlay stack (host-owned): the floating log + drop-down
+        // console, available to every scene.  Scenes dispatch input to it first
+        // (the console swallows keystrokes when open) and paint it on top of
+        // their own content.  Set up in the constructor below.
+        gui::OverlayStack overlays;
+
+        GuiContext() {
+            console_overlay.set_log(&log_overlay);
+            overlays.push(&log_overlay);       // bottom: floating status text
+            overlays.push(&console_overlay);   // top: drop-down console
+        }
 
         void append_log(StringView v,
                         std::chrono::steady_clock::duration endurance

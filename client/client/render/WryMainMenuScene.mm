@@ -104,7 +104,10 @@
         wry::gui::Event e = _gui->events.pop_front();
         e.location.x *= sx;
         e.location.y *= sy;
-        _root->on_event(e);
+        // App-tier overlays (console / log) get first crack -- the console
+        // swallows keystrokes when open -- then the menu's button column.
+        if (!_gui->overlays.dispatch(e))
+            _root->on_event(e);
     }
 }
 
@@ -187,6 +190,20 @@
     _root->paint(painter);
 
     _ctx.atlas->commit((__bridge void*)enc);
+
+    // App-tier overlays (floating log, console) on top -- the same GuiContext
+    // stack the world paints, so they're available in the menu too.  The UI
+    // pipeline + screen-space uniforms are already set from the button pass.
+    Painter overlay_painter;
+    overlay_painter.atlas = _ctx.atlas;
+    overlay_painter.font = _ctx.font;
+    overlay_painter.viewport_size_px = _viewportPx;
+    overlay_painter.frame_count = _frameCount;
+    overlay_painter.white_sprite = _ctx.atlas->_white;
+    overlay_painter.clip = wry::rect<float>{0.0f, 0.0f, _viewportPx.x, _viewportPx.y};
+    _gui->overlays.paint(overlay_painter);
+    _ctx.atlas->commit((__bridge void*)enc);
+
     [enc endEncoding];
     return _target;
 }

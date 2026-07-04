@@ -115,18 +115,15 @@ namespace wry {
 
         explicit WorldState(GuiContext& gui) : _gui(gui) {
 
-            // Overlay wiring.  Stack order, bottom up: floating log, palette,
-            // console (modal-on-top).  Push order = paint order; dispatch is
-            // the reverse walk.  Log and console live on the borrowed
-            // GuiContext now; the palette / main menu / save-list are
-            // model-owned (main menu / save-list pushed dynamically).
-            _gui.console_overlay.set_log(&_gui.log_overlay);
+            // Overlay wiring.  The floating log + console are app-tier now:
+            // GuiContext owns them (its ctor wires console->log and pushes them
+            // into GuiContext::overlays), and the host + scenes dispatch / paint
+            // that stack.  This scene stack holds only the world's palette (+ the
+            // in-game menu / save-list, pushed dynamically).
             _palette_overlay.set_model(this);
             _main_menu_overlay.set_model(this);
             _save_list_overlay.set_model(this);
-            _stack.push(&_gui.log_overlay);
             _stack.push(&_palette_overlay);
-            _stack.push(&_gui.console_overlay);
 
             // Install the starting world as the displayed world.  Same path
             // the NEW button uses; at construction _worlds is empty, so the

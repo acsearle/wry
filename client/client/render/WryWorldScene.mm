@@ -975,9 +975,10 @@
                      length:sizeof(uniforms)
                     atIndex:AAPLBufferIndexUniforms ];
 
-    // Let the overlay stack paint itself.  Bottom-up: log, palette
-    // (no-op paint for now), then console on top when active, then any
-    // dynamically-pushed overlays (main menu) above that.
+    // Paint the world's scene overlays -- palette (no-op paint for now) plus the
+    // in-game menu / save list when pushed -- then the app-tier overlays
+    // (floating log, console) on top.  The console is a global drop-down, so it
+    // sits above everything.
     {
         wry::gui::Painter painter;
         painter.atlas = _ctx.atlas;
@@ -992,6 +993,7 @@
             _model->_gui.viewport_size.x, _model->_gui.viewport_size.y,
         };
         _model->_stack.paint(painter);
+        _model->_gui.overlays.paint(painter);
     }
 
     _ctx.atlas->commit((__bridge void*)encoder);
