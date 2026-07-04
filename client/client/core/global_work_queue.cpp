@@ -15,6 +15,8 @@
 
 namespace wry {
 
+    constexpr int GLOBAL_WORK_QUEUE_REPIN_CADENCE = 10;
+
     BlockingDeque<void*> global_work_queue;
 
     namespace {
@@ -105,7 +107,8 @@ namespace wry {
                 break;
             mutator_pin();
             void* callback = {};
-            while (global_work_queue.try_pop_back(callback)) {
+            int countdown = GLOBAL_WORK_QUEUE_REPIN_CADENCE;
+            while (countdown-- && global_work_queue.try_pop_back(callback)) {
                 assert(callback);
                 (*(void(**)(void*))callback)(callback);
             }

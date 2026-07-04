@@ -768,10 +768,6 @@ N scales with the collection graph size.
   `_shade_history` are needed; document a counter-example for two cycles
   (presumably one where a leading mutator stamps k-gray on allocation but
   the trailing mutator's report hasn't been embargoed-out yet).
-- **`mutator_pin` does not re-prime `_thread_local_gray_did_shade`** (only
-  `mutator_repin` does — and as of recent edits, neither does). Decide
-  whether a fresh pin should re-prime, and what the invariant on
-  `_thread_local_gray_did_shade` is at pin time.
 - **Liveness of the wait branch.** §4 currently assumes the collector
   eventually advances; the busy-spin (or pending sleep) at
   [lines 256–262](../garbage_collected.cpp#L256-L262) is the controlling

@@ -54,6 +54,7 @@ namespace wry {
         static void* _Nonnull operator new(std::size_t count);
         static void operator delete(void* _Nullable pointer);
 
+        // Derived objects must be nothrow
         GarbageCollected();
         GarbageCollected(const GarbageCollected&);
         GarbageCollected(GarbageCollected&&);
@@ -742,7 +743,6 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
             }
         }
 
-        // Return value indicates if shading is requested
         virtual void _garbage_collected_decide_weak(uint16_t next_delete_mask,
                                                     uint16_t gray_for_marking,
                                                     uint16_t black_for_marking) const override {

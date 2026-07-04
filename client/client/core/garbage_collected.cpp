@@ -556,7 +556,7 @@ namespace wry {
                     bool periodic = !changed
                                  && ((++_dbg_stall_iters & ((1u << 24) - 1)) == 0);
                     if (changed || periodic) {
-                        printf("C: waiters=%zu epoch=%04x finalized=%04x",
+                        printf("C: waiters=%zu epoch=%04x finalized=%04x\n",
                                _cycle_waiters_count.load_relaxed(),
                                current_epoch.raw, _finalized.raw);
                         /*
@@ -711,9 +711,10 @@ namespace wry {
                                 s.black &= ~bit;
                                 continue;
                             }
-                            if (s.before <= _shade_most_recent[k]) {
-                                // The most recent k-gray happened after this
-                                // scan began
+                            if (s.before <= _shade_most_recent[k] + 1) {
+                                // The most recent k-gray is not guaranteed
+                                // visible to this scan's relaxed
+                                // loads unless before >= shade_epoch + 2
                                 s.black &= ~bit;
                                 continue;
                             }
@@ -812,7 +813,6 @@ namespace wry {
 
             _black_for_allocation = (_is_black_published | _is_weak_deciding | _is_sweeping).raw;
             _gray_for_allocation = (_is_gray_published | _is_black_published | _is_weak_deciding | _is_sweeping).raw;
-            _black_for_allocation = (_is_black_published | _is_weak_deciding | _is_sweeping).raw;
             _debug_assert_white = _is_unused.raw;
             _debug_assert_nonblack = (_is_unused | _is_gray_published).raw;
 
@@ -857,23 +857,29 @@ namespace wry {
                        kstate[k].scans,
                        _KPhase_names[kstate[k].kphase]);
             }
-            
             printf(
-                   "While scanning %zd objects with\n"
+                   "While scanning "
+#ifndef NDEBUG
+                   "%zd"
+#else
+                   "unknown number of"
+#endif // !NDEBUG
+                   " objects with\n"
                    "     gray_for_allocation %04x\n"
                    "    black_for_allocation %04x\n"
                    "       mask_for_deleting %04x\n"
                    "       mask_for_clearing %04x\n"
                    "      debug_assert_white %04x\n"
                    ,
+#ifndef NDEBUG
                    _known_objects.debug_size(),
+#endif
                    _gray_for_allocation,
                    _black_for_allocation,
                    _is_sweeping.raw,
                    _is_clearing.raw,
                    _debug_assert_white);
-            
-            
+
             __builtin_trap();
         }
 
@@ -992,6 +998,7 @@ namespace wry {
                 }
                 
                 if (_is_sweeping.raw && !(_is_sweeping.raw & after_gray)) {
+                    assert(!did_set_black);
                     delete object;
                     ++delete_count;
                 } else {
@@ -1002,7 +1009,7 @@ namespace wry {
             
             assert(_graystack.debug_is_empty());
             assert(_known_objects.debug_is_empty());
-            assert(global_children.c.empty());
+            assert(global_children.debug_is_empty());
             _known_objects.swap(survivors);
             
             auto t1 = std::chrono::steady_clock::now();
@@ -1027,6 +1034,11 @@ namespace wry {
 
     void collector_cancel() {
         collector._is_canceled.store_relaxed(true);
+        // Poke the epoch
+        // - wakes the collector, or
+        // - proves that another thread is pinned and will wake the collector
+        mutator_pin();
+        mutator_unpin();
     }
 
     void collector_register_cycle_callback(uint64_t k,

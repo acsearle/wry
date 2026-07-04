@@ -113,7 +113,7 @@ namespace wry {
                 // Validate that a given pinned epoch is consistent with this state;
                 // that is, it is either the current or prior epoch, and the
                 // corresponding pin count is not zero.
-                bool validate(Epoch occupied) const {
+                [[nodiscard]] bool validate(Epoch occupied) const {
                     return (((occupied == current) && pins_current)
                             || ((occupied+1 == current) && pins_prior));
                 }
@@ -151,7 +151,7 @@ namespace wry {
                 // current or prior epoch.
 
                 [[nodiscard]] State unpin(Epoch occupied) const {
-                    validate(occupied);
+                    assert(validate(occupied));
                     return State {
                         .current = current,
                         .pins_current = (occupied == current) ? predecessor(pins_current) : pins_current,
@@ -175,7 +175,7 @@ namespace wry {
                 // operation to use epoch allocations as it is serviced by
                 // different pool threads.
                 [[nodiscard]] State pin_explicit(Epoch requested) const {
-                    validate(requested);
+                    assert(validate(requested));
                     return State {
                         .current = current,
                         .pins_current = (requested == current) ? successor_of_nonzero(pins_current) : pins_current,
