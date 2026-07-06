@@ -15,8 +15,10 @@
 #include "hash.hpp"
 #include "utility.hpp"
 #include "term.hpp"
+#include "matter.hpp"
 #include "HeapString.hpp"
 #include "debug.hpp"
+#include "test.hpp"
 
 
 namespace wry {
@@ -558,6 +560,64 @@ namespace wry {
         return term_make_integer_with((int64_t)(h >> 4));
     }
 
+
+    // ---- MATTER ----
+    //
+    // Compile-time checks of the encoding, then a runtime test of the
+    // predicate family and the operator behavior the machine.cpp
+    // conservation gates rely on.
+
+    static_assert(term_is_matter(term_make_matter(MATTER_SHIPPING_CONTAINER)));
+    static_assert(!term_is_opcode(term_make_matter(MATTER_SHIPPING_CONTAINER)));
+    static_assert(term_as_matter(term_make_matter(MATTER_SHIPPING_CONTAINER))
+                  == MATTER_SHIPPING_CONTAINER);
+
+    define_test("term_matter") {
+
+        Term m = term_make_matter(MATTER_SHIPPING_CONTAINER);
+
+        // discrimination
+        assert(term_is_matter(m));
+        assert(m.is_matter());
+        assert(term_is_enum(m));
+        assert(!term_is_null(m));
+        assert(!term_is_error(m));
+        assert(!term_is_boolean(m));
+        assert(!term_is_character(m));
+        assert(!term_is_opcode(m));
+        assert(!term_is_sentinel(m));
+        assert(!m.is_opcode());
+        assert(!m.is_int64_t());
+        assert(!_term_is_object(m));
+
+        // payload round-trip
+        assert(term_as_matter(m) == MATTER_SHIPPING_CONTAINER);
+        assert(m.as_matter() == MATTER_SHIPPING_CONTAINER);
+
+        // matter is truthy (meta bits are nonzero even for code 0)
+        assert(bool(m));
+
+        // an opcode with the same code is a different bit pattern
+        Term o = term_make_opcode((int)MATTER_SHIPPING_CONTAINER);
+        assert(o._data != m._data);
+        assert(!term_is_matter(o));
+
+        // arithmetic refuses matter: the enumeration tag falls through
+        // to the ERROR path, so no opcode can fabricate values from it
+        assert(term_is_error(m + Term(1)));
+        assert(term_is_error(Term(1) + m));
+
+        // wire form: inline tags travel bitwise (save_format encodes
+        // non-OBJECT terms as their raw _data word)
+        assert(!_term_is_object(m));
+
+        // name table round-trips
+        assert(MATTER_from_name("MATTER_SHIPPING_CONTAINER") == MATTER_SHIPPING_CONTAINER);
+        assert(std::strcmp(name_from_MATTER(MATTER_SHIPPING_CONTAINER),
+                           "MATTER_SHIPPING_CONTAINER") == 0);
+
+        co_return;
+    };
 
 } // namespace wry
 

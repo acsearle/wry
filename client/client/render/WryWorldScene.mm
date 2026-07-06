@@ -80,8 +80,9 @@
     id <MTLRenderPipelineState> _deferredLightPointRenderPipelineState;
 
     id<MTLTexture> _deferredLightColorAttachmentTexture;
-    id<MTLTexture> _deferredAlbedoMetallicColorAttachmentTexture;
-    id<MTLTexture> _deferredNormalRoughnessColorAttachmentTexture;
+    id<MTLTexture> _deferredAlbedoColorAttachmentTexture;
+    id<MTLTexture> _deferredNormalColorAttachmentTexture;
+    id<MTLTexture> _deferredMaterialColorAttachmentTexture;
     id<MTLTexture> _deferredDepthColorAttachmentTexture;
     id<MTLTexture> _deferredDepthAttachmentTexture;
     
@@ -122,6 +123,9 @@
     WryMesh* _truck_mesh;
     WryMesh* _mine_mesh;
     WryMesh* _furnace_mesh;
+    // Default visualization for every MATTER code until per-code
+    // appearances (meshes / tints / decals) exist.
+    WryMesh* _container_mesh;
     
     // The opcode palette's data and selection now live on
     // _model->_palette_overlay; the renderer reads it for painting only.
@@ -390,8 +394,9 @@
             // Render meshes to GBuffer
 
             descriptor.colorAttachments[AAPLColorIndexColor].pixelFormat = _ctx.drawablePixelFormat;
-            descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].pixelFormat = MTLPixelFormatRGBA16Float;
-            descriptor.colorAttachments[AAPLColorIndexNormalRoughness].pixelFormat = MTLPixelFormatRGBA16Float;
+            descriptor.colorAttachments[AAPLColorIndexAlbedo].pixelFormat = MTLPixelFormatRGBA16Float;
+            descriptor.colorAttachments[AAPLColorIndexNormal].pixelFormat = MTLPixelFormatRGBA16Float;
+            descriptor.colorAttachments[AAPLColorIndexMaterial].pixelFormat = MTLPixelFormatRGBA8Unorm;
             descriptor.colorAttachments[AAPLColorIndexDepth].pixelFormat = MTLPixelFormatR32Float;
             descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
@@ -535,12 +540,30 @@
                 p.metallicTexture = _white; // [_ctx newTextureFromResource:@"PaintedMetal009_1K-PNG_Metalness" ofType:@"png"];
                 p.normalTexture = _blue; // [_ctx newTextureFromResource:@"PaintedMetal009_1K-PNG_NormalGL" ofType:@"png" withPixelFormat:MTLPixelFormatRGBA8Unorm];
                 p.roughnessTexture = _darkgray; // [_ctx newTextureFromResource:@"PaintedMetal009_1K-PNG_Roughness" ofType:@"png"];;
+                p.occlusionTexture = _white;
                 p.instanceCount = 0;
             };
-            
+
             f(_furnace_mesh, "furnace.obj");
             f(_mine_mesh, "mine.obj");
             f(_truck_mesh, "truck2.obj");
+
+            // Baked-detail workflow: the render mesh is the 12-triangle box
+            // proxy; the corrugation and door geometry live in the normal and
+            // occlusion maps baked from the high-poly source.  Normal and
+            // occlusion are non-color data, so they load linear (not sRGB).
+            // The test-pattern albedo makes UV orientation and scale problems
+            // visible; swap for a real paint texture when one exists.
+            f(_container_mesh, "Container20_Proxy.obj");
+            _container_mesh.albedoTexture = [_ctx newMipmappedTextureFromResource:@"testpattern"
+                                                                           ofType:@"png"
+                                                                  withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
+            _container_mesh.normalTexture = [_ctx newMipmappedTextureFromResource:@"Container20_Normal"
+                                                                           ofType:@"png"
+                                                                  withPixelFormat:MTLPixelFormatRGBA8Unorm];
+            _container_mesh.occlusionTexture = [_ctx newMipmappedTextureFromResource:@"Container20_AO"
+                                                                              ofType:@"png"
+                                                                     withPixelFormat:MTLPixelFormatRGBA8Unorm];
         }
                     
         {
@@ -1045,6 +1068,11 @@
     lookat_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
     lookat_transform.columns[3].y -= _model->_looking_at.y / 1024.0f;
 
+    // The container proxy is authored at real scale (6.058 x 2.438 x 2.591
+    // meters, Z-up, base at z = 0, long axis along x); this scale seats it
+    // within one grid cell.
+    constexpr float container_mesh_scale = 0.15f;
+
     MeshInstanced mesh_instanced_things = {};
     {
         mesh_instanced_things.model_transform = lookat_transform;
@@ -1097,6 +1125,7 @@
     _furnace_mesh.instanceCount = 0;
     _mine_mesh.instanceCount = 0;
     _truck_mesh.instanceCount = 0;
+    _container_mesh.instanceCount = 0;
     // raid model for data
 
     {
@@ -1215,6 +1244,19 @@
                 for (int i = (int) wry::PersistentStack<wry::Term>::size(p->_stack); i--;) {
                     location.z += 0.5;
                     wry::Term value = wry::PersistentStack<wry::Term>::at(p->_stack, i);
+                    if (value.is_matter()) {
+                        // held matter rides as a mesh at this stack slot,
+                        // heading-aligned with the machine
+                        auto A = simd_matrix_translate(location) * lookat_transform;
+                        A = A * simd_matrix_rotate(atan2(dx1.x, dx1.y), make<float3>(0.0, 0.0, -1.0));
+                        A = A * simd_matrix_scale(container_mesh_scale);
+                        MeshInstanced m;
+                        m.model_transform = A;
+                        m.inverse_transpose_model_transform = inverse(transpose(A));
+                        m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
+                        [_container_mesh addInstance:m];
+                        continue;
+                    }
                     simd_float4 coordinate;
                     if (value.is_opcode()) {
                         coordinate = _opcode_to_coordinate[value.as_opcode()];
@@ -1320,6 +1362,17 @@
                         } else {
                             printf("q is opcode but was not found, %d\n", q.as_opcode());
                         }
+                    } else if (q.is_matter()) {
+                        // matter renders as a mesh sitting on an ordinary
+                        // empty tile
+                        coordinate = make<float4>(0.0 / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
+                        auto A = simd_matrix_translate(location) * lookat_transform;
+                        A = A * simd_matrix_scale(container_mesh_scale);
+                        MeshInstanced m;
+                        m.model_transform = A;
+                        m.inverse_transpose_model_transform = inverse(transpose(A));
+                        m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
+                        [_container_mesh addInstance:m];
                     } else {
                         //printf("q is mystery\n");
                         coordinate = make<float4>(0.0 / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
@@ -1486,6 +1539,7 @@
         [_furnace_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
         [_mine_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
         [_truck_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
+        [_container_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
         
         // TODO: add an irradiance buffer from the light
         //
@@ -1518,16 +1572,23 @@
             descriptor.colorAttachments[AAPLColorIndexColor].storeAction = MTLStoreActionStore;
             descriptor.colorAttachments[AAPLColorIndexColor].texture = _deferredLightColorAttachmentTexture;
             
-            descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].clearColor = MTLClearColorMake(0, 0, 0, 0);
-            descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].loadAction = MTLLoadActionClear;
-            descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].storeAction = MTLStoreActionDontCare;
-            descriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].texture = _deferredAlbedoMetallicColorAttachmentTexture;
-            
-            descriptor.colorAttachments[AAPLColorIndexNormalRoughness].clearColor = MTLClearColorMake(0, 0, 0, 1);
-            descriptor.colorAttachments[AAPLColorIndexNormalRoughness].loadAction = MTLLoadActionClear;
-            descriptor.colorAttachments[AAPLColorIndexNormalRoughness].storeAction = MTLStoreActionDontCare;
-            descriptor.colorAttachments[AAPLColorIndexNormalRoughness].texture = _deferredNormalRoughnessColorAttachmentTexture;
-            
+            descriptor.colorAttachments[AAPLColorIndexAlbedo].clearColor = MTLClearColorMake(0, 0, 0, 0);
+            descriptor.colorAttachments[AAPLColorIndexAlbedo].loadAction = MTLLoadActionClear;
+            descriptor.colorAttachments[AAPLColorIndexAlbedo].storeAction = MTLStoreActionDontCare;
+            descriptor.colorAttachments[AAPLColorIndexAlbedo].texture = _deferredAlbedoColorAttachmentTexture;
+
+            descriptor.colorAttachments[AAPLColorIndexNormal].clearColor = MTLClearColorMake(0, 0, 0, 0);
+            descriptor.colorAttachments[AAPLColorIndexNormal].loadAction = MTLLoadActionClear;
+            descriptor.colorAttachments[AAPLColorIndexNormal].storeAction = MTLStoreActionDontCare;
+            descriptor.colorAttachments[AAPLColorIndexNormal].texture = _deferredNormalColorAttachmentTexture;
+
+            // clear to (occlusion 1, roughness 1, metallic 0), matching the
+            // background surface properties the old layout cleared to
+            descriptor.colorAttachments[AAPLColorIndexMaterial].clearColor = MTLClearColorMake(1, 1, 0, 0);
+            descriptor.colorAttachments[AAPLColorIndexMaterial].loadAction = MTLLoadActionClear;
+            descriptor.colorAttachments[AAPLColorIndexMaterial].storeAction = MTLStoreActionDontCare;
+            descriptor.colorAttachments[AAPLColorIndexMaterial].texture = _deferredMaterialColorAttachmentTexture;
+
             descriptor.colorAttachments[AAPLColorIndexDepth].clearColor = MTLClearColorMake(1, 1, 1, 1);
             descriptor.colorAttachments[AAPLColorIndexDepth].loadAction = MTLLoadActionClear;
             descriptor.colorAttachments[AAPLColorIndexDepth].storeAction = MTLStoreActionDontCare;
@@ -1621,6 +1682,7 @@
                 [_furnace_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
                 [_mine_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
                 [_truck_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
+                [_container_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
 
                 /*
                 if (show_points) {
@@ -1792,12 +1854,16 @@
 
     descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
     descriptor.storageMode = MTLStorageModeMemoryless; // <--
-    _deferredAlbedoMetallicColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
-    _deferredAlbedoMetallicColorAttachmentTexture.label = @"Albedo-metallic G-buffer";
-    
+    _deferredAlbedoColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
+    _deferredAlbedoColorAttachmentTexture.label = @"Albedo G-buffer";
+
     descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
-    _deferredNormalRoughnessColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
-    _deferredNormalRoughnessColorAttachmentTexture.label = @"Normal-roughness G-buffer";
+    _deferredNormalColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
+    _deferredNormalColorAttachmentTexture.label = @"Normal G-buffer";
+
+    descriptor.pixelFormat = MTLPixelFormatRGBA8Unorm;
+    _deferredMaterialColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
+    _deferredMaterialColorAttachmentTexture.label = @"Material G-buffer";
     
     descriptor.pixelFormat = MTLPixelFormatR32Float;
     _deferredDepthColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];

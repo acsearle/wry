@@ -96,8 +96,9 @@
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].sourceAlphaBlendFactor = MTLBlendFactorOne;
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexAlbedoMetallic].pixelFormat = MTLPixelFormatRGBA16Float;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexNormalRoughness].pixelFormat = MTLPixelFormatRGBA16Float;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexAlbedo].pixelFormat = MTLPixelFormatRGBA16Float;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexNormal].pixelFormat = MTLPixelFormatRGBA16Float;
+            renderPipelineDescriptor.colorAttachments[AAPLColorIndexMaterial].pixelFormat = MTLPixelFormatRGBA8Unorm;
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexDepth].pixelFormat = MTLPixelFormatR32Float;
             renderPipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
@@ -243,6 +244,43 @@
                  withBytes:image.data()
                bytesPerRow:image.stride_bytes()];
     texture.label = name;
+
+    return texture;
+}
+
+- (id<MTLTexture>)newMipmappedTextureFromResource:(NSString*)name
+                                           ofType:(NSString*)ext
+                                  withPixelFormat:(MTLPixelFormat)pixelFormat
+{
+    // The opt-in mipmapped path anticipated by the comment in
+    // newTextureFromResource:.  Only for textures that are never
+    // CPU-mutated after load; the blit is committed and waited on here,
+    // so the returned texture is complete and immutable.
+    wry::matrix<wry::RGBA8Unorm_sRGB> image = wry::from_png(wry::path_for_resource([name UTF8String], [ext UTF8String]).c_str());
+    wry::multiply_alpha_inplace(image);
+
+    MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+    descriptor.textureType = MTLTextureType2D;
+    descriptor.pixelFormat = pixelFormat;
+    descriptor.width = image.major();
+    descriptor.height = image.minor();
+    descriptor.mipmapLevelCount = 1 + (NSUInteger)floor(log2((double)std::max(image.major(), image.minor())));
+    descriptor.storageMode = MTLStorageModeShared;
+    descriptor.usage = MTLTextureUsageShaderRead;
+
+    id<MTLTexture> texture = [_device newTextureWithDescriptor:descriptor];
+    [texture replaceRegion:MTLRegionMake2D(0, 0, image.major(), image.minor())
+               mipmapLevel:0
+                 withBytes:image.data()
+               bytesPerRow:image.stride_bytes()];
+    texture.label = name;
+
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+    id<MTLBlitCommandEncoder> encoder = [commandBuffer blitCommandEncoder];
+    [encoder generateMipmapsForTexture:texture];
+    [encoder endEncoding];
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
 
     return texture;
 }

@@ -15,6 +15,7 @@
 #include "coroutine.hpp"
 #include "ctype.hpp"
 #include "garbage_collected.hpp"
+#include "matter.hpp"
 #include "save.hpp"
 
 namespace wry {
@@ -68,6 +69,11 @@ namespace wry {
             world->_term_for_coordinate.set(Coordinate{0, +3}, term_make_integer_with(3));
             world->_term_for_coordinate.set(Coordinate{0, +4}, term_make_opcode(OPCODE_FLIP_FLOP));
             world->_term_for_coordinate.set(Coordinate{0, +5}, term_make_integer_with(5));
+
+            // matter: shipping containers, on the ground where the demo
+            // machines will drive over (through) them
+            world->_term_for_coordinate.set(Coordinate{-2, +2}, term_make_matter(MATTER_SHIPPING_CONTAINER));
+            world->_term_for_coordinate.set(Coordinate{-3, +4}, term_make_matter(MATTER_SHIPPING_CONTAINER));
 
             return world;
         }

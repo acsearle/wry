@@ -40,6 +40,10 @@ namespace wry {
     // Version 1: initial sketch (no shipped saves).
     // Version 2: bumped 2026-05-24 alongside the Term tag renumber and
     //            ENUMERATION-as-meta-tag fold (review commit 2/3).
+    //
+    // Additive vocabulary (new ENUMERATION metas / codes) does NOT bump
+    // the version: layout is unchanged and older files remain loadable.
+    //   2026-07-05: TERM_ENUM_META_MATTER = 4 (matter.hpp codes).
     // ---------------------------------------------------------------------
 
     enum : uint32_t { TERM_SAVE_VERSION = 2 };

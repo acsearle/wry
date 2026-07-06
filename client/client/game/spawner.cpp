@@ -65,9 +65,11 @@ namespace wry {
                                                      max_items);
         
         printf("Counter is incrementing\n");
-        
+
         // Propose to write the incremented value back to the location
-        transaction->write_value_for_coordinate(this->_location, value + 1);
+        // (unless matter is parked on us; matter is never overwritten)
+        if (!value.is_matter())
+            transaction->write_value_for_coordinate(this->_location, value + 1);
         
         // If the transaction succeeds, run again in 120 ticks (= 1 second)
         transaction->on_commit_sleep_for(1);
@@ -89,7 +91,7 @@ namespace wry {
                                                      this,
                                                      max_items);
         
-        if (value.as_int64_t() & 1) {
+        if (!value.is_matter() && (value.as_int64_t() & 1)) {
             // printf("Evenator is incrementing\n");
             transaction->write_value_for_coordinate(this->_location,
                                                     value + 1,

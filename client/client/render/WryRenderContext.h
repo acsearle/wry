@@ -77,6 +77,15 @@
                                           ofType:(nonnull NSString*)ext
                                  withPixelFormat:(MTLPixelFormat)pixelFormat;
 
+// Opt-in mipmapped variant for textures that are NOT CPU-mutated after
+// load (mesh materials).  Allocates the full mip chain and fills it with
+// a blit generateMipmaps, blocking until complete.  The plain
+// newTextureFromResource stays single-level because some callers mutate
+// the texture bytes after loading (e.g. the symbol atlas).
+- (nonnull id<MTLTexture>)newMipmappedTextureFromResource:(nonnull NSString*)name
+                                                   ofType:(nonnull NSString*)ext
+                                          withPixelFormat:(MTLPixelFormat)pixelFormat;
+
 // ---- Scene backdrop helpers --------------------------------------------
 
 // Enumerate the file stems of every "<prefix>*.<ext>" in the resource

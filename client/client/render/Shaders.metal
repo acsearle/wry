@@ -752,11 +752,11 @@ namespace deferred {
     // Metal does not(?) allow reading back from depth buffer so we compute it
     // in user space
     
-    // TODO: occlusion, clearcoat, clearcoat roughness
+    // TODO: clearcoat, clearcoat roughness
     //
     // TODO: is g-buffer storage 'free' until we free up the imageblock?
     //       perhaps we should just write out the world position
-    
+
     struct FragmentFunctionOutput {
 
         // emission is written here in first pass
@@ -765,15 +765,21 @@ namespace deferred {
                                    raster_order_group(AAPLRasterOrderGroupLighting)]];
 
         // these surface properties are immutable on later passes
-        half4 albedo_metallic    [[color(AAPLColorIndexAlbedoMetallic),
-                                   raster_order_group(AAPLRasterOrderGroupGBuffer)]];
-        
-        half4 normal_roughness    [[color(AAPLColorIndexNormalRoughness),
+        half4 albedo              [[color(AAPLColorIndexAlbedo),
                                     raster_order_group(AAPLRasterOrderGroupGBuffer)]];
-        
+
+        half4 normal              [[color(AAPLColorIndexNormal),
+                                    raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+
+        // scalar material fields, packed one per channel following the
+        // glTF occlusion-roughness-metallic channel convention:
+        // r = ambient occlusion, g = roughness, b = metallic
+        half4 material            [[color(AAPLColorIndexMaterial),
+                                    raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+
         float depth               [[color(AAPLColorIndexDepth),
                                     raster_order_group(AAPLRasterOrderGroupGBuffer)]];
-        
+
     };
     
     // TODO: consider an object function and a mesh function
@@ -814,8 +820,9 @@ namespace deferred {
                                texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]],
                                texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
                                texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
-                               texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]])
-    
+                               texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]],
+                               texture2d<half> occlusionTexture [[texture(AAPLTextureIndexOcclusion)]])
+
     {
         
         constexpr sampler trilinearSampler(mag_filter::linear,
@@ -837,18 +844,23 @@ namespace deferred {
         half4 roughnessSample = roughnessTexture.sample(trilinearSampler, in.coordinate.xy);
         half4 metallicSample = metallicTexture.sample(trilinearSampler, in.coordinate.xy);
         half4 emissiveSample = emissiveTexture.sample(trilinearSampler, in.coordinate.xy);
-        
+        half4 occlusionSample = occlusionTexture.sample(trilinearSampler, in.coordinate.xy);
+
         normalSample = normalSample * 2.0h - 1.0h;
-        
+
         half3 normal = normalize(half3x3(half3(in.tangent_world.xyz),
                                          half3(in.bitangent_world.xyz),
                                          half3(in.normal_world.xyz)) * normalSample.xyz);
-                
+
         out.light = front_facing ? emissiveSample : half4(1.0h, 0.0h, 1.0h, 0.0h);
-        out.albedo_metallic.rgb = front_facing ? albedoSample.rgb : 0.0h;
-        out.albedo_metallic.a = front_facing ? metallicSample.b : 0.0h;
-        out.normal_roughness.xyz = front_facing ? normal : 0.0h;
-        out.normal_roughness.w = front_facing ? roughnessSample.g : 1.0h;
+        out.albedo.rgb = front_facing ? albedoSample.rgb : 0.0h;
+        out.albedo.a = 1.0h;
+        out.normal.xyz = front_facing ? normal : 0.0h;
+        out.normal.w = 0.0h;
+        out.material.r = front_facing ? occlusionSample.r : 1.0h;
+        out.material.g = front_facing ? roughnessSample.g : 1.0h;
+        out.material.b = front_facing ? metallicSample.b : 0.0h;
+        out.material.a = 0.0h;
         
         // this choice of depth is the same as the hardware depth buffer
         // note we cannot read the hardware depth buffer in the same pass
@@ -965,12 +977,12 @@ namespace deferred {
         
         LightingFragmentFunctionOutput out;
         
-        float3 albedo    = float3(gbuffer.albedo_metallic.rgb);
-        float  metallic  = float(gbuffer.albedo_metallic.a);
-        float3 normal    = float3(gbuffer.normal_roughness.xyz);
-        float  roughness = float(gbuffer.normal_roughness.w);
+        float3 albedo    = float3(gbuffer.albedo.rgb);
+        float3 normal    = float3(gbuffer.normal.xyz);
+        float  occlusion = float(gbuffer.material.r);
+        float  roughness = float(gbuffer.material.g);
+        float  metallic  = float(gbuffer.material.b);
         // float  depth     = gbuffer.depth;
-        float  occlusion = 1.0f;
         
         // compute ray direction (towards camera)
         float4 far_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2];
@@ -1032,16 +1044,16 @@ namespace deferred {
         
         LightingFragmentFunctionOutput out;
         
-        float3 albedo    = float3(gbuffer.albedo_metallic.rgb);
-        float  metallic  = float(gbuffer.albedo_metallic.a);
-        float3 normal    = float3(gbuffer.normal_roughness.xyz);
-        float  roughness = float(gbuffer.normal_roughness.w);
+        float3 albedo    = float3(gbuffer.albedo.rgb);
+        float3 normal    = float3(gbuffer.normal.xyz);
+        float  roughness = float(gbuffer.material.g);
+        float  metallic  = float(gbuffer.material.b);
         float  depth     = gbuffer.depth;
-        // float  occlusion = 1.0f;
-        
+        // direct light is not attenuated by baked ambient occlusion
+
         float4 position_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2] * depth;
         float3 direction = in.near_world.xyz * position_world.w - position_world.xyz * in.near_world.w;
-        
+
         float3 V = normalize(direction);
         float3 N = normal;
         float3 L = uniforms.light_direction;
@@ -1114,12 +1126,12 @@ namespace deferred {
         
         LightingFragmentFunctionOutput out;
         
-        float3 albedo    = float3(gbuffer.albedo_metallic.rgb);
-        float  metallic  = float(gbuffer.albedo_metallic.a);
-        float3 normal    = float3(gbuffer.normal_roughness.xyz);
-        float  roughness = float(gbuffer.normal_roughness.w);
+        float3 albedo    = float3(gbuffer.albedo.rgb);
+        float3 normal    = float3(gbuffer.normal.xyz);
+        float  roughness = float(gbuffer.material.g);
+        float  metallic  = float(gbuffer.material.b);
         float  depth     = gbuffer.depth;
-        // float  occlusion = 1.0f;
+        // direct light is not attenuated by baked ambient occlusion
 
         // position of the fragment in the world
         float4 position_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2] * depth;

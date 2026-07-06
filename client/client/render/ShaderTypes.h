@@ -34,8 +34,12 @@ enum AAPLBufferIndex {
 
 enum AAPLColorIndex {
     AAPLColorIndexColor,
-    AAPLColorIndexAlbedoMetallic,
-    AAPLColorIndexNormalRoughness,
+    AAPLColorIndexAlbedo,
+    AAPLColorIndexNormal,
+    // scalar material fields packed one per channel, glTF
+    // occlusion-roughness-metallic convention: r = occlusion,
+    // g = roughness, b = metallic
+    AAPLColorIndexMaterial,
     AAPLColorIndexDepth,
 };
 

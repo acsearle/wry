@@ -710,6 +710,65 @@ namespace wry::mesh {
             }
         }
 
+        // Tangent frames for baked normal maps, for hack_MeshVertex as
+        // produced by from_obj: three unshared vertices per triangle,
+        // authored normals preserved.  Computes per-triangle dP/du and
+        // dP/dv from the texture coordinates and assigns the
+        // Gram-Schmidt-orthonormalized frame to each corner.  A normal
+        // map baked against the mesh's UV layout (Blender et al.) shades
+        // correctly only in this basis; a frame invented from the normal
+        // alone (repair_jacobian above) rotates or mirrors the baked
+        // detail on the surface.  Degenerate or missing UVs fall back to
+        // that arbitrary perpendicular basis.
+        void repair_tangents() {
+            assert(!(hack_MeshVertex.size() % 3));
+            for (size_t i = 0; i + 2 < hack_MeshVertex.size(); i += 3) {
+                auto e1 = hack_MeshVertex[i + 1].position.xyz - hack_MeshVertex[i].position.xyz;
+                auto e2 = hack_MeshVertex[i + 2].position.xyz - hack_MeshVertex[i].position.xyz;
+                auto d1 = hack_MeshVertex[i + 1].coordinate.xy - hack_MeshVertex[i].coordinate.xy;
+                auto d2 = hack_MeshVertex[i + 2].coordinate.xy - hack_MeshVertex[i].coordinate.xy;
+                float det = d1.x * d2.y - d2.x * d1.y;
+                simd_float3 T = {}, B = {};
+                bool mapped = abs(det) > 1e-12f;
+                if (mapped) {
+                    float r = 1.0f / det;
+                    T = (e1 * d2.y - e2 * d1.y) * r;
+                    // stored t runs opposite to the authored bottom-left-
+                    // origin v that normal maps are baked against (from_obj
+                    // flips V for top-left-origin sampling), so negate to
+                    // recover the baker's bitangent: dP/dv = -dP/dt
+                    B = -(e2 * d1.x - e1 * d2.x) * r;
+                }
+                for (size_t j = 0; j != 3; ++j) {
+                    MeshVertex& v = hack_MeshVertex[i + j];
+                    auto n = simd_normalize(v.normal.xyz);
+                    auto t = T - n * simd_dot(n, T);
+                    if (mapped && simd_length_squared(t) > 1e-12f * simd_length_squared(T)) {
+                        t = simd_normalize(t);
+                        auto b = B - n * simd_dot(n, B) - t * simd_dot(t, B);
+                        if (simd_length_squared(b) > 1e-12f * simd_length_squared(B)) {
+                            b = simd_normalize(b);
+                        } else {
+                            b = simd_cross(n, t);
+                        }
+                        v.tangent.xyz = t;
+                        v.bitangent.xyz = b;
+                    } else {
+                        if (abs(n.x) < 0.577f) {
+                            v.bitangent.xyz = simd_normalize(simd_cross(n, simd_make_float3(1,0,0)));
+                        } else {
+                            v.bitangent.xyz = simd_normalize(simd_cross(n, simd_make_float3(0,1,0)));
+                        }
+                        v.tangent.xyz = simd_normalize(simd_cross(n, v.bitangent.xyz));
+                    }
+                    v.normal.xyz = n;
+                    v.tangent.w = 0;
+                    v.bitangent.w = 0;
+                    v.normal.w = 0;
+                }
+            }
+        }
+
         void strip() {
             // In O(N) time, build a table to O(1) lookup triangles by
             // directed edge; each directed edge should appear only once

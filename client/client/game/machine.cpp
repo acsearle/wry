@@ -70,9 +70,9 @@ namespace wry {
                         // we ignore the current value entirely
                         break;
                     case OPCODE_STORE:
-                        // ignore the current value, but STORE should eventually
-                        // check that we can actually ovewrite the value (it's
-                        // not "matter", or read only, or whatever)
+                        // we load [_new_location] only to check that we may
+                        // overwrite it; see the matter early-out below
+                        (void) tx->try_read_value_for_coordinate(_new_location, new_value);
                         break;
                     case OPCODE_LOAD:
                     case OPCODE_EXCHANGE:
@@ -98,6 +98,22 @@ namespace wry {
                     printf("EntityID %lld proposes to HALT\n", _entity_id.data);
                     return;
                 }
+
+                // a pending STORE must not destroy matter in the
+                // destination, and matter itself may only be placed into
+                // an empty cell (in particular, never over a program
+                // glyph).  Park here and retry when the cell changes.
+                if (_on_arrival == OPCODE_STORE) {
+                    Term pending = new_this->peek();
+                    if (new_value.is_matter()
+                        || (pending.is_matter() && !term_is_null(new_value))) {
+                        tx->write_entity_for_entity_id(this->_entity_id, new_this);
+                        tx->wait_on_value_for_coordinate(_new_location);
+                        tx->on_abort_retry();
+                        return;
+                    }
+                }
+
                 // work out where we will go next
                                 
                 i64 next_heading = _new_heading;
@@ -194,6 +210,9 @@ namespace wry {
                         break;
                     case OPCODE_LOAD:
                         new_this->push(new_value);
+                        // matter is taken, not copied
+                        if (new_value.is_matter())
+                            tx->write_value_for_coordinate(_new_location, term_make_empty());
                         break;
                     case OPCODE_STORE:
                         // assert(wants_write_new_tile);
@@ -243,14 +262,24 @@ namespace wry {
                         break;
                         
                     case OPCODE_DROP:
-                        new_this->pop();
+                        // matter is not destroyed; it is put down in the
+                        // next cell as if by STORE (waiting until empty)
+                        if (new_this->peek().is_matter())
+                            next_action = OPCODE_STORE;
+                        else
+                            new_this->pop();
                         break;
                     case OPCODE_DUPLICATE:
-                        new_this->push(new_this->peek());
+                        // matter is not copyable
+                        a = new_this->peek();
+                        if (!a.is_matter())
+                            new_this->push(a);
                         break;
                     case OPCODE_OVER:
+                        // matter is not copyable
                         std::tie(b, a) = new_this->peek2();
-                        new_this->push(b);
+                        if (!b.is_matter())
+                            new_this->push(b);
                         break;
                     case OPCODE_SWAP:
                         a = new_this->pop();

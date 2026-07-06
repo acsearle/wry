@@ -19,6 +19,7 @@
 @property (nonatomic, nullable) id<MTLTexture> metallicTexture;
 @property (nonatomic, nullable) id<MTLTexture> roughnessTexture;
 @property (nonatomic, nullable) id<MTLTexture> emissiveTexture;
+@property (nonatomic, nullable) id<MTLTexture> occlusionTexture;
 
 @property (nonatomic, nullable) id<MTLBuffer> vertexBuffer;
 @property (nonatomic, nullable) id<MTLBuffer> indexBuffer;

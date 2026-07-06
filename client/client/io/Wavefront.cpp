@@ -592,8 +592,15 @@ namespace wry {
                                                       o.positions[i-1].z,
                                                       o.positions[i-1].w);
                             if (j) {
+                                // OBJ texture coordinates have a bottom-left
+                                // origin (Blender, OpenGL); our textures load
+                                // with row 0 at t = 0 (top-left origin), so
+                                // flip V here.  repair_tangents compensates
+                                // when deriving the bitangent, so the frame
+                                // still matches the one the normal map was
+                                // baked against.
                                 w.coordinate = make<float4>(o.coordinates[j-1].x,
-                                                            o.coordinates[j-1].y,
+                                                            1.0f - o.coordinates[j-1].y,
                                                             o.coordinates[j-1].z,
                                                             1.0f);
                             }
@@ -618,9 +625,13 @@ namespace wry {
             m.hack_triangle_strip.insert(m.hack_triangle_strip.end(), std::begin(js), std::end(js));
         }
         
-        m.repair_jacobian();
-        
-        
+        // repair_jacobian operates on the (empty) vertices/triangles
+        // members, not hack_MeshVertex, so it was a no-op here and OBJ
+        // meshes shipped zero tangents; repair_tangents derives the
+        // frame from the UVs so baked normal maps shade correctly.
+        m.repair_tangents();
+
+
         /*
          for (auto& position : o._positions) {
          mesh::vertex w;

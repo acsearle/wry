@@ -145,7 +145,10 @@ namespace wry {
 
         constexpr bool is_opcode() const;
         constexpr int as_opcode() const;
-        
+
+        constexpr bool is_matter() const;
+        constexpr int as_matter() const;
+
         constexpr bool is_int64_t() const;
         constexpr int64_t as_int64_t() const;
         
@@ -171,6 +174,7 @@ namespace wry {
     constexpr Term term_make_zero();
     constexpr Term term_make_one();
     constexpr Term term_make_opcode(int);
+    constexpr Term term_make_matter(int);
 
     // EntityID is a weak reference: a stable 60-bit identity that may
     // outlive any particular Entity snapshot.  Resolution to a live
@@ -182,6 +186,7 @@ namespace wry {
     constexpr bool term_is_boolean(Term);
     constexpr bool term_is_character(Term);
     constexpr bool term_is_error(Term);
+    constexpr bool term_is_matter(Term);
     constexpr bool term_is_null(Term);
     constexpr bool term_is_enum(Term);
     
@@ -195,6 +200,7 @@ namespace wry {
     std::string_view term_as_string_view(Term);
     std::string_view term_as_string_view_else(Term, std::string_view);
     constexpr int term_as_opcode(Term);
+    constexpr int term_as_matter(Term);
     
     bool term_contains(Term, Term key);
     Term term_find(Term, Term key);
@@ -398,8 +404,8 @@ namespace wry {
     // Tag 0 (OBJECT) is the pointer pun; load-bearing, do not renumber.
     // Tags 1..5 are the inline payload tags.  ENUMERATION subsumes the
     // small-discriminator families (boolean, character, opcode, sentinel,
-    // and future atom/mod-defined enums) via a second-level meta tag in
-    // bits 4..31; see _term_enum_meta_e.
+    // matter, and future atom/mod-defined enums) via a second-level meta
+    // tag in bits 4..31; see _term_enum_meta_e.
     //
     // Tags 6..15 are reserved.  Do NOT use them without bumping
     // TERM_SAVE_VERSION in save_format.  Renumbering any committed tag
@@ -425,9 +431,17 @@ namespace wry {
         TERM_ENUM_META_CHARACTER = 1,   // code is utf32 codepoint
         TERM_ENUM_META_OPCODE    = 2,   // code is opcode_t
         TERM_ENUM_META_SENTINEL  = 3,   // code is _term_sentinel_e
-        // 4..(2^28-1) reserved.  Candidates: ATOM (interned symbol id),
+        TERM_ENUM_META_MATTER    = 4,   // code is MATTER (matter.hpp)
+        // 5..(2^28-1) reserved.  Candidates: ATOM (interned symbol id),
         // mod-defined enums (engine reserves a range, game data another,
         // mods a third).  Namespace governance is deferred.
+        //
+        // MATTER terms denote conserved physical objects.  They are
+        // fungible values at the Term level; conservation is enforced
+        // by the opcode semantics in machine.cpp (LOAD takes, STORE
+        // waits-and-places, DROP puts down; DUPLICATE and OVER refuse)
+        // and only Source/Sink entities create/destroy them.  Meta and
+        // code values are save-format constants: append only.
     };
 
     // Sentinel codes within (ENUMERATION, SENTINEL_META).  Stored in
@@ -525,6 +539,10 @@ namespace wry {
         return term_make_enum(TERM_ENUM_META_OPCODE, code);
     }
 
+    constexpr Term term_make_matter(int code) {
+        return term_make_enum(TERM_ENUM_META_MATTER, code);
+    }
+
     // TODO: fixme
     constexpr Term::Term(int64_t x) : _data(term_make_integer_with(x)._data) {}
 
@@ -534,6 +552,13 @@ namespace wry {
         // Extracts the 32-bit code, sign-extending if it was signed.
         assert((self._data & TERM_MASK_TAG_AND_META)
                == _term_enum_tag_meta_bits(TERM_ENUM_META_OPCODE));
+        return (int)(int32_t)(self._data >> 32);
+    }
+
+    constexpr int term_as_matter(Term self) {
+        // Pre-condition: self is an ENUMERATION with meta == MATTER.
+        assert((self._data & TERM_MASK_TAG_AND_META)
+               == _term_enum_tag_meta_bits(TERM_ENUM_META_MATTER));
         return (int)(int32_t)(self._data >> 32);
     }
 
@@ -550,6 +575,15 @@ namespace wry {
                == _term_enum_tag_meta_bits(TERM_ENUM_META_OPCODE);
     }
 
+    constexpr bool Term::is_matter() const {
+        return (_data & TERM_MASK_TAG_AND_META)
+               == _term_enum_tag_meta_bits(TERM_ENUM_META_MATTER);
+    }
+
+    constexpr int Term::as_matter() const {
+        return term_as_matter(*this);
+    }
+
     constexpr bool Term::is_int64_t() const {
         return (_data & TERM_MASK_TAG) == TERM_TAG_SMALL_INTEGER;
     }
@@ -559,15 +593,16 @@ namespace wry {
     }
 
 
-    // ENUMERATION subsumes BOOLEAN / CHARACTER / OPCODE / SENTINEL.  The
-    // term_is_* predicates discriminate by the (tag | meta<<4) compound
-    // discriminator in the low 32 bits.
+    // ENUMERATION subsumes BOOLEAN / CHARACTER / OPCODE / SENTINEL /
+    // MATTER.  The term_is_* predicates discriminate by the
+    // (tag | meta<<4) compound discriminator in the low 32 bits.
     constexpr bool term_is_enum(Term self)      { return (self._data & TERM_MASK_TAG) == TERM_TAG_ENUMERATION; }
     constexpr bool term_is_null(Term self)      { return !self._data; }
     constexpr bool term_is_error(Term self)     { return (self._data & TERM_MASK_TAG) == TERM_TAG_ERROR; }
     constexpr bool term_is_boolean(Term self)   { return (self._data & TERM_MASK_TAG_AND_META) == _term_enum_tag_meta_bits(TERM_ENUM_META_BOOLEAN); }
     constexpr bool term_is_character(Term self) { return (self._data & TERM_MASK_TAG_AND_META) == _term_enum_tag_meta_bits(TERM_ENUM_META_CHARACTER); }
     constexpr bool term_is_opcode(Term self)    { return (self._data & TERM_MASK_TAG_AND_META) == _term_enum_tag_meta_bits(TERM_ENUM_META_OPCODE); }
+    constexpr bool term_is_matter(Term self)    { return (self._data & TERM_MASK_TAG_AND_META) == _term_enum_tag_meta_bits(TERM_ENUM_META_MATTER); }
     constexpr bool term_is_sentinel(Term self)  { return (self._data & TERM_MASK_TAG_AND_META) == _term_enum_tag_meta_bits(TERM_ENUM_META_SENTINEL); }
 
 

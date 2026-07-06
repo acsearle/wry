@@ -82,6 +82,7 @@
     [encoder setFragmentTexture:_metallicTexture atIndex:AAPLTextureIndexMetallic];
     [encoder setFragmentTexture:_normalTexture atIndex:AAPLTextureIndexNormal];
     [encoder setFragmentTexture:_roughnessTexture atIndex:AAPLTextureIndexRoughness];
+    [encoder setFragmentTexture:_occlusionTexture atIndex:AAPLTextureIndexOcclusion];
     
     [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
                         indexCount:_indexBuffer.length / sizeof(uint)
