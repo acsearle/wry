@@ -133,7 +133,7 @@ children to scan.
 
 ## Phase ordering
 
-Per-bit phase chain (extending [tricolor.md](tricolor.md)):
+Per-bit phase chain (extending [garbage_collection.md](garbage_collection.md)):
 ```
 UNUSED → GRAY_PUBLISHED → BLACK_PUBLISHED → WEAK_DECISION
        → SWEEPING → WHITE_PUBLISHED → CLEARING → UNUSED
@@ -194,7 +194,7 @@ out of the state atomic.
 
 ## See also
 
-- [tricolor.md](tricolor.md) — collector phases, k-collections, embargo.
+- [garbage_collection.md](garbage_collection.md) — collector phases, k-collections, embargo.
 - [garbage_collected.cpp](../garbage_collected.cpp) — collector loop.
 - Papers: Prokopec et al., 2011 (basic Ctrie); Prokopec et al., 2012
   (LNode/SNode/TNode; we adopt this structure modulo snapshots).

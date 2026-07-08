@@ -204,6 +204,17 @@ namespace wry {
                 return desired.current;
             }
 
+            void pin_explicit(Epoch occupied) {
+                State expected = state.load_relaxed();
+                State desired;
+                do {
+                    desired = expected.pin_explicit(occupied);
+                } while (!state.compare_exchange_weak_acquire_relaxed(expected, desired));
+                if (expected.waiting && !desired.waiting) {
+                    state.notify_all();
+                }
+            }
+
             Epoch unpin(Epoch occupied) {
                 State expected = state.load_relaxed();
                 State desired;
@@ -265,6 +276,18 @@ namespace wry {
         inline constinit Service global_service = {};
 
     } // namespace wry::epoch
+
+    [[nodiscard]] inline epoch::Epoch pin_global_epoch() {
+        return epoch::global_service.pin();
+    }
+
+    inline void unpin_global_epoch(epoch::Epoch epoch) {
+        wry::epoch::global_service.unpin(epoch);
+    }
+
+    inline void pin_global_epoch_explicit(epoch::Epoch epoch) {
+        return wry::epoch::global_service.pin_explicit(epoch);
+    }
 
 } // namespace wry
 

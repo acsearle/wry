@@ -25,7 +25,6 @@ namespace wry {
     void mutator_repin();
     void mutator_unpin();
 
-
     // Garbage collector interface
 
     void collector_run_on_this_thread();
@@ -103,13 +102,22 @@ namespace wry {
 
     template<typename> struct Root;
     template<typename> struct AtomicScanSlot;
+    template<typename> struct AtomicMarkedScanSlot;
 
 } // namespace wry
 
 namespace wry {
-    
-        
+
+    // Cumulative allocation through GarbageCollected::operator new on this
+    // thread.  Debugging telemetry; mirrored into the thread's ThreadPublic
+    // node at each pin/repin/unpin.  (Extern rather than inline thread_local;
+    // see the note on wry::bump::this_thread_state.)
+    extern thread_local uint64_t _thread_local_gc_allocated_bytes;
+    extern thread_local uint64_t _thread_local_gc_allocated_objects;
+
     inline void* _Nonnull GarbageCollected::operator new(std::size_t count) {
+        _thread_local_gc_allocated_bytes += count;
+        ++_thread_local_gc_allocated_objects;
         return calloc(count, 1);
     }
     
@@ -231,7 +239,8 @@ namespace wry {
             return *this;
         }
 
-        Root() : _ptr(nullptr) {}
+        // constexpr so a thread_local Root can be constinit
+        constexpr Root() : _ptr(nullptr) {}
 
         Root(Root const& other)
         : _ptr(other._ptr) {
@@ -243,14 +252,21 @@ namespace wry {
         }
         
         ~Root() {
-            // To fire this assert, a Root object must have been erroneously
-            // placed into a GarbageCollected object.  Roots point into the
-            // garbage collected heap from outside it.
+            // To fire this assert, a nonempty Root object must have been
+            // erroneously placed into a GarbageCollected object.  Roots point
+            // into the garbage collected heap from outside it.
             //
             // Also, it is a contradiction for a collection to destroy a root
             // (root vs pointer-to-root distinction?)
-            assert_this_thread_is_mutator();
-            garbage_collected_roots_subtract(_ptr);
+            //
+            // Destroying an *empty* Root performs no collected-heap action
+            // and is permitted on any thread; a thread_local Root that was
+            // nulled by thread_public_deregister must be destructible on the
+            // collector thread at its exit.
+            if (_ptr) {
+                assert_this_thread_is_mutator();
+                garbage_collected_roots_subtract(_ptr);
+            }
         }
         
         Root& operator=(Root const& other) {
@@ -677,6 +693,98 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
     }; // struct AtomicScanSlot<T*>
 
 
+    // AtomicMarkedScanSlot<T*> -- AtomicScanSlot plus a Harris-style mark
+    // bit packed into the pointer's low bit.
+    //
+    // The mark conventionally means "the *owner* of this slot is logically
+    // deleted"; per Harris, once a slot is marked its pointer is frozen
+    // (every mutation CASes against an unmarked expected value, so all
+    // fail).  Concurrent lists unlink a marked node by CASing the
+    // predecessor's slot past it.
+    //
+    // GC integration does the heavy lifting that makes Harris lists easy
+    // here: the unlink CAS shades the displaced (unlinked) node -- Yuasa,
+    // as AtomicScanSlot -- so in-flight iterators holding it, and the
+    // frozen next pointers they may traverse through it, stay valid for
+    // the rest of the collection cycle.  No hazard pointers, no ABA: the
+    // node is reclaimed only when unreachable.
+    //
+    // Every load runs at >= acquire; the CAS at >= acq_rel with acquire on
+    // failure.  Shading on success is unconditional like AtomicScanSlot
+    // (shading an unchanged pointer, e.g. when only the mark bit changes,
+    // is idempotent-harmless).
+
+    template<typename T>
+    struct AtomicMarkedScanSlot<T*> {
+
+        struct MarkedPointer {
+            T* _Nullable ptr;
+            bool marked;
+            bool operator==(MarkedPointer const&) const = default;
+        };
+
+        Atomic<uintptr_t> raw;
+
+        static uintptr_t _encode(T* _Nullable p, bool m) {
+            return reinterpret_cast<uintptr_t>(p) | uintptr_t{m};
+        }
+
+        static MarkedPointer _decode(uintptr_t v) {
+            return MarkedPointer{
+                reinterpret_cast<T*>(v & ~uintptr_t{1}),
+                (bool)(v & 1)
+            };
+        }
+
+        // Constraint placement per AtomicScanSlot: in the constructor so
+        // naming the type does not require T to be complete.
+        constexpr AtomicMarkedScanSlot() noexcept : raw{} {
+            static_assert(std::is_base_of_v<GarbageCollected, T>);
+            static_assert(alignof(T) >= 2);
+        }
+
+        ~AtomicMarkedScanSlot() {
+            // Lives in a GC-derived owner; destroyed only by the collector.
+            assert_this_thread_is_collector();
+        }
+
+        AtomicMarkedScanSlot(const AtomicMarkedScanSlot&) = delete;
+        AtomicMarkedScanSlot& operator=(const AtomicMarkedScanSlot&) = delete;
+
+        MarkedPointer load_acquire() const noexcept {
+            return _decode(raw.load_acquire());
+        }
+
+        // Non-atomic access -- pre-publication setup only; see
+        // Atomic<T>::nonatomic_store for the contract.
+        MarkedPointer nonatomic_load() const noexcept {
+            return _decode(raw.nonatomic_load());
+        }
+
+        void nonatomic_store(T* _Nullable p, bool m) noexcept {
+            raw.nonatomic_store(_encode(p, m));
+        }
+
+        // On failure, expected is updated to the observed value.
+        bool compare_exchange_strong(MarkedPointer& expected,
+                                     MarkedPointer desired) noexcept {
+            uintptr_t e = _encode(expected.ptr, expected.marked);
+            bool ok = raw.compare_exchange_strong_acq_rel_acquire(
+                e, _encode(desired.ptr, desired.marked));
+            if (ok)
+                garbage_collected_shade(expected.ptr);
+            else
+                expected = _decode(e);
+            return ok;
+        }
+
+    }; // struct AtomicMarkedScanSlot<T*>
+
+    // Scan: the mark bit must be stripped before the pointer is reported.
+    template<typename T>
+    void garbage_collected_scan(AtomicMarkedScanSlot<T*> const& x) {
+        garbage_collected_scan(x.load_acquire().ptr);
+    }
 
 
     struct ScanDiscipline {

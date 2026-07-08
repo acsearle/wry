@@ -45,8 +45,7 @@ namespace wry {
         }
                 
         {
-            
-            
+
             ConcurrentSkiplistMap<int, int, DefaultKeyService<int>, EpochDiscipline> a;
             std::map<int, int> b;
             
@@ -118,6 +117,7 @@ namespace wry {
     } // anonymous namespace
 
     define_test("skiplist_partition") {
+        auto guard = pin_global_epoch();
         for (int iter = 0; iter != 200; ++iter) {
             PartSet a;
             std::set<uint64_t> b;
@@ -134,6 +134,7 @@ namespace wry {
             if (!(iter & 31))
                 mutator_repin();
         }
+        unpin_global_epoch(guard);
         co_return;
     };
 

@@ -21,6 +21,7 @@
 #include "epoch_allocator.hpp"
 #include "HeapString.hpp"
 #include "stack.hpp"
+#include "thread_public.hpp"
 #include "utility.hpp"
 #include "term.hpp"
 #include "inline_ring_buffer.hpp"
@@ -178,6 +179,10 @@ namespace wry {
     // TODO: Poison the bag somehow
     constinit thread_local Bag<const GarbageCollected*> _thread_local_new_objects;
 
+    // Allocation telemetry (not poisoned: cumulative, valid unpinned)
+    constinit thread_local uint64_t _thread_local_gc_allocated_bytes = 0;
+    constinit thread_local uint64_t _thread_local_gc_allocated_objects = 0;
+
     GarbageCollected::GarbageCollected()
     : _gray{_thread_local_gray_for_allocation}
     , _black{_thread_local_black_for_allocation}
@@ -283,6 +288,7 @@ namespace wry {
         epoch::pin_this_thread();
         // must load the color state *after* pinning
         _mutator_load_color();
+        _thread_public_note_pin();
     }
 
     void mutator_repin() {
@@ -291,16 +297,18 @@ namespace wry {
         epoch::repin_this_thread();
         // must load the color state *after* pinning
         _mutator_load_color();
+        _thread_public_note_repin();
     }
 
     void mutator_unpin() {
+        // note first: the hook touches this thread's GC-heap node
+        _thread_public_note_unpin();
         _mutator_publishes_report();
         // must publish report before unpinning
         epoch::unpin_this_thread();
         // only poison the color state after it has been reported
         _mutator_poison_color();
     }
-    
         
     enum KPhase {
         
@@ -506,8 +514,9 @@ namespace wry {
         void loop_until_canceled() {
             
             _this_thread_mode = ThreadMode::COLLECTOR;
-            
+
             mutator_pin();
+            thread_public_register("C0");
             assert(epoch::local_state.is_pinned);
             epoch::Epoch epoch_at_last_change = epoch::local_state.known;
 
@@ -559,6 +568,10 @@ namespace wry {
                         printf("C: waiters=%zu epoch=%04x finalized=%04x\n",
                                _cycle_waiters_count.load_relaxed(),
                                current_epoch.raw, _finalized.raw);
+                        // On a full freeze, name the pinned thread(s): a
+                        // stuck pinner is the prime suspect.
+                        if (periodic)
+                            thread_public_debug_dump();
                         /*
                         for (int k = 0; k != 16; ++k)
                             if (kstate[k].kphase != UNUSED)
@@ -593,6 +606,11 @@ namespace wry {
                 _scan_history.emplace_back(A, B, _black_for_allocation, _finalized);
                 
             } // while (!_is_cancelled.load_relaxed())
+
+            // Still pinned with valid colors, so we can retire our node
+            // (the root drop shades it).  We remain pinned forever after;
+            // nobody is left to need the epoch.
+            thread_public_deregister();
 
         } // void Collector::loop_until_canceled()
         

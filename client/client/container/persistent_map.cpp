@@ -83,6 +83,12 @@ namespace wry {
     // checking the source trie is left unchanged (structural-sharing safety).
     define_test("amt_parallel_rebuild") {
 
+        // Root pin for the whole work tree: parked rebuild continuations
+        // hold FrozenCursor state in bump slabs, which rotate after 3
+        // epoch advances (see the drain-loop contract in
+        // global_work_queue.cpp).
+        auto guard = pin_global_epoch();
+
         using A = PersistentMap<uint64_t, int>::AMT;
 
         struct Mod { enum Tag { Write, Clear } tag; int value; };
@@ -152,6 +158,7 @@ namespace wry {
                 mutator_repin();
         }
 
+        unpin_global_epoch(guard);
         co_return;
 
     };
@@ -159,6 +166,9 @@ namespace wry {
     // Stage 1 end-to-end: materialize a real ConcurrentSkiplistMap modifier and
     // rebuild a PersistentMap, vs a std::map oracle (+ source immutability).
     define_test("persistentmap_parallel_rebuild") {
+
+        // Root pin for the whole work tree; see amt_parallel_rebuild.
+        auto guard = pin_global_epoch();
 
         using PM = PersistentMap<uint64_t, int>;
         using Action = ParallelRebuildAction<int>;
@@ -225,6 +235,7 @@ namespace wry {
                 mutator_repin();
         }
 
+        unpin_global_epoch(guard);
         co_return;
 
     };

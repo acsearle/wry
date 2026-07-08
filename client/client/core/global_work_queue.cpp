@@ -11,6 +11,7 @@
 #include "bump_allocator.hpp"
 #include "concurrent_queue.hpp"
 #include "garbage_collected.hpp"
+#include "thread_public.hpp"
 
 
 namespace wry {
@@ -100,11 +101,25 @@ namespace wry {
             char str[256];
             snprintf(str, size, "W%d", thread_identifier.fetch_add_relaxed(1));
             pthread_setname_np(str);
+            mutator_pin();
+            thread_public_register(str);
+            mutator_unpin();
         }
         for (;;) {
             global_work_queue.wait_not_empty();
             if (global_work_queue.is_canceled())
                 break;
+            // Unpin every few tasks so a continuously-refilled queue cannot
+            // hold this pin (and thus wedge the epoch) indefinitely.
+            //
+            // CONTRACT: this drain pin is therefore NOT continuous across
+            // queued tasks.  A work-tree whose parked continuations hold
+            // epoch-allocated state (FrozenCursor etc.) must keep its own
+            // root pin alive for the tree's whole extent (pin_global_epoch /
+            // pin_explicit); otherwise three epoch advances rotate (and
+            // ASan-poison) the slabs under it -- demonstrated by the
+            // thread_public churn test against the unguarded waitablemap
+            // rebuild.
             mutator_pin();
             void* callback = {};
             int countdown = GLOBAL_WORK_QUEUE_REPIN_CADENCE;
@@ -114,6 +129,9 @@ namespace wry {
             }
             mutator_unpin();
         }
+        mutator_pin();
+        thread_public_deregister();
+        mutator_unpin();
         // Hand off (i.e. leak) any slabs this thread still owns so that the
         // bump::State destructor doesn't abort.  See _leak_this_thread_bump_slabs.
         _leak_this_thread_bump_slabs();

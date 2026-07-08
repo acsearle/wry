@@ -21,6 +21,11 @@ namespace wry {
     // rebuild and a std::map/std::set oracle.
     define_test("waitablemap_parallel_rebuild") {
 
+        // Root pin for the whole work tree: this was the test that hit the
+        // slab-rotation use-after-poison under the drain-loop repin cadence
+        // (see global_work_queue.cpp).
+        auto guard = pin_global_epoch();
+
         using WM = WaitableMap<uint64_t, int>;
         using ValAction = ParallelRebuildAction<int>;
         using KiAction = ParallelRebuildAction<std::vector<EntityID>>;
@@ -153,6 +158,7 @@ namespace wry {
                 mutator_repin();
         }
 
+        unpin_global_epoch(guard);
         co_return;
 
     };

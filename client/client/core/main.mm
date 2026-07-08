@@ -19,6 +19,7 @@
 #include "world_state.hpp"
 #include "test.hpp"
 #include "coroutine.hpp"
+#include "thread_public.hpp"
 
 #import "WryDelegate.h"
 
@@ -75,11 +76,17 @@ int main(int argc, const char** argv) {
     if (test_only) {
         heartbeat_thread = std::thread([&heartbeat_stop] {
             pthread_setname_np("test-heartbeat");
+            wry::mutator_pin();
+            wry::thread_public_register("test-heartbeat");
+            wry::mutator_unpin();
             while (!heartbeat_stop.load(std::memory_order_relaxed)) {
                 wry::mutator_pin();
                 wry::mutator_unpin();
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
+            wry::mutator_pin();
+            wry::thread_public_deregister();
+            wry::mutator_unpin();
         });
     }
 
@@ -102,6 +109,7 @@ int main(int argc, const char** argv) {
 
 
     wry::mutator_pin();
+    wry::thread_public_register("main");
 
     if (!test_only) {
         @autoreleasepool {
@@ -215,6 +223,11 @@ int main(int argc, const char** argv) {
     }
 
     printf("main is joining worker threads\n");
+    // Transient pin only (like collector_cancel's poke): main must not
+    // *stay* pinned during shutdown.
+    wry::mutator_pin();
+    wry::thread_public_deregister();
+    wry::mutator_unpin();
     wry::global_work_queue_cancel();
     while (!workers.empty()) {
         workers.back().join();
