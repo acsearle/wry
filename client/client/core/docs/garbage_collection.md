@@ -941,3 +941,112 @@ same gray/black word at distinct bit positions.
   2023 — the design lineage by direct admission of the author: pick the
   options that place the least compute burden on the mutator.
 
+---
+
+## 8. Future directions
+
+### 8.1 Stronger report ordering + gray lists (one staged redesign)
+
+Two changes that are individually attractive and compose into a large
+simplification.  Recorded 2026-07 after working the termination
+off-by-one (the `+1` in the `_shade_most_recent` scan-invalidation
+check) and comparing the design against Crossbeam and its successors.
+
+**(a) Publish reports with release/acquire instead of relaxed.**
+
+Today the report channel is relaxed at both ends and relies entirely on
+the epoch theorem for visibility: reports received at collector epoch F
+are opened at `E >= F + 3`, and `_finalized = F - 2`, so `_finalized`
+trails the current epoch by ~5.  Every `_finalized`-gated phase
+transition inherits that lag, several times per cycle; it is a large
+fraction of total cycle length, and cycle length is the float bound
+(dead-but-unreclaimed memory ~ allocation rate x cycle length).
+
+The mutator's publish CAS and the collector's exchange of
+`_global_atomic_reports_head` are natural release/acquire points: making
+the publish CAS release-on-success and the exchange acquire lets the
+collector open reports at receipt.  The -2 completeness lag (raggedness:
+a mutator pinned at F-1 may not have published yet) is a counting
+argument and remains; the +3 dereference embargo goes.  `_finalized`
+lag drops from ~5 epochs to ~2, and cycles shrink accordingly.
+
+Cost accounting: on x86-64 a release CAS is the same instruction as a
+relaxed CAS; on AArch64 it is nearly free.  The operation runs once per
+quiescence per thread, not per heap operation, so this spends
+essentially zero mutator-burden currency.  The relaxed-everything
+discipline was priced before the hardware exchange rate was known.
+Bonus: the report channel becomes ordinary release/acquire edges that
+ThreadSanitizer understands natively, instead of epoch-theorem edges it
+cannot see.
+
+The epoch theorem remains load-bearing where there is no natural release
+point: bump-slab rotation and the color-publication raggedness bounds
+keep their embargo reasoning.
+
+**(b) Report lists of shaded objects (DLG-style), not just did-shade
+bits.**
+
+`garbage_collected_shade` already computes `did_shade = gray & ~before`;
+appending the pointer to a thread-local bag when `did_shade != 0` costs
+one predictable branch plus a push charged per white-to-gray transition
+(at most once per object per bit per cycle), on machinery identical to
+the existing allocations channel in `Report`.  With current mutation
+rates (persistent structures, few barriers) the mutator cost rounds to
+zero.
+
+What it buys is termination, in both senses:
+
+- Latency: today each reported shade invalidates the in-flight
+  validation scan and forces another full O(heap) pass; the adversarial
+  tail (see the counterexample in section 1) is O(first-shades) full
+  scans.  With lists, a late shade is consumed as a targeted trace of
+  one subtree, on passes the collector was making anyway.
+- Simplification: the `_scan_history` / `_shade_most_recent` /
+  before-after validation apparatus exists solely to answer "did that
+  scan's relaxed loads observe every shade?"  With explicit lists,
+  receipt of the report *is* observation; termination for bit k becomes
+  report-stream arithmetic -- all reports through epoch X opened, k-lists
+  empty over a ~2-epoch quiet window -- with no heap-visibility
+  reasoning at all.  The subtlest code in the collector (where the
+  off-by-one lived) deletes.
+
+Scaling: the bit-report design costs (dirty epochs x heap) in extra
+passes; lists cost O(shaded subtrees), independent of heap size, and
+they feed the graystack directly, which is the natural work queue if
+tracing ever goes parallel.
+
+**Staging:** land as one redesign in the differential-oracle style: add
+the shade list to `Report` and a new report-arithmetic termination
+detector beside the existing scan-history one, assert the new detector
+never fires earlier than the old one validates, run both for a while,
+then delete the old apparatus and take the acquire/release channel in
+the same landing.  Less code, shorter cycles, smaller float, smaller
+proof.
+
+### 8.2 What this deliberately does not buy: stalled-thread robustness
+
+The post-Crossbeam reclamation literature (interval/era-based
+reclamation, Hyaline and its descendants) makes a stalled reader retain
+only the garbage born during its own stall window, instead of freezing
+reclamation globally.  We record explicitly why we are NOT pursuing
+that:
+
+- A thread that stalls while doing work for the next frame is already a
+  system failure at the game level.  The bounded thread pool is designed
+  not to saturate the machine and to let its threads evict each other;
+  stalls are treated as bugs, not tolerated states.  Era-robust memory
+  would mask the symptom without saving the frame.
+- More fundamentally, the write barrier is priced against non-stalled
+  mutators.  Tracing concurrently with a genuinely stalled mutator
+  requires the shade to happen-before the pointer overwrite at the
+  granularity of each individual barrier execution (release on the
+  `_gray` fetch_or, acquire on the collector's reads), not at the
+  granularity of epoch-batched reports.  That converts a per-quiescence
+  ordering cost into a per-write one, which is exactly the mutator
+  burden this design exists to avoid.
+
+The epoch is the collector's clock as well as its grace period; both
+assume every participant keeps ticking.  Diagnosis of violations, not
+tolerance of them, is the chosen posture (see `ThreadPublic` and the
+drain-loop pin-continuity contract in `global_work_queue.cpp`).
+
