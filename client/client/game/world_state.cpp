@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <random>
 
 #include "base36.hpp"
 #include "coroutine.hpp"
@@ -26,7 +27,9 @@ namespace wry {
         // constructor so NEW, restart, and the round-trip tests can all build
         // the same world.  The player is just one of the entities; callers
         // recover the local-player handle via find_local_player below.
-        World* make_starting_world() {
+        //
+        // TEMP: unreferenced while new_game uses make_starting_world_big.
+        [[maybe_unused]] World* make_starting_world() {
             World* world = new World;
 
             {
@@ -74,6 +77,83 @@ namespace wry {
             // machines will drive over (through) them
             world->_term_for_coordinate.set(Coordinate{-2, +2}, term_make_matter(MATTER_SHIPPING_CONTAINER));
             world->_term_for_coordinate.set(Coordinate{-3, +4}, term_make_matter(MATTER_SHIPPING_CONTAINER));
+
+            return world;
+        }
+
+        // TEMP: stress-test scenario.  Machines with random headings,
+        // randomly part-way through a move between adjacent tiles, scattered
+        // over a square region centered on the origin whose tiles each have
+        // a 10% chance of holding the flip-flop opcode.  Fixed seed, and
+        // modulo rather than uniform_int_distribution (whose mapping is
+        // implementation-defined), so every run and every peer builds the
+        // identical world.
+        World* make_starting_world_big() {
+            World* world = new World;
+
+            {
+                Player* p = new Player;
+                world->_entity_for_entity_id.set(p->_entity_id, p);
+                world->_waiting_on_time.set({Time{0}, p->_entity_id});
+            }
+
+            std::mt19937_64 gen{20260709};
+
+            constexpr i32 region_extent = 3000;     // [-1500, 1500) each axis
+            constexpr i32 half = region_extent / 2;
+            constexpr int machine_count = 100000;
+
+            for (i32 y = -half; y != half; ++y) {
+                for (i32 x = -half; x != half; ++x) {
+                    if (gen() % 10 == 0)
+                        world->_term_for_coordinate.set(Coordinate{x, y},
+                                                        term_make_opcode(OPCODE_FLIP_FLOP));
+                }
+            }
+
+            // Each machine starts mid-travel, mirroring the state a departing
+            // Machine::notify leaves behind (phase TRAVELLING, straight move,
+            // _on_arrival NOOP, wake scheduled at _new_time): arrival times
+            // are uniform over (0, travel_ticks], so wakeups run at a steady
+            // ~machine_count/travel_ticks per tick instead of a lockstep herd
+            // at t=0 -- and stay spread, since every subsequent hop is another
+            // travel_ticks.  A travelling machine occupies BOTH endpoint
+            // cells (Machine::notify asserts it is the registered occupant of
+            // each), so claim the pair, and reject-and-redraw a draw whose
+            // pair collides (100000 pairs over 9000000 tiles, so few
+            // retries).
+            constexpr i64 travel_ticks = 64;   // one hop, per Machine::notify
+            int placed = 0;
+            while (placed != machine_count) {
+                Coordinate xy{(i32)(gen() % region_extent) - half,
+                              (i32)(gen() % region_extent) - half};
+                i64 heading = (i64)(gen() % 4);
+                Time arrival = Time{1 + (i64)(gen() % travel_ticks)};
+                Coordinate destination = xy;
+                switch (heading & 3) {
+                    case 0: ++destination.y; break;
+                    case 1: ++destination.x; break;
+                    case 2: --destination.y; break;
+                    case 3: --destination.x; break;
+                }
+                EntityID occupant = {};
+                if (world->_entity_id_for_coordinate.try_get(xy, occupant) ||
+                    world->_entity_id_for_coordinate.try_get(destination, occupant))
+                    continue;
+                Machine* machine = new Machine;
+                machine->_phase = Machine::PHASE_TRAVELLING;
+                machine->_old_heading = heading;
+                machine->_new_heading = heading;
+                machine->_old_location = xy;
+                machine->_new_location = destination;
+                machine->_old_time = arrival - travel_ticks;
+                machine->_new_time = arrival;
+                world->_entity_for_entity_id.set(machine->_entity_id, machine);
+                world->_entity_id_for_coordinate.set(xy, machine->_entity_id);
+                world->_entity_id_for_coordinate.set(destination, machine->_entity_id);
+                world->_waiting_on_time.set({arrival, machine->_entity_id});
+                ++placed;
+            }
 
             return world;
         }

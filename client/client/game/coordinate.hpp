@@ -51,13 +51,17 @@ namespace wry {
         }
 
         constexpr key_type decode(code_type h) const {
-            // __builtin_memcpy(&key, &h, 8); // constexpr
-            //return key;
-            uint64_t xy = morton2_reverse(h);
+            // Must invert encode exactly: encode interleaves x into the ODD
+            // bit plane (clmul(x, x << 1)) and y into the EVEN plane, and
+            // morton2_reverse de-interleaves the even plane into the low
+            // half and the odd plane into the high half -- so x is the HIGH
+            // half.  (A memcpy of the whole word into {x, y} reads the
+            // halves transposed.)
+            uint64_t yx = morton2_reverse(h);
             Coordinate key = {};
-            __builtin_memcpy(&key, &xy, 8);
+            key.x = (i32)(uint32_t)(yx >> 32);
+            key.y = (i32)(uint32_t)(yx & 0xFFFFFFFFu);
             return key;
-            
         }
         
         constexpr bool operator()(key_type a, key_type b) const {

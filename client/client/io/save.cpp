@@ -343,18 +343,27 @@ namespace wry {
 
         std::vector<uint8_t> ref = serialize_world(w);
 
-        // The completion callback (-1 pending, 0 fail, 1 ok) fires once the save
-        // has fully published, so wait for it -- yielding so the saver gets
-        // worker time -- then confirm the file it wrote.
-        std::atomic<int> result{-1};
+        // The completion callback (-1 pending, 0 fail, 1 ok) fires once the
+        // save has fully published; wait for it with a wall-clock deadline.
+        // (The old iteration-counted poll deflated with optimization: 200k
+        // yields is seconds of budget in Debug but ~50ms at -O, less than
+        // one F_FULLFSYNC, and asserted spuriously.)  The result and the
+        // event are shared_ptr-held so a timed-out -- thereby detached --
+        // save still writes somewhere valid; the payload store is relaxed
+        // because signal()'s release / the wait's acquire is the publishing
+        // edge.
+        auto result = std::make_shared<std::atomic<int>>(-1);
+        auto done = Coroutine::OneShotEvent::make();
         Root<World const*> root(w);
-        save_game_async(root, [&result](bool ok) {
-            result.store(ok ? 1 : 0, std::memory_order_release);
+        save_game_async(root, [result, done](bool ok) {
+            result->store(ok ? 1 : 0, std::memory_order_relaxed);
+            done->signal();
         });
 
-        for (int iter = 0; iter < 200000 && result.load(std::memory_order_acquire) < 0; ++iter)
-            co_await Coroutine::SuspendAndSchedule{};  // let the saver run
-        assert(result.load(std::memory_order_acquire) == 1);
+        bool signaled = co_await done->wait_until(std::chrono::steady_clock::now()
+                                                  + std::chrono::seconds(30));
+        assert(signaled);
+        assert(result->load(std::memory_order_relaxed) == 1);
 
         int found = -1;
         for (auto& [name, id] : enumerate_games())

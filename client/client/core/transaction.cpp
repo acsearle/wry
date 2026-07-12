@@ -251,10 +251,10 @@ namespace wry {
     Transaction::State Transaction::abort() const {
         State prior = _state.exchange_relaxed(State::ABORTED);
         assert(prior != State::COMMITTED);
-        if (prior != State::ABORTED)
-            printf("EntityID %llu ABORTED\n", _entity->_entity_id.data);
-        if (prior == State::ABORTED)
-            printf("EntityID %llu REDUNDANT ABORTED\n", _entity->_entity_id.data);
+//        if (prior != State::ABORTED)
+//            printf("EntityID %llu ABORTED\n", _entity->_entity_id.data);
+//        if (prior == State::ABORTED)
+//            printf("EntityID %llu REDUNDANT ABORTED\n", _entity->_entity_id.data);
         return ABORTED;
     }
 
@@ -263,8 +263,8 @@ namespace wry {
         assert(prior != State::ABORTED);
 //        if (prior != State::COMMITTED)
 //            printf("COMMITTED transaction for EntityID %llu\n", _entity->_entity_id.data);
-        if (prior == State::COMMITTED)
-            printf("EntityID %llu REDUNDANT COMMIT\n", _entity->_entity_id.data);
+//        if (prior == State::COMMITTED)
+//            printf("EntityID %llu REDUNDANT COMMIT\n", _entity->_entity_id.data);
         return COMMITTED;
     }
     

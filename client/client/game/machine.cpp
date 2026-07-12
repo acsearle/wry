@@ -31,7 +31,7 @@ namespace wry {
                 assert(_old_location != _new_location);
                 if ((context->_world->_time - _new_time) < 0) {
                     // This was a spurious wakeup
-                    printf("EntityID %lld experienced spurious wakeup\n", _entity_id.data);
+                    // printf("EntityID %lld experienced spurious wakeup\n", _entity_id.data);
                     return;
                 }
                 new_this->_phase = PHASE_WAITING_FOR_OLD;
@@ -95,7 +95,7 @@ namespace wry {
                     new_this->_on_arrival = OPCODE_NOOP;
                     tx->write_entity_for_entity_id(this->_entity_id, new_this);
                     tx->wait_on_value_for_coordinate(new_this->_new_location);
-                    printf("EntityID %lld proposes to HALT\n", _entity_id.data);
+                    // printf("EntityID %lld proposes to HALT\n", _entity_id.data);
                     return;
                 }
 

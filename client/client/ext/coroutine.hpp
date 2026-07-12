@@ -11,8 +11,10 @@
 #include <cassert>
 #include <chrono>
 #include <coroutine>
+#include <cstdint>
 #include <deque>
 #include <exception>
+#include <memory>
 #include <semaphore>
 #include <thread>
 
@@ -118,9 +120,107 @@ namespace wry::Coroutine {
         }
         void await_resume() const noexcept {}
     };
-    
-    
-    
+
+    // ---- OneShotEvent: timed one-shot completion / cancellable timer -------
+    //
+    // One cell, two ends.  co_await cell->wait_until(t) is simultaneously
+    //   - a completion wait that signal() resolves early (returns true), and
+    //   - a timer that signal() cancels (the same race, seen from the other
+    //     end); if the deadline arrives first the wait resolves false.
+    // signal() may be called from any thread, before or after the wait
+    // begins, and repeatedly (idempotent).  Single waiter, single use.
+    //
+    // The waiter resumes on the GC pool via global_work_queue_schedule (a
+    // pinned mutator worker) -- unlike Until, which resumes on a dispatch
+    // thread.
+    //
+    // Lifetime: the cell is shared_ptr-managed (construct via make()) so the
+    // coordination state outlives whichever of {signaler, deadline fire,
+    // waiter} finishes last; it must not live in the winner's scope.  A
+    // timed-out wait leaves a detached signaler (e.g. a still-running
+    // background save) holding its own reference harmlessly.
+    //
+    // The deadline is dispatch_after_f, which has no cancellation:
+    // "cancelling the timer" is losing the race -- the fire still happens at
+    // the deadline, no-ops against the decided state, and drops its
+    // reference.  Upgrade the backend to a dispatch source if early physical
+    // release ever matters.
+    //
+    // State (one atomic word): EMPTY, SIGNALED, TIMED_OUT, or the waiter's
+    // coroutine handle address (frame allocations are aligned, so 1 and 2
+    // cannot alias a real handle).
+    //
+    //   EMPTY -> SIGNALED       signal() before the wait; wait is ready
+    //   EMPTY -> <handle>       await_suspend installs the waiter
+    //   <handle> -> SIGNALED    signal() wins and schedules the waiter
+    //   <handle> -> TIMED_OUT   deadline wins and schedules the waiter
+    //
+    // Terminal states absorb the loser's attempt.  (EMPTY -> TIMED_OUT is
+    // unreachable single-use: the timer is armed only after the install.)
+    //
+    // ORDER: await_suspend publishes the suspended frame with a release CAS;
+    // the deciding CAS in _decide is acq_rel (acquire: take ownership of
+    // that frame before scheduling it; release: publish the signaler's
+    // preceding writes -- the payload -- into the state word).  await_ready
+    // and await_resume load with acquire, closing the payload edge when the
+    // waiter observes SIGNALED.
+
+    struct OneShotEvent : std::enable_shared_from_this<OneShotEvent> {
+
+        static constexpr uintptr_t EMPTY = 0;
+        static constexpr uintptr_t SIGNALED = 1;
+        static constexpr uintptr_t TIMED_OUT = 2;
+
+        Atomic<uintptr_t> _state{EMPTY};
+
+        static std::shared_ptr<OneShotEvent> make() {
+            return std::make_shared<OneShotEvent>();
+        }
+
+        void _decide(uintptr_t terminal) {
+            uintptr_t expected = _state.load_relaxed();
+            for (;;) {
+                if ((expected == SIGNALED) || (expected == TIMED_OUT))
+                    return;  // already decided; late or duplicate, a no-op
+                if (_state.compare_exchange_weak_acq_rel_relaxed(expected,
+                                                                 terminal)) {
+                    if (expected != EMPTY)
+                        global_work_queue_schedule(
+                            std::coroutine_handle<>::from_address((void*)expected));
+                    return;
+                }
+            }
+        }
+
+        void signal() { _decide(SIGNALED); }
+
+        struct WaitUntil {
+            std::shared_ptr<OneShotEvent> _cell;
+            std::chrono::steady_clock::time_point _when;
+
+            bool await_ready() const noexcept {
+                return _cell->_state.load_acquire() == SIGNALED;
+            }
+            // Defined in coroutine.cpp (libdispatch).  Returns false --
+            // resume immediately -- when signal() beat the install.
+            bool await_suspend(std::coroutine_handle<> handle) noexcept;
+            bool await_resume() const noexcept {
+                return _cell->_state.load_acquire() == SIGNALED;
+            }
+        };
+
+        [[nodiscard]] WaitUntil wait_until(std::chrono::steady_clock::time_point when) {
+            return WaitUntil{shared_from_this(), when};
+        }
+
+        [[nodiscard]] WaitUntil wait_for(std::chrono::nanoseconds duration) {
+            return wait_until(std::chrono::steady_clock::now() + duration);
+        }
+
+    }; // struct OneShotEvent
+
+
+
     // Basic coroutine
     
     template<typename...>

@@ -8,6 +8,7 @@
 // Shared Metal header first for no contamination
 #include "ShaderTypes.h"
 
+#include <algorithm>
 #include <bit>
 #include <random>
 
@@ -114,7 +115,6 @@
     id<MTLTexture> _black;
     id<MTLTexture> _white;
     id<MTLTexture> _blue;
-    id<MTLBuffer> _instanced_things;
     id<MTLTexture> _darkgray;
     id<MTLTexture> _orange;
 
@@ -517,13 +517,6 @@
             //_darkgray = [_ctx newTextureFromResource:@"darkgray" ofType:@"png"];
             _orange = [_ctx newTextureFromResource:@"orange" ofType:@"png"];
 
-            
-            MeshInstanced i;
-            i.model_transform = simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f));
-            i.inverse_transpose_model_transform = simd_inverse(simd_transpose(i.model_transform));
-            i.albedo = make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
-            _instanced_things = [_ctx.device newBufferWithBytes:&i length:sizeof(i) options:MTLStorageModeShared];
-            
         }
         
         {
@@ -1073,13 +1066,14 @@
     // within one grid cell.
     constexpr float container_mesh_scale = 0.15f;
 
+    // Bound with setVertexBytes at each pass below.  A persistent shared
+    // MTLBuffer here is read at GPU *execution* time, so the next frame's
+    // CPU overwrite races any frame still in flight; setVertexBytes copies
+    // into the command buffer at encode time.
     MeshInstanced mesh_instanced_things = {};
-    {
-        mesh_instanced_things.model_transform = lookat_transform;
-        mesh_instanced_things.inverse_transpose_model_transform = simd_inverse(simd_transpose(mesh_instanced_things.model_transform));
-        mesh_instanced_things.albedo = make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
-        memcpy([_instanced_things contents], &mesh_instanced_things, sizeof(mesh_instanced_things));
-    }
+    mesh_instanced_things.model_transform = lookat_transform;
+    mesh_instanced_things.inverse_transpose_model_transform = simd_inverse(simd_transpose(mesh_instanced_things.model_transform));
+    mesh_instanced_things.albedo = make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
     
     // Project things onto ground plane
     
@@ -1132,12 +1126,34 @@
 
         auto tnow = world_get_time(new_world._ptr);
         auto&& entities = new_world->_entity_for_entity_id;
-        
-        // kludge out the contents of the entity mapping
+
+        // Visible entities by Morton-range descent over the occupancy map:
+        // O(visited blocks + hits), not O(all entities).  The query rect is
+        // the tile loop's grid_bounds (in closed form), so an entity is
+        // emitted iff it occupies a drawn cell -- the same predicate the
+        // per-entity cull this replaces applied.  A travelling machine
+        // occupies both its endpoint cells and can surface twice, hence
+        // sort+unique.  Entities absent from _entity_id_for_coordinate (the
+        // Player; the small world's static Source/Sink/Spawner) are no
+        // longer drawn by this loop -- statics want registration in the
+        // occupancy map or their own pass.
+        std::vector<EntityID> visible_ids;
+        visit_in_region(new_world->_entity_id_for_coordinate,
+                        Coordinate{grid_bounds.a.x, grid_bounds.a.y},
+                        Coordinate{grid_bounds.b.x - 1, grid_bounds.b.y - 1},
+                        [&visible_ids](Coordinate, EntityID id) {
+                            if (id) visible_ids.push_back(id);
+                        });
+        std::sort(visible_ids.begin(), visible_ids.end());
+        visible_ids.erase(std::unique(visible_ids.begin(), visible_ids.end()),
+                          visible_ids.end());
         std::vector<Entity const*> ptrs;
-        entities.kv.for_each([&ptrs](auto&& k, auto&& v) {
-            ptrs.push_back(v);
-        });
+        ptrs.reserve(visible_ids.size());
+        for (EntityID id : visible_ids) {
+            Entity const* e = nullptr;
+            if (entities.try_get(id, e) && e)
+                ptrs.push_back(e);
+        }
 
         // Accumulate the textured quads into growable buffers and upload them
         // once below.  The buffers grow to fit whatever the loops emit, so no
@@ -1171,7 +1187,7 @@
         for (Entity const* q : ptrs) {
             
             if (auto p = dynamic_cast<const wry::Machine*>(q)) { // ugh
-                
+
                 auto h0 = (p->_old_heading & 3) * M_PI_2;
                 auto h1 = (p->_new_heading & 3) * M_PI_2;
                 auto x0 = make<float2>(p->_old_location.x, p->_old_location.y);
@@ -1286,7 +1302,7 @@
                 }
                 
             } else if (auto p = dynamic_cast<const LocalizedEntity*>(q)){
-                
+
                 simd_float4 location = make<float4>(p->_location.x, p->_location.y + 1.0, 0.0, 1.0f);
                 auto A = simd_matrix_translate(location) * lookat_transform * simd_matrix_scale(0.5f);
 
@@ -1521,7 +1537,9 @@
                                        atIndex:AAPLBufferIndexUniforms];
         
         [render_command_encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
-        [render_command_encoder setVertexBuffer:_instanced_things offset:0 atIndex:AAPLBufferIndexInstanced];
+        [render_command_encoder setVertexBytes:&mesh_instanced_things
+                                        length:sizeof(MeshInstanced)
+                                       atIndex:AAPLBufferIndexInstanced];
                     
         [render_command_encoder setFragmentBytes:&uniforms
                                           length:sizeof(MeshUniforms)
@@ -1672,7 +1690,9 @@
                 [encoder setFragmentTexture:_blue atIndex:AAPLTextureIndexNormal];
                 [encoder setFragmentTexture:_white atIndex:AAPLTextureIndexRoughness];
                 [encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
-                [encoder setVertexBuffer:_instanced_things offset:0 atIndex:AAPLBufferIndexInstanced];
+                [encoder setVertexBytes:&mesh_instanced_things
+                                 length:sizeof(MeshInstanced)
+                                atIndex:AAPLBufferIndexInstanced];
                 [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
                                     indexCount:index_count
                                      indexType:MTLIndexTypeUInt32

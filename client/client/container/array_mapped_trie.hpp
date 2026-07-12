@@ -91,8 +91,10 @@ namespace wry {
 
         Word _prefix;
         int _shift;
+#ifndef NDEBUG
         size_t _debug_capacity;
         size_t _debug_count;
+#endif
         Bitmap _bitmap; // bitmap of which items are present
         union {
             // compressed flexible member array of children or values
@@ -155,8 +157,10 @@ namespace wry {
                         Bitmap bitmap)
         : _prefix(prefix)
         , _shift(shift)
+#ifndef NDEBUG
         , _debug_capacity(debug_capacity)
         , _debug_count(debug_count)
+#endif
         , _bitmap(bitmap) {
             using bit::popcount;
             assert(_debug_capacity >= popcount(_bitmap));
@@ -422,7 +426,9 @@ namespace wry {
             assert(prefix_includes_key(key));
             ArrayMappedTrie* _Nonnull new_node = clone_with_capacity(popcount(_bitmap) + 1);
             ArrayMappedTrie const* _Nullable _ = nullptr;
+#ifndef NDEBUG
             ++(new_node->_debug_count);
+#endif
             compressed_array_insert_for_index(new_node->_debug_capacity,
                                               new_node->_bitmap,
                                               new_node->_children,
@@ -452,7 +458,9 @@ namespace wry {
                                                               get_index_for_key(key),
                                                               _);
             assert(did_erase);
+#ifndef NDEBUG
             --(new_node->_debug_count);
+#endif
             return new_node;
         }
 
@@ -472,7 +480,9 @@ namespace wry {
             Word select = bitmask_for_index<Bitmap>(index);
             int compressed_index = get_compressed_index_for_index(index);
             ArrayMappedTrie* _Nonnull new_node = clone_with_capacity(std::popcount(_bitmap | select));
+#ifndef NDEBUG
             new_node->_debug_count = std::popcount(_bitmap | select);
+#endif
             bool leaf_did_assign = false;
             if (has_values()) {
                 leaf_did_assign = compressed_array_insert_or_exchange_for_index(new_node->_debug_capacity,
@@ -843,7 +853,9 @@ namespace wry {
             assert(has_children());
             Word key = new_child->_prefix;
             assert(prefix_includes_key(key));
+#ifndef NDEBUG
             ++_debug_count;
+#endif
             compressed_array_insert_for_index(_debug_capacity,
                                               _bitmap,
                                               _children,

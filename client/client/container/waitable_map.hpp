@@ -43,6 +43,71 @@ namespace wry {
         garbage_collected_scan(x.ki);
     }
 
+    // ---- Rectangular region query -----------------------------------------
+    //
+    // Visit every kv entry whose Coordinate key lies in the CLOSED rectangle
+    // [lo.x, hi.x] x [lo.y, hi.y], by recursive descent with per-block
+    // pruning; entries arrive in Morton (code) order.
+    //
+    // An AMT node covers the Morton-code block [_prefix, _prefix +
+    // 2^(_shift + SYMBOL_WIDTH)): its free bits are the code's low bits, and
+    // de-interleaving makes them the low bits of each axis.  Decoding the two
+    // corner codes (free bits all zero / all one) therefore yields, per axis,
+    // a contiguous two's-complement interval [c0, c1] whenever that axis's
+    // sign bit is among the fixed bits; a free sign bit means the whole axis
+    // is free, and shows up as wrapped corners (c0 > c1), read as "spans
+    // everything".  Blocks disjoint from the query prune; blocks contained in
+    // the query switch to a test-free for_each.
+
+    template<typename N, typename F>
+    void _visit_in_region_descend(const N* node,
+                                  Coordinate lo, Coordinate hi,
+                                  F&& action) {
+        if (!node)
+            return;
+        using H = DefaultKeyService<Coordinate>;
+        Coordinate c0 = H{}.decode(node->_prefix);
+        Coordinate c1 = H{}.decode(node->_prefix | ~node->get_prefix_mask());
+        bool x_wraps = c0.x > c1.x;
+        bool y_wraps = c0.y > c1.y;
+        if (!x_wraps && ((c1.x < lo.x) || (hi.x < c0.x)))
+            return;
+        if (!y_wraps && ((c1.y < lo.y) || (hi.y < c0.y)))
+            return;
+        bool contained = !x_wraps && !y_wraps
+            && (lo.x <= c0.x) && (c1.x <= hi.x)
+            && (lo.y <= c0.y) && (c1.y <= hi.y);
+        if (contained) {
+            node->for_each([&action](uint64_t code, auto value) {
+                action(H{}.decode(code), value);
+            });
+            return;
+        }
+        if (node->has_children()) {
+            int n = std::popcount(node->_bitmap);
+            for (int i = 0; i != n; ++i)
+                _visit_in_region_descend(node->_children[i], lo, hi, action);
+        } else {
+            // partially-covered leaf: filter per entry
+            node->for_each([&action, lo, hi](uint64_t code, auto value) {
+                Coordinate xy = H{}.decode(code);
+                if ((xy.x < lo.x) || (hi.x < xy.x) ||
+                    (xy.y < lo.y) || (hi.y < xy.y))
+                    return;
+                action(xy, value);
+            });
+        }
+    }
+
+    template<typename T, typename F>
+    void visit_in_region(const WaitableMap<Coordinate, T>& map,
+                         Coordinate lo, Coordinate hi,
+                         F&& action) {
+        assert((lo.x <= hi.x) && (lo.y <= hi.y));
+        _visit_in_region_descend(map.kv._inner ? &*map.kv._inner : nullptr,
+                                 lo, hi, action);
+    }
+
     // Combine for the ki waiter index: WRITE replaces a key's waitset, CLEAR
     // erases it, MERGE is the read-modify-write union (the combine's `old` arg is
     // the RMW read), NONE keeps it.

@@ -5,9 +5,13 @@
 //  Created by Antony Searle on 8/8/2025.
 //
 
+#include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <map>
+#include <random>
 #include <set>
+#include <tuple>
 #include <vector>
 
 #include "waitable_map.hpp"
@@ -161,6 +165,83 @@ namespace wry {
         unpin_global_epoch(guard);
         co_return;
 
+    };
+
+    // Differential oracle for visit_in_region: the same entries brute-force
+    // filtered through a std::map.  Mixed-sign coordinates exercise the
+    // two's-complement wrap logic at the Morton sign boundaries; far-flung
+    // outliers force deep prefix compression; the full-range query hits the
+    // wrapped root block.
+    define_test("waitable_map_visit_in_region") {
+
+        std::mt19937_64 gen{20260710};
+
+        WaitableMap<Coordinate, EntityID> m;
+
+        // empty-map query is a no-op
+        {
+            int count = 0;
+            visit_in_region(m, Coordinate{-10, -10}, Coordinate{10, 10},
+                            [&count](Coordinate, EntityID) { ++count; });
+            assert(count == 0);
+        }
+
+        std::map<std::pair<i32, i32>, u64> truth;
+        auto put = [&](i32 x, i32 y) {
+            u64 id = gen() | 1;
+            m.set(Coordinate{x, y}, EntityID{id});
+            truth[{x, y}] = id;   // set() assigns, so last write wins in both
+        };
+
+        // dense mixed-sign cluster around the origin
+        for (int i = 0; i != 4000; ++i)
+            put((i32)(gen() % 101) - 50, (i32)(gen() % 101) - 50);
+        // sparse mid-range scatter
+        for (int i = 0; i != 500; ++i)
+            put((i32)(gen() % 20001) - 10000, (i32)(gen() % 20001) - 10000);
+        // far outliers in all four quadrants
+        for (int i = 0; i != 100; ++i)
+            put((i32)(gen() % 0x40000000) - 0x20000000,
+                (i32)(gen() % 0x40000000) - 0x20000000);
+
+        auto check = [&](Coordinate lo, Coordinate hi) {
+            std::vector<std::tuple<i32, i32, u64>> got;
+            visit_in_region(m, lo, hi, [&got](Coordinate xy, EntityID id) {
+                got.emplace_back(xy.x, xy.y, id.data);
+            });
+            std::sort(got.begin(), got.end());
+            std::vector<std::tuple<i32, i32, u64>> expected;
+            for (auto&& [xy, id] : truth)
+                if ((lo.x <= xy.first) && (xy.first <= hi.x) &&
+                    (lo.y <= xy.second) && (xy.second <= hi.y))
+                    expected.emplace_back(xy.first, xy.second, id);
+            std::sort(expected.begin(), expected.end());
+            assert(got == expected);
+        };
+
+        // origin-spanning (sign-boundary blocks), single cell, straddling
+        // pairs, all-negative and all-positive quadrants, degenerate row,
+        // full range
+        check(Coordinate{-50, -50}, Coordinate{50, 50});
+        check(Coordinate{0, 0}, Coordinate{0, 0});
+        check(Coordinate{-1, -1}, Coordinate{0, 0});
+        check(Coordinate{-50, 3}, Coordinate{-3, 40});
+        check(Coordinate{3, -40}, Coordinate{47, -1});
+        check(Coordinate{-10, 7}, Coordinate{10, 7});
+        check(Coordinate{std::numeric_limits<i32>::min(),
+                         std::numeric_limits<i32>::min()},
+              Coordinate{std::numeric_limits<i32>::max(),
+                         std::numeric_limits<i32>::max()});
+
+        for (int i = 0; i != 200; ++i) {
+            i32 x0 = (i32)(gen() % 30001) - 15000;
+            i32 y0 = (i32)(gen() % 30001) - 15000;
+            i32 w = (i32)(gen() % 400);
+            i32 h = (i32)(gen() % 400);
+            check(Coordinate{x0, y0}, Coordinate{x0 + w, y0 + h});
+        }
+
+        co_return;
     };
 
 } // namespace wry

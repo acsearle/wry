@@ -839,7 +839,7 @@ namespace wry {
 
         
         void violation(GarbageCollected const* object, uint16_t gray, uint16_t black, int32_t count) {
-                        
+#ifndef NDEBUG
             uint16_t a = black & ~gray;
             uint16_t b = (gray | black) & _debug_assert_white;
             uint16_t c = black & _debug_assert_nonblack;
@@ -876,22 +876,14 @@ namespace wry {
                        _KPhase_names[kstate[k].kphase]);
             }
             printf(
-                   "While scanning "
-#ifndef NDEBUG
-                   "%zd"
-#else
-                   "unknown number of"
-#endif // !NDEBUG
-                   " objects with\n"
+                   "While scanning %zd objects with\n"
                    "     gray_for_allocation %04x\n"
                    "    black_for_allocation %04x\n"
                    "       mask_for_deleting %04x\n"
                    "       mask_for_clearing %04x\n"
                    "      debug_assert_white %04x\n"
                    ,
-#ifndef NDEBUG
                    _known_objects.debug_size(),
-#endif
                    _gray_for_allocation,
                    _black_for_allocation,
                    _is_sweeping.raw,
@@ -899,6 +891,7 @@ namespace wry {
                    _debug_assert_white);
 
             __builtin_trap();
+#endif // !NDEBUG
         }
 
         void collector_scans() {
@@ -929,6 +922,8 @@ namespace wry {
                 int32_t count = object->_count.load_relaxed();
                 violation(object, gray, black, count);
             }
+
+            int counter = 0;
 
             // While any objects are unprocessed
             for (;;) {
@@ -965,6 +960,9 @@ namespace wry {
                             ++mark_count;
                             _graystack.push(child);
                         }
+                    }
+                    if (++counter > 1000) {
+                        mutator_repin(); counter = 0;
                     }
                 }
 
@@ -1023,6 +1021,10 @@ namespace wry {
                     survivors.push(std::move(object));
                 }
 
+                if (++counter > 1000) {
+                    mutator_repin(); counter = 0;
+                }
+
             } // loop until no objects
             
             assert(_graystack.debug_is_empty());
@@ -1032,11 +1034,11 @@ namespace wry {
             
             auto t1 = std::chrono::steady_clock::now();
             
-//            printf("C0: scanned=%zd,marked=%zd,deleted=%zd in %.3gs\n",
-//                   scan_count,
-//                   trace_count + mark_count,
-//                   delete_count,
-//                   std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+            printf("C0: scanned=%zd,marked=%zd,deleted=%zd in %.3gs\n",
+                   scan_count,
+                   trace_count + mark_count,
+                   delete_count,
+                   std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
             
 
         } // void Collector::scan()
