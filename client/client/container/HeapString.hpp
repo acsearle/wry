@@ -114,13 +114,20 @@ namespace wry {
         return _ct._ptr;
     }
 
-    inline HeapString const* _heap_string_ctrie_mutator_find_upgrade_or_emplace(std::string s) {
+    // `did_emplace`, when supplied, reports whether the call installed a
+    // fresh string (true) or upgraded an existing holder (false).  The alter
+    // lambda may run several times racing other mutators; the invocation
+    // whose CAS wins runs last, so the flag ends with the effective path.
+    inline HeapString const* _heap_string_ctrie_mutator_find_upgrade_or_emplace(std::string s,
+                                                                                bool* did_emplace = nullptr) {
         WeakDict* t = heap_string_weak_dictionary();
-        auto [before, after] = t->alter(s, [&s](std::optional<WeakHolder<HeapString> const*> before) {
+        auto [before, after] = t->alter(s, [&s, did_emplace](std::optional<WeakHolder<HeapString> const*> before) {
             if (before.has_value()) {
                 // It does exist, try to get permission:
                 if (before.value()->mutator_try_upgrade()) {
                     printf("%p:HeapString: mutator upgraded\n", before.value()->_weak);
+                    if (did_emplace)
+                        *did_emplace = false;
                     return WeakDict::AlterChoice::keep();
                 }
                 printf("%p:HeapString: mutator upgrade failed\n", before.value()->_weak);
@@ -130,6 +137,8 @@ namespace wry {
             HeapString const* nhs = HeapString::make(s);
             printf("%p:HeapString: mutator tries to install\n", nhs);
             WeakHolder<HeapString> const* nwh = new WeakHolder<HeapString>{nhs};
+            if (did_emplace)
+                *did_emplace = true;
             return WeakDict::AlterChoice::replace(nwh);
         });
         return (*after)->_weak;

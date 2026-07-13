@@ -101,22 +101,33 @@ namespace wry {
 
     define_test("[string interning]") {
 
-        HeapString const* a{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one")};
-        HeapString const* b{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one")};
+        bool a_emplaced = false;
+        bool b_emplaced = true;
+        HeapString const* a{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one", &a_emplaced)};
+        HeapString const* b{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one", &b_emplaced)};
 
         assert(a == b);
+        assert(a_emplaced);
+        assert(!b_emplaced);
 
         co_await Coroutine::WaitForCollectionCycles{3};
         // SAFETY: a and b are now dangling
 
-        HeapString const* c{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one")};
-        HeapString const* d{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one")};
+        bool c_emplaced = false;
+        bool d_emplaced = true;
+        HeapString const* c{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one", &c_emplaced)};
+        HeapString const* d{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one", &d_emplaced)};
 
         assert(c == d);
+        assert(!d_emplaced);
 
-        // TODO: This can spuriously fire if the allocation is reused
-        assert(a != c);
-
+        // The first "one" was collected iff the re-intern EMPLACED rather
+        // than upgraded.  Comparing addresses (the old assert(a != c)) is
+        // invalid: the collector frees a's block and operator new may hand
+        // the same block straight back for c -- routine now that
+        // reclamation is prompt, and masked in Debug only by ASan's
+        // free-quarantine.
+        assert(c_emplaced);
 
         co_return;
     };

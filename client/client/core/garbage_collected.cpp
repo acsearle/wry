@@ -188,6 +188,16 @@ namespace wry {
     // stale entries resolve themselves.
     constinit thread_local Bag<const GarbageCollected*> _thread_local_shaded_objects;
 
+    // Root-registry feed: objects whose root count went 0 -> 1 since the
+    // last report.  The transition also shades (see roots_add), so in-cycle
+    // root-ups are k-work covered by the quiet window; the registry exists
+    // to answer the one question transitions cannot: which objects were
+    // ALREADY rooted when a cycle started.
+    constinit thread_local Bag<const GarbageCollected*> _thread_local_rooted_objects;
+
+    // Weak-registry feed: weak holders registered at construction.
+    constinit thread_local Bag<const GarbageCollected*> _thread_local_weak_registrations;
+
     // Allocation telemetry (not poisoned: cumulative, valid unpinned)
     constinit thread_local uint64_t _thread_local_gc_allocated_bytes = 0;
     constinit thread_local uint64_t _thread_local_gc_allocated_objects = 0;
@@ -222,6 +232,17 @@ namespace wry {
         }
     }
 
+    void _garbage_collected_root_up(GarbageCollected const* ptr) {
+        assert(ptr);
+        garbage_collected_shade(ptr);
+        _thread_local_rooted_objects.push(ptr);
+    }
+
+    void garbage_collected_register_weak(GarbageCollected const* ptr) {
+        assert(ptr);
+        _thread_local_weak_registrations.push(ptr);
+    }
+
     constinit Stack<GarbageCollected const*> global_children;
 
     void garbage_collected_scan(GarbageCollected const* child) {
@@ -245,6 +266,8 @@ namespace wry {
         uint16_t gray_did_shade = 0;
         Bag<const GarbageCollected*> allocations;
         Bag<const GarbageCollected*> shaded;
+        Bag<const GarbageCollected*> rooted;
+        Bag<const GarbageCollected*> weak_registrations;
         Epoch epoch;
 
     }; // struct Report
@@ -266,6 +289,8 @@ namespace wry {
             .gray_did_shade = std::exchange(_thread_local_gray_did_shade, 0),
             .allocations = std::move(_thread_local_new_objects),
             .shaded = std::move(_thread_local_shaded_objects),
+            .rooted = std::move(_thread_local_rooted_objects),
+            .weak_registrations = std::move(_thread_local_weak_registrations),
             .epoch = epoch::local_state.known
         };
         // Publish with release so the collector's acquire-exchange reads the
@@ -396,9 +421,18 @@ namespace wry {
         Stack<const GarbageCollected*> _graystack;
 
         // Shaded objects reported by mutators (stage-2 shadelists), spliced
-        // from reports post-embargo and drained into the trace wavefront at
-        // the top of each scan.
+        // from reports and drained into the trace wavefront at the top of
+        // each scan.
         Bag<const GarbageCollected*> _shaded_arrivals;
+
+        // Stage-4 registries, fed from reports; see the walks at the top of
+        // collector_scans.  _root_registry holds candidate standing roots
+        // (pruned when their count is observed zero -- a re-root files a
+        // fresh event).  _weak_registry holds every live weak holder
+        // (pruned exactly when the current pass's sweep is about to delete
+        // one, so it never dangles).
+        Bag<const GarbageCollected*> _root_registry;
+        Bag<const GarbageCollected*> _weak_registry;
 
         // Margin dashboard.  Volumes received from reports since the last
         // scan line, plus pass/cycle accounting: the stability margin is
@@ -483,6 +517,8 @@ namespace wry {
         ~Collector() {
             _known_objects.leak();
             _shaded_arrivals.leak();
+            _root_registry.leak();
+            _weak_registry.leak();
         }
 
         void collector_receives_reports() {
@@ -513,6 +549,8 @@ namespace wry {
                 _shaded_since_scan += head->shaded.debug_size();
                 _known_objects.splice(std::move(head->allocations));
                 _shaded_arrivals.splice(std::move(head->shaded));
+                _root_registry.splice(std::move(head->rooted));
+                _weak_registry.splice(std::move(head->weak_registrations));
                 for (int k = 0; k != 16; ++k) {
                     uint16_t bit = 1 << k;
                     if (head->gray_did_shade & bit) {
@@ -890,6 +928,7 @@ namespace wry {
             size_t mark_count = 0;
             size_t delete_count = 0;
             size_t scan_count = 0;
+            size_t rescue_count = 0;
             auto t0 = std::chrono::steady_clock::now();
             ++_scan_passes;
 
@@ -956,6 +995,78 @@ namespace wry {
                 }
             }
 
+            // Root registry (stage 4): the standing roots.  In-cycle 0->1
+            // transitions shade (and so reset the quiet window); the
+            // registry answers the one question transitions cannot: what
+            // was already rooted when a cycle began.  Entries observed with
+            // count zero are dropped -- the preceding 1->0 shaded, and any
+            // re-root files a fresh event.  Live entries are grayed for
+            // every active collection and promoted exactly as the pass
+            // would; the pass's own per-object count check remains, for
+            // now, as the differential oracle (`rescues` below must read
+            // zero, modulo in-flight root-up reports, before stage 5 may
+            // delete it).
+            {
+                Bag<const GarbageCollected*> keep;
+                const GarbageCollected* object = nullptr;
+                while (_root_registry.try_pop(object)) {
+                    assert(object);
+                    int32_t reference_count = object->_count.load_relaxed();
+                    if (reference_count == 0)
+                        continue;
+                    uint16_t before_gray = object->_gray.load_relaxed();
+                    uint16_t before_black = object->_black;
+                    violation(object, before_gray, before_black, reference_count);
+                    uint16_t after_gray;
+                    for (;;) {
+                        after_gray = (before_gray | _gray_for_allocation) & ~_is_clearing.raw;
+                        if (after_gray == before_gray)
+                            break;
+                        if (object->_gray.compare_exchange_weak_relaxed_relaxed(before_gray,
+                                                                                after_gray))
+                            break;
+                    }
+                    uint16_t mark_black = after_gray & _black_for_allocation;
+                    uint16_t after_black = (before_black | mark_black) & ~_is_clearing.raw;
+                    object->_black = after_black;
+                    violation(object, after_gray, after_black, reference_count);
+                    uint16_t did_set_black = ~before_black & after_black;
+                    if (did_set_black) {
+                        ++mark_count;
+                        _graystack.push(object);
+                    }
+                    keep.push(object);
+                }
+                _root_registry.splice(std::move(keep));
+            }
+
+            // Weak registry (stage 4): only actual weak holders are visited,
+            // replacing the per-object virtual decide in the pass body.  An
+            // entry is dropped exactly when this pass's sweep is about to
+            // delete it: white for every currently-sweeping bit and
+            // unrooted, so the pass body cannot rescue it.  (Arrivals and
+            // roots were drained above, so the gray word read here is what
+            // the pass body will see.)
+            if ((_is_weak_deciding | _is_sweeping).raw) {
+                Bag<const GarbageCollected*> keep;
+                const GarbageCollected* object = nullptr;
+                while (_weak_registry.try_pop(object)) {
+                    assert(object);
+                    if (_is_weak_deciding.raw)
+                        object->_garbage_collected_decide_weak(_is_weak_deciding.raw,
+                                                               _gray_for_allocation,
+                                                               _black_for_allocation);
+                    uint16_t gray = object->_gray.load_relaxed();
+                    int32_t reference_count = object->_count.load_relaxed();
+                    bool doomed = _is_sweeping.raw
+                        && !(_is_sweeping.raw & gray)
+                        && (reference_count == 0);
+                    if (!doomed)
+                        keep.push(object);
+                }
+                _weak_registry.splice(std::move(keep));
+            }
+
             // While any objects are unprocessed
             for (;;) {
 
@@ -1006,9 +1117,7 @@ namespace wry {
                 assert(object);
                 ++scan_count;
 
-                // Process weak decision point
-                if (_is_weak_deciding.raw)
-                    object->_garbage_collected_decide_weak(_is_weak_deciding.raw, _gray_for_allocation, _black_for_allocation);
+                // (Weak decisions moved to the registry walk above.)
 
                 // Process root set
                 int32_t reference_count = object->_count.load_relaxed();
@@ -1036,16 +1145,29 @@ namespace wry {
                 object->_black = after_black;
                 violation(object, after_gray, after_black, reference_count);
 
-                // uint16_t did_set_gray  = ~before_gray  & after_gray;
+                // A rescue is this count-check graying a rooted object the
+                // registry machinery had not already grayed -- the
+                // differential signal that must sit at zero (modulo
+                // in-flight root-up reports) before stage 5 may delete the
+                // per-object count check.
+                uint16_t did_set_gray = ~before_gray & after_gray;
+                if (reference_count && did_set_gray)
+                    ++rescue_count;
+
                 uint16_t did_set_black = ~before_black & after_black;
 
                 if (did_set_black) {
                     ++trace_count;
                     _graystack.push(object);
                 }
-                
+
                 if (_is_sweeping.raw && !(_is_sweeping.raw & after_gray)) {
                     assert(!did_set_black);
+                    // Trace-complete and quiet: nothing reachable is white,
+                    // and rooting requires a reachable pointer -- so a white
+                    // object here cannot be rooted.  This is the S1 oracle
+                    // that registry-driven root seeding must keep true.
+                    assert(reference_count == 0);
                     delete object;
                     ++delete_count;
                 } else {
@@ -1071,12 +1193,15 @@ namespace wry {
 
             auto t1 = std::chrono::steady_clock::now();
             
-            printf("C0: scanned=%zd,marked=%zd,deleted=%zd,alloc+=%zd,shaded+=%zd in %.3gs\n",
+            printf("C0: scanned=%zd,marked=%zd,deleted=%zd,alloc+=%zd,shaded+=%zd,roots=%zd,weak=%zd,rescues=%zd in %.3gs\n",
                    scan_count,
                    trace_count + mark_count,
                    delete_count,
                    std::exchange(_allocated_since_scan, size_t{0}),
                    std::exchange(_shaded_since_scan, size_t{0}),
+                   _root_registry.debug_size(),
+                   _weak_registry.debug_size(),
+                   rescue_count,
                    std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
             
 

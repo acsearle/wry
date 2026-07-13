@@ -751,6 +751,41 @@ WHITE_PUBLISHED -> CLEARING likewise becomes a bare $E \ge F + 2$: after
 it, no mutator can shade k, so no report can ever carry fresh k-work
 (a flip requires a zero gray bit; post-sweep every object is k-black).
 
+### 4.9 Stage-4 revision: root and weak registries
+
+*(Implemented 2026-07-12.  The full pass still runs; its per-object count
+check is retained as the differential oracle for stage 5.)*
+
+**Roots.**  The 0 -> 1 root-count transition now (a) SHADES -- so rooting
+a k-white object is k-work that resets the quiet window, closing the
+termination gate over late root-ups exactly as it closes over Yuasa
+flips -- and (b) files the object, through the report channel, into a
+collector-side root registry.  The registry answers the one question
+transitions cannot: what was already rooted when a cycle started.  It is
+walked at the top of every scan: entries observed with count zero are
+dropped (the 1 -> 0 drop shaded; a re-root files a fresh event), and live
+entries are grayed for every active collection and promoted into the
+wavefront.  In-cycle root-ups of already-marked objects need no registry
+help; root-ups of white objects are shades.  The rescue counter -- the
+pass's count check graying a rooted object the registries had not --
+reads zero across the full suite (6,405 passes); stage 5 requires that
+before deleting the count check.  The sweep now asserts count == 0 on
+every deleted object: rooting requires a reachable pointer, and nothing
+reachable is white at sweep, so this is the direct S1 oracle.
+
+**Weak.**  Objects with a nontrivial weak decision (WeakHolder) register
+at construction, through the report channel, into a weak registry; the
+weak-decision walk visits only that registry, replacing the per-object
+virtual dispatch in the pass body.  An entry is dropped exactly when the
+current pass's sweep is about to delete it (white for every sweeping bit
+and unrooted, so the pass cannot rescue it), so the registry never holds
+a dangling pointer.
+
+Incidentally exposed: prompt reclamation makes malloc address reuse
+routine, so any test asserting collected-ness by address inequality is
+invalid (the interning test now asserts on emplaced-vs-upgraded instead;
+ASan's free-quarantine had been masking this in Debug).
+
 ## 5. Worst-case interleavings
 
 > *Skeleton — to be filled in by the author. For each scenario, draw the

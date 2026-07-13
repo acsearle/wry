@@ -167,13 +167,21 @@ namespace wry {
     
     void garbage_collected_scan_weak(GarbageCollected const* _Nullable);
 
+    // Out-of-line cold path for the 0 -> 1 root transition: shades the
+    // object (so rooting a white object is k-work that resets the quiet
+    // window, exactly like a Yuasa flip) and files it for the collector's
+    // root registry via the report channel.
+    void _garbage_collected_root_up(GarbageCollected const* _Nonnull);
+
     // Subtract (increment the multiplicity of) an object from the implicit
     // Roots multiset.
 
     inline void garbage_collected_roots_add(GarbageCollected const* _Nullable ptr) {
         if (ptr) {
-            [[maybe_unused]] int32_t before = ptr->_count.fetch_add_relaxed(1);
+            int32_t before = ptr->_count.fetch_add_relaxed(1);
             assert(before >= 0 && before != INT32_MAX);
+            if (before == 0)
+                _garbage_collected_root_up(ptr);
         }
     }
 
@@ -821,6 +829,12 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
     }
 
     
+    // Weak-registry feed: objects with a nontrivial
+    // _garbage_collected_decide_weak register at construction, so the
+    // collector's weak-decision walk visits only actual weak holders
+    // instead of virtually dispatching on every known object per pass.
+    void garbage_collected_register_weak(GarbageCollected const* _Nonnull);
+
     template<typename T>
     struct WeakHolder : GarbageCollected {
 
@@ -833,7 +847,9 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
         mutable Atomic<State> _state;
         T const* _Nullable _weak;
 
-        explicit WeakHolder(T const* _Nullable weak) : _state{READY}, _weak{weak} {}
+        explicit WeakHolder(T const* _Nullable weak) : _state{READY}, _weak{weak} {
+            garbage_collected_register_weak(this);
+        }
 
         T const* _Nullable mutator_try_upgrade() const {
             State expected = _state.load_relaxed();
