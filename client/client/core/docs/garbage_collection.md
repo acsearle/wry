@@ -697,6 +697,60 @@ at the beginning.
 
 ---
 
+### 4.8 Stage-3 revision: immediate reports and exact termination
+
+*(Implemented 2026-07-12.  Supersedes the report-embargo machinery and the
+scan-history termination search of 4.3; the phase narrative above otherwise
+stands.)*
+
+**Immediate reports.** The report push is now a release (a local `expected`,
+so the successful CAS is the last write the mutator makes to the report),
+and the collector's exchange is an acquire.  Consequences:
+
+- Report contents -- and everything the mutator wrote before publishing,
+  including the `_gray` words of the objects it shaded and the headers of
+  the objects it allocated -- are readable immediately.  The embargo deque,
+  `_finalized`, `_scan_history` and `_shade_most_recent` are deleted.
+- Because the exchange is a read-modify-write, it always reads the head's
+  latest modification-order value: one exchange takes every report
+  published so far.  Every completeness argument reduces to the pattern
+  *gate, then exchange, then decide*.
+
+**Completeness lemma.** If X happened at epoch $Q$ (a color publish; the
+last received k-work), then once the collector is pinned at $E \ge Q + 2$,
+every mutator has repinned since $Q$ -- the epoch cannot reach $Q+2$ while
+a $Q$-pinned thread remains -- and each mutator's report push is sequenced
+before its repin.  The per-iteration exchange therefore already received
+every report a mutator published before adopting the state change at $Q$.
+The two atomics (epoch, report head) need no joint consistency: each
+conclusion rides exactly one edge.
+
+**Shadelists.** `garbage_collected_shade` records the object into a
+thread-local bag exactly when its `fetch_or` flipped a bit (record-once;
+no cross-thread duplicates).  Reports carry the bag; the collector drains
+arrivals into the gray wavefront at the top of each scan, promoting
+gray to black only for bits in blackening phases (4.1's no-early-black
+rule), routing each entry by the object's *current* `_gray` word.
+
+**Termination (replaces 4.3's search).** Bit k leaves BLACK_PUBLISHED when:
+
+1. $E \ge \mathrm{since} + 2$: every mutator allocates k-black, and (by the
+   lemma) every k-gray warm-up allocation has been received;
+2. $E \ge \mathrm{k\_last\_work}[k] + 2$: a full quiet window -- any
+   mutator that flipped k has since reported, so an unreported k-flip
+   cannot exist; a *future* flip requires reaching a k-white object, which
+   contradicts trace completeness by the snapshot induction;
+3. at least one scan completed after the last k-work was received, so that
+   work is traced to fixpoint and rooted-but-unshaded objects were grayed
+   by the scan's root check.
+
+`k_last_work` is fed by `gray_did_shade`, whose initialization at color
+load (`gray & ~black`) also flags the continued existence of k-gray
+*allocating* mutators, so the quiet window cannot open during warm-up.
+WHITE_PUBLISHED -> CLEARING likewise becomes a bare $E \ge F + 2$: after
+it, no mutator can shade k, so no report can ever carry fresh k-work
+(a flip requires a zero gray bit; post-sweep every object is k-black).
+
 ## 5. Worst-case interleavings
 
 > *Skeleton — to be filled in by the author. For each scenario, draw the
@@ -789,6 +843,53 @@ N scales with the collection graph size.
 
 
 ---
+
+## 6.5 Throughput model
+
+*(Stage-1 dashboard, 2026-07-12: per-pass `alloc+=`/`shaded+=` volumes and
+per-cycle `passes=P in T` lines.)*
+
+Variables: mutators quiesce every $T_m$ (one frame); each period allocates
+$N$ objects and unlinks $N$; live set $L$; heap $M = L + F$ where $F$ is
+floating garbage; scan rate $S$ objects/second (a decreasing function of
+$M$ once the heap outgrows cache); pass time $T_p = M/S$; passes per cycle
+$P$; allocation rate $A = N/T_m$.
+
+Two regimes, split by whether a pass outlasts the mutator cadence:
+
+**Idle ($T_p < T_m$).**  The loop's trailing `epoch::wait` blocks, so
+iterations -- and passes -- run 1:1 with epoch advances, and the epoch
+advances at mutator cadence.  A cycle therefore costs its *epoch budget*,
+one (trivial) pass per epoch: measured 20-24 with the stage-2 embargoes
+(three +3 finalization waits, plus the ack and quiet windows), 7-9 after
+stage 3 removed the embargoes.  Collector CPU is $\sim P \cdot T_p$ per
+$P \cdot T_m$ of wall clock -- negligible.  A high idle $P$ is an artifact,
+not the loaded-regime multiplier.
+
+**Loaded ($T_p > T_m$).**  Epoch gates hide inside passes (each pass spans
+$T_p / T_m \ge 2$ epochs), so $P$ collapses to the *mandatory-scan floor*:
+trace pass(es), weak, sweep, clear -- about 4 after stage 3, which also
+removed the scan-history retry tail (each disqualified candidate scan was
+a full pass).  Then:
+
+$$T_c = P M / S, \qquad F \approx c A T_c, \; c \in [1, 2]$$
+
+(garbage born during cycle $n$ is snapshot-protected and sweeps in a later
+cycle), giving the equilibrium
+
+$$M = \frac{L}{1 - cPA/S(M)}$$
+
+which exists only while $S(M) > cPA$.  Because $S$ *decreases* in $M$,
+there is a stable fixed point at small $M$ and a knee above it; a heap
+transient (e.g. bulk world construction dumping millions of path-copy
+nodes) can push $M$ past the knee permanently, after which there is no
+equilibrium at any load -- the observed death spiral (100k stress: $S$
+fell 11.5M/s -> 2.25M/s as $M$ grew 8M -> 35M).
+
+Stages 4-5 (root/weak registries, cohort-segregated sweep, clearing folded
+into sweep) remove the per-pass root scan and shrink the walked set to
+(live + one short cycle's allocations), replacing the condition with
+"streaming sweep rate > allocation rate", with no $M$-dependent knee.
 
 ## 7. Literature comparison
 

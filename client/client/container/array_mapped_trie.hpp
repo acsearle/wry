@@ -173,9 +173,11 @@ namespace wry {
             printf("    _gray %04x\n", this->_gray.load_relaxed());
             printf("    _black %04x\n", this->_black);
             printf("    _count %u\n", this->_count.load_relaxed());
+#ifndef NDEBUG
             printf("    _debug_allocation_gray %04x\n", this->_debug_allocation_gray);
             printf("    _debug_allocation_black %04x\n", this->_debug_allocation_black);
             printf("    _debug_allocation_epoch %d\n", this->_debug_allocation_epoch);
+#endif
         }
 
         virtual void _garbage_collected_scan() const override {

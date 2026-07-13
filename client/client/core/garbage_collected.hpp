@@ -45,10 +45,12 @@ namespace wry {
         mutable Atomic<uint16_t> _gray;
         mutable uint16_t _black;
         mutable Atomic<int32_t> _count;
-        
+
+#ifndef NDEBUG
         uint16_t _debug_allocation_gray;
         uint16_t _debug_allocation_black;
         uint16_t _debug_allocation_epoch;
+#endif
 
         static void* _Nonnull operator new(std::size_t count);
         static void operator delete(void* _Nullable pointer);
