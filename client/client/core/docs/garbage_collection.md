@@ -1,4 +1,32 @@
-# Concurrent collection correctness
+# The garbage collector
+
+The collector lives in [`garbage_collected.hpp`](../garbage_collected.hpp) /
+[`garbage_collected.cpp`](../garbage_collected.cpp), on the epoch service in
+[`epoch.hpp`](../epoch.hpp).  It is a DLG-family concurrent tracing collector
+(tricolor, Yuasa deletion barrier) with Pizlo-style ragged phase transitions
+driven by the epoch service.  Up to 16 collections overlap, one per bit of
+the 16-bit gray/black words.  Section 6 locates the design in the
+literature.
+
+Design posture, in order:
+
+- **Mutators never block on the collector.**  Load-bearing; every mechanism
+  below is priced against it.
+- **Minimize mutator burden.**  The mutator pays one idempotent relaxed
+  `fetch_or` per barrier and a report push per quiescence, and nothing
+  else.  Costs move to the collector thread wherever a choice exists.
+- **Diagnose violations, don't tolerate them.**  Stalled threads are bugs
+  (see the non-goal in section 9); per-object invariant checks trap
+  corruption rather than working around it.
+
+Reading order: sections 1-2 are the memory-model and epoch foundations;
+section 3 states the goals, primitives, and per-bit state machine; section
+4 argues each phase transition, with 4.8-4.11 recording the 2026-07
+list-driven redesign; section 5 is the measured throughput model; section 6
+is the literature comparison.  Sections 7-9 hold unfinished sketches, open
+questions, and future work.
+
+---
 
 ## 1. Atomic preliminaries
 
@@ -12,14 +40,16 @@ writes to different atomic objects.
 
 **Inter-thread happens-before:** if one thread performs an atomic store-release
 to some variable, and another thread performs an atomic
-load-acquire from that variable that takes its value from the release operation 
-itself or from a subsequent atomic read-modify-write operation in the release 
-sequence, then all writes before the release on the first thread 
+load-acquire from that variable that takes its value from the release operation
+itself or from a subsequent atomic read-modify-write operation in the release
+sequence, then all writes before the release on the first thread
 happen-before all reads after the acquire on the second thread.  Note that it is
 the _identity_ of the value that matters, which is stronger than requiring
-the values are equal. 
+the values are equal.
 
-## 2. Epoch system
+---
+
+## 2. The epoch system
 
 Consider an atomic counter.  Every write is a transition from x -> x + 1.  The
 value of the counter is therefore a reification of the modification order,
@@ -36,11 +66,11 @@ We speak of epoch $E$ or the full state $(E, m, n)$.  $m$ and $n$ can be thought
 of as reference counts keeping epochs $E$ and $E-1$ alive.  Unlike the strictly
 increasing atomic counter above, the epoch number is only non-decreasing, and
 the information its values provide about modification order is coarser, with
-runs of the same value being indistinguishable. 
+runs of the same value being indistinguishable.
 
 Fundamental operations on the epoch state are:
 
-**pin:** A thread increases the number of threads in the current epoch, and 
+**pin:** A thread increases the number of threads in the current epoch, and
 remembers the current epoch number.
 
 **unpin** A thread compares its remembered epoch number against the current
@@ -48,7 +78,7 @@ epoch number, and decreases the number of threads in either the current or
 previous epoch.  The remembered epoch number
 must correspond to either the current or previous epochs, and that epoch must
 be greater than zero.  Violation of these preconditions indicates an
-implementation bug.  
+implementation bug.
 
 **try-advance** A thread loads the number of threads in the previous epoch, and
 if zero, it increases the epoch number and swaps the numbers of threads
@@ -58,8 +88,8 @@ at all.  If it is pinning the prior epoch, the operation will not accomplish
 anything.
 
 The system as a whole
-cannot advance unless every pin is eventually unpinned.  Note that **pin** 
-increments $m$ but never $n$, **unpin** decreases either $m$ or $n$, and 
+cannot advance unless every pin is eventually unpinned.  Note that **pin**
+increments $m$ but never $n$, **unpin** decreases either $m$ or $n$, and
 **try-advance** only increases $n$ when it increases $E$.
 
 In practice, threads will also atomically execute combinations of these
@@ -73,7 +103,7 @@ operation, so the release sequence headed by any release on it is unbroken.
 - Thread $A$ is in epoch $E$.
 - Thread $A$ *unpin-try-advances* $E' \in \{E, E+1, E+2\}$.
 
-When $A$ *pins*, it performs the transition 
+When $A$ *pins*, it performs the transition
 1. $(E, m, n) \rightarrow (E, m+1, n)$
 
 When $A$ *unpins*, it may discover that some other thread has already
@@ -93,54 +123,55 @@ Now consider another thread
 - Thread $B$ pins the current epoch $F$.
 - Thread $B$ is in epoch $F$.
 
-The global epoch number never decreases, so if $F > E+2$, then every store 
+The global epoch number never decreases, so if $F > E+2$, then every store
 of value $E+2$ precedes every store of value $F$ in the modification order,
 and precedes every load of value $F$.
 
 We may further improve the inequality.  In cases 1, 2 and 3, $A$ writes $E$ or
 $E+1$.  In case 4, $A$ writes $E+2$ and this is the first write of this value.
-In all cases, every write of $E+2$ is in the release-sequence headed by $A$'s 
+In all cases, every write of $E+2$ is in the release-sequence headed by $A$'s
 unpin.  So we can say that any store in thread $A$ before it unpins the epoch
 $E$  happens before thread $B$ pins the epoch $F \ge E+2$ and performs any loads.
 
 More concisely, we can say that epoch $E$ happens-before epoch $F$ if
-$F\ge E+2$.  This is a _partial ordering_.  Neighbouring epochs are 
+$F\ge E+2$.  This is a _partial ordering_.  Neighbouring epochs are
 _incomparable_, but sufficiently different epochs are in numeric order.
 
 If $B$ instead reads $E+1$, we cannot prove a happens-before relationship,
-though one exists in cases 1 and 2. In case 4, $A$ writes $E+2$ 
+though one exists in cases 1 and 2. In case 4, $A$ writes $E+2$
 which obviously cannot precede $E+1$.  In case 3, we can't know if the $E+1$ that
 $B$ read was before or after the $E+1$ that $A$ wrote.
 
 The above arguments hold if we replace thread $A$ with any other thread that
 pins epoch $E$, and if we replace thread $B$ with any other thread that pins
-epoch $F$.  Thus we obtain the result: 
+epoch $F$.  Thus we obtain the result:
 
 **Theorem 2.1:** Stores made by any thread in epoch $E$ happen-before
 loads made by any thread in epoch $F \ge E+2$.
 
 ### 2.2 Embargoed reads
 
-In theorem 2.1 applies to both atomic and non-atomic variables.  For a non-
+Theorem 2.1 applies to both atomic and non-atomic variables.  For a non-
 atomic variable, any write that does not happen-before the read is a data race
 and undefined behavior.
 Therefore the only writes that may legally have produced the value that $F$
-reads are writes that happen-before $F$'s read; that is, writes in 
+reads are writes that happen-before $F$'s read; that is, writes in
 epochs $\le E$.
 
 However, if the variable is atomic, $F$ may load values written in any of the
-epochs in the range $\[E,F+1\]$.  While the reading thread is in epoch
+epochs in the range $[E, F+1]$.  While the reading thread is in epoch
 $F$, other threads might also be in $F-1$, $F$ or even $F+1$, and the reading
 thread might encounter writes made by any of them.
 
 It is intuitive, but not yet proven, that since $F$ happens-before $F+2$,
-any load in $F$ happens-before any store in $F+2$, and thus the load cannot 
-take its value from epochs $\ge F+2$.  The C++ standard explicity addreses this.  
+any load in $F$ happens-before any store in $F+2$, and thus the load cannot
+take its value from epochs $\ge F+2$.  The C++ standard explicitly addresses
+this.
 
-> If a value computation $A$ of an atomic object $M$ happens before an operation $B$ 
-> that modifies $M$, then $A$ shall take its value from a side effect $X$ on $M$, where 
-> $X$ precedes $B$ in the modification order of $M$. [ Note: This requirement is 
-> known as read-write coherence.  — end note ]
+> If a value computation $A$ of an atomic object $M$ happens before an operation $B$
+> that modifies $M$, then $A$ shall take its value from a side effect $X$ on $M$, where
+> $X$ precedes $B$ in the modification order of $M$. [ Note: This requirement is
+> known as read-write coherence.  -- end note ]
 > - [intro.races/16]
 
 Thus any atomic load made in epoch $F$ will originate from an epoch $\le F+1$.
@@ -152,10 +183,10 @@ been written after that value.  Thus we can't dereference the pointer
 that we read in $F$, potentially written as late as $F+1$, until a later
 epoch.
 
-Corollary 2.2.1 (dereference embargo). A pointer loaded by a thread in epoch $F$ 
-may have been written by a writer in any epoch up to $F+1$. To dereference it 
-safely, the reader must wait until it pins some later epoch $G$ where 
-$G \ge (F+1) + 2 = F + 3$. The release that establishes synchronization is the 
+Corollary 2.2.1 (dereference embargo). A pointer loaded by a thread in epoch $F$
+may have been written by a writer in any epoch up to $F+1$. To dereference it
+safely, the reader must wait until it pins some later epoch $G$ where
+$G \ge (F+1) + 2 = F + 3$. The release that establishes synchronization is the
 writer's unpin of epoch $F+1$.
 
 This problem only arises when the pointer is stored and loaded with relaxed
@@ -171,46 +202,117 @@ even if the resulting machine happened to be correct without it.  On weakly
 ordered architectures like AArch64, the embargo is also required at the
 hardware level.
 
+Since the stage-3 revision (4.8) the report channel is release/acquire and no
+longer relies on this embargo.  The embargo argument remains load-bearing
+where there is no natural release point: bump-slab rotation in the epoch
+allocator, and the raggedness bounds on color publication (mutators load the
+published colors relaxed and rely on the epoch for visibility).
 
-  
+### 2.3 Who advances the epoch
 
+If a thread has pinned epoch $E$, then when it unpins it store-releases
+either $E$ (redundantly) or $E+1$.  In the former case, some other thread has
+$E-1$ pinned; in the latter case, some other thread has $E$ pinned.  But if
+$E$ is the prior epoch (the epoch advanced while we had it pinned), and we
+were the last thread pinning it, we may correctly write $E+2$ when we unpin.
 
+This does not break anything: we rely on a load-acquire of $E+2$ being enough
+to synchronize, and it is in this case too, precisely because ours is the
+first write of $E+2$.  If the epoch is entirely unpinned, it can in principle
+advance by any amount.
 
+The collector unpins while it works.  This keeps the epoch ticking at mutator
+("frame") cadence during long scans -- which keeps the epoch allocator's bump
+slabs sized to one frame's worth of temporaries rather than $N$ frames' --
+and lets the phase gates of section 4 make progress mid-pass.
 
+### 2.4 The width of the epoch
 
-
-
-
-
-
-
-
-
-
-## (Older)
-
-This document derives the safety properties of the tricolor scheme implemented
-in [`garbage_collected.cpp`](../garbage_collected.cpp) and
-[`garbage_collected.hpp`](../garbage_collected.hpp), in the same style as the
-embargo argument inlined into `Collector::collector_takes_reports`. The goal is
-to make every cross-thread dependency explicit and discharge it from a small
-set of primitives.
-
-The reasoning structure is:
-
-1. State the invariants we want to preserve.
-2. Enumerate the synchronization primitives we have.
-3. Describe the per-bit state machine and which thread writes each transition.
-4. For each phase transition at the collector, argue why the trigger
-   condition implies the necessary cross-thread visibility.
-5. Walk through worst-case interleavings.
-6. Track open questions.
-
-Sections 1–3 are filled in. Sections 4–6 are scaffolds for further work.
+Stored epochs are compared cyclically.  The counter is 32 bits (`cyc32_t`,
+comparison window $\pm 2^{30}$), packed with the pin counts into the single
+64-bit `Service::State` word (epoch:32, pins_current:15, waiting:1,
+pins_prior:16; pin-count trap at 0x7FFF).  Sixteen bits were tried first and
+failed empirically (2026-07-12): a loaded 100k-entity cycle spanned 8000+
+epochs -- epochs tick at frame rate while collector iterations stretch to
+seconds -- pushing stored-epoch comparisons (cohort min_epoch, sweep gates,
+quiet timestamps) past the $\pm$0x4000 window and firing the locality assert.
 
 ---
 
-## 1. What we are proving
+## 3. The tracing collector
+
+### 3.1 Life of one collection
+
+The argued version of this narrative is section 4; this is the shape of one
+cycle on a single bit k, from bit allocation to bit recycle.  Up to 16 such
+cycles overlap, staggered, each on its own bit.
+
+**Quiescent: bit k is unused.**
+- All mutators are k-white; all objects are k-white.
+- New objects are allocated k-white; no mutator shades k.
+
+**The collector publishes k-gray.**
+- Some mutators are k-white, some k-gray; each adopts the color at its own
+  next quiescence.
+- New objects are allocated k-white or k-gray, by their allocator's color.
+- k-gray mutators' write barriers shade displaced objects
+  k-white -> k-gray.
+- The collector receives reports of k-white allocations, k-gray
+  allocations, and k-gray shadings.  It cannot trace yet: without k-black
+  it cannot tell visited from unvisited, so it parks the k-gray work
+  (4.10's warm-up deferral).
+
+**All mutators see k-gray.**
+- Every object reachable at this point will survive the k-sweep: k-white
+  allocation and un-k-barriered overwrites all happen-before this point,
+  and every overwrite after it shades its displaced pointer for k.  This
+  is the snapshot.
+- All k-white allocations have been reported; no more will occur.
+- All mutators now shade k-white -> k-gray on overwrite.
+
+**The collector publishes k-black.**
+- Mutators are k-gray or k-black; objects are k-white, k-gray, or k-black;
+  allocation is k-gray or k-black.
+- The collector now traces: reported gray arrivals, the parked warm-up
+  work, and the standing roots (the root registry), depth-first to
+  fixpoint, blackening as it goes.
+
+**The collector finishes tracing, and waits out the quiet window.**
+- Any k-gray object it has not traced was either allocated gray before
+  some mutator saw k-black, or shaded by a barrier -- and in both cases it
+  is in a report that will arrive.  Fresh work re-opens tracing; graph
+  mutation can prolong this, but each round costs O(new work), and in
+  practice it converges quickly.
+- The window closes when no k-work has arrived for two epochs and a trace
+  has run since the last work: now no k-gray objects exist, no mutator can
+  produce one (nothing k-white is reachable), and every reachable object
+  is k-black.
+
+**Weak decisions.**
+- With the marks stable, registered weak objects (the weak registry)
+  decide their fate before the sweep can free them.
+
+**The collector sweeps.**
+- One walk over the eligible cohorts deletes every object that is white
+  for any currently-sweeping bit (asserting it is unrooted), and certifies
+  the survivors marked for every swept bit.  A k-gray object found here is
+  a bug and asserts.
+
+**The collector publishes k-white.**
+- Mutators progressively drop k from their masks; allocation and barriers
+  stop carrying k.  After the window, no report can ever carry fresh
+  k-work.
+
+**Clearing rides the sweep.**
+- Cohorts old enough to carry stale k-marks are flagged; subsequent sweep
+  walks strip k from survivors; late reports from mutators that loaded
+  pre-white colors are caught by the strip horizon (4.10).
+
+**The bit recycles.**
+- No cohort is flagged for k; all objects and all mutators are k-white;
+  bit k returns to the unused pool, and we are back at the beginning.
+
+### 3.2 What we are proving
 
 Each independent collection is identified by a single bit `k` in the 16-bit
 gray/black words. Up to 16 collections coexist; the per-bit reasoning below
@@ -218,453 +320,369 @@ generalizes by AND-masking with `k`.
 
 The **safety** properties we need:
 
-- **S1 — No live object is freed.** If, at the moment the collector executes
+- **S1 -- No live object is freed.** If, at the moment the collector executes
   `delete object` for some bit `k`, the object is reachable from a root or from
   another reachable object, that is a bug.
-- **S2 — Every k-white→k-gray transition performed by a mutator is reflected
-  in the collector's view before k is declared stable.** Otherwise the
-  collector might delete an object that a mutator is in the middle of marking
-  reachable.
-- **S3 — `_black` writes are race-free.** The collector writes `_black` with
+- **S2 -- Every k-white -> k-gray transition performed by a mutator is
+  reflected in the collector's view before k is declared stable.** Otherwise
+  the collector might delete an object that a mutator is in the middle of
+  marking reachable.
+- **S3 -- `_black` writes are race-free.** The collector writes `_black` with
   plain stores; we must show no other thread ever writes it concurrently and
   that mutators that read derived `_thread_local_black_for_allocation` see the
   correct values via the epoch system.
-- **S4 — Concurrent collections do not interfere.** Bits k₀ and k₁ progress
+- **S4 -- Concurrent collections do not interfere.** Bits k0 and k1 progress
   through their phases independently; the per-object `_gray`/`_black` words
   contain non-overlapping bit-patterns from each.
 
 The **liveness** properties we want (not the focus of this document, but worth
 naming):
 
-- **L1 — Every unreachable object is freed within a bounded number of
+- **L1 -- Every unreachable object is freed within a bounded number of
   collection cycles.** The bound is governed by the number of epochs each
   phase transition waits.
-- **L2 — Phase transitions eventually fire.** This depends on mutators
-  repinning frequently enough; not analyzed here.
+- **L2 -- Phase transitions eventually fire.** Practical, not adversarial.
+  Termination of tracing requires a quiet window (4.8), and every k-flip a
+  mutator performs re-opens it, so an adversarial mutator that keeps
+  unlinking not-yet-traced objects can extend a cycle without bound.  What
+  the stage-3 shadelists changed is the price: a late shade is consumed as
+  a targeted trace of one subtree on a pass the collector was making
+  anyway, where the original design re-ran a full O(heap) validation scan
+  per late shade (an adversarial O(N^2)).  We accept the unbounded
+  adversarial tail; real mutators quiesce, and cycles converge in a round
+  or two.
 
-This design may be theoretically unable to guarantee L1 or L2, but should
-achieve timely collection in practice.
+### 3.3 Primitives
 
-The counterexample is this: 
-- Start with a singly linked list of objects, with mutable next pointers.
-- The head is grey, the rest of the list is white.
-- Suppose the collector will scan the list in reverse order (head last).
-- The collector scans all the tail nodes, finds them to be white, and takes no
-action.
-- The mutator concurrently unlinks the tail from the head, writing zero into
-the head's next pointer.  The mutator executes the write barrier, shading the
-first node of the tail, but the collector has already inspected it.
-- The collector marks the head node black, enumerates its single child pointer,
-and sees the new null value, so it has nothing to trace.
-- We're now back at the original situation; we have a singly linked list of
-white objects with a new gray head.  We have to perform a number of scans equal
-to the list length to get to the end, which is obviously O$(N^2)$.  Likewise,
-we can't transition phase because the mutator makes one new gray object every
-scan.
-
-In practice, to repeatedly touch objects in the right order and to see exactly
-the right atomic values would require a pathological scheduler, so we can expect
-to settle down rapidly in practice.
-
-If we didn't eagerly depth-first trace objects the collector shaded, but just
-relied on the scan encountering them, this problem would manifest even for
-immutable singly linked lists that we happened to scan in reverse order.
-
-Subsequent sections derive S1–S4 from primitives.
-
----
-
-## 2. Primitives
-
-### 2.1 Atomic operations on object headers
+#### 3.3.1 Atomic operations on object headers
 
 | Field | Type | Mutator access | Collector access |
 |-------|------|----------------|------------------|
-| `_gray` | `Atomic<uint16_t>` | `fetch_or` (RELAXED) in `_garbage_collected_shade`; constructor `=` while object is thread-private | `load` (RELAXED), `compare_exchange_weak` (RELAXED, RELAXED) during scan |
-| `_black` | plain `mutable uint16_t` | constructor `=` while object is thread-private; otherwise no access | plain read/write during scan |
-| `_count` | `Atomic<int32_t>` | `fetch_add`, `fetch_sub` (RELAXED) via `Root` | `load` (RELAXED) during scan |
+| `_gray` | `Atomic<uint16_t>` | `fetch_or` (RELAXED) in `_garbage_collected_shade`; constructor `=` while object is thread-private | `load` (RELAXED), `compare_exchange_weak` (RELAXED, RELAXED) during the registry walk and trace |
+| `_black` | plain `mutable uint16_t` | constructor `=` while object is thread-private; otherwise no access | plain read/write during trace and sweep |
+| `_count` | `Atomic<int32_t>` | `fetch_add`, `fetch_sub` (RELAXED) via `Root` | `load` (RELAXED) during the registry walk and sweep |
 
 The asymmetry is the key: `_gray` is contended (mutator shades, collector
-processes), so it must be atomic. `_black` is only contended for one window —
-between construction and registration — and that window is closed by the
+processes), so it must be atomic. `_black` is only contended for one window --
+between construction and registration -- and that window is closed by the
 report mechanism, so post-registration the collector has exclusive access.
 This is the basis for **S3**.
 
-### 2.2 Global atomics
+#### 3.3.2 Debug-only header fields
+
+`NDEBUG`-gated fields on the header (`_debug_allocation_gray`,
+`_debug_allocation_black`, `_debug_allocation_epoch`) record the
+allocation-time colors and epoch for the per-object invariant checks and
+crash forensics.  They are written once at construction, are never
+synchronized, and carry no correctness role; Release builds do not have
+them.  Do not generalize from their access patterns to production
+memory-ordering choices.
+
+#### 3.3.3 Global atomics
 
 | Variable | Type | Producer ordering | Consumer ordering |
 |----------|------|-------------------|-------------------|
 | `_global_atomic_color_for_allocation` | `Atomic<Color>` | collector store (RELAXED) | mutator load (RELAXED) on pin/repin |
-| `_global_atomic_reports_head` | `Atomic<Report*>` | mutator CAS (RELAXED, RELAXED) | collector exchange (RELAXED) |
+| `_global_atomic_reports_head` | `Atomic<Report*>` | mutator CAS (RELEASE on success) | collector exchange (ACQUIRE) |
 
-Both are RELAXED on both ends. Their cross-thread visibility is established
-*not* through release/acquire on these atomics themselves, but through the
-epoch system — exactly as for the report contents (the existing embargo
-argument).
+The color word is relaxed at both ends; its cross-thread visibility rides the
+epoch system alone, with the raggedness bounds used throughout section 4.
 
-### 2.3 Epoch ordering (recap)
+The report head is an ordinary release/acquire channel (since stage 3, 4.8).
+The successful publish CAS is the last write the mutator makes to the report,
+so the collector's acquiring exchange makes the report contents -- and
+everything the mutator wrote before publishing, including the `_gray` words
+of the objects it shaded and the headers of the objects it allocated --
+immediately readable.  Because the exchange is a read-modify-write, it takes
+the head's latest modification-order value: one exchange receives every
+report published so far.
 
-From the [embargo argument in
-`Collector::collector_takes_reports`](../garbage_collected.cpp#L173-L199):
+#### 3.3.4 The mutator at quiescence
 
-> If thread A unpins or repins from epoch E (release barrier), and thread B
-> later pins or repins to epoch F where F > E + 1, then every write A made
-> before its release happens-before every read B makes after its acquire.
+At each quiescence boundary a mutator publishes a `Report` -- its
+allocations, shaded objects, root-ups, weak registrations, and did-shade
+summary bits since the last boundary -- with a release CAS, then repins,
+loading the published colors (relaxed) for the next period.  The push is
+sequenced before the repin; the completeness lemma (4.8) counts on exactly
+this ordering.
 
-We will write this as **HB(E, F) iff F > E + 1** when discussing inter-thread
-visibility. The collector's loop deliberately waits for the epoch to advance
-by ≥ 3 since its last phase change so that any per-mutator state changes
-happening up to that change are visible.
+A mutator's view of the published colors is "the colors stored before its
+last acquire": pinned at $F$ it is guaranteed to see every color the
+collector stored while pinned at $E \le F - 2$, and may additionally see
+stores as late as $F + 1$.  Raggedness is therefore bounded at about two
+epochs, and the collector's gates wait accordingly.
 
-Is **iff** the right choice here?  happens-before _might_ happen under a looser
-constraint, and it's even observable if we additionally know that when we
-unpinned the epoch, the epoch had not yet advanced.
+#### 3.3.5 The collector receive
 
-### 2.4 Mutator pin/repin/unpin
+Each loop iteration begins by exchanging out the report list (acquire) and
+merging it: the batch's allocations become a new cohort (one per receive,
+4.10), flagged against the strip horizons of any clearing bits; shaded
+objects drain into the gray wavefront; root-ups and weak registrations file
+into their registries (4.9); and the `gray_did_shade` bits feed the
+quiet-window accounting.  Receive runs first in every iteration; several
+phase arguments (the strip horizon, the termination gates) lean on this
+receive-before-advance ordering.
 
-Each mutator at quiescence boundaries publishes a `Report` and then repins.
-The report contents are RELAXED-written but synchronized with the collector
-via the epoch (the embargo). Mutators load the current `Color` on each
-pin/repin, also RELAXED, also synchronized via the epoch.
-
-**Consequence.** A mutator's view of the published colors is "the colors
-stored before the mutator's last acquire." More precisely: if the mutator
-pins/repins to epoch F, it sees every collector color-store that was followed
-by a collector release at epoch E < F − 1.
-
-It may, but is not guaranteed, to also see collector color-stores from as late
-as F + 1.
-
-### 2.5 Collector quiescence
-
-The collector pins, exchanges out the report list, places `(E + 3, head)` in
-`_embargoed_until`, and only dereferences `head` once its current pinned
-epoch ≥ E + 3. This is the embargo. Throughout this document we treat the
-embargo as established and use it as a black box.
-
----
-
-## 3. Per-bit state machine
+### 3.4 Per-bit state machine
 
 Pick a single bit `k`. Its meaning at any object header is encoded by the
 pair (`gray`, `black`) projected onto bit k:
 
-| gray bit | black bit | name | "this object is…" |
+| gray bit | black bit | name | "this object is..." |
 |----------|-----------|------|--------------------|
 | 0 | 0 | **k-white** | a candidate for collection in cycle k |
 | 1 | 0 | **k-gray** | reachable in cycle k, children not yet traced |
 | 1 | 1 | **k-black** | reachable in cycle k, children traced |
 | 0 | 1 | (forbidden) | not produced in steady state; would require black-without-gray |
 
-### 3.1 Transitions
+#### 3.4.1 Transitions
 
-Each transition is annotated with **(writer, ordering, reader-side
-expectation)**. The reader-side expectation is what must already be true for
-the read on the other thread to be correct.
+Each transition, with its writer and ordering:
 
-Table is a bad format for this because (a) cells are too long and (b) pipe is
-used both to delimit cells and mean bitwise 'or', and the display breaks because
-it doesn't respect the code quoting.
+- **k-white -> k-gray, by a mutator (shading).**  `_gray.fetch_or`
+  (relaxed) in `_garbage_collected_shade`; when the fetch_or flips a bit,
+  the object is recorded once into the thread-local shadelist and the
+  did-shade summary.  The collector observes the shade through the report
+  (the shadelist entry), not by rediscovering it on the heap.
+- **k-white -> k-gray, by the collector (root walk, receive-time
+  promotion).**  `_gray.compare_exchange_weak` (relaxed, relaxed), subject
+  to the gray-bit rule of 4.10: gray only what you can also blacken or
+  park.
+- **k-gray -> k-black, by the collector (tracing).**  Plain
+  `_black |= k`; only the collector touches `_black` after registration
+  (3.4.3).
+- **k-black -> k-white, by the collector (strip, riding sweep).**  CAS
+  clearing the gray bit and a plain clear of the black bit, applied to
+  survivors during the sweep walk (4.10).  Mutators never read `_black`;
+  they read only the published allocation masks.
+- **k-white -> k-black directly: does not occur.**
 
-| From → to | Writer(s) | Ordering | Reader expectation |
-|-----------|-----------|----------|--------------------|
-| k-white → k-gray (mutator shading) | mutator | `_gray.fetch_or(k)` RELAXED; record in `_thread_local_gray_did_shade`; reported | collector reads via `_gray.load` and via `Report::gray_did_shade`; both relaxed, both gated by embargo |
-| k-white → k-gray (collector marking, e.g. roots) | collector | `_gray.compare_exchange_weak(_, _, RELAXED, RELAXED)` | only collector reads its own writes within the same scan |
-| k-gray → k-black | collector | plain `_black PIPE= k` | only collector reads `_black`; `_gray` already has k set, no change |
-| k-black → k-white (clearing) | collector | `_gray.compare_exchange_weak` clearing k; plain `_black &= ~k` | collector internal; mutators only read derived `_thread_local_*_for_allocation`, never `_black` directly |
-| k-white → k-black | does not occur | — | — |
+#### 3.4.2 Where each transition lives in code
 
-### 3.2 Where each transition lives in code
+- Mutator shading: `garbage_collected_shade`, called by the mutable slot
+  types' store barriers (`AtomicScanSlot`, `AtomicMarkedScanSlot` -- the
+  Yuasa-style snapshot-at-the-beginning deletion barrier shades the
+  displaced pointer on overwrite) and by the root count reaching zero in
+  `garbage_collected_roots_subtract`.  The barrier is an unconditional
+  `fetch_or` of the thread's gray mask rather than Yuasa's classic "if
+  white, shade gray": equivalent because OR is idempotent on any
+  already-non-white object's gray bit, and branch-free.
+- Root-up shading and registry filing: `_garbage_collected_root_up`, from
+  `garbage_collected_roots_add` on the 0 -> 1 count transition (4.9).
+- Collector marking: `_promote` at receive, and the root-registry walk and
+  graystack trace in `collector_trace`.
+- Sweeping and stripping: `collector_sweep_walk`.
+- Phase transitions: `try_advance_collection_phases`.
+- Allocation: the `GarbageCollected` constructor stamps `_gray` and
+  `_black` from the thread-local snapshot of the published color.
 
-- Mutator shading: `_garbage_collected_shade` at
-  [garbage_collected.cpp:58–63](../garbage_collected.cpp#L58-L63), and
-  through `Edge::operator=` calling `garbage_collected_shade` (the
-  Yuasa-style snapshot-at-the-beginning / deletion barrier — shades the
-  displaced pointer on overwrite) and through `Root` reaching multiplicity
-  zero ([garbage_collected.hpp:256–258](../garbage_collected.hpp#L256-L258)).
-  We use unconditional `fetch_or` on the gray bits rather than Yuasa's
-  classic "if white, shade gray"; equivalent because OR is idempotent on
-  any already-non-white object's gray bit.
-- Collector marking and clearing: `Collector::collector_scans`
-  ([garbage_collected.cpp:351–554](../garbage_collected.cpp#L351-L554)),
-  inside the per-object CAS loops on `_gray` and the plain writes to `_black`.
-- Allocation: `GarbageCollected::GarbageCollected`
-  ([garbage_collected.cpp:42–56](../garbage_collected.cpp#L42-L56)) stamps
-  `_gray` and `_black` from the thread-local snapshot of the published color.
-
-### 3.3 Why `_black` writes are race-free (justifies **S3**)
+#### 3.4.3 Why `_black` writes are race-free (justifies S3)
 
 After construction-and-registration, the only writer to `_black` is the
-collector. The construction-time write happens while the object is reachable
-only from `_thread_local_new_objects` — by definition, only the constructing
-thread sees it. That thread publishes a report containing the object pointer,
-and the collector takes ownership of the object via `_known_objects` after
-the embargo. Once the object is in `_known_objects`, the constructing thread
-never reads or writes `_black` again. So:
+collector.  The construction-time write happens while the object is
+reachable only from `_thread_local_new_objects` -- by definition, only the
+constructing thread sees it.  That thread publishes a report containing the
+object pointer (release CAS), and the collector's acquiring exchange takes
+ownership of the object into a cohort.  Once the object is in a cohort, the
+constructing thread never reads or writes `_black` again.  So:
 
 - Construction-time `_black =` happens-before the report publish (program
   order on the constructing thread).
-- Report publish happens-before the collector dereferencing the report
-  (embargo + epoch HB).
+- The publish happens-before the collector dereferencing the report
+  (release/acquire on the report head).
 - Therefore construction-time `_black =` happens-before any subsequent
   collector access.
 
-After that, the collector is the sole writer/reader of `_black`. ✓ **S3**.
-
-### 3.4 What `_thread_local_gray_did_shade` records
-
-For each quiescence period and each k, indicates the mutator produced new work
-for the collector by (a) allocating new objects k-gray or (b) changing an
-existing object from k-white to k-gray.
-
-This summary is what feeds `_shade_history` at the collector and drives the
-"color is stable" decision (section 4.3).
-
-### 3.5 Staggered collections
-
-The basic tri-color collector has a scanning phase and a sweeping phase.  In
-both cases, they visit all objects. 
-
-Our collector visits all objects in a loop.  Bitmaps encode the state of
-multiple different collectors, and the loop is able to shade, mark, sweep or
-clear all of these simultaneously with a compare-exchange of the 
-object's "color" word.
-
-
+After that, the collector is the sole writer and reader of `_black`; the
+trace's blackening, the sweep's read, and the strip's clear all inherit the
+same reasoning.  **S3** holds.
 
 ---
 
 ## 4. Phase transitions at the collector
 
-> *Skeleton — to be filled in by the author.*
+One collection, on bit k, argued phase by phase.  4.1-4.7 walk the life
+cycle in order; 4.8-4.10 record the revisions, implemented 2026-07-12, that
+replaced the original full-scan machinery (immediate reports, registries,
+cohorts); 4.11 is a design note held in reserve.  Where an early section's
+mechanism was superseded, it defers to the revision rather than repeating
+it.
 
-For each transition below, state:
-- **Trigger condition** (the bit-mask expression on histories).
-- **What the trigger implies** about cross-thread visibility (using HB and
-  epoch counts).
-- **What the collector does next** (writes to internal masks; effect on
-  subsequent allocations and scans).
-- **Why the wait length is sufficient** (and why a shorter wait would break
-  S1 or S2).
+Each transition trigger asks one of three kinds of question (mirrored in the
+comments of `try_advance_collection_phases`):
 
-Phases to cover:
+- *Has time passed?* -- have all mutators observed a color publish?
+  Counted as epochs since the publish.  Used by GRAY_PUBLISHED and
+  WHITE_PUBLISHED.
+- *Has the work been done?* -- has a sweep walk run since the phase began?
+  Used by SWEEPING and CLEARING.
+- *What did the mutators actually do?* -- has k-work stopped arriving, and
+  has what arrived been traced?  Used only by BLACK_PUBLISHED, because
+  tracing termination depends on what the mutators wrote, not just on
+  time.
 
 ### 4.1 Publish k-gray (start a new collection on bit k)
 
-[`try_advance_collection_phases` lines 342–346](../garbage_collected.cpp#L342-L346).
+In `try_advance_collection_phases`: each call starts a collection on at most
+one bit, the first UNUSED one found.  (Keeping in-flight collections spread
+out -- an admission policy -- is the open lever of section 5.)
 
-Trigger: `~_color_in_use`
-
-`_color_in_use` tracks which bits are in use, and applies to both the gray and
-black words.
-
-If there are unused bits, we may start another collection by transitioning that
-bit to k.  We can pick any bits; currently we pick the least significant unused
-bit.
-
-`new_bit = (_color_in_use + 1) & ~_color_in_use`.
-
-A bit being unused implies that the bit is zero on all existing objects.  The
-scan asserts this on every object.  Before a used bit retires to unused state,
-the scan (acting as a sweep on k) clears that bit on all surving objects. 
+A bit being unused implies the bit is zero on every existing object: before
+a used bit retires, the sweep strips it from all survivors (4.6), and the
+per-object color checks trap any object still carrying it.
 
 States we pass through:
 
 All mutators are k-white.
 All objects are k-white.
 
-Transition: The collector publishes k-grey in epoch E.
+Transition: the collector publishes k-gray in epoch E.  It conservatively
+records the cycle start as k-work, so the quiet window of 4.8 cannot open
+during warm-up.
 
-Mutators are k-white or k-grey.
-Objects are k-white or k-grey.
-Objects are allocated k-white or k-grey.
-Objects may be shaded k-white to k-grey by:
-- k-grey mutator's write barriers
-- collector is permitted to shade gray if they are roots or reachable from
-  other gray objects, but this is just an optimization 
+Mutators are k-white or k-gray.
+Objects are k-white or k-gray.
+Objects are allocated k-white or k-gray.
+Objects may be shaded k-white to k-gray by:
+- k-gray mutators' write barriers;
+- the collector, which may legally shade gray early (roots, children of
+  gray objects) -- the *optional early shade* -- but today defers that work
+  instead, parking it in the warm-up bag (4.10): under record-once
+  shadelists, an early gray that its agent can neither blacken nor park
+  can be orphaned.
 There are no k-black objects.
 
-NOTE: if k-black was allowed here, we could have a k-black object with a field
-overwritten by a k-white mutator whose k-write barrier is not yet in effect;
-this is why we have a gray warm-up phase, and why the collector can't
-recursively trace yet.  Since the goal is to get things to stop becoming gray 
-as quickly as possible, we should propagate gray from parent to child where we
-can, but without the black bit we can't yet trace the graph without getting
-stuck in loops.  This manifests as not adding the children of gray objects to
-the depth-first trace, yet.
+NOTE: if k-black were allowed here, we could have a k-black object with a
+field overwritten by a k-white mutator whose k-write-barrier is not yet in
+effect -- a hidden white object behind a black one.  This is the
+*no-early-black rule*, and it is why there is a gray warm-up phase at all.
+It also means the collector cannot recursively trace yet: without the black
+bit it cannot tell visited from unvisited and would get stuck in cycles of
+the object graph.
 
-Eventually: The epoch advances to epoch E + 2.
+Eventually: the epoch advances to E + 2.
 
-All mutators are k-grey.
-All objects are k-white or k-grey.
-Objects are allocated k-grey.
+All mutators are k-gray.
+All objects are k-white or k-gray.
+Objects are allocated k-gray.
 Objects may be shaded k-white to k-gray.
 No new k-white objects are made.
 The number of k-white objects is non-increasing.
-The number of k-grey objects is non-decreasing.
+The number of k-gray objects is non-decreasing.
 
 ### 4.2 Publish k-black (k-gray acknowledged by all mutators)
 
-Trigger: The collector pins an epoch F > E + 1 where E is the epoch the
-collector wrote k-grey.
+Trigger: the collector pins an epoch F >= E + 2, where E is the epoch of the
+k-gray publish.
 
-Transition: The collector publishes k-black in epoch F.
+Transition: the collector publishes k-black in epoch F.  It records the
+sweep gate `_k_sweep_gate[k] = F + 2` (every allocation from the gate on is
+k-marked at birth; 4.10), and re-feeds the parked warm-up bag through the
+arrivals drain, now that k may blacken.
 
 Mutators are k-gray or k-black.
 Objects are k-white or k-gray or k-black.
 Objects are allocated k-gray or k-black.
 No new k-white objects are made.
-Objects may be shaded k-white to k-gray by mutator write barriers (including root count)
+Objects may be shaded k-white to k-gray by mutator write barriers
+(including the root count reaching zero).
 The collector is now permitted to use k-black and trace recursively.
-Objects may be shaded k-white to k-gray to k-black by the collector.
-- If reachable from a gray object
-- If root count nonzero
+Objects may be shaded k-white to k-gray to k-black by the collector:
+- if reachable from a gray object;
+- if their root count is nonzero (the registry walk).
 The number of k-white objects is non-increasing.
 The number of k-black objects is non-decreasing.
 
-NOTE: As soon as k-black is allowed we can start tracing.  The mutator's write
-barrier doesn't care about gray vs black, and we have proved that no mutators
-are k-white any more.  
+NOTE: as soon as k-black is allowed we can start tracing.  The mutator's
+write barrier doesn't care about gray vs black, and we have proved that no
+mutators are k-white any more.
 
-Eventually: The epoch advances to F + 2.
+Eventually: the epoch advances to F + 2.
 
 Mutators are k-black.
 Objects are k-white or k-gray or k-black.
 Objects are allocated k-black.
-No new k-white or k-gray objects are made.  (Existing k-white may become k-gray)
-Objects may be shaded k-white to k-gray by mutator write barriers (including root count)
+No new k-white or k-gray objects are made (existing k-white may become
+k-gray).
+Objects may be shaded k-white to k-gray by mutator write barriers.
 Objects may be shaded k-white to k-gray to k-black by the collector.
 The number of k-white objects is non-increasing.
 The number of k-black objects is non-decreasing.
 
-### 4.3 K-black acknowledged and stable-color detection
+### 4.3 Tracing and termination
 
-The collector is now tracing the graph while k-black mutators mutate the graph
-by allocating new black nodes (no problem) and overwriting pointers to nodes
-that are still k-white (tricky).
+The collector traces while k-black mutators mutate the graph: new
+allocations are born marked (no problem); pointer overwrites can hide
+still-white objects behind already-traced ones (tricky).  We can stop only
+when
 
-We can stop only when
-- we have finally received all Reports that might contain newly allocated 
-  k-white and k-gray objects.  (All mutators are now k-black but Reports will
-  arrive later; this is just another case of wait-for-a-later epoch).  
+- every report that might carry k-work -- k-gray warm-up allocations,
+  barrier shades -- has been received; and
 - we can prove that no object will ever turn k-gray again.
 
-A write barrier can only turn a k-white object k-gray if it can reach that
-k-white object.
+The second is the snapshot induction.  A write barrier can only shade a
+k-white object that its mutator can reach.  For a reachable object to remain
+k-white after a trace has run to fixpoint, every pointer to it must have
+been overwritten before the trace read the containing slots -- and each such
+overwrite shaded some displaced object, which is reported k-work.  So either
+fresh k-work arrives, re-opening tracing at a cost proportional to that work
+(not to the heap), or no reachable k-white object exists.
 
-By epoch G, the collector has received the Reports containing the final k-gray
-allocated objects.  These Reports were made in the last epoch k-gray mutators
-could exist: epoch F+1, so G > F+2.
+The gates that decide "no more work is coming" are stage 3's, argued in 4.8:
+k-black acknowledged (since + 2), a full quiet window since the last
+received k-work, and at least one trace pass after that work.  The original
+version of this section derived a termination search over relaxed heap
+observations and scan histories -- the subtlest code in the collector, where
+an off-by-one lived -- and stage 3 deleted it in favor of report-stream
+arithmetic.
 
-After this point, all k-white and k-gray objects are known to the collector.
-For reachable object A to remain k-white after this pass, it must be reachable
-via an object B to which (all) pointer(s) were overwritten before the collector
-traced them.  These overwrites shaded that B gray, but the collector must
-have already seen that B was white, which means that the pointers must have
-been overwritten during (loosely) the scan.
-
-Note that at the end of each scan, the collector has visited every object
-(except newly allocated black objects) to see if it is k-gray or a root, traced
-(a snapshot of) their chidren (thus visiting these objects twice) and left 
-every object in a not k-gray state.  So to maintain reachable white objects
-requires the mutators to actively move things around during every scan, and
-even so it turns at least one white object gray.
-
-The termination condition:
-
-Recall the embargo result:
-
-The mutator is in epoch X
-The mutator performs various stores
-- nonatomic stores to `Report`s
-- atomic store-relaxed to `_gray`
-Finally
-- atomic store-relaxed to `_global_atomic_reports`
-- atomic store-release to `_global_epoch_state` of value X or X+1
-
-The collector load-acquires epoch Y
-Mutator epoch X's stores happen-before store of X+1 happens-before Y if X+1 < Y
-
-Now, suppose the collector has pinned epoch C.
-Other threads may be in C-1, C or C+1.
-Thus the collector may see writes from a mutator in C+1.
-When this mutator unpins C+1 it may write C+1 or C+2.
-
-Thus the collector must be in Y > C+2 before it can follow a Report pointer.
-Likewise a gray bit store-relaxed in epoch C+1 may load as soon as collector
-epoch C but only happens-before, and is thus guaranteed to load in, collector
-epoch C+3.
-
-So:
-
-The collector pins epoch E.
-It takes the report pointer and places it in embargo until E+3.
-Some older reports are still embargoed.
-It reads reports for which the embargo just lifted:
-- New black objects, which require no work.
-- Did shade gray
-The collector unpins.
-
-The collector scans.
-
-The collector pins epoch F >= E at the end of the scan.
-The collector unpins.
-Mutators may be in epochs up to F+1.
-Such a mutator writes F+2 when it unpins.
-
-The collector must be in G > F+2 to be sure of receiving that report.
-The collector then can't open it until G+3.
-
-In G+3, the collector has access to the reports of all mutators since E-3.
-If any report shading gray, we start another scan.
-
-If none of them did shade gray, we can terminate.
-
-This is very fiddly.  The saving grace is that
-(a) TSan is able to detect embargo errors
-(b) If there are any k-grays when we terminate, the sweep will detect them.
-
+The saving graces, in any version: TSan understands the release/acquire
+report channel natively, and if any k-gray survives to the sweep, the
+sweep's per-object check traps it.
 
 Eventually:
 
 Mutators are k-black.
-Objects are k-white or k-black.
+Objects are k-white or k-black; none are k-gray.
 New objects are allocated k-black.
-No objects are k-gray.
-Mutators only see k-black objects and perform no shades.
+Mutators reach only k-black objects and perform no k-shades.
 
-### 4.4 Delete k-whites
+### 4.4 Sweep: delete the k-whites
 
-The hard part is the termination above.
+Trigger: k is SWEEPING and the shared sweep walk runs (one walk per
+iteration serves every concurrently-sweeping bit; 4.10).  The walk visits
+the mature cohort plus the nursery cohorts eligible for some sweeping bit,
+and for each object:
 
-Collector scans all known objects
-- deletes k-white
-- retains k-black
-- asserts if k-gray (bug)
-New objects that have not yet been reported are all k-black.
-- asserts if did_shade (bug)
+- deletes it if it is white for ANY sweeping bit -- that bit is past its
+  quiet gate, so its whiteness alone proves permanent unreachability --
+  asserting the root count is zero (the standing S1 oracle);
+- asserts it is not gray for any sweeping bit (tracing termination said
+  none exist; one here is a bug);
+- otherwise strips any flagged clearing bits and retains it, now certified
+  marked for every bit the walk swept (the certificate 4.11 builds on).
 
-[scan loop, lines 521–538](../garbage_collected.cpp#L521-L538). Trigger:
-`_mask_for_deleting != 0` and `(before_gray & _mask_for_deleting) == 0`.
+Objects allocated after the sweep gate were born k-marked and are skipped
+wholesale via their cohort's min_epoch; objects not yet reported are
+untouchable by construction (they are in no cohort).
 
-### 4.5 Unpublish k-gray and k-black
+### 4.5 Publish k-white (unpublish k)
 
-Once we have deleted all known k-whites:
+Once the sweep has deleted the k-whites:
 
 All mutators are k-black.
 All objects are k-black.
-Mutators are making new black-objects.
-Mutators perform no shades.
+Mutators are making new k-black objects.
+Mutators perform no k-shades.
 
-At this point the k-bits have served their purpose and the collector no longer
-assigns meaning to them.
+At this point the k-bits have served their purpose and the collector no
+longer assigns meaning to them.  The collector publishes new colors with
+the k-bits clear.
 
-The collector publishes new values for gray and black, clearing the k-bits.
-
-Some mutators are k-black.
-Some mutators are k-white.
+Some mutators are k-black, some are k-white.
 New objects are k-black or k-white.
-k-black mutators shade k-white objects newly made by k-white mutators.
+k-black mutators shade (for k) objects newly made by k-white mutators;
+this is harmless.
 Objects of all k-colors exist.
 
 Eventually: the epoch advances by 2.
@@ -674,34 +692,35 @@ No mutators are shading k-white to k-gray.
 New objects are k-white.
 Objects of all k-colors exist.
 
-We still need to wait slightly longer until we can open the embargoed reports
-that contain the last k-gray objects.
+Reports from mutators that loaded their colors before the white publish can
+still arrive carrying k-marked allocations.  The strip horizon (4.10) flags
+their cohorts at receive, so those stale marks are stripped before the bit
+can recycle.
 
 ### 4.6 Clear k from all surviving objects
 
-All new embargoed objects are k-white.
-All k-gray and k-black objects are in the known set.
-
-Sweep the known set and set all objects to k-white.
-
-All objects, known and embargoed, are k-white.
-All mutators are k-white.
-No mutators are shading objects k-gray.
+Clearing rides the sweep (4.10).  At the WHITE_PUBLISHED -> CLEARING
+transition -- a bare $E \ge F + 2$, sufficient because after it no mutator
+can shade k, so no report can ever carry fresh k-work -- every cohort old
+enough to carry k-marks is flagged `needs_strip`, and the transition records
+the strip horizon against which late-arriving cohorts are flagged at
+creation.  Each subsequent sweep walk strips k from the survivors it visits
+and clears their cohorts' flags.  There is no dedicated clearing pass, no
+meaning-flip of the bit sense, and the mutator barrier stays one idempotent
+`fetch_or`.
 
 ### 4.7 Recycle k
 
-We can now remove bit k from the color_in_use set.
-
-With bit k unused and all objects k-white and all mutators k-white, we are back
-at the beginning.
-
----
+CLEARING -> UNUSED fires when no cohort holds k in `needs_strip`: every
+object is k-white again, all mutators are k-white, and bit k returns to the
+unused pool -- we are back at the beginning of 4.1.  The per-object color
+checks trap any object still carrying a supposedly-unused bit.
 
 ### 4.8 Stage-3 revision: immediate reports and exact termination
 
 *(Implemented 2026-07-12.  Supersedes the report-embargo machinery and the
-scan-history termination search of 4.3; the phase narrative above otherwise
-stands.)*
+scan-history termination search that 4.3 originally derived; the phase
+narrative above otherwise stands.)*
 
 **Immediate reports.** The report push is now a release (a local `expected`,
 so the successful CAS is the last write the mutator makes to the report),
@@ -732,7 +751,8 @@ arrivals into the gray wavefront at the top of each scan, promoting
 gray to black only for bits in blackening phases (4.1's no-early-black
 rule), routing each entry by the object's *current* `_gray` word.
 
-**Termination (replaces 4.3's search).** Bit k leaves BLACK_PUBLISHED when:
+**Termination (replaces the original 4.3 search).** Bit k leaves
+BLACK_PUBLISHED when:
 
 1. $E \ge \mathrm{since} + 2$: every mutator allocates k-black, and (by the
    lemma) every k-gray warm-up allocation has been received;
@@ -751,10 +771,22 @@ WHITE_PUBLISHED -> CLEARING likewise becomes a bare $E \ge F + 2$: after
 it, no mutator can shade k, so no report can ever carry fresh k-work
 (a flip requires a zero gray bit; post-sweep every object is k-black).
 
+**Cost accounting (why release/acquire here is free).**  On x86-64 a
+release CAS is the same instruction as a relaxed CAS; on AArch64 it is
+nearly free.  The publish runs once per quiescence per thread, not per
+heap operation, so it spends essentially none of the mutator-burden
+currency -- the relaxed-everything discipline predated that exchange-rate
+observation.  The shadelist push costs one predictable branch plus a push
+charged per white-to-gray flip, at most once per object per bit per cycle;
+at persistent-structure mutation rates it rounds to zero.  Bonus: the
+report channel became ordinary release/acquire edges that ThreadSanitizer
+understands natively, instead of epoch-theorem edges it cannot see.
+
 ### 4.9 Stage-4 revision: root and weak registries
 
-*(Implemented 2026-07-12.  The full pass still runs; its per-object count
-check is retained as the differential oracle for stage 5.)*
+*(Implemented 2026-07-12.  The full pass still ran at this stage; its
+per-object count check was retained as the differential oracle for stage
+5.)*
 
 **Roots.**  The 0 -> 1 root-count transition now (a) SHADES -- so rooting
 a k-white object is k-work that resets the quiet window, closing the
@@ -768,7 +800,7 @@ entries are grayed for every active collection and promoted into the
 wavefront.  In-cycle root-ups of already-marked objects need no registry
 help; root-ups of white objects are shades.  The rescue counter -- the
 pass's count check graying a rooted object the registries had not --
-reads zero across the full suite (6,405 passes); stage 5 requires that
+reads zero across the full suite (6,405 passes); stage 5 required that
 before deleting the count check.  The sweep now asserts count == 0 on
 every deleted object: rooting requires a reachable pointer, and nothing
 reachable is white at sweep, so this is the direct S1 oracle.
@@ -908,103 +940,9 @@ Wrinkles:
 Prerequisite (landed with the any-bit delete predicate in 4.10): a
 walk's survivors are uniformly certified for every bit the walk swept.
 
-## 5. Worst-case interleavings
-
-> *Skeleton — to be filled in by the author. For each scenario, draw the
-> per-thread timeline with epoch labels and bit values, and pinpoint the
-> rule from §4 that prevents the bug.*
-
-### 5.1 Leading mutator allocates k-white, trailing mutator shades k-gray
-
-The scenario alluded to in
-[the comment at lines 332–338](../garbage_collected.cpp#L332-L338).
-
-> TODO.
-
-### 5.2 Mutator shading races collector marking on `_gray`
-
-Both threads RMW `_gray`. The mutator's `fetch_or(k)` and the collector's
-`compare_exchange_weak` must compose correctly.
-
-> TODO: trivial because OR is commutative and idempotent — but write it out
-> to confirm no bit-loss is possible.
-
-### 5.3 Object's count drops to zero between root-removal and scan
-
-`Root::~Root` decrements count and shades on count==1
-([garbage_collected.hpp:246–263](../garbage_collected.hpp#L246-L263)). Mutator
-might re-root in between.
-
-> TODO: argue that the shade-on-zero plus the epoch-pinned root protocol
-> gives the same guarantees as a write barrier on the implicit roots set.
-
-### 5.4 K-bit reuse: cycle on bit 0 ends, new cycle on bit 0 begins
-
-> TODO: the recycle ordering (4.6 must complete before 4.1 picks up the bit).
-> Confirm that the `_color_in_use` mask is the gating mechanism and that
-> picking up a freshly-cleared bit can't see stale set-state in any object.
-
-### 5.5 Who advances the epoch?
-
-If a thread has pinned epoch E, we have said above that when it unpins the
-epoch it store-releases either E (redundantly) or E+1.  In the former case,
-some other thread has E-1 pinned; in the latter case, some other thread has
-E pinned.  But if E is the prior epoch (the epoch advanced while we had it
-pinned), and we were the last thread pinning it, we could correctly write
-E+2 when we unpin.
-
-This doesn't actually break anything because we rely on a load-acquire of E+2
-being enough to synchronize, and it is in this case also precisely because it
-is the first write of E+2.
-
-If the epoch is entirely unpinned, it could theoretically advance by any
-amount.
-
-We've assumed above that the collector unpins while scanning.  This lets the
-epoch system keep ticking over at "frame rate", keeps the bump allocation size
-proportional to one frame's worth of temporary memory, not N frames where
-N scales with the collection graph size.
-
 ---
 
-## 6. Open questions
-
-- **`mark = before_gray` vs `mark = after_gray`** in
-  `collector_scans`
-  ([lines 483–491](../garbage_collected.cpp#L483-L491)). The two
-  semantics differ when a root was added between the previous scan and this
-  one. Resolution should fall out of §4.4 — capture the decision here once
-  made.
-- **The 3-cycle wait in §4.3.** Confirm that exactly three cycles of
-  `_shade_history` are needed; document a counter-example for two cycles
-  (presumably one where a leading mutator stamps k-gray on allocation but
-  the trailing mutator's report hasn't been embargoed-out yet).
-- **Liveness of the wait branch.** §4 currently assumes the collector
-  eventually advances; the busy-spin (or pending sleep) at
-  [lines 256–262](../garbage_collected.cpp#L256-L262) is the controlling
-  factor. Out of scope for this document, but cross-link if a separate
-  liveness analysis is written.
-- **Uint16 wrap on epoch differences.** ANSWERED EMPIRICALLY (2026-07-12):
-  it was not sufficient.  A loaded 100k-entity cycle spanned 8000+ epochs
-  (mutators quiesce at frame rate while collector iterations stretch to
-  seconds), pushing stored-epoch comparisons -- cohort min_epoch, sweep
-  gates, quiet timestamps -- past the +-0x4000 window and firing the
-  cyc16 locality assert on two threads.  Fixed by widening the epoch to
-  32 bits (cyc32_t, window +-2^30); the packed Service::State keeps its
-  single 64-bit word as epoch:32, pins_current:15, waiting:1,
-  pins_prior:16, with the pin-count overflow trap moved to 0x7FFF.
-- **Is there any benefit to the k-collections?** If so, how many?  If four are 
-  enough be just need a single byte.  I assert that it's not actually the source
-  of the complexity, but it doesn't help.  Sure is cool though.
-- **Is the reasoning about the range of time the atomic gray bits can show up 
-  over actually valid?**  Somehow it feels different from acquire-release of
-  nonatomic writes, but... maybe it isn't.
-- **Tests and testability**
-
-
----
-
-## 6.5 Throughput model
+## 5. Throughput model
 
 *(Stage-1 dashboard, 2026-07-12: per-pass `alloc+=`/`shaded+=` volumes and
 per-cycle `passes=P in T` lines.)*
@@ -1079,7 +1017,9 @@ by ~3 for negligible float cost.  That is the next lever; 4.11's
 certificate cohorts stay in reserve (sweep is ~4% of the cycle), and
 parallel trace remains unneeded at this scale.
 
-## 7. Literature comparison
+---
+
+## 6. Literature comparison
 
 A pass at locating this design in the published GC literature.  Names and
 claims are best-effort; cross-check before quoting.
@@ -1088,10 +1028,10 @@ claims are best-effort; cross-check before quoting.
 
 - Concurrent mark-sweep, non-moving, non-generational.
 - Tricolor (white/gray/black), with the twist that gray and black are
-  encoded as *separate bits per "k-collection"* — supporting up to 16
+  encoded as *separate bits per "k-collection"* -- supporting up to 16
   overlapping concurrent collections distinguished by bit position.  Most
   schemes have one collection at a time.
-- **Yuasa-style deletion barrier** — shades the displaced pointer on
+- **Yuasa-style deletion barrier** -- shades the displaced pointer on
   overwrite, via unconditional `fetch_or` on the gray bit (idempotent on
   already-non-white objects, so equivalent to Yuasa's classic conditional
   "if white, shade gray").
@@ -1101,9 +1041,9 @@ claims are best-effort; cross-check before quoting.
   at its own next pin/repin boundary, not at a synchronized handshake.
   The collector waits *enough epochs* before relying on a phase change
   being globally visible.
-- An "embargo" (3-epoch delay) on reading mutator reports gives the
-  per-mutator stores time to be globally visible before the collector
-  dereferences them.
+- Report publication is an ordinary release/acquire channel (since stage
+  3, 4.8); the epoch system's dereference embargo remains for bump-slab
+  rotation and for bounding the raggedness of color publication.
 
 ### DLG (Doligez-Leroy-Gonthier, 1993/1994)
 
@@ -1122,7 +1062,7 @@ allocation.
 
 What we differ on:
 
-- **Phase synchronization mechanism.**  DLG uses synchronous handshakes —
+- **Phase synchronization mechanism.**  DLG uses synchronous handshakes --
   every mutator must acknowledge a phase change before the collector
   advances.  Each thread blocks at the handshake until released.  Our
   scheme is **ragged**: the phase publication is a single atomic store,
@@ -1170,9 +1110,10 @@ safepoint-vs-epoch implementation.
 Our epoch service has the same shape as Fraser's epoch-based reclamation
 (EBR), popularized by Aaron Turon's *Lock-freedom without garbage
 collection* (2015) and the Rust `crossbeam-epoch` crate: pin/unpin,
-bounded retirement, advance-when-quiescent.  We use it for both the
-embargo on mutator reports and the synchronization mechanism for phase
-transitions.
+bounded retirement, advance-when-quiescent.  We use it for the
+phase-transition raggedness bounds and for the epoch allocator's slab
+retirement; the mutator reports originally rode it too, before becoming
+a plain release/acquire channel (4.8).
 
 This is what fuses the DLG-style tricolor with the Pizlo-style ragged
 safepoints:
@@ -1194,125 +1135,116 @@ N-epoch embargo replacing the usual hazard-pointer / quiescent-state
 retirement).
 
 The k-collection multi-bit overlap is a structural detail we can't trace
-to a specific paper but feels like an unwritten generalization —
+to a specific paper but feels like an unwritten generalization --
 multiple instances of the otherwise-standard scheme, packed into the
 same gray/black word at distinct bit positions.
 
 ### Bibliography of close cousins
 
 - Doligez & Leroy, *A Concurrent, Generational Garbage Collector for a
-  Multithreaded Implementation of ML*, POPL 1993 — primary DLG.
+  Multithreaded Implementation of ML*, POPL 1993 -- primary DLG.
 - Doligez & Gonthier, *Portable, Unobtrusive Garbage Collection for
-  Multiprocessor Systems*, POPL 1994 — the "unobtrusive" handshake
+  Multiprocessor Systems*, POPL 1994 -- the "unobtrusive" handshake
   formulation closest in spirit to our ragged style (still synchronous
   though).
 - Yuasa, *Real-time garbage collection on general-purpose machines*,
-  Journal of Systems and Software, 1990 — the deletion barrier we use.
+  Journal of Systems and Software, 1990 -- the deletion barrier we use.
 - Pizlo et al., *Schism: Fragmentation-Tolerant Real-Time Garbage
-  Collection*, PLDI 2010 — first use of "ragged safepoints"; closest
+  Collection*, PLDI 2010 -- first use of "ragged safepoints"; closest
   spirit to our phase-transition mechanism.
-- Pizlo, *Fil's Unbelievable Garbage Collector* (https://fil-c.org/fugc) —
+- Pizlo, *Fil's Unbelievable Garbage Collector* (https://fil-c.org/fugc) --
   modern descendant; explicit DLG comparison; uses Dijkstra not Yuasa.
 - Vechev, Yahav & Bacon, *Derivation and Evaluation of Concurrent
-  Collectors*, ECOOP 2005 — formal taxonomy that classifies our scheme as
+  Collectors*, ECOOP 2005 -- formal taxonomy that classifies our scheme as
   an instance of "incremental snapshot-at-the-beginning," close to but
   distinct from incremental update.
-- Pirinen, *Barrier techniques for incremental tracing*, ISMM 1998 —
+- Pirinen, *Barrier techniques for incremental tracing*, ISMM 1998 --
   classic survey separating "what is preserved" by a barrier from "how"
   it preserves it.
-- Österlund, *Block-free concurrent GC: stack scanning and copying*,
-  ISMM 2016 — modern asynchronous-handshake stack scanning; ZGC parts of
+- Osterlund, *Block-free concurrent GC: stack scanning and copying*,
+  ISMM 2016 -- modern asynchronous-handshake stack scanning; ZGC parts of
   the lineage.
 - Turon, *Lock-freedom without garbage collection* (2015,
-  http://aturon.github.io/tech/2015/08/27/epoch/) — accessible
+  http://aturon.github.io/tech/2015/08/27/epoch/) -- accessible
   epoch-based reclamation explainer; close to our epoch service shape.
 - Jones, Hosking & Moss, *The Garbage Collection Handbook*, 2nd ed.
-  2023 — the design lineage by direct admission of the author: pick the
+  2023 -- the design lineage by direct admission of the author: pick the
   options that place the least compute burden on the mutator.
 
 ---
 
-## 8. Future directions
+## 7. Worst-case interleavings (unfinished)
 
-### 8.1 Stronger report ordering + gray lists (one staged redesign)
+A scaffold that predates the stage 3-5 revisions, kept as exercises: for
+each scenario, draw the per-thread timeline with epoch labels and bit
+values, and pinpoint the rule from section 4 that prevents the bug.  Two
+earlier scenarios here -- the root count dropping to zero between
+root-removal and scan, and k-bit reuse seeing stale set-state -- were
+answered outright by 4.9 (shade on both count edges + the registry) and
+4.10 (the strip horizon) and have been retired.
 
-Two changes that are individually attractive and compose into a large
-simplification.  Recorded 2026-07 after working the termination
-off-by-one (the `+1` in the `_shade_most_recent` scan-invalidation
-check) and comparing the design against Crossbeam and its successors.
+### 7.1 Leading mutator allocates k-white, trailing mutator shades k-gray
 
-**(a) Publish reports with release/acquire instead of relaxed.**
+> TODO.  The machinery that answers it: warm-up deferral (4.10) and the
+> completeness lemma (4.8).
 
-Today the report channel is relaxed at both ends and relies entirely on
-the epoch theorem for visibility: reports received at collector epoch F
-are opened at `E >= F + 3`, and `_finalized = F - 2`, so `_finalized`
-trails the current epoch by ~5.  Every `_finalized`-gated phase
-transition inherits that lag, several times per cycle; it is a large
-fraction of total cycle length, and cycle length is the float bound
-(dead-but-unreclaimed memory ~ allocation rate x cycle length).
+### 7.2 Mutator shading races collector marking on `_gray`
 
-The mutator's publish CAS and the collector's exchange of
-`_global_atomic_reports_head` are natural release/acquire points: making
-the publish CAS release-on-success and the exchange acquire lets the
-collector open reports at receipt.  The -2 completeness lag (raggedness:
-a mutator pinned at F-1 may not have published yet) is a counting
-argument and remains; the +3 dereference embargo goes.  `_finalized`
-lag drops from ~5 epochs to ~2, and cycles shrink accordingly.
+Both threads RMW `_gray`. The mutator's `fetch_or(k)` and the collector's
+`compare_exchange_weak` must compose correctly.
 
-Cost accounting: on x86-64 a release CAS is the same instruction as a
-relaxed CAS; on AArch64 it is nearly free.  The operation runs once per
-quiescence per thread, not per heap operation, so this spends
-essentially zero mutator-burden currency.  The relaxed-everything
-discipline was priced before the hardware exchange rate was known.
-Bonus: the report channel becomes ordinary release/acquire edges that
-ThreadSanitizer understands natively, instead of epoch-theorem edges it
-cannot see.
+> TODO: trivial because OR is commutative and idempotent, and the
+> collector's CAS retries on interference -- but write it out to confirm
+> no bit-loss is possible.
 
-The epoch theorem remains load-bearing where there is no natural release
-point: bump-slab rotation and the color-publication raggedness bounds
-keep their embargo reasoning.
+---
 
-**(b) Report lists of shaded objects (DLG-style), not just did-shade
-bits.**
+## 8. Open questions
 
-`garbage_collected_shade` already computes `did_shade = gray & ~before`;
-appending the pointer to a thread-local bag when `did_shade != 0` costs
-one predictable branch plus a push charged per white-to-gray transition
-(at most once per object per bit per cycle), on machinery identical to
-the existing allocations channel in `Report`.  With current mutation
-rates (persistent structures, few barriers) the mutator cost rounds to
-zero.
+- **Idle behavior.**  When there is nothing to collect, the loop still
+  runs a cycle every few epochs (admission is eager: each pass starts the
+  first unused bit).  The planned admission cap (section 9) subsumes idle
+  throttling.  Liveness also assumes mutators keep repinning -- L2's
+  practical caveat.
+- **How many overlapping collections?**  k = 16 is pipeline depth.
+  Measured depth under load is 5-6 with eager admission, while ~2
+  suffices to hide the handshake latency (section 5); if four bits are
+  enough, the color words shrink to a byte.  The overlap is not the
+  source of the complexity, but it doesn't help.  Sure is cool though.
+- **Is the reasoning about the range of epochs over which relaxed gray-bit
+  stores can be observed actually valid?**  Somehow it feels different
+  from acquire-release of nonatomic writes, but maybe it isn't.  (Less
+  now rides on it: shades travel in the release/acquire reports, and the
+  heap gray word is confirmation rather than the primary channel.)
+- **Tests and testability.**  What exists: the per-object color checks
+  (Debug) validate every visited object's word against its bits' phases;
+  the sweep's count == 0 delete assert is the standing S1 oracle;
+  `gc_root_churn` and the churn tests are tripwires for the registry and
+  pin-continuity contracts; TSan sees the report channel natively
+  (fences over release sequences still need the annotation rule).  What
+  is missing: a stress that deliberately saturates all 16 bits, and
+  adversarial-scheduler coverage of the ragged windows.
 
-What it buys is termination, in both senses:
+---
 
-- Latency: today each reported shade invalidates the in-flight
-  validation scan and forces another full O(heap) pass; the adversarial
-  tail (see the counterexample in section 1) is O(first-shades) full
-  scans.  With lists, a late shade is consumed as a targeted trace of
-  one subtree, on passes the collector was making anyway.
-- Simplification: the `_scan_history` / `_shade_most_recent` /
-  before-after validation apparatus exists solely to answer "did that
-  scan's relaxed loads observe every shade?"  With explicit lists,
-  receipt of the report *is* observation; termination for bit k becomes
-  report-stream arithmetic -- all reports through epoch X opened, k-lists
-  empty over a ~2-epoch quiet window -- with no heap-visibility
-  reasoning at all.  The subtlest code in the collector (where the
-  off-by-one lived) deletes.
+## 9. Future directions
 
-Scaling: the bit-report design costs (dirty epochs x heap) in extra
-passes; lists cost O(shaded subtrees), independent of heap size, and
-they feed the graystack directly, which is the natural work queue if
-tracing ever goes parallel.
+- **Cycle admission cap** -- the next lever (section 5): do not start a
+  new bit while about two are in flight.  Divides mark work by ~3 at the
+  100k load for negligible float cost, and subsumes idle throttling when
+  the allocation rate is zero.
+- **Certificate-gated cohorts** -- 4.11, in reserve until sweep bandwidth
+  shows up hot (it is ~4% of a cycle today).
+- **Orphaned-slab handoff** -- a slab field on a thread's final `Report`
+  (openable at $E \ge F + 3$, exactly the rotation bound), the crossbeam
+  SealedBag analog; replaces leaking the last bump slabs at thread exit
+  and would also yield a general schedule-after-epoch.
+- **Parallel trace** -- the graystack is already the natural work queue;
+  not needed at 10x the design target on one thread.
+- **Partial scans** -- valued for making the epoch cadence
+  heap-size-invariant; deferred while heaps are modest.
 
-**Staging:** land as one redesign in the differential-oracle style: add
-the shade list to `Report` and a new report-arithmetic termination
-detector beside the existing scan-history one, assert the new detector
-never fires earlier than the old one validates, run both for a while,
-then delete the old apparatus and take the acquire/release channel in
-the same landing.  Less code, shorter cycles, smaller float, smaller
-proof.
-
-### 8.2 What this deliberately does not buy: stalled-thread robustness
+### 9.1 Non-goal: stalled-thread robustness
 
 The post-Crossbeam reclamation literature (interval/era-based
 reclamation, Hyaline and its descendants) makes a stalled reader retain
@@ -1338,4 +1270,3 @@ The epoch is the collector's clock as well as its grace period; both
 assume every participant keeps ticking.  Diagnosis of violations, not
 tolerance of them, is the chosen posture (see `ThreadPublic` and the
 drain-loop pin-continuity contract in `global_work_queue.cpp`).
-
