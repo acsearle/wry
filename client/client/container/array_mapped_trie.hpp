@@ -142,6 +142,18 @@ namespace wry {
             return !has_children();
         }
 
+        // Value form of the debug capacity, for feeding the bounds asserts
+        // in the compressed_array functions.  An NDEBUG build has no field,
+        // and the asserts that would consume the value are gone there too,
+        // so any value serves; "unbounded" is the honest stand-in.
+        size_t debug_capacity() const {
+#ifndef NDEBUG
+            return _debug_capacity;
+#else
+            return ~(size_t)0;
+#endif
+        }
+
 
 
 
@@ -431,7 +443,7 @@ namespace wry {
 #ifndef NDEBUG
             ++(new_node->_debug_count);
 #endif
-            compressed_array_insert_for_index(new_node->_debug_capacity,
+            compressed_array_insert_for_index(new_node->debug_capacity(),
                                               new_node->_bitmap,
                                               new_node->_children,
                                               get_index_for_key(key),
@@ -487,7 +499,7 @@ namespace wry {
 #endif
             bool leaf_did_assign = false;
             if (has_values()) {
-                leaf_did_assign = compressed_array_insert_or_exchange_for_index(new_node->_debug_capacity,
+                leaf_did_assign = compressed_array_insert_or_exchange_for_index(new_node->debug_capacity(),
                                                                                 new_node->_bitmap,
                                                                                 new_node->_values,
                                                                                 index,
@@ -503,7 +515,7 @@ namespace wry {
                     new_child = make_singleton(key, value);
                 }
                 ArrayMappedTrie const* _Nullable _ = nullptr;
-                (void) compressed_array_insert_or_exchange_for_index(new_node->_debug_capacity,
+                (void) compressed_array_insert_or_exchange_for_index(new_node->debug_capacity(),
                                                                      new_node->_bitmap,
                                                                      new_node->_children,
                                                                      index,
@@ -858,7 +870,7 @@ namespace wry {
 #ifndef NDEBUG
             ++_debug_count;
 #endif
-            compressed_array_insert_for_index(_debug_capacity,
+            compressed_array_insert_for_index(debug_capacity(),
                                               _bitmap,
                                               _children,
                                               get_index_for_key(key),

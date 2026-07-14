@@ -221,7 +221,8 @@ to synchronize, and it is in this case too, precisely because ours is the
 first write of $E+2$.  If the epoch is entirely unpinned, it can in principle
 advance by any amount.
 
-The collector unpins while it works.  This keeps the epoch ticking at mutator
+The collector repins periodically while it works.  This keeps the 
+epoch ticking at mutator
 ("frame") cadence during long scans -- which keeps the epoch allocator's bump
 slabs sized to one frame's worth of temporaries rather than $N$ frames' --
 and lets the phase gates of section 4 make progress mid-pass.
@@ -344,11 +345,13 @@ naming):
 - **L2 -- Phase transitions eventually fire.** Practical, not adversarial.
   Termination of tracing requires a quiet window (4.8), and every k-flip a
   mutator performs re-opens it, so an adversarial mutator that keeps
-  unlinking not-yet-traced objects can extend a cycle without bound.  What
+  unlinking not-yet-traced objects can extend a cycle a number of times bounded
+  by the number of k-white objects; no new k-white objects are being created, and
+  at least one must be shaded k-gray each unlink to prevent the transition.  What
   the stage-3 shadelists changed is the price: a late shade is consumed as
   a targeted trace of one subtree on a pass the collector was making
   anyway, where the original design re-ran a full O(heap) validation scan
-  per late shade (an adversarial O(N^2)).  We accept the unbounded
+  per late shade (an adversarial O(N^2)).  We accept the long
   adversarial tail; real mutators quiesce, and cycles converge in a round
   or two.
 
@@ -368,15 +371,24 @@ between construction and registration -- and that window is closed by the
 report mechanism, so post-registration the collector has exclusive access.
 This is the basis for **S3**.
 
+A non-zero `_count` indicates membership in the reference-counted root set.
+Unlike shared_ptr, we don't delete the object on zero count, and thus we don't
+need release ordered decrements or a final acquire.  Instead on zero we shade
+the object with the write barrier to indicate it _was_ reachable, and hand over
+responsibility to the tracing collector.   
+
 #### 3.3.2 Debug-only header fields
 
 `NDEBUG`-gated fields on the header (`_debug_allocation_gray`,
 `_debug_allocation_black`, `_debug_allocation_epoch`) record the
 allocation-time colors and epoch for the per-object invariant checks and
 crash forensics.  They are written once at construction, are never
-synchronized, and carry no correctness role; Release builds do not have
-them.  Do not generalize from their access patterns to production
-memory-ordering choices.
+synchronized, and carry no correctness role.  Note that no shipped
+configuration defines NDEBUG (verified 2026-07-14), so every build we
+run -- Release included -- carries the fields and runs the checks; an
+NDEBUG build compiles (kept honest by syntax checks) but has never been
+exercised.  Do not generalize from these fields' access patterns to
+production memory-ordering choices.
 
 #### 3.3.3 Global atomics
 
@@ -388,7 +400,7 @@ memory-ordering choices.
 The color word is relaxed at both ends; its cross-thread visibility rides the
 epoch system alone, with the raggedness bounds used throughout section 4.
 
-The report head is an ordinary release/acquire channel (since stage 3, 4.8).
+The report head is an ordinary release/acquire channel (since "stage 3", 4.8).
 The successful publish CAS is the last write the mutator makes to the report,
 so the collector's acquiring exchange makes the report contents -- and
 everything the mutator wrote before publishing, including the `_gray` words
@@ -412,7 +424,7 @@ collector stored while pinned at $E \le F - 2$, and may additionally see
 stores as late as $F + 1$.  Raggedness is therefore bounded at about two
 epochs, and the collector's gates wait accordingly.
 
-#### 3.3.5 The collector receive
+#### 3.3.5 The collector receives reports
 
 Each loop iteration begins by exchanging out the report list (acquire) and
 merging it: the batch's allocations become a new cohort (one per receive,
@@ -788,12 +800,9 @@ understands natively, instead of epoch-theorem edges it cannot see.
 per-object count check was retained as the differential oracle for stage
 5.)*
 
-**Roots.**  The 0 -> 1 root-count transition now (a) SHADES -- so rooting
-a k-white object is k-work that resets the quiet window, closing the
-termination gate over late root-ups exactly as it closes over Yuasa
-flips -- and (b) files the object, through the report channel, into a
-collector-side root registry.  The registry answers the one question
-transitions cannot: what was already rooted when a cycle started.  It is
+**Roots.**  The 0 -> 1 root-count transition now files the object, through the
+report channel, into a collector-side root registry.  The registry answers a
+question transitions cannot: what was already rooted when a cycle started.  It is
 walked at the top of every scan: entries observed with count zero are
 dropped (the 1 -> 0 drop shaded; a re-root files a fresh event), and live
 entries are grayed for every active collection and promoted into the
@@ -818,6 +827,11 @@ routine, so any test asserting collected-ness by address inequality is
 invalid (the interning test now asserts on emplaced-vs-upgraded instead;
 ASan's free-quarantine had been masking this in Debug).
 
+TODO: Manipulation of the weak table is the only operation requiring the
+collector to create GC objects and thus requiring a pinned epoch.  We could
+be unpinned during other operations, and trivially pin-unpin to establish
+orderings.
+
 ### 4.10 Stage-5 revision: cohorts; the full pass retired
 
 *(Implemented 2026-07-12.  The collector loop is now: receive, advance
@@ -834,10 +848,16 @@ skipped by k's sweep.  Visited cohorts fold into the single mature cohort
 -- their birth order is older than every future gate, so the distinction
 is spent -- and the deque stays a handful of entries long.
 
+TODO: (4.11) The birth order is a less precise way of ordering cohorts than the
+mutator's allocation color; the distinction that matters is "known to be
+k-black" and "may not be k-black".  If the mutator is allocating k-black, during
+a reporting period, all new allocations are k-black and don't need to be k-swept.   
+
 **Sweep.**  One walk per cycle (shared by every concurrently-SWEEPING
 bit) visits mature plus the eligible nursery prefix: deletes whites
 (asserting count == 0), strips every cohort-flagged CLEARING bit from
-survivors, and folds.  The delete predicate is any-bit: white for SOME
+survivors, and folds the survivors into the mature cohort.  
+The delete predicate is any-bit: white for SOME
 sweeping bit suffices, because that bit is past its quiet gate and its
 whiteness alone proves permanent unreachability -- blackness for a
 concurrently sweeping bit records reachability only at an older snapshot
@@ -847,6 +867,18 @@ consequence used by 4.11: surviving a walk certifies the object marked
 for every bit the walk swept.  SWEEPING -> WHITE requires the walk;
 WEAK's per-iteration registry walk (whose doom test mirrors the any-bit
 predicate) and the trace's quiet accounting are unchanged.
+
+TODO: (4.11) If we k-sweep, and j-gray is published but we but are not yet j-black-quiescent,
+k-black survivors may be observed to be j-gray or j-black.
+(k-white and j-nonwhite object is forbidden when both bits are live and j is after k in publication order.)
+j-nonwhiteness at this point guarantees surviving the j-sweep, but j-whiteness does not yet guarantee unreachability.
+The notion of a mature cohort thus discards useful information that we don't
+need to sweep such objects; instead we should maintain up to 16 cohorts that
+group the objects by the oldest live bit that is not known to be non-white.
+When doing a sweep of quiescent bits, we have one cohort of each bit, which we
+sweep and distribute to the cohorts of non-quiesecent bits according to the
+survivor's oldest live white bit.
+ 
 
 **Clearing rides sweep.**  On WHITE -> CLEARING, k is flagged
 (needs_strip) on every cohort old enough to carry it; the next sweep walk
@@ -936,6 +968,17 @@ Wrinkles:
    cycles, spending the 16-bit headroom faster.  Mitigate with a
    strip-only walk of flagged-but-skipped cohorts when UNUSED bits run
    low, or with wider color words.
+   
+TODO:  We argue (somewhere?) that we want to limit the number of cycles in
+flight, so this delayed recycling is less alarming.  It may even be helpful.
+
+TODO: We need to route every survivor to a cohort based on
+- subset of gray bits (live not quiet)
+- first 0 bit in that subset under an arbitrary ordering
+This needs to be somewhat efficient since it gets run per survivor.
+Not an obvious bithack for it.  If we constrain the bits to live and die in strict
+bit-position order--not obviously a problem, and it might be also good for our
+sanity--it becomes a rotate and ffs
 
 Prerequisite (landed with the any-bit delete predicate in 4.10): a
 walk's survivors are uniformly certified for every bit the walk swept.
@@ -1088,7 +1131,7 @@ advances, different implementation (Pizlo uses callbacks at safepoints;
 we use a counted atomic state that mutators read at pin/repin).
 
 Pizlo's most current work, FUGC ("Fil's Unbelievable Garbage Collector"),
-describes itself as a "grey-stack Dijkstra accurate non-moving"
+describes itself as a "gray-stack Dijkstra accurate non-moving"
 collector using "soft handshakes (ragged safepoints)".  FUGC explicitly
 cites DLG as antecedent and Schism/Fiji CMR as Pizlo's prior work.  It
 uses:

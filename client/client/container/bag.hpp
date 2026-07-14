@@ -98,35 +98,27 @@ namespace wry {
         
         Node* _head = nullptr;
         Node* _tail = nullptr;
-#ifndef NDEBUG
-        size_t _debug_size = 0;
-#endif // NDEBUG
+        size_t _size = 0;
 
         void swap(SinglyLinkedListOfInlineStacksBag& other) {
             using std::swap;
             swap(_head, other._head);
             swap(_tail, other._tail);
-#ifndef NDEBUG
-            swap(_debug_size, other._debug_size);
-#endif // NDEBUG
+            swap(_size, other._size);
         }
 
         // constexpr constructor permits use as a constinit thread_local
         constexpr SinglyLinkedListOfInlineStacksBag()
         : _head(nullptr)
         , _tail(nullptr)
-#ifndef NDEBUG
-        , _debug_size(0)
-#endif // NDEBUG
+        , _size(0)
         {
         }
 
         constexpr SinglyLinkedListOfInlineStacksBag(poisoned_t)
         : _head((Node*)alignof(Node*)) // <-- probably doesn't work?
         , _tail(nullptr)
-#ifndef NDEBUG
-        , _debug_size(0)
-#endif // NDEBUG
+        , _size(0)
         {
         }
 
@@ -135,38 +127,34 @@ namespace wry {
         SinglyLinkedListOfInlineStacksBag(SinglyLinkedListOfInlineStacksBag&& other)
         : _head(std::exchange(other._head, nullptr))
         , _tail(std::exchange(other._tail, nullptr))
-#ifndef NDEBUG
-        , _debug_size(std::exchange(other._debug_size, 0))
-#endif // NDEBUG
+        , _size(std::exchange(other._size, 0))
         {
         }
         
         ~SinglyLinkedListOfInlineStacksBag() {
             assert(_head == nullptr);
             assert(_tail == nullptr);
-#ifndef NDEBUG
-            assert(_debug_size == 0);
-#endif // NDEBUG
+            assert(_size == 0);
         }
                 
         SinglyLinkedListOfInlineStacksBag& operator=(const SinglyLinkedListOfInlineStacksBag&) = delete;
         SinglyLinkedListOfInlineStacksBag& operator=(SinglyLinkedListOfInlineStacksBag&&) = delete;
 
         
-#ifndef NDEBUG
-        bool debug_is_empty() const {
-            return !_debug_size;
+        // The count is maintained, not computed, so these are production
+        // API (the collector's receive and sweep-fold branch on emptiness).
+        // Note that _head != nullptr does not imply nonempty: a pop can
+        // leave an exhausted node in place.
+        bool is_empty() const {
+            return !_size;
         }
-        
-        size_t debug_size() const {
-            return _debug_size;
+
+        size_t size() const {
+            return _size;
         }
-#endif // NDEBUG
 
         void push(T value) {
-#ifndef NDEBUG
-            ++_debug_size;
-#endif // NDEBUG
+            ++_size;
             while (!_head || !_head->try_push(std::move(value))) {
                 Node* node = new Node;
                 node->_next = _head;
@@ -182,9 +170,7 @@ namespace wry {
                 if (!_head)
                     return false;
                 if (_head->try_pop(victim)) {
-#ifndef NDEBUG
-                    --_debug_size;
-#endif // NDEBUG
+                    --_size;
                     return true;
                 }
                 delete std::exchange(_head, _head->_next);
@@ -203,18 +189,14 @@ namespace wry {
                     _head = std::exchange(other._head, nullptr);
                 }
                 _tail = std::exchange(other._tail, nullptr);
-#ifndef NDEBUG
-                _debug_size += std::exchange(other._debug_size, 0);
-#endif // NDEBUG
+                _size += std::exchange(other._size, 0);
             }
         }
         
         void leak() {
             _head = nullptr;
             _tail = nullptr;
-#ifndef NDEBUG
-            _debug_size = 0;
-#endif // NDEBUG
+            _size = 0;
         }
         
         struct const_iterator {

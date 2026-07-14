@@ -94,7 +94,7 @@ namespace wry {
     }
     
     template<typename Bitmap, typename T>
-    void compressed_array_insert_for_index(size_t debug_capacity,
+    void compressed_array_insert_for_index([[maybe_unused]] size_t debug_capacity,
                                            Bitmap& bitmap,
                                            T* _Nonnull array,
                                            int index,
@@ -125,7 +125,7 @@ namespace wry {
     }
     
     template<typename Bitmap, typename T>
-    bool compressed_array_insert_or_exchange_for_index(size_t debug_capacity,
+    bool compressed_array_insert_or_exchange_for_index([[maybe_unused]] size_t debug_capacity,
                                                        Bitmap& bitmap,
                                                        T* _Nonnull array,
                                                        int index,

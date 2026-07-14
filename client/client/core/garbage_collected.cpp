@@ -234,7 +234,7 @@ namespace wry {
 
     void _garbage_collected_root_up(GarbageCollected const* ptr) {
         assert(ptr);
-        garbage_collected_shade(ptr);
+        // garbage_collected_shade(ptr);
         _thread_local_rooted_objects.push(ptr);
     }
 
@@ -622,19 +622,19 @@ namespace wry {
                 // pass-lengthened iterations.)
                 assert(H <= E + 1);
 
-                if (!head->allocations.debug_is_empty()) {
+                if (!head->allocations.is_empty()) {
                     // The report covers allocations since its publisher's
                     // previous quiescence: epoch H - 1 at the earliest.
                     Epoch lower = H - 1;
                     incoming.min_epoch = any_allocations
                         ? std::min(incoming.min_epoch, lower) : lower;
                     any_allocations = true;
-                    size_t n = head->allocations.debug_size();
+                    size_t n = head->allocations.size();
                     _allocated_since_scan += n;
                     _heap_objects += n;
                     incoming.objects.splice(std::move(head->allocations));
                 }
-                _shaded_since_scan += head->shaded.debug_size();
+                _shaded_since_scan += head->shaded.size();
                 _shaded_arrivals.splice(std::move(head->shaded));
                 _root_registry.splice(std::move(head->rooted));
                 _weak_registry.splice(std::move(head->weak_registrations));
@@ -1152,6 +1152,9 @@ namespace wry {
                         _graystack.push(object);
                     }
                     keep.push(object);
+                    if (++counter > 1000) {
+                        mutator_repin(); counter = 0;
+                    }
                 }
                 _root_registry.splice(std::move(keep));
             }
@@ -1215,6 +1218,9 @@ namespace wry {
                         && (reference_count == 0);
                     if (!doomed)
                         keep.push(object);
+                    if (++counter > 1000) {
+                        mutator_repin(); counter = 0;
+                    }
                 }
                 _weak_registry.splice(std::move(keep));
             }
@@ -1238,8 +1244,8 @@ namespace wry {
                        std::exchange(_marked_since_line, size_t{0}),
                        std::exchange(_allocated_since_scan, size_t{0}),
                        std::exchange(_shaded_since_scan, size_t{0}),
-                       _root_registry.debug_size(),
-                       _weak_registry.debug_size(),
+                       _root_registry.size(),
+                       _weak_registry.size(),
                        _heap_objects,
                        std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
             }
@@ -1343,7 +1349,7 @@ namespace wry {
                 }
             }
             _cohorts = std::move(keep);
-            if (!folded.objects.debug_is_empty())
+            if (!folded.objects.is_empty())
                 _cohorts.push_front(std::move(folded));
 
             // One walk serves every currently-sweeping bit.
