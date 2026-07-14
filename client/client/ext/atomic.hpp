@@ -156,6 +156,13 @@ return std::bit_cast<T>(__atomic_exchange_n(&value, std::bit_cast<U>(desired), _
         MAKE_WRY_ATOMIC_EXCHANGE(acq_rel)
         MAKE_WRY_ATOMIC_EXCHANGE(seq_cst)
         
+// std::atomic semantics: `expected` is written only on FAILURE, with the
+// observed value.  The builtin leaves expected2 untouched on success, so
+// an unconditional write-back would be value-identical -- but it is a
+// real store, and when `expected` aliases memory other threads may read
+// once the CAS publishes (the Treiber-push idiom, cas(node->next, node)),
+// a post-publication store is a data race.  (TSan-caught 2026-07-12 when
+// immediate report reads removed the epoch embargo that had hidden it.)
 #define MAKE_WRY_ATOMIC_COMPARE_EXCHANGE(strength, success, failure)\
 bool compare_exchange_##strength##_##success##_##failure(T& expected, T desired) noexcept {\
 U expected2{std::bit_cast<U>(expected)};\
@@ -165,7 +172,8 @@ std::bit_cast<U>(desired),\
 #strength[0]=='w',\
 _WRY_ATOMIC_##success,\
 _WRY_ATOMIC_##failure)};\
-expected = std::bit_cast<T>(expected2);\
+if (!result)\
+    expected = std::bit_cast<T>(expected2);\
 return result;\
 }
 

@@ -295,14 +295,9 @@ namespace wry {
         };
         // Publish with release so the collector's acquire-exchange reads the
         // report -- and the _gray words of the objects shaded before it --
-        // immediately, with no epoch embargo.
-        //
-        // `expected` must be a LOCAL, not desired->next itself: the house
-        // compare_exchange writes back through `expected` even on SUCCESS
-        // (std::atomic writes only on failure), and a post-publication write
-        // to desired->next is a plain store racing the collector's immediate
-        // acquire-read of that field.  With a local, desired->next is
-        // written only before each attempt.
+        // immediately, with no epoch embargo.  Standard push shape:
+        // desired->next is written only before each attempt, never after
+        // the successful (publishing) exchange.
         Report* expected = _global_atomic_reports_head.load_relaxed();
         do {
             desired->next = expected;
