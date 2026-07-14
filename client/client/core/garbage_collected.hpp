@@ -49,7 +49,7 @@ namespace wry {
 #ifndef NDEBUG
         uint16_t _debug_allocation_gray;
         uint16_t _debug_allocation_black;
-        uint16_t _debug_allocation_epoch;
+        uint32_t _debug_allocation_epoch;
 #endif
 
         static void* _Nonnull operator new(std::size_t count);
@@ -904,9 +904,15 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
                         // Unconditionally change it back to READY, since
                         // mutators will not transition it from this state.
                         _state.store_relaxed(READY);
-                        // We shade it with *all* the live bits, as-if it was
-                        // newly allocated.
-                        _weak->_gray.fetch_or_relaxed(gray_for_marking);
+                        // Revive the referent through the standard shade
+                        // channel (we run on the collector thread, which is
+                        // pinned with valid colors): the shadelist entry is
+                        // re-promoted like any mutator flip, INCLUDING
+                        // deferral across bits still in gray warm-up.  The
+                        // old direct fetch_or left the referent
+                        // gray-not-black for warm-up bits, which nothing
+                        // revisits now that the full pass is gone.
+                        garbage_collected_shade(_weak);
                         _weak->_black |= black_for_marking;
                         // TODO: This is enough for childess objects.  We need
                         // to put it on the graystack if it has children.  That's

@@ -48,7 +48,7 @@ namespace wry {
         char _name[16];
 
         Atomic<bool>     _is_pinned;
-        Atomic<uint16_t> _pinned_epoch;       // valid while _is_pinned
+        Atomic<uint32_t> _pinned_epoch;       // valid while _is_pinned
         Atomic<uint64_t> _pin_count;          // cumulative pins
         Atomic<uint64_t> _repin_count;        // cumulative repins
         Atomic<uint64_t> _unpin_count;        // cumulative unpins

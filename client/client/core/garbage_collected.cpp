@@ -399,8 +399,48 @@ namespace wry {
     
     
     struct Collector {
-        
-        Bag<const GarbageCollected*> _known_objects;
+
+        // Stage-5 cohorts: the known heap, segregated by arrival.  Each
+        // receive that carried allocations appends one cohort.  min_epoch is
+        // a lower bound on the allocation epoch of every member: a report
+        // pinned at H covers allocations since that mutator's previous
+        // quiescence, i.e. from epoch H - 1 at the earliest, so the cohort
+        // takes min(H) - 1 over the reports merged into it.  A cohort whose
+        // min_epoch is at or after a bit's sweep gate (black publish + 2:
+        // every mutator pinned from there allocates k-black) contains only
+        // k-marked objects and is skipped by k's sweep.  Sweep-visited
+        // cohorts fold into the single mature cohort at the front -- their
+        // remaining distinction, birth order, is older than every future
+        // gate and therefore spent.
+        //
+        // needs_strip carries stage-5 clearing: when a bit enters CLEARING
+        // it is flagged on every cohort that can hold it, the next sweep
+        // walk that visits the cohort strips it from the members (mutators
+        // cannot shade a CLEARING bit, so the strip races nothing), and the
+        // bit recycles when no cohort carries the flag.  Clearing costs no
+        // walk of its own: it rides sweep.
+        struct Cohort {
+            Epoch min_epoch;
+            bool mature;
+            uint16_t needs_strip;
+            Bag<const GarbageCollected*> objects;
+        };
+        std::deque<Cohort> _cohorts;
+        size_t _heap_objects = 0;
+        std::array<Epoch, 16> _k_sweep_gate = {};
+
+        // Strip horizon: while k is CLEARING, any cohort whose min_epoch
+        // predates this (= k's white publish + 2) may contain k-marked
+        // members and must be flagged for stripping.  Consulted at cohort
+        // creation, because the one-shot flagging at the WHITE -> CLEARING
+        // transition races late reports: a mutator that loaded its colors
+        // before the white publish can deliver k-marked allocations up to
+        // a couple of epochs afterwards.  (It cannot deliver them later
+        // than the recycle check can see: a pre-ack pin blocks the epoch,
+        // so its report is received -- and its cohort flagged -- before
+        // the try_advance that could retire k, receive running first in
+        // the iteration.)
+        std::array<Epoch, 16> _k_strip_before = {};
 
         bit16_t _is_unused = {(uint16_t)0xFFFF};
         bit16_t _is_gray_published = {};
@@ -425,6 +465,16 @@ namespace wry {
         // each scan.
         Bag<const GarbageCollected*> _shaded_arrivals;
 
+        // Objects whose gray word touches a bit still in gray warm-up: they
+        // cannot be blackened for it yet (4.1's no-early-black rule), and
+        // with no full pass to rediscover them they wait here; each
+        // GRAY -> BLACK transition re-feeds the bag through the arrivals
+        // drain.  Re-deferral for a different warm-up bit is fine --
+        // promotion is idempotent -- and entries always survive intervening
+        // sweeps, because whatever grayed them for the warm-up bit grayed
+        // them for every sweeping bit too.
+        Bag<const GarbageCollected*> _deferred_warmup;
+
         // Stage-4 registries, fed from reports; see the walks at the top of
         // collector_scans.  _root_registry holds candidate standing roots
         // (pruned when their count is observed zero -- a re-root files a
@@ -440,6 +490,7 @@ namespace wry {
         // is the multiplier the redesign is trying to kill.
         size_t _allocated_since_scan = 0;
         size_t _shaded_since_scan = 0;
+        size_t _marked_since_line = 0;
         uint64_t _scan_passes = 0;
         std::array<uint64_t, 16> _cycle_pass0 = {};
         std::array<std::chrono::steady_clock::time_point, 16> _cycle_t0 = {};
@@ -515,10 +566,39 @@ namespace wry {
         }
 
         ~Collector() {
-            _known_objects.leak();
+            for (auto& c : _cohorts)
+                c.objects.leak();
             _shaded_arrivals.leak();
+            _deferred_warmup.leak();
             _root_registry.leak();
             _weak_registry.leak();
+        }
+
+        // Promote an object gray -> black for every bit whose collection may
+        // blacken, and enqueue it for tracing if this newly blackened it.
+        // The gray word is whatever its writers made it; _black is
+        // collector-owned.  _black_for_allocation is disjoint from
+        // _is_clearing (a bit is in exactly one phase), so this can neither
+        // set nor resurrect a clearing bit.
+        void _promote(const GarbageCollected* object) {
+            assert(object);
+            uint16_t before_gray = object->_gray.load_relaxed();
+            uint16_t before_black = object->_black;
+            int32_t reference_count = object->_count.load_relaxed();
+            violation(object, before_gray, before_black, reference_count);
+            uint16_t mark_black = before_gray & _black_for_allocation;
+            uint16_t after_black = before_black | mark_black;
+            uint16_t did_set_black = ~before_black & after_black;
+            if (did_set_black) {
+                object->_black = after_black;
+                ++_marked_since_line;
+                _graystack.push(object);
+            }
+            // Gray for a bit still warming up: park for re-promotion at
+            // that bit's GRAY -> BLACK transition.
+            uint16_t warmup = _gray_for_allocation & ~_black_for_allocation;
+            if (before_gray & warmup)
+                _deferred_warmup.push(object);
         }
 
         void collector_receives_reports() {
@@ -536,6 +616,8 @@ namespace wry {
             assert(epoch::local_state.is_pinned);
             Epoch E = epoch::local_state.known;
             Report* head = _global_atomic_reports_head.exchange_acquire(nullptr);
+            Cohort incoming{E, false, 0, {}};
+            bool any_allocations = false;
             while (head) {
                 Epoch H = Epoch{head->epoch};
 
@@ -545,9 +627,19 @@ namespace wry {
                 // pass-lengthened iterations.)
                 assert(H <= E + 1);
 
-                _allocated_since_scan += head->allocations.debug_size();
+                if (!head->allocations.debug_is_empty()) {
+                    // The report covers allocations since its publisher's
+                    // previous quiescence: epoch H - 1 at the earliest.
+                    Epoch lower = H - 1;
+                    incoming.min_epoch = any_allocations
+                        ? std::min(incoming.min_epoch, lower) : lower;
+                    any_allocations = true;
+                    size_t n = head->allocations.debug_size();
+                    _allocated_since_scan += n;
+                    _heap_objects += n;
+                    incoming.objects.splice(std::move(head->allocations));
+                }
                 _shaded_since_scan += head->shaded.debug_size();
-                _known_objects.splice(std::move(head->allocations));
                 _shaded_arrivals.splice(std::move(head->shaded));
                 _root_registry.splice(std::move(head->rooted));
                 _weak_registry.splice(std::move(head->weak_registrations));
@@ -559,6 +651,26 @@ namespace wry {
                     }
                 }
                 delete std::exchange(head, head->next);
+            }
+            if (any_allocations) {
+                // Late-report stripping: this cohort may hold members born
+                // k-marked by a mutator that had not yet seen k's white
+                // publish, arriving after the CLEARING transition's
+                // flagging pass already ran.  Flag it now, or the recycle
+                // check has nothing to wait on and k reuses the bit under
+                // stale marks.
+                for (int k = 0; k != 16; ++k) {
+                    if (_is_clearing[k] && incoming.min_epoch < _k_strip_before[k])
+                        incoming.needs_strip |= (uint16_t)(1 << k);
+                }
+                // Receive-time promotion: gray-born objects blacken here
+                // once their bit may blacken; those born for a bit still
+                // warming up park in _deferred_warmup (via _promote) for
+                // that bit's GRAY -> BLACK transition.  Everything born
+                // after a black-ack is black at birth and no-ops.
+                for (const GarbageCollected* object : incoming.objects)
+                    _promote(object);
+                _cohorts.push_back(std::move(incoming));
             }
         }
 
@@ -592,12 +704,13 @@ namespace wry {
                         .black = _black_for_allocation
                     };
                     _global_atomic_color_for_allocation.store_relaxed(color);
-                    
+
                     epoch_at_last_change = current_epoch;
 
-                    for (int k = 0; k != 16; ++k) {
-                        kstate[k].scans++;
-                    }
+                    // (kstate[k].scans is no longer bumped here: the phases
+                    // that wait on it need the actual work to have run --
+                    // WEAK_DECIDING counts trace's weak walks, SWEEPING
+                    // counts sweep walks.)
                 }
 
                 // TEMP (shutdown cycle-waiter stall investigation): when a
@@ -635,13 +748,14 @@ namespace wry {
 
                 assert(epoch::local_state.is_pinned);
                 Epoch A{epoch::local_state.known};
-                // epoch::unpin_this_thread();
 
-                // TODO: Resumable partial scans
-                // Once we have enough work for a pass to last O(10ms) we
-                // should dip out periodically to open more reports and get more
-                // objects
-                collector_scans();
+                // Trace is O(new work); the sweep walk -- the one remaining
+                // heap-proportional operation -- runs only when a bit needs
+                // it, over only the cohorts old enough to matter.
+                collector_trace();
+
+                if (_is_sweeping.raw)
+                    collector_sweep_walk();
 
                 mutator_repin();
                 epoch::wait(A);
@@ -656,7 +770,7 @@ namespace wry {
 
             // That final shade recorded into this thread's shadelist, and no
             // report will follow -- the collector is exiting, and the process
-            // with it.  Leak the record as _known_objects is leaked, or the
+            // with it.  Leak the record as the cohorts are leaked, or the
             // Bag destructor asserts at thread exit.
             _thread_local_shaded_objects.leak();
 
@@ -692,6 +806,7 @@ namespace wry {
             epoch::Epoch E = epoch::local_state.known;
 
             bool first = true;
+            bool splice_deferred = false;
 
             for (int k = 0; k != 16; ++k) {
                 auto p = UNUSED;
@@ -743,6 +858,18 @@ namespace wry {
                         if (E < kstate[k].since + 2)
                             break;
                         kstate[k] = { BLACK_PUBLISHED, E, 0 };
+                        // Sweep gate: every mutator pinned at E + 2 or later
+                        // has adopted k-black, so every allocation from
+                        // there is k-marked at birth and cohorts wholly
+                        // newer than the gate are exempt from k's sweep.
+                        _k_sweep_gate[k] = E + 2;
+                        // Everything grayed for k during the warm-up --
+                        // shades of old objects and gray-born allocations
+                        // alike -- was parked in _deferred_warmup by
+                        // _promote; re-feed it through the arrivals drain
+                        // now that k may blacken (deferred below until the
+                        // masks include the new black bit).
+                        splice_deferred = true;
                         break;
                         
                     case BLACK_PUBLISHED: {
@@ -755,8 +882,9 @@ namespace wry {
                         //     mutator's report push precedes its
                         //     color-adopting repin, and we receive every
                         //     iteration, this also means every k-gray
-                        //     warm-up allocation is already in
-                        //     _known_objects / _shaded_arrivals;
+                        //     warm-up allocation is already in the cohorts
+                        //     (and was promoted at receive or at this bit's
+                        //     warm-up walk);
                         //
                         // (2) a full quiet window has passed since the last
                         //     reported k-work: at E >= _k_last_work[k] + 2,
@@ -769,12 +897,12 @@ namespace wry {
                         //     contradicts trace completeness, per the
                         //     snapshot induction -- see the docs); and
                         //
-                        // (3) at least one scan completed after the last
+                        // (3) at least one trace completed after the last
                         //     k-work was received, so that work has been
-                        //     traced to fixpoint (scans drain the graystack
-                        //     before returning), and rooted-but-unshaded
-                        //     objects have been grayed by the scan's own
-                        //     root check.
+                        //     traced to fixpoint (a trace drains the
+                        //     graystack before returning), and the standing
+                        //     roots have been grayed by the trace's root
+                        //     registry walk.
                         //
                         // After this: no k-gray objects exist, no mutator
                         // can produce one, and every reachable object is
@@ -817,21 +945,40 @@ namespace wry {
                         if (E < F + 2)
                             break;
                         kstate[k] = { CLEARING, E, 0 };
+                        // Flag k for stripping on every cohort that can
+                        // carry it: those with members born before the
+                        // white-ack.  Cohorts born after it were born
+                        // without k, and mutators can no longer shade it.
+                        // Cohorts CREATED after this pass are flagged at
+                        // receive against the same horizon (late reports).
+                        _k_strip_before[k] = F + 2;
+                        for (auto& c : _cohorts)
+                            if (c.mature || c.min_epoch < F + 2)
+                                c.needs_strip |= bit;
                     } break;
-                        
-                    case CLEARING:
-                        // Wait for at least one scan to complete
-                        if (!kstate[k].scans)
+
+                    case CLEARING: {
+                        // Clearing rides sweep: k has been stripped from a
+                        // cohort's members when the flag is gone.  k
+                        // recycles when no cohort carries it -- at most
+                        // about one further cycle, since every flagged
+                        // cohort is older than the next sweep's gate.
+                        bool pending = false;
+                        for (auto& c : _cohorts)
+                            if (c.needs_strip & bit) {
+                                pending = true;
+                                break;
+                            }
+                        if (pending)
                             break;
-                        // All objects are now k-white
                         kstate[k] = { UNUSED, E, 0 };
-                        printf("C0: k=%d cycle complete: passes=%llu in %.3gs\n",
+                        printf("C0: k=%d cycle complete: iters=%llu in %.3gs\n",
                                k,
                                (unsigned long long)(_scan_passes - _cycle_pass0[k]),
                                std::chrono::duration<double>(
                                    std::chrono::steady_clock::now() - _cycle_t0[k]).count());
                         _on_cycle_completed(bit);
-                        break;
+                    } break;
                         
                 } // switch kphase
                 
@@ -858,6 +1005,13 @@ namespace wry {
             _debug_assert_white = _is_unused.raw;
             _debug_assert_nonblack = (_is_unused | _is_gray_published).raw;
 
+            // Deferred from the GRAY -> BLACK transition, after the masks
+            // above include the new black bit: re-feed the warm-up's parked
+            // grays through the arrivals drain.  This iteration's
+            // collector_trace promotes and traces them (and re-parks any
+            // that also touch a bit still warming up).
+            if (splice_deferred)
+                _shaded_arrivals.splice(std::move(_deferred_warmup));
 
         } // void Collector::try_advance_collection_phases()
 
@@ -900,14 +1054,14 @@ namespace wry {
                        _KPhase_names[kstate[k].kphase]);
             }
             printf(
-                   "While scanning %zd objects with\n"
+                   "While processing %zd known objects with\n"
                    "     gray_for_allocation %04x\n"
                    "    black_for_allocation %04x\n"
                    "       mask_for_deleting %04x\n"
                    "       mask_for_clearing %04x\n"
                    "      debug_assert_white %04x\n"
                    ,
-                   _known_objects.debug_size(),
+                   _heap_objects,
                    _gray_for_allocation,
                    _black_for_allocation,
                    _is_sweeping.raw,
@@ -918,94 +1072,61 @@ namespace wry {
 #endif // !NDEBUG
         }
 
-        void collector_scans() {
+        // Trace: promote and trace everything the reports delivered --
+        // shadelist arrivals, the root registry's standing roots, the weak
+        // registry when deciding -- then drain the graystack to fixpoint.
+        // (Allocations were promoted at receive; warm-up cohorts at the
+        // GRAY -> BLACK transition.)  Cost is proportional to the new work,
+        // never to the heap: stage 5 deleted the full pass, and with it the
+        // per-object count check -- the sweep's count == 0 delete assert is
+        // the standing S1 oracle in its place.
+        void collector_trace() {
 
-#pragma mark Scan all known objects
-
-            Bag<const GarbageCollected*> survivors;
-
-            size_t trace_count = 0;
-            size_t mark_count = 0;
-            size_t delete_count = 0;
-            size_t scan_count = 0;
-            size_t rescue_count = 0;
-            auto t0 = std::chrono::steady_clock::now();
             ++_scan_passes;
+            auto t0 = std::chrono::steady_clock::now();
 
-            assert(_graystack.debug_is_empty());
-            assert(survivors.debug_is_empty());
             assert(global_children.debug_is_empty());
 
             // validate state:
-
             assert((_is_sweeping & _is_clearing).raw == 0);
             assert((_is_clearing.raw & _gray_for_allocation) == 0);
             assert((_is_clearing.raw & _black_for_allocation) == 0);
 
-#ifndef NDEBUG
-            for (GarbageCollected const* object : _known_objects) {
-                uint16_t gray  = object->_gray.load_relaxed();
-                uint16_t black = object->_black;
-                int32_t count = object->_count.load_relaxed();
-                violation(object, gray, black, count);
-            }
-#endif
-
             int counter = 0;
 
-            // Shadelists: seed the trace wavefront with the objects mutators
-            // reported flipping white->gray, instead of waiting for this pass
-            // to rediscover them.  The mutator already wrote the gray bits;
-            // here we only promote gray to black where a collection is in a
-            // blackening phase, and enqueue for tracing -- the same marking
-            // step the loop below applies to its own discoveries, minus the
-            // root check and sweep.  Bits whose collection is still in gray
-            // warm-up are deliberately NOT promoted (mark_black masks them
-            // out); the pass will blacken them once k-black publishes.
-            //
-            // An entry may predate its object's allocation report.  That is
-            // safe: the header is dereferenceable (construction
-            // happened-before the shader's use of the pointer, which
-            // happened-before its report, which is embargo-gated like any
-            // other), _black stays collector-owned, and no sweep can free
-            // the object before its entry is read -- the weakest case, a
-            // shade recorded by a still-j-white mutator of an object that
-            // then dies for j, is readable at most 3 epochs after the shade,
-            // while j's sweep is at least ~6 epochs from a start at most 2
-            // epochs before it.
+            // Shadelist arrivals: the objects mutators flipped white->gray.
+            // The mutator already wrote the gray bits; promotion only
+            // blackens where a collection may blacken (warm-up bits wait
+            // for the transition walk).  An entry may predate its object's
+            // allocation report; the header is dereferenceable through the
+            // shader's release/acquire report edge, and no sweep can free
+            // an object whose entry is still in flight (any shade of it
+            // precedes its unreachability, which precedes the quiet gate by
+            // at least the +2 window).
             {
                 const GarbageCollected* object = nullptr;
-                while (_shaded_arrivals.try_pop(object)) {
-                    assert(object);
-                    uint16_t before_gray = object->_gray.load_relaxed();
-                    uint16_t before_black = object->_black;
-                    int32_t reference_count = object->_count.load_relaxed();
-                    violation(object, before_gray, before_black, reference_count);
-                    // _black_for_allocation is disjoint from _is_clearing
-                    // (a bit is in exactly one phase), so this can neither
-                    // set nor resurrect a clearing bit.
-                    uint16_t mark_black = before_gray & _black_for_allocation;
-                    uint16_t after_black = before_black | mark_black;
-                    uint16_t did_set_black = ~before_black & after_black;
-                    if (did_set_black) {
-                        object->_black = after_black;
-                        ++mark_count;
-                        _graystack.push(object);
-                    }
-                }
+                while (_shaded_arrivals.try_pop(object))
+                    _promote(object);
             }
 
-            // Root registry (stage 4): the standing roots.  In-cycle 0->1
-            // transitions shade (and so reset the quiet window); the
-            // registry answers the one question transitions cannot: what
-            // was already rooted when a cycle began.  Entries observed with
-            // count zero are dropped -- the preceding 1->0 shaded, and any
-            // re-root files a fresh event.  Live entries are grayed for
-            // every active collection and promoted exactly as the pass
-            // would; the pass's own per-object count check remains, for
-            // now, as the differential oracle (`rescues` below must read
-            // zero, modulo in-flight root-up reports, before stage 5 may
-            // delete it).
+            // Root registry: the standing roots.  In-cycle 0->1 transitions
+            // shade (resetting the quiet window); the registry answers the
+            // one question transitions cannot: what was already rooted when
+            // a cycle began.  Entries observed with count zero are dropped
+            // -- the preceding 1->0 shaded, and any re-root files a fresh
+            // event.
+            //
+            // Live entries are grayed only for bits this walk can ALSO
+            // blacken.  Graying a warm-up bit here would be legal (4.1's
+            // optional early shade) but is a trap: the walk cannot blacken
+            // it, does not park it for deferral, and if the entry leaves
+            // the registry before the bit blackens, the exit shade's
+            // record-once fetch_or finds the bit already gray and files
+            // nothing -- orphaning the object gray-not-black (seen as a
+            // sweep-time GRAY violation on a dropped World).  Leaving
+            // warm-up bits untouched costs nothing: the snapshot point is
+            // black-publish, where this walk grays-and-blackens the entry,
+            // and an early exit routes through the ordinary shade channel.
             {
                 Bag<const GarbageCollected*> keep;
                 const GarbageCollected* object = nullptr;
@@ -1019,7 +1140,7 @@ namespace wry {
                     violation(object, before_gray, before_black, reference_count);
                     uint16_t after_gray;
                     for (;;) {
-                        after_gray = (before_gray | _gray_for_allocation) & ~_is_clearing.raw;
+                        after_gray = (before_gray | _black_for_allocation) & ~_is_clearing.raw;
                         if (after_gray == before_gray)
                             break;
                         if (object->_gray.compare_exchange_weak_relaxed_relaxed(before_gray,
@@ -1032,7 +1153,7 @@ namespace wry {
                     violation(object, after_gray, after_black, reference_count);
                     uint16_t did_set_black = ~before_black & after_black;
                     if (did_set_black) {
-                        ++mark_count;
+                        ++_marked_since_line;
                         _graystack.push(object);
                     }
                     keep.push(object);
@@ -1040,38 +1161,8 @@ namespace wry {
                 _root_registry.splice(std::move(keep));
             }
 
-            // Weak registry (stage 4): only actual weak holders are visited,
-            // replacing the per-object virtual decide in the pass body.  An
-            // entry is dropped exactly when this pass's sweep is about to
-            // delete it: white for every currently-sweeping bit and
-            // unrooted, so the pass body cannot rescue it.  (Arrivals and
-            // roots were drained above, so the gray word read here is what
-            // the pass body will see.)
-            if ((_is_weak_deciding | _is_sweeping).raw) {
-                Bag<const GarbageCollected*> keep;
-                const GarbageCollected* object = nullptr;
-                while (_weak_registry.try_pop(object)) {
-                    assert(object);
-                    if (_is_weak_deciding.raw)
-                        object->_garbage_collected_decide_weak(_is_weak_deciding.raw,
-                                                               _gray_for_allocation,
-                                                               _black_for_allocation);
-                    uint16_t gray = object->_gray.load_relaxed();
-                    int32_t reference_count = object->_count.load_relaxed();
-                    bool doomed = _is_sweeping.raw
-                        && !(_is_sweeping.raw & gray)
-                        && (reference_count == 0);
-                    if (!doomed)
-                        keep.push(object);
-                }
-                _weak_registry.splice(std::move(keep));
-            }
-
-            // While any objects are unprocessed
-            for (;;) {
-
-                // Depth-first recusively trace all the known children
-
+            // Depth-first trace to fixpoint.
+            {
                 const GarbageCollected* parent = nullptr;
                 while (_graystack.try_pop(parent)) {
                     assert(parent);
@@ -1096,10 +1187,9 @@ namespace wry {
                         uint16_t after_black = (before_black | mark_black) & ~_is_clearing.raw;
                         child->_black = after_black;
                         violation(child, after_gray, after_black, reference_count);
-                        // uint16_t did_set_gray  = ~before_gray  & after_gray;
                         uint16_t did_set_black = ~before_black & after_black;
                         if (did_set_black) {
-                            ++mark_count;
+                            ++_marked_since_line;
                             _graystack.push(child);
                         }
                     }
@@ -1107,105 +1197,176 @@ namespace wry {
                         mutator_repin(); counter = 0;
                     }
                 }
+            }
 
-                // Resume scanning each object in turn.
-                // (Many will have already been processed by tracing)
-
+            // Weak registry: only actual weak holders are visited.  Runs
+            // after the drain so the doomed test reads settled gray words;
+            // an entry is dropped exactly when this iteration's sweep walk
+            // is about to delete it (the mirror of the sweep's any-bit
+            // predicate: white for some sweeping bit, and unrooted), so
+            // the registry never dangles.
+            if ((_is_weak_deciding | _is_sweeping).raw) {
+                Bag<const GarbageCollected*> keep;
                 const GarbageCollected* object = nullptr;
-                if (!_known_objects.try_pop(object))
-                    break;
-                assert(object);
-                ++scan_count;
-
-                // (Weak decisions moved to the registry walk above.)
-
-                // Process root set
-                int32_t reference_count = object->_count.load_relaxed();
-                uint16_t root_gray = reference_count ? _gray_for_allocation : 0;
-
-                uint16_t before_gray = object->_gray.load_relaxed();
-                uint16_t before_black = object->_black;
-                uint16_t after_gray;
-                for (;;) {
-                    violation(object, before_gray, before_black, reference_count);
-                    after_gray = (before_gray | root_gray) & ~_is_clearing.raw;
-                    if (after_gray == before_gray)
-                        break;
-                    if (object->_gray.compare_exchange_weak_relaxed_relaxed(before_gray,
-                                                                            after_gray))
-                        break;
-                    // Compare exchange failed, start over
+                while (_weak_registry.try_pop(object)) {
+                    assert(object);
+                    if (_is_weak_deciding.raw)
+                        object->_garbage_collected_decide_weak(_is_weak_deciding.raw,
+                                                               _gray_for_allocation,
+                                                               _black_for_allocation);
+                    uint16_t gray = object->_gray.load_relaxed();
+                    int32_t reference_count = object->_count.load_relaxed();
+                    bool doomed = (~gray & _is_sweeping.raw)
+                        && (reference_count == 0);
+                    if (!doomed)
+                        keep.push(object);
                 }
-                
-                // If gray, and black is active, make it black
-                // If in clearing mask, clear it
-                
-                uint16_t mark_black = after_gray & _black_for_allocation;
-                uint16_t after_black = (before_black | mark_black) & ~_is_clearing.raw;
-                object->_black = after_black;
-                violation(object, after_gray, after_black, reference_count);
+                _weak_registry.splice(std::move(keep));
+            }
 
-                // A rescue is this count-check graying a rooted object the
-                // registry machinery had not already grayed -- the
-                // differential signal that must sit at zero (modulo
-                // in-flight root-up reports) before stage 5 may delete the
-                // per-object count check.
-                uint16_t did_set_gray = ~before_gray & after_gray;
-                if (reference_count && did_set_gray)
-                    ++rescue_count;
-
-                uint16_t did_set_black = ~before_black & after_black;
-
-                if (did_set_black) {
-                    ++trace_count;
-                    _graystack.push(object);
-                }
-
-                if (_is_sweeping.raw && !(_is_sweeping.raw & after_gray)) {
-                    assert(!did_set_black);
-                    // Trace-complete and quiet: nothing reachable is white,
-                    // and rooting requires a reachable pointer -- so a white
-                    // object here cannot be rooted.  This is the S1 oracle
-                    // that registry-driven root seeding must keep true.
-                    assert(reference_count == 0);
-                    delete object;
-                    ++delete_count;
-                } else {
-                    survivors.push(std::move(object));
-                }
-
-                if (++counter > 1000) {
-                    mutator_repin(); counter = 0;
-                }
-
-            } // loop until no objects
-            
             assert(_graystack.debug_is_empty());
-            assert(_known_objects.debug_is_empty());
             assert(global_children.debug_is_empty());
-            _known_objects.swap(survivors);
 
-            // This scan traced everything received before it started
-            // (reports are received only between scans, and the graystack is
-            // drained above), so it counts toward every bit's quiet window.
+            // Quiet accounting: this trace ran the graystack dry (reports
+            // are received only between traces), so it counts toward every
+            // bit's quiet window; and the weak walk ran for every deciding
+            // bit.
             for (auto& n : _passes_since_k_work)
                 ++n;
+            for (int k = 0; k != 16; ++k)
+                if (_is_weak_deciding[k])
+                    kstate[k].scans += 1;
+
+            if (_marked_since_line | _allocated_since_scan | _shaded_since_scan) {
+                auto t1 = std::chrono::steady_clock::now();
+                printf("C0: trace marked=%zd,alloc+=%zd,shaded+=%zd,roots=%zd,weak=%zd,heap=%zd in %.3gs\n",
+                       std::exchange(_marked_since_line, size_t{0}),
+                       std::exchange(_allocated_since_scan, size_t{0}),
+                       std::exchange(_shaded_since_scan, size_t{0}),
+                       _root_registry.debug_size(),
+                       _weak_registry.debug_size(),
+                       _heap_objects,
+                       std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+            }
+
+        } // void Collector::collector_trace()
+
+        // Sweep: the one heap walk, over only the cohorts old enough to
+        // hold a white object for some sweeping bit.  Deletes whites,
+        // strips retired (CLEARING) bits from survivors as it goes --
+        // clearing rides sweep and costs no walk of its own -- and folds
+        // the visited cohorts into the single mature cohort, whose birth
+        // order is older than every future gate and therefore spent.
+        void collector_sweep_walk() {
+
+            assert(_is_sweeping.raw);
+            assert(_graystack.debug_is_empty());
+
+            auto t0 = std::chrono::steady_clock::now();
+            uint16_t sweep_mask = _is_sweeping.raw;
+
+            // Newest gate among the sweeping bits: cohorts older than it
+            // are eligible for at least one of them.  (A cohort eligible
+            // for one sweeping bit but not another is walked with the full
+            // mask; that is safe because members born after a bit's gate
+            // are marked for it at birth, so the any-bit delete predicate
+            // below cannot misfire on them.)
+            Epoch newest_gate{};
+            bool have_gate = false;
+            for (int k = 0; k != 16; ++k) {
+                if (_is_sweeping[k]) {
+                    newest_gate = have_gate ? std::max(newest_gate, _k_sweep_gate[k])
+                                            : _k_sweep_gate[k];
+                    have_gate = true;
+                }
+            }
+            assert(have_gate);
+
+            std::deque<Cohort> keep;
+            Cohort folded{Epoch{}, true, 0, {}};
+            size_t visited = 0;
+            size_t delete_count = 0;
+            uint16_t stripped = 0;
+            int counter = 0;
+
+            for (auto& c : _cohorts) {
+                if (!c.mature && !(c.min_epoch < newest_gate)) {
+                    // Every member born k-marked for every sweeping k; and
+                    // young cohorts cannot carry needs_strip (flags are set
+                    // only on cohorts older than the flagging bit's
+                    // white-ack, which predates any later sweep gate).
+                    keep.push_back(std::move(c));
+                    continue;
+                }
+                uint16_t strip = c.needs_strip;
+                stripped |= strip;
+                const GarbageCollected* object = nullptr;
+                while (c.objects.try_pop(object)) {
+                    assert(object);
+                    ++visited;
+                    uint16_t before_gray = object->_gray.load_relaxed();
+                    uint16_t before_black = object->_black;
+                    int32_t reference_count = object->_count.load_relaxed();
+                    violation(object, before_gray, before_black, reference_count);
+                    if (~before_gray & sweep_mask) {
+                        // White for ANY sweeping bit: that bit is past its
+                        // quiet gate, so its whiteness alone proves the
+                        // object was unreachable at that bit's snapshot --
+                        // permanently.  Blackness for a concurrently
+                        // sweeping bit only records reachability at an
+                        // older snapshot and cannot resurrect.  (This also
+                        // makes surviving a walk certify the object marked
+                        // for every bit the walk swept -- the uniform
+                        // certificate 4.11 builds on.)  Rooting requires a
+                        // reachable pointer, so a white object cannot be
+                        // rooted -- the standing S1 oracle.
+                        assert(reference_count == 0);
+                        delete object;
+                        ++delete_count;
+                        --_heap_objects;
+                    } else {
+                        if (strip) {
+                            // The stripped bits are all in CLEARING, which
+                            // no mutator can shade; the CAS contends only
+                            // with concurrent shades of OTHER bits.
+                            uint16_t after_gray;
+                            for (;;) {
+                                after_gray = before_gray & ~strip;
+                                if (after_gray == before_gray)
+                                    break;
+                                if (object->_gray.compare_exchange_weak_relaxed_relaxed(before_gray,
+                                                                                        after_gray))
+                                    break;
+                            }
+                            object->_black = before_black & ~strip;
+                        }
+                        folded.objects.push(object);
+                    }
+                    if (++counter > 1000) {
+                        mutator_repin(); counter = 0;
+                    }
+                }
+            }
+            _cohorts = std::move(keep);
+            if (!folded.objects.debug_is_empty())
+                _cohorts.push_front(std::move(folded));
+
+            // One walk serves every currently-sweeping bit.
+            for (int k = 0; k != 16; ++k)
+                if (_is_sweeping[k])
+                    kstate[k].scans += 1;
 
             auto t1 = std::chrono::steady_clock::now();
-            
-            printf("C0: scanned=%zd,marked=%zd,deleted=%zd,alloc+=%zd,shaded+=%zd,roots=%zd,weak=%zd,rescues=%zd in %.3gs\n",
-                   scan_count,
-                   trace_count + mark_count,
+            printf("C0: sweep mask=%04x visited=%zd deleted=%zd stripped=%04x heap=%zd cohorts=%zd in %.3gs\n",
+                   sweep_mask,
+                   visited,
                    delete_count,
-                   std::exchange(_allocated_since_scan, size_t{0}),
-                   std::exchange(_shaded_since_scan, size_t{0}),
-                   _root_registry.debug_size(),
-                   _weak_registry.debug_size(),
-                   rescue_count,
+                   stripped,
+                   _heap_objects,
+                   _cohorts.size(),
                    std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
-            
 
-        } // void Collector::scan()
+        } // void Collector::collector_sweep_walk()
 
     }; // struct Collector
 
@@ -1235,6 +1396,26 @@ namespace wry {
             collector._cycle_waiters_count.store_relaxed(collector._cycle_waiters.size());  // TEMP
         }
     }
+
+    // Tripwire for the stage-5 root-walk warm-up orphan: an object rooted
+    // across a report boundary (so the root registry holds it) and dropped
+    // while some bit is still in gray warm-up must not end up gray-not-black
+    // -- the registry walk must not gray bits it cannot blacken, or the exit
+    // shade's record-once fetch_or files nothing and the orphan trips the
+    // sweep's GRAY violation.  This mirrors the per-frame World swap that
+    // exposed the bug in the GUI (root, hold across quiescences, drop),
+    // sampled across enough cycles to land in every phase window.
+    define_test("gc_root_churn") {
+        for (int i = 0; i != 400; ++i) {
+            Root<HeapInt64*> r{new HeapInt64(i)};
+            co_await Coroutine::SuspendAndSchedule{};
+            // r drops here: a 1 -> 0 shade on a registry-resident object.
+        }
+        // Let several full cycles complete so the sweeps run under the
+        // violation checks.
+        co_await Coroutine::WaitForCollectionCycles{4};
+        co_return;
+    };
 
 
 

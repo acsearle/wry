@@ -185,7 +185,7 @@ namespace wry {
     }
 
     void WorldState::new_game() {
-        install_displayed_world(*this, make_starting_world());
+        install_displayed_world(*this, make_starting_world_big());
     }
 
     void WorldState::load_from_save(int id) {

@@ -786,6 +786,128 @@ routine, so any test asserting collected-ness by address inequality is
 invalid (the interning test now asserts on emplaced-vs-upgraded instead;
 ASan's free-quarantine had been masking this in Debug).
 
+### 4.10 Stage-5 revision: cohorts; the full pass retired
+
+*(Implemented 2026-07-12.  The collector loop is now: receive, advance
+phases, trace (O(new work)), and -- only when some bit is SWEEPING -- one
+sweep walk.  The full pass, and with it the per-object count check, is
+gone; the sweep's count == 0 delete assert is the standing S1 oracle.)*
+
+**Cohorts.**  The known heap is a birth-ordered deque of cohorts, one per
+receive that carried allocations, tagged min_epoch = min(report H) - 1 (a
+report covers allocations since its publisher's previous quiescence).
+Sweep gate: _k_sweep_gate[k] = black-publish + 2; a cohort with
+min_epoch at or past the gate holds only objects born k-marked and is
+skipped by k's sweep.  Visited cohorts fold into the single mature cohort
+-- their birth order is older than every future gate, so the distinction
+is spent -- and the deque stays a handful of entries long.
+
+**Sweep.**  One walk per cycle (shared by every concurrently-SWEEPING
+bit) visits mature plus the eligible nursery prefix: deletes whites
+(asserting count == 0), strips every cohort-flagged CLEARING bit from
+survivors, and folds.  The delete predicate is any-bit: white for SOME
+sweeping bit suffices, because that bit is past its quiet gate and its
+whiteness alone proves permanent unreachability -- blackness for a
+concurrently sweeping bit records reachability only at an older snapshot
+and cannot resurrect.  (Requiring white-for-all, as the full pass did,
+merely floated the k-black-j-white dead object one extra cycle.)  A
+consequence used by 4.11: surviving a walk certifies the object marked
+for every bit the walk swept.  SWEEPING -> WHITE requires the walk;
+WEAK's per-iteration registry walk (whose doom test mirrors the any-bit
+predicate) and the trace's quiet accounting are unchanged.
+
+**Clearing rides sweep.**  On WHITE -> CLEARING, k is flagged
+(needs_strip) on every cohort old enough to carry it; the next sweep walk
+strips it; k recycles (CLEARING -> UNUSED) when no cohort is flagged --
+at most about one further cycle.  No meaning-flip, no dedicated pass, and
+the mutator barrier stays one idempotent fetch_or.
+
+The flagging is NOT one-shot: a mutator that loaded its colors before k's
+white publish can deliver k-marked allocations in a report that arrives
+after the transition's flagging pass ran (its cohort then carried stale
+k-marks past the recycle, and the bit was reused under them -- caught by
+the b-check as NONWHITE on a freshly recycled bit).  So the transition
+records a strip horizon (_k_strip_before[k] = white publish + 2) and
+cohort creation flags newborn cohorts against the horizons of every
+currently-CLEARING bit.  This is airtight by ordering: a pre-ack pin
+blocks the epoch, so the straggler's report is received -- and its cohort
+flagged -- before the try_advance that could retire k, receive running
+first in each iteration.
+
+**Warm-up deferral.**  With no pass to re-discover them, objects grayed
+for a bit still in gray warm-up (Yuasa shades of old objects, gray-born
+allocations, weak revivals) park in _deferred_warmup at promotion, and
+each GRAY -> BLACK transition re-feeds the bag through the arrivals
+drain.  Whatever grayed them for the warm-up bit also grayed them for
+every sweeping bit, so parked entries always survive intervening sweeps.
+The WeakHolder revival path now routes through the standard shade channel
+(it runs on the pinned collector thread) instead of a bare fetch_or, for
+exactly this reason.
+
+**Nobody else may gray a warm-up bit.**  The root registry walk
+originally grayed entries with the full gray mask (4.1's optional early
+shade).  That is a trap under record-once shadelists: the walk cannot
+blacken a warm-up bit and does not defer, and if the entry leaves the
+registry (count -> 0) before the bit blackens, the exit shade's fetch_or
+finds the bit already gray and files nothing -- orphaning the object
+gray-not-black (observed as a sweep-time GRAY violation on the per-frame
+dropped World).  The walk now grays only bits it can also blacken; the
+snapshot point is black-publish, so nothing is lost, and an early exit
+routes through the ordinary shade channel.  The general rule: a gray bit
+may be set only by (a) an agent that also blackens it, (b) an agent that
+parks the object in _deferred_warmup, or (c) the mutator shade path,
+whose record-once filter then files the object exactly once.  The
+`gc_root_churn` test (root, hold across quiescences, drop, across many
+cycles) is the tripwire.
+
+Steady state observed in the suite: one sweep walk per cycle over the
+whole small heap, cohorts = 1 (mature), stripped masks riding each walk,
+traces proportional to reported work.
+
+### 4.11 Design note: certificate-gated cohorts (not implemented)
+
+*(Filed 2026-07-12; revisit after the 100k stress baseline, if sweep
+bandwidth shows up hot.)*
+
+Within a cycle, marks are set-only -- a bit's strip strictly follows its
+own sweep -- so any mark OBSERVED during a sweep walk is stable through
+that bit's sweep: "observed j-gray" certifies that j's visit could not
+delete the object.  This generalizes the cohort key from birth epoch to a
+**certificate mask**: bits for which every member is known marked.  Sweep
+for j skips cohorts whose certificate contains j.  Two certificate
+sources, one mechanism:
+
+- **Birth**: born after gate(j) implies born j-marked; min_epoch is a
+  compressed certificate issued without looking at the object.
+- **Observation**: the sweep walk already loads every survivor's color
+  word; evacuation writes the observed (stable) bits into the target
+  cohort's certificate.
+
+Skipping certified visits adds NO reclamation latency: a skipped visit
+provably could not delete, and the first bit whose snapshot postdates a
+death also postdates the certificate, so it visits and deletes on
+today's schedule.  Expected win: mature is re-observed about once per
+pipeline depth instead of once per cycle -- sweep bandwidth divided by
+roughly the depth.  This is the sound form of the generational instinct:
+survival cannot confer newness, but observation confers exactly the
+certificate that licenses visit-avoidance, and it is free at sweep time.
+
+Wrinkles:
+
+1. Bits past their quiet gate certify uniformly (trace-complete: live
+   implies marked); bits still tracing do not (an unreached live object
+   is indistinguishable from garbage).  Start with post-quiet-only
+   certificates and a single evacuation bucket; bucket by observed mask
+   only if measurements ask for it.
+2. Clearing rides sweep, and certified cohorts skip sweeps, so a retired
+   bit's strip -- hence its recycle -- can wait about pipeline-depth
+   cycles, spending the 16-bit headroom faster.  Mitigate with a
+   strip-only walk of flagged-but-skipped cohorts when UNUSED bits run
+   low, or with wider color words.
+
+Prerequisite (landed with the any-bit delete predicate in 4.10): a
+walk's survivors are uniformly certified for every bit the walk swept.
+
 ## 5. Worst-case interleavings
 
 > *Skeleton — to be filled in by the author. For each scenario, draw the
@@ -862,12 +984,15 @@ N scales with the collection graph size.
   [lines 256–262](../garbage_collected.cpp#L256-L262) is the controlling
   factor. Out of scope for this document, but cross-link if a separate
   liveness analysis is written.
-- **Uint16 wrap on epoch differences.** The wrap-safe comparison pattern
-  `(int16_t)(uint16_t)(E.raw - F.raw) < N` is used in two places
-  ([:215](../garbage_collected.cpp#L215),
-  [:256](../garbage_collected.cpp#L256)). Confirm this is sufficient given
-  the maximum cycle latency (between any two adjacent epoch reads,
-  fewer than 32768 epochs can have elapsed).
+- **Uint16 wrap on epoch differences.** ANSWERED EMPIRICALLY (2026-07-12):
+  it was not sufficient.  A loaded 100k-entity cycle spanned 8000+ epochs
+  (mutators quiesce at frame rate while collector iterations stretch to
+  seconds), pushing stored-epoch comparisons -- cohort min_epoch, sweep
+  gates, quiet timestamps -- past the +-0x4000 window and firing the
+  cyc16 locality assert on two threads.  Fixed by widening the epoch to
+  32 bits (cyc32_t, window +-2^30); the packed Service::State keeps its
+  single 64-bit word as epoch:32, pins_current:15, waiting:1,
+  pins_prior:16, with the pin-count overflow trap moved to 0x7FFF.
 - **Is there any benefit to the k-collections?** If so, how many?  If four are 
   enough be just need a single byte.  I assert that it's not actually the source
   of the complexity, but it doesn't help.  Sure is cool though.
@@ -925,6 +1050,34 @@ Stages 4-5 (root/weak registries, cohort-segregated sweep, clearing folded
 into sweep) remove the per-pass root scan and shrink the walked set to
 (live + one short cycle's allocations), replacing the condition with
 "streaming sweep rate > allocation rate", with no $M$-dependent knee.
+
+**Post-stage-5 loaded baseline (100k stress, Debug+ASan, 2026-07-12):**
+with $P = 1$ the binding term moved from sweep to TRACE.  Snapshot
+collection marks each object about once per cycle it survives, and
+floating garbage survives 1-2 cycles, so mark work per second is
+$\approx (1..2) A$ plus live/cycle -- observed as marked $\approx$
+alloc+= on every iteration.  Debug mark rate ($\approx 3$M/s) landed at
+parity with the allocation rate ($\approx 2.8$M/s): $cA/S \approx 1$, no
+equilibrium, heap 8M -> 80M over two cycles, cycle time 143 s.  Sweeps
+stayed healthy (23M obj/s early, 8M/s at 20M heap) and the construction
+burst was absorbed in one cycle (7.2M of 7.9M deleted in 0.4 s).  The
+mutators held frame rate throughout -- never-block did its job; the
+collector lost the race silently.  Release changes both sides ($A$ is
+frame-capped, $S$ gains the optimizer); measure before optimizing.
+
+**Release baseline (same world, 2026-07-12): STABLE.**  Trace 10.9M
+marks/s, sweep 25M visits/s, allocation 0.7M/s; heap steady at 1.87M
+objects = live 1.05M + one cycle's float ($c \approx 1$); cycle 1.69 s
+at the 9-iteration phase floor.  One collector thread at 10x the design
+target.  The residual: marked-per-cycle is ~6x the heap, because each
+in-flight bit marks the reachable set independently and cycles start
+eagerly (depth 5-6) -- collector duty ~65%, true headroom ~1.5x.  With
+1.69 s cycles, pipelining only needs depth ~2 to hide handshake latency,
+so a **cycle admission cap** (do not start a new bit while two are in
+flight; subsumes idle throttling when alloc is zero) divides mark work
+by ~3 for negligible float cost.  That is the next lever; 4.11's
+certificate cohorts stay in reserve (sweep is ~4% of the cycle), and
+parallel trace remains unneeded at this scale.
 
 ## 7. Literature comparison
 

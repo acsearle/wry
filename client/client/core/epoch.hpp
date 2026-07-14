@@ -39,57 +39,70 @@ namespace wry {
 
         // Cyclic group of order 2^N
         //
-        // Promoting arithmetic makes uint16_t awkward to use as a cyclic group
-        // This type performs some coercion to greatly improve the ergonomics
+        // Promoting arithmetic makes unsigned types awkward to use as a
+        // cyclic group.  This type performs some coercion to greatly improve
+        // the ergonomics.
+        //
+        // 32 bits: comparisons are valid within a half-cycle (2^30 asserted
+        // below), and stored epochs are compared against the current epoch
+        // after arbitrary collector-side delays -- a heavily loaded cycle
+        // was observed to span 8000+ epochs, which broke the old 16-bit
+        // window (+-0x4000) in ordinary operation.
 
-        struct cyc16_t {
+        struct cyc32_t {
 
-            uint16_t raw;
+            uint32_t raw;
 
-            cyc16_t operator++(int) { return {raw++}; }
-            cyc16_t operator--(int) { return {raw--}; }
-            cyc16_t& operator++() { ++raw; return *this; }
-            cyc16_t& operator--() { --raw; return *this; }
-            cyc16_t operator+(int delta) const { return {(uint16_t)(raw + delta)}; }
-            cyc16_t operator-(int delta) const { return {(uint16_t)(raw - delta)}; }
-            int16_t operator-(cyc16_t other) const { return (int16_t)(raw - other.raw); }
+            cyc32_t operator++(int) { return {raw++}; }
+            cyc32_t operator--(int) { return {raw--}; }
+            cyc32_t& operator++() { ++raw; return *this; }
+            cyc32_t& operator--() { --raw; return *this; }
+            cyc32_t operator+(int delta) const { return {(uint32_t)(raw + delta)}; }
+            cyc32_t operator-(int delta) const { return {(uint32_t)(raw - delta)}; }
+            int32_t operator-(cyc32_t other) const { return (int32_t)(raw - other.raw); }
 
             // This is "locally" a strong ordering but "globally" the cycle
             // means chains of local comparisons eventually break transitivity.
             // We assert "locality".
-            std::strong_ordering operator<=>(cyc16_t const& other) const {
-                int difference = *this - other;
+            std::strong_ordering operator<=>(cyc32_t const& other) const {
+                int32_t difference = *this - other;
                 // catch comparisons spanning more than half a cycle
-                assert(std::abs(difference) < 0x4000);
+                assert((difference > -0x40000000) && (difference < 0x40000000));
                 return difference <=> 0;
             }
-            bool operator==(cyc16_t const& other) const = default;
+            bool operator==(cyc32_t const& other) const = default;
 
-            cyc16_t& operator+=(int delta) { raw += delta; return *this; }
-            cyc16_t& operator-=(int delta) { raw -= delta; return *this; }
+            cyc32_t& operator+=(int delta) { raw += delta; return *this; }
+            cyc32_t& operator-=(int delta) { raw -= delta; return *this; }
 
         };
-        
-        using Epoch = cyc16_t;
-        
-        
+
+        using Epoch = cyc32_t;
+
+
         using Count = uint16_t;
-        
+
         // Manipulate reference counts, preventing arithmetic promotions and
-        // trapping on overflow, which indicates unpaired pin-unpin operations
-        
+        // trapping on overflow, which indicates unpaired pin-unpin operations.
+        //
+        // Counts are stored as 15-bit fields in the packed State (the epoch
+        // widened to 32 bits and the word stays 64), so the overflow trap
+        // fires at 0x7FFF.
+
+        inline constexpr Count COUNT_MAX = 0x7FFF;
+
         [[nodiscard]] constexpr Count successor(Count n) {
-            if (n == UINT16_MAX) [[unlikely]] abort();
+            if (n == COUNT_MAX) [[unlikely]] abort();
             return (uint16_t)(n + 1);
         };
-        
+
         [[nodiscard]] constexpr Count predecessor(Count n) {
             if (n == 0) [[unlikely]] abort();
             return (uint16_t)(n - 1);
         }
-        
+
         [[nodiscard]] constexpr Count successor_of_nonzero(Count n) {
-            if ((n == 0) || (n == UINT16_MAX)) [[unlikely]] abort();
+            if ((n == 0) || (n == COUNT_MAX)) [[unlikely]] abort();
             return (uint16_t)(n + 1);
         };
 
@@ -101,15 +114,15 @@ namespace wry {
 
             struct alignas(8) State {
 
-                Epoch current;      // The current epoch
-                Count pins_current; // Pins in the current epoch
-                Count pins_prior;   // Pins in the prior epoch
-                uint16_t waiting;   // A thread is waiting
-                
+                Epoch current;            // The current epoch (32-bit cyclic)
+                Count pins_current : 15;  // Pins in the current epoch
+                Count waiting      : 1;   // A thread is waiting
+                Count pins_prior;         // Pins in the prior epoch
+
                 // TODO: If we want to wait on epoch, the layout may matter to
                 // Linux 32-bit futex.
-                                
-                
+
+
                 // Validate that a given pinned epoch is consistent with this state;
                 // that is, it is either the current or prior epoch, and the
                 // corresponding pin count is not zero.
@@ -127,22 +140,22 @@ namespace wry {
                 [[nodiscard]] State try_advance() const {
                     return State{
                         .current = pins_prior ? current : current+1,
-                        .pins_current = pins_prior ? pins_current : Count{0},
-                        .pins_prior = pins_prior ? pins_prior : pins_current,
-                        .waiting = pins_prior ? waiting : uint16_t{0},
+                        .pins_current = (Count)(pins_prior ? (Count)pins_current : Count{0}),
+                        .waiting = (Count)(pins_prior ? (Count)waiting : Count{0}),
+                        .pins_prior = pins_prior ? pins_prior : (Count)pins_current,
                     };
                 }
 
                 // New pins are applied to the current epoch
-                // Aborts if the current pin count wraps; a maximum of 2**16-1 pins
+                // Aborts if the current pin count wraps; a maximum of 2**15-1 pins
                 // are permitted.
 
                 [[nodiscard]] State pin() const {
                     return State {
                         .current = current,
                         .pins_current = successor(pins_current),
-                        .pins_prior = pins_prior,
                         .waiting = waiting,
+                        .pins_prior = pins_prior,
                     };
                 }
 
@@ -154,9 +167,9 @@ namespace wry {
                     assert(validate(occupied));
                     return State {
                         .current = current,
-                        .pins_current = (occupied == current) ? predecessor(pins_current) : pins_current,
+                        .pins_current = (occupied == current) ? predecessor(pins_current) : (Count)pins_current,
+                        .waiting = waiting,
                         .pins_prior = (occupied+1 == current) ? predecessor(pins_prior) : pins_prior,
-                        .waiting = waiting
                     };
                 }
 
@@ -165,11 +178,11 @@ namespace wry {
                     return State {
                         .current = current,
                         .pins_current = pins_current,
-                        .pins_prior = pins_prior,
                         .waiting = (current == expected),
+                        .pins_prior = pins_prior,
                     };
                 }
-                
+
                 // Pin a particular epoch.  Use case is to create a non-thread
                 // pin that can move between threads, allowing a fork-join
                 // operation to use epoch allocations as it is serviced by
@@ -178,7 +191,7 @@ namespace wry {
                     assert(validate(requested));
                     return State {
                         .current = current,
-                        .pins_current = (requested == current) ? successor_of_nonzero(pins_current) : pins_current,
+                        .pins_current = (requested == current) ? successor_of_nonzero(pins_current) : (Count)pins_current,
                         .pins_prior = (requested+1 == current) ? successor_of_nonzero(pins_prior) : pins_prior,
                     };
                 }
