@@ -837,7 +837,12 @@ orderings.
 *(Implemented 2026-07-12.  The collector loop is now: receive, advance
 phases, trace (O(new work)), and -- only when some bit is SWEEPING -- one
 sweep walk.  The full pass, and with it the per-object count check, is
-gone; the sweep's count == 0 delete assert is the standing S1 oracle.)*
+gone; the sweep's count == 0 delete assert is the standing S1 oracle.
+Partly superseded 2026-07-15: 4.11 as implemented replaced the
+birth-ordered deque, min_epoch and the sweep gates, the mature fold, and
+the strip horizon; the any-bit predicate, warm-up deferral, and the
+gray-bit rule stand.  The paragraphs below are kept as the stage
+record.)*
 
 **Cohorts.**  The known heap is a birth-ordered deque of cohorts, one per
 receive that carried allocations, tagged min_epoch = min(report H) - 1 (a
@@ -847,11 +852,6 @@ min_epoch at or past the gate holds only objects born k-marked and is
 skipped by k's sweep.  Visited cohorts fold into the single mature cohort
 -- their birth order is older than every future gate, so the distinction
 is spent -- and the deque stays a handful of entries long.
-
-TODO: (4.11) The birth order is a less precise way of ordering cohorts than the
-mutator's allocation color; the distinction that matters is "known to be
-k-black" and "may not be k-black".  If the mutator is allocating k-black, during
-a reporting period, all new allocations are k-black and don't need to be k-swept.   
 
 **Sweep.**  One walk per cycle (shared by every concurrently-SWEEPING
 bit) visits mature plus the eligible nursery prefix: deletes whites
@@ -867,18 +867,6 @@ consequence used by 4.11: surviving a walk certifies the object marked
 for every bit the walk swept.  SWEEPING -> WHITE requires the walk;
 WEAK's per-iteration registry walk (whose doom test mirrors the any-bit
 predicate) and the trace's quiet accounting are unchanged.
-
-TODO: (4.11) If we k-sweep, and j-gray is published but we but are not yet j-black-quiescent,
-k-black survivors may be observed to be j-gray or j-black.
-(k-white and j-nonwhite object is forbidden when both bits are live and j is after k in publication order.)
-j-nonwhiteness at this point guarantees surviving the j-sweep, but j-whiteness does not yet guarantee unreachability.
-The notion of a mature cohort thus discards useful information that we don't
-need to sweep such objects; instead we should maintain up to 16 cohorts that
-group the objects by the oldest live bit that is not known to be non-white.
-When doing a sweep of quiescent bits, we have one cohort of each bit, which we
-sweep and distribute to the cohorts of non-quiesecent bits according to the
-survivor's oldest live white bit.
- 
 
 **Clearing rides sweep.**  On WHITE -> CLEARING, k is flagged
 (needs_strip) on every cohort old enough to carry it; the next sweep walk
@@ -928,60 +916,96 @@ Steady state observed in the suite: one sweep walk per cycle over the
 whole small heap, cohorts = 1 (mature), stripped masks riding each walk,
 traces proportional to reported work.
 
-### 4.11 Design note: certificate-gated cohorts (not implemented)
+### 4.11 Keyed cohorts: the certificate is the key
 
-*(Filed 2026-07-12; revisit after the 100k stress baseline, if sweep
-bandwidth shows up hot.)*
+*(Filed 2026-07-12 as a design note; implemented 2026-07-15 with the
+per-object refinement below.  Supersedes 4.10's birth-ordered deque, its
+min_epoch and sweep gates, the mature fold, and the strip horizon.)*
 
-Within a cycle, marks are set-only -- a bit's strip strictly follows its
-own sweep -- so any mark OBSERVED during a sweep walk is stable through
-that bit's sweep: "observed j-gray" certifies that j's visit could not
-delete the object.  This generalizes the cohort key from birth epoch to a
-**certificate mask**: bits for which every member is known marked.  Sweep
-for j skips cohorts whose certificate contains j.  Two certificate
-sources, one mechanism:
+**The insight.**  Within a cycle, marks are set-only -- a bit's strip
+strictly follows its own sweep -- so any mark OBSERVED during a sweep
+walk is stable through that bit's sweep: observed j-nonwhite certifies
+that j's visit could not delete the object, even while j is still
+tracing.  (j-whiteness, by contrast, proves nothing until j's quiet
+gate: an unreached live object is indistinguishable from garbage.)
+This is the sound form of the generational instinct: survival cannot
+confer newness, but observation confers exactly the certificate that
+licenses visit-avoidance, and it is free at sweep time.
 
-- **Birth**: born after gate(j) implies born j-marked; min_epoch is a
-  compressed certificate issued without looking at the object.
-- **Observation**: the sweep walk already loads every survivor's color
-  word; evacuation writes the observed (stable) bits into the target
-  cohort's certificate.
+**The certificate is the cohort key.**  Rather than tagging cohorts
+with certificate masks, each object's key IS its certificate: the
+oldest live sweep-pending bit it is not known to be nonwhite for --
+the first bit whose sweep might yet delete it.  There are up to 16
+cohorts, one per bit position.  Objects known nonwhite for every live
+bit key to the *future slot*: the position the next collection will
+take, whose accumulated cohort it adopts wholesale when it starts --
+everything routed there is white for the new bit by construction.
+(This is the old "mature" cohort, now with an exact meaning.)  k's
+sweep visits exactly cohort k: every object possibly white for k keys
+at or before k in window order, sweeps run in window order, and older
+keys were emptied by older sweeps; every other cohort's key certifies
+that k's visit could not matter, and it is skipped.
 
-Skipping certified visits adds NO reclamation latency: a skipped visit
-provably could not delete, and the first bit whose snapshot postdates a
-death also postdates the certificate, so it visits and deletes on
-today's schedule.  Expected win: mature is re-observed about once per
-pipeline depth instead of once per cycle -- sweep bandwidth divided by
-roughly the depth.  This is the sound form of the generational instinct:
-survival cannot confer newness, but observation confers exactly the
-certificate that licenses visit-avoidance, and it is free at sweep time.
+**Routing.**  One computation (`_route_for_gray`: the oldest candidate
+bit the word is white for, else the future slot) serves both sources:
 
-Wrinkles:
+- **Birth**: a report now carries its period's allocation color (one
+  color per quiescence period, loaded at pin/repin), so the whole
+  allocation bag shares one key: the oldest sweep-pending bit absent
+  from the color.  Strictly more precise than the retired
+  birth-epoch-versus-sweep-gate arithmetic -- "born k-marked" is
+  carried exactly, not bounded by epoch arithmetic.
+- **Observation**: sweep survivors reroute by their observed
+  (post-strip) color word.  A concurrent shade the read misses only
+  under-certifies -- an extra future visit, never a wrong skip.
 
-1. Bits past their quiet gate certify uniformly (trace-complete: live
-   implies marked); bits still tracing do not (an unreached live object
-   is indistinguishable from garbage).  Start with post-quiet-only
-   certificates and a single evacuation bucket; bucket by observed mask
-   only if measurements ask for it.
-2. Clearing rides sweep, and certified cohorts skip sweeps, so a retired
-   bit's strip -- hence its recycle -- can wait about pipeline-depth
-   cycles, spending the 16-bit headroom faster.  Mitigate with a
-   strip-only walk of flagged-but-skipped cohorts when UNUSED bits run
-   low, or with wider color words.
-   
-TODO:  We argue (somewhere?) that we want to limit the number of cycles in
-flight, so this delayed recycling is less alarming.  It may even be helpful.
+The computation is a rotate-and-ffs, because bits now start AND retire
+in strict cyclic position order, keeping the live window contiguous
+(the arbitrary ordering is bit position; the window base rotates the
+candidate set so ffs finds the oldest).  In-order retirement means a
+bit whose strips are done can wait in CLEARING for its elders --
+harmless: its cohort is already empty and its marks are stripped.
 
-TODO: We need to route every survivor to a cohort based on
-- subset of gray bits (live not quiet)
-- first 0 bit in that subset under an arbitrary ordering
-This needs to be somewhat efficient since it gets run per survivor.
-Not an obvious bithack for it.  If we constrain the bits to live and die in strict
-bit-position order--not obviously a problem, and it might be also good for our
-sanity--it becomes a rotate and ffs
+**Clearing.**  The needs_strip flags move to the keyed cohorts:
+WHITE -> CLEARING flags every nonempty cohort; a sweep visit strips
+its cohort's flagged bits from survivors BEFORE rerouting them, so
+routing cannot spread stale marks; and a late pre-ack report carries
+the stale bit in its allocation color, which flags the target cohort
+at receive.  The strip horizon is retired; the ordering that makes the
+late-report case airtight (a pre-ack pin blocks the epoch; receive
+precedes advance in each iteration) is unchanged.
 
-Prerequisite (landed with the any-bit delete predicate in 4.10): a
-walk's survivors are uniformly certified for every bit the walk swept.
+**No reclamation latency.**  A skipped visit provably could not
+delete, and the first bit whose snapshot postdates a death also
+postdates every mark the dead object holds, so it visits and deletes
+on the same schedule as before.
+
+**The admission bound.**  Recycling can now wait on cohorts that only
+their own key's sweep visits, so a bit's retirement can trail by up to
+the pipeline depth -- accepted, per the cycles-in-flight argument.
+But a FULL window deadlocks outright: the oldest bit's recycle waits
+on a strip flag held by the never-started future cohort, whose start
+the full window blocks.  So UNUSED -> GRAY additionally requires the
+slot after the candidate to be free and caps the live count (12
+today, far above the observed depth of 5-6).  The planned admission
+cap of ~2 -- the throughput lever of section 5 -- subsumes this bound
+when it lands.
+
+**Oracles.**  Three new asserts stand guard beside the count == 0
+delete assert and the per-object violation checks: the key invariant
+(every member of cohort k is nonwhite for every sweep-pending bit
+older than k in window order), the clearing-subset invariant (a
+visited object's stale clearing marks are covered by its cohort's
+flags), and a completeness re-check at receive (no report routes
+newborns into a currently-sweeping cohort -- the lemma of 4.8,
+verified at runtime).
+
+**Observed** (suite, 2026-07-15): the startup burst swept 19k of a
+143k-object heap -- the certificate skip working from the first walk;
+suite-wide sweep visits ran about 1.3x deletes, where the old walk
+re-observed the whole heap every cycle; idle sweeps visit the
+~11-object live set or nothing at all.  The 100k big-world baseline
+(section 5) is still to be re-measured on this design.
 
 ---
 
@@ -1056,9 +1080,11 @@ eagerly (depth 5-6) -- collector duty ~65%, true headroom ~1.5x.  With
 1.69 s cycles, pipelining only needs depth ~2 to hide handshake latency,
 so a **cycle admission cap** (do not start a new bit while two are in
 flight; subsumes idle throttling when alloc is zero) divides mark work
-by ~3 for negligible float cost.  That is the next lever; 4.11's
-certificate cohorts stay in reserve (sweep is ~4% of the cycle), and
-parallel trace remains unneeded at this scale.
+by ~3 for negligible float cost.  That is the next lever.  4.11's keyed
+cohorts landed 2026-07-15 (sweep was ~4% of the cycle here, so the win
+is structural rather than urgent at this load); this baseline predates
+them and should be re-measured.  Parallel trace remains unneeded at
+this scale.
 
 ---
 

@@ -5,6 +5,7 @@
 //  Created by Antony Searle on 16/6/2024.
 //
 
+#include <bit>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -264,6 +265,12 @@ namespace wry {
 
         Report* next = nullptr;
         uint16_t gray_did_shade = 0;
+        // The period's allocation color: colors are loaded at pin/repin,
+        // so one quiescence period has one color, and every member of
+        // `allocations` was stamped with exactly this gray word at birth.
+        // The receive routes the whole bag into a keyed cohort with it
+        // (4.11).
+        uint16_t gray_for_allocation = 0;
         Bag<const GarbageCollected*> allocations;
         Bag<const GarbageCollected*> shaded;
         Bag<const GarbageCollected*> rooted;
@@ -287,6 +294,7 @@ namespace wry {
         Report* desired = new Report{
             .next = nullptr,
             .gray_did_shade = std::exchange(_thread_local_gray_did_shade, 0),
+            .gray_for_allocation = _thread_local_gray_for_allocation,
             .allocations = std::move(_thread_local_new_objects),
             .shaded = std::move(_thread_local_shaded_objects),
             .rooted = std::move(_thread_local_rooted_objects),
@@ -395,47 +403,70 @@ namespace wry {
     
     struct Collector {
 
-        // Stage-5 cohorts: the known heap, segregated by arrival.  Each
-        // receive that carried allocations appends one cohort.  min_epoch is
-        // a lower bound on the allocation epoch of every member: a report
-        // pinned at H covers allocations since that mutator's previous
-        // quiescence, i.e. from epoch H - 1 at the earliest, so the cohort
-        // takes min(H) - 1 over the reports merged into it.  A cohort whose
-        // min_epoch is at or after a bit's sweep gate (black publish + 2:
-        // every mutator pinned from there allocates k-black) contains only
-        // k-marked objects and is skipped by k's sweep.  Sweep-visited
-        // cohorts fold into the single mature cohort at the front -- their
-        // remaining distinction, birth order, is older than every future
-        // gate and therefore spent.
+        // Keyed cohorts (4.11, cohorts-as-certificates): the known heap,
+        // segregated by certificate.  An object's key is the oldest live
+        // sweep-pending bit it is not known to be nonwhite for -- the
+        // first bit whose sweep might yet delete it.  k's sweep therefore
+        // visits exactly cohort k; every other cohort's key is a
+        // certificate that k's visit could not matter.  Objects fully
+        // marked for every live bit key to the future slot (_next_start),
+        // which the next collection adopts as its own cohort when it
+        // starts -- everything accumulated there is white for the new bit
+        // by construction.
         //
-        // needs_strip carries stage-5 clearing: when a bit enters CLEARING
-        // it is flagged on every cohort that can hold it, the next sweep
-        // walk that visits the cohort strips it from the members (mutators
-        // cannot shade a CLEARING bit, so the strip races nothing), and the
-        // bit recycles when no cohort carries the flag.  Clearing costs no
-        // walk of its own: it rides sweep.
+        // Keys come from two places, one computation (_route_for_gray):
+        // newborn reports route by their period's allocation color
+        // (strictly more precise than the retired birth-epoch-versus-
+        // sweep-gate arithmetic), and sweep survivors reroute by their
+        // observed color word (marks are set-only until a bit's own
+        // strip, so an observed mark is stable through that bit's sweep).
+        // The routing is a rotate-and-ffs because bits start and retire
+        // in strict cyclic position order, keeping the live window
+        // contiguous.
+        //
+        // needs_strip carries clearing exactly as before, per keyed
+        // cohort: when a bit enters CLEARING it is flagged on every
+        // nonempty cohort; a sweep visit strips the flagged bits from
+        // survivors before rerouting them (so routing cannot spread stale
+        // marks); late pre-ack reports carry the stale bit in their
+        // allocation color and flag their target cohort at receive; the
+        // bit recycles when no cohort is flagged.
         struct Cohort {
-            Epoch min_epoch;
-            bool mature;
             uint16_t needs_strip;
             Bag<const GarbageCollected*> objects;
         };
-        std::deque<Cohort> _cohorts;
+        std::array<Cohort, 16> _cohorts_by_key = {};
         size_t _heap_objects = 0;
-        std::array<Epoch, 16> _k_sweep_gate = {};
 
-        // Strip horizon: while k is CLEARING, any cohort whose min_epoch
-        // predates this (= k's white publish + 2) may contain k-marked
-        // members and must be flagged for stripping.  Consulted at cohort
-        // creation, because the one-shot flagging at the WHITE -> CLEARING
-        // transition races late reports: a mutator that loaded its colors
-        // before the white publish can deliver k-marked allocations up to
-        // a couple of epochs afterwards.  (It cannot deliver them later
-        // than the recycle check can see: a pre-ack pin blocks the epoch,
-        // so its report is received -- and its cohort flagged -- before
-        // the try_advance that could retire k, receive running first in
-        // the iteration.)
-        std::array<Epoch, 16> _k_strip_before = {};
+        // The live window, kept cyclically contiguous by the strict
+        // start/retire order: _window_base is the oldest live bit's
+        // position (== _next_start when none are live); _next_start is
+        // the position the next collection will take, and until it does,
+        // the key meaning "not white for any live bit".  _live_count is
+        // capped (see the UNUSED transition) so a start is always
+        // possible: a full window would deadlock retirement against the
+        // never-started future cohort's strip flags.
+        int _window_base = 0;
+        int _next_start = 0;
+        int _live_count = 0;
+
+        // Bits whose sweep is still ahead: being white for one of these
+        // is the only way an object can still be deleted.
+        uint16_t _sweep_pending_mask() const {
+            return (_is_gray_published | _is_black_published |
+                    _is_weak_deciding | _is_sweeping).raw;
+        }
+
+        // The keyed-cohort routing (4.11): the oldest candidate bit, in
+        // window order, that `gray` is white for; the future slot if
+        // none.  candidates must be a subset of the live window.
+        int _route_for_gray(uint16_t gray, uint16_t candidates) const {
+            uint16_t whites = (uint16_t)(~gray & candidates);
+            if (!whites)
+                return _next_start;
+            return (std::countr_zero((uint16_t)std::rotr(whites, _window_base))
+                    + _window_base) & 15;
+        }
 
         bit16_t _is_unused = {(uint16_t)0xFFFF};
         bit16_t _is_gray_published = {};
@@ -507,7 +538,7 @@ namespace wry {
         std::array<uint32_t, 16> _passes_since_k_work = {};
 
         // Cycle-completion counter and pending callback list.  Bumped each
-        // time any kbit transitions CLEARING → UNUSED (i.e., one full cycle
+        // time any kbit transitions CLEARING -> UNUSED (i.e., one full cycle
         // of that bit completed).  Waiters drain after each bump.
         //
         // Public entry: `collector_register_cycle_callback` (declared in
@@ -561,7 +592,7 @@ namespace wry {
         }
 
         ~Collector() {
-            for (auto& c : _cohorts)
+            for (auto& c : _cohorts_by_key)
                 c.objects.leak();
             _shaded_arrivals.leak();
             _deferred_warmup.leak();
@@ -611,8 +642,7 @@ namespace wry {
             assert(epoch::local_state.is_pinned);
             Epoch E = epoch::local_state.known;
             Report* head = _global_atomic_reports_head.exchange_acquire(nullptr);
-            Cohort incoming{E, false, 0, {}};
-            bool any_allocations = false;
+            uint16_t pending = _sweep_pending_mask();
             while (head) {
                 Epoch H = Epoch{head->epoch};
 
@@ -623,16 +653,43 @@ namespace wry {
                 assert(H <= E + 1);
 
                 if (!head->allocations.is_empty()) {
-                    // The report covers allocations since its publisher's
-                    // previous quiescence: epoch H - 1 at the earliest.
-                    Epoch lower = H - 1;
-                    incoming.min_epoch = any_allocations
-                        ? std::min(incoming.min_epoch, lower) : lower;
-                    any_allocations = true;
                     size_t n = head->allocations.size();
                     _allocated_since_scan += n;
                     _heap_objects += n;
-                    incoming.objects.splice(std::move(head->allocations));
+                    // Route the whole bag by the period's allocation
+                    // color: one color per quiescence period, so every
+                    // member was born with exactly these gray bits, and
+                    // the key -- the oldest sweep-pending bit a member
+                    // might be white for -- is shared (4.11; strictly
+                    // more precise than birth-epoch arithmetic against
+                    // sweep gates).
+                    int key = _route_for_gray(head->gray_for_allocation, pending);
+                    // A sweeping bit is past its quiet gate: no report
+                    // can still carry allocations white for it (the
+                    // completeness lemma), so newborns never route into a
+                    // cohort this iteration's walk will sweep.
+                    assert(!((uint16_t)(1u << key) & _is_sweeping.raw));
+                    Cohort& c = _cohorts_by_key[key];
+                    // Late-report stripping: a mutator that loaded its
+                    // colors before k's white publish delivers k-marked
+                    // allocations after the CLEARING transition's
+                    // flagging pass ran; the stale mark is right there in
+                    // the allocation color, so flag the target directly.
+                    // (Sound against the recycle check by ordering: a
+                    // pre-ack pin blocks the epoch, so the straggler's
+                    // report is received -- and its cohort flagged --
+                    // before the try_advance that could retire k, receive
+                    // running first in the iteration.)
+                    c.needs_strip |= head->gray_for_allocation & _is_clearing.raw;
+                    // Receive-time promotion: gray-born objects blacken
+                    // here once their bit may blacken; those born for a
+                    // bit still warming up park in _deferred_warmup (via
+                    // _promote) for that bit's GRAY -> BLACK transition.
+                    // Everything born after a black-ack is black at birth
+                    // and no-ops.
+                    for (const GarbageCollected* object : head->allocations)
+                        _promote(object);
+                    c.objects.splice(std::move(head->allocations));
                 }
                 _shaded_since_scan += head->shaded.size();
                 _shaded_arrivals.splice(std::move(head->shaded));
@@ -646,26 +703,6 @@ namespace wry {
                     }
                 }
                 delete std::exchange(head, head->next);
-            }
-            if (any_allocations) {
-                // Late-report stripping: this cohort may hold members born
-                // k-marked by a mutator that had not yet seen k's white
-                // publish, arriving after the CLEARING transition's
-                // flagging pass already ran.  Flag it now, or the recycle
-                // check has nothing to wait on and k reuses the bit under
-                // stale marks.
-                for (int k = 0; k != 16; ++k) {
-                    if (_is_clearing[k] && incoming.min_epoch < _k_strip_before[k])
-                        incoming.needs_strip |= (uint16_t)(1 << k);
-                }
-                // Receive-time promotion: gray-born objects blacken here
-                // once their bit may blacken; those born for a bit still
-                // warming up park in _deferred_warmup (via _promote) for
-                // that bit's GRAY -> BLACK transition.  Everything born
-                // after a black-ack is black at birth and no-ops.
-                for (const GarbageCollected* object : incoming.objects)
-                    _promote(object);
-                _cohorts.push_back(std::move(incoming));
             }
         }
 
@@ -785,13 +822,13 @@ namespace wry {
             // pre-transition report was pushed before that repin, and the
             // per-iteration exchange has therefore already received it.
             //
-            // *Has all the work been done?* — i.e., has every known object been
+            // *Has all the work been done?* -- i.e., has every known object been
             // visited? Answered by `kstate[k].scans >= 1`. Used by `SWEEPING`,
             // `CLEARING`. Safe because objects we haven't yet seen are
             // guaranteed to be in the target state by the previous phase's
             // invariant.
             //
-            // *What did the mutators actually do?* — i.e., has k-work stopped
+            // *What did the mutators actually do?* -- i.e., has k-work stopped
             // arriving, and has what arrived been traced?  Answered by
             // `_k_last_work` + `_passes_since_k_work`.  Used only by
             // `BLACK_PUBLISHED`, because tracing termination depends on what
@@ -830,13 +867,35 @@ namespace wry {
                 switch (kstate[k].kphase) {
                         
                     case UNUSED:
-                        // Only start a collection for the first unused bit we
-                        // discover.
-                        // TODO: We want to keep the collections spread out; not much point
-                        // having them bunched up
+                        // Strict cyclic start order (4.11): only the next
+                        // slot in rotation may start, so the live window
+                        // stays contiguous and keyed-cohort routing is a
+                        // rotate-and-ffs.
                         if (!first)
                             break;
+                        if (k != _next_start)
+                            break;
+                        // The slot after must be free to become the future
+                        // cohort, and the window must not fill: retirement
+                        // is in-order and waits on strip flags that only a
+                        // future start can discharge, so a full window
+                        // deadlocks.  (An admission cap of ~2, the next
+                        // performance lever, would subsume this bound.)
+                        if (!_is_unused[(k + 1) & 15])
+                            break;
+                        if (_live_count >= 12)
+                            break;
                         first = false;
+                        // The future slot we vacate holds exactly this
+                        // bit's population -- everything accumulated there
+                        // is k-white by construction.  The slot we adopt
+                        // as the new future was drained by its own final
+                        // sweep and never routed into since.
+                        assert(_cohorts_by_key[(k + 1) & 15].objects.is_empty());
+                        if (_live_count == 0)
+                            _window_base = k;
+                        ++_live_count;
+                        _next_start = (k + 1) & 15;
                         kstate[k] = { GRAY_PUBLISHED, E, 0 };
                         // Conservative: treat cycle start as k-work, so the
                         // quiet window cannot open before warm-up completes.
@@ -853,11 +912,10 @@ namespace wry {
                         if (E < kstate[k].since + 2)
                             break;
                         kstate[k] = { BLACK_PUBLISHED, E, 0 };
-                        // Sweep gate: every mutator pinned at E + 2 or later
-                        // has adopted k-black, so every allocation from
-                        // there is k-marked at birth and cohorts wholly
-                        // newer than the gate are exempt from k's sweep.
-                        _k_sweep_gate[k] = E + 2;
+                        // (No sweep gate to record: newborn cohorts key by
+                        // their reports' allocation color, which carries
+                        // "born k-marked" exactly rather than bounding it
+                        // with epoch arithmetic.)
                         // Everything grayed for k during the warm-up --
                         // shades of old objects and gray-born allocations
                         // alike -- was parked in _deferred_warmup by
@@ -940,26 +998,35 @@ namespace wry {
                         if (E < F + 2)
                             break;
                         kstate[k] = { CLEARING, E, 0 };
-                        // Flag k for stripping on every cohort that can
-                        // carry it: those with members born before the
-                        // white-ack.  Cohorts born after it were born
-                        // without k, and mutators can no longer shade it.
-                        // Cohorts CREATED after this pass are flagged at
-                        // receive against the same horizon (late reports).
-                        _k_strip_before[k] = F + 2;
-                        for (auto& c : _cohorts)
-                            if (c.mature || c.min_epoch < F + 2)
+                        // Flag k for stripping on every nonempty keyed
+                        // cohort: at the white publish every live object
+                        // was k-marked, wherever its key placed it.
+                        // Cohorts that gain members later stay clean --
+                        // late pre-ack reports carry k in their allocation
+                        // color and flag their target at receive, and
+                        // sweep-rerouted survivors move stripped.
+                        for (auto& c : _cohorts_by_key)
+                            if (!c.objects.is_empty())
                                 c.needs_strip |= bit;
                     } break;
 
                     case CLEARING: {
+                        // Retire strictly in window order (4.11): the
+                        // rotate-and-ffs keying needs the live window
+                        // contiguous, so a bit waits for its elders even
+                        // when its own strips are done.
+                        if (k != _window_base)
+                            break;
                         // Clearing rides sweep: k has been stripped from a
                         // cohort's members when the flag is gone.  k
-                        // recycles when no cohort carries it -- at most
-                        // about one further cycle, since every flagged
-                        // cohort is older than the next sweep's gate.
+                        // recycles when no cohort carries it.  Recycling
+                        // can now wait on cohorts that only their own
+                        // key's sweep visits -- the accepted latency of
+                        // certificate skipping; the admission bound keeps
+                        // a future start (hence that sweep) always
+                        // reachable.
                         bool pending = false;
-                        for (auto& c : _cohorts)
+                        for (auto& c : _cohorts_by_key)
                             if (c.needs_strip & bit) {
                                 pending = true;
                                 break;
@@ -967,6 +1034,8 @@ namespace wry {
                         if (pending)
                             break;
                         kstate[k] = { UNUSED, E, 0 };
+                        --_live_count;
+                        _window_base = _live_count ? (k + 1) & 15 : _next_start;
                         printf("C0: k=%d cycle complete: iters=%llu in %.3gs\n",
                                k,
                                (unsigned long long)(_scan_passes - _cycle_pass0[k]),
@@ -1252,12 +1321,16 @@ namespace wry {
 
         } // void Collector::collector_trace()
 
-        // Sweep: the one heap walk, over only the cohorts old enough to
-        // hold a white object for some sweeping bit.  Deletes whites,
-        // strips retired (CLEARING) bits from survivors as it goes --
-        // clearing rides sweep and costs no walk of its own -- and folds
-        // the visited cohorts into the single mature cohort, whose birth
-        // order is older than every future gate and therefore spent.
+        // Sweep: visits exactly the sweeping bits' own cohorts (4.11,
+        // cohorts-as-certificates).  Every object possibly white for k
+        // keys at or before k, sweeps run in window order, and older keys
+        // were emptied by older sweeps, so cohort k is precisely k's
+        // candidate set; every other cohort's key certifies the visit
+        // could not delete, and it is skipped.  Deletes whites, strips
+        // retired (CLEARING) bits from survivors as it goes -- clearing
+        // rides sweep and costs no walk of its own -- and reroutes each
+        // survivor to the cohort of the oldest still-pending bit its
+        // observed word is white for, the future slot if none.
         void collector_sweep_walk() {
 
             assert(_is_sweeping.raw);
@@ -1266,41 +1339,37 @@ namespace wry {
             auto t0 = std::chrono::steady_clock::now();
             uint16_t sweep_mask = _is_sweeping.raw;
 
-            // Newest gate among the sweeping bits: cohorts older than it
-            // are eligible for at least one of them.  (A cohort eligible
-            // for one sweeping bit but not another is walked with the full
-            // mask; that is safe because members born after a bit's gate
-            // are marked for it at birth, so the any-bit delete predicate
-            // below cannot misfire on them.)
-            Epoch newest_gate{};
-            bool have_gate = false;
-            for (int k = 0; k != 16; ++k) {
-                if (_is_sweeping[k]) {
-                    newest_gate = have_gate ? std::max(newest_gate, _k_sweep_gate[k])
-                                            : _k_sweep_gate[k];
-                    have_gate = true;
-                }
-            }
-            assert(have_gate);
+            // Reroute candidates: live sweep-pending bits whose fate this
+            // walk does not decide.  A survivor's new key is the oldest
+            // of these its observed word is white for -- observed marks
+            // are set-only until the marked bit's own strip, so they are
+            // stable through that bit's sweep, and routing past it is a
+            // certificate against its walk.  Fully marked survivors key
+            // to the future slot.
+            uint16_t candidates = (uint16_t)(_sweep_pending_mask() & ~sweep_mask);
 
-            std::deque<Cohort> keep;
-            Cohort folded{Epoch{}, true, 0, {}};
             size_t visited = 0;
             size_t delete_count = 0;
             uint16_t stripped = 0;
             int counter = 0;
 
-            for (auto& c : _cohorts) {
-                if (!c.mature && !(c.min_epoch < newest_gate)) {
-                    // Every member born k-marked for every sweeping k; and
-                    // young cohorts cannot carry needs_strip (flags are set
-                    // only on cohorts older than the flagging bit's
-                    // white-ack, which predates any later sweep gate).
-                    keep.push_back(std::move(c));
+            for (int key = 0; key != 16; ++key) {
+                uint16_t key_bit = (uint16_t)(1u << key);
+                if (!(key_bit & sweep_mask))
+                    // Certificate: every member of this cohort is nonwhite
+                    // for every sweep-pending bit older than its key,
+                    // which includes every sweeping bit -- the visit could
+                    // not delete, so it is skipped.
                     continue;
-                }
-                uint16_t strip = c.needs_strip;
+                Cohort& c = _cohorts_by_key[key];
+                uint16_t strip = std::exchange(c.needs_strip, 0);
                 stripped |= strip;
+                // Key-invariant oracle: members promised nonwhite for
+                // every sweep-pending bit older than their key in window
+                // order.
+                [[maybe_unused]] uint16_t older_than_key =
+                    (uint16_t)std::rotl((uint16_t)((1u << ((key - _window_base) & 15)) - 1u),
+                                        _window_base);
                 const GarbageCollected* object = nullptr;
                 while (c.objects.try_pop(object)) {
                     assert(object);
@@ -1309,28 +1378,31 @@ namespace wry {
                     uint16_t before_black = object->_black;
                     int32_t reference_count = object->_count.load_relaxed();
                     violation(object, before_gray, before_black, reference_count);
+                    assert(!(~before_gray & older_than_key & (uint16_t)(sweep_mask | candidates)));
+                    // Stale clearing marks reach a cohort only through its
+                    // flags: transition flagging covers residents, receive
+                    // flagging covers late newborns, and rerouted
+                    // survivors were stripped before they moved.
+                    assert(!(before_gray & _is_clearing.raw & ~strip));
                     if (~before_gray & sweep_mask) {
                         // White for ANY sweeping bit: that bit is past its
                         // quiet gate, so its whiteness alone proves the
                         // object was unreachable at that bit's snapshot --
                         // permanently.  Blackness for a concurrently
                         // sweeping bit only records reachability at an
-                        // older snapshot and cannot resurrect.  (This also
-                        // makes surviving a walk certify the object marked
-                        // for every bit the walk swept -- the uniform
-                        // certificate 4.11 builds on.)  Rooting requires a
-                        // reachable pointer, so a white object cannot be
-                        // rooted -- the standing S1 oracle.
+                        // older snapshot and cannot resurrect.  Rooting
+                        // requires a reachable pointer, so a white object
+                        // cannot be rooted -- the standing S1 oracle.
                         assert(reference_count == 0);
                         delete object;
                         ++delete_count;
                         --_heap_objects;
                     } else {
+                        uint16_t after_gray = before_gray;
                         if (strip) {
                             // The stripped bits are all in CLEARING, which
                             // no mutator can shade; the CAS contends only
                             // with concurrent shades of OTHER bits.
-                            uint16_t after_gray;
                             for (;;) {
                                 after_gray = before_gray & ~strip;
                                 if (after_gray == before_gray)
@@ -1341,30 +1413,39 @@ namespace wry {
                             }
                             object->_black = before_black & ~strip;
                         }
-                        folded.objects.push(object);
+                        // Reroute by the observed (post-strip) word; a
+                        // concurrent shade we miss only under-certifies,
+                        // costing an extra future visit, never a wrong
+                        // skip.  Never routes into a swept cohort.
+                        int route = _route_for_gray(after_gray, candidates);
+                        assert(!((uint16_t)(1u << route) & sweep_mask));
+                        _cohorts_by_key[route].objects.push(object);
                     }
                     if (++counter > 1000) {
                         mutator_repin(); counter = 0;
                     }
                 }
             }
-            _cohorts = std::move(keep);
-            if (!folded.objects.is_empty())
-                _cohorts.push_front(std::move(folded));
 
             // One walk serves every currently-sweeping bit.
             for (int k = 0; k != 16; ++k)
                 if (_is_sweeping[k])
                     kstate[k].scans += 1;
 
+            int nonempty = 0;
+            for (auto& c : _cohorts_by_key)
+                if (!c.objects.is_empty())
+                    ++nonempty;
             auto t1 = std::chrono::steady_clock::now();
-            printf("C0: sweep mask=%04x visited=%zd deleted=%zd stripped=%04x heap=%zd cohorts=%zd in %.3gs\n",
+            printf("C0: sweep mask=%04x visited=%zd deleted=%zd stripped=%04x heap=%zd cohorts=%d window=[%d,%d) in %.3gs\n",
                    sweep_mask,
                    visited,
                    delete_count,
                    stripped,
                    _heap_objects,
-                   _cohorts.size(),
+                   nonempty,
+                   _window_base,
+                   _next_start,
                    std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
 
         } // void Collector::collector_sweep_walk()
