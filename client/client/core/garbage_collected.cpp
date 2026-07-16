@@ -552,15 +552,6 @@ namespace wry {
         std::mutex _cycle_waiters_mutex;
         std::vector<CycleWaiter> _cycle_waiters;
 
-        // TEMP (shutdown cycle-waiter stall investigation): a relaxed mirror of
-        // _cycle_waiters.size(), written under _cycle_waiters_mutex, so the
-        // collector loop can gate its diagnostic print on "is anything parked
-        // on a cycle?" with a single relaxed load instead of taking the mutex
-        // every spin.  Plus collector-thread-only throttle state for that print.
-        Atomic<size_t> _cycle_waiters_count{0};
-        uint64_t _dbg_last_phases = ~uint64_t{0};
-        uint64_t _dbg_stall_iters = 0;
-
         void _on_cycle_started(uint16_t tag) {
             std::scoped_lock guard{_cycle_waiters_mutex};
             for (auto& x : _cycle_waiters)
@@ -585,7 +576,6 @@ namespace wry {
                         ++it;
                     }
                 }
-                _cycle_waiters_count.store_relaxed(_cycle_waiters.size());  // TEMP
             }
             for (auto& w : ready)
                 global_work_queue_schedule(w.callback);
@@ -743,39 +733,6 @@ namespace wry {
                     // that wait on it need the actual work to have run --
                     // WEAK_DECIDING counts trace's weak walks, SWEEPING
                     // counts sweep walks.)
-                }
-
-                // TEMP (shutdown cycle-waiter stall investigation): when a
-                // coroutine is parked on a collection cycle (WaitForCollection-
-                // Cycles in the weak-string / ctrie tests) the collector must
-                // drive that cycle to completion itself.  If it can't, this
-                // makes the hang legible: the log tail shows the phase set
-                // frozen while `waiters` stays nonzero.  Hot path when
-                // nothing is parked is a single relaxed load.  Throttled to
-                // fire on state change, plus a periodic [STALLED] line if it
-                // sits fully frozen.  Remove once the stall is understood.
-                if (_cycle_waiters_count.load_relaxed() != 0) {
-                    uint64_t phases = 0;
-                    for (int k = 0; k != 16; ++k)
-                        phases |= (uint64_t)kstate[k].kphase << (k * 3);
-                    bool changed = (phases != _dbg_last_phases);
-                    bool periodic = !changed
-                                 && ((++_dbg_stall_iters & ((1u << 24) - 1)) == 0);
-                    if (changed || periodic) {
-                        printf("C: waiters=%zu epoch=%04x phases=%016llx\n",
-                               _cycle_waiters_count.load_relaxed(),
-                               current_epoch.raw,
-                               (unsigned long long)phases);
-                        // On a full freeze, name the pinned thread(s): a
-                        // stuck pinner is the prime suspect.
-                        if (periodic)
-                            thread_public_debug_dump();
-                        _dbg_last_phases = phases;
-                        if (changed)
-                            _dbg_stall_iters = 0;
-                    }
-                } else {
-                    _dbg_stall_iters = 0;
                 }
 
                 assert(epoch::local_state.is_pinned);
@@ -1475,7 +1432,6 @@ namespace wry {
         } else {
             std::scoped_lock guard{collector._cycle_waiters_mutex};
             collector._cycle_waiters.emplace_back(k, callback, 0);
-            collector._cycle_waiters_count.store_relaxed(collector._cycle_waiters.size());  // TEMP
         }
     }
 

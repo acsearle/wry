@@ -383,12 +383,15 @@ responsibility to the tracing collector.
 `_debug_allocation_black`, `_debug_allocation_epoch`) record the
 allocation-time colors and epoch for the per-object invariant checks and
 crash forensics.  They are written once at construction, are never
-synchronized, and carry no correctness role.  Note that no shipped
-configuration defines NDEBUG (verified 2026-07-14), so every build we
-run -- Release included -- carries the fields and runs the checks; an
-NDEBUG build compiles (kept honest by syntax checks) but has never been
-exercised.  Do not generalize from these fields' access patterns to
-production memory-ordering choices.
+synchronized, and carry no correctness role.  As of 2026-07-15 the
+Release configuration defines NDEBUG=1 (the Profile action inherits
+it), so Release builds drop these fields, every assert, and the
+violation() machinery; Debug (with sanitizers, on the small world)
+remains the fully checked build and the only correctness gate -- a
+Release test-suite pass is vacuous, since the tests' own asserts
+compile out with everything else.  The section-5 baselines predate the
+flip and include the check cost.  Do not generalize from these fields'
+access patterns to production memory-ordering choices.
 
 #### 3.3.3 Global atomics
 
@@ -806,13 +809,28 @@ question transitions cannot: what was already rooted when a cycle started.  It i
 walked at the top of every scan: entries observed with count zero are
 dropped (the 1 -> 0 drop shaded; a re-root files a fresh event), and live
 entries are grayed for every active collection and promoted into the
-wavefront.  In-cycle root-ups of already-marked objects need no registry
-help; root-ups of white objects are shades.  The rescue counter -- the
+wavefront.  The rescue counter -- the
 pass's count check graying a rooted object the registries had not --
 reads zero across the full suite (6,405 passes); stage 5 required that
 before deleting the count check.  The sweep now asserts count == 0 on
 every deleted object: rooting requires a reachable pointer, and nothing
 reachable is white at sweep, so this is the direct S1 oracle.
+
+The 0 -> 1 transition originally also SHADED; removed 2026-07-15.
+Soundness rests on the **possession contract**: a mutator may not hold
+a bare GC pointer across a quiescence without an anchor -- heap
+reachability or a Root -- the same contract that lets the sweep free
+memory with no epoch grace period.  Under it: the registry entry rides
+the very report the shade would have ridden; receive precedes trace
+precedes sweep within an iteration, so receipt-before-sweep implies
+marked-before-sweep (the registry walk grays-and-blackens live
+entries); and once k's quiet window has closed, a k-white object cannot
+be legitimately possessed at all, so no late white root-up exists to
+protect.  The clincher: the shade never covered the truly-late case
+anyway -- shading an already-swept object is itself a use-after-free.
+Removing it also stopped root churn from spuriously resetting quiet
+windows, and restored the exit shade's record-once flip, structurally
+closing the orphan-trap path of 4.10 at this call site.
 
 **Weak.**  Objects with a nontrivial weak decision (WeakHolder) register
 at construction, through the report channel, into a weak registry; the
@@ -1080,11 +1098,43 @@ eagerly (depth 5-6) -- collector duty ~65%, true headroom ~1.5x.  With
 1.69 s cycles, pipelining only needs depth ~2 to hide handshake latency,
 so a **cycle admission cap** (do not start a new bit while two are in
 flight; subsumes idle throttling when alloc is zero) divides mark work
-by ~3 for negligible float cost.  That is the next lever.  4.11's keyed
-cohorts landed 2026-07-15 (sweep was ~4% of the cycle here, so the win
-is structural rather than urgent at this load); this baseline predates
-them and should be re-measured.  Parallel trace remains unneeded at
-this scale.
+by ~3 for negligible float cost.  (This baseline predates 4.11; see
+below.  The pacing analysis it motivated is in section 9.)  Parallel
+trace remains unneeded at this scale.
+
+**Post-4.11 baseline (100k stress, Release, 2026-07-15): STABLE, cycle
+time ~60% of the pre-4.11 design.**  Per iteration (~116 ms; 11 per
+1.28 s bit-cycle; one bit completes per iteration): trace 1.27M marks
+in 94 ms (13.5M marks/s -- the thinner heap traces faster than the
+1.87M-object heap did), sweep 417k visits in 19 ms -- 26% of the heap,
+the certificate skip in the large; visited ~= deletions (105k) plus
+the not-yet-certified tail -- allocation 107k ~= deletions (steady),
+heap 1.58-1.69M, live window 11 bits wide.  Xcode-reported process
+memory stable around 3 GB.
+
+Two framings of "overhead":
+
+- **Memory**: float = heap - live ~= 0.55M objects ~= 33% of the heap
+  by object count -- and a rounding error against process RSS, which
+  is dominated by textures, buffers, and allocator slack.  Float is
+  the cheap resource here; that fact drives the pacing decision in
+  section 9.
+- **CPU**: collector duty ~97% of one core, and under the list-driven
+  model this is a GENUINE utilization signal -- the old scan-for-gray
+  model was busy by construction, idling *as* scanning, so its
+  utilization measured nothing.  The core is saturated but keeping up.
+  Marks-per-allocation ~= 12 ~= the live window depth: each iteration
+  admits a new bit, which costs one full marking of the reachable set
+  per iteration.  That multiplier is the remaining fat.
+
+Also observed: `shaded+=0` throughout.  The big world generates almost
+no write-barrier traffic, which validates the architecture --
+rebuild-fresh persistent structures plus arena temporaries mean the
+deletion barrier fires only on genuine long-lived-graph edits.  The
+flip side: the quiet-window re-opening path is unexercised at scale,
+and the clockwork cycle regularity (1.28 s +- 0.01) is partly an
+artifact of that easy case.  Any pacing scheme calibrated on this
+world is calibrated without churn.
 
 ---
 
@@ -1276,9 +1326,11 @@ Both threads RMW `_gray`. The mutator's `fetch_or(k)` and the collector's
   throttling.  Liveness also assumes mutators keep repinning -- L2's
   practical caveat.
 - **How many overlapping collections?**  k = 16 is pipeline depth.
-  Measured depth under load is 5-6 with eager admission, while ~2
-  suffices to hide the handshake latency (section 5); if four bits are
-  enough, the color words shrink to a byte.  The overlap is not the
+  Measured depth under eager admission reached 11 post-4.11 (the live
+  window in the logs), while ~2 suffices to hide the handshake latency
+  and the settled pacing direction (section 9) runs one working bit
+  plus overlapping tails -- so four bits may genuinely be enough, and
+  the color words would shrink to a byte.  The overlap is not the
   source of the complexity, but it doesn't help.  Sure is cool though.
 - **Is the reasoning about the range of epochs over which relaxed gray-bit
   stores can be observed actually valid?**  Somehow it feels different
@@ -1291,19 +1343,54 @@ Both threads RMW `_gray`. The mutator's `fetch_or(k)` and the collector's
   `gc_root_churn` and the churn tests are tripwires for the registry and
   pin-continuity contracts; TSan sees the report channel natively
   (fences over release sequences still need the annotation rule).  What
-  is missing: a stress that deliberately saturates all 16 bits, and
-  adversarial-scheduler coverage of the ragged windows.
+  is missing: a stress that deliberately saturates all 16 bits;
+  adversarial-scheduler coverage of the ragged windows; and a
+  shade-heavy churn workload -- the big world generates almost no
+  barrier traffic (section 5), so the quiet-window re-opening path and
+  the late-shade machinery are unexercised at scale.
 
 ---
 
 ## 9. Future directions
 
-- **Cycle admission cap** -- the next lever (section 5): do not start a
-  new bit while about two are in flight.  Divides mark work by ~3 at the
-  100k load for negligible float cost, and subsumes idle throttling when
-  the allocation rate is zero.
-- **Certificate-gated cohorts** -- 4.11, in reserve until sweep bandwidth
-  shows up hot (it is ~4% of a cycle today).
+- **Collection pacing** (analysis settled 2026-07-15; implementation
+  deferred until a more realistic big workload exists).  Total marking
+  cost is heap x start-frequency, independent of how starts are spaced:
+  spacing only evens reclamation latency and smooths the core.  The
+  dial is therefore collections per second; the cap is just how the
+  dial is held.  Findings:
+  - A bunched cap of two -- "start when a slot frees" -- is the worst
+    point on the curve: the second start trails the first by one
+    iteration, they mark in lockstep, and we pay twice the marking for
+    essentially no latency gain.
+  - The likely operating point is ONE working bit with retirement
+    tails overlapping (k's WHITE/CLEARING under k+1's warm-up -- the
+    depth ~2 that hides the handshakes), paced by TILING: start the
+    next collection when the incumbent's quiet window opens (graystack
+    drained, gates pending).  The successor's two-epoch warm-up runs
+    under the incumbent's quiet/weak tail, so its tracing becomes
+    legal exactly as the incumbent stops needing the core.
+    Event-driven, zero idle, no clock prediction.  Estimated at the
+    100k load: ~0.4-0.5 s reclamation latency, float under 1M objects,
+    roughly half of today's marking.  Since float is ~2% of process
+    memory (section 5), buying latency with concurrent marking spends
+    the scarce resource on the abundant one.
+  - The latency dial, held in reserve: midpoint staggering as a
+    PROGRESS MEASUREMENT, not a wall-clock prediction -- start the
+    next collection when marked-since-black-publish exceeds half of
+    the previous cycle's total marks.  Exact at steady state; under
+    churn, a re-opened quiet window means "more tracing work
+    appeared", so the trigger waits longer -- the correct
+    backpressure, exactly where phase- or clock-based triggers would
+    fire into a still-growing trace.
+  - At depth one the keyed-cohort skip mostly idles: reroute
+    candidates are empty, survivors all route to the future slot, and
+    sweeps revert to ~whole-heap visits.  The certificates cost
+    nothing to keep and re-engage whenever depth exceeds one.
+  Pacing also subsumes idle throttling and the live_count < 12
+  deadlock bound of 4.11.
+- **Keyed cohorts** -- landed 2026-07-15 (4.11).  Their payoff is
+  concurrency-dependent; see the pacing note above.
 - **Orphaned-slab handoff** -- a slab field on a thread's final `Report`
   (openable at $E \ge F + 3$, exactly the rotation bound), the crossbeam
   SealedBag analog; replaces leaking the last bump slabs at thread exit

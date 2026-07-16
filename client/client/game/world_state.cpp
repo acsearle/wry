@@ -28,8 +28,7 @@ namespace wry {
         // the same world.  The player is just one of the entities; callers
         // recover the local-player handle via find_local_player below.
         //
-        // TEMP: unreferenced while new_game uses make_starting_world_big.
-        [[maybe_unused]] World* make_starting_world() {
+        World* make_starting_world() {
             World* world = new World;
 
             {
@@ -81,14 +80,16 @@ namespace wry {
             return world;
         }
 
-        // TEMP: stress-test scenario.  Machines with random headings,
-        // randomly part-way through a move between adjacent tiles, scattered
-        // over a square region centered on the origin whose tiles each have
-        // a 10% chance of holding the flip-flop opcode.  Fixed seed, and
-        // modulo rather than uniform_int_distribution (whose mapping is
+        // Stress-test scenario, unreferenced while new_game uses
+        // make_starting_world; wire it in temporarily for big-world runs.
+        // Machines with random headings, randomly part-way through a move
+        // between adjacent tiles, scattered over a square region centered
+        // on the origin whose tiles each have a 10% chance of holding the
+        // flip-flop opcode.  Fixed seed, and modulo rather than
+        // uniform_int_distribution (whose mapping is
         // implementation-defined), so every run and every peer builds the
         // identical world.
-        World* make_starting_world_big() {
+        [[maybe_unused]] World* make_starting_world_big() {
             World* world = new World;
 
             {
@@ -185,7 +186,7 @@ namespace wry {
     }
 
     void WorldState::new_game() {
-        install_displayed_world(*this, make_starting_world_big());
+        install_displayed_world(*this, make_starting_world());
     }
 
     void WorldState::load_from_save(int id) {

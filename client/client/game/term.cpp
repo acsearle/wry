@@ -141,7 +141,10 @@ namespace wry {
         assert(term_size(t) == 1);
         assert(term_contains(t, "a"));
         assert(term_find(t, "a") == "A");
-        assert(term_insert_or_assign(t, "a", "A2") == "A");
+        // Mutations stay outside assert(): under NDEBUG the argument
+        // expression is never evaluated.
+        [[maybe_unused]] Term displaced_a = term_insert_or_assign(t, "a", "A2");
+        assert(displaced_a == "A");
         assert(term_size(t) == 1);
         assert(term_contains(t, "a"));
         assert(term_find(t, "a") == "A2");
@@ -156,10 +159,12 @@ namespace wry {
             Term k2 = "another very long key";
             assert(!term_contains(t, k));
             assert(term_find(t, k) == term_make_null());
-            assert(term_insert_or_assign(t, k, v) == term_make_null());
+            [[maybe_unused]] Term displaced_k = term_insert_or_assign(t, k, v);
+            assert(displaced_k == term_make_null());
             assert(term_contains(t, k));
             assert(term_find(t, k) == v);
-            assert(term_erase(t, k));
+            [[maybe_unused]] Term erased_k = term_erase(t, k);
+            assert(erased_k);
         }
         
         {
@@ -191,7 +196,8 @@ namespace wry {
             assert(!term_contains(t, v[i]));
             assert(term_is_null(term_find(t, v[i])));
             // assert(hash(v[i]) == hash(Term(v[i])));
-            assert(term_is_null(term_insert_or_assign(t, v[i], v[i])));
+            [[maybe_unused]] Term displaced_i = term_insert_or_assign(t, v[i], v[i]);
+            assert(term_is_null(displaced_i));
             assert(term_size(t) == i + 1);
             assert(term_contains(t, v[i]));
             assert(term_find(t, v[i]) == v[i]);
@@ -208,7 +214,8 @@ namespace wry {
         for (int i = 0; i != 100; ++i) {
             assert(term_contains(t, v[i]));
             assert(term_find(t, v[i]) == v[i]);
-            assert(term_erase(t, v[i])== v[i]);
+            [[maybe_unused]] Term erased_i = term_erase(t, v[i]);
+            assert(erased_i == v[i]);
             assert(term_contains(t, v[i]) == false);
             assert(term_is_null(term_find(t, v[i])));
         }
