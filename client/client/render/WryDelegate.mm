@@ -606,6 +606,17 @@ namespace {
     _gui->events.push(ev);
 }
 
+// Trackpad pinch.  Arrives via the responder chain like scrollWheel:.
+-(void) magnifyWithEvent:(NSEvent *)event {
+    using namespace wry::gui;
+    Event ev{};
+    ev.kind = WryEventKindMagnify;
+    ev.mods = modifiers_from_ns_flags([event modifierFlags]);
+    ev.location = location_in_view_pt(_metalView, event);
+    ev.magnification = (float)event.magnification;
+    _gui->events.push(ev);
+}
+
 - (void)encodeWithCoder:(nonnull NSCoder *)coder {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }

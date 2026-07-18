@@ -118,9 +118,15 @@
     id<MTLTexture> _darkgray;
     id<MTLTexture> _orange;
 
-    // One texel per terrain kind, indexed by wry::Terrain; terrain tiles are
-    // untextured solid colors until real terrain art exists.
-    id<MTLTexture> _terrainPalette;
+    // Terrain material atlases (assets/terrain/): 4 material rows indexed
+    // by wry::Terrain x 4 variant columns of 256 px PBR tiles, with a
+    // baked near-black border per cell that doubles as the bleed gutter.
+    // ORM packs occlusion/roughness/metallic into r/g/b (the glTF channel
+    // convention the shader reads), so the one texture serves all three
+    // bindings.
+    id<MTLTexture> _terrainAlbedo;
+    id<MTLTexture> _terrainNormal;
+    id<MTLTexture> _terrainORM;
 
     // Double-buffered world-map texture (one texel per tile).  The
     // background builder hands finished pixel buffers to the main thread,
@@ -532,23 +538,20 @@
         }
 
         {
-            // Terrain palette, texels indexed by wry::Terrain (colors are
-            // the shared TERRAIN_COLOR_SRGB, also used by the world-map
-            // builder).  Each tile quad puts all four corners at its kind's
-            // texel center, so the linear sampler returns the texel
-            // exactly: solid color, no bleed.
-            MTLTextureDescriptor* descriptor =
-                [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
-                                                                   width:wry::TERRAIN_KIND_COUNT
-                                                                  height:1
-                                                               mipmapped:NO];
-            descriptor.usage = MTLTextureUsageShaderRead;
-            _terrainPalette = [_ctx.device newTextureWithDescriptor:descriptor];
-            _terrainPalette.label = @"terrain palette";
-            [_terrainPalette replaceRegion:MTLRegionMake2D(0, 0, wry::TERRAIN_KIND_COUNT, 1)
-                               mipmapLevel:0
-                                 withBytes:wry::TERRAIN_COLOR_SRGB
-                               bytesPerRow:sizeof(wry::TERRAIN_COLOR_SRGB)];
+            // Terrain material atlases (built by assets/terrain/
+            // build_terrain_textures.py): immutable, so they take the
+            // mipmapped path; the trilinear sampler puts the mips to use.
+            // Albedo is color (sRGB); the normal and ORM maps are data,
+            // loaded linear.
+            _terrainAlbedo = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_Albedo"
+                                                            ofType:@"png"
+                                                   withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
+            _terrainNormal = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_NormalGL"
+                                                            ofType:@"png"
+                                                   withPixelFormat:MTLPixelFormatRGBA8Unorm];
+            _terrainORM = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_ORM"
+                                                         ofType:@"png"
+                                                withPixelFormat:MTLPixelFormatRGBA8Unorm];
         }
 
         {
@@ -1290,10 +1293,11 @@
         // rect runs [X0 - 0.5, X0 + EXTENT - 0.5) per axis and uv 0..1
         // lands texel centers on tile centers.
         //
-        // The x64 zoom is a model transform: scale the quad by 1/64 about
-        // the camera focus (the lookat pan), leaving the camera itself
-        // alone, so the view direction and lighting are the world's own.
-        map_instanced.model_transform = simd_mul(simd_matrix_scale(1.0f / 64.0f),
+        // The zoom (x64 canonically; pinch varies _map_zoom) is a model
+        // transform: scale the quad by 1/zoom about the camera focus (the
+        // lookat pan), leaving the camera itself alone, so the view
+        // direction and lighting are the world's own.
+        map_instanced.model_transform = simd_mul(simd_matrix_scale(1.0f / _model->_map_zoom),
                                                  lookat_transform);
         map_instanced.inverse_transpose_model_transform
             = simd_inverse(simd_transpose(map_instanced.model_transform));
@@ -1569,12 +1573,15 @@
 
                 simd_float4 location = make<float4>(i, j, 0.1f, 1.0f);
                 simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
-                
+                bool not_empty = true;
+
                 {
                     //wry::Term q = new_world->_term_for_coordinate.read(wry::Coordinate{i, j});
                     wry::Term q = {};
-                    (void) new_world->_term_for_coordinate.try_get(wry::Coordinate{i, j}, q);
+                    not_empty = new_world->_term_for_coordinate.try_get(wry::Coordinate{i, j}, q);
                     // printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::Coordinate{i, j}.data(), q._data);
+                    if (!not_empty)
+                        continue;
                     if (q.is_int64_t()) {
                         coordinate = make<float4>((q.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                     } else if (q.is_opcode()) {
@@ -1628,11 +1635,11 @@
 
         {
 
-            // Terrain: one solid-colored quad per generated tile in view,
-            // at z = 0 under the tile/entity layer.  Sourced by Morton-range
-            // descent over the terrain map, like the entity query above;
-            // cells that have no terrain yet (beyond the generated region)
-            // draw nothing and show the clear color.
+            // Terrain: one material-atlas-textured quad per generated tile
+            // in view, at z = 0 under the tile/entity layer.  Sourced by
+            // Morton-range descent over the terrain map, like the entity
+            // query above; cells that have no terrain yet (beyond the
+            // generated region) draw nothing and show the clear color.
             std::vector<MeshVertex> terrain_vbuf;
             std::vector<uint> terrain_ibuf;
             uint terrain_k = 0;
@@ -1642,18 +1649,26 @@
                             [&](Coordinate xy, wry::Terrain t) {
                 if ((t < 0) || (t >= wry::TERRAIN_KIND_COUNT))
                     t = wry::TERRAIN_KIND_COUNT - 1;
-                // All four corners at the kind's texel center: solid color.
-                simd_float4 coordinate = make<float4>((t + 0.5f) / wry::TERRAIN_KIND_COUNT,
-                                                      0.5f, 0.0f, 1.0f);
+                // Atlas cell: material row from the terrain kind, variant
+                // column from the coordinate hash.  Corner order follows
+                // the sprite quads (world +y = image up = smaller v),
+                // which also orients the GL-convention normal map's +Y
+                // with the +y bitangent.  The cells' baked border is the
+                // bleed gutter.
+                float u0 = (float)wry::terrain_variant(xy) * 0.25f;
+                float v0 = (float)t * 0.25f;
                 simd_float4 location = make<float4>(xy.x, xy.y, 0.0f, 1.0f);
-                v.coordinate = coordinate;
                 v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = make<float4>(u0, v0 + 0.25f, 0.0f, 1.0f);
                 terrain_vbuf.push_back(v);
                 v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = make<float4>(u0 + 0.25f, v0 + 0.25f, 0.0f, 1.0f);
                 terrain_vbuf.push_back(v);
                 v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = make<float4>(u0 + 0.25f, v0, 0.0f, 1.0f);
                 terrain_vbuf.push_back(v);
                 v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
+                v.coordinate = make<float4>(u0, v0, 0.0f, 1.0f);
                 terrain_vbuf.push_back(v);
                 terrain_ibuf.push_back(terrain_k);
                 terrain_ibuf.push_back(terrain_k);
@@ -1943,18 +1958,10 @@
                                      length:sizeof(MeshInstanced)
                                     atIndex:AAPLBufferIndexInstanced];
 
-                    // Terrain tiles first (a shadow receiver only, so they skip
-                    // the shadow pass entirely): solid palette colors.
-                    if (terrain_index_count) {
-                        [encoder setFragmentTexture:_terrainPalette atIndex:AAPLTextureIndexAlbedo];
-                        [encoder setVertexBuffer:terrain_vertices offset:0 atIndex:AAPLBufferIndexVertices];
-                        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
-                                            indexCount:terrain_index_count
-                                             indexType:MTLIndexTypeUInt32
-                                           indexBuffer:terrain_indices
-                                     indexBufferOffset:0];
-                    }
-
+                    // Sprite quads first, under the pre-branch bindings --
+                    // in particular the occlusion slot stays unbound for
+                    // them, as it always has been; the depth test makes
+                    // the draw order irrelevant to the result.
                     [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
                     [encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
                     [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
@@ -1962,6 +1969,24 @@
                                          indexType:MTLIndexTypeUInt32
                                        indexBuffer:indices
                                  indexBufferOffset:0];
+
+                    // Terrain tiles (a shadow receiver only, so they skip
+                    // the shadow pass entirely): the full PBR material
+                    // atlases, with ORM feeding the occlusion / roughness
+                    // / metallic slots from one texture.
+                    if (terrain_index_count) {
+                        [encoder setFragmentTexture:_terrainAlbedo atIndex:AAPLTextureIndexAlbedo];
+                        [encoder setFragmentTexture:_terrainNormal atIndex:AAPLTextureIndexNormal];
+                        [encoder setFragmentTexture:_terrainORM atIndex:AAPLTextureIndexMetallic];
+                        [encoder setFragmentTexture:_terrainORM atIndex:AAPLTextureIndexRoughness];
+                        [encoder setFragmentTexture:_terrainORM atIndex:AAPLTextureIndexOcclusion];
+                        [encoder setVertexBuffer:terrain_vertices offset:0 atIndex:AAPLBufferIndexVertices];
+                        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
+                                            indexCount:terrain_index_count
+                                             indexType:MTLIndexTypeUInt32
+                                           indexBuffer:terrain_indices
+                                     indexBufferOffset:0];
+                    }
 
                 }
 

@@ -10,6 +10,8 @@
 
 #include <cstdint>
 
+#include "coordinate.hpp"
+
 namespace wry {
 
     // Which kind of ground occupies a tile.  Terrain is a dense spatial
@@ -29,15 +31,32 @@ namespace wry {
 
     inline constexpr int TERRAIN_KIND_COUNT = 4;
 
-    // Placeholder solid color per kind, as sRGB bytes, indexed by Terrain.
-    // Shared by the tile renderer's palette texture and the world-map
-    // builder so the map's base layer matches the world's ground colors.
+    // Representative solid color per kind, as sRGB bytes, indexed by
+    // Terrain.  Used by the world-map builder (1 px/tile) and echoed by
+    // the synthesized water tile in assets/terrain; the in-world tiles
+    // themselves now render from the terrain material atlases.
     inline constexpr uint8_t TERRAIN_COLOR_SRGB[TERRAIN_KIND_COUNT][4] = {
         {  58, 110, 165, 255 },   // TERRAIN_WATER
         { 214, 194, 138, 255 },   // TERRAIN_SAND
         { 104, 148,  76, 255 },   // TERRAIN_GRASS
         { 128, 124, 118, 255 },   // TERRAIN_ROCK
     };
+
+    // Which variant column of the terrain material atlas (4 materials by
+    // row = Terrain code, 4 variants by column; see assets/terrain/)
+    // decorates this tile: an avalanche mix of the coordinates, so the
+    // choice is deterministic, roughly uniform, and neighbor-decorrelated.
+    // Renderer-side cosmetics only -- never simulation state.
+    inline int terrain_variant(Coordinate xy) {
+        uint32_t h = (uint32_t)xy.x * 0x9E3779B9u
+                   ^ (uint32_t)xy.y * 0x85EBCA6Bu;
+        h ^= h >> 16;
+        h *= 0x7FEB352Du;
+        h ^= h >> 15;
+        h *= 0x846CA68Bu;
+        h ^= h >> 16;
+        return (int)(h & 3u);
+    }
 
     struct World;
 

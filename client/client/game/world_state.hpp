@@ -99,9 +99,16 @@ namespace wry {
         String _outstanding_keysdown;     // pending hex-key writes
 
         // Map mode (TAB): the renderer draws the world-map quad instead of
-        // the world, the palette hides, scroll pans at x64, and world edits
-        // are suppressed.  The minimap shows whenever this is off.
+        // the world, the palette hides, scroll pans at the map scale, and
+        // world edits are suppressed.  The minimap shows whenever this is
+        // off.
         bool _show_map = false;
+
+        // Map-mode zoom: how many world units span one normal-view unit
+        // (64 = the canonical map scale; pinch varies it, clamped).  Kept
+        // across TAB toggles.  Scroll-pan speed follows it so a swipe
+        // always traverses what it visually crosses.
+        float _map_zoom = 64.0f;
 
         // World-map pipeline: ~1 Hz background rebuild of the
         // one-pixel-per-tile map image, double-buffered into textures on

@@ -41,7 +41,9 @@
       ignoresPersistentStateOnLaunch = "YES"
       debugDocumentVersioning = "YES"
       debugServiceExtension = "internal"
-      enableGPUValidationMode = "1"
+      enableGPUShaderValidationMode = "2"
+      showGraphicsOverview = "Yes"
+      logGraphicsOverview = "Yes"
       allowLocationSimulation = "YES">
       <BuildableProductRunnable
          runnableDebuggingMode = "0">

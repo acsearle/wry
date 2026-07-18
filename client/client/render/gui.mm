@@ -66,7 +66,8 @@ namespace wry {
                                    e.kind == WryEventKindMouseUp   ||
                                    e.kind == WryEventKindMouseEnter ||
                                    e.kind == WryEventKindMouseExit  ||
-                                   e.kind == WryEventKindScroll);
+                                   e.kind == WryEventKindScroll     ||
+                                   e.kind == WryEventKindMagnify);
             const bool is_kbd   = (e.kind == WryEventKindKeyDown ||
                                    e.kind == WryEventKindKeyUp);
 

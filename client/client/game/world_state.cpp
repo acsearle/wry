@@ -7,6 +7,7 @@
 
 #include "world_state.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -426,13 +427,59 @@ namespace wry {
                 break;
 
             case WryEventKindScroll: {
-                // The map is drawn at 1/64 scale, so a map-mode swipe
-                // traverses 64x the world distance for the same on-screen
-                // travel.  _looking_at is the one shared focus: leaving map
-                // mode keeps you looking at the spot you panned to.
-                float shuttle = _show_map ? 64.0f : 1.0f;
+                // The map is drawn at 1/_map_zoom scale, so a map-mode
+                // swipe traverses _map_zoom times the world distance for
+                // the same on-screen travel.  _looking_at is the one shared
+                // focus: leaving map mode keeps you looking at the spot you
+                // panned to.
+                float shuttle = _show_map ? _map_zoom : 1.0f;
                 _looking_at.x += e.scroll_delta.x * shuttle;
                 _looking_at.y += e.scroll_delta.y * shuttle;
+                break;
+            }
+
+            case WryEventKindMagnify: {
+                // Trackpad pinch zooms the map (map mode only; the world
+                // view has no zoom).  Anchored at the cursor: the map point
+                // under the fingers stays put, like every maps app.
+                //
+                // The map quad is drawn with model transform
+                //     p_view = (p_world + t) / Z,
+                // t = (+_looking_at.x, -_looking_at.y) / 1024.  Holding the
+                // cursor's world point q fixed on screen across Z -> Z'
+                // needs (q + t) / Z == (q + t') / Z', so
+                //     t' = (q + t) * (Z' / Z) - q.
+                if (!_show_map)
+                    break;
+                constexpr float MAP_ZOOM_MIN = 8.0f;    // texels get blocky
+                constexpr float MAP_ZOOM_MAX = 256.0f;  // whole map, small
+                float factor = 1.0f + e.magnification;
+                if (factor < 0.5f) factor = 0.5f;   // one event is a nudge
+                if (factor > 2.0f) factor = 2.0f;
+                float old_zoom = _map_zoom;
+                _map_zoom = std::clamp(_map_zoom / factor,
+                                       MAP_ZOOM_MIN, MAP_ZOOM_MAX);
+                if (_map_zoom == old_zoom)
+                    break;
+
+                // q: the cursor's ground-plane point under the CURRENT map
+                // transform (same projection submit_local_commands does for
+                // the world, with the map's model matrix).
+                auto lookat = matrix_identity_float4x4;
+                lookat.columns[3].x += _looking_at.x / 1024.0f;
+                lookat.columns[3].y -= _looking_at.y / 1024.0f;
+                simd_float4x4 model = simd_mul(simd_matrix_scale(1.0f / old_zoom),
+                                               lookat);
+                simd_float4x4 A = simd_mul(_uniforms.viewprojection_transform,
+                                           model);
+                simd_float4 b = simd_make_float4(_mouse.x, _mouse.y, 0.0f, 1.0f);
+                float2 q = project_screen_ray(A, b);
+
+                float s = _map_zoom / old_zoom;
+                float tx = +_looking_at.x / 1024.0f;
+                float ty = -_looking_at.y / 1024.0f;
+                _looking_at.x = +((q.x + tx) * s - q.x) * 1024.0f;
+                _looking_at.y = -((q.y + ty) * s - q.y) * 1024.0f;
                 break;
             }
 
@@ -500,7 +547,8 @@ namespace wry {
                  e.kind == WryEventKindMouseUp    ||
                  e.kind == WryEventKindMouseEnter ||
                  e.kind == WryEventKindMouseExit  ||
-                 e.kind == WryEventKindScroll);
+                 e.kind == WryEventKindScroll     ||
+                 e.kind == WryEventKindMagnify);
 
             if (is_positional) {
                 e.location.x *= scale_x;

@@ -46,6 +46,7 @@ typedef enum WryEventKind : uint8_t {
     WryEventKindMouseEnter,
     WryEventKindMouseExit,
     WryEventKindScroll,
+    WryEventKindMagnify,
 } WryEventKind;
 
 namespace wry::gui {
@@ -130,6 +131,11 @@ namespace wry::gui {
         // legacy _looking_at handler.  Normalize to logical points when the
         // world-pan code becomes a proper world-overlay handler.
         float2 scroll_delta = {0.0f, 0.0f};
+
+        // Magnify only.  Fractional change for this event, matching
+        // NSEvent.magnification: positive = fingers spreading (zoom in),
+        // small per event; a whole pinch is the product of (1 + m) terms.
+        float magnification = 0.0f;
     };
 
     // Per-frame event queue.  Producer is WryDelegate's NSResponder
