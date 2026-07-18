@@ -347,6 +347,22 @@ namespace wry {
         _worlds.emplace_back(_world_to_render);
         assert(_world_to_render);
 
+        // ~1 Hz: hand a rooted snapshot of the freshly stepped world to the
+        // background map builder.  The load_acquire pairs with the builder's
+        // completion store_release, so the previous build's publication is
+        // visible before we permit the next one; the map may lag the world
+        // by a second or two, by design.
+        {
+            auto now = std::chrono::steady_clock::now();
+            if (!_map_handoff->in_flight.load_acquire()
+                && (now - _map_last_start >= std::chrono::seconds(1))) {
+                _map_last_start = now;
+                _map_handoff->in_flight.store_relaxed(true);
+                world_map_build_async(Root<const World*>{_world_to_render._ptr},
+                                      _map_handoff);
+            }
+        }
+
         // Turn this frame's input into commands (this also projects the
         // cursor).  After the step, so a submission applies next frame.
         submit_local_commands();
@@ -404,20 +420,30 @@ namespace wry {
         switch (e.kind) {
 
             case WryEventKindMouseUp:
-                if (e.button == MouseButton::Left)
+                // No world edits in map mode.
+                if (!_show_map && (e.button == MouseButton::Left))
                     _outstanding_click = true;
                 break;
 
-            case WryEventKindScroll:
-                _looking_at.x += e.scroll_delta.x;
-                _looking_at.y += e.scroll_delta.y;
+            case WryEventKindScroll: {
+                // The map is drawn at 1/64 scale, so a map-mode swipe
+                // traverses 64x the world distance for the same on-screen
+                // travel.  _looking_at is the one shared focus: leaving map
+                // mode keeps you looking at the spot you panned to.
+                float shuttle = _show_map ? 64.0f : 1.0f;
+                _looking_at.x += e.scroll_delta.x * shuttle;
+                _looking_at.y += e.scroll_delta.y * shuttle;
                 break;
+            }
 
             case WryEventKindKeyDown: {
                 char buffer[100];
                 switch (e.key) {
                     case key::Escape:
                         _stack.push(&_main_menu_overlay);
+                        break;
+                    case key::Tab:
+                        _show_map = !_show_map;
                         break;
                     case 'j':
                         _show_jacobian = !_show_jacobian;
@@ -438,8 +464,10 @@ namespace wry {
                         _gui.append_log(buffer);
                         break;
                     default:
-                        if ((e.key >= '0' && e.key <= '9') ||
-                            (e.key >= 'a' && e.key <= 'f')) {
+                        // Hex-key writes are world edits: not in map mode.
+                        if (!_show_map &&
+                            ((e.key >= '0' && e.key <= '9') ||
+                             (e.key >= 'a' && e.key <= 'f'))) {
                             _outstanding_keysdown.push_back((char32_t)e.key);
                         }
                         break;
@@ -485,8 +513,12 @@ namespace wry {
             // App-tier overlays (console / log) get first crack -- the console
             // swallows keystrokes when open -- then the world's palette stack
             // (and any in-game menu pushed onto it), then the legacy fallback.
+            // In map mode the palette is hidden and must be inert too, so the
+            // scene stack is skipped while it holds only the palette; a menu
+            // or save list pushed above it restores normal dispatch.
+            bool stack_active = !_show_map || (_stack.size() > 1);
             if (!_gui.overlays.dispatch(e))
-                if (!_stack.dispatch(e))
+                if (!(stack_active && _stack.dispatch(e)))
                     pump_legacy_event(e);
         }
     }

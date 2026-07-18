@@ -8,6 +8,8 @@
 #ifndef terrain_hpp
 #define terrain_hpp
 
+#include <cstdint>
+
 namespace wry {
 
     // Which kind of ground occupies a tile.  Terrain is a dense spatial
@@ -26,6 +28,16 @@ namespace wry {
     inline constexpr Terrain TERRAIN_ROCK  = 3;
 
     inline constexpr int TERRAIN_KIND_COUNT = 4;
+
+    // Placeholder solid color per kind, as sRGB bytes, indexed by Terrain.
+    // Shared by the tile renderer's palette texture and the world-map
+    // builder so the map's base layer matches the world's ground colors.
+    inline constexpr uint8_t TERRAIN_COLOR_SRGB[TERRAIN_KIND_COUNT][4] = {
+        {  58, 110, 165, 255 },   // TERRAIN_WATER
+        { 214, 194, 138, 255 },   // TERRAIN_SAND
+        { 104, 148,  76, 255 },   // TERRAIN_GRASS
+        { 128, 124, 118, 255 },   // TERRAIN_ROCK
+    };
 
     struct World;
 

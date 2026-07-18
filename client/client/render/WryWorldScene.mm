@@ -122,6 +122,14 @@
     // untextured solid colors until real terrain art exists.
     id<MTLTexture> _terrainPalette;
 
+    // Double-buffered world-map texture (one texel per tile).  The
+    // background builder hands finished pixel buffers to the main thread,
+    // which uploads into the back texture and flips; the front texture was
+    // last written a whole build (~1 s) earlier, far outside any frame
+    // still in flight on the GPU.
+    id<MTLTexture> _mapTexture[2];
+    int _mapFrontIndex;
+
     wry::Table<ulong, simd_float4> _opcode_to_coordinate;
     
     WryMesh* _truck_mesh;
@@ -524,15 +532,11 @@
         }
 
         {
-            // Terrain palette, texels indexed by wry::Terrain.  Each tile
-            // quad puts all four corners at its kind's texel center, so the
-            // linear sampler returns the texel exactly: solid color, no bleed.
-            static const uint8_t terrain_srgb[wry::TERRAIN_KIND_COUNT][4] = {
-                {  58, 110, 165, 255 },   // TERRAIN_WATER
-                { 214, 194, 138, 255 },   // TERRAIN_SAND
-                { 104, 148,  76, 255 },   // TERRAIN_GRASS
-                { 128, 124, 118, 255 },   // TERRAIN_ROCK
-            };
+            // Terrain palette, texels indexed by wry::Terrain (colors are
+            // the shared TERRAIN_COLOR_SRGB, also used by the world-map
+            // builder).  Each tile quad puts all four corners at its kind's
+            // texel center, so the linear sampler returns the texel
+            // exactly: solid color, no bleed.
             MTLTextureDescriptor* descriptor =
                 [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
                                                                    width:wry::TERRAIN_KIND_COUNT
@@ -543,8 +547,29 @@
             _terrainPalette.label = @"terrain palette";
             [_terrainPalette replaceRegion:MTLRegionMake2D(0, 0, wry::TERRAIN_KIND_COUNT, 1)
                                mipmapLevel:0
-                                 withBytes:terrain_srgb
-                               bytesPerRow:sizeof(terrain_srgb)];
+                                 withBytes:wry::TERRAIN_COLOR_SRGB
+                               bytesPerRow:sizeof(wry::TERRAIN_COLOR_SRGB)];
+        }
+
+        {
+            // World-map double buffer, zero-filled so the map is fully
+            // transparent until the first background build lands.
+            MTLTextureDescriptor* descriptor =
+                [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
+                                                                   width:wry::WorldMap::EXTENT
+                                                                  height:wry::WorldMap::EXTENT
+                                                               mipmapped:NO];
+            descriptor.usage = MTLTextureUsageShaderRead;
+            std::vector<uint8_t> zero((size_t)wry::WorldMap::EXTENT * wry::WorldMap::EXTENT * 4, 0);
+            for (int i = 0; i != 2; ++i) {
+                _mapTexture[i] = [_ctx.device newTextureWithDescriptor:descriptor];
+                _mapTexture[i].label = [NSString stringWithFormat:@"world map %d", i];
+                [_mapTexture[i] replaceRegion:MTLRegionMake2D(0, 0, wry::WorldMap::EXTENT, wry::WorldMap::EXTENT)
+                                  mipmapLevel:0
+                                    withBytes:zero.data()
+                                  bytesPerRow:(NSUInteger)wry::WorldMap::EXTENT * 4];
+            }
+            _mapFrontIndex = 0;
         }
         
         {
@@ -896,10 +921,13 @@
     }
 
     [encoder setRenderPipelineState:_ctx.overlayRenderPipelineState];
+    // The deferred pass left back-face culling on; GUI quads are authored
+    // in screen space with no winding discipline, so turn it off.
+    [encoder setCullMode:MTLCullModeNone];
 
     // ----- Palette paint pass (projective transform; reads PaletteOverlay
-    // state for hover/selected highlights).
-    {
+    // state for hover/selected highlights).  Hidden in map mode.
+    if (!_model->_show_map) {
         auto& palette = _model->_palette_overlay;
         auto& m = palette.controls()._payload;
 
@@ -1019,6 +1047,85 @@
                      length:sizeof(uniforms)
                     atIndex:AAPLBufferIndexUniforms ];
 
+    // ----- Minimap (hidden while the full map is displayed): the world
+    // map in the top-right corner, windowed to one map-extent of world
+    // centered on the camera focus -- the same content the full map shows,
+    // miniaturized and screen-aligned.  A translucent plate marks the
+    // instrument's box; the map texels draw over it, clipped to the mapped
+    // world rect (so panning past the edge shows plate, not smeared or
+    // wrapped texels).  Drawn before the atlas commit, so all sprite-atlas
+    // GUI (log, console, menus) stays on top.
+    if (!_model->_show_map) {
+        using wry::WorldMap;
+
+        const float SIZE = 512.0f;    // drawable px; 2 px per map texel
+        const float MARGIN = 24.0f;
+        float2 vp = _model->_gui.viewport_size;
+        const float bx0 = vp.x - MARGIN - SIZE;   // box, screen px, y-down
+        const float by0 = MARGIN;
+
+        // World-space window (tile units), centered on the camera focus.
+        const float cx = -_model->_looking_at.x / 1024.0f;
+        const float cy = +_model->_looking_at.y / 1024.0f;
+        const float W = (float)WorldMap::EXTENT;
+        const float wx0 = cx - W * 0.5f;
+        const float wy0 = cy - W * 0.5f;
+
+        // Mapped world rect (tile (x, y) spans x +/- 0.5).
+        const float mx0 = WorldMap::X0 - 0.5f;
+        const float my0 = WorldMap::Y0 - 0.5f;
+        const float mx1 = mx0 + W;
+        const float my1 = my0 + W;
+
+        // Window/world intersection, in world units.
+        const float ix0 = std::max(wx0, mx0);
+        const float ix1 = std::min(wx0 + W, mx1);
+        const float iy0 = std::max(wy0, my0);
+        const float iy1 = std::min(wy0 + W, my1);
+
+        // World -> screen (north = world +y at the top of the box) and
+        // world -> map uv.
+        auto sx = [=](float x) { return bx0 + (x - wx0) * (SIZE / W); };
+        auto sy = [=](float y) { return by0 + (wy0 + W - y) * (SIZE / W); };
+        auto tu = [=](float x) { return (x - mx0) / W; };
+        auto tv = [=](float y) { return (y - my0) / W; };
+
+        auto emit_quad = [&](float px0, float py0, float px1, float py1,
+                             float u0, float v0, float u1, float v1,
+                             RGBA8Unorm_sRGB color, id<MTLTexture> texture) {
+            SpriteVertex q[6];
+            for (auto& c : q) c.color = color;
+            q[0].v.position = make<float4>(px0, py0, 0.0f, 1.0f);
+            q[0].v.texCoord = simd_make_float2(u0, v0);
+            q[1].v.position = make<float4>(px1, py0, 0.0f, 1.0f);
+            q[1].v.texCoord = simd_make_float2(u1, v0);
+            q[2].v.position = make<float4>(px1, py1, 0.0f, 1.0f);
+            q[2].v.texCoord = simd_make_float2(u1, v1);
+            q[3] = q[0];
+            q[4] = q[2];
+            q[5].v.position = make<float4>(px0, py1, 0.0f, 1.0f);
+            q[5].v.texCoord = simd_make_float2(u0, v1);
+            [encoder setVertexBytes:q length:sizeof(q) atIndex:AAPLBufferIndexVertices];
+            [encoder setFragmentTexture:texture atIndex:AAPLTextureIndexColor];
+            [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                        vertexStart:0
+                        vertexCount:6];
+        };
+
+        // Plate: the whole box, white texture tinted translucent black.
+        emit_quad(bx0, by0, bx0 + SIZE, by0 + SIZE,
+                  0.0f, 0.0f, 1.0f, 1.0f,
+                  RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.5f), _white);
+
+        // Map texels over the intersection (empty when panned far away).
+        if ((ix0 < ix1) && (iy0 < iy1)) {
+            emit_quad(sx(ix0), sy(iy1), sx(ix1), sy(iy0),
+                      tu(ix0), tv(iy1), tu(ix1), tv(iy0),
+                      RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f),
+                      _mapTexture[_mapFrontIndex]);
+        }
+    }
+
     // Paint the world's scene overlays -- palette (no-op paint for now) plus the
     // in-game menu / save list when pushed -- then the app-tier overlays
     // (floating log, console) on top.  The console is a global drop-down, so it
@@ -1080,7 +1187,21 @@
     // before this -encode, on the same thread and frame; we only read it here.
     Root<World*>& new_world = _model->_world_to_render;
     assert(new_world);
-    
+
+    // Adopt a freshly built world map, if the background builder finished
+    // one: upload into the back texture of the double buffer and flip.
+    if (wry::WorldMap* built = _model->_map_handoff->take_finished()) {
+        int back = _mapFrontIndex ^ 1;
+        [_mapTexture[back] replaceRegion:MTLRegionMake2D(0, 0, wry::WorldMap::EXTENT, wry::WorldMap::EXTENT)
+                             mipmapLevel:0
+                               withBytes:built->rgba.data()
+                             bytesPerRow:(NSUInteger)wry::WorldMap::EXTENT * 4];
+        _mapFrontIndex = back;
+        delete built;
+    }
+
+    const bool show_map = _model->_show_map;
+
     // Construct camera transforms
     MeshUniforms uniforms = _model->_uniforms;
     
@@ -1149,13 +1270,66 @@
     id<MTLBuffer> terrain_vertices = nil;
     id<MTLBuffer> terrain_indices = nil;
     NSUInteger terrain_index_count = 0;
+    // Map mode: the world-map quad, in place of all of the above.
+    id<MTLBuffer> map_vertices = nil;
+    id<MTLBuffer> map_indices = nil;
+    NSUInteger map_index_count = 0;
+    MeshInstanced map_instanced = mesh_instanced_things;
     _furnace_mesh.instanceCount = 0;
     _mine_mesh.instanceCount = 0;
     _truck_mesh.instanceCount = 0;
     _container_mesh.instanceCount = 0;
     // raid model for data
 
-    {
+    if (show_map) {
+
+        // Map mode: a single quad covering the mapped world rect, textured
+        // by the current map at one texel per tile, through the same lit
+        // G-buffer path as the world -- none of the per-tile / per-entity
+        // content is built or drawn.  Tile (x, y) spans x +/- 0.5, so the
+        // rect runs [X0 - 0.5, X0 + EXTENT - 0.5) per axis and uv 0..1
+        // lands texel centers on tile centers.
+        //
+        // The x64 zoom is a model transform: scale the quad by 1/64 about
+        // the camera focus (the lookat pan), leaving the camera itself
+        // alone, so the view direction and lighting are the world's own.
+        map_instanced.model_transform = simd_mul(simd_matrix_scale(1.0f / 64.0f),
+                                                 lookat_transform);
+        map_instanced.inverse_transpose_model_transform
+            = simd_inverse(simd_transpose(map_instanced.model_transform));
+
+        const float mx0 = wry::WorldMap::X0 - 0.5f;
+        const float my0 = wry::WorldMap::Y0 - 0.5f;
+        const float mx1 = mx0 + (float)wry::WorldMap::EXTENT;
+        const float my1 = my0 + (float)wry::WorldMap::EXTENT;
+
+        MeshVertex v;
+        v.tangent = make<float4>(1.0f, 0.0f, 0.0f, 0.0f);
+        v.bitangent = make<float4>(0.0f, 1.0f, 0.0f, 0.0f);
+        v.normal = make<float4>(0.0f, 0.0f, 1.0f, 0.0f);
+
+        MeshVertex quad[4];
+        v.position = make<float4>(mx0, my0, 0.0f, 1.0f);
+        v.coordinate = make<float4>(0.0f, 0.0f, 0.0f, 1.0f);
+        quad[0] = v;
+        v.position = make<float4>(mx1, my0, 0.0f, 1.0f);
+        v.coordinate = make<float4>(1.0f, 0.0f, 0.0f, 1.0f);
+        quad[1] = v;
+        v.position = make<float4>(mx1, my1, 0.0f, 1.0f);
+        v.coordinate = make<float4>(1.0f, 1.0f, 0.0f, 1.0f);
+        quad[2] = v;
+        v.position = make<float4>(mx0, my1, 0.0f, 1.0f);
+        v.coordinate = make<float4>(0.0f, 1.0f, 0.0f, 1.0f);
+        quad[3] = v;
+        const uint quad_indices[6] = {0, 0, 1, 3, 2, 2};
+
+        map_vertices = [_ctx.device newBufferWithLength:sizeof(quad) options:MTLStorageModeShared];
+        map_indices = [_ctx.device newBufferWithLength:sizeof(quad_indices) options:MTLStorageModeShared];
+        memcpy(map_vertices.contents, quad, sizeof(quad));
+        memcpy(map_indices.contents, quad_indices, sizeof(quad_indices));
+        map_index_count = 6;
+
+    } else {
 
         auto tnow = world_get_time(new_world._ptr);
         auto&& entities = new_world->_entity_for_entity_id;
@@ -1586,29 +1760,32 @@
         // Are 2D entities mostly just above the ground plane and thus behind
         // any 3D geometry?
 
-        // Draw the 2D entities
+        // Draw the 2D entities (none in map mode: the map quad lies in the
+        // ground plane and cannot cast)
 
-        [render_command_encoder setVertexBytes:&uniforms
-                                        length:sizeof(MeshUniforms)
-                                       atIndex:AAPLBufferIndexUniforms];
-        
-        [render_command_encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
-        [render_command_encoder setVertexBytes:&mesh_instanced_things
-                                        length:sizeof(MeshInstanced)
-                                       atIndex:AAPLBufferIndexInstanced];
-                    
-        [render_command_encoder setFragmentBytes:&uniforms
-                                          length:sizeof(MeshUniforms)
-                                         atIndex:AAPLBufferIndexUniforms];
-        [render_command_encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
-        
-        [render_command_encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
-                                           indexCount:index_count
-                                            indexType:MTLIndexTypeUInt32
-                                          indexBuffer:indices
-                                    indexBufferOffset:0];
-        
-        // Draw the 3D entities
+        if (!show_map) {
+            [render_command_encoder setVertexBytes:&uniforms
+                                            length:sizeof(MeshUniforms)
+                                           atIndex:AAPLBufferIndexUniforms];
+
+            [render_command_encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
+            [render_command_encoder setVertexBytes:&mesh_instanced_things
+                                            length:sizeof(MeshInstanced)
+                                           atIndex:AAPLBufferIndexInstanced];
+
+            [render_command_encoder setFragmentBytes:&uniforms
+                                              length:sizeof(MeshUniforms)
+                                             atIndex:AAPLBufferIndexUniforms];
+            [render_command_encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
+
+            [render_command_encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
+                                               indexCount:index_count
+                                                indexType:MTLIndexTypeUInt32
+                                              indexBuffer:indices
+                                        indexBufferOffset:0];
+        }
+
+        // Draw the 3D entities (each no-ops on zero instances)
 
         [_furnace_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
         [_mine_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
@@ -1744,30 +1921,50 @@
                 [encoder setFragmentTexture:_black atIndex:AAPLTextureIndexMetallic];
                 [encoder setFragmentTexture:_blue atIndex:AAPLTextureIndexNormal];
                 [encoder setFragmentTexture:_white atIndex:AAPLTextureIndexRoughness];
-                [encoder setVertexBytes:&mesh_instanced_things
-                                 length:sizeof(MeshInstanced)
-                                atIndex:AAPLBufferIndexInstanced];
 
-                // Terrain tiles first (a shadow receiver only, so they skip
-                // the shadow pass entirely): solid palette colors.
-                if (terrain_index_count) {
-                    [encoder setFragmentTexture:_terrainPalette atIndex:AAPLTextureIndexAlbedo];
-                    [encoder setVertexBuffer:terrain_vertices offset:0 atIndex:AAPLBufferIndexVertices];
+                if (show_map) {
+
+                    // Map mode: the world-map quad alone, lit by the same
+                    // deferred pipeline as the world it stands in for.
+                    [encoder setFragmentTexture:_mapTexture[_mapFrontIndex] atIndex:AAPLTextureIndexAlbedo];
+                    [encoder setVertexBuffer:map_vertices offset:0 atIndex:AAPLBufferIndexVertices];
+                    [encoder setVertexBytes:&map_instanced
+                                     length:sizeof(MeshInstanced)
+                                    atIndex:AAPLBufferIndexInstanced];
                     [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
-                                        indexCount:terrain_index_count
+                                        indexCount:map_index_count
                                          indexType:MTLIndexTypeUInt32
-                                       indexBuffer:terrain_indices
+                                       indexBuffer:map_indices
                                  indexBufferOffset:0];
+
+                } else {
+
+                    [encoder setVertexBytes:&mesh_instanced_things
+                                     length:sizeof(MeshInstanced)
+                                    atIndex:AAPLBufferIndexInstanced];
+
+                    // Terrain tiles first (a shadow receiver only, so they skip
+                    // the shadow pass entirely): solid palette colors.
+                    if (terrain_index_count) {
+                        [encoder setFragmentTexture:_terrainPalette atIndex:AAPLTextureIndexAlbedo];
+                        [encoder setVertexBuffer:terrain_vertices offset:0 atIndex:AAPLBufferIndexVertices];
+                        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
+                                            indexCount:terrain_index_count
+                                             indexType:MTLIndexTypeUInt32
+                                           indexBuffer:terrain_indices
+                                     indexBufferOffset:0];
+                    }
+
+                    [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
+                    [encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
+                    [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
+                                        indexCount:index_count
+                                         indexType:MTLIndexTypeUInt32
+                                       indexBuffer:indices
+                                 indexBufferOffset:0];
+
                 }
 
-                [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
-                [encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
-                [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
-                                    indexCount:index_count
-                                     indexType:MTLIndexTypeUInt32
-                                   indexBuffer:indices
-                             indexBufferOffset:0];
-                
                 [_furnace_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
                 [_mine_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
                 [_truck_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];

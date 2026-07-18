@@ -10,6 +10,7 @@
 
 #include "ShaderTypes.h"
 
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <map>
@@ -28,6 +29,7 @@
 #include "spawner.hpp"
 #include "string.hpp"
 #include "world.hpp"
+#include "world_map.hpp"
 #include "player.hpp"
 #include "server.hpp"
 
@@ -95,6 +97,18 @@ namespace wry {
         simd_float4 _mouse4 = {};         // cursor projected onto the ground plane
         bool _outstanding_click = false;  // pending world click
         String _outstanding_keysdown;     // pending hex-key writes
+
+        // Map mode (TAB): the renderer draws the world-map quad instead of
+        // the world, the palette hides, scroll pans at x64, and world edits
+        // are suppressed.  The minimap shows whenever this is off.
+        bool _show_map = false;
+
+        // World-map pipeline: ~1 Hz background rebuild of the
+        // one-pixel-per-tile map image, double-buffered into textures on
+        // the render side.  shared_ptr so an in-flight build outlives us.
+        std::shared_ptr<WorldMapHandoff> _map_handoff =
+            std::make_shared<WorldMapHandoff>();
+        std::chrono::steady_clock::time_point _map_last_start{};
         
         // visualization state
         
