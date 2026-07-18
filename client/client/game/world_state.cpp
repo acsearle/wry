@@ -18,6 +18,7 @@
 #include "garbage_collected.hpp"
 #include "matter.hpp"
 #include "save.hpp"
+#include "terrain.hpp"
 
 namespace wry {
 
@@ -30,6 +31,8 @@ namespace wry {
         //
         World* make_starting_world() {
             World* world = new World;
+
+            generate_starting_terrain(world);
 
             {
                 Player* p = new Player;

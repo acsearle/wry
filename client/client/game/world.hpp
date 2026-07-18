@@ -10,6 +10,7 @@
 
 #include "sim.hpp"
 #include "simd.hpp"
+#include "terrain.hpp"
 #include "tile.hpp"
 #include "utility.hpp"
 #include "machine.hpp"
@@ -53,6 +54,7 @@ namespace wry {
         WaitableMap<Coordinate, EntityID> _entity_id_for_coordinate;
         WaitableMap<EntityID, const Entity*> _entity_for_entity_id;
         WaitableMap<Coordinate, Term> _term_for_coordinate;
+        WaitableMap<Coordinate, Terrain> _terrain_for_coordinate;
 
         using Set = PersistentSet<std::pair<Time, EntityID>, DefaultKeyService<std::pair<Time, EntityID>>, ScanDiscipline>;
         Set _waiting_on_time;
@@ -63,6 +65,7 @@ namespace wry {
         , _entity_id_for_coordinate{}
         , _entity_for_entity_id{}
         , _term_for_coordinate{}
+        , _terrain_for_coordinate{}
         , _waiting_on_time{}
         {
         }
@@ -71,11 +74,13 @@ namespace wry {
               WaitableMap<Coordinate, EntityID> entity_id_for_coordinate,
               WaitableMap<EntityID, const Entity*> entity_for_entity_id,
               WaitableMap<Coordinate, Term> value_for_coordinate,
+              WaitableMap<Coordinate, Terrain> terrain_for_coordinate,
               Set waiting_on_time)
         : _time(time)
         , _entity_id_for_coordinate(entity_id_for_coordinate)
         , _entity_for_entity_id(entity_for_entity_id)
         , _term_for_coordinate(value_for_coordinate)
+        , _terrain_for_coordinate(terrain_for_coordinate)
         , _waiting_on_time(waiting_on_time)
         {}
 

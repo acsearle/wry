@@ -35,7 +35,7 @@ namespace wry {
 
     namespace {
         constexpr uint32_t SAVE_MAGIC   = 0x57525953;  // 'WRYS'
-        constexpr uint32_t SAVE_VERSION = 1;
+        constexpr uint32_t SAVE_VERSION = TERM_SAVE_VERSION;
 
         std::filesystem::path saves_dir() {
             // TODO: real per-user save location.  Cwd is fine for sketch.
@@ -239,7 +239,10 @@ namespace wry {
         Loader L;
         L._cursor = buf.data();
         L._end    = buf.data() + buf.size();
-        return L.load_world();
+        World* w = L.load_world();
+        // Version-rejected (or otherwise unreadable) file: empty world, the
+        // same fallback as an absent file.
+        return w ? w : new World;
     }
 
     World* continue_game() {

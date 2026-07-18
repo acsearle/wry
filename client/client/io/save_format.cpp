@@ -14,6 +14,7 @@
 //    - ArrayMappedTrie<uint64_t, Term>          // value-for-coordinate map leaves
 //    - ArrayMappedTrie<uint64_t, EntityID>       // entity-id-for-coordinate map leaves
 //    - ArrayMappedTrie<uint64_t, const Entity*>  // entity-for-entity-id map leaves
+//    - ArrayMappedTrie<uint64_t, Terrain>        // terrain-for-coordinate map leaves
 //    - ArrayMappedTrie<__uint128_t, std::monostate>            // time wheel set node
 //    - ArrayMappedTrie<uint64_t, WaitSet>        // ki waiter-index outer map
 //    - ArrayMappedTrie<uint64_t, std::monostate>            // ki waitset inner set node
@@ -288,6 +289,13 @@ namespace wry {
         });
     }
 
+    // AMT Node<Terrain, uint64_t>: leaf values are small ints, no references.
+    // (Terrain is an alias of int; the structural tag comes from
+    // save_type_traits<int>.)
+    static void emit_body(const ArrayMappedTrie<uint64_t, Terrain, ScanDiscipline>* n, Saver& s) {
+        emit_amt_body(n, s, [](Terrain t) { return (int32_t)t; });
+    }
+
     // The kv side hashes Coordinate / EntityID keys to u64 codes.  The time
     // wheel (_waiting_on_time) is keyed by pair<Time, EntityID>, which the
     // DefaultKeyService packs into a u128 code, so its set nodes are
@@ -297,6 +305,7 @@ namespace wry {
     using NodeEntityID_U64    = ArrayMappedTrie<uint64_t, EntityID, ScanDiscipline>;
     using NodeEntityPtr_U64   = ArrayMappedTrie<uint64_t, const Entity*, ScanDiscipline>;
     using NodeValue_U64       = ArrayMappedTrie<uint64_t, Term, ScanDiscipline>;
+    using NodeTerrain_U64     = ArrayMappedTrie<uint64_t, Terrain, ScanDiscipline>;
     using NodeSet_U128        = ArrayMappedTrie<__uint128_t, std::monostate, ScanDiscipline>;
     using NodeWaitSet_U64     = ArrayMappedTrie<uint64_t, WaitSet, ScanDiscipline>;
     using NodeSet_U64         = ArrayMappedTrie<uint64_t, std::monostate, ScanDiscipline>;
@@ -310,6 +319,7 @@ namespace wry {
         SaveRef eid_for_coord_kv = s.visit<NodeEntityID_U64>(_entity_id_for_coordinate.kv._inner);
         SaveRef ent_for_eid_kv   = s.visit<NodeEntityPtr_U64>(_entity_for_entity_id.kv._inner);
         SaveRef val_for_coord_kv = s.visit<NodeValue_U64>(_term_for_coordinate.kv._inner);
+        SaveRef ter_for_coord_kv = s.visit<NodeTerrain_U64>(_terrain_for_coordinate.kv._inner);
         SaveRef waiting_on_time  = s.visit<NodeSet_U128>(_waiting_on_time._inner);
 
         // The ki waiter index is semantic state, not a regenerable cache: a
@@ -319,6 +329,7 @@ namespace wry {
         SaveRef eid_for_coord_ki = s.visit<NodeWaitSet_U64>(_entity_id_for_coordinate.ki._inner);
         SaveRef ent_for_eid_ki   = s.visit<NodeWaitSet_U64>(_entity_for_entity_id.ki._inner);
         SaveRef val_for_coord_ki = s.visit<NodeWaitSet_U64>(_term_for_coordinate.ki._inner);
+        SaveRef ter_for_coord_ki = s.visit<NodeWaitSet_U64>(_terrain_for_coordinate.ki._inner);
 
         s.write_u64((uint64_t)_time);
         s.write_ref(eid_for_coord_kv);
@@ -327,6 +338,8 @@ namespace wry {
         s.write_ref(ent_for_eid_ki);
         s.write_ref(val_for_coord_kv);
         s.write_ref(val_for_coord_ki);
+        s.write_ref(ter_for_coord_kv);
+        s.write_ref(ter_for_coord_ki);
         s.write_ref(waiting_on_time);
     }
 
@@ -420,11 +433,14 @@ namespace wry {
         SaveRef ent_ki  = L.read_u32();
         SaveRef val_kv  = L.read_u32();
         SaveRef val_ki  = L.read_u32();
+        SaveRef ter_kv  = L.read_u32();
+        SaveRef ter_ki  = L.read_u32();
         SaveRef wait    = L.read_u32();
 
         w->_entity_id_for_coordinate.kv._inner = (NodeEntityID_U64*)L._ptrs[eid_kv];
         w->_entity_for_entity_id.kv._inner     = (NodeEntityPtr_U64*)L._ptrs[ent_kv];
         w->_term_for_coordinate.kv._inner     = (NodeValue_U64*)L._ptrs[val_kv];
+        w->_terrain_for_coordinate.kv._inner   = (NodeTerrain_U64*)L._ptrs[ter_kv];
         w->_waiting_on_time._inner             = (NodeSet_U128*)L._ptrs[wait];
 
         // Pre-ki saves wrote SAVE_REF_NULL for these three refs; _ptrs[0] is
@@ -432,6 +448,7 @@ namespace wry {
         w->_entity_id_for_coordinate.ki._inner = (NodeWaitSet_U64*)L._ptrs[eid_ki];
         w->_entity_for_entity_id.ki._inner     = (NodeWaitSet_U64*)L._ptrs[ent_ki];
         w->_term_for_coordinate.ki._inner     = (NodeWaitSet_U64*)L._ptrs[val_ki];
+        w->_terrain_for_coordinate.ki._inner   = (NodeWaitSet_U64*)L._ptrs[ter_ki];
     }
 
     // Loaded entities carry their saved EntityIDs, but the oracle that mints
@@ -576,6 +593,13 @@ namespace wry {
         });
     }
 
+    static void load_into_amt_node_terrain_u64(Loader& L, SaveRef id) {
+        load_amt_node<Terrain, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
+            for (uint32_t i = 0; i < count; ++i)
+                n->_values[i] = (Terrain)L.read_pod<int32_t>();
+        });
+    }
+
     // The registry table.
 
     static const SaveableTraits g_saveable_traits[] = {
@@ -596,6 +620,7 @@ namespace wry {
         { save_type_tag_v<NodeSet_U128>,                                     "Node<unit,u128>",                      &load_into_amt_node_int_u128 },
         { save_type_tag_v<NodeWaitSet_U64>,                                  "Node<WaitSet,u64>",                   &load_into_amt_node_wait_set_u64 },
         { save_type_tag_v<NodeSet_U64>,                                      "Node<unit,u64>",                       &load_into_amt_node_int_u64 },
+        { save_type_tag_v<NodeTerrain_U64>,                                  "Node<int,u64>",                        &load_into_amt_node_terrain_u64 },
     };
 
     const SaveableTraits* find_saveable_traits(uint64_t tag) {
@@ -617,7 +642,13 @@ namespace wry {
         uint32_t version = read_u32();
         uint32_t count   = read_u32();
         (void)magic;
-        (void)version;
+        // Hard reject on version mismatch, per the TERM_SAVE_VERSION
+        // contract: an older record layout would misparse, not degrade.
+        if (version != TERM_SAVE_VERSION) {
+            fprintf(stderr, "save: version %u (loader expects %u); refusing to load\n",
+                    version, (unsigned)TERM_SAVE_VERSION);
+            return nullptr;
+        }
 
         _ptrs.assign(count + 1, nullptr);  // +1 because IDs are 1-based
 
@@ -660,7 +691,7 @@ namespace wry {
     static std::vector<uint8_t> test_save_to_buffer(const World* w) {
         Saver s;
         s.write_u32(0x57525953);  // 'WRYS', as save_game writes
-        s.write_u32(1);
+        s.write_u32(TERM_SAVE_VERSION);
         size_t record_count_offset = s._stream.size();
         s.write_u32(0);  // placeholder
         SaveRef root_ref = s.save_world(w);
@@ -867,6 +898,16 @@ namespace wry {
         w->_term_for_coordinate.set(Coordinate{-2, -2}, shared_term);
         w->_term_for_coordinate.set(Coordinate{7, 7}, term_make_string_with("hello save"));
 
+        // Terrain patch spanning positive and negative coordinates, plus a
+        // waiter on a terrain cell (an entity waiting on a terrain change),
+        // so both sides of the terrain WaitableMap hit the file.
+        w->_terrain_for_coordinate.set(Coordinate{0, 0}, TERRAIN_GRASS);
+        w->_terrain_for_coordinate.set(Coordinate{1, 0}, TERRAIN_WATER);
+        w->_terrain_for_coordinate.set(Coordinate{-40, 25}, TERRAIN_ROCK);
+        w->_terrain_for_coordinate.set(Coordinate{6, -3}, TERRAIN_SAND);
+        { WaitSet ws; ws.set(spawner->_entity_id);
+          w->_terrain_for_coordinate.ki.set(Coordinate{1, 0}, ws); }
+
         { WaitSet ws; ws.set(player->_entity_id);
           w->_term_for_coordinate.ki.set(Coordinate{0, 1}, ws); }
         { WaitSet ws; ws.set(sink->_entity_id); ws.set(counter->_entity_id);
@@ -922,6 +963,20 @@ namespace wry {
         ws.for_each([&got](EntityID e) { got.insert(e.data); });
         assert((got == std::set<uint64_t>{ sink->_entity_id.data,
                                            counter->_entity_id.data }));
+
+        Terrain terrain = -1;
+        assert(w2->_terrain_for_coordinate.try_get(Coordinate{1, 0}, terrain));
+        assert(terrain == TERRAIN_WATER);
+        assert(w2->_terrain_for_coordinate.try_get(Coordinate{-40, 25}, terrain));
+        assert(terrain == TERRAIN_ROCK);
+        assert(!w2->_terrain_for_coordinate.try_get(Coordinate{9, 9}, terrain));
+        {
+            WaitSet tws;
+            assert(w2->_terrain_for_coordinate.ki.try_get(Coordinate{1, 0}, tws));
+            std::set<uint64_t> twaiters;
+            tws.for_each([&twaiters](EntityID e) { twaiters.insert(e.data); });
+            assert((twaiters == std::set<uint64_t>{ spawner->_entity_id.data }));
+        }
 
         // Strong backstop: re-saving the loaded world reproduces the stream.
         std::vector<uint8_t> b2 = test_save_to_buffer(w2);

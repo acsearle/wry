@@ -15,6 +15,7 @@ namespace wry {
         garbage_collected_scan(_entity_id_for_coordinate);
         garbage_collected_scan(_entity_for_entity_id);
         garbage_collected_scan(_term_for_coordinate);
+        garbage_collected_scan(_terrain_for_coordinate);
         garbage_collected_scan(_waiting_on_time);
         
     } // World::_garbage_collected_scan
@@ -300,11 +301,14 @@ namespace wry {
         
 
         // -- completion barrier --
+        // Terrain has no transaction channel yet; the persistent map is
+        // carried over unchanged (an O(1) structural share, not a copy).
         co_return new World{
             new_time,
             new_entity_id_for_coordinate,
             new_entity_for_entity_id,
             new_value_for_coordinate,
+            _terrain_for_coordinate,
             new_waiting_on_time
         };
         

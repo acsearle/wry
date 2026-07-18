@@ -118,6 +118,10 @@
     id<MTLTexture> _darkgray;
     id<MTLTexture> _orange;
 
+    // One texel per terrain kind, indexed by wry::Terrain; terrain tiles are
+    // untextured solid colors until real terrain art exists.
+    id<MTLTexture> _terrainPalette;
+
     wry::Table<ulong, simd_float4> _opcode_to_coordinate;
     
     WryMesh* _truck_mesh;
@@ -517,6 +521,30 @@
             //_darkgray = [_ctx newTextureFromResource:@"darkgray" ofType:@"png"];
             _orange = [_ctx newTextureFromResource:@"orange" ofType:@"png"];
 
+        }
+
+        {
+            // Terrain palette, texels indexed by wry::Terrain.  Each tile
+            // quad puts all four corners at its kind's texel center, so the
+            // linear sampler returns the texel exactly: solid color, no bleed.
+            static const uint8_t terrain_srgb[wry::TERRAIN_KIND_COUNT][4] = {
+                {  58, 110, 165, 255 },   // TERRAIN_WATER
+                { 214, 194, 138, 255 },   // TERRAIN_SAND
+                { 104, 148,  76, 255 },   // TERRAIN_GRASS
+                { 128, 124, 118, 255 },   // TERRAIN_ROCK
+            };
+            MTLTextureDescriptor* descriptor =
+                [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
+                                                                   width:wry::TERRAIN_KIND_COUNT
+                                                                  height:1
+                                                               mipmapped:NO];
+            descriptor.usage = MTLTextureUsageShaderRead;
+            _terrainPalette = [_ctx.device newTextureWithDescriptor:descriptor];
+            _terrainPalette.label = @"terrain palette";
+            [_terrainPalette replaceRegion:MTLRegionMake2D(0, 0, wry::TERRAIN_KIND_COUNT, 1)
+                               mipmapLevel:0
+                                 withBytes:terrain_srgb
+                               bytesPerRow:sizeof(terrain_srgb)];
         }
         
         {
@@ -1116,6 +1144,11 @@
     id<MTLBuffer> vertices = nil;
     id<MTLBuffer> indices = nil;
     NSUInteger index_count = 0;
+    // Terrain tiles get their own buffers: same quad pipeline, but drawn
+    // with the terrain palette (not the sprite atlas) bound as albedo.
+    id<MTLBuffer> terrain_vertices = nil;
+    id<MTLBuffer> terrain_indices = nil;
+    NSUInteger terrain_index_count = 0;
     _furnace_mesh.instanceCount = 0;
     _mine_mesh.instanceCount = 0;
     _truck_mesh.instanceCount = 0;
@@ -1162,8 +1195,8 @@
         std::vector<MeshVertex> vbuf;
         std::vector<uint> ibuf;
         // Reserve a rough lower bound (one quad per grid cell and per entity,
-        // plus the ground plane and cursor) to avoid most reallocations; this
-        // is only a hint -- the vectors still grow past it as needed.
+        // plus the cursor) to avoid most reallocations; this is only a hint
+        // -- the vectors still grow past it as needed.
         size_t quad_hint = 2
             + (size_t)(grid_bounds.b.x - grid_bounds.a.x) * (size_t)(grid_bounds.b.y - grid_bounds.a.y)
             + ptrs.size();
@@ -1420,30 +1453,52 @@
         }
 
         {
-            
-            // big ground plane
-            
-            v.coordinate = make<float4>(3.0 / 32.0f, 4.5f / 32.0f, 0.0f, 1.0f);
-            v.position = make<float4>(grid_bounds.a.x - 1, grid_bounds.a.y - 1, 0.0, 1.0f);
-            vbuf.push_back(v);
-            v.position = make<float4>(grid_bounds.b.x, grid_bounds.a.y - 1, 0.0, 1.0f);
-            vbuf.push_back(v);
-            v.position = make<float4>(grid_bounds.b.x, grid_bounds.b.y, 0.0, 1.0f);
-            vbuf.push_back(v);
-            v.position = make<float4>(grid_bounds.a.x - 1, grid_bounds.b.y, 0.0, 1.0f);
-            vbuf.push_back(v);
-            
-            ibuf.push_back(k);
-            ibuf.push_back(k);
-            ibuf.push_back(k + 1);
-            ibuf.push_back(k + 3);
-            ibuf.push_back(k + 2);
-            ibuf.push_back(k + 2);
-            
-            k += 4;
-            
+
+            // Terrain: one solid-colored quad per generated tile in view,
+            // at z = 0 under the tile/entity layer.  Sourced by Morton-range
+            // descent over the terrain map, like the entity query above;
+            // cells that have no terrain yet (beyond the generated region)
+            // draw nothing and show the clear color.
+            std::vector<MeshVertex> terrain_vbuf;
+            std::vector<uint> terrain_ibuf;
+            uint terrain_k = 0;
+            visit_in_region(new_world->_terrain_for_coordinate,
+                            Coordinate{grid_bounds.a.x, grid_bounds.a.y},
+                            Coordinate{grid_bounds.b.x - 1, grid_bounds.b.y - 1},
+                            [&](Coordinate xy, wry::Terrain t) {
+                if ((t < 0) || (t >= wry::TERRAIN_KIND_COUNT))
+                    t = wry::TERRAIN_KIND_COUNT - 1;
+                // All four corners at the kind's texel center: solid color.
+                simd_float4 coordinate = make<float4>((t + 0.5f) / wry::TERRAIN_KIND_COUNT,
+                                                      0.5f, 0.0f, 1.0f);
+                simd_float4 location = make<float4>(xy.x, xy.y, 0.0f, 1.0f);
+                v.coordinate = coordinate;
+                v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
+                terrain_vbuf.push_back(v);
+                v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
+                terrain_vbuf.push_back(v);
+                v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
+                terrain_vbuf.push_back(v);
+                v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
+                terrain_vbuf.push_back(v);
+                terrain_ibuf.push_back(terrain_k);
+                terrain_ibuf.push_back(terrain_k);
+                terrain_ibuf.push_back(terrain_k + 1);
+                terrain_ibuf.push_back(terrain_k + 3);
+                terrain_ibuf.push_back(terrain_k + 2);
+                terrain_ibuf.push_back(terrain_k + 2);
+                terrain_k += 4;
+            });
+            terrain_index_count = terrain_ibuf.size();
+            if (terrain_index_count) {
+                terrain_vertices = [_ctx.device newBufferWithLength:terrain_vbuf.size() * sizeof(MeshVertex) options:MTLStorageModeShared];
+                terrain_indices = [_ctx.device newBufferWithLength:terrain_ibuf.size() * sizeof(uint) options:MTLStorageModeShared];
+                memcpy(terrain_vertices.contents, terrain_vbuf.data(), terrain_vbuf.size() * sizeof(MeshVertex));
+                memcpy(terrain_indices.contents, terrain_ibuf.data(), terrain_ibuf.size() * sizeof(uint));
+            }
+
         }
-        
+
         {
             // mouse cursor thing
             simd_float4 location = _model->_mouse4;
@@ -1523,8 +1578,9 @@
                                   slopeScale:+1.0f // ?
                                        clamp:0.0f];
         
-        // We don't render the ground plane here as it can't cast shadows; is
-        // there anything else in this category to discard?
+        // We don't render the terrain tiles here as geometry in the z = 0
+        // ground plane can't cast shadows; is there anything else in this
+        // category to discard?
 
         // TODO: Think about draw order here to maximize fragment discard
         // Are 2D entities mostly just above the ground plane and thus behind
@@ -1685,14 +1741,27 @@
                 }
 
                 [encoder setFragmentTexture:_black atIndex:AAPLTextureIndexEmissive];
-                [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
                 [encoder setFragmentTexture:_black atIndex:AAPLTextureIndexMetallic];
                 [encoder setFragmentTexture:_blue atIndex:AAPLTextureIndexNormal];
                 [encoder setFragmentTexture:_white atIndex:AAPLTextureIndexRoughness];
-                [encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
                 [encoder setVertexBytes:&mesh_instanced_things
                                  length:sizeof(MeshInstanced)
                                 atIndex:AAPLBufferIndexInstanced];
+
+                // Terrain tiles first (a shadow receiver only, so they skip
+                // the shadow pass entirely): solid palette colors.
+                if (terrain_index_count) {
+                    [encoder setFragmentTexture:_terrainPalette atIndex:AAPLTextureIndexAlbedo];
+                    [encoder setVertexBuffer:terrain_vertices offset:0 atIndex:AAPLBufferIndexVertices];
+                    [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
+                                        indexCount:terrain_index_count
+                                         indexType:MTLIndexTypeUInt32
+                                       indexBuffer:terrain_indices
+                                 indexBufferOffset:0];
+                }
+
+                [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
+                [encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
                 [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
                                     indexCount:index_count
                                      indexType:MTLIndexTypeUInt32
