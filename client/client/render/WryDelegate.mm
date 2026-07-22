@@ -207,7 +207,14 @@ namespace {
     _metalLayer = [[CAMetalLayer alloc] init];
     _metalLayer.device = MTLCreateSystemDefaultDevice();
     _metalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
-    _metalLayer.framebufferOnly = YES;
+    // The present path (see -render) blits each scene's returned texture
+    // into the late-acquired drawable, and a blit DESTINATION is exactly
+    // what framebufferOnly = YES forbids (it restricts the drawable to
+    // render-attachment use; the Metal debug layer asserts on the copy,
+    // and it only happened to work with validation off).  NO trades the
+    // layer's render-target-only optimizations for blit-ability, which
+    // the copy-based present needs.
+    _metalLayer.framebufferOnly = NO;
     _metalLayer.displaySyncEnabled = YES;
     _metalView.layer = _metalLayer;
     _metalView.wantsLayer = YES;
