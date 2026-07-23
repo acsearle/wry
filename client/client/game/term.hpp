@@ -153,7 +153,19 @@ namespace wry {
         constexpr int64_t as_int64_t() const;
         
         constexpr bool is_Empty() const;
-        
+
+        // Boolean/integer coercion family.  Predicates produce booleans
+        // (keeping the truth/number distinction visible to rendering),
+        // but any consumer of integers -- arithmetic, branching, headings
+        // -- accepts booleans as 0/1 via is_inty/as_int.  is_booly and
+        // is_inty are coextensive today; the name at a call site records
+        // whether truth or magnitude is wanted.
+        constexpr bool is_booly() const;
+        constexpr bool is_truthy() const;
+        constexpr bool is_falsey() const;
+        constexpr bool is_inty() const;
+        constexpr int64_t as_int() const;
+
     }; // struct Term
     
     void garbage_collected_shade(Term const& value);
@@ -631,7 +643,30 @@ namespace wry {
     constexpr Term term_make_character_with(int utf32) {
         return term_make_enum(TERM_ENUM_META_CHARACTER, utf32);
     }
-    
+
+    constexpr bool Term::is_booly() const {
+        return is_int64_t() || term_is_boolean(*this);
+    }
+
+    constexpr bool Term::is_inty() const {
+        return is_int64_t() || term_is_boolean(*this);
+    }
+
+    constexpr bool Term::is_truthy() const {
+        // Falsey rule: all payload bits zero.  Only meaningful under
+        // is_booly; anything else is neither truthy nor falsey.
+        return is_booly() && (_data >> TERM_SHIFT);
+    }
+
+    constexpr bool Term::is_falsey() const {
+        return is_booly() && !(_data >> TERM_SHIFT);
+    }
+
+    constexpr int64_t Term::as_int() const {
+        // Pre-condition: is_inty()
+        return is_int64_t() ? as_int64_t() : (int64_t)term_as_boolean(*this);
+    }
+
     constexpr Term::operator bool() const {
         // POINTER: nonnull
         //    - All containers are true, even if empty

@@ -14,9 +14,12 @@
 #include <cstring>
 
 namespace wry {
-    
+
     // define opcodes
-    
+    //
+    // Opcode values are save-format constants: append only, never
+    // renumber or reorder.
+
 #define WRY_OPCODES_X \
 X(OPCODE_NOOP),\
 X(OPCODE_SKIP),\
@@ -72,6 +75,8 @@ X(OPCODE_GREATER_THAN_OR_EQUAL_TO),\
 X(OPCODE_COMPARE),\
 X(OPCODE_FLIP_FLOP),\
 X(OPCODE_FLOP_FLIP),\
+X(OPCODE_ROT),\
+X(OPCODE_IS_MATTER),\
 
     enum OPCODE
     : int64_t {

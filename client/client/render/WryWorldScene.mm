@@ -1936,6 +1936,7 @@
                 [encoder setFragmentTexture:_black atIndex:AAPLTextureIndexMetallic];
                 [encoder setFragmentTexture:_blue atIndex:AAPLTextureIndexNormal];
                 [encoder setFragmentTexture:_white atIndex:AAPLTextureIndexRoughness];
+                [encoder setFragmentTexture:_white atIndex:AAPLTextureIndexOcclusion];
 
                 if (show_map) {
 

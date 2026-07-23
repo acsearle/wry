@@ -148,19 +148,19 @@ namespace wry {
                         next_heading += 2;
                         break;
                     case OPCODE_BRANCH_LEFT:
-                        a = peek();
-                        if (a.is_int64_t())
-                            next_heading -= a.as_int64_t();
+                        a = new_this->peek();
+                        if (a.is_inty())
+                            next_heading -= a.as_int();
                         break;
                     case OPCODE_BRANCH_RIGHT:
-                        a = peek();
-                        if (a.is_int64_t())
-                            next_heading += a.as_int64_t();
+                        a = new_this->peek();
+                        if (a.is_inty())
+                            next_heading += a.as_int();
                         break;
-                    case OPCODE_HEADING_LOAD:
-                        a = peek();
-                        if (a.is_int64_t())
-                            next_heading = a.as_int64_t();
+                    case OPCODE_HEADING_STORE:
+                        a = new_this->peek();
+                        if (a.is_inty())
+                            next_heading = a.as_int();
                         break;
                 }
                 
@@ -231,7 +231,7 @@ namespace wry {
                         // - is not an opcode
                         // - is copyable, aka immaterial, sybmbolic, numeric?
                         // we pick it up.  Good idea?
-                        if (new_value.is_int64_t()) {
+                        if (new_value.is_inty()) {
                             new_this->push(new_value);
                         }
                         break;
@@ -253,7 +253,7 @@ namespace wry {
                     case OPCODE_BRANCH_LEFT:
                     case OPCODE_BRANCH_RIGHT:
                     case OPCODE_HEADING_STORE:
-                        if (new_this->peek().is_int64_t())
+                        if (new_this->peek().is_inty())
                             new_this->pop();
                         break;
                         
@@ -287,79 +287,135 @@ namespace wry {
                         new_this->push(a);
                         new_this->push(b);
                         break;
+                    case OPCODE_ROT: {
+                        // ( x y z -- y z x ); pure permutation, so matter
+                        // may ride along; needs three operands
+                        auto* s = new_this->_stack;
+                        if (s && s->_next && s->_next->_next) {
+                            Term z = new_this->pop();
+                            Term y = new_this->pop();
+                            Term x = new_this->pop();
+                            new_this->push(y);
+                            new_this->push(z);
+                            new_this->push(x);
+                        }
+                    } break;
                         
                         // arithmetic / logic
                         
-                    case OPCODE_IS_NOT_ZERO:
+                    case OPCODE_IS_ZERO:
                         a = new_this->peek();
-                        if (a.is_int64_t()) {
-                            a = a.as_int64_t() != 0;
+                        if (a.is_inty()) {
+                            a = a.as_int() == 0;
                             new_this->pop(); new_this->push(a);
                         }
                         break;
-                        
+                    case OPCODE_IS_NOT_ZERO:
+                        a = new_this->peek();
+                        if (a.is_inty()) {
+                            a = a.as_int() != 0;
+                            new_this->pop(); new_this->push(a);
+                        }
+                        break;
+                    case OPCODE_IS_POSITIVE:
+                        a = new_this->peek();
+                        if (a.is_inty()) {
+                            a = a.as_int() > 0;
+                            new_this->pop(); new_this->push(a);
+                        }
+                        break;
+                    case OPCODE_IS_NOT_POSITIVE:
+                        a = new_this->peek();
+                        if (a.is_inty()) {
+                            a = a.as_int() <= 0;
+                            new_this->pop(); new_this->push(a);
+                        }
+                        break;
+                    case OPCODE_IS_NEGATIVE:
+                        a = new_this->peek();
+                        if (a.is_inty()) {
+                            a = a.as_int() < 0;
+                            new_this->pop(); new_this->push(a);
+                        }
+                        break;
+                    case OPCODE_IS_NOT_NEGATIVE:
+                        a = new_this->peek();
+                        if (a.is_inty()) {
+                            a = a.as_int() >= 0;
+                            new_this->pop(); new_this->push(a);
+                        }
+                        break;
+                    case OPCODE_IS_MATTER:
+                        // ( x -- x flag ); non-consuming, so testing can
+                        // never destroy matter
+                        a = new_this->peek();
+                        if (!term_is_null(a))
+                            new_this->push(Term(a.is_matter()));
+                        break;
+
+
                     case OPCODE_LOGICAL_NOT:
                         a = new_this->peek();
-                        if (a.is_int64_t()) {
-                            a = !a.as_int64_t();
+                        if (a.is_booly()) {
+                            a = a.is_falsey();
                             new_this->pop(); new_this->push(a);
                         }
                         break;
                     case OPCODE_LOGICAL_AND:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() && b.as_int64_t();
+                        if (a.is_booly() && b.is_booly()) {
+                            a = a.is_truthy() && b.is_truthy();
                             new_this->pop2push1(a);
                         }
                         break;
                     case OPCODE_LOGICAL_OR:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() || b.as_int64_t();
+                        if (a.is_booly() && b.is_booly()) {
+                            a = a.is_truthy() || b.is_truthy();
                             new_this->pop2push1(a);
                         }
                         break;
                     case OPCODE_LOGICAL_XOR:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = !a.as_int64_t() != !b.as_int64_t();
+                        if (a.is_booly() && b.is_booly()) {
+                            a = a.is_truthy() != b.is_truthy();
                             new_this->pop2push1(a);
                         }
                         break;
                     case OPCODE_BITWISE_NOT:
                         a = new_this->peek();
-                        if (a.is_int64_t()) {
-                            a = ~a.as_int64_t();
+                        if (a.is_inty()) {
+                            a = ~a.as_int();
                             new_this->pop(); new_this->push(a);
                         }
                         break;
                     case OPCODE_BITWISE_AND:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() & b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            a = a.as_int() & b.as_int();
                             new_this->pop2push1(a);
                         }
                         break;
                     case OPCODE_BITWISE_OR:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() | b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            a = a.as_int() | b.as_int();
                             new_this->pop2push1(a);
                         }
                         break;
                     case OPCODE_BITWISE_XOR:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() ^ b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            a = a.as_int() ^ b.as_int();
                             new_this->pop2push1(a);
                         }
                         break;
-                        
+
                     case OPCODE_BITWISE_SPLIT:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            i64 x = a.as_int64_t() & b.as_int64_t();
-                            i64 y = a.as_int64_t() ^ b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            i64 x = a.as_int() & b.as_int();
+                            i64 y = a.as_int() ^ b.as_int();
                             a = x;
                             b = y;
                             new_this->pop();
@@ -368,104 +424,128 @@ namespace wry {
                             new_this->push(b);
                         }
                         break;
-                        
+
                     case OPCODE_SHIFT_RIGHT:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() >> b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            // clamp: small integers are 60-bit, so by 60
+                            // every value is all sign bits anyway, and a
+                            // negative count would be undefined behavior
+                            i64 shift = b.as_int();
+                            if (shift < 0) shift = 0;
+                            if (shift > 60) shift = 60;
+                            a = a.as_int() >> shift;
                             new_this->pop2push1(a);
                         }
                         break;
-                        
+
                     case OPCODE_POPCOUNT:
-                        a = peek();
-                        if (a.is_int64_t()) {
-                            a = __builtin_popcountll(a.as_int64_t());
+                        a = new_this->peek();
+                        if (a.is_inty()) {
+                            a = __builtin_popcountll(a.as_int());
                             new_this->pop(); new_this->push(a);
                         }
                         break;
                         
                     case OPCODE_NEGATE:
                         a = new_this->peek();
-                        if (a.is_int64_t()) {
-                            a = -a.as_int64_t();
+                        if (a.is_inty()) {
+                            a = -a.as_int();
                             new_this->pop(); new_this->push(a);
                         }
                         break;
                     case OPCODE_ABS:
                         a = new_this->peek();
-                        if (a.is_int64_t()) {
-                            a = abs(a.as_int64_t());
+                        if (a.is_inty()) {
+                            a = abs(a.as_int());
                             new_this->pop(); new_this->push(a);
                         }
                         break;
                     case OPCODE_SIGN:
                         a = new_this->peek();
-                        if (a.is_int64_t()) {
-                            a = (0 < a.as_int64_t()) - (a.as_int64_t() < 0);
+                        if (a.is_inty()) {
+                            a = (0 < a.as_int()) - (a.as_int() < 0);
                             new_this->pop(); new_this->push(a);
                         }
                         break;
                     case OPCODE_EQUAL:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() == b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            // booleans and integers cross-compare as 0/1
+                            a = a.as_int() == b.as_int();
                             new_this->pop2push1(a);
+                        } else if (!term_is_null(a) && !term_is_null(b)
+                                   && !a.is_matter() && !b.is_matter()) {
+                            // any information compares; consuming matter
+                            // into a flag would destroy it, so matter
+                            // refuses (until ghost matter exists).  Term-
+                            // incomparable pairs (cross-type) count as
+                            // not equal rather than leaking ERROR.
+                            Term r = term_eq(a, b);
+                            new_this->pop2push1(term_is_boolean(r)
+                                                ? r : Term(false));
                         }
                         break;
                     case OPCODE_NOT_EQUAL:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() != b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            a = a.as_int() != b.as_int();
                             new_this->pop2push1(a);
+                        } else if (!term_is_null(a) && !term_is_null(b)
+                                   && !a.is_matter() && !b.is_matter()) {
+                            // negation of EQUAL, same contract
+                            Term r = term_eq(a, b);
+                            bool eq = term_is_boolean(r) && term_as_boolean(r);
+                            new_this->pop2push1(Term(!eq));
                         }
                         break;
                     case OPCODE_LESS_THAN:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() < b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            a = a.as_int() < b.as_int();
                             new_this->pop2push1(a);
                         }
                         break;
                     case OPCODE_GREATER_THAN:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() > b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            a = a.as_int() > b.as_int();
                             new_this->pop2push1(a);
                         }
                         break;
                     case OPCODE_LESS_THAN_OR_EQUAL_TO:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() <= b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            a = a.as_int() <= b.as_int();
                             new_this->pop2push1(a);
                         }
                         break;
                     case OPCODE_GREATER_THAN_OR_EQUAL_TO:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() >= b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            a = a.as_int() >= b.as_int();
                             new_this->pop2push1(a);
                         }
                         break;
                     case OPCODE_COMPARE:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = (a.as_int64_t() < b.as_int64_t()) - (b.as_int64_t() < (i64) a.as_int64_t());
+                        if (a.is_inty() && b.is_inty()) {
+                            // sign(a - b), agreeing with SUBTRACT; SIGN
+                            a = (b.as_int() < a.as_int()) - (a.as_int() < b.as_int());
                             new_this->pop2push1(a);
                         }
                         break;
                     case OPCODE_ADD:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() + b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            a = a.as_int() + b.as_int();
                             new_this->pop2push1(a);
                         }
                         break;
                     case OPCODE_SUBTRACT:
                         std::tie(a, b) = new_this->peek2();
-                        if (a.is_int64_t() && b.is_int64_t()) {
-                            a = a.as_int64_t() - b.as_int64_t();
+                        if (a.is_inty() && b.is_inty()) {
+                            a = a.as_int() - b.as_int();
                             new_this->pop2push1(a);
                         }
                         break;

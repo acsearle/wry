@@ -1,9 +1,9 @@
 # The Machine Language
 
 Documentation for the language defined by `OPCODE` (game/opcode.hpp) and its
-interpreter `Machine::notify` (game/machine.cpp), as of 2026-07-21.  The
-second half of this document is a design review: missing opcodes, rough
-edges, and contradictions found while tracing the implementation.
+interpreter `Machine::notify` (game/machine.cpp), as of 2026-07-23.  The
+second half of this document is a design review: rough edges and open
+questions, plus a changelog of the defects already fixed.
 
 Status: descriptive, not normative.  Where the implementation and the
 apparent intent disagree, both are stated and the discrepancy is flagged.
@@ -39,7 +39,7 @@ Machines never overlap.  A machine that wants to enter an occupied cell
 **blocks**: it parks and sleeps until the occupant leaves (or until the
 value under the parked machine changes, which serves as an external escape
 hatch).  Blocking is the language's only synchronization primitive, and it
-is a good one -- but deadlock is expressible (section 8.13).
+is a good one -- but deadlock is expressible (section 8.11).
 
 Matter is conserved.  A `MATTER` Term denotes a physical object; the
 opcode semantics refuse to copy it (`DUPLICATE`, `OVER`) or destroy it
@@ -53,7 +53,7 @@ destroys it.
 Headings are quarter-turns from north: 0 = north (+y), 1 = east (+x),
 2 = south (-y), 3 = west (-x).  Internally a heading is a full `i64` and
 is only reduced mod 4 when a step is taken; turns add or subtract, so the
-stored heading accumulates (this leaks: see 8.6).
+stored heading accumulates (this leaks: see 8.3).
 
 
 ## 2. Machine state
@@ -118,8 +118,9 @@ Precisely, at each arrival at cell C:
      the stack and leaves C empty.
    - `SKIP`: nothing.
    - none of the above (the common case): **auto-pickup** -- if C holds a
-     small integer, push a copy of it.  Driving over a number reads it.
-     This is the idiomatic way both literals and signals enter the stack.
+     small integer or a boolean, push a copy of it.  Driving over a number
+     reads it.  This is the idiomatic way both literals and signals enter
+     the stack.
 
 7. **Action effect.**  Stack manipulation, arithmetic, logic, and the
    flip-flop self-modification happen here (see the reference).  Branches
@@ -148,19 +149,26 @@ motion are indivisible.  If it cannot move on, it has not yet acted.
 
 | Term class          | executed?  | auto-pickup? | ALU?  | notes                              |
 |---------------------|------------|--------------|-------|------------------------------------|
-| opcode glyph        | yes        | no           | no    | LOAD/EXCHANGE move it as data      |
+| opcode glyph        | yes        | no           | no    | LOAD/EXCHANGE move it as data; EQUAL compares it |
 | small integer       | no         | yes (copy)   | yes   | 60-bit signed inline               |
-| heap integer        | no         | no           | no    | overflow product; inert (see 8.5)  |
-| boolean             | no         | no           | no    | predicate output; inert (see 8.2)  |
-| matter              | no         | no           | no    | conserved; opaque to tests (8.7)   |
+| boolean             | no         | yes (copy)   | yes   | predicate output; converts to 0/1  |
+| heap integer        | no         | no           | no*   | overflow product; inert except EQUAL (see 8.2) |
+| matter              | no         | no           | no    | conserved; IS_MATTER tests it, EQUAL refuses it |
 | empty (null)        | no         | no           | no    | pushes of null are discarded       |
-| anything else       | no         | no           | no    | strings etc.: inert cargo          |
+| anything else       | no         | no           | no*   | strings etc.: inert cargo, but EQUAL compares |
 
-"ALU" means the arithmetic/logic/comparison opcodes will operate on it;
-they all require *small integers* and no-op otherwise.
+"ALU" means the arithmetic/logic/comparison opcodes will operate on it.
+The ALU accepts *small integers and booleans*: the coercion family on Term
+(`is_booly` / `is_truthy` / `is_falsey` / `is_inty` / `as_int`) lets the
+two interconvert freely -- predicates return booleans (keeping the
+truth/number distinction visible to rendering), and every consumer of
+integers (arithmetic, branching, headings) accepts booleans as 0/1.
+`EQUAL` / `NOT_EQUAL` are wider still: they compare any information
+(anything but matter) via `term_eq`.
 
 The 0/1/2/3 heading encoding doubles as the language's enum-of-directions,
-consumed by `BRANCH_*` as "number of quarter-turns".
+consumed by `BRANCH_*` as "number of quarter-turns"; a boolean steers a
+branch as 0 (straight) or 1 (turn).
 
 
 ## 5. Opcode reference
@@ -207,10 +215,10 @@ matter.  STORE of information over information overwrites silently.
 
 | opcode          | effect                                                     |
 |-----------------|------------------------------------------------------------|
-| HEADING_LOAD    | intended ( -- h ): push current heading.  As implemented, also sets heading from the (un-popped) top of stack -- see BUG in 8.1 |
-| HEADING_STORE   | intended ( h -- ): set heading.  As implemented, pops h and *does not* set the heading -- see BUG in 8.1 |
+| HEADING_LOAD    | ( -- h ) push current heading (raw winding number, see 8.3) |
+| HEADING_STORE   | ( h -- ) heading := h                                      |
 | LOCATION_LOAD   | UNIMPLEMENTED (executes as NOOP); blocked on Coordinate-as-Term encoding |
-| LOCATION_STORE  | UNIMPLEMENTED (executes as NOOP); as specified it would be teleportation, which contradicts the no-random-access principle -- see 8.3 |
+| LOCATION_STORE  | UNIMPLEMENTED (executes as NOOP); as specified it would be teleportation, which contradicts the no-random-access principle -- see 8.4 |
 
 ### 5.4 Stack manipulation
 
@@ -220,37 +228,51 @@ matter.  STORE of information over information overwrites silently.
 | DUPLICATE  | ( x -- x x ), refused for matter                             |
 | SWAP       | ( x y -- y x ), any Terms including matter                   |
 | OVER       | ( x y -- x y x ), refused when x is matter                   |
+| ROT        | ( x y z -- y z x ), any Terms including matter (pure permutation) |
 
-There is no ROT, PICK, or DEPTH: the stack below the top two elements is
-unreachable except by popping (see 8.11).
+There is no PICK or DEPTH: the stack below the top three elements is
+unreachable except by popping (see 8.10).
 
-### 5.5 Predicates and logic -- all currently produce inert booleans (8.2)
+### 5.5 Predicates and logic
 
-| opcode                    | effect as implemented                        |
+All predicates return booleans.  By the coercion family (section 4) a
+boolean feeds anything that wants an integer -- `EQUAL` then
+`BRANCH_RIGHT` turns right on equality -- so predicates compose with
+control flow and with each other.  Inputs marked "inty" accept small
+integers and booleans; inputs marked "booly" likewise (the distinction is
+intent: magnitude vs truth).
+
+| opcode                    | effect                                       |
 |---------------------------|----------------------------------------------|
-| IS_NOT_ZERO               | ( a -- bool(a != 0) )                        |
-| LOGICAL_NOT               | ( a -- bool(!a) )                            |
-| LOGICAL_AND               | ( a b -- bool(a && b) )                      |
-| LOGICAL_OR                | ( a b -- bool(a \|\| b) )                    |
-| LOGICAL_XOR               | ( a b -- bool(!a != !b) )                    |
-| EQUAL                     | ( a b -- bool(a == b) )                      |
-| NOT_EQUAL                 | ( a b -- bool(a != b) )                      |
-| LESS_THAN                 | ( a b -- bool(a < b) )                       |
-| GREATER_THAN              | ( a b -- bool(a > b) )                       |
-| LESS_THAN_OR_EQUAL_TO     | ( a b -- bool(a <= b) )                      |
-| GREATER_THAN_OR_EQUAL_TO  | ( a b -- bool(a >= b) )                      |
-| IS_ZERO                   | UNIMPLEMENTED (NOOP)                         |
-| IS_POSITIVE               | UNIMPLEMENTED (NOOP)                         |
-| IS_NEGATIVE               | UNIMPLEMENTED (NOOP)                         |
-| IS_NOT_POSITIVE           | UNIMPLEMENTED (NOOP)                         |
-| IS_NOT_NEGATIVE           | UNIMPLEMENTED (NOOP)                         |
+| IS_ZERO                   | ( a -- a == 0 ), inty                        |
+| IS_NOT_ZERO               | ( a -- a != 0 ), inty                        |
+| IS_POSITIVE               | ( a -- a > 0 ), inty                         |
+| IS_NOT_POSITIVE           | ( a -- a <= 0 ), inty                        |
+| IS_NEGATIVE               | ( a -- a < 0 ), inty                         |
+| IS_NOT_NEGATIVE           | ( a -- a >= 0 ), inty                        |
+| IS_MATTER                 | ( x -- x flag ), any x; NON-consuming, so testing never destroys matter |
+| LOGICAL_NOT               | ( a -- !a ), booly                           |
+| LOGICAL_AND               | ( a b -- a && b ), booly                     |
+| LOGICAL_OR                | ( a b -- a \|\| b ), booly                   |
+| LOGICAL_XOR               | ( a b -- a xor b ), booly                    |
+| EQUAL                     | ( a b -- a == b ), see below                 |
+| NOT_EQUAL                 | ( a b -- a != b ), see below                 |
+| LESS_THAN                 | ( a b -- a < b ), inty                       |
+| GREATER_THAN              | ( a b -- a > b ), inty                       |
+| LESS_THAN_OR_EQUAL_TO     | ( a b -- a <= b ), inty                      |
+| GREATER_THAN_OR_EQUAL_TO  | ( a b -- a >= b ), inty                      |
 
-The `bool(...)` results are boolean Terms, which no opcode -- including
-these same logical opcodes -- accepts as input.  Until 8.2 is resolved,
-express conditionals with `SIGN` / `COMPARE` (below), whose outputs are
-integers.
+`EQUAL` / `NOT_EQUAL` are the widest comparisons: inty pairs cross-compare
+as 0/1 (so `true` equals `1`); any other pair of *information* Terms --
+opcodes as data, strings, heap integers -- compares by content via
+`term_eq`, with Term-incomparable (cross-type) pairs counting as not
+equal rather than leaking ERROR onto the stack.  Matter operands refuse
+(no-op): consuming matter into a flag would destroy it, and duplicable
+"ghost matter" reference images are a deliberately deferred design
+(section 8.6).  Test cargo with `IS_MATTER`; comparing matter *kinds*
+awaits ghost matter.
 
-### 5.6 Arithmetic and bit operations (operands and results are integers)
+### 5.6 Arithmetic and bit operations (inty operands; integer results)
 
 | opcode         | effect                                                   |
 |----------------|----------------------------------------------------------|
@@ -259,18 +281,20 @@ integers.
 | NEGATE         | ( a -- -a )                                              |
 | ABS            | ( a -- \|a\| )                                           |
 | SIGN           | ( a -- -1/0/+1 )                                         |
-| COMPARE        | ( a b -- +1 if a<b, 0 if a=b, -1 if a>b ) -- note the inverted convention, 8.4 |
+| COMPARE        | ( a b -- sign(a-b) ): -1 if a<b, 0 if a=b, +1 if a>b; agrees with SUBTRACT then SIGN |
 | BITWISE_NOT    | ( a -- ~a )                                              |
 | BITWISE_AND    | ( a b -- a&b )                                           |
 | BITWISE_OR     | ( a b -- a\|b )                                          |
 | BITWISE_XOR    | ( a b -- a^b )                                           |
 | BITWISE_SPLIT  | ( a b -- a&b a^b ) partition of the set bits             |
-| SHIFT_RIGHT    | ( a b -- a>>b ) arithmetic shift; b < 0 or b > 63 is UB (8.6) |
+| SHIFT_RIGHT    | ( a b -- a>>b ) arithmetic shift; count clamped to [0, 60] (small integers are 60-bit, so 60 is already "all sign bits") |
 | POPCOUNT       | ( a -- popcount of the 64-bit two's-complement pattern ) |
 
-There is no MULTIPLY, DIVIDE, MODULO, or SHIFT_LEFT (8.10).
-BITWISE_SPLIT is the bit-conserving decomposition (intersection and
-symmetric difference); together with AND/XOR it is the half-adder.
+There is no MULTIPLY, DIVIDE, or SHIFT_LEFT -- deliberately, for now:
+cheap ways to build enormous values are a gameplay lever, not an
+oversight (see 8.9).  MODULO is under consideration.  BITWISE_SPLIT is
+the bit-conserving decomposition (intersection and symmetric
+difference); together with AND/XOR it is the half-adder.
 
 
 ## 6. Idioms
@@ -322,6 +346,11 @@ straight off the loop, counter (now 0) still on the stack.  Note the entry
 merges through the absolute `N` at the corner: loop traffic arriving
 westbound turns north there, entry traffic arriving northbound passes over
 it unchanged.  Absolute turns are self-normalizing merge points.
+
+Predicates steer branches directly (their booleans read as 0/1), so
+"loop until the counter equals the target" is a ground literal, EQUAL,
+and a BRANCH; the SIGN spelling above is for when you need the
+three-way -1/0/+1.
 
 ### 6.4 The computed switch, and subroutines by geometry
 
@@ -395,7 +424,7 @@ Two observations temper the obvious claim:
 
 - The stack ALU is *not* an unbounded-integer machine: past +/- 2^59,
   arithmetic results silently box to heap integers that every subsequent
-  opcode refuses (8.5).  The stack-plus-ALU fragment alone is finite-state
+  opcode refuses (8.2).  The stack-plus-ALU fragment alone is finite-state
   in practice.
 - The grid, however, is unbounded, and `EXCHANGE` with an empty stack is
   "pick up and clear" while `STORE` is "put down": a machine can shuttle a
@@ -409,191 +438,169 @@ increment and decrement are EXCHANGE-carry-STORE shuttles, zero-test is
 finite control is a fixed circuit of branch glyphs.  Two-counter machines
 are Turing complete; therefore so is one machine on an unbounded grid --
 through the grid, not through the ALU.  (With the small-integer cliff
-fixed, the much more direct construction "two counters live on the stack,
-SWAP reaches both, SIGN+BRANCH tests them" also works, and is a nice
-argument for why SWAP alone -- without ROT -- is just barely enough.)
+fixed, the much more direct construction "counters live on the stack,
+SWAP and ROT reach them, IS_ZERO+BRANCH tests them" also works.)
 
 
-## 8. Rough edges, contradictions, and missing pieces
+## 8. Rough edges, open questions, and the fix changelog
 
-Ordered roughly by severity.
+### 8.1 Fixed 2026-07-23
 
-### 8.1 BUG: HEADING_LOAD and HEADING_STORE have crossed wires
+The first review of this interpreter (the original revision of this
+document) found two significant bugs and a cluster of smaller defects;
+all of the following landed together:
 
-In machine.cpp the heading-resolution switch handles `OPCODE_HEADING_LOAD`
-by setting the heading from the top of stack (without popping), while the
-action switch pushes the old heading under `HEADING_LOAD` and pops the top
-under `HEADING_STORE` -- which never touches the heading at all.  Net
-effect as shipped:
+- **HEADING_LOAD / HEADING_STORE had crossed wires** (the heading-
+  resolution case was mislabeled): HEADING_STORE popped a value and never
+  set the heading; HEADING_LOAD set the heading from an un-popped operand
+  and pushed the old heading.  Now: LOAD ( -- h ) pushes, STORE ( h -- )
+  sets.
+- **Predicates produced boolean Terms that no consumer accepted** --
+  branches, logic, arithmetic and auto-pickup all demanded small
+  integers, so `EQUAL` could not feed `BRANCH_RIGHT` and logic could not
+  consume its own output.  Resolved by the coercion family on Term
+  (`is_booly` / `is_truthy` / `is_falsey` / `is_inty` / `as_int`):
+  predicates still *return* booleans -- keeping the truth/number
+  distinction visible to rendering, which wants to draw a flag and a
+  count differently -- and every integer consumer now accepts booleans
+  as 0/1.  Auto-pickup takes booleans too, so boolean ground signals
+  work.
+- **IS_ZERO, IS_POSITIVE, IS_NEGATIVE, IS_NOT_POSITIVE,
+  IS_NOT_NEGATIVE** were declared but entirely unimplemented (silent
+  no-ops).  Implemented, returning booleans.
+- **COMPARE** computed sign(b-a), disagreeing with C convention and with
+  its own decomposition SUBTRACT-then-SIGN.  Flipped to sign(a-b).
+- **SHIFT_RIGHT** had UB for negative or oversized counts.  Count now
+  clamps to [0, 60] (small integers are 60-bit, so 60 already yields
+  all-sign-bits; negative counts clamp to no-shift).
+- **EQUAL / NOT_EQUAL** widened from int-only to `term_eq` over any
+  information (matter refuses -- see 8.6); inty pairs cross-compare as
+  0/1 so `true` equals `1`.
+- **ROT** ( x y z -- y z x ) added -- the top-2 permutation monoid
+  provably could not reach the third element.
+- **IS_MATTER** ( x -- x flag ) added, non-consuming so testing can
+  never destroy matter.
+- Interpreter hygiene: the four stale `peek()`-on-`this` sites
+  (BRANCH_LEFT/RIGHT, the heading case, POPCOUNT) normalized to
+  `new_this->peek()`.
 
-- `HEADING_STORE` ( h -- ) : discards h, heading unchanged.  Broken.
-- `HEADING_LOAD` ( h -- h old ) : sets heading to h, which *stays* on the
-  stack, and pushes the previous heading on top of it.  An accidental
-  exchange-with-dregs.
+New opcodes were appended to the opcode list (values are save-format
+constants; append only, never renumber).
 
-Clearly the heading-resolution case is mislabeled: it belongs to
-`HEADING_STORE` (matching the cell-op convention where LOAD means
-register-to-stack).  Intended and recommended semantics:
+### 8.2 The 2^59 cliff: overflow makes values inert, silently (OPEN)
 
-- `HEADING_LOAD` ( -- h ) : push current heading.
-- `HEADING_STORE` ( h -- ) : pop h, heading := h.
+Small integers are 60-bit.  `ADD`, `SUBTRACT`, `NEGATE`, and `ABS`
+compute in int64 and re-box via `term_make_integer_with`, which spills
+results outside [-2^59, 2^59) into heap-allocated `HeapInt64` -- and the
+ALU's `is_inty()` is false for heap integers.  So the first overflow
+produces a value that subsequent arithmetic, ordering, branching, and
+auto-pickup silently ignore.  The program does not wrap, does not fault;
+it just goes numb around that value.  (At the full int64 boundary the
+addition itself is also UB.)  Options: saturate, wrap explicitly at 60
+bits, or teach the ALU to unbox HeapInt64 (the accessors exist).
 
-### 8.2 CONTRADICTION: predicates produce values nothing can consume
+Since the EQUAL widening, heap integers do compare by content -- but a
+boxed integer never equals an inline one (`term_eq` calls cross-tag
+pairs incomparable, which EQUAL flattens to not-equal).  Machine
+arithmetic never produces a boxed value in inline range, so this only
+bites hand-authored worlds that box small values.
 
-All eleven implemented comparison and logical opcodes compute a C++ `bool`
-and assign it to a Term, which selects the `Term(bool)` constructor and
-produces a *boolean* Term.  But every consumer in the machine -- the
-`BRANCH_*` steering, the logical opcodes themselves, all arithmetic, and
-auto-pickup -- requires `is_int64_t()`, which booleans fail.  Therefore:
+Note the deliberate tension with 8.9: the missing MULTIPLY / SHIFT_LEFT
+are precisely the cheap routes to enormous values, so the cliff is
+today guarded mostly by how slowly ADD can climb.
 
-- `EQUAL` followed by `BRANCH_RIGHT` does not branch.
-- `LESS_THAN` twice followed by `LOGICAL_AND` computes nothing: logic
-  cannot consume its own output.
-- A stored boolean on the ground is invisible to passing machines.
+### 8.3 Heading winding leak (OPEN)
 
-The type system has a schism: the predicate sublanguage and the control
-sublanguage do not compose.  Today the only working conditionals are
-`SIGN` and `COMPARE`, whose bool-minus-bool arithmetic yields genuine
-integers.  Two coherent fixes:
+The stored heading accumulates unmasked (TURN_RIGHT is ++, flip-flops
+increment forever); it is reduced mod 4 at stepping time, which is
+correct, and the visualization needs the winding for its lerp.  But
+HEADING_LOAD pushes the raw winding number, so a program comparing its
+heading against a literal 0..3 breaks after any full rotation.  Now that
+HEADING_STORE works, round-trips are common enough to care.  Fix:
+canonicalize (mask to 0..3, i.e. `& 3` of the euclidean residue) at the
+HEADING_LOAD boundary, keeping the internal winding for animation.
 
-1. Predicates push small integers 0/1 (change `a = ...bool...` to push
-   `Term(int(...))`).  Keeps consumers simple; booleans stop appearing in
-   machine programs entirely.
-2. Consumers accept booleans (BRANCH treats true as 1, logic ops accept
-   mixed bool/int via the falsey rule).  Keeps the boolean type visible.
+### 8.4 LOCATION_LOAD / LOCATION_STORE (OPEN)
 
-Option 1 is smaller and matches the "heading codes are just integers"
-spirit.  Either way, decide; the current halfway state is the single
-biggest usability defect in the language.
+Still declared and still silent no-ops.  `LOCATION_LOAD` is blocked on
+the parked Coordinate-as-Term encoding (Morton-60 design).
+`LOCATION_STORE` as named would be teleportation, which contradicts the
+founding constraint (no random access; machines move only to neighbors);
+recommend deleting it.  If a location *value* is ever needed for
+comparison ("am I home?"), that is LOCATION_LOAD plus EQUAL; no store is
+required.
 
-### 8.3 Unimplemented opcodes execute as silent no-ops
+### 8.5 Small sharp edges (OPEN, low stakes)
 
-`IS_ZERO`, `IS_POSITIVE`, `IS_NEGATIVE`, `IS_NOT_POSITIVE`,
-`IS_NOT_NEGATIVE`, `LOCATION_LOAD`, and `LOCATION_STORE` are declared in
-opcode.hpp but have no case anywhere in machine.cpp: placing the glyph
-does nothing at all, indistinguishable from NOOP.  Notes:
+- `ABS` / `NEGATE` of INT64_MIN is UB in principle; unreachable-ish
+  given 8.2 boxes first at 2^59, but a cleanup pass can settle it (and
+  spell `abs` as `std::abs` while there -- the unqualified call resolves
+  through the C library overload set).
+- `POPCOUNT` counts the 64-bit two's-complement pattern, so popcount of
+  a negative number is 60 bits of value plus 4 bits of sign extension.
+  Defensible; documented here as "of the representation".
 
-- The IS_ family is largely redundant: `IS_ZERO` is `LOGICAL_NOT`,
-  `IS_POSITIVE` / `IS_NEGATIVE` are recoverable from `SIGN`, and once 8.2
-  is fixed the comparisons cover the rest.  Either implement them as
-  integer-producing predicates for convenience or delete them; a glyph
-  that looks meaningful and does nothing is a trap.
-- `LOCATION_LOAD` is blocked on the parked Coordinate-as-Term encoding
-  (Morton-60 design); fine to leave pending, but it should probably HALT
-  or refuse visibly rather than silently no-op.
-- `LOCATION_STORE` as named would be teleportation, which contradicts the
-  founding constraint (no random access; machines move only to
-  neighbors).  Recommend deleting it rather than implementing it.  If a
-  location *value* is ever needed for comparison ("am I home?"), that is
-  LOCATION_LOAD plus EQUAL, and no store is required.
+### 8.6 Matter comparison awaits ghost matter (OPEN, deliberately)
 
-### 8.4 COMPARE's sign convention is inverted relative to SUBTRACT
+`IS_MATTER` now answers "is this cargo?", but matter *kinds* remain
+incomparable: EQUAL refuses matter operands, because consuming two
+matter Terms into a flag would destroy them, and because the natural
+alternative -- a duplicable reference image, "the picture of an apple on
+the sign equals the apple I am holding" -- is **ghost matter**: data
+that is term_eq-equal to a conserved thing while being freely copyable.
+That equivalence has been judged dangerous for now (it blurs the
+information/matter boundary that the conservation rules depend on) and
+is deferred.  Until then, sorting by kind is inexpressible with more
+than one matter kind in play.
 
-`COMPARE` computes `(a < b) - (b < a)`, i.e. sign(b - a): +1 when the
-*deeper* operand is smaller.  The C family convention (memcmp, strcmp,
-three-way compare) is sign(a - b).  Within this language, `SUBTRACT` then
-`SIGN` computes sign(a - b) = the negation of `COMPARE` on the same
-operands.  Having the fused opcode disagree with its own decomposition
-will produce persistent off-by-sign bugs in user programs.  Recommend
-flipping COMPARE to sign(a - b) (save-format-neutral; it is a behavior
-change only).  The stray `(i64)` cast on one side of the comparison is
-harmless asymmetry worth cleaning while there.
+### 8.7 EXCHANGE can place matter onto a non-empty cell (OPEN)
 
-### 8.5 The 2^59 cliff: overflow makes values inert, silently
+The stated rule (matter.hpp, and the STORE guard's comment) is that
+matter may only be placed into an empty cell, never over a program
+glyph.  But EXCHANGE has no guard: with matter on top of the stack and a
+glyph in the cell, it swaps them -- the glyph goes to the stack and the
+matter now sits where code was.  Nothing is destroyed (the swap
+conserves both), so this may be acceptable or even desirable; but it
+contradicts the never-over-a-glyph half of the stated rule.  Decide
+which is canon: if placement-only-into-emptiness is the physical law,
+EXCHANGE needs the guard when its stack side is matter; if conservation
+is the only law, soften the comments.
 
-Small integers are 60-bit.  `ADD`, `SUBTRACT`, `NEGATE`, and `ABS` compute
-in int64 and re-box via `term_make_integer_with`, which spills results
-outside [-2^59, 2^59) into heap-allocated `HeapInt64` -- and every machine
-opcode tests `is_int64_t()`, which is false for heap integers.  So the
-first overflow produces a value that all subsequent arithmetic,
-comparison, branching, and auto-pickup silently ignore.  The program does
-not wrap, does not fault; it just goes numb around that value.  (At the
-full int64 boundary the addition itself is also UB.)  Options: saturate,
-wrap explicitly at 60 bits, or teach the ALU to unbox HeapInt64 (the
-accessors exist).  Any of the three is better than the silent cliff.
-Related: auto-pickup ignores heap integers on the ground, but LOAD happily
-picks them up as inert cargo.
-
-### 8.6 Smaller sharp edges
-
-- `SHIFT_RIGHT` with a negative or >= 64 shift count is C++ UB in the
-  interpreter.  Clamp or mask; and see 8.10 for the missing left shift.
-- The stored heading accumulates unmasked (TURN_RIGHT is ++, flip-flops
-  increment forever); it is reduced mod 4 at stepping time, which is
-  correct, and the visualization needs the winding for its lerp -- but a
-  (fixed) HEADING_LOAD would push the raw winding number, so a program
-  comparing a heading against a literal 0..3 breaks after any full
-  rotation.  Canonicalize (mask to 0..3) at the HEADING_LOAD boundary,
-  keeping the internal winding for animation.
-- `ABS`/`NEGATE` of INT64_MIN is UB in principle; unreachable-ish given
-  8.5 boxes first at 2^59, but the same cleanup pass can settle it.
-- `POPCOUNT` counts the 64-bit two's-complement pattern, so popcount of a
-  negative number is 60 bits of value plus 4 bits of sign extension.
-  Defensible, but worth documenting as "of the representation".
-
-### 8.7 Matter is opaque to control flow
-
-No opcode can test what a machine is carrying or what lies in a cell:
-`EQUAL` requires integers, `BRANCH` requires integers, and there is no
-IS_MATTER.  Consequence: with more than one matter kind, *a sorter is
-inexpressible* -- machines cannot route cargo by kind, which is presumably
-a core gameplay verb.  Cheapest coherent fix: make `EQUAL` / `NOT_EQUAL`
-total by delegating to `term_eq` (which already exists and is total) and
-pushing an integer 0/1.  Then a reference glyph or matter sample on the
-ground (LOADed as data) becomes a comparison standard: LOAD sample, test
-cargo, branch.  This composes with 8.2's fix.
-
-### 8.8 EXCHANGE can place matter onto a non-empty cell
-
-The stated rule (matter.hpp, and the STORE guard's comment) is that matter
-may only be placed into an empty cell, never over a program glyph.  But
-EXCHANGE has no guard at all: with matter on top of the stack and a glyph
-in the cell, it swaps them -- the glyph goes to the stack and the matter
-now sits where code was.  Nothing is destroyed (the swap conserves both),
-so this may be acceptable or even desirable; but it contradicts the
-never-over-a-glyph half of the stated rule.  Decide which is canon: if
-placement-only-into-emptiness is the physical law, EXCHANGE needs the
-guard when its stack side is matter; if conservation is the only law,
-soften the comments.
-
-### 8.9 STORE with an empty stack erases the target cell
+### 8.8 STORE with an empty stack erases the target cell (OPEN)
 
 Pop of an empty stack yields null, and STORE writes it: a machine with
 nothing to give wipes the operand cell (of information; the matter guard
 still protects matter).  Handy as an eraser, alarming as an accident --
 an under-provisioned producer silently deletes the very signal cell it
-was meant to feed.  Worth a deliberate decision: either document it as
-the eraser idiom, or make empty-stack STORE a no-op (park-and-wait would
-also be coherent: "wait until I have something to store").
+was meant to feed.  Either bless it as the eraser idiom or make
+empty-stack STORE a no-op (park-and-wait would also be coherent: "wait
+until I have something to store").
 
-### 8.10 Missing operations, ranked
+### 8.9 Withheld and missing operations
 
-1. **ROT** (or PICK): the stack below the top two elements is unreachable
-   without destroying it.  {DUP, DROP, SWAP, OVER} cannot express ROT --
-   that is exactly why Forth makes it primitive.  Every third live value
-   forces a spill to the ground, which costs cells, hops, and 64 ticks
-   each.  One opcode buys a lot of program density.
-2. **MULTIPLY / DIVIDE / MODULO**: absent, though Term already carries
-   `operator*` / `/` / `%` machinery.  Synthesizing multiplication from
-   ADD and SHIFT_RIGHT via shift-and-add is a genuinely large 2D circuit.
-   This might be deliberate game design (make the player build the
-   multiplier factory!); if so, say so loudly in the design docs, because
-   as a language omission it reads as an oversight.  MODULO in particular
-   is the natural "extract a digit / a field" tool for signal encoding.
-3. **SHIFT_LEFT**: right shift exists, left does not; doubling via
-   DUPLICATE+ADD forces a loop per bit.  Cheap to add, pairs with fixing
-   8.6's UB.
-4. **WAIT n** (sleep for a duration): the transaction layer already has
-   `on_commit_sleep_for`; exposing it would give programs timing control.
-   Today the only temporal primitives are the 64-tick hop and unbounded
-   blocking, so phase-offsetting two machines requires track-length
-   gymnastics.
-5. **Sensing** (IS_MATTER on top-of-stack, or a "test the cell ahead"
-   predicate): both are local and would not breach the no-random-access
-   principle; they would let programs avoid blocking rather than only
-   experience it.  See 8.7 and 8.13.
-6. Conveniences that can wait: NIP/TUCK (sugar over SWAP/DROP/OVER),
-   DEPTH, MAX/MIN (COMPARE+BRANCH geometry covers them).
+Withheld deliberately (gameplay: cheap paths to enormous values are a
+design lever, not an oversight):
+
+- **MULTIPLY / DIVIDE**: synthesizing multiplication from ADD and
+  conditionals is a genuinely large 2D circuit -- that is the point.
+- **SHIFT_LEFT**: doubles per cell; also forces the overflow story (8.2)
+  before it can be specified.  Deferred until that story exists.
+
+Under consideration:
+
+- **MODULO**: the natural "extract a digit / a field" tool for signal
+  encoding; does not build large values, so the withholding argument
+  does not apply.
+- **WAIT n** (sleep for a duration): the transaction layer already has
+  `on_commit_sleep_for`; exposing it would give programs timing control.
+  Today the only temporal primitives are the 64-tick hop and unbounded
+  blocking, so phase-offsetting two machines requires track-length
+  gymnastics.
+- **Sensing ahead** (a "test the cell ahead" predicate): local, so it
+  would not breach the no-random-access principle; would let programs
+  avoid blocking rather than only experience it.  See 8.11.
+- Conveniences that can wait: NIP/TUCK (sugar over SWAP/DROP/OVER),
+  DEPTH, MAX/MIN (COMPARE+BRANCH geometry covers them).
 
 Non-goals, endorsed as such: no jump, no address arithmetic, no random
 number source (determinism), no I/O opcodes (the player and the
@@ -601,39 +608,19 @@ Source/Sink/Spawner entities are the I/O), no machine-spawns-machine
 opcode yet (a von Neumann constructor would be a lovely late-game
 artifact, and the Spawner entity shows the seam where it would go).
 
-### 8.11 The stack access horizon
+### 8.10 The stack access horizon
 
-Related to 8.10.1 but worth stating as a language property: with top-2
-access only, the stack is a *pushdown store with a two-slot window*, and
-the grid is the real random-access memory (at 64 ticks per cell of
-distance).  This is a coherent design -- it pushes complexity out into
-space, which is the game -- but it means "register allocation" in this
-language is literally town planning.  Decide whether that is the intended
-difficulty knob before adding ROT; adding it later is save-compatible
-(append-only opcode list), so the cautious default is to withhold it and
-watch what players build.
+With DUP/DROP/SWAP/OVER/ROT the top *three* stack elements are fully
+permutable and the region below is unreachable except by popping: the
+stack is a pushdown store with a three-slot window, and the grid is the
+real random-access memory (at 64 ticks per cell of distance).  This is a
+coherent design -- it pushes complexity out into space, which is the
+game -- but it means "register allocation" in this language is literally
+town planning.  Whether to extend the window further (PICK) is a
+difficulty-knob decision; the append-only opcode list makes deferring
+it free.
 
-### 8.12 Interpreter hygiene (behavior-preserving today, landmines tomorrow)
-
-- Four sites read the *pre-transaction* stack: the three `peek()` calls in
-  heading resolution (BRANCH_LEFT, BRANCH_RIGHT, HEADING_LOAD) and one in
-  POPCOUNT, all on `this` where every neighboring case uses
-  `new_this->peek()`.  Today this cannot diverge -- when an opcode
-  executes, the pending-op stage never pushed (executing implies the cell
-  held an opcode, so auto-pickup had nothing to grab) -- but the proof is
-  three switches apart, and any future opcode that both pushes in the
-  pending stage and executes would quietly read stale state.  Normalize to
-  `new_this`.
-- The interleaving of the two big switches (heading resolution peeks,
-  action effects pop) means BRANCH's operand is examined in one place and
-  consumed in another, with the no-pop-if-not-integer rule duplicated.  A
-  future refactor to single-switch-per-opcode would remove the class of
-  bug that produced 8.1.
-- `abs()` on i64 resolves through the C library overload set; spell it
-  `std::abs` (or the sign trick used by SIGN) to be immune to header
-  drift.
-
-### 8.13 Deadlock is expressible and unrecoverable in-language
+### 8.11 Deadlock is expressible and unrecoverable in-language
 
 Two machines approaching head-on each wait for the other's cell forever;
 so do four machines in a rotational cycle.  The escape hatches (a blocked
@@ -644,25 +631,30 @@ in-language detection.  For a game this is arguably content: gridlock is
 real, one-way loops and flip-flop balancers are the players' traffic
 engineering; the priority-randomized transaction layer already guarantees
 the *simulation* never wedges, only the players' programs.  Two cheap
-mitigations if wanted later: a sensing predicate (8.10.5) so programs can
+mitigations if wanted later: a sensing predicate (8.9) so programs can
 test-and-turn instead of committing to a blocked entry, and a WAIT with
 timeout semantics.  Neither compromises determinism.
 
-### 8.14 Small semantic asymmetries to either bless or sand off
+### 8.12 Interpreter structure and small asymmetries
 
+- The two-switch structure remains: a branch's operand is examined in
+  heading resolution and consumed in the action switch, with the
+  pop-iff-inty rule duplicated between them.  A future
+  single-switch-per-opcode refactor would remove the class of bug that
+  produced the HEADING crossing (8.1).
 - LOAD copies information but moves matter; EXCHANGE moves both ways;
-  auto-pickup copies integers only.  Three different acquisition
-  semantics, each individually sensible; document them as the trio
-  (copy-read, swap, take) and keep them stable.
+  auto-pickup copies integers and booleans only.  Three different
+  acquisition semantics, each individually sensible; documented as the
+  trio (copy-read, swap, take) -- keep them stable.
 - SKIP protects exactly one cell.  A long foreign data run needs a SKIP
-  per cell.  Acceptable at game scale; a SKIP-with-count would change the
-  two-cell pipeline shape, so is probably not worth it.
+  per cell.  Acceptable at game scale; a SKIP-with-count would change
+  the two-cell pipeline shape, so is probably not worth it.
 - A machine woken from HALT executes whatever the cell now holds,
   including auto-picking a number and driving on.  Powerful (a writable
   "next instruction" slot under a sleeping machine) and slightly spooky
   (a stray write launches it).  The machine.cpp TODO asking whether the
-  top of stack itself should serve as the instruction latch points at the
-  same design nerve.
+  top of stack itself should serve as the instruction latch points at
+  the same design nerve.
 
 --------------------------------------------------------------------------
 
@@ -680,13 +672,15 @@ wants the player to feel, and the mitigation idioms -- ground spills,
 signal cells, absolute-turn merges, flip-flop balancers, occupancy
 queues -- are the gameplay.
 
-What is tarpit-flavored but *not* inherent: predicates that cannot feed
-branches (8.2), registers that cannot be set (8.1), glyphs that silently
-do nothing (8.3), matter that cannot be sorted (8.7), arithmetic that
-goes numb at 2^59 (8.5), and a stack whose third element might as well
-be on the moon (8.10.1).  Fix the first five and the language is a
-pleasant, teachable spatial Forth; leave them and every nontrivial
-program is built from the two opcodes that happen to type-check.
+What was tarpit-flavored was *not* inherent, and most of it is now gone
+(8.1): predicates feed branches, the heading register loads and stores,
+every declared glyph does something, cargo is testable, and ROT reaches
+the third stack element.  What remains open is deliberate or small:
+arithmetic still goes numb at 2^59 (8.2), matter kinds stay
+incomparable until ghost matter is designed (8.6), and the big
+multipliers are withheld on purpose (8.9).  The language now reads as a
+pleasant, teachable spatial Forth rather than a two-opcode obstacle
+course.
 
 Compared to relatives: Befunge is easier only because it cheats -- its
 `p`/`g` give random-access grid writes from anywhere, which this design
