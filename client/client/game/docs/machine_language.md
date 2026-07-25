@@ -3,7 +3,8 @@
 Documentation for the language defined by `OPCODE` (game/opcode.hpp) and its
 interpreter `Machine::notify` (game/machine.cpp), as of 2026-07-23.  The
 second half of this document is a design review: rough edges and open
-questions, plus a changelog of the defects already fixed.
+questions, plus a changelog of the defects already fixed.  Section 10
+records future directions -- direction of travel, not commitments.
 
 Status: descriptive, not normative.  Where the implementation and the
 apparent intent disagree, both are stated and the discrepancy is flagged.
@@ -25,6 +26,13 @@ opcode glyphs on the ground; the machine executes whatever it drives over.
 Control flow is turning.  Data and code share the value plane: a cell can
 hold a number today and an opcode tomorrow, and machines can read, write,
 and relocate both.
+
+The instruction set is deliberately austere: zero-argument opcodes over
+a stack, chosen precisely to head off an explosion of parameterized
+instructions (PICK n, PUT MY_NW MY_REG_7, ...).  The intended pressure
+gradient: keep any single machine simple, and push complexity into the
+world -- toward spilled state on the ground, and toward several simple
+machines interacting rather than one elaborate program.
 
 Instructions take effect at **arrival instants**.  Each hop between
 adjacent cells takes 64 ticks, and everything a machine does at an arrival
@@ -231,7 +239,13 @@ matter.  STORE of information over information overwrites silently.
 | ROT        | ( x y z -- y z x ), any Terms including matter (pure permutation) |
 
 There is no PICK or DEPTH: the stack below the top three elements is
-unreachable except by popping (see 8.10).
+unreachable except by popping (see 8.10).  The four shufflers are all
+instances of "bring the nth element to the top", either copying
+(DUPLICATE and OVER are Forth's `0 PICK` and `1 PICK`) or moving (SWAP
+and ROT are `1 ROLL` and `2 ROLL`).  ROT deliberately rotates only the
+top three, not the whole stack: a whole-stack rotate would make every
+"subroutine" disturb the depths beneath its arguments, destroying
+composability.
 
 ### 5.5 Predicates and logic
 
@@ -509,16 +523,24 @@ Note the deliberate tension with 8.9: the missing MULTIPLY / SHIFT_LEFT
 are precisely the cheap routes to enormous values, so the cliff is
 today guarded mostly by how slowly ADD can climb.
 
-### 8.3 Heading winding leak (OPEN)
+### 8.3 Heading winding is a free loop counter (reframed; access still open)
 
 The stored heading accumulates unmasked (TURN_RIGHT is ++, flip-flops
-increment forever); it is reduced mod 4 at stepping time, which is
-correct, and the visualization needs the winding for its lerp.  But
-HEADING_LOAD pushes the raw winding number, so a program comparing its
-heading against a literal 0..3 breaks after any full rotation.  Now that
-HEADING_STORE works, round-trips are common enough to care.  Fix:
-canonicalize (mask to 0..3, i.e. `& 3` of the euclidean residue) at the
-HEADING_LOAD boundary, keeping the internal winding for animation.
+increment forever); it is reduced mod 4 at stepping time, and the
+visualization wants the winding for its lerp.  The first revision of
+this document called the raw winding a leak and proposed canonicalizing
+HEADING_LOAD to 0..3.  Decision: no.  The un-modulused heading is a
+*free register*: a closed clockwise circuit winds it +4 per lap
+(counterclockwise -4) using no glyphs beyond the loop's own turns, so
+HEADING_LOAD followed by `2 SHIFT_RIGHT` reads a lap counter the
+machine got for nothing, and BITWISE_AND with 3 recovers the direction
+(two's complement makes `& 3` correct for negative windings too).
+Programs comparing a heading against a literal 0..3 must mask first;
+that is now the documented contract, not a bug.
+
+What remains open is better access to the register: today the only
+writes are the TURN/BRANCH family (which also steer) and HEADING_STORE
+(which overwrites the whole winding).  Candidates unexplored.
 
 ### 8.4 LOCATION_LOAD / LOCATION_STORE (OPEN)
 
@@ -586,6 +608,10 @@ design lever, not an oversight):
 - **SHIFT_LEFT**: doubles per cell; also forces the overflow story (8.2)
   before it can be specified.  Deferred until that story exists.
 
+The longer-term resolution of the overflow story -- arbitrary precision
+governed by cost-proportional time, or narrower integers -- is the
+integer fork, sketched in 10.3.
+
 Under consideration:
 
 - **MODULO**: the natural "extract a digit / a field" tool for signal
@@ -616,9 +642,14 @@ stack is a pushdown store with a three-slot window, and the grid is the
 real random-access memory (at 64 ticks per cell of distance).  This is a
 coherent design -- it pushes complexity out into space, which is the
 game -- but it means "register allocation" in this language is literally
-town planning.  Whether to extend the window further (PICK) is a
-difficulty-knob decision; the append-only opcode list makes deferring
-it free.
+town planning.  Current position: keep it brutally simple and let
+spills be gameplay ("potentially cool, or incredibly annoying; time
+will tell").  If the window is ever widened, the primitives are PICK
+(copy the nth element to the top) and ROLL (move it), with n taken
+from the stack -- which stays within the zero-argument-glyph principle
+of section 1, but makes a machine's reach into its own stack
+data-dependent, which is its own kind of complexity.  The append-only
+opcode list makes deferring this free.
 
 ### 8.11 Deadlock is expressible and unrecoverable in-language
 
@@ -633,7 +664,10 @@ engineering; the priority-randomized transaction layer already guarantees
 the *simulation* never wedges, only the players' programs.  Two cheap
 mitigations if wanted later: a sensing predicate (8.9) so programs can
 test-and-turn instead of committing to a blocked entry, and a WAIT with
-timeout semantics.  Neither compromises determinism.
+timeout semantics.  Neither compromises determinism.  Section 10.4
+records two candidate opcodes aimed squarely at this class: the VALVE
+pair (a critical-section turnstile) and
+DO_NOT_QUEUE_ACROSS_INTERSECTION (the box-junction rule).
 
 ### 8.12 Interpreter structure and small asymmetries
 
@@ -688,3 +722,121 @@ rightly refuses.  Turmites/Langton ants sit far below: no stack, no
 ALU, no addressing.  This language occupies a genuinely interesting
 middle: a concurrent, transactional, conservation-respecting Forth
 where the program counter is a truck.
+
+--------------------------------------------------------------------------
+
+## 10. Future directions
+
+Design notes recorded from discussion, 2026-07-23.  Direction of
+travel, not commitments: nothing here is scheduled, and none of it
+should be built without an explicit decision to.
+
+### 10.1 The entity spectrum: machines-but
+
+Machine is deliberately the most capable entity.  Gameplay wants
+capability-stripped variants -- a dump truck that cannot LOAD by
+itself and must be loaded by something else -- with the single-purpose
+entities (Source, Sink) as the degenerate extremes.  A factory sits in
+the middle: wait on its input cells, take the inputs, apply a
+transformation, wait a processing time, then wait for a clear output
+cell and write to it.
+
+### 10.2 Cost-proportional time: the performance governor
+
+The player must be unable to *innocently* kill engine performance;
+deliberate mischief (reverse-engineering the hash function and the
+like) is acceptable.  The general mechanism: any operation or datum
+whose cost can grow charges time-in-ticks proportional to that cost,
+tuned so that every memory or compute explosion explodes in game-time
+first -- the simulation slows the offender, not itself.  Concrete
+instances: machine speed reducing in proportion to stack depth;
+terrain multipliers (10.8); a hypothetical MULTIPLY on a large integer
+stalling the machine in proportion to operand size; string catenation
+likewise.
+
+### 10.3 The integer fork
+
+Two incompatible futures for inty Terms.  Unresolved; MULTIPLY and
+SHIFT_LEFT stay withheld (8.9) until it is.
+
+- **Arbitrary precision.**  A good exercise in shaking out every place
+  that relies on integers being bit-hackable.  On its own it is an
+  attack vector -- multiply doubles a number's size per cell driven,
+  filling memory and forcing O(n^2) work -- so it only works in tandem
+  with the 10.2 governor.
+- **int32.**  Frees the wide ENUMERATION space to decorate inty things
+  with type information (headings, signs, three-way-compare results as
+  displayable typed values).  Costs: EntityIDs, hashes, and
+  coordinates no longer fit in an inty Term, and it does nothing for
+  string catenation.
+
+### 10.4 Traffic-control opcodes
+
+Both aimed at the deadlock class of 8.11; both are self-modifying
+glyphs in the FLIP_FLOP family.
+
+- **VALVE_NORTH_SOUTH <-> VALVE_EAST_WEST**: passable only along the
+  named axis; a machine approaching along the other axis waits as if
+  the cell were occupied; passage flips it to the other opcode.  This
+  is a critical-section turnstile: place it at a corner of the
+  region.  The entrant passes through, flipping the valve against its
+  own direction of entry and thereby blocking the machines queued
+  behind it; it later exits through the same tile along the other
+  axis, flipping the valve back and admitting the next entrant.
+  Implementation note: this is the first glyph whose *approach* is
+  gated by the destination cell's value rather than only its
+  occupancy -- the sensing seam of 8.9.
+- **DO_NOT_QUEUE_ACROSS_INTERSECTION**: to proceed onto this cell a
+  machine must claim both this cell and the next; the first unlocks as
+  soon as it exits.  The box-junction rule: it stops a queue from
+  backing up across a perpendicular path, where it could transitively
+  prevent its own blockage from clearing.
+
+### 10.5 The thought latch
+
+Cool or maddening?  Instructions load to the top of the stack, and the
+top of the stack *is* the pending operation -- what I am doing, what I
+am thinking.  You load ADD, you are adding while driving to the next
+cell, and when you arrive you have added.  Operations stop being
+instant, and the whole machine state becomes inspectable (and
+writable) as data.  The machine.cpp TODO about using the stack as the
+instruction slot is this same nerve.
+
+### 10.6 Push-channel wakes: the chute
+
+A dump truck drives beside a producer and HALTs.  The producer, when
+it holds output, pushes it directly onto the truck's stack and
+overwrites the HALT under the truck with NOOP to wake it -- visualized
+as a chute or arm.  This is an entity-writes-another-entity's-stack
+channel that machines themselves deliberately lack; it belongs to the
+entity layer (10.1), not the opcode set.
+
+### 10.7 Occupancy vs location
+
+Currently conflated: "an entity is at this coordinate" and "an entity
+has locked others out of this coordinate" are one map.  Source does
+not occupy its cell, so it cannot even be looked up by coordinate.
+Splitting monopolising-a-cell from being-at-a-cell unblocks drawing
+non-Machine entities again, entities with footprints (10.1, 10.9), and
+parts of 10.4.
+
+### 10.8 Terrain and placement
+
+Terrain must affect speed, prevent traversal entirely (water), and
+gate placement of mines and the like.  Players cannot place entities
+at all yet; they must be able to.
+
+### 10.9 Extended entities: belts, warehouses, stockpiles
+
+Belts, warehouses, and stacker-reclaimer stockpiles are entities that
+extend over many cells.  Unlike Factorio's, belts do not compact: they
+stop when their egress is blocked.  Terms ride a belt at fixed
+belt-relative coordinates that slide relative to world coordinates;
+pick-offs wait on Terms arriving at their cell.
+
+### 10.10 Test worlds
+
+Unit-test opcodes and entities by building small worlds, stepping them
+headlessly, and asserting on machine state -- a shakedown of stepping,
+transactions, and collector pinning in the test harness as much as of
+the opcodes themselves.
