@@ -10,6 +10,10 @@
 #include "debug.hpp"
 #include "transaction.hpp"
 
+#include "epoch.hpp"
+#include "matter.hpp"
+#include "test.hpp"
+
 namespace wry {
     
     void Machine::notify(TransactionContext* context) const {
@@ -584,6 +588,214 @@ namespace wry {
         } // switch (_phase)
 
     }
- 
-    
+
+    // ====================================================================
+    // Machine interpreter semantics tests
+    //
+    // Build a small world containing glyph tracks and at-rest machines,
+    // step it headlessly to a fixed time, then assert on the machines'
+    // final state and on the value plane.  Tracks park their machines on
+    // HALT so the terminal state is stable regardless of how far past the
+    // last arrival we step.
+    //
+    // Stepping protocol: World::step's transaction structures are epoch-
+    // allocated and its work is serviced by many pool threads, so the
+    // whole fork-join must sit under an epoch pin.  The GUI gets this
+    // implicitly -- WorldState::update's thread stays pinned across its
+    // fork+sync_wait.  The test instead holds a PORTABLE pin
+    // (pin_global_epoch / unpin_global_epoch): owned by the coroutine
+    // frame rather than by any thread, held across a co_await of the
+    // step, which may resume on a different pool thread with a
+    // different thread-local pin.  This exercises the non-thread-pin
+    // path the epoch Service was designed around (see
+    // State::pin_explicit's comment in epoch.hpp).  The pin is released
+    // between steps so the epoch, and hence the collector, can advance
+    // across the loop; the live world is always held by a Root.
+
+    namespace {
+
+        void test_put(World* w, i32 x, i32 y, Term t) {
+            w->_term_for_coordinate.set(Coordinate{x, y}, t);
+        }
+
+        EntityID test_machine_at_rest(World* w, i32 x, i32 y) {
+            Machine* m = new Machine;
+            m->_old_location = Coordinate{x, y};
+            m->_new_location = Coordinate{x, y};
+            w->_entity_for_entity_id.set(m->_entity_id, m);
+            w->_entity_id_for_coordinate.set(Coordinate{x, y}, m->_entity_id);
+            w->_waiting_on_time.set({Time{0}, m->_entity_id});
+            return m->_entity_id;
+        }
+
+        Coroutine::Task test_step_until(Root<World*>& world, Time t_end) {
+            while (world._ptr->_time < t_end) {
+                // Extra pin, living in this coroutine's frame: it holds
+                // the epoch floor for step's epoch-allocated structures
+                // while the awaiting thread's own pin comes and goes.
+                epoch::Epoch our_pin = pin_global_epoch();
+                Root<World*> next = co_await world._ptr->step();
+                unpin_global_epoch(our_pin);
+                assert(next._ptr);
+                world = std::move(next);
+            }
+        }
+
+        const Machine* test_machine_for(const Root<World*>& world, EntityID id) {
+            const Entity* e = nullptr;
+            (void) world._ptr->_entity_for_entity_id.try_get(id, e);
+            assert(e);
+            return static_cast<const Machine*>(e);
+        }
+
+        // expected reads bottom -> top, the order the machine acquired them
+        [[maybe_unused]]
+        bool test_stack_is(const Machine* m, std::initializer_list<Term> expected) {
+            std::vector<Term> top_first;
+            for (auto* s = m->_stack; s; s = s->_next)
+                top_first.push_back(s->_payload);
+            if (top_first.size() != expected.size())
+                return false;
+            size_t i = top_first.size();
+            for (Term t : expected) {
+                --i;
+                if (top_first[i]._data != t._data)
+                    return false;
+            }
+            return true;
+        }
+
+    } // anonymous namespace
+
+    define_test("machine_step_semantics") {
+
+        World* w = new World;
+
+        // Track A (x=0, northbound): auto-pickup of literals, ADD, the
+        // flipped COMPARE (sign(a-b)), DUPLICATE, the clamped SHIFT_RIGHT,
+        // IS_ZERO producing a boolean, HALT.
+        //
+        // 12 COMPARE 3 = +1 (the pre-fix inverted convention gave -1,
+        // which would propagate to a final false); 2 >> 65 clamps to
+        // 2 >> 60 = 0 (unclamped ARM mod-64 behavior would give
+        // 2 >> 1 = 1).
+        EntityID ma = test_machine_at_rest(w, 0, 0);
+        test_put(w, 0,  1, term_make_integer_with(5));
+        test_put(w, 0,  2, term_make_integer_with(7));
+        test_put(w, 0,  3, term_make_opcode(OPCODE_ADD));
+        test_put(w, 0,  4, term_make_integer_with(3));
+        test_put(w, 0,  5, term_make_opcode(OPCODE_COMPARE));
+        test_put(w, 0,  6, term_make_opcode(OPCODE_DUPLICATE));
+        test_put(w, 0,  7, term_make_opcode(OPCODE_ADD));
+        test_put(w, 0,  8, term_make_integer_with(65));
+        test_put(w, 0,  9, term_make_opcode(OPCODE_SHIFT_RIGHT));
+        test_put(w, 0, 10, term_make_opcode(OPCODE_IS_ZERO));
+        test_put(w, 0, 11, term_make_opcode(OPCODE_HALT));
+
+        // Track B (x=10): ROT, integer-steered BRANCH_RIGHT (east), then
+        // HEADING_STORE turns south by data, HEADING_LOAD reads the
+        // heading back, HALT.
+        EntityID mb = test_machine_at_rest(w, 10, 0);
+        test_put(w, 10, 1, term_make_integer_with(1));
+        test_put(w, 10, 2, term_make_integer_with(2));
+        test_put(w, 10, 3, term_make_integer_with(3));
+        test_put(w, 10, 4, term_make_opcode(OPCODE_ROT));
+        test_put(w, 10, 5, term_make_integer_with(1));
+        test_put(w, 10, 6, term_make_opcode(OPCODE_BRANCH_RIGHT));
+        test_put(w, 11, 6, term_make_integer_with(2));
+        test_put(w, 12, 6, term_make_opcode(OPCODE_HEADING_STORE));
+        test_put(w, 12, 5, term_make_opcode(OPCODE_HEADING_LOAD));
+        test_put(w, 12, 4, term_make_opcode(OPCODE_HALT));
+
+        // Track C (x=20): EQUAL on equal ints pushes true; BRANCH_RIGHT
+        // consumes the boolean as 1 and turns east.
+        EntityID mc = test_machine_at_rest(w, 20, 0);
+        test_put(w, 20, 1, term_make_integer_with(4));
+        test_put(w, 20, 2, term_make_integer_with(4));
+        test_put(w, 20, 3, term_make_opcode(OPCODE_EQUAL));
+        test_put(w, 20, 4, term_make_opcode(OPCODE_BRANCH_RIGHT));
+        test_put(w, 21, 4, term_make_opcode(OPCODE_HALT));
+
+        // Track D (x=30): EQUAL on unequal ints pushes false; BRANCH_RIGHT
+        // consumes it as 0 and continues straight.
+        EntityID md = test_machine_at_rest(w, 30, 0);
+        test_put(w, 30, 1, term_make_integer_with(4));
+        test_put(w, 30, 2, term_make_integer_with(5));
+        test_put(w, 30, 3, term_make_opcode(OPCODE_EQUAL));
+        test_put(w, 30, 4, term_make_opcode(OPCODE_BRANCH_RIGHT));
+        test_put(w, 30, 5, term_make_opcode(OPCODE_HALT));
+
+        // Track E (x=40): LOAD takes matter (the cell empties), DUPLICATE
+        // refuses it, IS_MATTER tests without consuming, the flag steers
+        // BRANCH_RIGHT east, DROP of matter becomes a STORE into the next
+        // empty cell, HALT.  Conservation: exactly one container, moved
+        // from (40,2) to (42,5).
+        EntityID me = test_machine_at_rest(w, 40, 0);
+        test_put(w, 40, 1, term_make_opcode(OPCODE_LOAD));
+        test_put(w, 40, 2, term_make_matter(MATTER_SHIPPING_CONTAINER));
+        test_put(w, 40, 3, term_make_opcode(OPCODE_DUPLICATE));
+        test_put(w, 40, 4, term_make_opcode(OPCODE_IS_MATTER));
+        test_put(w, 40, 5, term_make_opcode(OPCODE_BRANCH_RIGHT));
+        test_put(w, 41, 5, term_make_opcode(OPCODE_DROP));
+        // (42,5) deliberately left empty: the DROP target
+        test_put(w, 43, 5, term_make_opcode(OPCODE_HALT));
+
+        Root<World*> world{w};
+
+        // Longest track parks after 11 hops = 704 ticks; run past it.
+        co_await test_step_until(world, Time{800});
+
+        {
+            const Machine* m = test_machine_for(world, ma);
+            assert(m->_phase == Machine::PHASE_WAITING_FOR_NEW);
+            assert((m->_new_location == Coordinate{0, 11}));
+            assert(m->_new_heading == HEADING_NORTH);
+            assert(m->_on_arrival == OPCODE_NOOP);
+            assert((test_stack_is(m, {Term(true)})));
+        }
+
+        {
+            const Machine* m = test_machine_for(world, mb);
+            assert((m->_new_location == Coordinate{12, 4}));
+            assert(m->_new_heading == HEADING_SOUTH);
+            assert((test_stack_is(m, {term_make_integer_with(2),
+                                      term_make_integer_with(3),
+                                      term_make_integer_with(1),
+                                      term_make_integer_with(2)})));
+        }
+
+        {
+            const Machine* m = test_machine_for(world, mc);
+            assert((m->_new_location == Coordinate{21, 4}));
+            assert(m->_new_heading == HEADING_EAST);
+            assert((test_stack_is(m, {})));
+        }
+
+        {
+            const Machine* m = test_machine_for(world, md);
+            assert((m->_new_location == Coordinate{30, 5}));
+            assert(m->_new_heading == HEADING_NORTH);
+            assert((test_stack_is(m, {})));
+        }
+
+        {
+            const Machine* m = test_machine_for(world, me);
+            assert((m->_new_location == Coordinate{43, 5}));
+            assert(m->_new_heading == HEADING_EAST);
+            assert((test_stack_is(m, {})));
+
+            // try_get leaves its out-param untouched on a miss, so a
+            // default (null) Term covers both "erased" and "stored null"
+            Term taken{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{40, 2}, taken);
+            assert(term_is_null(taken));
+
+            Term placed{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{42, 5}, placed);
+            assert(placed._data == term_make_matter(MATTER_SHIPPING_CONTAINER)._data);
+        }
+
+        co_return;
+    };
+
 } // namespace wry::sim

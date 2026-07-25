@@ -46,24 +46,24 @@ namespace wry {
         }
 
         wry::Task test_t::run_all(std::string_view filter) {
+            // Serially, by design: each test gets the worker pool to
+            // itself, its printed time is its own, and a test that
+            // blocks a worker or saturates the queue cannot starve the
+            // others.  (Tests that want internal parallelism fork their
+            // own nurseries.)
             base* head = exchange(get_head(), nullptr);
-            Coroutine::Nursery nursery;
             while (head) {
                 base* test = exchange(head, head->next);
                 if (!_matches_filter(test, filter)) {
                     delete test;
                     continue;
                 }
-                co_await nursery.fork([](base* test) -> wry::Task {
-                    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-                    co_await (test->run());
-                    uint64_t t1 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-                    test->print_metadata("", (t1 - t0) * 1e-9);
-                    delete test;
-                    co_return;
-                } (test));
+                uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+                co_await (test->run());
+                uint64_t t1 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+                test->print_metadata("", (t1 - t0) * 1e-9);
+                delete test;
             }
-            co_await nursery.join();
             printf("[all] : unit tests complete\n");
         }
 

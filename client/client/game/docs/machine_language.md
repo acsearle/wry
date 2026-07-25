@@ -840,3 +840,23 @@ Unit-test opcodes and entities by building small worlds, stepping them
 headlessly, and asserting on machine state -- a shakedown of stepping,
 transactions, and collector pinning in the test harness as much as of
 the opcodes themselves.
+
+First increment landed 2026-07-23: `machine_step_semantics` at the
+bottom of machine.cpp.  Five glyph tracks run concurrently in one
+world (ALU with the flipped COMPARE and clamped shift; ROT and the
+heading register; EQUAL steering a branch both ways; matter
+take/test/place with conservation checked on the value plane), each
+parking its machine on HALT so the terminal state is stable, asserted
+after 800 headless steps (~0.1 s).  The helpers (test_put,
+test_machine_at_rest, test_step_until, test_stack_is) are the template
+for future entity tests.  Protocol notes: the harness runs tests
+serially (as of 2026-07-23; run_all previously forked every test
+concurrently, letting a blocking test starve the pool and making
+timings mutual), and the stepping loop holds a *portable* epoch pin --
+pin_global_epoch / unpin_global_epoch, owned by the coroutine frame
+rather than by any thread -- across a co_await of World::step,
+released between steps so the collector can advance across the loop.
+This exercises the non-thread-pin path the epoch Service was designed
+around (State::pin_explicit's comment in epoch.hpp); the GUI's
+WorldState::update still uses the thread-pinned fork+sync_wait form of
+the same contract.
