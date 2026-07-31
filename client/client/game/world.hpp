@@ -51,7 +51,27 @@ namespace wry {
 
         Time _time;
 
+        // Occupancy vs location (split 2026-07-26):
+        //
+        // _entity_id_for_coordinate is OCCUPANCY: mutually exclusive sole
+        // occupant or empty.  One entity can occupy several cells (a
+        // travelling machine holds both endpoints).  Occupancy is what
+        // blocks movement.
+        //
+        // _located_for_coordinate is LOCATION: the authoritative
+        // Coordinate -> Set<EntityID> multimap of everything "at" a cell,
+        // independent of occupancy.  Non-occupying entities (Source,
+        // Sink, Spawner) appear only here; machines appear in both maps
+        // (deliberate duplication -- the noted-not-built alternative is
+        // to treat occupancy as one location source and this map as the
+        // non-occupants' side, unioning at query time).  Region queries
+        // over this map can surface an entity once per cell it spans;
+        // consumers de-duplicate.  The value type is WaitSet -- the same
+        // PersistentSet<EntityID> instantiation as the ki waiter index --
+        // deliberately, so the save format reuses the existing node
+        // emitters and registry entries.
         WaitableMap<Coordinate, EntityID> _entity_id_for_coordinate;
+        WaitableMap<Coordinate, WaitSet> _located_for_coordinate;
         WaitableMap<EntityID, const Entity*> _entity_for_entity_id;
         WaitableMap<Coordinate, Term> _term_for_coordinate;
         WaitableMap<Coordinate, Terrain> _terrain_for_coordinate;
@@ -63,6 +83,7 @@ namespace wry {
         World()
         : _time{0}
         , _entity_id_for_coordinate{}
+        , _located_for_coordinate{}
         , _entity_for_entity_id{}
         , _term_for_coordinate{}
         , _terrain_for_coordinate{}
@@ -72,12 +93,14 @@ namespace wry {
 
         World(Time time,
               WaitableMap<Coordinate, EntityID> entity_id_for_coordinate,
+              WaitableMap<Coordinate, WaitSet> located_for_coordinate,
               WaitableMap<EntityID, const Entity*> entity_for_entity_id,
               WaitableMap<Coordinate, Term> value_for_coordinate,
               WaitableMap<Coordinate, Terrain> terrain_for_coordinate,
               Set waiting_on_time)
         : _time(time)
         , _entity_id_for_coordinate(entity_id_for_coordinate)
+        , _located_for_coordinate(located_for_coordinate)
         , _entity_for_entity_id(entity_for_entity_id)
         , _term_for_coordinate(value_for_coordinate)
         , _terrain_for_coordinate(terrain_for_coordinate)

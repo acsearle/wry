@@ -317,6 +317,10 @@ namespace wry {
 
     void World::_save_body(Saver& s) const {
         SaveRef eid_for_coord_kv = s.visit<NodeEntityID_U64>(_entity_id_for_coordinate.kv._inner);
+        // The location multimap's kv side is Coordinate -> WaitSet: the
+        // same node type as the ki waiter indexes, so it reuses their
+        // emitters and registry entries.
+        SaveRef loc_for_coord_kv = s.visit<NodeWaitSet_U64>(_located_for_coordinate.kv._inner);
         SaveRef ent_for_eid_kv   = s.visit<NodeEntityPtr_U64>(_entity_for_entity_id.kv._inner);
         SaveRef val_for_coord_kv = s.visit<NodeValue_U64>(_term_for_coordinate.kv._inner);
         SaveRef ter_for_coord_kv = s.visit<NodeTerrain_U64>(_terrain_for_coordinate.kv._inner);
@@ -327,6 +331,7 @@ namespace wry {
         // load, or its wake is silently lost.  Nested map: the outer
         // Node<WaitSet,u64> leaves reference inner Node<int,u64> set roots.
         SaveRef eid_for_coord_ki = s.visit<NodeWaitSet_U64>(_entity_id_for_coordinate.ki._inner);
+        SaveRef loc_for_coord_ki = s.visit<NodeWaitSet_U64>(_located_for_coordinate.ki._inner);
         SaveRef ent_for_eid_ki   = s.visit<NodeWaitSet_U64>(_entity_for_entity_id.ki._inner);
         SaveRef val_for_coord_ki = s.visit<NodeWaitSet_U64>(_term_for_coordinate.ki._inner);
         SaveRef ter_for_coord_ki = s.visit<NodeWaitSet_U64>(_terrain_for_coordinate.ki._inner);
@@ -334,6 +339,8 @@ namespace wry {
         s.write_u64((uint64_t)_time);
         s.write_ref(eid_for_coord_kv);
         s.write_ref(eid_for_coord_ki);
+        s.write_ref(loc_for_coord_kv);
+        s.write_ref(loc_for_coord_ki);
         s.write_ref(ent_for_eid_kv);
         s.write_ref(ent_for_eid_ki);
         s.write_ref(val_for_coord_kv);
@@ -429,6 +436,8 @@ namespace wry {
         w->_time = (Time)L.read_u64();
         SaveRef eid_kv  = L.read_u32();
         SaveRef eid_ki  = L.read_u32();
+        SaveRef loc_kv  = L.read_u32();
+        SaveRef loc_ki  = L.read_u32();
         SaveRef ent_kv  = L.read_u32();
         SaveRef ent_ki  = L.read_u32();
         SaveRef val_kv  = L.read_u32();
@@ -438,6 +447,7 @@ namespace wry {
         SaveRef wait    = L.read_u32();
 
         w->_entity_id_for_coordinate.kv._inner = (NodeEntityID_U64*)L._ptrs[eid_kv];
+        w->_located_for_coordinate.kv._inner   = (NodeWaitSet_U64*)L._ptrs[loc_kv];
         w->_entity_for_entity_id.kv._inner     = (NodeEntityPtr_U64*)L._ptrs[ent_kv];
         w->_term_for_coordinate.kv._inner     = (NodeValue_U64*)L._ptrs[val_kv];
         w->_terrain_for_coordinate.kv._inner   = (NodeTerrain_U64*)L._ptrs[ter_kv];
@@ -446,6 +456,7 @@ namespace wry {
         // Pre-ki saves wrote SAVE_REF_NULL for these three refs; _ptrs[0] is
         // nullptr, so such files load with an empty waiter index.
         w->_entity_id_for_coordinate.ki._inner = (NodeWaitSet_U64*)L._ptrs[eid_ki];
+        w->_located_for_coordinate.ki._inner   = (NodeWaitSet_U64*)L._ptrs[loc_ki];
         w->_entity_for_entity_id.ki._inner     = (NodeWaitSet_U64*)L._ptrs[ent_ki];
         w->_term_for_coordinate.ki._inner     = (NodeWaitSet_U64*)L._ptrs[val_ki];
         w->_terrain_for_coordinate.ki._inner   = (NodeWaitSet_U64*)L._ptrs[ter_ki];
@@ -892,6 +903,18 @@ namespace wry {
         w->_entity_id_for_coordinate.set(source->_location, source->_entity_id);
         w->_entity_id_for_coordinate.set(machine->_new_location, machine->_entity_id);
 
+        // Location multimap: statics and the machine, including one
+        // multi-member set (spawner + machine sharing a cell) so the
+        // nested set encoding is exercised on the kv side too.
+        { WaitSet s; s.set(spawner->_entity_id); s.set(machine->_entity_id);
+          w->_located_for_coordinate.set(spawner->_location, s); }
+        { WaitSet s; s.set(source->_entity_id);
+          w->_located_for_coordinate.set(source->_location, s); }
+        { WaitSet s; s.set(sink->_entity_id);
+          w->_located_for_coordinate.set(sink->_location, s); }
+        { WaitSet s; s.set(machine->_entity_id);
+          w->_located_for_coordinate.set(machine->_new_location, s); }
+
         w->_term_for_coordinate.set(Coordinate{0, 1}, term_make_integer_with(1));
         w->_term_for_coordinate.set(Coordinate{0, 2}, term_make_integer_with(2));
         w->_term_for_coordinate.set(Coordinate{0, 4}, term_make_opcode(OPCODE_FLIP_FLOP));
@@ -963,6 +986,19 @@ namespace wry {
         ws.for_each([&got](EntityID e) { got.insert(e.data); });
         assert((got == std::set<uint64_t>{ sink->_entity_id.data,
                                            counter->_entity_id.data }));
+
+        // Location multimap round-trips, including the multi-member set.
+        {
+            WaitSet ls;
+            assert(w2->_located_for_coordinate.try_get(spawner->_location, ls));
+            std::set<uint64_t> located;
+            ls.for_each([&located](EntityID e) { located.insert(e.data); });
+            assert((located == std::set<uint64_t>{ spawner->_entity_id.data,
+                                                   machine->_entity_id.data }));
+            WaitSet ss;
+            assert(w2->_located_for_coordinate.try_get(sink->_location, ss));
+            assert(ss.contains(sink->_entity_id));
+        }
 
         Terrain terrain = -1;
         assert(w2->_terrain_for_coordinate.try_get(Coordinate{1, 0}, terrain));

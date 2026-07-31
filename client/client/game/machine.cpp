@@ -47,6 +47,21 @@ namespace wry {
                 (void) tx->try_read_entity_id_for_coordinate(_old_location, occupant);
                 assert(occupant == this->_entity_id);
                 tx->write_entity_id_for_coordinate(_old_location, EntityID{0});
+                {
+                    // location mirrors occupancy: rebuild the released
+                    // cell's set without us (PersistentSet has no erase;
+                    // sets here are tiny), preserving any non-occupying
+                    // residents
+                    WaitSet located;
+                    (void) tx->try_read_located_for_coordinate(_old_location, located);
+                    WaitSet without;
+                    EntityID self = this->_entity_id;
+                    located.for_each([&without, self](EntityID id) {
+                        if (id != self)
+                            without.set(id);
+                    });
+                    tx->write_located_for_coordinate(_old_location, without);
+                }
                 new_this->_old_time = _new_time;
                 new_this->_old_location = _new_location;
                 new_this->_old_heading = _new_heading;
@@ -188,7 +203,15 @@ namespace wry {
                 (void) tx->try_read_entity_id_for_coordinate(next_location, occupant);
                 tx->write_entity_for_entity_id(this->_entity_id, new_this);
                 if (occupant) {
-                    assert(occupant != _entity_id);
+                    // Reading ourselves at the destination is a U-turn in
+                    // progress: reads see the old world, and we released
+                    // that cell earlier in this same transaction.  The
+                    // wait below is woken by our own committing release,
+                    // and the retry re-enters the now-empty cell -- a
+                    // U-turn costs a one-tick reversing pause.  Self at
+                    // any OTHER cell would be occupancy corruption.
+                    assert((occupant != _entity_id)
+                           || (next_location == _old_location));
                     // occupied; wait for our destination to clear
                     tx->wait_on_entity_id_for_coordinate(next_location);
                     // or wait for the instruction under us to change
@@ -205,9 +228,16 @@ namespace wry {
                     return;
                 }
                 tx->write_entity_id_for_coordinate(next_location, this->_entity_id);
-                
-                                
-                
+                {
+                    // location mirrors occupancy: join the claimed cell's
+                    // set alongside any non-occupying residents
+                    WaitSet located;
+                    (void) tx->try_read_located_for_coordinate(next_location, located);
+                    located.set(this->_entity_id);
+                    tx->write_located_for_coordinate(next_location, located);
+                }
+
+
 
                 switch (_on_arrival) {
                     case OPCODE_SKIP:
@@ -624,8 +654,27 @@ namespace wry {
             m->_new_location = Coordinate{x, y};
             w->_entity_for_entity_id.set(m->_entity_id, m);
             w->_entity_id_for_coordinate.set(Coordinate{x, y}, m->_entity_id);
+            { WaitSet s; s.set(m->_entity_id);
+              w->_located_for_coordinate.set(Coordinate{x, y}, s); }
             w->_waiting_on_time.set({Time{0}, m->_entity_id});
             return m->_entity_id;
+        }
+
+        // the machine (and nothing else here) is located at exactly (x, y)
+        bool test_located_only_at(const Root<World*>& world, EntityID id,
+                                  i32 x, i32 y,
+                                  std::initializer_list<Coordinate> not_at) {
+            WaitSet s{};
+            (void) world._ptr->_located_for_coordinate.try_get(Coordinate{x, y}, s);
+            if (!s.contains(id))
+                return false;
+            for (Coordinate c : not_at) {
+                WaitSet t{};
+                (void) world._ptr->_located_for_coordinate.try_get(c, t);
+                if (t.contains(id))
+                    return false;
+            }
+            return true;
         }
 
         Coroutine::Task test_step_until(Root<World*>& world, Time t_end) {
@@ -740,6 +789,15 @@ namespace wry {
         // (42,5) deliberately left empty: the DROP target
         test_put(w, 43, 5, term_make_opcode(OPCODE_HALT));
 
+        // Track F (x=50): TURN_BACK aims the machine at the cell it is
+        // still releasing -- the U-turn.  It stalls one tick (woken by
+        // its own committing release), re-enters, and retraces the track
+        // southbound, re-picking the literal on the way out.
+        EntityID mf = test_machine_at_rest(w, 50, 0);
+        test_put(w, 50,  1, term_make_integer_with(7));
+        test_put(w, 50,  2, term_make_opcode(OPCODE_TURN_BACK));
+        test_put(w, 50, -1, term_make_opcode(OPCODE_HALT));
+
         Root<World*> world{w};
 
         // Longest track parks after 11 hops = 704 ticks; run past it.
@@ -794,6 +852,35 @@ namespace wry {
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{42, 5}, placed);
             assert(placed._data == term_make_matter(MATTER_SHIPPING_CONTAINER)._data);
         }
+
+        // The location multimap tracked every move: each parked machine is
+        // located at exactly its HALT cell, and the sets along its track
+        // (start cell, a mid-track cell, the pre-turn corner) emptied
+        // behind it.
+        assert((test_located_only_at(world, ma, 0, 11,
+                                     {Coordinate{0, 0}, Coordinate{0, 5},
+                                      Coordinate{0, 10}})));
+        assert((test_located_only_at(world, mb, 12, 4,
+                                     {Coordinate{10, 0}, Coordinate{10, 6},
+                                      Coordinate{12, 6}})));
+        assert((test_located_only_at(world, mc, 21, 4,
+                                     {Coordinate{20, 0}, Coordinate{20, 4}})));
+        assert((test_located_only_at(world, md, 30, 5,
+                                     {Coordinate{30, 0}, Coordinate{30, 4}})));
+        assert((test_located_only_at(world, me, 43, 5,
+                                     {Coordinate{40, 0}, Coordinate{40, 2},
+                                      Coordinate{41, 5}, Coordinate{42, 5}})));
+
+        {
+            const Machine* m = test_machine_for(world, mf);
+            assert((m->_new_location == Coordinate{50, -1}));
+            assert(m->_new_heading == HEADING_SOUTH);
+            assert((test_stack_is(m, {term_make_integer_with(7),
+                                      term_make_integer_with(7)})));
+        }
+        assert((test_located_only_at(world, mf, 50, -1,
+                                     {Coordinate{50, 0}, Coordinate{50, 1},
+                                      Coordinate{50, 2}})));
 
         co_return;
     };

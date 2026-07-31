@@ -18,6 +18,10 @@ namespace wry {
         return this->_world->_entity_id_for_coordinate.try_get(key, victim);
     }
 
+    bool TransactionContext::try_read_located_for_coordinate(Coordinate key, WaitSet& victim) {
+        return this->_world->_located_for_coordinate.try_get(key, victim);
+    }
+
     bool TransactionContext::try_read_entity_for_entity_id(EntityID key, Entity const*& victim) {
         return this->_world->_entity_for_entity_id.try_get(key, victim);
     }
@@ -42,6 +46,10 @@ namespace wry {
 
     bool Transaction::try_read_entity_id_for_coordinate(Coordinate key, EntityID& victim) const {
         return _context->try_read_entity_id_for_coordinate(key, victim);
+    }
+
+    bool Transaction::try_read_located_for_coordinate(Coordinate key, WaitSet& victim) const {
+        return _context->try_read_located_for_coordinate(key, victim);
     }
 
     bool Transaction::try_read_entity_for_entity_id(EntityID key, Entity const*& victim) const {
@@ -114,9 +122,32 @@ namespace wry {
                                   &(_context->_verb_entity_id_for_coordinate),
                                   key,
                                   desired,
-                                  Operation::WRITE_ON_COMMIT);
+                                  operation);
     }
     
+    auto Transaction::
+    write_located_for_coordinate(Coordinate key,
+                                 WaitSet desired,
+                                 int operation)
+    -> void {
+        transaction_verb_generic(this,
+                                 &(_context->_verb_located_for_coordinate),
+                                 key,
+                                 desired,
+                                 operation);
+    }
+
+    auto Transaction::
+    wait_on_located_for_coordinate(Coordinate key,
+                                   int operation)
+    -> void {
+        transaction_verb_generic<Coordinate, WaitSet>(this,
+                                 &(_context->_verb_located_for_coordinate),
+                                 key,
+                                 {},
+                                 operation);
+    }
+
     auto Transaction::
     wait_on_value_for_coordinate(Coordinate key,
                                  int operation)

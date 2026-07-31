@@ -1338,22 +1338,24 @@
         auto tnow = world_get_time(new_world._ptr);
         auto&& entities = new_world->_entity_for_entity_id;
 
-        // Visible entities by Morton-range descent over the occupancy map:
-        // O(visited blocks + hits), not O(all entities).  The query rect is
-        // the tile loop's grid_bounds (in closed form), so an entity is
-        // emitted iff it occupies a drawn cell -- the same predicate the
-        // per-entity cull this replaces applied.  A travelling machine
-        // occupies both its endpoint cells and can surface twice, hence
-        // sort+unique.  Entities absent from _entity_id_for_coordinate (the
-        // Player; the small world's static Source/Sink/Spawner) are no
-        // longer drawn by this loop -- statics want registration in the
-        // occupancy map or their own pass.
+        // Visible entities by Morton-range descent over the location
+        // multimap (the occupancy/location split's authoritative
+        // Coordinate -> Set<EntityID>): O(visited blocks + hits), not
+        // O(all entities).  The query rect is the tile loop's grid_bounds
+        // (in closed form), so an entity is emitted iff it is located at
+        // a drawn cell.  This surfaces the non-occupying statics (Source,
+        // Sink, Spawner) that the occupancy map hid.  An entity located
+        // at several cells (a travelling machine holds both endpoints)
+        // surfaces once per cell, hence sort+unique.  The Player has no
+        // location and is not drawn by this loop.
         std::vector<EntityID> visible_ids;
-        visit_in_region(new_world->_entity_id_for_coordinate,
+        visit_in_region(new_world->_located_for_coordinate,
                         Coordinate{grid_bounds.a.x, grid_bounds.a.y},
                         Coordinate{grid_bounds.b.x - 1, grid_bounds.b.y - 1},
-                        [&visible_ids](Coordinate, EntityID id) {
-                            if (id) visible_ids.push_back(id);
+                        [&visible_ids](Coordinate, const WaitSet& located) {
+                            located.for_each([&visible_ids](EntityID id) {
+                                if (id) visible_ids.push_back(id);
+                            });
                         });
         std::sort(visible_ids.begin(), visible_ids.end());
         visible_ids.erase(std::unique(visible_ids.begin(), visible_ids.end()),
@@ -1487,9 +1489,16 @@
                     simd_float4 coordinate;
                     if (value.is_opcode()) {
                         coordinate = _opcode_to_coordinate[value.as_opcode()];
+                    } else if (value.is_inty()) {
+                        // number, as hex; booleans as their 0/1 coercion --
+                        // a placeholder until the atlas grows true/false
+                        // glyphs (the digit row has free cells)
+                        coordinate = make<float4>((value.as_int() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                     } else {
-                        // number, as hex
-                        coordinate = make<float4>((value.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                        // not renderable yet (heap integer, string, ...):
+                        // the same neutral dot the ground uses, rather than
+                        // a garbage hex digit cut from the bit pattern
+                        coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
                     }
                     v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
                     v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
@@ -1537,7 +1546,7 @@
                 
                 if (auto r = dynamic_cast<const Source*>(q)) {
                     
-                    simd_float4 coordinate = make<float4>((r->_of_this.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                    simd_float4 coordinate = make<float4>(((r->_of_this.is_inty() ? r->_of_this.as_int() : 0) & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                     
                     v.position = make<float4>(-0.5f, -0.1f, -0.5f, 0.0f) + location;
                     v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f) + coordinate;
@@ -1582,8 +1591,10 @@
                     // printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::Coordinate{i, j}.data(), q._data);
                     if (!not_empty)
                         continue;
-                    if (q.is_int64_t()) {
-                        coordinate = make<float4>((q.as_int64_t() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                    if (q.is_inty()) {
+                        // number, as hex; booleans as their 0/1 coercion --
+                        // placeholder until the atlas grows true/false glyphs
+                        coordinate = make<float4>((q.as_int() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
                     } else if (q.is_opcode()) {
                         //printf("q is opcode\n");
                         auto p = _opcode_to_coordinate.find(q.as_opcode());

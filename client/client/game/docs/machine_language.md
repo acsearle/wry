@@ -206,6 +206,12 @@ integers is a no-op (stack, heading, and world all untouched).
 built-in alternator: a stream of machines through one splits alternately
 right and left.
 
+A heading reversal -- TURN_BACK, a branch of 2, a HEADING_STORE of the
+opposite direction -- aims the machine at the cell it is still in the
+middle of releasing.  This is legal: the machine pauses one tick while
+its own release commits, then re-enters.  A U-turn costs a one-tick
+reversing pause on top of the usual hops.
+
 ### 5.2 Memory (prefix opcodes; operand = the next cell entered)
 
 | opcode    | effect on arrival at operand cell                              |
@@ -813,12 +819,38 @@ entity layer (10.1), not the opcode set.
 
 ### 10.7 Occupancy vs location
 
-Currently conflated: "an entity is at this coordinate" and "an entity
-has locked others out of this coordinate" are one map.  Source does
-not occupy its cell, so it cannot even be looked up by coordinate.
-Splitting monopolising-a-cell from being-at-a-cell unblocks drawing
-non-Machine entities again, entities with footprints (10.1, 10.9), and
-parts of 10.4.
+LANDED 2026-07-26.  `_entity_id_for_coordinate` is occupancy: exclusive
+sole occupant or empty, and one entity can occupy several cells (a
+travelling machine holds both endpoints).  `_located_for_coordinate` is
+the authoritative Coordinate -> Set<EntityID> location multimap,
+independent of occupancy.  Statics (Spawner, Source, Sink) register
+only in location; machines mirror their occupancy transitions into it
+transactionally (add on claim, remove on release; whole-set
+read-modify-write, exclusive per key, which today's movers already
+serialize through occupancy).  The renderer's region query now
+descends the location map, restoring the drawing of the non-occupying
+statics; an entity located at several cells surfaces once per cell and
+is de-duplicated by sort+unique.  The save format gained the map's
+kv/ki refs (version 4); the value type is WaitSet, deliberately, so
+the existing nested-set emitters serialize it with no new registry
+entries.
+
+Noted, not built:
+
+- The union-query optimization: treat occupancy as one source of
+  location truth and keep only non-occupants in this map, unioning at
+  query time.  Machines would drop out of the location map; for now
+  the duplicate data is accepted.
+- Set-delta merge semantics for the location verb, needed the day
+  non-occupying things move (belt riders, 10.9): concurrent add and
+  remove at one key must all apply, where today's whole-set write
+  would conflict.
+- Wait granularities beyond "the set at this key changed" (regions; a
+  specific id entering or leaving), and region-query granularity
+  (pyramidal maps, wide entities registered at shallow branches).
+- There is no transactional key-erase, so a cell whose last resident
+  leaves keeps an empty set, matching the occupancy map's id-0
+  tombstones.
 
 ### 10.8 Terrain and placement
 

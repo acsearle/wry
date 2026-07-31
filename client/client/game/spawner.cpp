@@ -45,6 +45,14 @@ namespace wry {
             // printf("Made new EntityID for Coordinate %lld\n", b.data);
             tx->write_entity_for_entity_id(b, machine);
             tx->write_entity_id_for_coordinate(this->_location, b);
+            {
+                // the new machine is located here, alongside this Spawner
+                // (and any other non-occupying residents)
+                WaitSet located;
+                (void) tx->try_read_located_for_coordinate(this->_location, located);
+                located.set(b);
+                tx->write_located_for_coordinate(this->_location, located);
+            }
             tx->write_entity_id_for_time(context->_world->_time + 1, b);
         }
         tx->wait_on_entity_id_for_coordinate(this->_location, Transaction::Operation::WAIT_ALWAYS);

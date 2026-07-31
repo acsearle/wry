@@ -13,11 +13,12 @@ namespace wry {
     void World::_garbage_collected_scan() const {
         // printf("%s\n", __PRETTY_FUNCTION__);
         garbage_collected_scan(_entity_id_for_coordinate);
+        garbage_collected_scan(_located_for_coordinate);
         garbage_collected_scan(_entity_for_entity_id);
         garbage_collected_scan(_term_for_coordinate);
         garbage_collected_scan(_terrain_for_coordinate);
         garbage_collected_scan(_waiting_on_time);
-        
+
     } // World::_garbage_collected_scan
 
     /*
@@ -73,6 +74,7 @@ namespace wry {
        
         WaitableMap<Coordinate, Term> new_value_for_coordinate;
         WaitableMap<Coordinate, EntityID> new_entity_id_for_coordinate;
+        WaitableMap<Coordinate, WaitSet> new_located_for_coordinate;
         WaitableMap<EntityID, Entity const*> new_entity_for_entity_id;
 
                 
@@ -186,6 +188,61 @@ namespace wry {
         };
         
         
+        auto action_for_located_for_coordinate
+        = [this, &next_ready]
+        (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
+        -> Coroutine::Future<std::pair<ParallelRebuildAction<WaitSet>, ParallelRebuildAction<std::vector<EntityID>>>> {
+
+            using A = std::pair<ParallelRebuildAction<WaitSet>, ParallelRebuildAction<std::vector<EntityID>>>;
+
+            A result = {};
+            const Transaction::Node* writer = nullptr;
+            std::vector<EntityID> waiters;
+
+            for (auto candidate = kv.second.load_acquire();
+                 candidate != nullptr;
+                 candidate = candidate->_next)
+            {
+                Transaction::State resolution = candidate->resolve();
+                if ((resolution == Transaction::State::COMMITTED)
+                    && (candidate->_operation & Transaction::Operation::WRITE_ON_COMMIT))
+                {
+                    assert(!writer);
+                    writer = candidate;
+                } else if (candidate->_operation & resolution) {
+                    waiters.push_back(candidate->_parent->_entity->_entity_id);
+                }
+            }
+
+            if (writer) {
+                assert(writer->_operation & Transaction::Operation::WRITE_ON_COMMIT);
+                result.first.value = get<WaitSet>(writer->_desired);
+                result.first.tag = ParallelRebuildAction<WaitSet>::WRITE_VALUE;
+                if (writer->_operation & Transaction::Operation::WAIT_ON_COMMIT) {
+                    result.second.value.push_back(writer->_parent->_entity->_entity_id);
+                    result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::WRITE_VALUE;
+                } else {
+                    result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::CLEAR_VALUE;
+                }
+                {
+                    WaitSet ws;
+                    if (_located_for_coordinate.ki.try_get(kv.first, ws))
+                        ws.for_each([&next_ready](EntityID waiter) {
+                            next_ready.try_emplace(waiter);
+                        });
+                }
+                for (EntityID key : waiters) {
+                    next_ready.try_emplace(key);
+                }
+
+            } else if (!waiters.empty()) {
+                result.second.value = std::move(waiters);
+                result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::MERGE_VALUE;
+            }
+            co_return result;
+        };
+
+
         auto action_for_entity_for_entity_id
         = [this, &next_ready]
         (const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
@@ -271,7 +328,12 @@ namespace wry {
                               coroutine_parallel_rebuild2_unified(_entity_id_for_coordinate,
                                                          context._verb_entity_id_for_coordinate,
                                                          action_for_entity_id_for_coordinate));
-        
+
+        co_await nursery.fork(new_located_for_coordinate,
+                              coroutine_parallel_rebuild2_unified(_located_for_coordinate,
+                                                         context._verb_located_for_coordinate,
+                                                         action_for_located_for_coordinate));
+
         co_await nursery.fork(new_entity_for_entity_id,
                               coroutine_parallel_rebuild2_unified(_entity_for_entity_id,
                                                          context._verb_entity_for_entity_id,
@@ -306,6 +368,7 @@ namespace wry {
         co_return new World{
             new_time,
             new_entity_id_for_coordinate,
+            new_located_for_coordinate,
             new_entity_for_entity_id,
             new_value_for_coordinate,
             _terrain_for_coordinate,

@@ -15,6 +15,7 @@
 #include "entity.hpp"
 #include "garbage_collected.hpp"
 #include "persistent_map.hpp"
+#include "waitable_map.hpp"
 
 namespace wry {
 
@@ -172,9 +173,10 @@ namespace wry {
 
         bool try_read_value_for_coordinate(Coordinate, Term&) const;
         bool try_read_entity_id_for_coordinate(Coordinate, EntityID&) const;
+        bool try_read_located_for_coordinate(Coordinate, WaitSet&) const;
         bool try_read_entity_for_entity_id(EntityID, const Entity*&) const;
 
-    
+
         void write_value_for_coordinate(Coordinate, Term, int = WRITE_ON_COMMIT);
         //void erase_value_for_coordinate(Coordinate, int = ERASE_ON_COMMIT);
         void wait_on_value_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
@@ -186,6 +188,14 @@ namespace wry {
         void write_entity_id_for_coordinate(Coordinate, EntityID, int = WRITE_ON_COMMIT);
         //void erase_entity_id_for_coordinate(Coordinate, int = ERASE_ON_COMMIT);
         void wait_on_entity_id_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
+
+        // Location multimap: whole-set read-modify-write.  Writes are
+        // exclusive per key like every other verb; today's movers piggyback
+        // location updates on occupancy transitions, which already serialize
+        // same-key writers.  Non-occupying movers will need set-delta merge
+        // semantics here (noted in machine_language.md 10.7; not built).
+        void write_located_for_coordinate(Coordinate, WaitSet, int = WRITE_ON_COMMIT);
+        void wait_on_located_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
 
         
         void write_entity_id_for_time(Time, EntityID, int = WAIT_ON_COMMIT);
@@ -219,6 +229,7 @@ namespace wry {
         // COMMIT and write its value, all others will ABORT.
                 
         Map<Coordinate> _verb_entity_id_for_coordinate;
+        Map<Coordinate> _verb_located_for_coordinate;
         Map<Coordinate> _verb_value_for_coordinate;
         Map<EntityID> _verb_entity_for_entity_id;
         
@@ -240,6 +251,7 @@ namespace wry {
         
         bool try_read_value_for_coordinate(Coordinate, Term&);
         bool try_read_entity_id_for_coordinate(Coordinate, EntityID&);
+        bool try_read_located_for_coordinate(Coordinate, WaitSet&);
         bool try_read_entity_for_entity_id(EntityID, const Entity*&);
 
     };
