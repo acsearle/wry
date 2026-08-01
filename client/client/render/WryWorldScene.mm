@@ -144,6 +144,7 @@
     simd_float4 _digit_zero_coordinate;
     simd_float4 _true_coordinate;
     simd_float4 _false_coordinate;
+    simd_float4 _cdot_coordinate;
     
     WryMesh* _truck_mesh;
     WryMesh* _mine_mesh;
@@ -663,6 +664,7 @@
             _digit_zero_coordinate = make<float4>(0.0f / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
             _true_coordinate       = make<float4>(0.0f / 32.0f, 14.0f / 32.0f, 0.0f, 1.0f);
             _false_coordinate      = make<float4>(1.0f / 32.0f, 14.0f / 32.0f, 0.0f, 1.0f);
+            _cdot_coordinate       = make<float4>(0.0f / 32.0f,  1.0f / 32.0f, 0.0f, 1.0f);
 
             try {
                 auto x = json::from_file<ContiguousDeque<ContiguousDeque<String>>>("assets.json");
@@ -687,6 +689,8 @@
                                 _true_coordinate = coordinate;
                             else if (sv == "false")
                                 _false_coordinate = coordinate;
+                            else if (sv == "cdot")
+                                _cdot_coordinate = coordinate;
                         }
                         else /* if (p != _name_to_opcode.end()) */ {
                             // printf("p is not equal to end\n");
@@ -1520,7 +1524,7 @@
                         // not renderable yet (heap integer, string, ...):
                         // the same neutral dot the ground uses, rather than
                         // a garbage hex digit cut from the bit pattern
-                        coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
+                        coordinate = _cdot_coordinate;
                     }
                     v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
                     v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
@@ -1638,7 +1642,7 @@
                     } else if (q.is_matter()) {
                         // matter renders as a mesh sitting on an ordinary
                         // empty tile
-                        coordinate = make<float4>(0.0 / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
+                        coordinate = _cdot_coordinate;
                         auto A = simd_matrix_translate(location) * lookat_transform;
                         A = A * simd_matrix_scale(container_mesh_scale);
                         MeshInstanced m;
@@ -1648,7 +1652,7 @@
                         [_container_mesh addInstance:m];
                     } else {
                         //printf("q is mystery\n");
-                        coordinate = make<float4>(0.0 / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f);
+                        coordinate = _cdot_coordinate;
                     }
                 }
                 
