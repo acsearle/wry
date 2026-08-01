@@ -137,6 +137,13 @@
     int _mapFrontIndex;
 
     wry::Table<ulong, simd_float4> _opcode_to_coordinate;
+
+    // Non-opcode glyph coordinates captured from assets.json (whose grid
+    // is aligned 1:1 with the atlas art): the digit row origin ('0',
+    // with '1'..'F' contiguous to its right) and the boolean glyphs.
+    simd_float4 _digit_zero_coordinate;
+    simd_float4 _true_coordinate;
+    simd_float4 _false_coordinate;
     
     WryMesh* _truck_mesh;
     WryMesh* _mine_mesh;
@@ -650,6 +657,13 @@
 //            }
 
                 
+            // Defaults matching the shipped atlas layout, overwritten by
+            // the by-name capture below; a json missing the names
+            // degrades to these rather than rendering garbage
+            _digit_zero_coordinate = make<float4>(0.0f / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+            _true_coordinate       = make<float4>(0.0f / 32.0f, 14.0f / 32.0f, 0.0f, 1.0f);
+            _false_coordinate      = make<float4>(1.0f / 32.0f, 14.0f / 32.0f, 0.0f, 1.0f);
+
             try {
                 auto x = json::from_file<ContiguousDeque<ContiguousDeque<String>>>("assets.json");
                 ulong i = 0;
@@ -663,10 +677,16 @@
                         auto p = _name_to_opcode.find(z);
                         // printf("p choice\n");
                         if (p == _name_to_opcode.end()) {
-                            // printf("p is equal to end\n");
-                            // printf("No opcode found for \"%.*s\"\n", (int) z.chars.size(), (const char*) z.chars.data());
-                            // auto mq = _name_to_opcode[z];
-                            // printf("Forced lookup is %lld\n", mq);
+                            // Not an opcode: capture the handful of named
+                            // non-opcode glyphs the renderer draws directly
+                            std::string_view sv((const char*) z.chars.data(),
+                                                z.chars.size());
+                            if (sv == "0")
+                                _digit_zero_coordinate = coordinate;
+                            else if (sv == "true")
+                                _true_coordinate = coordinate;
+                            else if (sv == "false")
+                                _false_coordinate = coordinate;
                         }
                         else /* if (p != _name_to_opcode.end()) */ {
                             // printf("p is not equal to end\n");
@@ -1489,11 +1509,13 @@
                     simd_float4 coordinate;
                     if (value.is_opcode()) {
                         coordinate = _opcode_to_coordinate[value.as_opcode()];
+                    } else if (wry::term_is_boolean(value)) {
+                        coordinate = wry::term_as_boolean(value)
+                            ? _true_coordinate : _false_coordinate;
                     } else if (value.is_inty()) {
-                        // number, as hex; booleans as their 0/1 coercion --
-                        // a placeholder until the atlas grows true/false
-                        // glyphs (the digit row has free cells)
-                        coordinate = make<float4>((value.as_int() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                        // number, as hex
+                        coordinate = _digit_zero_coordinate
+                            + make<float4>((value.as_int() & 15) / 32.0f, 0.0f, 0.0f, 0.0f);
                     } else {
                         // not renderable yet (heap integer, string, ...):
                         // the same neutral dot the ground uses, rather than
@@ -1546,7 +1568,14 @@
                 
                 if (auto r = dynamic_cast<const Source*>(q)) {
                     
-                    simd_float4 coordinate = make<float4>(((r->_of_this.is_inty() ? r->_of_this.as_int() : 0) & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                    simd_float4 coordinate;
+                    if (wry::term_is_boolean(r->_of_this)) {
+                        coordinate = wry::term_as_boolean(r->_of_this)
+                            ? _true_coordinate : _false_coordinate;
+                    } else {
+                        coordinate = _digit_zero_coordinate
+                            + make<float4>(((r->_of_this.is_inty() ? r->_of_this.as_int() : 0) & 15) / 32.0f, 0.0f, 0.0f, 0.0f);
+                    }
                     
                     v.position = make<float4>(-0.5f, -0.1f, -0.5f, 0.0f) + location;
                     v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f) + coordinate;
@@ -1591,10 +1620,13 @@
                     // printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::Coordinate{i, j}.data(), q._data);
                     if (!not_empty)
                         continue;
-                    if (q.is_inty()) {
-                        // number, as hex; booleans as their 0/1 coercion --
-                        // placeholder until the atlas grows true/false glyphs
-                        coordinate = make<float4>((q.as_int() & 15) / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
+                    if (wry::term_is_boolean(q)) {
+                        coordinate = wry::term_as_boolean(q)
+                            ? _true_coordinate : _false_coordinate;
+                    } else if (q.is_inty()) {
+                        // number, as hex
+                        coordinate = _digit_zero_coordinate
+                            + make<float4>((q.as_int() & 15) / 32.0f, 0.0f, 0.0f, 0.0f);
                     } else if (q.is_opcode()) {
                         //printf("q is opcode\n");
                         auto p = _opcode_to_coordinate.find(q.as_opcode());
