@@ -1061,9 +1061,17 @@ namespace deferred {
         
         float4 coordinate_light = uniforms.light_viewprojectiontexture_transform * position_world;
         coordinate_light /= coordinate_light.w;
-        
-        float shadowSample = shadowTexture.sample(nearestSampler, coordinate_light.xy).r;
-        float shadowFactor = step(coordinate_light.z, shadowSample);
+
+        // Off the shadow map we have no occluder information, so treat the
+        // point as lit.  The map covers the screen plus a margin, so only
+        // geometry well above the ground plane near a screen edge lands
+        // here; letting clamp_to_edge answer instead smears the boundary
+        // texels' occluders into streaks.
+        float shadowFactor = 1.0f;
+        if (all(0.0f <= coordinate_light.xy) && all(coordinate_light.xy <= 1.0f)) {
+            float shadowSample = shadowTexture.sample(nearestSampler, coordinate_light.xy).r;
+            shadowFactor = step(coordinate_light.z, shadowSample);
+        }
         
         float3 F0 = 0.04f;
         F0 = mix(F0, albedo, metallic);

@@ -302,16 +302,29 @@ namespace wry {
         // :todo: ensure that result fits in the clip space z range though
         
         // finally, we rescale the projection to fit in the larger shadow map
-        // texture.
-        
-        // :todo: what if the viewport is odd-sized?
-        // :todo:
-        
-        simd_float4x4 C = simd_matrix_scale(_gui.viewport_size.x / 2048.0f,
-                                            _gui.viewport_size.y / 2048.0f,
-                                            1.0f);
-        
-        
+        // texture: screen NDC [-1, 1] maps to the central viewport-sized
+        // texel rect of the map, preserving the 1:1 screen-pixel-to-texel
+        // correspondence, and the remainder is margin for out-of-plane
+        // geometry (see WryWorldScene -resizeShadowMapForDrawableSize:,
+        // which sizes the texture and mirrors it into _shadow_map_size
+        // before rerunning us)
+
+        // when the texture and viewport parities differ, the centering
+        // offset (map - viewport) / 2 is a half-integer number of texels,
+        // which would break the exact texel-to-pixel correspondence; snap
+        // it to a whole texel with a sub-texel translation
+
+        float t0x = (_shadow_map_size.x - _gui.viewport_size.x) * 0.5f;
+        float t0y = (_shadow_map_size.y - _gui.viewport_size.y) * 0.5f;
+
+        simd_float4x4 C = simd_mul(
+            simd_matrix_translate(simd_make_float3(2.0f * (roundf(t0x) - t0x) / _shadow_map_size.x,
+                                                   2.0f * (roundf(t0y) - t0y) / _shadow_map_size.y,
+                                                   0.0f)),
+            simd_matrix_scale(_gui.viewport_size.x / _shadow_map_size.x,
+                              _gui.viewport_size.y / _shadow_map_size.y,
+                              1.0f));
+
         _uniforms.light_viewprojection_transform = simd_mul(C , simd_mul(B, A));
         _uniforms.light_viewprojectiontexture_transform = simd_mul(matrix_ndc_to_tc_float4x4,
                                                                    _uniforms.light_viewprojection_transform);

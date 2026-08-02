@@ -376,18 +376,10 @@
         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
 
-        // Prepare shadow map resources
-        {
-            MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
-            descriptor.textureType = MTLTextureType2D;
-            descriptor.width = 2048;
-            descriptor.height = 2048;
-            descriptor.pixelFormat = MTLPixelFormatDepth32Float;
-            descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-            descriptor.resourceOptions = MTLResourceStorageModePrivate;
-            _shadowMapTarget = [_ctx.device newTextureWithDescriptor:descriptor];
-            _shadowMapTarget.label = @"Shadow map texture";
-        }
+        // Prepare shadow map resources.  The shadow map texture itself is
+        // allocated (and reallocated) by -drawableResize:, which the host
+        // guarantees to call before our first frame; see
+        // -resizeShadowMapForDrawableSize: for the sizing policy.
         {
             // todo: make a dedicated ShadowVertexShader so that we can use the
             // same uniforms
@@ -402,7 +394,7 @@
             descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::shadow_fragment_function"];
             descriptor.vertexBuffers[AAPLBufferIndexVertices].mutability = MTLMutabilityImmutable;
             descriptor.vertexBuffers[AAPLBufferIndexUniforms].mutability = MTLMutabilityImmutable;
-            descriptor.depthAttachmentPixelFormat = _shadowMapTarget.pixelFormat;
+            descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
             _shadowMapRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
         }
         
@@ -2183,16 +2175,75 @@
 }
 
 
+// Shadow map sizing.  The map must cover the drawable exactly (the screen
+// rect samples it texel-per-pixel; see _regenerate_uniforms) plus a margin
+// for out-of-plane geometry: off-screen casters on the sunward side shade
+// screen pixels, and elevated on-screen receivers sample beyond the
+// opposite edge.  A caster or receiver of height h reaches
+// h * |light.xy| / light.z world units, times pixels-per-world-unit (which
+// scales with the drawable at our fixed camera); an eighth of each
+// dimension per side covers heights to about 3 world units without
+// modelling either bound.  NB: grid_bounds culls the shadow pass to
+// roughly the visible cells anyway, so today a caster more than a cell or
+// two off-screen is absent from the map regardless of margin; the shadow
+// pass's cull, not this margin, is the binding constraint on how far
+// off-screen shadows can originate.
+//
+// Reallocation policy: quantize the wanted size up to 256-texel steps, so
+// a live window resize reallocates at most once per couple hundred pixels
+// of growth; grow whenever the map is too small; shrink only when at
+// least two whole quanta too big in some dimension, so jitter around a
+// step boundary can't thrash.  256 is even, so on the usual all-even
+// path the centering offset stays a whole texel and the snap term in
+// _regenerate_uniforms is the identity.
+- (void)resizeShadowMapForDrawableSize:(CGSize)drawableSize
+{
+    if (!(drawableSize.width >= 1.0) || !(drawableSize.height >= 1.0))
+        return; // degenerate (miniaturized?); keep whatever we have
+
+    // All current Metal GPUs top out at 16384 per dimension
+    NSUInteger want_w = MIN((NSUInteger)ceil(drawableSize.width * 1.25 / 256.0) * 256, 16384);
+    NSUInteger want_h = MIN((NSUInteger)ceil(drawableSize.height * 1.25 / 256.0) * 256, 16384);
+
+    NSUInteger have_w = _shadowMapTarget.width;  // 0 when not yet allocated
+    NSUInteger have_h = _shadowMapTarget.height;
+
+    bool too_small = (have_w < want_w) || (have_h < want_h);
+    bool too_big = (have_w >= want_w + 512) || (have_h >= want_h + 512);
+    if (too_small || too_big) {
+        MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+        descriptor.textureType = MTLTextureType2D;
+        descriptor.width = want_w;
+        descriptor.height = want_h;
+        descriptor.pixelFormat = MTLPixelFormatDepth32Float;
+        descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        descriptor.resourceOptions = MTLResourceStorageModePrivate;
+        _shadowMapTarget = [_ctx.device newTextureWithDescriptor:descriptor];
+        _shadowMapTarget.label = [NSString stringWithFormat:@"Shadow map texture %lux%lu",
+                                  (unsigned long)want_w, (unsigned long)want_h];
+        // Any in-flight frame retains the texture it encoded against, so
+        // dropping our reference here is safe.
+    }
+
+    // Mirror the actual size for _regenerate_uniforms (the caller runs it
+    // next).  Unconditional, so the invariant is simply: after this method,
+    // _shadow_map_size is the bound texture's size.
+    _model->_shadow_map_size.x = (float)_shadowMapTarget.width;
+    _model->_shadow_map_size.y = (float)_shadowMapTarget.height;
+}
+
 -(void)drawableResize:(CGSize)drawableSize
 {
-    
+
     _model->_gui.viewport_size.x = drawableSize.width;
     _model->_gui.viewport_size.y = drawableSize.height;
+
+    // (Re)allocate the shadow map to cover the new drawable before the
+    // uniforms bake in the screen-rect-to-map fit from its size.
+    [self resizeShadowMapForDrawableSize:drawableSize];
+
     _model->_regenerate_uniforms();
-    
-    // TODO: The shadow map must be recreated at the new size PLUS some
-    // angle-dependent padding, power of two, etc.
-        
+
     // The G-buffers must be recreated at the new size
 
     MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];

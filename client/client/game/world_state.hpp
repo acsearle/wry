@@ -121,10 +121,18 @@ namespace wry {
         
         
         // Camera and sun projections
-        
+
         // (_viewport_size moved to GuiContext / _gui.)
 
         MeshUniforms _uniforms;
+
+        // Shadow map footprint in texels.  The renderer owns the texture and
+        // mirrors its actual size here whenever it (re)allocates it
+        // (WryWorldScene -drawableResize:, which then reruns
+        // _regenerate_uniforms); _regenerate_uniforms uses it to fit the
+        // screen rect into the map.  The default only covers the
+        // constructor's regenerate call, before any renderer exists.
+        float2 _shadow_map_size = { 2048.0f, 2048.0f };
 
         // The world advanced one step by update(), read by the renderer the
         // same frame (the _worlds deque stays the source of truth).
