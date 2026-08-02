@@ -12,6 +12,7 @@
 
 #include "epoch.hpp"
 #include "matter.hpp"
+#include "spawner.hpp"
 #include "test.hpp"
 
 namespace wry {
@@ -648,10 +649,13 @@ namespace wry {
             w->_term_for_coordinate.set(Coordinate{x, y}, t);
         }
 
-        EntityID test_machine_at_rest(World* w, i32 x, i32 y) {
+        EntityID test_machine_at_rest(World* w, i32 x, i32 y,
+                                      i64 heading = HEADING_NORTH) {
             Machine* m = new Machine;
             m->_old_location = Coordinate{x, y};
             m->_new_location = Coordinate{x, y};
+            m->_old_heading = heading;
+            m->_new_heading = heading;
             w->_entity_for_entity_id.set(m->_entity_id, m);
             w->_entity_id_for_coordinate.set(Coordinate{x, y}, m->_entity_id);
             { WaitSet s; s.set(m->_entity_id);
@@ -798,6 +802,95 @@ namespace wry {
         test_put(w, 50,  2, term_make_opcode(OPCODE_TURN_BACK));
         test_put(w, 50, -1, term_make_opcode(OPCODE_HALT));
 
+        // Track G (x=60): SKIP suppresses exactly one cell, both ways --
+        // the skipped 9 is not picked up, and the skipped TURN_EAST is
+        // not executed.
+        EntityID mg = test_machine_at_rest(w, 60, 0);
+        test_put(w, 60, 1, term_make_integer_with(5));
+        test_put(w, 60, 2, term_make_opcode(OPCODE_SKIP));
+        test_put(w, 60, 3, term_make_integer_with(9));
+        test_put(w, 60, 4, term_make_opcode(OPCODE_SKIP));
+        test_put(w, 60, 5, term_make_opcode(OPCODE_TURN_EAST));
+        test_put(w, 60, 6, term_make_opcode(OPCODE_HALT));
+
+        // Track H (x=70): LOAD as quote (copies an ADD glyph to the
+        // stack without executing it; the source cell keeps its glyph),
+        // STORE writing that glyph as code into an empty cell (without
+        // executing what it stands on), then EXCHANGE swapping 8 for 42.
+        EntityID mh = test_machine_at_rest(w, 70, 0);
+        test_put(w, 70, 1, term_make_opcode(OPCODE_LOAD));
+        test_put(w, 70, 2, term_make_opcode(OPCODE_ADD));
+        test_put(w, 70, 3, term_make_opcode(OPCODE_STORE));
+        // (70,4) empty: receives the quoted ADD
+        test_put(w, 70, 5, term_make_integer_with(7));
+        test_put(w, 70, 6, term_make_integer_with(8));
+        test_put(w, 70, 7, term_make_opcode(OPCODE_EXCHANGE));
+        test_put(w, 70, 8, term_make_integer_with(42));
+        test_put(w, 70, 9, term_make_opcode(OPCODE_HALT));
+
+        // Track I (x=80): EXCHANGE with an empty stack MOVES the cell
+        // value (the cell empties), then the logical family chews
+        // booleans and integers interchangeably.
+        EntityID mi = test_machine_at_rest(w, 80, 0);
+        test_put(w, 80, 1, term_make_opcode(OPCODE_EXCHANGE));
+        test_put(w, 80, 2, term_make_integer_with(6));
+        test_put(w, 80, 3, term_make_opcode(OPCODE_IS_POSITIVE));
+        test_put(w, 80, 4, term_make_opcode(OPCODE_LOGICAL_NOT));
+        test_put(w, 80, 5, term_make_integer_with(4));
+        test_put(w, 80, 6, term_make_opcode(OPCODE_LOGICAL_OR));
+        test_put(w, 80, 7, term_make_opcode(OPCODE_HALT));
+
+        // Track J (x=90): two machines queue through one FLIP_FLOP.
+        // The leader takes it as TURN_RIGHT (glyph becomes FLOP_FLIP);
+        // the follower -- which first waits twice for the leader's cells
+        // to clear -- takes it as TURN_LEFT (glyph restored).  The
+        // follower's heading winds to -1, reduced mod 4 at the assert.
+        EntityID mj1 = test_machine_at_rest(w, 90,  0);
+        EntityID mj2 = test_machine_at_rest(w, 90, -1);
+        test_put(w, 90, 1, term_make_opcode(OPCODE_FLIP_FLOP));
+        test_put(w, 91, 1, term_make_opcode(OPCODE_HALT));
+        test_put(w, 89, 1, term_make_opcode(OPCODE_HALT));
+
+        // Track K (x=100): the STORE guard parks.  The machine takes the
+        // container, then its STORE finds the target cell holding a 9 --
+        // matter needs emptiness, so it parks on the cell.  A Sink AT
+        // that cell (non-occupying: located, sharing the cell with the
+        // parked machine -- the occupancy/location split at work) is
+        // scheduled to wake at t=300, eats the 9, and the value change
+        // wakes the machine, which places the container and moves on
+        // (the Sink then lawfully consumes it).  Arrival time at the
+        // HALT proves the park happened: unblocked it would be 320.
+        EntityID mk = test_machine_at_rest(w, 100, 0);
+        test_put(w, 100, 1, term_make_opcode(OPCODE_LOAD));
+        test_put(w, 100, 2, term_make_matter(MATTER_SHIPPING_CONTAINER));
+        test_put(w, 100, 3, term_make_opcode(OPCODE_STORE));
+        test_put(w, 100, 4, term_make_integer_with(9));
+        test_put(w, 100, 5, term_make_opcode(OPCODE_HALT));
+        Sink* sink = new Sink;
+        sink->_location = Coordinate{100, 4};
+        w->_entity_for_entity_id.set(sink->_entity_id, sink);
+        { WaitSet s; s.set(sink->_entity_id);
+          w->_located_for_coordinate.set(sink->_location, s); }
+        w->_waiting_on_time.set({Time{300}, sink->_entity_id});
+        EntityID sink_id = sink->_entity_id;
+
+        // Track L (x=103..111): a boolean ground signal between two
+        // machines.  The producer computes 4 == 4 and STOREs true at
+        // (110,5); the consumer, arriving from the west well after the
+        // producer has passed (it briefly queues on the producer's
+        // release of the shared cell), auto-picks the boolean COPY and
+        // branches south on it.
+        EntityID ml_producer = test_machine_at_rest(w, 110, 0);
+        test_put(w, 110, 1, term_make_integer_with(4));
+        test_put(w, 110, 2, term_make_integer_with(4));
+        test_put(w, 110, 3, term_make_opcode(OPCODE_EQUAL));
+        test_put(w, 110, 4, term_make_opcode(OPCODE_STORE));
+        // (110,5) empty: receives true
+        test_put(w, 110, 6, term_make_opcode(OPCODE_HALT));
+        EntityID ml_consumer = test_machine_at_rest(w, 103, 5, HEADING_EAST);
+        test_put(w, 111, 5, term_make_opcode(OPCODE_BRANCH_RIGHT));
+        test_put(w, 111, 4, term_make_opcode(OPCODE_HALT));
+
         Root<World*> world{w};
 
         // Longest track parks after 11 hops = 704 ticks; run past it.
@@ -881,6 +974,105 @@ namespace wry {
         assert((test_located_only_at(world, mf, 50, -1,
                                      {Coordinate{50, 0}, Coordinate{50, 1},
                                       Coordinate{50, 2}})));
+
+        {
+            // Track G: the 9 was not picked up, the TURN_EAST was not
+            // executed
+            const Machine* m = test_machine_for(world, mg);
+            assert((m->_new_location == Coordinate{60, 6}));
+            assert(m->_new_heading == HEADING_NORTH);
+            assert((test_stack_is(m, {term_make_integer_with(5)})));
+        }
+
+        {
+            // Track H: quote copied (source glyph intact), code written,
+            // exchange swapped
+            const Machine* m = test_machine_for(world, mh);
+            assert((m->_new_location == Coordinate{70, 9}));
+            assert((test_stack_is(m, {term_make_integer_with(7),
+                                      term_make_integer_with(42)})));
+            Term quoted{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{70, 2}, quoted);
+            assert(quoted._data == term_make_opcode(OPCODE_ADD)._data);
+            Term written{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{70, 4}, written);
+            assert(written._data == term_make_opcode(OPCODE_ADD)._data);
+            Term swapped{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{70, 8}, swapped);
+            assert(swapped._data == term_make_integer_with(8)._data);
+        }
+
+        {
+            // Track I: exchange-with-empty-stack moved the 6 out of the
+            // cell; the logical family accepted the bool/int mix
+            const Machine* m = test_machine_for(world, mi);
+            assert((m->_new_location == Coordinate{80, 7}));
+            assert((test_stack_is(m, {Term(true)})));
+            Term moved{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{80, 2}, moved);
+            assert(term_is_null(moved));
+        }
+
+        {
+            // Track J: leader turned right, follower (after queueing on
+            // the leader twice) turned left, and the glyph flipped twice
+            // back to FLIP_FLOP.  The follower's heading wound to -1;
+            // reduce mod 4.
+            const Machine* m1 = test_machine_for(world, mj1);
+            assert((m1->_new_location == Coordinate{91, 1}));
+            assert(m1->_new_heading == HEADING_EAST);
+            const Machine* m2 = test_machine_for(world, mj2);
+            assert((m2->_new_location == Coordinate{89, 1}));
+            assert((m2->_new_heading & 3) == HEADING_WEST);
+            Term glyph{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{90, 1}, glyph);
+            assert(glyph._data == term_make_opcode(OPCODE_FLIP_FLOP)._data);
+            assert((test_located_only_at(world, mj1, 91, 1,
+                                         {Coordinate{90, 0}, Coordinate{90, 1}})));
+            assert((test_located_only_at(world, mj2, 89, 1,
+                                         {Coordinate{90, -1}, Coordinate{90, 0},
+                                          Coordinate{90, 1}})));
+        }
+
+        {
+            // Track K: the STORE guard parked on the 9 until the Sink ate
+            // it (arrival at the HALT would be t=320 unblocked; the park
+            // pushes it past 360), the container was placed and then
+            // lawfully sunk, and the parked machine shared the Sink's
+            // cell in the location map while never displacing it
+            const Machine* m = test_machine_for(world, mk);
+            assert((m->_new_location == Coordinate{100, 5}));
+            assert((test_stack_is(m, {})));
+            assert(m->_new_time >= Time{360});
+            Term taken{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{100, 2}, taken);
+            assert(term_is_null(taken));
+            Term sunk{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{100, 4}, sunk);
+            assert(term_is_null(sunk));
+            WaitSet at_sink{};
+            (void) world._ptr->_located_for_coordinate.try_get(Coordinate{100, 4}, at_sink);
+            assert(at_sink.contains(sink_id));
+            assert(!at_sink.contains(mk));
+            assert((test_located_only_at(world, mk, 100, 5,
+                                         {Coordinate{100, 0}, Coordinate{100, 4}})));
+        }
+
+        {
+            // Track L: the producer stored true on the ground; the
+            // consumer picked up a COPY (the signal survives) and
+            // branched south on it
+            const Machine* p = test_machine_for(world, ml_producer);
+            assert((p->_new_location == Coordinate{110, 6}));
+            assert((test_stack_is(p, {})));
+            const Machine* c = test_machine_for(world, ml_consumer);
+            assert((c->_new_location == Coordinate{111, 4}));
+            assert(c->_new_heading == HEADING_SOUTH);
+            assert((test_stack_is(c, {})));
+            Term signal{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{110, 5}, signal);
+            assert(signal._data == Term(true)._data);
+        }
 
         co_return;
     };

@@ -873,15 +873,25 @@ headlessly, and asserting on machine state -- a shakedown of stepping,
 transactions, and collector pinning in the test harness as much as of
 the opcodes themselves.
 
-First increment landed 2026-07-23: `machine_step_semantics` at the
-bottom of machine.cpp.  Five glyph tracks run concurrently in one
-world (ALU with the flipped COMPARE and clamped shift; ROT and the
-heading register; EQUAL steering a branch both ways; matter
-take/test/place with conservation checked on the value plane), each
-parking its machine on HALT so the terminal state is stable, asserted
-after 800 headless steps (~0.1 s).  The helpers (test_put,
-test_machine_at_rest, test_step_until, test_stack_is) are the template
-for future entity tests.  Protocol notes: the harness runs tests
+First increment landed 2026-07-23, densified 2026-07-27 ahead of the
+interpreter refactor: `machine_step_semantics` at the bottom of
+machine.cpp.  Twelve glyph tracks run concurrently in one world, each
+parking its machines on HALT so the terminal state is stable,
+asserted after 800 headless steps (~0.1 s): ALU with the flipped
+COMPARE and clamped shift; ROT and the heading register; EQUAL
+steering a branch both ways; matter take/test/place with conservation
+checked on the value plane; the U-turn's one-tick reversing pause;
+SKIP suppressing pickup and execution; LOAD-as-quote plus STORE
+writing code plus EXCHANGE (including the empty-stack move); the
+logical family on mixed bool/int; two machines queueing through one
+FLIP_FLOP (self-modification asserted, winding reduced mod 4); the
+STORE guard parking on a full cell until a co-located non-occupying
+Sink clears it (the park proven by arrival time; the
+occupancy/location split exercised on the shared cell); and a boolean
+ground signal STOREd by one machine and auto-picked as a copy by
+another, which branches on it.  The helpers (test_put,
+test_machine_at_rest, test_step_until, test_stack_is,
+test_located_only_at) are the template for future entity tests.  Protocol notes: the harness runs tests
 serially (as of 2026-07-23; run_all previously forked every test
 concurrently, letting a blocking test starve the pool and making
 timings mutual), and the stepping loop holds a *portable* epoch pin --
