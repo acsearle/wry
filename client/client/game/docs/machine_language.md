@@ -677,11 +677,21 @@ DO_NOT_QUEUE_ACROSS_INTERSECTION (the box-junction rule).
 
 ### 8.12 Interpreter structure and small asymmetries
 
-- The two-switch structure remains: a branch's operand is examined in
-  heading resolution and consumed in the action switch, with the
-  pop-iff-inty rule duplicated between them.  A future
-  single-switch-per-opcode refactor would remove the class of bug that
-  produced the HEADING crossing (8.1).
+- Restructured 2026-07-27 around the transaction commit point (the
+  occupancy claim), replacing the old smear of overlapping switches: a
+  pure decide half, `plan_arrival` (classify the pending memory op,
+  read the cell, resolve steering through the single-source
+  `steering_of` table, and choose a disposition -- every way an
+  arrival can park, enumerated in one place), then a commit half in
+  `notify` (the park switch writes each disposition's waits, or the
+  machine claims, applies the pending memory effect, runs the one
+  action switch, and departs).  No opcode's logic is split across
+  switches any more -- steering operand consumption is recorded in the
+  plan -- which structurally removes the bug class that produced the
+  HEADING crossing (8.1).  The swap was behavior-identical under the
+  twelve-track net of 10.10.  Deliberately NOT a single mega-switch:
+  the commit point divides every opcode into decide and effect halves,
+  and the structure now says so instead of hiding it.
 - LOAD copies information but moves matter; EXCHANGE moves both ways;
   auto-pickup copies integers and booleans only.  Three different
   acquisition semantics, each individually sensible; documented as the

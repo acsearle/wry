@@ -16,7 +16,240 @@
 #include "test.hpp"
 
 namespace wry {
-    
+
+    // ====================================================================
+    // The interpreter, structured around the transaction commit point
+    // (the occupancy claim).  Each arrival divides into:
+    //
+    //   plan_arrival    the DECIDE half: pure reads.  Classify the
+    //                   pending memory op, read the cell, resolve
+    //                   steering, and choose a disposition -- every way
+    //                   an arrival can park, enumerated in one place.
+    //   notify          the COMMIT half: write the waits for a parking
+    //                   disposition, or claim the next cell and apply
+    //                   this arrival's effects.  Nothing has happened
+    //                   until the claim succeeds; a parked machine has
+    //                   done nothing at all.
+    //   apply_pending   the latched memory op's effect at this cell
+    //                   (LOAD / STORE / EXCHANGE / auto-pickup).
+    //   the action switch  the executed opcode's stack and world
+    //                   effects, in notify's commit tail.
+    //
+    // Steering has a single source of truth, steering_of: the planner
+    // uses it for the heading and records the operand consumption in
+    // the plan, so no opcode's logic is split across switches (the
+    // peek-here-pop-there duplication that produced the HEADING
+    // crossed-wires bug is structurally gone).
+    //
+    // The phase machinery around all this (travel, release-old, clone,
+    // retries) is the transactional shell, not language semantics.
+
+    namespace {
+
+        struct Steering {
+            enum Kind {
+                STEER_STRAIGHT,        // no heading change
+                STEER_ABSOLUTE,        // heading := argument
+                STEER_RELATIVE,        // heading += argument
+                STEER_STACK_RELATIVE,  // heading += argument * top, if
+                                       // top is inty; consumes top
+                STEER_STACK_ABSOLUTE,  // heading := top, if top is
+                                       // inty; consumes top
+            };
+            Kind kind;
+            i64 argument;
+        };
+
+        Steering steering_of(i64 action) {
+            switch (action) {
+                case OPCODE_TURN_NORTH:
+                    return {Steering::STEER_ABSOLUTE, HEADING_NORTH};
+                case OPCODE_TURN_EAST:
+                    return {Steering::STEER_ABSOLUTE, HEADING_EAST};
+                case OPCODE_TURN_SOUTH:
+                    return {Steering::STEER_ABSOLUTE, HEADING_SOUTH};
+                case OPCODE_TURN_WEST:
+                    return {Steering::STEER_ABSOLUTE, HEADING_WEST};
+                case OPCODE_TURN_RIGHT:
+                case OPCODE_FLIP_FLOP:
+                    return {Steering::STEER_RELATIVE, +1};
+                case OPCODE_TURN_LEFT:
+                case OPCODE_FLOP_FLIP:
+                    return {Steering::STEER_RELATIVE, -1};
+                case OPCODE_TURN_BACK:
+                    return {Steering::STEER_RELATIVE, +2};
+                case OPCODE_BRANCH_RIGHT:
+                    return {Steering::STEER_STACK_RELATIVE, +1};
+                case OPCODE_BRANCH_LEFT:
+                    return {Steering::STEER_STACK_RELATIVE, -1};
+                case OPCODE_HEADING_STORE:
+                    return {Steering::STEER_STACK_ABSOLUTE, 0};
+                default:
+                    return {Steering::STEER_STRAIGHT, 0};
+            }
+        }
+
+        // The four memory opcodes latch across the hop and treat their
+        // operand cell -- the cell the machine lands on next -- as
+        // data: not executed, not auto-picked.
+        bool pending_treats_cell_as_data(i64 pending) {
+            switch (pending) {
+                case OPCODE_SKIP:
+                case OPCODE_LOAD:
+                case OPCODE_STORE:
+                case OPCODE_EXCHANGE:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        struct ArrivalPlan {
+            enum Disposition {
+                PROCEED,           // claim next_location, apply effects
+                PARK_HALT,         // sleep until the value under us changes
+                PARK_STORE_GUARD,  // the pending STORE may not act yet
+                PARK_OCCUPIED,     // next_location is occupied
+            };
+            Disposition disposition;
+            Term cell_value;       // value plane at the machine's cell
+            i64 action;            // opcode executing this arrival, or NOOP
+            bool steering_pop;     // the action consumed the top of stack
+            i64 next_heading;
+            Coordinate next_location;
+        };
+
+        // The decide half.  Reads only; no writes, no waits.
+        ArrivalPlan plan_arrival(const Machine* self, Transaction* tx) {
+            ArrivalPlan plan = {};
+
+            // The cell's value is executed only if no pending memory op
+            // claims it as data
+            (void) tx->try_read_value_for_coordinate(self->_new_location,
+                                                     plan.cell_value);
+            plan.action = OPCODE_NOOP;
+            if (!pending_treats_cell_as_data(self->_on_arrival)
+                && plan.cell_value.is_opcode())
+                plan.action = plan.cell_value.as_opcode();
+
+            // Steering
+            plan.next_heading = self->_new_heading;
+            plan.steering_pop = false;
+            Steering steering = steering_of(plan.action);
+            switch (steering.kind) {
+                case Steering::STEER_STRAIGHT:
+                    break;
+                case Steering::STEER_ABSOLUTE:
+                    plan.next_heading = steering.argument;
+                    break;
+                case Steering::STEER_RELATIVE:
+                    plan.next_heading += steering.argument;
+                    break;
+                case Steering::STEER_STACK_RELATIVE: {
+                    Term top = self->peek();
+                    if (top.is_inty()) {
+                        plan.next_heading += steering.argument * top.as_int();
+                        plan.steering_pop = true;
+                    }
+                } break;
+                case Steering::STEER_STACK_ABSOLUTE: {
+                    Term top = self->peek();
+                    if (top.is_inty()) {
+                        plan.next_heading = top.as_int();
+                        plan.steering_pop = true;
+                    }
+                } break;
+            }
+
+            plan.next_location = self->_new_location;
+            switch (plan.next_heading & 3) {
+                case 0: ++plan.next_location.y; break;
+                case 1: ++plan.next_location.x; break;
+                case 2: --plan.next_location.y; break;
+                case 3: --plan.next_location.x; break;
+            }
+
+            // Disposition: every way an arrival can park, in one place
+
+            if (plan.action == OPCODE_HALT) {
+                plan.disposition = ArrivalPlan::PARK_HALT;
+                return plan;
+            }
+
+            // A pending STORE must not destroy matter in the
+            // destination, and matter itself may only be placed into an
+            // empty cell (in particular, never over a program glyph)
+            if (self->_on_arrival == OPCODE_STORE) {
+                Term pending = self->peek();
+                if (plan.cell_value.is_matter()
+                    || (pending.is_matter()
+                        && !term_is_null(plan.cell_value))) {
+                    plan.disposition = ArrivalPlan::PARK_STORE_GUARD;
+                    return plan;
+                }
+            }
+
+            EntityID occupant = {};
+            (void) tx->try_read_entity_id_for_coordinate(plan.next_location,
+                                                         occupant);
+            if (occupant) {
+                // Reading ourselves at the destination is a U-turn in
+                // progress: reads see the old world, and we released
+                // that cell earlier in this same transaction.  The
+                // park's wait is woken by our own committing release,
+                // and the retry re-enters the now-empty cell -- a
+                // U-turn costs a one-tick reversing pause.  Self at any
+                // OTHER cell would be occupancy corruption.
+                assert((occupant != self->_entity_id)
+                       || (plan.next_location == self->_old_location));
+                plan.disposition = ArrivalPlan::PARK_OCCUPIED;
+                return plan;
+            }
+
+            plan.disposition = ArrivalPlan::PROCEED;
+            return plan;
+        }
+
+        // The latched memory op's effect at the cell we stand on.
+        void apply_pending(const Machine* self, Machine* new_this,
+                           Transaction* tx, const Term& cell_value) {
+            switch (self->_on_arrival) {
+                case OPCODE_SKIP:
+                    break;
+                case OPCODE_LOAD:
+                    new_this->push(cell_value);
+                    // matter is taken, not copied
+                    if (cell_value.is_matter())
+                        tx->write_value_for_coordinate(self->_new_location,
+                                                       term_make_empty());
+                    break;
+                case OPCODE_STORE:
+                    // the guard in plan_arrival already vetted this write
+                    tx->write_value_for_coordinate(self->_new_location,
+                                                   new_this->pop());
+                    break;
+                case OPCODE_EXCHANGE: {
+                    // TODO: should push(...) itself discard nothings, always?
+                    Term displaced = new_this->pop();
+                    new_this->push(cell_value);
+                    tx->write_value_for_coordinate(self->_new_location,
+                                                   displaced);
+                } break;
+                default:
+                    // To avoid explicit loads everywhere, when we run over
+                    // something that
+                    // - is not an opcode
+                    // - is copyable, aka immaterial, symbolic, numeric?
+                    // we pick it up.  Good idea?
+                    if (cell_value.is_inty()) {
+                        new_this->push(cell_value);
+                    }
+                    break;
+            }
+        }
+
+    } // anonymous namespace
+
     void Machine::notify(TransactionContext* context) const {
 
         Transaction* tx = Transaction::make(context, this, 10);
@@ -70,228 +303,101 @@ namespace wry {
             } [[fallthrough]];
                 
             case PHASE_WAITING_FOR_NEW: {
-                
+
                 assert(new_this->_old_location == _new_location);
-                
-                // TODO: at the moment we have _on_arrivial and next action to
+
+                // TODO: at the moment we have _on_arrival and next action to
                 // coordinate stuff.  Can we instead use the top of the stack
                 // itself as the instruction slot and current machine state?
-                
+                // (The thought latch, machine_language.md 10.5.)
+
                 EntityID occupant = {};
                 (void) tx->try_read_entity_id_for_coordinate(_new_location, occupant);
                 assert(occupant == this->_entity_id);
 
-                // now we need to work out what other cells are needed
-                
-                Term new_value = {};
-                i64 next_action = OPCODE_NOOP;
-                switch (_on_arrival) {
-                    case OPCODE_SKIP:
-                        // we ignore the current value entirely
-                        break;
-                    case OPCODE_STORE:
-                        // we load [_new_location] only to check that we may
-                        // overwrite it; see the matter early-out below
-                        (void) tx->try_read_value_for_coordinate(_new_location, new_value);
-                        break;
-                    case OPCODE_LOAD:
-                    case OPCODE_EXCHANGE:
-                        // we load [_new_location] but don't execute it
-                        // new_value = peek_world_coordinate_value(world, _new_location);
-                        (void) tx->try_read_value_for_coordinate(_new_location, new_value);
-                        break;
-                    default:
-                        // we load [_new_location] and may execute it
-                        (void) tx->try_read_value_for_coordinate(_new_location, new_value);
-                        if (new_value.is_opcode())
-                            next_action = new_value.as_opcode();
-                        break;
-                }
-            
-                // bail out for the trivial case of halt
-                
-                if (next_action == OPCODE_HALT) {
-                    // we don't need to do any further processing
-                    new_this->_on_arrival = OPCODE_NOOP;
-                    tx->write_entity_for_entity_id(this->_entity_id, new_this);
-                    tx->wait_on_value_for_coordinate(new_this->_new_location);
-                    // printf("EntityID %lld proposes to HALT\n", _entity_id.data);
-                    return;
-                }
+                // Decide, then commit: the plan gathers every read and
+                // chooses a disposition; writes happen only once we know
+                // which path we are on.  See the interpreter banner at
+                // the top of this file.
+                ArrivalPlan plan = plan_arrival(this, tx);
 
-                // a pending STORE must not destroy matter in the
-                // destination, and matter itself may only be placed into
-                // an empty cell (in particular, never over a program
-                // glyph).  Park here and retry when the cell changes.
-                if (_on_arrival == OPCODE_STORE) {
-                    Term pending = new_this->peek();
-                    if (new_value.is_matter()
-                        || (pending.is_matter() && !term_is_null(new_value))) {
+                switch (plan.disposition) {
+
+                    case ArrivalPlan::PARK_HALT:
+                        // park; wake -- executing whatever is here by
+                        // then -- when the value under us changes
+                        new_this->_on_arrival = OPCODE_NOOP;
+                        tx->write_entity_for_entity_id(this->_entity_id, new_this);
+                        tx->wait_on_value_for_coordinate(_new_location);
+                        return;
+
+                    case ArrivalPlan::PARK_STORE_GUARD:
+                        // the pending STORE may not act yet (see the
+                        // guard in plan_arrival); retry when the cell
+                        // changes
                         tx->write_entity_for_entity_id(this->_entity_id, new_this);
                         tx->wait_on_value_for_coordinate(_new_location);
                         tx->on_abort_retry();
                         return;
-                    }
+
+                    case ArrivalPlan::PARK_OCCUPIED:
+                        tx->write_entity_for_entity_id(this->_entity_id, new_this);
+                        // wait for our destination to clear
+                        tx->wait_on_entity_id_for_coordinate(plan.next_location);
+                        // or for the instruction under us to change
+                        tx->wait_on_value_for_coordinate(_new_location);
+                        // waiting can't fail; writing our next state can
+                        // fail if somebody is messing with us, and then
+                        // whoever wrote our state is responsible for
+                        // scheduling us
+                        tx->on_abort_retry();
+                        return;
+
+                    case ArrivalPlan::PROCEED:
+                        break;
                 }
 
-                // work out where we will go next
-                                
-                i64 next_heading = _new_heading;
-                switch (next_action) {
-
-                    default:
-                        // go straight
-                        break;
-                        
-                        // other opcodes may change the direction
-                    case OPCODE_TURN_NORTH:
-                        next_heading = 0;
-                        break;
-                    case OPCODE_TURN_EAST:
-                        next_heading = 1;
-                        break;
-                    case OPCODE_TURN_SOUTH:
-                        next_heading = 2;
-                        break;
-                    case OPCODE_TURN_WEST:
-                        next_heading = 3;
-                        break;
-                    case OPCODE_TURN_LEFT:
-                    case OPCODE_FLOP_FLIP:
-                        --next_heading;
-                        break;
-                    case OPCODE_TURN_RIGHT:
-                    case OPCODE_FLIP_FLOP:
-                        ++next_heading;
-                        break;
-                    case OPCODE_TURN_BACK:
-                        next_heading += 2;
-                        break;
-                    case OPCODE_BRANCH_LEFT:
-                        a = new_this->peek();
-                        if (a.is_inty())
-                            next_heading -= a.as_int();
-                        break;
-                    case OPCODE_BRANCH_RIGHT:
-                        a = new_this->peek();
-                        if (a.is_inty())
-                            next_heading += a.as_int();
-                        break;
-                    case OPCODE_HEADING_STORE:
-                        a = new_this->peek();
-                        if (a.is_inty())
-                            next_heading = a.as_int();
-                        break;
-                }
-                
-                Coordinate next_location = _new_location;
-                switch (next_heading & 3) {
-                    case 0:
-                        ++next_location.y;
-                        break;
-                    case 1:
-                        ++next_location.x;
-                        break;
-                    case 2:
-                        --next_location.y;
-                        break;
-                    case 3:
-                        --next_location.x;
-                        break;
-                }
-                
-                occupant = {};
-                (void) tx->try_read_entity_id_for_coordinate(next_location, occupant);
+                // Commit: claim the destination (occupancy, mirrored in
+                // the location multimap), then apply this arrival's
+                // effects
                 tx->write_entity_for_entity_id(this->_entity_id, new_this);
-                if (occupant) {
-                    // Reading ourselves at the destination is a U-turn in
-                    // progress: reads see the old world, and we released
-                    // that cell earlier in this same transaction.  The
-                    // wait below is woken by our own committing release,
-                    // and the retry re-enters the now-empty cell -- a
-                    // U-turn costs a one-tick reversing pause.  Self at
-                    // any OTHER cell would be occupancy corruption.
-                    assert((occupant != _entity_id)
-                           || (next_location == _old_location));
-                    // occupied; wait for our destination to clear
-                    tx->wait_on_entity_id_for_coordinate(next_location);
-                    // or wait for the instruction under us to change
-                    tx->wait_on_value_for_coordinate(_new_location);
-                    // waiting can't fail
-                    // clearing our own previous location shouldn't fail
-                    // writing our next state can fail though if somebody is
-                    // messing with us
-                    // if our own state gets written by somebody else, they are
-                    // responsible for scheduling us
-                    // printf("EntityID %lld proposes to WAIT on next_location (or new instructions)\n", _entity_id.data);
-                    tx->on_abort_retry();
-                    //tx->describe();
-                    return;
-                }
-                tx->write_entity_id_for_coordinate(next_location, this->_entity_id);
+                tx->write_entity_id_for_coordinate(plan.next_location, this->_entity_id);
                 {
                     // location mirrors occupancy: join the claimed cell's
                     // set alongside any non-occupying residents
                     WaitSet located;
-                    (void) tx->try_read_located_for_coordinate(next_location, located);
+                    (void) tx->try_read_located_for_coordinate(plan.next_location, located);
                     located.set(this->_entity_id);
-                    tx->write_located_for_coordinate(next_location, located);
+                    tx->write_located_for_coordinate(plan.next_location, located);
                 }
 
+                apply_pending(this, new_this, tx, plan.cell_value);
 
+                // Apply the executed action.  latched is what enters
+                // _on_arrival: usually the action itself, but DROP of
+                // matter latches STORE.  The steering operand was
+                // identified by the planner; consume it here.
+                i64 latched = plan.action;
+                if (plan.steering_pop)
+                    new_this->pop();
 
-                switch (_on_arrival) {
-                    case OPCODE_SKIP:
-                        break;
-                    case OPCODE_LOAD:
-                        new_this->push(new_value);
-                        // matter is taken, not copied
-                        if (new_value.is_matter())
-                            tx->write_value_for_coordinate(_new_location, term_make_empty());
-                        break;
-                    case OPCODE_STORE:
-                        // assert(wants_write_new_tile);
-                        // set_world_coordinate_value(world, _new_location, pop());
-                        tx->write_value_for_coordinate(_new_location, new_this->pop());
-                        break;
-                    case OPCODE_EXCHANGE:
-                        a = new_this->pop();
-                        // TODO: should push(...) itself discard nothings, always?
-                        new_this->push(new_value);
-                        tx->write_value_for_coordinate(_new_location, a);
-                        break;
-                    default:
-                        // To avoid explicit loads everywhere, when we run over
-                        // something that
-                        // - is not an opcode
-                        // - is copyable, aka immaterial, sybmbolic, numeric?
-                        // we pick it up.  Good idea?
-                        if (new_value.is_inty()) {
-                            new_this->push(new_value);
-                        }
-                        break;
-                }
-                
-                switch (next_action) {
+                switch (plan.action) {
                         
                     default:
                         // default: no action
                         break;
                         
                     case OPCODE_HALT:
-                        // we should have early-out before here
+                        // the planner parks HALT; it never proceeds here
                         abort();
-                        
+
                         // all of these opcodes just manipulate the entity
                         // state
-                        
-                    case OPCODE_BRANCH_LEFT:
-                    case OPCODE_BRANCH_RIGHT:
-                    case OPCODE_HEADING_STORE:
-                        if (new_this->peek().is_inty())
-                            new_this->pop();
-                        break;
-                        
+
+                        // (BRANCH_LEFT / BRANCH_RIGHT / HEADING_STORE have
+                        // no case here: their operand is the steering_pop
+                        // consumed above)
+
                     case OPCODE_HEADING_LOAD:
                         new_this->push(Term(_new_heading));
                         break;
@@ -300,7 +406,7 @@ namespace wry {
                         // matter is not destroyed; it is put down in the
                         // next cell as if by STORE (waiting until empty)
                         if (new_this->peek().is_matter())
-                            next_action = OPCODE_STORE;
+                            latched = OPCODE_STORE;
                         else
                             new_this->pop();
                         break;
@@ -598,18 +704,17 @@ namespace wry {
                                                    term_make_opcode(OPCODE_FLIP_FLOP));
                         break;
                                                 
-                } // switch (next_action)
-                
-                new_this->_on_arrival = next_action;
-                new_this->_new_heading = next_heading;
-                new_this->_new_location = next_location;
+                } // switch (plan.action)
+
+                // depart
+                new_this->_on_arrival = latched;
+                new_this->_new_heading = plan.next_heading;
+                new_this->_new_location = plan.next_location;
                 new_this->_old_time = context->_world->_time;
                 new_this->_new_time = context->_world->_time + 64;
                 new_this->_phase = PHASE_TRAVELLING;
                 tx->wait_on_time(new_this->_new_time);
                 tx->on_abort_retry();
-                // printf("EntityID %lld proposes to WAIT on new time\n", _entity_id.data);
-                //tx->describe();
                 return;
             }
                 
