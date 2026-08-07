@@ -199,6 +199,8 @@ integers is a no-op (stack, heading, and world all untouched).
 | BRANCH_LEFT   | ( n -- ) heading -= n quarter-turns                           |
 | FLIP_FLOP     | heading += 1, and the glyph rewrites itself to FLOP_FLIP      |
 | FLOP_FLIP     | heading -= 1, and the glyph rewrites itself to FLIP_FLOP      |
+| VALVE_NORTH_SOUTH | passable only along north-south; flips to VALVE_EAST_WEST when executed |
+| VALVE_EAST_WEST   | passable only along east-west; flips to VALVE_NORTH_SOUTH when executed |
 
 `BRANCH_*` with n = 0 goes straight, so sign-valued data (-1/0/+1 from
 `SIGN` or `COMPARE`) steers left/straight/right directly.  With n in
@@ -211,6 +213,19 @@ opposite direction -- aims the machine at the cell it is still in the
 middle of releasing.  This is legal: the machine pauses one tick while
 its own release commits, then re-enters.  A U-turn costs a one-tick
 reversing pause on top of the usual hops.
+
+The valves are FLIP_FLOP's cousins for mutual exclusion.  A machine
+approaching a valve crossed to its axis of travel parks as if the
+cell were occupied, waking when the valve's value changes.  The gate
+applies to every entry -- even one whose pending memory op will treat
+the valve as data; entering is entering -- but the flip happens only
+on execution, so [SKIP][valve] ghosts through an open valve without
+flipping it, and LOAD can quote one.  Passage through an open valve
+is straight; a valve never steers.  The critical-section idiom: place
+a valve at a corner of a private region.  The entrant passes through,
+flipping the valve against its own entry axis and locking the queue
+behind it; it later exits through the same tile along the other axis,
+flipping it back and admitting the next entrant.
 
 ### 5.2 Memory (prefix opcodes; operand = the next cell entered)
 
@@ -620,9 +635,11 @@ integer fork, sketched in 10.3.
 
 Under consideration:
 
-- **MODULO**: the natural "extract a digit / a field" tool for signal
-  encoding; does not build large values, so the withholding argument
-  does not apply.
+- **MODULO**: parked (2026-08-08), enthusiasm pending.  The
+  it-only-shrinks-numbers argument admits DIVIDE just as well; the
+  natural opcode returns (quotient, remainder); and the presence of
+  quotient argues for its inverse -- which reopens exactly the
+  multiplication question the withholding exists to avoid.
 - **WAIT n** (sleep for a duration): the transaction layer already has
   `on_commit_sleep_for`; exposing it would give programs timing control.
   Today the only temporal primitives are the 64-tick hop and unbounded
@@ -788,25 +805,33 @@ SHIFT_LEFT stay withheld (8.9) until it is.
 
 ### 10.4 Traffic-control opcodes
 
-Both aimed at the deadlock class of 8.11; both are self-modifying
-glyphs in the FLIP_FLOP family.
+Both aimed at the deadlock class of 8.11; both self-modifying glyphs
+in the FLIP_FLOP family.
 
-- **VALVE_NORTH_SOUTH <-> VALVE_EAST_WEST**: passable only along the
-  named axis; a machine approaching along the other axis waits as if
-  the cell were occupied; passage flips it to the other opcode.  This
-  is a critical-section turnstile: place it at a corner of the
-  region.  The entrant passes through, flipping the valve against its
-  own direction of entry and thereby blocking the machines queued
-  behind it; it later exits through the same tile along the other
-  axis, flipping the valve back and admitting the next entrant.
-  Implementation note: this is the first glyph whose *approach* is
-  gated by the destination cell's value rather than only its
-  occupancy -- the sensing seam of 8.9.
-- **DO_NOT_QUEUE_ACROSS_INTERSECTION**: to proceed onto this cell a
-  machine must claim both this cell and the next; the first unlocks as
-  soon as it exits.  The box-junction rule: it stops a queue from
-  backing up across a perpendicular path, where it could transitively
-  prevent its own blockage from clearing.
+- **VALVE_NORTH_SOUTH <-> VALVE_EAST_WEST: LANDED 2026-08-08.**
+  Semantics in 5.1 (axis gate on every entry; flip only on execution;
+  ghost passage under SKIP or a pending memory op).  The first glyph
+  whose approach is gated by the destination cell's value rather than
+  only its occupancy, and the first opcode added through the
+  ArrivalPlan structure (8.12): one gate in plan_arrival with a new
+  PARK_VALVE disposition waiting on the valve's value, one self-modify
+  case in the action switch.  (No atlas art yet.)
+- **DO_NOT_QUEUE_ACROSS_INTERSECTION** (open; the chaining design is
+  unsettled): to proceed onto this cell a machine must claim both this
+  cell and the next; the first unlocks as soon as it exits.  The
+  box-junction rule.  If the second cell is itself DO_NOT_QUEUE, the
+  friendly reading scans forward until it finds either an occupied
+  cell (wait on that) or a non-DO_NOT_QUEUE cell, then attempts to
+  claim the whole run -- an aborted claim simply retries and
+  presumably then discovers an occupied cell to wait on, in the same
+  deliberate ignorance of causes that notify keeps about why it woke.
+  But that makes one opcode cost unbounded work: a large field of
+  DO_NOT_QUEUE becomes a trivial way to break the game -- the same
+  hazard shape as multiplication (10.2, 10.3).  Candidate fixes, none
+  loved: cap the scan at N and queue on the Nth anyway
+  (user-hostile); or forbid writing a DO_NOT_QUEUE adjacent to
+  another one (a whole new placement-restriction mechanism).  Also
+  unresolved: what [SKIP, DO_NOT_QUEUE] should even mean.
 
 ### 10.5 The thought latch
 
@@ -883,11 +908,11 @@ headlessly, and asserting on machine state -- a shakedown of stepping,
 transactions, and collector pinning in the test harness as much as of
 the opcodes themselves.
 
-First increment landed 2026-07-23, densified 2026-07-27 ahead of the
-interpreter refactor: `machine_step_semantics` at the bottom of
-machine.cpp.  Twelve glyph tracks run concurrently in one world, each
-parking its machines on HALT so the terminal state is stable,
-asserted after 800 headless steps (~0.1 s): ALU with the flipped
+First increment landed 2026-07-23, densified ahead of the interpreter
+refactor and growing with each new opcode: `machine_step_semantics`
+at the bottom of machine.cpp.  The glyph tracks run concurrently in
+one world, each parking its machines on HALT so the terminal state is
+stable, asserted after 800 headless steps (~0.1 s): ALU with the flipped
 COMPARE and clamped shift; ROT and the heading register; EQUAL
 steering a branch both ways; matter take/test/place with conservation
 checked on the value plane; the U-turn's one-tick reversing pause;
@@ -897,9 +922,12 @@ logical family on mixed bool/int; two machines queueing through one
 FLIP_FLOP (self-modification asserted, winding reduced mod 4); the
 STORE guard parking on a full cell until a co-located non-occupying
 Sink clears it (the park proven by arrival time; the
-occupancy/location split exercised on the shared cell); and a boolean
+occupancy/location split exercised on the shared cell); a boolean
 ground signal STOREd by one machine and auto-picked as a copy by
-another, which branches on it.  The helpers (test_put,
+another, which branches on it; and the valves (aligned passage flips;
+the crossed-axis turnstile blocks, wakes, and flips back on exit,
+the block proven by arrival time; SKIP ghosting through unflipped) --
+fifteen tracks in all.  The helpers (test_put,
 test_machine_at_rest, test_step_until, test_stack_is,
 test_located_only_at) are the template for future entity tests.  Protocol notes: the harness runs tests
 serially (as of 2026-07-23; run_all previously forked every test

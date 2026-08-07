@@ -104,12 +104,31 @@ namespace wry {
             }
         }
 
+        // Does a valve at the destination bar entry along this heading?
+        // A valve is passable only along its named axis.  The gate
+        // applies to EVERY entry, even one whose pending memory op will
+        // treat the valve as data (entering is entering); the FLIP,
+        // by contrast, happens only when the valve is executed, so a
+        // SKIP or memory op ghosts through an open valve unflipped.
+        bool valve_blocks(Term destination_value, i64 heading) {
+            if (!destination_value.is_opcode())
+                return false;
+            i64 opcode = destination_value.as_opcode();
+            if ((opcode != OPCODE_VALVE_NORTH_SOUTH)
+                && (opcode != OPCODE_VALVE_EAST_WEST))
+                return false;
+            bool valve_is_north_south = (opcode == OPCODE_VALVE_NORTH_SOUTH);
+            bool travelling_north_south = ((heading & 1) == 0);
+            return valve_is_north_south != travelling_north_south;
+        }
+
         struct ArrivalPlan {
             enum Disposition {
                 PROCEED,           // claim next_location, apply effects
                 PARK_HALT,         // sleep until the value under us changes
                 PARK_STORE_GUARD,  // the pending STORE may not act yet
                 PARK_OCCUPIED,     // next_location is occupied
+                PARK_VALVE,        // a valve ahead is crossed to our axis
             };
             Disposition disposition;
             Term cell_value;       // value plane at the machine's cell
@@ -185,6 +204,21 @@ namespace wry {
                     || (pending.is_matter()
                         && !term_is_null(plan.cell_value))) {
                     plan.disposition = ArrivalPlan::PARK_STORE_GUARD;
+                    return plan;
+                }
+            }
+
+            // Valves gate passage by axis.  Checked before occupancy:
+            // an occupant's departure does not open a crossed valve, so
+            // waiting on the valve's VALUE (it flips when an aligned
+            // passage executes it, or an edit replaces it) is the
+            // productive wait.
+            {
+                Term destination_value = {};
+                (void) tx->try_read_value_for_coordinate(plan.next_location,
+                                                         destination_value);
+                if (valve_blocks(destination_value, plan.next_heading)) {
+                    plan.disposition = ArrivalPlan::PARK_VALVE;
                     return plan;
                 }
             }
@@ -350,6 +384,15 @@ namespace wry {
                         // fail if somebody is messing with us, and then
                         // whoever wrote our state is responsible for
                         // scheduling us
+                        tx->on_abort_retry();
+                        return;
+
+                    case ArrivalPlan::PARK_VALVE:
+                        tx->write_entity_for_entity_id(this->_entity_id, new_this);
+                        // wait for the valve ahead to flip open
+                        tx->wait_on_value_for_coordinate(plan.next_location);
+                        // or for the instruction under us to change
+                        tx->wait_on_value_for_coordinate(_new_location);
                         tx->on_abort_retry();
                         return;
 
@@ -703,6 +746,19 @@ namespace wry {
                                                    _new_location,
                                                    term_make_opcode(OPCODE_FLIP_FLOP));
                         break;
+
+                        // valves flip their axis on every executed
+                        // passage; the gate itself lives in plan_arrival
+                    case OPCODE_VALVE_NORTH_SOUTH:
+                        tx->write_value_for_coordinate(
+                                                   _new_location,
+                                                   term_make_opcode(OPCODE_VALVE_EAST_WEST));
+                        break;
+                    case OPCODE_VALVE_EAST_WEST:
+                        tx->write_value_for_coordinate(
+                                                   _new_location,
+                                                   term_make_opcode(OPCODE_VALVE_NORTH_SOUTH));
+                        break;
                                                 
                 } // switch (plan.action)
 
@@ -996,6 +1052,33 @@ namespace wry {
         test_put(w, 111, 5, term_make_opcode(OPCODE_BRANCH_RIGHT));
         test_put(w, 111, 4, term_make_opcode(OPCODE_HALT));
 
+        // Track M (x=115): an aligned machine passes through a valve,
+        // flipping its axis.
+        EntityID mm = test_machine_at_rest(w, 115, 0);
+        test_put(w, 115, 1, term_make_opcode(OPCODE_VALVE_NORTH_SOUTH));
+        test_put(w, 115, 2, term_make_opcode(OPCODE_HALT));
+
+        // Track N (x=117..121): the turnstile.  A, eastbound, parks
+        // against the crossed valve at (120,5).  B, northbound, passes
+        // through it (flipping it east-west), which wakes A; A queues
+        // briefly on B's occupancy, then passes through the now-open
+        // valve, flipping it BACK to north-south on the way out.
+        // Unblocked, A would reach its HALT at t=256; the valve wait
+        // pushes it past 400.
+        EntityID mn_a = test_machine_at_rest(w, 117, 5, HEADING_EAST);
+        EntityID mn_b = test_machine_at_rest(w, 120, 1);
+        test_put(w, 120, 5, term_make_opcode(OPCODE_VALVE_NORTH_SOUTH));
+        test_put(w, 120, 6, term_make_opcode(OPCODE_HALT));
+        test_put(w, 121, 5, term_make_opcode(OPCODE_HALT));
+
+        // Track O (x=130): ghost passage.  A SKIP-latched machine
+        // enters an ALIGNED valve as data: the gate admits it (axis
+        // matches) but nothing executes, so the valve does not flip.
+        EntityID mo = test_machine_at_rest(w, 130, 0);
+        test_put(w, 130, 1, term_make_opcode(OPCODE_SKIP));
+        test_put(w, 130, 2, term_make_opcode(OPCODE_VALVE_NORTH_SOUTH));
+        test_put(w, 130, 3, term_make_opcode(OPCODE_HALT));
+
         Root<World*> world{w};
 
         // Longest track parks after 11 hops = 704 ticks; run past it.
@@ -1177,6 +1260,41 @@ namespace wry {
             Term signal{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{110, 5}, signal);
             assert(signal._data == Term(true)._data);
+        }
+
+        {
+            // Track M: passage flipped the valve's axis
+            const Machine* m = test_machine_for(world, mm);
+            assert((m->_new_location == Coordinate{115, 2}));
+            Term valve{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{115, 1}, valve);
+            assert(valve._data == term_make_opcode(OPCODE_VALVE_EAST_WEST)._data);
+        }
+
+        {
+            // Track N: the turnstile round-trip.  A was genuinely held
+            // (256 unblocked, past 400 held), both machines are through,
+            // and the valve flipped twice back to north-south.
+            const Machine* a2 = test_machine_for(world, mn_a);
+            assert((a2->_new_location == Coordinate{121, 5}));
+            assert(a2->_new_heading == HEADING_EAST);
+            assert(a2->_new_time >= Time{400});
+            const Machine* b2 = test_machine_for(world, mn_b);
+            assert((b2->_new_location == Coordinate{120, 6}));
+            assert(b2->_new_heading == HEADING_NORTH);
+            Term valve{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{120, 5}, valve);
+            assert(valve._data == term_make_opcode(OPCODE_VALVE_NORTH_SOUTH)._data);
+        }
+
+        {
+            // Track O: the ghost passage left the valve unflipped
+            const Machine* m = test_machine_for(world, mo);
+            assert((m->_new_location == Coordinate{130, 3}));
+            assert((test_stack_is(m, {})));
+            Term valve{};
+            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{130, 2}, valve);
+            assert(valve._data == term_make_opcode(OPCODE_VALVE_NORTH_SOUTH)._data);
         }
 
         co_return;
