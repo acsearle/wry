@@ -789,9 +789,49 @@ multipliers are withheld on purpose (8.9).  The language now reads as a
 pleasant, teachable spatial Forth rather than a two-opcode obstacle
 course.
 
-Compared to relatives: Befunge is easier only because it cheats -- its
-`p`/`g` give random-access grid writes from anywhere, which this design
-rightly refuses.  Turmites/Langton ants sit far below: no stack, no
+Compared to relatives (family survey 2026-08-09): the Befunges --
+Befunge-93, Funge-98, and the fungeoid descendants -- share the whole
+chassis: zero-argument glyphs over a stack, position-plus-heading as
+the program counter, no jump, turning as control flow, code and data
+on one plane, self-modification as the road to power, and even the
+same parentage (Forth crossed with a spatial medium -- theirs a text
+page, ours a freight simulation).  The convergence runs deep enough
+that Funge-98 grew our prefix pipeline independently: with random
+access already on the table it still added `'` (quote the next cell
+in the path and hop over it) and `s` (its store mirror) --
+LOAD-as-quote and STORE, rediscovered from the aspatial side.
+
+But the family divides on one question that decides everything else:
+is the grid an address space or is it physics?  Every fungeoid
+answers address space.  Befunge is easier only because it cheats --
+its `p`/`g` give random-access grid writes from anywhere, which this
+design rightly refuses -- and its pointer is a ghost: no extent, no
+exclusion, no cargo, nothing conserved.  Underneath the 2D notation
+sits an ordinary von Neumann machine, and the famous hostility to
+compilers is exactly the aspatial organs at work (`p` rewrites any
+instruction from anywhere, so no static analysis survives).  Here
+the grid is physics and the machine is a body: it occupies, blocks,
+carries, conserves, and pays 64 ticks per cell of distance; the one
+aspatial organ left is the stack, and 8.10 caps its window at three
+precisely so that even working memory spills back into space.  No
+fungeoid conserves anything.  Befunge-93 is also section 7's mirror
+image: its grid is bounded, so completeness must come through
+unbounded stack words if at all; ours comes through the unbounded
+grid despite the 2^59 word cliff.
+
+The family has two wings: move a pointer through static code
+(Befunge, Hexagony, Labyrinth), or move data through static
+operators (Marbelous, AsciiDots, Orca -- and Factorio belts are this
+wing built as a game).  A machine is both at once, a program counter
+that is also a physical token, and the belts and factories of 10.9
+and 10.1 will fill in the pure-operator wing as entity tiers.  On
+concurrency the family's own evolution corroborates this design:
+Funge-98 bolted forking onto a single-pointer core (`t`: an
+interleaved pointer list, zero-tick timing subtleties, no
+arbitration beyond list order), and the descendants that made
+multiplicity primary -- Fission, Marbelous, Orca -- all abandoned
+interleaving for synchronous global ticks, which is where this
+language started.  Turmites/Langton ants sit far below: no stack, no
 ALU, no addressing.  This language occupies a genuinely interesting
 middle: a concurrent, transactional, conservation-respecting Forth
 where the program counter is a truck.
@@ -990,3 +1030,58 @@ This exercises the non-thread-pin path the epoch Service was designed
 around (State::pin_explicit's comment in epoch.hpp); the GUI's
 WorldState::update still uses the thread-pinned fork+sync_wait form of
 the same contract.
+
+### 10.11 The tick-cost invariant: no observable action is free
+
+Recorded 2026-08-09; provenance is the Befunge family's one great
+timing mistake.  Concurrent Funge-98 made spaces and `;` cost zero
+ticks, so how long a straight run takes depends on its whitespace:
+timing became non-local, and multi-pointer programs became
+timing-hostile.  The invariant -- already true here, now named as a
+standing constraint on every future opcode and temporal primitive:
+**no observable action is free**.  Everything a machine does is
+attached to an arrival, arrivals are separated by paid travel (64
+ticks per hop, one tick per U-turn reversal), and cost is charged
+where it is incurred.  Already-decided instances: the delimited SKIP
+of 8.9 stays paid per hop; a WAIT n must charge its n; sensing (8.9)
+is free information only because it rides an arrival already paid
+for.  Players will build clocks out of track lengths, and this
+invariant is what keeps their clocks honest.  It is the floor under
+10.2's governor: 10.2 scales time up with an operation's size; this
+guarantees nothing ducks under time entirely.
+
+### 10.12 Blueprints and the square's symmetries
+
+Recorded 2026-08-09; nothing scheduled.  When blueprints arrive (the
+Factorio lineage says they will), translation is already solved:
+every reference in this language is machine-relative, so code is
+relocatable by construction -- the property Funge-98 had to retrofit
+with its storage offset after Befunge-93's absolute `p`/`g` made
+programs unstampable.  Rotation and reflection are the real design
+item.  A blueprint transform is the dihedral group of the square
+acting on the glyph set:
+
+- **invariant**: NOOP, HALT, SKIP, the memory and stack families,
+  the ALU and predicates, DO_NOT_QUEUE -- no orientation at all;
+- **oriented**: the absolute TURNs transform as the compass
+  directions they name, and the VALVE pair as its axes (a
+  quarter-turn swaps NORTH_SOUTH and EAST_WEST, a half-turn fixes
+  them);
+- **chiral**: TURN_LEFT/TURN_RIGHT, BRANCH_LEFT/BRANCH_RIGHT,
+  FLIP_FLOP/FLOP_FLIP -- rotation-invariant, swapped by every
+  reflection.
+
+The stamper can fix all of that mechanically, because glyphs are
+enumerable.  What it cannot fix is data: a ground literal 1 that
+means "east" (destined for HEADING_STORE) is indistinguishable from
+a 1 that means "one", so absolute-heading data breaks under rotation
+invisibly, and HEADING_LOAD windings already on a stack are pinned
+the same way.  Relative steering is inherently blueprint-safe --
+BRANCH's quarter-turn counts mean the same thing at any orientation,
+so 6.4's return-code convention survives stamping rotated -- which
+suggests the house style for reusable track: prefer relative
+steering; treat absolute turns and heading constants as
+orientation-pinned.  Standing rule for future opcodes: every new
+glyph declares its orbit -- invariant, oriented, or chiral.  An axis
+the stamper can see (the valves) is fine; hidden orientation is the
+failure mode.
