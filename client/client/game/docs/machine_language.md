@@ -201,6 +201,7 @@ integers is a no-op (stack, heading, and world all untouched).
 | FLOP_FLIP     | heading -= 1, and the glyph rewrites itself to FLIP_FLOP      |
 | VALVE_NORTH_SOUTH | passable only along north-south; flips to VALVE_EAST_WEST when executed |
 | VALVE_EAST_WEST   | passable only along east-west; flips to VALVE_NORTH_SOUTH when executed |
+| DO_NOT_QUEUE  | junction marker: entry requires claiming the exit cell too |
 
 `BRANCH_*` with n = 0 goes straight, so sign-valued data (-1/0/+1 from
 `SIGN` or `COMPARE`) steers left/straight/right directly.  With n in
@@ -226,6 +227,27 @@ a valve at a corner of a private region.  The entrant passes through,
 flipping the valve against its own entry axis and locking the queue
 behind it; it later exits through the same tile along the other axis,
 flipping it back and admitting the next entrant.
+
+DO_NOT_QUEUE is the box-junction rule (its ancestors are Factorio's
+chain rail signals, themselves descended from Transport Tycoon's --
+though those live on pathfinded rail graphs, a different setting).
+Entering a junction cell requires the cell beyond it -- the exit,
+straight through, since a junction marker never steers -- to be
+enterable too, and both are claimed in the same transaction, so a
+machine can never end up parked ON the junction; the claims release
+behind it as ordinary old-cell releases, and a clear junction costs
+nothing.  A machine whose exit is blocked parks BEFORE the junction
+holding no claims at all, and cross-traffic uses the junction freely
+-- which is the point.  The gate is passive physics like occupancy
+and the valve gate: a pending memory op does not exempt entry, though
+it does suppress executing the marker (which is a no-op anyway; the
+glyph's whole meaning is the approach rule).  Chained junctions
+extend one cell per arrival -- a rolling three-cell hold -- which
+stays O(1) per arrival but can wedge holding junction cells if an
+exit blocks mid-chain; the supported pattern is lanes of traffic
+separated by a median cell, with DO_NOT_QUEUE at each crossing,
+which cannot deadlock (until turning inside a cycle of trucks is
+introduced, which is accepted).
 
 ### 5.2 Memory (prefix opcodes; operand = the next cell entered)
 
@@ -648,6 +670,24 @@ Under consideration:
 - **Sensing ahead** (a "test the cell ahead" predicate): local, so it
   would not breach the no-random-access principle; would let programs
   avoid blocking rather than only experience it.  See 8.11.
+- **Conditional SKIP** (SKIP_IF, ( b -- ), latching SKIP on truthy):
+  natural -- it is predication (ARM conditional execution; SPARC's
+  annul bit is conditional-skip fused with a branch).  Composes with
+  EQUAL / IS_MATTER to predicate a single cell on a straight track.
+  The tension to weigh first: it grants linear conditionals, slightly
+  eroding the branching-costs-area aesthetic; conditioning exactly one
+  cell probably keeps it tame.
+- **Delimited SKIP** (a skip-until-closing-marker pair): the
+  principled long-skip, from the Befunge lineage -- Befunge-93's `#`
+  bridge IS our SKIP, and Funge-98 grew both `j` (skip-n; clunky,
+  little loved) and the `;` pair (delimited; the good one).  No count
+  parameter (zero-argument principle), extent drawn on the ground as
+  a closing marker, and crucially the cost model stays flat: a
+  skipping machine still travels cell by cell, so the extent is
+  unbounded only in distance paid per-hop, never in work per arrival
+  (contrast the rejected DO_NOT_QUEUE forward scan, 10.4).  Needs one
+  latched "skipping" state.  Not needed yet; SKIP-of-one covers
+  today's crossings.
 - Conveniences that can wait: NIP/TUCK (sugar over SWAP/DROP/OVER),
   DEPTH, MAX/MIN (COMPARE+BRANCH geometry covers them).
 
@@ -816,22 +856,28 @@ in the FLIP_FLOP family.
   ArrivalPlan structure (8.12): one gate in plan_arrival with a new
   PARK_VALVE disposition waiting on the valve's value, one self-modify
   case in the action switch.  (No atlas art yet.)
-- **DO_NOT_QUEUE_ACROSS_INTERSECTION** (open; the chaining design is
-  unsettled): to proceed onto this cell a machine must claim both this
-  cell and the next; the first unlocks as soon as it exits.  The
-  box-junction rule.  If the second cell is itself DO_NOT_QUEUE, the
-  friendly reading scans forward until it finds either an occupied
-  cell (wait on that) or a non-DO_NOT_QUEUE cell, then attempts to
-  claim the whole run -- an aborted claim simply retries and
-  presumably then discovers an occupied cell to wait on, in the same
-  deliberate ignorance of causes that notify keeps about why it woke.
-  But that makes one opcode cost unbounded work: a large field of
-  DO_NOT_QUEUE becomes a trivial way to break the game -- the same
-  hazard shape as multiplication (10.2, 10.3).  Candidate fixes, none
-  loved: cap the scan at N and queue on the Nth anyway
-  (user-hostile); or forbid writing a DO_NOT_QUEUE adjacent to
-  another one (a whole new placement-restriction mechanism).  Also
-  unresolved: what [SKIP, DO_NOT_QUEUE] should even mean.
+- **DO_NOT_QUEUE: the O(1) version LANDED 2026-08-08** (semantics in
+  5.1; provenance: Factorio's chain rail signals, via Transport
+  Tycoon).  Junction entry claims the exit in the same transaction;
+  blocked-exit machines park before the junction holding nothing;
+  chains extend one cell per arrival as a rolling hold.  Two accepted
+  imperfections, both documented rather than defended against: a
+  machine already inside a chain can wedge holding junction cells if
+  an exit blocks mid-chain (the lanes-and-medians pattern never
+  builds this); and a forward claim leaks if an entity rewrites the
+  glyph under a mid-transit machine so that it turns away from a cell
+  it reserved (an edit-under-traffic exotic; the claim is then never
+  released).  Note the pre-claim also retired the occupancy-corruption
+  assert: reading yourself ahead is now legitimate.
+  The rejected O(N) variant, kept for the record: scan forward past
+  consecutive DO_NOT_QUEUE cells to the first occupied or ordinary
+  cell and claim the whole run, retrying aborts in deliberate
+  ignorance of causes (as notify does about wakes).  Unbounded work
+  per arrival: a large DO_NOT_QUEUE field becomes a trivial way to
+  break the game -- the multiplication hazard shape (10.2, 10.3).
+  Unloved fixes: cap at N and queue on the Nth (user-hostile);
+  placement restriction forbidding adjacent junction glyphs (a whole
+  new mechanism).
 
 ### 10.5 The thought latch
 
@@ -924,10 +970,14 @@ STORE guard parking on a full cell until a co-located non-occupying
 Sink clears it (the park proven by arrival time; the
 occupancy/location split exercised on the shared cell); a boolean
 ground signal STOREd by one machine and auto-picked as a copy by
-another, which branches on it; and the valves (aligned passage flips;
+another, which branches on it; the valves (aligned passage flips;
 the crossed-axis turnstile blocks, wakes, and flips back on exit,
-the block proven by arrival time; SKIP ghosting through unflipped) --
-fifteen tracks in all.  The helpers (test_put,
+the block proven by arrival time; SKIP ghosting through unflipped);
+and DO_NOT_QUEUE (a clear junction crossed at full speed with both
+claims released behind; the box-junction scenario, where a
+blocked-exit machine parks clear of the junction and cross-traffic
+flows through -- a track that fails under plain queueing) --
+seventeen tracks in all.  The helpers (test_put,
 test_machine_at_rest, test_step_until, test_stack_is,
 test_located_only_at) are the template for future entity tests.  Protocol notes: the harness runs tests
 serially (as of 2026-07-23; run_all previously forked every test

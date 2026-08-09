@@ -129,6 +129,8 @@ namespace wry {
                 PARK_STORE_GUARD,  // the pending STORE may not act yet
                 PARK_OCCUPIED,     // next_location is occupied
                 PARK_VALVE,        // a valve ahead is crossed to our axis
+                PARK_JUNCTION,     // a DO_NOT_QUEUE ahead whose exit is
+                                   // not currently enterable
             };
             Disposition disposition;
             Term cell_value;       // value plane at the machine's cell
@@ -136,7 +138,19 @@ namespace wry {
             bool steering_pop;     // the action consumed the top of stack
             i64 next_heading;
             Coordinate next_location;
+            bool claim_beyond;     // DO_NOT_QUEUE: also claim `beyond`
+            Coordinate beyond;     // the junction's exit cell
         };
+
+        Coordinate step_from(Coordinate c, i64 heading) {
+            switch (heading & 3) {
+                case 0: ++c.y; break;
+                case 1: ++c.x; break;
+                case 2: --c.y; break;
+                case 3: --c.x; break;
+            }
+            return c;
+        }
 
         // The decide half.  Reads only; no writes, no waits.
         ArrivalPlan plan_arrival(const Machine* self, Transaction* tx) {
@@ -180,13 +194,8 @@ namespace wry {
                 } break;
             }
 
-            plan.next_location = self->_new_location;
-            switch (plan.next_heading & 3) {
-                case 0: ++plan.next_location.y; break;
-                case 1: ++plan.next_location.x; break;
-                case 2: --plan.next_location.y; break;
-                case 3: --plan.next_location.x; break;
-            }
+            plan.next_location = step_from(self->_new_location,
+                                           plan.next_heading);
 
             // Disposition: every way an arrival can park, in one place
 
@@ -208,36 +217,66 @@ namespace wry {
                 }
             }
 
+            Term destination_value = {};
+            (void) tx->try_read_value_for_coordinate(plan.next_location,
+                                                     destination_value);
+
             // Valves gate passage by axis.  Checked before occupancy:
             // an occupant's departure does not open a crossed valve, so
             // waiting on the valve's VALUE (it flips when an aligned
             // passage executes it, or an edit replaces it) is the
             // productive wait.
-            {
-                Term destination_value = {};
-                (void) tx->try_read_value_for_coordinate(plan.next_location,
-                                                         destination_value);
-                if (valve_blocks(destination_value, plan.next_heading)) {
-                    plan.disposition = ArrivalPlan::PARK_VALVE;
-                    return plan;
-                }
+            if (valve_blocks(destination_value, plan.next_heading)) {
+                plan.disposition = ArrivalPlan::PARK_VALVE;
+                return plan;
             }
 
             EntityID occupant = {};
             (void) tx->try_read_entity_id_for_coordinate(plan.next_location,
                                                          occupant);
-            if (occupant) {
-                // Reading ourselves at the destination is a U-turn in
-                // progress: reads see the old world, and we released
-                // that cell earlier in this same transaction.  The
-                // park's wait is woken by our own committing release,
-                // and the retry re-enters the now-empty cell -- a
-                // U-turn costs a one-tick reversing pause.  Self at any
-                // OTHER cell would be occupancy corruption.
-                assert((occupant != self->_entity_id)
-                       || (plan.next_location == self->_old_location));
+            if ((occupant == self->_entity_id)
+                && (plan.next_location != self->_old_location)) {
+                // The cell ahead is already ours: a DO_NOT_QUEUE
+                // pre-claim made on the junction approach.  Fall through
+                // to the junction rule (the pre-claimed cell may itself
+                // be a junction) and re-claim idempotently on commit.
+            } else if (occupant) {
+                // Reading ourselves at the just-released old cell is a
+                // U-turn in progress: reads see the old world, and the
+                // park's wait is woken by our own committing release --
+                // a U-turn costs a one-tick reversing pause.  Any other
+                // occupant is traffic to queue behind.
                 plan.disposition = ArrivalPlan::PARK_OCCUPIED;
                 return plan;
+            }
+
+            // DO_NOT_QUEUE: entering a junction cell requires the cell
+            // beyond it -- the exit, straight through, since a junction
+            // marker never steers -- to be enterable too, and both are
+            // claimed together, so a machine can never end up parked ON
+            // the junction.  If the exit is not enterable we park HERE,
+            // holding nothing, and cross-traffic uses the junction
+            // freely.  A machine already holding the junction (the
+            // pre-claim case above) extends the same rule one cell
+            // onward when the exit is itself a junction; if that scan
+            // would need to keep going, it instead parks holding what
+            // it has -- the accepted O(1) imperfection of chained
+            // junctions (machine_language.md 10.4).
+            if (destination_value.is_opcode()
+                && (destination_value.as_opcode() == OPCODE_DO_NOT_QUEUE)) {
+                plan.beyond = step_from(plan.next_location, plan.next_heading);
+                Term beyond_value = {};
+                (void) tx->try_read_value_for_coordinate(plan.beyond,
+                                                         beyond_value);
+                EntityID beyond_occupant = {};
+                (void) tx->try_read_entity_id_for_coordinate(plan.beyond,
+                                                             beyond_occupant);
+                if (beyond_occupant
+                    || valve_blocks(beyond_value, plan.next_heading)) {
+                    plan.disposition = ArrivalPlan::PARK_JUNCTION;
+                    return plan;
+                }
+                plan.claim_beyond = true;
             }
 
             plan.disposition = ArrivalPlan::PROCEED;
@@ -396,6 +435,17 @@ namespace wry {
                         tx->on_abort_retry();
                         return;
 
+                    case ArrivalPlan::PARK_JUNCTION:
+                        tx->write_entity_for_entity_id(this->_entity_id, new_this);
+                        // wait for the junction's exit to open (occupant
+                        // leaving, or a crossed valve there flipping)
+                        tx->wait_on_entity_id_for_coordinate(plan.beyond);
+                        tx->wait_on_value_for_coordinate(plan.beyond);
+                        // or for the instruction under us to change
+                        tx->wait_on_value_for_coordinate(_new_location);
+                        tx->on_abort_retry();
+                        return;
+
                     case ArrivalPlan::PROCEED:
                         break;
                 }
@@ -412,6 +462,17 @@ namespace wry {
                     (void) tx->try_read_located_for_coordinate(plan.next_location, located);
                     located.set(this->_entity_id);
                     tx->write_located_for_coordinate(plan.next_location, located);
+                }
+                if (plan.claim_beyond) {
+                    // DO_NOT_QUEUE: reserve the junction's exit in the
+                    // same transaction, so we can never park ON the
+                    // junction; the reservation is released by the
+                    // ordinary old-cell release as we pass through
+                    tx->write_entity_id_for_coordinate(plan.beyond, this->_entity_id);
+                    WaitSet located;
+                    (void) tx->try_read_located_for_coordinate(plan.beyond, located);
+                    located.set(this->_entity_id);
+                    tx->write_located_for_coordinate(plan.beyond, located);
                 }
 
                 apply_pending(this, new_this, tx, plan.cell_value);
@@ -1079,6 +1140,27 @@ namespace wry {
         test_put(w, 130, 2, term_make_opcode(OPCODE_VALVE_NORTH_SOUTH));
         test_put(w, 130, 3, term_make_opcode(OPCODE_HALT));
 
+        // Track P (x=140): a clear DO_NOT_QUEUE junction costs nothing:
+        // the machine claims junction and exit together, rolls through
+        // at full speed, and releases both behind it.
+        EntityID mp = test_machine_at_rest(w, 140, 0);
+        test_put(w, 140, 2, term_make_opcode(OPCODE_DO_NOT_QUEUE));
+        test_put(w, 140, 4, term_make_opcode(OPCODE_HALT));
+
+        // Track Q (x=142..147): the box-junction rule.  A, eastbound,
+        // wants through the junction at (145,5), but the exit (146,5)
+        // is held by a parked blocker.  A parks BEFORE the junction,
+        // claiming nothing.  B, northbound, crosses the same junction
+        // freely while A waits.  Under plain queueing A would advance
+        // onto the junction and B would never get through -- B's final
+        // position is the non-vacuous assert.
+        EntityID mq_a = test_machine_at_rest(w, 142, 5, HEADING_EAST);
+        EntityID mq_b = test_machine_at_rest(w, 145, 2);
+        EntityID mq_blocker = test_machine_at_rest(w, 146, 5);
+        test_put(w, 146, 5, term_make_opcode(OPCODE_HALT));   // parks the blocker in place
+        test_put(w, 145, 5, term_make_opcode(OPCODE_DO_NOT_QUEUE));
+        test_put(w, 145, 7, term_make_opcode(OPCODE_HALT));
+
         Root<World*> world{w};
 
         // Longest track parks after 11 hops = 704 ticks; run past it.
@@ -1295,6 +1377,45 @@ namespace wry {
             Term valve{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{130, 2}, valve);
             assert(valve._data == term_make_opcode(OPCODE_VALVE_NORTH_SOUTH)._data);
+        }
+
+        {
+            // Track P: the clear junction cost nothing (parked at the
+            // usual time for a 4-hop track) and both claimed cells were
+            // released behind the machine
+            const Machine* m = test_machine_for(world, mp);
+            assert((m->_new_location == Coordinate{140, 4}));
+            assert(m->_new_time == Time{256});
+            assert((test_located_only_at(world, mp, 140, 4,
+                                         {Coordinate{140, 2}, Coordinate{140, 3}})));
+            EntityID junction_occupant = {};
+            (void) world._ptr->_entity_id_for_coordinate.try_get(Coordinate{140, 2},
+                                                                 junction_occupant);
+            assert(!junction_occupant);
+        }
+
+        {
+            // Track Q: A parked BEFORE the junction, holding nothing (it
+            // never re-departed after t=128, and the junction's
+            // occupancy is clear), while B crossed and parked beyond
+            const Machine* a2 = test_machine_for(world, mq_a);
+            assert((a2->_new_location == Coordinate{144, 5}));
+            assert(a2->_new_heading == HEADING_EAST);
+            assert(a2->_new_time <= Time{200});
+            const Machine* b2 = test_machine_for(world, mq_b);
+            assert((b2->_new_location == Coordinate{145, 7}));
+            assert(b2->_new_heading == HEADING_NORTH);
+            const Machine* blocker2 = test_machine_for(world, mq_blocker);
+            assert((blocker2->_new_location == Coordinate{146, 5}));
+            EntityID junction_occupant = {};
+            (void) world._ptr->_entity_id_for_coordinate.try_get(Coordinate{145, 5},
+                                                                 junction_occupant);
+            assert(!junction_occupant);
+            WaitSet at_junction{};
+            (void) world._ptr->_located_for_coordinate.try_get(Coordinate{145, 5},
+                                                               at_junction);
+            assert(!at_junction.contains(mq_a));
+            assert(!at_junction.contains(mq_b));
         }
 
         co_return;

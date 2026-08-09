@@ -683,6 +683,15 @@
                                 _false_coordinate = coordinate;
                             else if (sv == "cdot")
                                 _cdot_coordinate = coordinate;
+                            // Lowercase opcode-art names: wired into the
+                            // opcode coordinate table like any glyph, but
+                            // routed through this branch so the art is
+                            // NOT overstamped with label text the way the
+                            // uppercase opcode path stamps its cells
+                            else if (sv == "valve_north_south")
+                                _opcode_to_coordinate[OPCODE_VALVE_NORTH_SOUTH] = coordinate;
+                            else if (sv == "valve_east_west")
+                                _opcode_to_coordinate[OPCODE_VALVE_EAST_WEST] = coordinate;
                         }
                         else /* if (p != _name_to_opcode.end()) */ {
                             // printf("p is not equal to end\n");
