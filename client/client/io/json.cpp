@@ -6,6 +6,7 @@
 //  Copyright © 2019 Antony Searle. All rights reserved.
 //
 
+#include <memory>
 #include <sstream>
 
 #include "debug.hpp"
@@ -84,14 +85,15 @@ namespace wry::json {
     Json Json::from(StringView& v) {
         return Json(_json_value::from(v));
     }
-    
+
     Json Json::from(StringView&& v) {
         StringView u{v};
-        _json_value* p = _json_value::from(u);
+        Json j{_json_value::from(u)};
         while (!u.empty() && is_json_whitespace(u.front()))
             u.pop_front();
-        assert(u.empty());
-        return Json(p);
+        if (!u.empty())
+            throw JsonParseError("trailing characters after JSON document");
+        return j;
     }
     
     std::ostream& operator<<(std::ostream& a, Json const& b) {
@@ -101,8 +103,32 @@ namespace wry::json {
     double _number_from(StringView& v) {
         char* q;
         double d = std::strtod(v.chars.begin(), &q);
+        if (q == v.chars.begin())
+            throw JsonParseError("malformed number");
         v.chars._begin = q;
         return d;
+    }
+
+    // Parse-loop helpers.  The recursive-descent parsers below use these
+    // instead of raw front()/assert so that malformed or truncated input
+    // (an expected condition for user-edited files) surfaces as a
+    // JsonParseError instead of an assertion failure / undefined behavior.
+
+    static void _skip_json_whitespace(StringView& v) {
+        while (!v.empty() && is_json_whitespace(v.front()))
+            v.pop_front();
+    }
+
+    static char32_t _peek_json(StringView const& v) {
+        if (v.empty())
+            throw JsonParseError("unexpected end of input");
+        return v.front();
+    }
+
+    static void _expect_json(StringView& v, char32_t ch, const char* what) {
+        if (v.empty() || v.front() != ch)
+            throw JsonParseError(what);
+        v.pop_front();
     }
     
     struct _json_object : _json_value {
@@ -120,30 +146,36 @@ namespace wry::json {
         }
         
         static _json_object* from(StringView& v) {
-            _json_object* p = new _json_object;
-            while (is_json_whitespace(v.front())) v.pop_front();
-            assert(v.front() == '{'); v.pop_front();
-            while (is_json_whitespace(v.front())) v.pop_front();
-            while (v.front() != '}') {
+            // unique_ptr so a JsonParseError thrown mid-parse (bad key,
+            // bad value, truncation) doesn't leak the partial object.
+            auto p = std::make_unique<_json_object>();
+            _skip_json_whitespace(v);
+            _expect_json(v, '{', "expected '{'");
+            _skip_json_whitespace(v);
+            while (_peek_json(v) != '}') {
                 // parse the key string
                 String s;
-                if (!parse_json_string(s)(v.chars)) return nullptr;
-                while (is_json_whitespace(v.front())) v.pop_front();
-                assert(v.front() == ':'); v.pop_front();
-                // p->_table._assert_invariant();
-                assert(!p->_table.contains(s));
+                if (!parse_json_string(s)(v.chars))
+                    throw JsonParseError("expected object key string");
+                _skip_json_whitespace(v);
+                _expect_json(v, ':', "expected ':' after object key");
+                if (p->_table.contains(s))
+                    throw JsonParseError("duplicate object key");
                 auto [i, f] = p->_table.emplace(s, Json(_json_value::from(v)));
                 assert(f);
-                //p->_table._assert_invariant();
-                assert(p->_table.contains(s));
-                while (is_json_whitespace(v.front())) v.pop_front();
-                assert((v.front() == ',') || (v.front() == '}'));
-                if (v.front() == ',') {
-                    v.pop_front(); while (is_json_whitespace(v.front())) v.pop_front();
+                _skip_json_whitespace(v);
+                // Accept a trailing comma before '}' (the previous parser
+                // did, and it is the most common hand-edit slip in a
+                // user-maintained file).
+                if (_peek_json(v) == ',') {
+                    v.pop_front();
+                    _skip_json_whitespace(v);
+                } else if (_peek_json(v) != '}') {
+                    throw JsonParseError("expected ',' or '}' in object");
                 }
             }
             v.pop_front();
-            return p;
+            return p.release();
         }
         
         virtual String debug() const override {
@@ -189,20 +221,23 @@ namespace wry::json {
         }
         
         static _json_array* from(StringView& v) {
-            _json_array* p = new _json_array;
-            while (is_json_whitespace(v.front())) v.pop_front();
-            assert(v.front() == '['); v.pop_front();
-            while (is_json_whitespace(v.front())) v.pop_front();
-            while (v.front() != ']') {
+            auto p = std::make_unique<_json_array>();
+            _skip_json_whitespace(v);
+            _expect_json(v, '[', "expected '['");
+            _skip_json_whitespace(v);
+            while (_peek_json(v) != ']') {
                 p->_array.push_back(Json(_json_value::from(v)));
-                while (is_json_whitespace(v.front())) v.pop_front();
-                assert((v.front() == ',') || (v.front() == ']'));
-                if (v.front() == ',') {
-                    v.pop_front(); while (is_json_whitespace(v.front())) v.pop_front();
+                _skip_json_whitespace(v);
+                // Trailing comma accepted, as for objects.
+                if (_peek_json(v) == ',') {
+                    v.pop_front();
+                    _skip_json_whitespace(v);
+                } else if (_peek_json(v) != ']') {
+                    throw JsonParseError("expected ',' or ']' in array");
                 }
             }
             v.pop_front();
-            return p;
+            return p.release();
         }
         
         virtual String debug() const override {
@@ -243,7 +278,9 @@ namespace wry::json {
         
         static _json_string* from(StringView& v) {
             String s;
-            if (!parse_json_string(s)(v.chars)) return nullptr;   // strips quotes, decodes escapes, advances v
+            // strips quotes, decodes escapes, advances v
+            if (!parse_json_string(s)(v.chars))
+                throw JsonParseError("malformed string");
             return new _json_string(std::move(s));
         }
         
@@ -310,7 +347,7 @@ namespace wry::json {
                 return new _json_bool(false);
             if (match_zstr("true")(v))
                 return new _json_bool(true);
-            return nullptr;
+            throw JsonParseError("expected 'true' or 'false'");
         }
         
         virtual String debug() const override {
@@ -334,7 +371,7 @@ namespace wry::json {
         static _json_null* from(StringView& v) {
             if (match_zstr("null")(v))
                 return new _json_null();
-            return nullptr;
+            throw JsonParseError("expected 'null'");
         }
         
         virtual String debug() const override {
@@ -348,10 +385,9 @@ namespace wry::json {
     };
     
     _json_value* _json_value::from(StringView& v) {
-        while (is_json_whitespace(v.front()))
-            v.pop_front();
-        
-        switch (v.front()) {
+        _skip_json_whitespace(v);
+
+        switch (_peek_json(v)) {
             case '{': // object
                 return _json_object::from(v);
             case '[': // array
@@ -377,11 +413,8 @@ namespace wry::json {
             case 'n': // null
                 return _json_null::from(v);
             default:
-                assert(false);
+                throw JsonParseError("unexpected character at start of value");
         }
-        
-        return nullptr;
-
     }
 
     // Round-trip smoke test for the Json DOM (the Serde path is covered
@@ -403,6 +436,52 @@ namespace wry::json {
         assert(b[0].is_bool() && b[0].as_bool() == true);
         assert(b[1].is_null());
         assert(b[2].is_string() && b[2].as_string() == StringView("x\"y")); // escape decoded
+
+        // Leniency kept from the original parser: trailing commas.
+        Json t = Json::from(StringView("{\"a\": [1, 2,], }"));
+        assert(t.is_object() && t.size() == 1);
+        assert(t[StringView("a")].size() == 2);
+
+        co_return;
+    };
+
+    // Malformed input must surface as JsonParseError -- never an assert or
+    // a crash -- because settings.json is a user-edited file.
+    define_test("json_parse_errors")
+    {
+        auto rejects = [](const char* text) -> bool {
+            try {
+                Json::from(StringView(text));
+            } catch (JsonParseError const&) {
+                return true;
+            }
+            return false;
+        };
+
+        assert(rejects(""));                    // empty document
+        assert(rejects("   "));                 // whitespace only
+        assert(rejects("{"));                   // truncated object
+        assert(rejects("{\"a\""));              // missing ':'
+        assert(rejects("{\"a\":}"));            // missing value
+        assert(rejects("{\"a\":1 \"b\":2}"));   // missing ','
+        assert(rejects("{a:1}"));               // unquoted key
+        assert(rejects("{\"a\":1,\"a\":2}"));   // duplicate key
+        assert(rejects("[1, 2"));               // truncated array
+        assert(rejects("[1 2]"));               // missing ','
+        assert(rejects("\"unterminated"));      // unterminated string
+        assert(rejects("tru"));                 // bad literal
+        assert(rejects("nul"));                 // bad literal
+        assert(rejects("xyz"));                 // junk
+        assert(rejects("{\"a\":1} garbage"));   // trailing junk
+        assert(rejects("- 1"));                 // malformed number
+
+        // And the error is catchable as std::exception with a message.
+        try {
+            Json::from(StringView("{"));
+            assert(false);
+        } catch (std::exception const& e) {
+            assert(e.what() != nullptr);
+        }
 
         co_return;
     };

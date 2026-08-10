@@ -9,6 +9,8 @@
 #ifndef json_hpp
 #define json_hpp
 
+#include <exception>
+
 #include "base36.hpp"
 #include "filesystem.hpp"
 #include "match.hpp"
@@ -537,6 +539,17 @@ namespace wry::json {
 
     struct _json_value;
 
+    // Thrown by Json::from on malformed input.  The message is a static
+    // string naming the first problem encountered; no allocation, so it is
+    // safe to throw from deep inside a failed parse.  Malformed input is an
+    // expected condition for user-edited files (settings.json), so the DOM
+    // parser reports it as an exception rather than an assert.
+    struct JsonParseError : std::exception {
+        const char* _what;
+        explicit JsonParseError(const char* w) : _what(w) {}
+        const char* what() const noexcept override { return _what; }
+    };
+
     struct Json {
 
         _json_value* _ptr;
@@ -549,9 +562,11 @@ namespace wry::json {
         Json& operator=(Json const&);
         Json& operator=(Json&& x) { Json tmp(std::move(x)); std::swap(_ptr, tmp._ptr); return *this; }
 
+        // Parse a JSON document from `v`, advancing it past the value read.
+        // The rvalue overload additionally requires that only whitespace
+        // remain.  Both throw JsonParseError on malformed input.
         static Json from(StringView&);
         static Json from(StringView&&);
-        static Json from_file(FILE*);
 
         size_t size() const;
 
