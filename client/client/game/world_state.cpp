@@ -536,6 +536,32 @@ namespace wry {
                                       _show_wireframe ? "Show" : "Hide");
                         _gui.append_log(buffer);
                         break;
+                    case 'r':
+                    case 'h':
+                    case 'v': {
+                        // Reorient the held opcode, Factorio-style: R
+                        // rotates clockwise, SHIFT-R counterclockwise,
+                        // H mirrors east<->west, V mirrors north<->south.
+                        // The palette shows one glyph per orbit; these
+                        // keys reach the rest.
+                        if (!_holding_value._value.is_opcode())
+                            break;
+                        OPCODE held = (OPCODE)_holding_value._value.as_opcode();
+                        OPCODE reoriented =
+                            (e.key == 'r') ? (e.mods.has(Modifiers::Shift)
+                                              ? opcode_rotated_counterclockwise(held)
+                                              : opcode_rotated_clockwise(held))
+                          : (e.key == 'h') ? opcode_mirrored_horizontal(held)
+                                           : opcode_mirrored_vertical(held);
+                        if (reoriented != held) {
+                            _holding_value = term_make_opcode(reoriented);
+                            _palette_overlay.request_cursor_refresh();
+                        }
+                        std::snprintf(buffer, sizeof(buffer), "Holding %s",
+                                      name_from_OPCODE(reoriented) + 7);
+                        _gui.append_log(buffer);
+                        break;
+                    }
                     default:
                         // Hex-key writes are world edits: not in map mode.
                         if (!_show_map &&

@@ -317,9 +317,12 @@ namespace wry {
 
             // True for exactly one frame after a selection change, so the
             // renderer knows to refresh the NSCursor image.  Renderer
-            // clears it after consuming.
+            // clears it after consuming.  Anything else that changes the
+            // held value (e.g. the reorientation keys) requests a refresh
+            // the same way.
             bool cursor_needs_refresh() const { return _cursor_dirty; }
             void clear_cursor_refresh()      { _cursor_dirty = false; }
+            void request_cursor_refresh()    { _cursor_dirty = true; }
 
         private:
             wry::Palette<wry::Term> _controls;

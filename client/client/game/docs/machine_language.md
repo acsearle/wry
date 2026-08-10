@@ -353,6 +353,41 @@ oversight (see 8.9).  MODULO is under consideration.  BITWISE_SPLIT is
 the bit-conserving decomposition (intersection and symmetric
 difference); together with AND/XOR it is the half-adder.
 
+### 5.7 Reorientation
+
+Opcodes transform under rotation and mirroring (opcode.hpp: one
+master table, columns rotate-clockwise and mirror-horizontal, with
+counterclockwise derived by inversion and mirror-vertical as
+rotate-twice-then-mirror; the dihedral group structure is verified by
+static_assert).  MIRROR HORIZONTAL means east <-> west; MIRROR
+VERTICAL means north <-> south.  In the editor, R rotates the held
+opcode clockwise, SHIFT-R counterclockwise, H and V mirror; the
+palette shows one glyph per orbit (the least enum value) and the keys
+reach the rest.
+
+Four behaviours cover everything: **invariant** (heading-relative or
+heading-free -- almost the whole set, including the memory ops, whose
+operand cell reorients with the machine, and the false friends ROT
+and SHIFT_RIGHT, whose names are spatial but whose semantics are
+not); **direction-like** (the absolute TURNs, a 4-cycle under
+rotation, each mirror fixing its own axis); **axis-like** (the
+VALVEs, a 2-cycle under rotation, mirror-invariant); and
+**handedness-like** (TURN and BRANCH LEFT/RIGHT, FLIP_FLOP/FLOP_FLIP:
+rotation-invariant, swapped by any mirror).
+
+The dishonest identities: HEADING_LOAD and HEADING_STORE (and the
+unimplemented LOCATION pair) map to themselves because nothing else
+is possible, but they are not honestly transformable -- they traffic
+in absolute heading codes as *data*, and integers on the ground and
+on stacks are outside any glyph table's reach.  A reoriented block
+containing them changes meaning: [1][HEADING_STORE] says "go east" in
+every orientation.  Relative-turn data is equivariant and safe --
+BRANCH_RIGHT n mirrors to BRANCH_LEFT n, which is correct -- so the
+taint boundary is precisely absolute-frame data, the same boundary
+three other analyses already drew (no-random-access, 8.3's winding,
+10.7's location design).  Factorio has the identical residue: rotating
+a blueprint does not rewrite combinator constants.
+
 
 ## 6. Idioms
 

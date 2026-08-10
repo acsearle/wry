@@ -749,6 +749,10 @@
 
                 i64 j = 0;
                 for (i64 i = 0; i != _name_to_opcode.size(); ++i) {
+                    // One glyph per reorientation orbit: the R / SHIFT-R /
+                    // H / V keys reach the rest of each cycle.
+                    if (!wry::opcode_is_orbit_representative((wry::OPCODE)i))
+                        continue;
                     if (_opcode_to_coordinate.contains(i)) {
                         controls._payload[j % nn, j / nn] = term_make_opcode((int)i);
                         ++j;
