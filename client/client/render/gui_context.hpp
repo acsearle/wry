@@ -47,6 +47,13 @@ namespace wry {
         gui::LogOverlay log_overlay;
         gui::ConsoleOverlay console_overlay;
 
+        // Settings UI, app-tier so the same overlays serve the main-menu
+        // scene and the in-game menu.  Pushed dynamically onto `overlays`
+        // by open_settings() / the KEY BINDINGS button; popped via
+        // wants_close.
+        gui::SettingsOverlay settings_overlay;
+        gui::KeyBindingsOverlay key_bindings_overlay;
+
         // App-tier overlay stack (host-owned): the floating log + drop-down
         // console, available to every scene.  Scenes dispatch input to it first
         // (the console swallows keystrokes when open) and paint it on top of
@@ -56,8 +63,18 @@ namespace wry {
         GuiContext() {
             console_overlay.set_log(&log_overlay);
             console_overlay.set_keymap(&settings.keymap);
+            settings_overlay.set_context(this);
+            key_bindings_overlay.set_context(this);
             overlays.push(&log_overlay);       // bottom: floating status text
             overlays.push(&console_overlay);   // top: drop-down console
+        }
+
+        // Open the settings UI over whatever scene is showing.  Both the
+        // main-menu scene's SETTINGS button and the in-game menu's route
+        // here.  Idempotent: a second call while open is a no-op.
+        void open_settings() {
+            if (!overlays.contains(&settings_overlay))
+                overlays.push(&settings_overlay);
         }
 
         void append_log(StringView v,

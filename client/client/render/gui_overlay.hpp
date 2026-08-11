@@ -35,6 +35,7 @@
 #include <chrono>
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <limits>
@@ -42,6 +43,7 @@
 #include "contiguous_deque.hpp"
 #include "font.hpp"
 #include "gui_event.hpp"
+#include "gui_keymap.hpp"
 #include "palette.hpp"
 #include "rect.hpp"
 #include "simd.hpp"
@@ -52,9 +54,10 @@
 
 namespace wry {
 
+    struct GuiContext;
+
     namespace gui {
         class Widget;
-        class Keymap;
     }
 
     namespace gui {
@@ -227,6 +230,15 @@ namespace wry {
             void pop()               { _overlays.pop_back(); }
             bool empty() const       { return _overlays.empty(); }
             std::size_t size() const { return _overlays.size(); }
+
+            // Whether `o` is anywhere on the stack; used to make pushes
+            // of persistent overlays (settings) idempotent.
+            bool contains(Overlay const* o) const {
+                for (Overlay const* p : _overlays)
+                    if (p == o)
+                        return true;
+                return false;
+            }
 
             // Top-down walk.  Returns true if any overlay consumed the
             // event, or if a modal overlay blocked it.
@@ -430,6 +442,91 @@ namespace wry {
             void scroll_to_selected();
             void load_selected();
             void delete_selected();
+        };
+
+        // ----------------------------------------------------------------
+        // Settings root overlay: KEY BINDINGS / RESET TO DEFAULTS / BACK.
+        // App-tier: lives on GuiContext::overlays (pushed by
+        // GuiContext::open_settings), so the same UI is reachable from
+        // both the main-menu scene and the in-game menu.  Modal in both
+        // axes; ESC closes.
+
+        class SettingsOverlay : public Overlay {
+        public:
+            SettingsOverlay();
+            ~SettingsOverlay() override;
+
+            bool on_event(Event const&) override;
+            void paint(Painter&) override;
+
+            bool modal_mouse()    const override { return true; }
+            bool modal_keyboard() const override { return true; }
+
+            // The buttons drive settings reset / the key-bindings overlay
+            // through the owning GuiContext; set once in its constructor.
+            void set_context(GuiContext* g) { _gui = g; }
+
+        private:
+            std::unique_ptr<Widget> _root;
+            GuiContext* _gui = nullptr;
+        };
+
+        // ----------------------------------------------------------------
+        // Key-bindings overlay: one row per action showing its display
+        // name, its bound combos, and a CLEAR button.  Clicking the
+        // action arms capture: the next keystroke becomes a binding for
+        // that action, stolen from any action that previously held it;
+        // Escape (or any click) cancels.  Every change saves
+        // settings.json immediately.
+        //
+        // While capture is armed the overlay consumes *every* event.  It
+        // sits on the app-tier stack, which each scene dispatches first,
+        // so the next keystroke genuinely cannot land anywhere else --
+        // no deeper hook into the platform layer is needed.
+        //
+        // Widget-tree rebuilds (row labels change on every binding
+        // change) are deferred to paint() via _rows_dirty: a rebuild
+        // inside a button's own on_click would destroy the button
+        // mid-dispatch.
+
+        class KeyBindingsOverlay : public Overlay {
+        public:
+            KeyBindingsOverlay();
+            ~KeyBindingsOverlay() override;
+
+            bool on_event(Event const&) override;
+            void paint(Painter&) override;
+
+            bool modal_mouse()    const override { return true; }
+            bool modal_keyboard() const override { return true; }
+
+            void set_context(GuiContext* g) { _gui = g; }
+
+            // Mark the rows stale (rebuilt lazily at next paint) and
+            // disarm capture.  Called before the overlay is shown.
+            void refresh();
+
+            // Arm capture for `action`: the next bindable keystroke binds
+            // to it.  Normally driven by clicking the action's row;
+            // exposed so a caller (or a test) can arm it directly.
+            void begin_capture(Action a) { _capturing = a; _rows_dirty = true; }
+            bool is_capturing() const { return _capturing.has_value(); }
+
+        private:
+            std::unique_ptr<Widget> _root;
+            // Non-owning pointer into the tree, for the height cap.
+            class ScrollView* _scroll = nullptr;
+
+            GuiContext* _gui = nullptr;
+
+            // Armed capture target: the next keystroke binds to this
+            // action.  nullopt = browsing.
+            std::optional<Action> _capturing;
+
+            bool _rows_dirty = true;
+
+            void rebuild();
+            void apply_captured_combo(KeyCombo);
         };
 
     } // namespace gui

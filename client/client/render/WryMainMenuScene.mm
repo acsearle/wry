@@ -83,6 +83,12 @@
         // placeholder no-op for now.
         col->add(std::make_unique<Button>("JOIN GAME", [] { /* TODO: multiplayer */ }));
 
+        // SETTINGS: the app-tier settings UI (GuiContext::overlays), the
+        // same overlays the in-game menu opens.
+        col->add(std::make_unique<Button>("SETTINGS", [uself] {
+            uself->_gui->open_settings();
+        }));
+
         // QUIT TO DESKTOP: ask the host to end the run loop (graceful shutdown).
         col->add(std::make_unique<Button>("QUIT TO DESKTOP", [uself] {
             if (uself->_quit) uself->_quit();

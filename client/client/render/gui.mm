@@ -11,10 +11,16 @@
 #include <cmath>
 #include <cstdio>
 
+#include <unistd.h>   // mkdtemp (capture-flow test)
+
+#include "filesystem.hpp"
+#include "gui_context.hpp"
 #include "gui_event.hpp"
 #include "gui_keymap.hpp"
 #include "gui_overlay.hpp"
 #include "gui_widget.hpp"
+#include "settings.hpp"
+#include "test.hpp"
 #include "world_state.hpp"
 #include "save.hpp"
 #include "SpriteAtlas.hpp"
@@ -595,6 +601,29 @@ namespace wry {
         }
 
         // ================================================================
+        // MinWidth
+        // ================================================================
+
+        Size MinWidth::measure(SizeConstraints c, MeasureContext const& ctx) {
+            Size s = _child ? _child->measure(c, ctx) : Size{};
+            _last_measured_size = c.constrain(Size{ std::max(s.w, _min_w),
+                                                    s.h });
+            return _last_measured_size;
+        }
+
+        void MinWidth::arrange(rect<float> r) {
+            if (_child) _child->arrange(r);
+        }
+
+        bool MinWidth::on_event(Event const& e) {
+            return _child && _child->on_event(e);
+        }
+
+        void MinWidth::paint(Painter& p) {
+            if (_child) _child->paint(p);
+        }
+
+        // ================================================================
         // ScrollView
         // ================================================================
 
@@ -753,9 +782,13 @@ namespace wry {
                     _model->save_current();
             }));
 
-            // Placeholder action; real implementation lands when settings
-            // get built out.
-            col->add(std::make_unique<Button>("SETTINGS", [] { /* TODO */ }));
+            // Push the app-tier settings UI over this menu.  It lives on
+            // GuiContext::overlays, which dispatches and paints above this
+            // stack, so it layers correctly over the in-game menu.
+            col->add(std::make_unique<Button>("SETTINGS", [this] {
+                if (_model)
+                    _model->_gui.open_settings();
+            }));
 
             _root = std::move(col);
         }
@@ -982,6 +1015,367 @@ namespace wry {
 
             _root->paint(p);
         }
+
+        // ================================================================
+        // SettingsOverlay
+        // ================================================================
+
+        SettingsOverlay::SettingsOverlay() {
+            auto col = std::make_unique<Column>();
+            col->set_spacing(12.0f);
+
+            col->add(std::make_unique<Label>("Settings"));
+
+            // Key bindings: mark the rows stale and push the overlay
+            // above us on the app-tier stack.
+            col->add(std::make_unique<Button>("KEY BINDINGS", [this] {
+                if (!_gui)
+                    return;
+                _gui->key_bindings_overlay.refresh();
+                if (!_gui->overlays.contains(&_gui->key_bindings_overlay))
+                    _gui->overlays.push(&_gui->key_bindings_overlay);
+            }));
+
+            // Reset every setting to the compiled-in defaults, backing up
+            // the current settings.json first (settings-backup-N.json).
+            col->add(std::make_unique<Button>("RESET TO DEFAULTS", [this] {
+                if (!_gui)
+                    return;
+                std::vector<String> warnings;
+                _gui->settings = reset_settings(_gui->settings_paths,
+                                                &warnings);
+                for (String const& w : warnings)
+                    _gui->append_log(w, std::chrono::seconds(15));
+                if (warnings.empty())
+                    _gui->append_log("Settings reset to defaults "
+                                     "(backup written)");
+            }));
+
+            col->add(std::make_unique<Button>("BACK", [this] {
+                wants_close = true;
+            }));
+
+            _root = std::move(col);
+        }
+
+        SettingsOverlay::~SettingsOverlay() = default;
+
+        bool SettingsOverlay::on_event(Event const& e) {
+            if (e.kind == WryEventKindKeyDown && e.key == key::Escape) {
+                wants_close = true;
+                return true;
+            }
+            return _root ? _root->on_event(e) : false;
+        }
+
+        void SettingsOverlay::paint(Painter& p) {
+            // Dim whatever is behind (scene or in-game menu), same as
+            // MainMenuOverlay.
+            p.fill_rect(rect<float>{0.0f, 0.0f,
+                                    p.viewport_size_px.x,
+                                    p.viewport_size_px.y},
+                        RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.5f));
+            if (!_root) return;
+
+            MeasureContext mctx{ p.font };
+            SizeConstraints c = SizeConstraints::loose(p.viewport_size_px);
+            Size desired = _root->measure(c, mctx);
+            float x = (p.viewport_size_px.x - desired.w) * 0.5f;
+            float y = (p.viewport_size_px.y - desired.h) * 0.5f;
+            _root->arrange(rect<float>{x, y, x + desired.w, y + desired.h});
+            _root->paint(p);
+        }
+
+        // ================================================================
+        // KeyBindingsOverlay
+        // ================================================================
+
+        KeyBindingsOverlay::KeyBindingsOverlay() {
+            // The real tree is built lazily by rebuild() at first paint;
+            // rows depend on the live keymap, which isn't wired yet at
+            // construction time.
+        }
+
+        KeyBindingsOverlay::~KeyBindingsOverlay() = default;
+
+        void KeyBindingsOverlay::refresh() {
+            _capturing.reset();
+            _rows_dirty = true;
+        }
+
+        void KeyBindingsOverlay::rebuild() {
+            // Column min-widths (drawable px): action name | bindings.
+            // The CLEAR button trails at its natural width.
+            constexpr float kActionColumnWidth   = 420.0f;
+            constexpr float kBindingsColumnWidth = 360.0f;
+
+            auto title = std::make_unique<Label>("Key Bindings");
+
+            // The hint doubles as the capture-mode indicator.
+            String hint;
+            if (_capturing) {
+                hint.append("Press a key to bind '");
+                hint.append(display_name_from_action(*_capturing));
+                hint.append("'  --  Escape cancels");
+            } else {
+                hint.append("Click an action, then press its new key.  "
+                            "Escape closes.");
+            }
+
+            auto rows = std::make_unique<Column>();
+            rows->set_spacing(2.0f);
+            for (size_t i = 0; i != action_count; ++i) {
+                Action a = (Action)i;
+
+                // Arm capture for this action.  The tree rebuild (armed
+                // visuals, hint text) is deferred to the next paint.
+                auto action_button = std::make_unique<Button>(
+                    display_name_from_action(a),
+                    [this, a] {
+                        _capturing = a;
+                        _rows_dirty = true;
+                    });
+                action_button->set_selected(_capturing == a);
+
+                String combos_text;
+                std::vector<KeyCombo> combos = _gui
+                    ? _gui->settings.keymap.combos_from_action(a)
+                    : std::vector<KeyCombo>{};
+                for (size_t j = 0; j != combos.size(); ++j) {
+                    if (j) combos_text.append(", ");
+                    combos_text.append(string_from_combo(combos[j]));
+                }
+                if (combos.empty())
+                    combos_text.append("unbound");
+
+                // Remove every binding for this action (and persist).
+                auto clear_button = std::make_unique<Button>(
+                    "CLEAR",
+                    [this, a] {
+                        if (!_gui)
+                            return;
+                        _gui->settings.keymap.clear_action(a);
+                        if (!save_settings(_gui->settings,
+                                           _gui->settings_paths))
+                            _gui->append_log("Could not save settings.json");
+                        _rows_dirty = true;
+                    });
+
+                auto row = std::make_unique<Row>();
+                row->set_spacing(8.0f);
+                row->add(std::make_unique<MinWidth>(
+                    kActionColumnWidth, std::move(action_button)));
+                row->add(std::make_unique<MinWidth>(
+                    kBindingsColumnWidth,
+                    std::make_unique<Label>(combos_text)));
+                row->add(std::move(clear_button));
+                rows->add(std::move(row));
+            }
+
+            auto scroll = std::make_unique<ScrollView>();
+            _scroll = scroll.get();
+            scroll->set_child(std::move(rows));
+
+            auto bar = std::make_unique<Row>();
+            bar->set_spacing(8.0f);
+            bar->add(std::make_unique<Button>("BACK", [this] {
+                wants_close = true;
+            }));
+
+            auto col = std::make_unique<Column>();
+            col->set_spacing(12.0f);
+            col->add(std::move(title));
+            col->add(std::make_unique<Label>(hint));
+            col->add(std::move(scroll));
+            col->add(std::move(bar));
+            _root = std::move(col);
+        }
+
+        void KeyBindingsOverlay::apply_captured_combo(KeyCombo combo) {
+            _rows_dirty = true;
+            if (!_gui || !_capturing)
+                return;
+            Action a = *_capturing;
+            _capturing.reset();
+
+            Keymap& keymap = _gui->settings.keymap;
+            std::optional<Action> previous = keymap.action_from_combo(combo);
+            if (previous && *previous == a)
+                return;   // already bound to this action; nothing to do
+
+            keymap.bind(combo, a);   // steals from `previous`, if any
+            if (!save_settings(_gui->settings, _gui->settings_paths)) {
+                _gui->append_log("Could not save settings.json");
+            } else if (previous) {
+                String message;
+                message.append(string_from_combo(combo));
+                message.append(" moved from '");
+                message.append(display_name_from_action(*previous));
+                message.append("' to '");
+                message.append(display_name_from_action(a));
+                message.append("'");
+                _gui->append_log(message);
+            }
+        }
+
+        bool KeyBindingsOverlay::on_event(Event const& e) {
+            if (_capturing) {
+                // Capture mode: we consume everything.  A keystroke binds
+                // (or, for Escape, cancels); a click cancels; the rest is
+                // swallowed so nothing leaks past an armed capture.
+                if (e.kind == WryEventKindKeyDown) {
+                    if (e.key == key::Escape) {
+                        _capturing.reset();
+                        _rows_dirty = true;
+                        return true;
+                    }
+                    if (e.is_repeat)
+                        return true;
+                    KeyCombo combo = combo_from_event(e);
+                    if (combo_is_bindable(combo))
+                        apply_captured_combo(combo);
+                    // Unbindable (e.g. an unmapped key): stay armed.
+                    return true;
+                }
+                if (e.kind == WryEventKindMouseDown) {
+                    _capturing.reset();
+                    _rows_dirty = true;
+                    return true;
+                }
+                return true;
+            }
+
+            if (e.kind == WryEventKindKeyDown && e.key == key::Escape) {
+                wants_close = true;
+                return true;
+            }
+            return _root ? _root->on_event(e) : false;
+        }
+
+        void KeyBindingsOverlay::paint(Painter& p) {
+            // Deferred tree (re)build: safe here, between dispatches.
+            if (_rows_dirty) {
+                rebuild();
+                _rows_dirty = false;
+            }
+
+            p.fill_rect(rect<float>{0.0f, 0.0f,
+                                    p.viewport_size_px.x,
+                                    p.viewport_size_px.y},
+                        RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.5f));
+            if (!_root) return;
+
+            MeasureContext mctx{ p.font };
+
+            // Cap the row list so long action lists scroll rather than
+            // overflow the viewport ("N + 0.5 rows", the save-list idiom).
+            if (_scroll && p.font) {
+                const int n_visible = 10;
+                const float cell_h = p.font->ascender - p.font->descender;
+                const float row_h = cell_h + 2.0f * Button::kVertPadding;
+                _scroll->set_height_cap((n_visible + 0.5f) * row_h);
+            }
+
+            SizeConstraints c = SizeConstraints::loose(p.viewport_size_px);
+            Size desired = _root->measure(c, mctx);
+            float x = (p.viewport_size_px.x - desired.w) * 0.5f;
+            float y = (p.viewport_size_px.y - desired.h) * 0.5f;
+            _root->arrange(rect<float>{x, y, x + desired.w, y + desired.h});
+            _root->paint(p);
+        }
+
+        // ================================================================
+        // KeyBindingsOverlay capture-flow test.
+        //
+        // The capture mode is the deepest "special" behavior here (it eats
+        // the next keystroke system-wide), so it is worth exercising
+        // headlessly rather than only by hand.  Driven through the real
+        // overlay -> GuiContext -> settings.keymap -> settings.json path,
+        // so it covers arming, binding, stealing, cancel, and persistence.
+
+        define_test("keymap_capture_flow")
+        {
+            char pattern[] = "keybind-test-XXXXXX";
+            char* dir = mkdtemp(pattern);
+            assert(dir);
+
+            wry::GuiContext gc;
+            gc.settings_paths = wry::settings_paths(dir);
+            gc.settings = wry::load_settings(gc.settings_paths, nullptr);
+
+            KeyBindingsOverlay& overlay = gc.key_bindings_overlay;
+            Keymap& keymap = gc.settings.keymap;
+
+            auto key_event = [](uint32_t k, uint16_t mods,
+                                bool repeat = false) {
+                Event e{};
+                e.kind = WryEventKindKeyDown;
+                e.key = k;
+                e.mods.bits = mods;
+                e.is_repeat = repeat;
+                return e;
+            };
+
+            // Arm capture on toggle_points, press F5: it binds, and the
+            // event is consumed and capture disarms.
+            KeyCombo f5 = *combo_from_string(StringView("F5"));
+            overlay.begin_capture(Action::toggle_points);
+            assert(overlay.is_capturing());
+            assert(overlay.on_event(key_event(key::F1 + 4, 0)));   // F5
+            assert(!overlay.is_capturing());
+            assert(keymap.action_from_combo(f5) == Action::toggle_points);
+
+            // Persisted: reload the file and F5 -> toggle_points survives.
+            {
+                String text = string_from_file(gc.settings_paths.settings);
+                Settings reloaded = settings_from_json(text, nullptr);
+                assert(reloaded.keymap.action_from_combo(f5) ==
+                       Action::toggle_points);
+            }
+
+            // Escape cancels without binding.
+            overlay.begin_capture(Action::toggle_points);
+            assert(overlay.on_event(key_event(key::Escape, 0)));
+            assert(!overlay.is_capturing());
+            KeyCombo f6 = *combo_from_string(StringView("F6"));
+            assert(!keymap.action_from_combo(f6));
+
+            // A key auto-repeat while armed is swallowed but does not bind.
+            overlay.begin_capture(Action::toggle_points);
+            assert(overlay.on_event(key_event(key::F1 + 5, 0, /*repeat*/true)));
+            assert(overlay.is_capturing());   // still waiting for a real press
+            assert(!keymap.action_from_combo(f6));
+            overlay.on_event(key_event(key::Escape, 0));
+
+            // Capture steals a combo from another action.  R defaults to
+            // rotate; bind it to flip_vertical via capture.
+            KeyCombo r = *combo_from_string(StringView("R"));
+            assert(keymap.action_from_combo(r) == Action::rotate);
+            overlay.begin_capture(Action::flip_vertical);
+            assert(overlay.on_event(key_event('r', 0)));
+            assert(keymap.action_from_combo(r) == Action::flip_vertical);
+            assert(keymap.combos_from_action(Action::rotate).empty());
+
+            // A mouse click while armed cancels.
+            overlay.begin_capture(Action::rotate);
+            Event click{};
+            click.kind = WryEventKindMouseDown;
+            click.button = MouseButton::Left;
+            assert(overlay.on_event(click));
+            assert(!overlay.is_capturing());
+
+            // Reserved key (Escape is handled as cancel; try a truly
+            // unmapped key): capture stays armed, nothing bound.
+            overlay.begin_capture(Action::rotate);
+            assert(overlay.on_event(key_event(key::Unknown, 0)));
+            assert(overlay.is_capturing());
+            overlay.on_event(key_event(key::Escape, 0));
+
+            std::error_code ec;
+            std::filesystem::remove_all(gc.settings_paths.directory, ec);
+
+            co_return;
+        };
 
 
     } // namespace gui

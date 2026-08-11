@@ -267,6 +267,30 @@ namespace wry::gui {
     };
 
     // ----------------------------------------------------------------
+    // MinWidth: single-child wrapper that widens the child's measured
+    // width to at least `min_w`.  Rows built from naturally-sized
+    // widgets are ragged; wrapping each cell in a MinWidth aligns
+    // unrelated rows into columns (a poor man's table grid).  The child
+    // is arranged into the full widened rect -- children already accept
+    // being stretched beyond their measured size by Column / Row.
+
+    class MinWidth : public Widget {
+    public:
+        MinWidth(float min_w, std::unique_ptr<Widget> child)
+        : _min_w(min_w)
+        , _child(std::move(child)) {}
+
+        Size measure(SizeConstraints, MeasureContext const&) override;
+        void arrange(rect<float>) override;
+        bool on_event(Event const&) override;
+        void paint(Painter&) override;
+
+    private:
+        float _min_w = 0.0f;
+        std::unique_ptr<Widget> _child;
+    };
+
+    // ----------------------------------------------------------------
     // ScrollView: single-child widget that clips and translates its child.
     //
     // Sizing.  measure() picks a width matching the constraints' cross
