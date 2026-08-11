@@ -137,9 +137,14 @@ Load semantics (all tolerant, because the file is user-edited):
   absent, standard practice).
 - unknown action id / unparseable combo / reserved key: skipped with a
   warning; the rest of the file still applies.
-- a combo claimed by two actions: first writer wins, warning for the
-  loser (in-memory bind() steals, but on load first-wins is less
-  surprising for hand-edits, since file order is visible).
+- a combo bound in the file steals itself from wherever it was before
+  (the same rule bind() and the rebind UI use).  An explicit file entry
+  must win over the *default* binding of some other action the file
+  never mentioned -- otherwise a deliberate "bind R to flip-vertical"
+  would be silently overruled by rotate keeping its default R.  If two
+  actions in the file both claim the same combo, the loader applies
+  actions in declaration order (not the DOM's hash order), so the
+  later-declared action keeps it; the displacement is warned either way.
 
 Writes go through temp + rename in the same directory (the save-file
 idiom), so a crash mid-write cannot corrupt settings.json.  The
