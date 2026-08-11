@@ -439,6 +439,76 @@ namespace wry {
         }
     }
 
+    // Perform a bound game action -- the target half of the keymap
+    // dispatch in pump_legacy_event.
+    void WorldState::perform_action(gui::Action action) {
+        using namespace ::wry::gui;
+        char buffer[100];
+        switch (action) {
+
+            case Action::rotate:
+            case Action::reverse_rotate:
+            case Action::flip_horizontal:
+            case Action::flip_vertical: {
+                // Reorient the held opcode, Factorio-style: rotate is
+                // clockwise, reverse-rotate counterclockwise, the flips
+                // mirror east<->west / north<->south.  The palette shows
+                // one glyph per orbit; these actions reach the rest.
+                if (!_holding_value._value.is_opcode())
+                    break;
+                OPCODE held = (OPCODE)_holding_value._value.as_opcode();
+                OPCODE reoriented =
+                      (action == Action::rotate)
+                        ? opcode_rotated_clockwise(held)
+                    : (action == Action::reverse_rotate)
+                        ? opcode_rotated_counterclockwise(held)
+                    : (action == Action::flip_horizontal)
+                        ? opcode_mirrored_horizontal(held)
+                        : opcode_mirrored_vertical(held);
+                if (reoriented != held) {
+                    _holding_value = term_make_opcode(reoriented);
+                    _palette_overlay.request_cursor_refresh();
+                }
+                std::snprintf(buffer, sizeof(buffer), "Holding %s",
+                              name_from_OPCODE(reoriented) + 7);
+                _gui.append_log(buffer);
+                break;
+            }
+
+            case Action::toggle_map:
+                _show_map = !_show_map;
+                break;
+
+            case Action::toggle_console:
+                // The console is app-tier: its overlay dispatches before
+                // the world and consumes its own toggle, so this only
+                // arrives if the console overlay is absent.  Nothing to
+                // do here.
+                break;
+
+            case Action::toggle_jacobians:
+                _show_jacobian = !_show_jacobian;
+                std::snprintf(buffer, sizeof(buffer), "%s Jacobians",
+                              _show_jacobian ? "Show" : "Hide");
+                _gui.append_log(buffer);
+                break;
+
+            case Action::toggle_points:
+                _show_points = !_show_points;
+                std::snprintf(buffer, sizeof(buffer), "%s points",
+                              _show_points ? "Show" : "Hide");
+                _gui.append_log(buffer);
+                break;
+
+            case Action::toggle_wireframe:
+                _show_wireframe = !_show_wireframe;
+                std::snprintf(buffer, sizeof(buffer), "%s wireframe",
+                              _show_wireframe ? "Show" : "Hide");
+                _gui.append_log(buffer);
+                break;
+        }
+    }
+
     // Whatever the overlay stack didn't claim: the world's ground-plane click,
     // scroll-pan, ESC-opens-the-in-game-menu, hex-key writes, and debug toggles.
     void WorldState::pump_legacy_event(gui::Event const& e) {
@@ -510,66 +580,32 @@ namespace wry {
             }
 
             case WryEventKindKeyDown: {
-                char buffer[100];
-                switch (e.key) {
-                    case key::Escape:
-                        _stack.push(&_main_menu_overlay);
-                        break;
-                    case key::Tab:
-                        _show_map = !_show_map;
-                        break;
-                    case 'j':
-                        _show_jacobian = !_show_jacobian;
-                        std::snprintf(buffer, sizeof(buffer), "%s [J]acobians",
-                                      _show_jacobian ? "Show" : "Hide");
-                        _gui.append_log(buffer);
-                        break;
-                    case 'p':
-                        _show_points = !_show_points;
-                        std::snprintf(buffer, sizeof(buffer), "%s [P]oints",
-                                      _show_points ? "Show" : "Hide");
-                        _gui.append_log(buffer);
-                        break;
-                    case 'w':
-                        _show_wireframe = !_show_wireframe;
-                        std::snprintf(buffer, sizeof(buffer), "%s [W]ireframe",
-                                      _show_wireframe ? "Show" : "Hide");
-                        _gui.append_log(buffer);
-                        break;
-                    case 'r':
-                    case 'h':
-                    case 'v': {
-                        // Reorient the held opcode, Factorio-style: R
-                        // rotates clockwise, SHIFT-R counterclockwise,
-                        // H mirrors east<->west, V mirrors north<->south.
-                        // The palette shows one glyph per orbit; these
-                        // keys reach the rest.
-                        if (!_holding_value._value.is_opcode())
-                            break;
-                        OPCODE held = (OPCODE)_holding_value._value.as_opcode();
-                        OPCODE reoriented =
-                            (e.key == 'r') ? (e.mods.has(Modifiers::Shift)
-                                              ? opcode_rotated_counterclockwise(held)
-                                              : opcode_rotated_clockwise(held))
-                          : (e.key == 'h') ? opcode_mirrored_horizontal(held)
-                                           : opcode_mirrored_vertical(held);
-                        if (reoriented != held) {
-                            _holding_value = term_make_opcode(reoriented);
-                            _palette_overlay.request_cursor_refresh();
-                        }
-                        std::snprintf(buffer, sizeof(buffer), "Holding %s",
-                                      name_from_OPCODE(reoriented) + 7);
-                        _gui.append_log(buffer);
-                        break;
-                    }
-                    default:
-                        // Hex-key writes are world edits: not in map mode.
-                        if (!_show_map &&
-                            ((e.key >= '0' && e.key <= '9') ||
-                             (e.key >= 'a' && e.key <= 'f'))) {
-                            _outstanding_keysdown.push_back((char32_t)e.key);
-                        }
-                        break;
+                // Escape is reserved (not bindable): it opens the in-game
+                // menu.
+                if (e.key == key::Escape) {
+                    _stack.push(&_main_menu_overlay);
+                    break;
+                }
+
+                // User-bound actions (settings.json via the live keymap).
+                // Bound combos win over the hex-write fallback below, so
+                // binding e.g. F predictably shadows the hex digit.
+                std::optional<Action> action =
+                    _gui.settings.keymap.action_from_combo(combo_from_event(e));
+                if (action) {
+                    // Toggles don't re-fire while the key is held; cycles
+                    // (rotate) do.  Either way the keystroke is consumed.
+                    if (!e.is_repeat || action_fires_on_repeat(*action))
+                        perform_action(*action);
+                    break;
+                }
+
+                // Unbound keys: hex-key writes are world edits, and not in
+                // map mode.
+                if (!_show_map &&
+                    ((e.key >= '0' && e.key <= '9') ||
+                     (e.key >= 'a' && e.key <= 'f'))) {
+                    _outstanding_keysdown.push_back((char32_t)e.key);
                 }
                 break;
             }

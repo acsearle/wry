@@ -14,6 +14,7 @@
 
 #include "gui_event.hpp"
 #include "gui_overlay.hpp"
+#include "settings.hpp"
 #include "simd.hpp"
 #include "string.hpp"
 
@@ -32,6 +33,14 @@ namespace wry {
         // Drawable-pixel viewport size, set by the active scene on resize.
         float2 viewport_size = {};
 
+        // User settings.  Constructed as the compiled-in defaults so the
+        // keymap is live from the first event; the host replaces them
+        // with load_settings(settings_paths, ...) at startup (after the
+        // cwd is established).  Assignment replaces the contents, not
+        // the address, so pointers wired to members below stay valid.
+        Settings settings = default_settings();
+        SettingsPaths settings_paths = wry::settings_paths();
+
         // Generic overlays, available regardless of scene: the floating log and
         // the drop-down console.  (Scene-specific overlays -- the palette, the
         // in-game menu -- still live on the model.)
@@ -46,6 +55,7 @@ namespace wry {
 
         GuiContext() {
             console_overlay.set_log(&log_overlay);
+            console_overlay.set_keymap(&settings.keymap);
             overlays.push(&log_overlay);       // bottom: floating status text
             overlays.push(&console_overlay);   // top: drop-down console
         }

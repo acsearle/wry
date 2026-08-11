@@ -12,6 +12,7 @@
 #include <cstdio>
 
 #include "gui_event.hpp"
+#include "gui_keymap.hpp"
 #include "gui_overlay.hpp"
 #include "gui_widget.hpp"
 #include "world_state.hpp"
@@ -147,14 +148,31 @@ namespace wry {
         bool ConsoleOverlay::on_event(Event const& e) {
             if (e.kind != WryEventKindKeyDown) return false;
 
+            // The toggle follows the user's toggle-console binding
+            // (backtick by default).  Suppressed on auto-repeat so a held
+            // key doesn't flap the console.
+            bool is_toggle = false;
+            if (_keymap && !e.is_repeat)
+                is_toggle = (_keymap->action_from_combo(combo_from_event(e))
+                             == Action::toggle_console);
+
             if (!_active) {
                 // Inactive: only the activation hotkey is ours.
-                if (e.key == '`') {
+                if (is_toggle) {
                     _active = true;
                     if (_log) _log->append("[~] Show console");
                     return true;
                 }
                 return false;
+            }
+
+            // Active: the toggle closes -- in-game-console convention.
+            // Checked before the editing keys so a printable toggle key
+            // closes rather than typing itself into the input line.
+            if (is_toggle) {
+                _active = false;
+                if (_log) _log->append("[~] Hide console");
+                return true;
             }
 
             // Active: full console keymap.  modal_keyboard() == true so the
@@ -163,13 +181,6 @@ namespace wry {
             switch (e.key) {
                 case key::Enter:
                     _lines.emplace_back();
-                    break;
-                case '`':
-                    // Tilde toggles -- in-game-console convention.  Without
-                    // this it'd just fall through to the text-insert default
-                    // case and end up appended to the input line.
-                    _active = false;
-                    if (_log) _log->append("[~] Hide console");
                     break;
                 case key::Escape:
                     _active = false;

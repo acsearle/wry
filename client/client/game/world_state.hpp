@@ -20,6 +20,7 @@
 #include "entity.hpp"
 #include "gui_context.hpp"
 #include "gui_event.hpp"
+#include "gui_keymap.hpp"
 #include "gui_overlay.hpp"
 #include "hash.hpp"
 #include "machine.hpp"
@@ -190,6 +191,7 @@ namespace wry {
         void handle_events(float2 view_size_pt);
         void submit_local_commands();                 // input -> commands (from update)
         void pump_legacy_event(gui::Event const& e);  // legacy world-input fallback
+        void perform_action(gui::Action);             // a bound action fired
 
         ~WorldState() {
             fprintf(stderr, "%s\n", __PRETTY_FUNCTION__);

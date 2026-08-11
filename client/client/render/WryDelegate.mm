@@ -85,6 +85,18 @@ namespace {
             case kVK_End:               return k::End;
             case kVK_PageUp:            return k::PageUp;
             case kVK_PageDown:          return k::PageDown;
+            case kVK_F1:                return k::F1;
+            case kVK_F2:                return k::F1 + 1;
+            case kVK_F3:                return k::F1 + 2;
+            case kVK_F4:                return k::F1 + 3;
+            case kVK_F5:                return k::F1 + 4;
+            case kVK_F6:                return k::F1 + 5;
+            case kVK_F7:                return k::F1 + 6;
+            case kVK_F8:                return k::F1 + 7;
+            case kVK_F9:                return k::F1 + 8;
+            case kVK_F10:               return k::F1 + 9;
+            case kVK_F11:               return k::F1 + 10;
+            case kVK_F12:               return k::F1 + 11;
             default:
                 break;
         }
@@ -168,6 +180,17 @@ namespace {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     if ((self = [super init])) {
         _gui = std::make_unique<wry::GuiContext>();
+        // Load (or first-run install) settings.json.  The cwd is already
+        // the assets directory (main.mm chdir), so the config/ paths in
+        // settings_paths resolve next to saves/.  Any warnings (unknown
+        // ids, malformed combos, unparseable file) surface in the
+        // floating log once a scene is up.
+        std::vector<wry::String> warnings;
+        _gui->settings = wry::load_settings(_gui->settings_paths, &warnings);
+        for (wry::String const& w : warnings) {
+            NSLog(@"%.*s\n", (int)w.chars.size(), w.chars.data());
+            _gui->append_log(w, std::chrono::seconds(15));
+        }
     }
     return self;
 }

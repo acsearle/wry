@@ -54,6 +54,7 @@ namespace wry {
 
     namespace gui {
         class Widget;
+        class Keymap;
     }
 
     namespace gui {
@@ -255,8 +256,9 @@ namespace wry {
             std::multimap<std::chrono::steady_clock::time_point, String> _logs;
         };
 
-        // Quake-style drop-down console: toggled by `'`'`, captures all
-        // keyboard input while active.
+        // Quake-style drop-down console: toggled by the toggle-console
+        // binding (backtick by default), captures all keyboard input
+        // while active.
         class ConsoleOverlay : public Overlay {
         public:
             ConsoleOverlay();
@@ -278,10 +280,15 @@ namespace wry {
             // etc. into the floating log.
             void set_log(LogOverlay* l) { _log = l; }
 
+            // Wired by GuiContext to the live keymap so the toggle key
+            // follows the user's toggle-console binding.
+            void set_keymap(Keymap const* k) { _keymap = k; }
+
         private:
             ContiguousDeque<String> _lines;
             bool _active = false;
             LogOverlay* _log = nullptr;
+            Keymap const* _keymap = nullptr;
         };
 
         // The opcode-picker grid.  For phase 2 this overlay handles input
