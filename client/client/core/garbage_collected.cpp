@@ -40,19 +40,35 @@ namespace wry::bump {
 namespace wry {
     
     // TODO: Combine with is_pinned?
-    enum class ThreadMode : uint8_t {
-        MUTATOR = 0,
-        COLLECTOR = 1,
+    enum ThreadMode : uint8_t {
+        NONE = 0,
+        MUTATOR = 1,
+        COLLECTOR = 2,
     };
     
     constinit thread_local ThreadMode _this_thread_mode;
-    
+
+    void assert_this_thread_is_mutator_or_collector() {
+        assert((_this_thread_mode == ThreadMode::MUTATOR)
+               || (_this_thread_mode == ThreadMode::COLLECTOR));
+    }
+
     void assert_this_thread_is_mutator() {
         assert(_this_thread_mode == ThreadMode::MUTATOR);
     }
     
     void assert_this_thread_is_collector() {
         assert(_this_thread_mode == ThreadMode::COLLECTOR);
+    }
+
+    void this_thread_set_is_mutator() {
+        assert(_this_thread_mode == NONE);
+        _this_thread_mode = ThreadMode::MUTATOR;
+    }
+
+    void this_thread_set_is_collector() {
+        assert(_this_thread_mode == NONE);
+        _this_thread_mode = ThreadMode::COLLECTOR;
     }
 
 
@@ -213,6 +229,8 @@ namespace wry {
     , _debug_allocation_epoch{epoch::local_state.known.raw}
 #endif
     {
+        // assert_this_thread_is_mutator_or_collector();
+
         // SAFETY: pointer to a partially constructed object escapes.  These
         // pointers are only published to the collector thread after the
         // constructor has completed.
@@ -697,8 +715,7 @@ namespace wry {
         }
 
         void loop_until_canceled() {
-            
-            _this_thread_mode = ThreadMode::COLLECTOR;
+            assert_this_thread_is_collector();
 
             mutator_pin();
             thread_public_register("C0");
@@ -1412,6 +1429,7 @@ namespace wry {
     static Collector collector = {};
 
     void collector_run_on_this_thread() {
+        this_thread_set_is_collector();
         pthread_setname_np("C0");
         collector.loop_until_canceled();
     }

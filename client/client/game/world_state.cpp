@@ -87,6 +87,7 @@ namespace wry {
             world->_term_for_coordinate.set(Coordinate{-2, +2}, term_make_matter(MATTER_SHIPPING_CONTAINER));
             world->_term_for_coordinate.set(Coordinate{-3, +4}, term_make_matter(MATTER_SHIPPING_CONTAINER));
 
+            world->hack_repair_invariant();
             return world;
         }
 
@@ -173,6 +174,7 @@ namespace wry {
                 ++placed;
             }
 
+            world->hack_repair_invariant();
             return world;
         }
 

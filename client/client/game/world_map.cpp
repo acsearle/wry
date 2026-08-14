@@ -119,6 +119,7 @@ namespace wry {
         // A Term over sand, and an occupant over sand: layers plot on top.
         w->_term_for_coordinate.set(Coordinate{5, 0}, term_make_integer_with(7));
         w->_entity_id_for_coordinate.set(Coordinate{6, 1}, EntityID{42});
+        w->hack_repair_invariant();
 
         auto handoff = std::make_shared<WorldMapHandoff>();
         handoff->in_flight.store_relaxed(true);

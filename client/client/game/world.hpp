@@ -50,6 +50,7 @@ namespace wry {
 
 
         Time _time;
+        FrozenSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline> _ready;
 
         // Occupancy vs location (split 2026-07-26):
         //
@@ -79,11 +80,9 @@ namespace wry {
         using Set = PersistentSet<std::pair<Time, EntityID>, DefaultKeyService<std::pair<Time, EntityID>>, ScanDiscipline>;
         Set _waiting_on_time;
 
-        FrozenSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline> _ready;
-
-
         World()
         : _time{0}
+        , _ready{}
         , _entity_id_for_coordinate{}
         , _located_for_coordinate{}
         , _entity_for_entity_id{}
@@ -94,6 +93,7 @@ namespace wry {
         }
 
         World(Time time,
+              FrozenSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline> ready,
               WaitableMap<Coordinate, EntityID> entity_id_for_coordinate,
               WaitableMap<Coordinate, WaitSet> located_for_coordinate,
               WaitableMap<EntityID, const Entity*> entity_for_entity_id,
@@ -101,16 +101,52 @@ namespace wry {
               WaitableMap<Coordinate, Terrain> terrain_for_coordinate,
               Set waiting_on_time)
         : _time(time)
+        , _ready(ready)
         , _entity_id_for_coordinate(entity_id_for_coordinate)
         , _located_for_coordinate(located_for_coordinate)
         , _entity_for_entity_id(entity_for_entity_id)
         , _term_for_coordinate(value_for_coordinate)
         , _terrain_for_coordinate(terrain_for_coordinate)
         , _waiting_on_time(waiting_on_time)
-        {}
+        {
+        }
 
         virtual ~World() {
             // printf("~World at %p\n", this);
+        }
+
+        void hack_repair_invariant() {
+            std::pair<Time, wry::EntityID> victim;
+            if (_waiting_on_time.try_front(victim)) {
+                assert(victim.first >= _time);
+                if (victim.first == _time) {
+
+                    // TODO: Require the arguments to already be partitioned
+
+                    // HACK: We've been given a waiting_on_time that includes
+                    // elements that should be in _ready.
+
+                    Set waiting_on_now;
+                    std::tie(waiting_on_now, _waiting_on_time) = partition_first(_waiting_on_time, _time);
+
+                    // HACK: If the world is in a bad state from being manually
+                    // constructed, the ready set should be empty
+                    assert(_ready.is_empty());
+
+                    ConcurrentSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline> mut_ready;
+
+                    // Copy the EntityIDs waiting on now to the _ready skiplist
+                    waiting_on_now.for_each([this, &mut_ready] (std::pair<Time, EntityID> x) {
+                        assert(x.first == _time);
+                        (void) mut_ready.try_emplace(x.second);
+                    });
+
+                    _ready = FrozenSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline>(std::move(mut_ready));
+
+                    // HACK: _ready is now populated, _waiting_on_time is now pruned
+
+                }
+            }
         }
 
         virtual void _garbage_collected_scan() const override;

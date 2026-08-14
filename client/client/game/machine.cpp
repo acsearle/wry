@@ -1161,6 +1161,7 @@ namespace wry {
         test_put(w, 145, 5, term_make_opcode(OPCODE_DO_NOT_QUEUE));
         test_put(w, 145, 7, term_make_opcode(OPCODE_HALT));
 
+        w->hack_repair_invariant();
         Root<World*> world{w};
 
         // Longest track parks after 11 hops = 704 ticks; run past it.

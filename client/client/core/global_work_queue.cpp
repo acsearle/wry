@@ -96,6 +96,7 @@ namespace wry {
         
     void global_work_queue_service() {
         {
+            this_thread_set_is_mutator();
             constinit static Atomic<int> thread_identifier{};
             size_t size = 256;
             char str[256];

@@ -12,13 +12,13 @@ namespace wry {
     
     void World::_garbage_collected_scan() const {
         // printf("%s\n", __PRETTY_FUNCTION__);
+        garbage_collected_scan(_ready);
         garbage_collected_scan(_entity_id_for_coordinate);
         garbage_collected_scan(_located_for_coordinate);
         garbage_collected_scan(_entity_for_entity_id);
         garbage_collected_scan(_term_for_coordinate);
         garbage_collected_scan(_terrain_for_coordinate);
         garbage_collected_scan(_waiting_on_time);
-        garbage_collected_scan(_ready);
 
     } // World::_garbage_collected_scan
 
@@ -35,45 +35,62 @@ namespace wry {
      */
 
     Coroutine::Future<Root<World*>> World::step() const {
-        
-        TransactionContext context{._world = this};
-        
-        Time new_time = _time + 1;
-        
-        
-        // Debug
-//        printf("World step %lld\n", _time);
-//        _waiting_on_time.for_each([](auto const& p){
-//            printf("EntityID %lld is waiting for time %lld\n", p.second.data, p.first);
-//        });
-        
-        // Take the set of EntityIDs that are ready to run
+#ifndef NDEBUG
+        {
+            std::pair<Time, wry::EntityID> x;
+            if (_waiting_on_time.try_front(x)) {
+                assert(x.first > _time);
+            }
+        }
+#endif // NDEBUG
 
         using Set = PersistentSet<std::pair<Time, EntityID>, DefaultKeyService<std::pair<Time, EntityID>>, ScanDiscipline>;
-        // Set ready ;
-        Set waiting_on_next_tick;
-        Set new_waiting_on_time;
-        std::tie(waiting_on_next_tick, new_waiting_on_time) = partition_first(_waiting_on_time, _time + 1);
+
+        TransactionContext context{._world = this};
+        
+        Time next_time = _time + 1;
+
+        // printf("World step %lld\n", _time);
+        // _waiting_on_time.for_each([](auto const& p){
+        //     printf("EntityID %lld is waiting for time %lld\n", p.second.data, p.first);
+        //  });
+
+        // Immutable:
+        // this->_ready contains all EntityIDs to notify at this->_time
+        // this->_waiting_on_time contains all EntityIDs to notify after this->_time
+
+        auto [waiting_on_next_time, next_waiting_on_time] = partition_first(_waiting_on_time, next_time);
         ConcurrentSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline> next_ready;
 
-        // In parallel, notify each Entity.  Entities will typically examine
-        // the World and may propose a Transaction to change it.
+        // Mutable:
+        // waiting_on_next_time contains all EntityIDs to notify at next_time
+        // next_waiting_on_time contains all EntityIDs to notify after next time
+        // next_ready _will_ contain all EntityIDs to notify at next_time
+
+        // TODO: We don't need to create waiting_on_next_time, we just need a
+        // masked for_each on _waiting_on_time
 
         {
-            auto action_for_ready = [this, &context](EntityID k) {
+            Coroutine::Nursery nursery;
+
+            // For each EntityID ready now, look up the Entity and notify it.
+            // On notification, entities will typically examine the World and
+            // may propose a Transaction to change it.
+            co_await nursery.fork(_ready
+                                  .coroutine_parallel_for_each([this, &context] (EntityID k) {
                 const Entity* a = nullptr;
                 (void) _entity_for_entity_id.try_get(k, a);
                 assert(a);
                 a->notify(&context);
-            };
-            auto action_for_copy = [this, &next_ready](std::pair<Time, EntityID> kv) {
-                assert(kv.first == _time + 1);
-                next_ready.try_emplace(kv.second);
-            };
+            }));
 
-            Coroutine::Nursery nursery;
-            co_await nursery.fork(_ready.coroutine_parallel_for_each(action_for_ready));
-            co_await nursery.fork(waiting_on_next_tick.coroutine_parallel_for_each(action_for_copy));
+            // For each EntityID ready next_time, copy it into next_ready
+            co_await nursery.fork(waiting_on_next_time
+                                  .coroutine_parallel_for_each([next_time, &next_ready](std::pair<Time, EntityID> kv) {
+                assert(kv.first == next_time);
+                next_ready.try_emplace(kv.second);
+            }));
+
             co_await nursery.join();
         }
 
@@ -82,8 +99,7 @@ namespace wry {
                     
         // Build the new map from the old map by resolving transactions and
         // implementing the resulting mutations
-        
-       
+
         WaitableMap<Coordinate, Term> new_value_for_coordinate;
         WaitableMap<Coordinate, EntityID> new_entity_id_for_coordinate;
         WaitableMap<Coordinate, WaitSet> new_located_for_coordinate;
@@ -310,21 +326,33 @@ namespace wry {
         };
         
         auto action_for_waiting_on_time
-        = [new_waiting_on_time, this]
+        = [next_time, &next_ready]
         (const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
         -> Coroutine::Future<ParallelRebuildAction<Set>> {
-            // TODO: We need to special-case waits for new_time
-            assert(kv.first > _time);
             ParallelRebuildAction<Set> result{};
-            result.tag = ParallelRebuildAction<Set>::MERGE_VALUE;
-            // new_waiting_on_time.try_get(kv.first, result.value);
-            const Transaction::Node* head = kv.second.load_relaxed();
-            for (; head; head = head->_next) {
-                using std::get;
-                EntityID entity_id = get<EntityID>(head->_desired);
-                // State and Condition are bit-compatible
-                if (head->resolve() & head->_operation)
-                    result.value.set({kv.first, entity_id});
+            if (kv.first == next_time) {
+                result.tag = ParallelRebuildAction<Set>::NONE;
+                const Transaction::Node* head = kv.second.load_relaxed();
+                for (; head; head = head->_next) {
+                    using std::get;
+                    EntityID entity_id = get<EntityID>(head->_desired);
+                    // State and Condition are bit-compatible
+                    if (head->resolve() & head->_operation) {
+                        next_ready.try_emplace(entity_id);
+                    }
+                }
+            } else {
+                assert(kv.first > next_time);
+                result.tag = ParallelRebuildAction<Set>::MERGE_VALUE;
+                // new_waiting_on_time.try_get(kv.first, result.value);
+                const Transaction::Node* head = kv.second.load_relaxed();
+                for (; head; head = head->_next) {
+                    using std::get;
+                    EntityID entity_id = get<EntityID>(head->_desired);
+                    // State and Condition are bit-compatible
+                    if (head->resolve() & head->_operation)
+                        result.value.set({kv.first, entity_id});
+                }
             }
             co_return result;
         };
@@ -351,40 +379,27 @@ namespace wry {
                                                          context._verb_entity_for_entity_id,
                                                          action_for_entity_for_entity_id));
         
-        co_await nursery.fork(new_waiting_on_time,
-                              coroutine_parallel_rebuild(new_waiting_on_time,
+        co_await nursery.fork(next_waiting_on_time,
+                              coroutine_parallel_rebuild(next_waiting_on_time,
                                                          context._wait_on_time,
                                                          action_for_waiting_on_time));
 
         co_await nursery.join();
-        
-        // HACK: We have two separate representations of work for next_time,
-        // we need to merge them and expose them to the next cycle.  This hack
-        // is serial and wasteful; we should direct write all these things into
-        // a concurrent-map-ified next_ready and hold it over to the next step
-        {
-            // PersistentSet<EntityID> v{};
-            // (void) new_waiting_on_time.try_get(new_time, v);
-            for (auto key : next_ready) {
-                // v.set(key);
-                new_waiting_on_time.set({new_time, key});
-            }
-            // new_waiting_on_time.set(new_time, v);
-        }
-        
-        
 
         // -- completion barrier --
+
         // Terrain has no transaction channel yet; the persistent map is
         // carried over unchanged (an O(1) structural share, not a copy).
+
         co_return new World{
-            new_time,
+            next_time,
+            FrozenSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline>(std::move(next_ready)),
             new_entity_id_for_coordinate,
             new_located_for_coordinate,
             new_entity_for_entity_id,
             new_value_for_coordinate,
             _terrain_for_coordinate,
-            new_waiting_on_time
+            next_waiting_on_time
         };
         
     } // World::step

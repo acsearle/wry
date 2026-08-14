@@ -240,6 +240,7 @@ namespace wry {
         L._cursor = buf.data();
         L._end    = buf.data() + buf.size();
         World* w = L.load_world();
+        if (w) w->hack_repair_invariant();
         // Version-rejected (or otherwise unreadable) file: empty world, the
         // same fallback as an absent file.
         return w ? w : new World;
@@ -306,6 +307,7 @@ namespace wry {
         World* w = new World;
         w->_time = Time{1234};
         w->_term_for_coordinate.set(Coordinate{3, -7}, term_make_integer_with(99));
+        w->hack_repair_invariant();
 
         // save_game is synchronous, so its file is complete on return; find it
         // by exact bytes (the sentinel content is unique amid concurrent saves).
@@ -343,6 +345,7 @@ namespace wry {
         World* w = new World;
         w->_time = Time{0x5A5E5A5E};
         w->_term_for_coordinate.set(Coordinate{1, 1}, term_make_integer_with(5));
+        w->hack_repair_invariant();
 
         std::vector<uint8_t> ref = serialize_world(w);
 

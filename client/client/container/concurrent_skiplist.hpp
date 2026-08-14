@@ -246,8 +246,14 @@ namespace wry {
             std::pair<basic_iterator<Key, Compare, Discipline, LoadAcquire>, bool>
             try_emplace(Keylike&& keylike, Args&&... args);
 
+            // Precondition: frozen
             template<typename Action> [[nodiscard]] Coroutine::Task
             coroutine_parallel_for_each(Action&& action) const;
+
+            // Precondition: frozen
+            [[nodiscard]] bool is_empty() const {
+                return !_next[0].load_relaxed();
+            }
 
         };
 
@@ -741,6 +747,10 @@ namespace wry {
         template<typename Action> [[nodiscard]] Coroutine::Task
         coroutine_parallel_for_each(Action&& action) const {
             return _head->coroutine_parallel_for_each(FORWARD(action));
+        }
+
+        [[nodiscard]] bool is_empty() const {
+            return _head->is_empty();
         }
 
     };

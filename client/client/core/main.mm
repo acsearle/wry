@@ -58,6 +58,7 @@ int main(int argc, const char** argv) {
         printf("    hex     : %016" PRIX64  "\n", std::uniform_int_distribution<uint64_t>(0)(rd));
     }
 
+    wry::this_thread_set_is_mutator();
     std::thread collector_thread(&wry::collector_run_on_this_thread);
     std::vector<std::thread> workers;
     for (int i = 0; i != 4; ++i) {

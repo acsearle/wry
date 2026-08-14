@@ -237,6 +237,10 @@ namespace wry {
     // Root must never be called on destruction
     
     void assert_this_thread_is_mutator();
+    void assert_this_thread_is_collector();
+
+    void this_thread_set_is_mutator();
+    void this_thread_set_is_collector();
 
     template<typename T>
     struct Root<T*> {
@@ -538,10 +542,7 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
     void garbage_collected_scan(Root<T*> const& x) {
         garbage_collected_scan(x._ptr);
     }
-    
-    
-    void assert_this_thread_is_collector();
-    
+
     // AtomicScanSlot<T> — atomic strong edge to a GC object T.
     //
     // Implements a Yuasa-style snapshot-at-the-beginning (deletion) write

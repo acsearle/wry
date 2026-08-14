@@ -753,7 +753,11 @@ namespace wry {
             w->_entity_id_for_coordinate.ki.set(Coordinate{-3, 4}, ws);
         }
         w->_term_for_coordinate.set(Coordinate{1, -2}, term_make_integer_with(7));
-        w->_waiting_on_time.set({Time{5}, EntityID{101}});
+        // Strictly future relative to _time == 77: the world invariant
+        // (nothing waiting on the past or present outside _ready) now
+        // holds at construction, so hack_repair_invariant is a no-op.
+        w->_waiting_on_time.set({Time{78}, EntityID{101}});
+        w->hack_repair_invariant();
 
         std::vector<uint8_t> buffer = test_save_to_buffer(w);
         World* w2 = test_load_from_buffer(buffer);
@@ -784,7 +788,7 @@ namespace wry {
         bool has = w2->_term_for_coordinate.try_get(Coordinate{1, -2}, t);
         assert(has);
         assert(t._data == term_make_integer_with(7)._data);
-        assert(w2->_waiting_on_time.contains({Time{5}, EntityID{101}}));
+        assert(w2->_waiting_on_time.contains({Time{78}, EntityID{101}}));
 
         co_return;
     };
@@ -813,6 +817,7 @@ namespace wry {
                                  (const Entity*)source, (const Entity*)sink })
             w->_entity_for_entity_id.set(e->_entity_id, e);
 
+        w->hack_repair_invariant();
         std::vector<uint8_t> buffer = test_save_to_buffer(w);
         World* w2 = test_load_from_buffer(buffer);
         assert(w2);
@@ -938,8 +943,13 @@ namespace wry {
         { WaitSet ws; ws.set(machine->_entity_id);
           w->_entity_for_entity_id.ki.set(source->_entity_id, ws); }
 
-        w->_waiting_on_time.set({Time{1}, player->_entity_id});
-        w->_waiting_on_time.set({Time{2}, machine->_entity_id});
+        // Strictly future relative to _time == 42: the world invariant
+        // (nothing waiting on the past or present outside _ready) now
+        // holds at construction, so hack_repair_invariant is a no-op and
+        // the save -> load -> save byte-equality backstop is unaffected.
+        w->_waiting_on_time.set({Time{43}, player->_entity_id});
+        w->_waiting_on_time.set({Time{44}, machine->_entity_id});
+        w->hack_repair_invariant();
 
         std::vector<uint8_t> b1 = test_save_to_buffer(w);
         World* w2 = test_load_from_buffer(b1);
@@ -978,7 +988,7 @@ namespace wry {
         assert(m2->_new_time == Time{41});
         assert(PersistentStack<Term>::size(m2->_stack) == 3);
 
-        assert(w2->_waiting_on_time.contains({Time{2}, machine->_entity_id}));
+        assert(w2->_waiting_on_time.contains({Time{44}, machine->_entity_id}));
 
         WaitSet ws;
         assert(w2->_entity_id_for_coordinate.ki.try_get(Coordinate{0, 0}, ws));

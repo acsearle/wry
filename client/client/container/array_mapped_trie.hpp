@@ -49,6 +49,8 @@ namespace wry {
         static constexpr Word INDEX_MASK = ~PREFIX_MASK;
         static constexpr int RADIX_LOG2 = SYMBOL_WIDTH; // bits consumed per level
 
+        using value_type = std::pair<Word, T>;
+
         static_assert(BITMAP_WIDTH >= ((size_t)1 << SYMBOL_WIDTH));
 
         static void assert_valid_shift(int shift) {
@@ -113,6 +115,21 @@ namespace wry {
 
         bool prefix_includes_key(Word key) const {
             return _prefix == (key & get_prefix_mask());
+        }
+
+        int get_index_for_front() const {
+            assert(_bitmap);
+            return bit::ctz(_bitmap);
+        }
+
+        int get_index_for_back() const {
+            assert(_bitmap);
+            return 63 - bit::clz(_bitmap);
+        }
+
+        int get_compressed_index_for_back() const {
+            assert(_bitmap);
+            return bit::popcount(_bitmap) - 1;
         }
 
         int get_index_for_key(Word key) const {
@@ -269,6 +286,35 @@ namespace wry {
                 return true; // bitmap is authoritative for leaves
             }
             return _children[compressed_index]->try_get(key, victim);
+        }
+
+        [[nodiscard]] std::conditional_t<_is_set, Word, std::pair<Word, T>>
+        front() const {
+            if (has_children()) {
+                return _children[0]->front();
+            } else {
+                Word key = _prefix | get_index_for_front();
+                if constexpr (_is_set) {
+                    return key;
+                } else {
+                    return { key, _values[0] };
+                }
+            }
+        }
+
+        [[nodiscard]] std::conditional_t<_is_set, Word, std::pair<Word, T>>
+        back() const {
+            int j = get_compressed_index_for_back();
+            if (has_children()) {
+                return _children[j]->back();
+            } else {
+                Word key = _prefix | get_index_for_back();
+                if constexpr (_is_set) {
+                    return key;
+                } else {
+                    return { key, _values[j] };
+                }
+            }
         }
 
         [[nodiscard]] bool contains_any(Word key, Word mask) const {

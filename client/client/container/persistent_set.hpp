@@ -35,11 +35,23 @@ namespace wry {
         using N = ArrayMappedTrie<U, T, typename Discipline::InnerDiscipline>;
         Discipline::template Slot<N const*> _inner = nullptr;
 
-        bool contains(Key key) const {
+        [[nodiscard]] bool contains(Key key) const {
             U j = H{}.encode(key);
             return _inner && _inner->contains(j);
         }
-        
+
+        [[nodiscard]] bool try_front(Key& victim) const  {
+            if (_inner)
+                victim = H{}.decode(_inner->front());
+            return _inner;
+        }
+
+        [[nodiscard]] bool try_back(Key& victim) const {
+            if (_inner)
+                victim = H{}.decode(_inner->back());
+            return _inner;
+        }
+
         [[nodiscard]] PersistentSet clone_and_set(Key key) const {
             U j = H{}.encode(key);
             T value = {};
