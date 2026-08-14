@@ -79,6 +79,8 @@ namespace wry {
         using Set = PersistentSet<std::pair<Time, EntityID>, DefaultKeyService<std::pair<Time, EntityID>>, ScanDiscipline>;
         Set _waiting_on_time;
 
+        FrozenSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline> _ready;
+
 
         World()
         : _time{0}

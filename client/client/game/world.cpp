@@ -18,6 +18,7 @@ namespace wry {
         garbage_collected_scan(_term_for_coordinate);
         garbage_collected_scan(_terrain_for_coordinate);
         garbage_collected_scan(_waiting_on_time);
+        garbage_collected_scan(_ready);
 
     } // World::_garbage_collected_scan
 
@@ -49,22 +50,33 @@ namespace wry {
         // Take the set of EntityIDs that are ready to run
 
         using Set = PersistentSet<std::pair<Time, EntityID>, DefaultKeyService<std::pair<Time, EntityID>>, ScanDiscipline>;
-        Set ready ;
+        // Set ready ;
+        Set waiting_on_next_tick;
         Set new_waiting_on_time;
-        std::tie(ready, new_waiting_on_time) = partition_first(_waiting_on_time, _time);
-        ConcurrentSkiplistSet<EntityID, DefaultKeyService<EntityID>, EpochDiscipline> next_ready;
+        std::tie(waiting_on_next_tick, new_waiting_on_time) = partition_first(_waiting_on_time, _time + 1);
+        ConcurrentSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline> next_ready;
 
         // In parallel, notify each Entity.  Entities will typically examine
         // the World and may propose a Transaction to change it.
 
-        auto action_for_ready = [this, &context](std::pair<Time, EntityID> kv) {
-            const Entity* a = nullptr;
-            (void) _entity_for_entity_id.try_get(kv.second, a);
-            assert(a);
-            a->notify(&context);
-        };
-        co_await ready.coroutine_parallel_for_each(action_for_ready);
-        
+        {
+            auto action_for_ready = [this, &context](EntityID k) {
+                const Entity* a = nullptr;
+                (void) _entity_for_entity_id.try_get(k, a);
+                assert(a);
+                a->notify(&context);
+            };
+            auto action_for_copy = [this, &next_ready](std::pair<Time, EntityID> kv) {
+                assert(kv.first == _time + 1);
+                next_ready.try_emplace(kv.second);
+            };
+
+            Coroutine::Nursery nursery;
+            co_await nursery.fork(_ready.coroutine_parallel_for_each(action_for_ready));
+            co_await nursery.fork(waiting_on_next_tick.coroutine_parallel_for_each(action_for_copy));
+            co_await nursery.join();
+        }
+
         // All transactions are now described and ready to be resolved in
         // parallel.
                     

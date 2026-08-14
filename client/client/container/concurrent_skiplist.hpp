@@ -16,9 +16,10 @@
 #include "garbage_collected.hpp"
 #include "key_service.hpp"
 #include "utility.hpp"
+#include "coroutine.hpp"
 
 namespace wry {
-    
+
     // Concurrent skiplist
     //
     // size() and erase() lack a compelling use case at the moment are not
@@ -34,33 +35,40 @@ namespace wry {
     // Tim Harris, "A Pragmatic Implementation of Non-Blocking Linked-Lists," DISC 2001
     // Maged Michael, "High Performance Dynamic Lock-Free Hash Tables and List-Based Sets," SPAA 2002
     // Fraser & Harris, "Concurrent Programming Without Locks," TOCS 2007
-    
-    // Constinit-ialize to a nonzero value.  Keeps the thread_local as cheap as possible.
-    // We don't really care that the threads start out synchronized
-    // TODO: On pool thread entry, replace value with something better
-    constinit inline thread_local uint64_t _skiplist_prng_state = 0x9E3779B97F4A7C15ULL;
-    
-    inline uint64_t _skiplist_xorshift64() {
-        uint64_t x = _skiplist_prng_state;
-        x ^= x << 13;
-        x ^= x >>  7;
-        x ^= x << 17;
-        _skiplist_prng_state = x;
-        assert(x != 0);
-        return x;
-    }
-    
-    template<typename Key, typename Compare, typename Discipline>
-    struct ConcurrentSkiplistSet {
 
-        struct Node;
+    namespace _skiplist_detail {
 
-        using IntrusiveAllocator = Discipline::IntrusiveAllocator;
+        // Constinit-ialize to a nonzero value.  Keeps the thread_local as cheap as possible.
+        // We don't really care that the threads start out synchronized
+        // TODO: On pool thread entry, replace value with something better
+        constinit inline thread_local uint64_t _skiplist_prng_state = 0x9E3779B97F4A7C15ULL;
 
-        template<typename T> using Slot = Discipline::template Slot<T>;
-        template<typename T> using AtomicSlot = Discipline::template AtomicSlot<T>;
+        inline uint64_t _skiplist_xorshift64() {
+            uint64_t x = _skiplist_prng_state;
+            x ^= x << 13;
+            x ^= x >>  7;
+            x ^= x << 17;
+            _skiplist_prng_state = x;
+            assert(x != 0);
+            return x;
+        }
 
-        struct Node : IntrusiveAllocator {
+        struct LoadNonatomic {
+            auto operator()(auto const& x) const {
+                return x.nonatomic_load();
+            }
+        };
+
+        struct LoadAcquire {
+            auto operator()(auto const& x) const {
+                return x.load_acquire();
+            }
+        };
+
+        template<typename Key, typename Compare, typename Discipline>
+        struct Node : Discipline::IntrusiveAllocator {
+
+            template<typename T> using AtomicSlot = Discipline::template AtomicSlot<T>;
 
             // Local placement-new: GarbageCollected's `operator new(size_t)`
             // would otherwise hide the global placement form via class-scope
@@ -68,7 +76,7 @@ namespace wry {
             static void* _Nonnull  operator new(size_t count, void* _Nonnull ptr) {
                 return ptr;
             }
-            
+
             Key _key;
             size_t _size;
             AtomicSlot<Node* _Nullable> _next[] __counted_by(_size);
@@ -87,13 +95,13 @@ namespace wry {
                 std::memset(raw, 0, number_of_bytes);
                 return new(raw) Node(n, FORWARD(args)...);
             }
-            
+
             static Node* _Nonnull with_random_size_emplace(auto&&... args) {
                 size_t n = 1 + __builtin_ctzll(_skiplist_xorshift64());
                 Node* a = with_size_emplace(n, FORWARD(args)...);
                 return a;
             }
-            
+
             // In GC mode (IntrusiveAllocator derives from GarbageCollected),
             // these methods' signatures match the base's pure virtuals and
             // implicitly override them — Node becomes a concrete GC type
@@ -119,48 +127,57 @@ namespace wry {
                 printf("%s\n", __PRETTY_FUNCTION__);
             }
 
+            template<typename Action>
+            Coroutine::Task coroutine_parallel_for_each(Node* _Nullable bound,
+                                                        Action const& action) const;
+
         }; // struct Node
-        
-        struct iterator {
-            
+
+
+        template<typename Key, typename Compare, typename Discipline, typename Loader>
+        struct basic_iterator {
+
+            using Node = Node<Key, Compare, Discipline>;
+
             // we can iterate across a live sequence but obviously that won't
             // be authoritative
-            
+
             Node* _Nullable current;
-            
-            bool operator==(const iterator&) const = default;
-            
+
+            bool operator==(const basic_iterator&) const = default;
+
             Key& operator*() const {
                 assert(current);
                 return current->_key;
             }
-            
+
             Key* _Nonnull operator->() const {
                 assert(current);
                 return &(current->_key);
             }
-            
-            iterator& operator++() {
+
+            basic_iterator& operator++() {
                 assert(current);
-                // acquire to iterate a live sequence, relaxed to iterate a frozen
-                // sequence
-                current = current->_next[0].load_acquire();
+                current = Loader{}(current->_next[0]);
                 return *this;
             }
-            
-            iterator operator++(int) {
-                iterator old{current};
+
+            basic_iterator operator++(int) {
+                basic_iterator old{current};
                 operator++();
                 return old;
             }
-            
-        }; // struct iterator
-        
-        
+
+        }; // struct basic_iterator
+
+        template<typename Key, typename Compare, typename Discipline>
         struct Head : Discipline::IntrusiveAllocator {
 
+            template<typename T> using AtomicSlot = Discipline::template AtomicSlot<T>;
+            using Node = Node<Key, Compare, Discipline>;
+
             static constexpr size_t HEAD_LEVELS = 64;
-            
+
             // Local placement-new: GarbageCollected's `operator new(size_t)`
             // would otherwise hide the global placement form via class-scope
             // name lookup, breaking `new(raw) Head` inside `make()`.
@@ -170,7 +187,7 @@ namespace wry {
 
             Compare _compare;
             Atomic<size_t> _top;
-            Discipline::template AtomicSlot<Node* _Nullable> _next[] __counted_by(HEAD_LEVELS);
+            AtomicSlot<Node* _Nullable> _next[] __counted_by(HEAD_LEVELS);
 
             explicit Head(Compare comp) : _compare(std::move(comp)), _top(1) {}
 
@@ -183,7 +200,7 @@ namespace wry {
                 std::memset(raw, 0, number_of_bytes);
                 return new(raw) Head(std::move(comp));
             }
-            
+
             // Implicit-override pattern, see Node above.
             //
             // We scan only _next[0] (the level-0 chain head), not the full
@@ -205,15 +222,17 @@ namespace wry {
             void _garbage_collected_debug() const {
                 printf("%s\n", __PRETTY_FUNCTION__);
             }
-            
+
             // Forward declare substantial methods
-            
-            template<typename Query> [[nodiscard]] iterator
+
+            template<typename Loader = LoadAcquire, typename Query> [[nodiscard]]
+            basic_iterator<Key, Compare, Discipline, Loader>
             find(const Query& query) const;
 
             // First node whose key is not less than `query` (i.e. >= query),
             // or end() if every key is less.  Mirrors `find`'s descent.
-            template<typename Query> [[nodiscard]] iterator
+            template<typename Loader = LoadAcquire, typename Query> [[nodiscard]]
+            basic_iterator<Key, Compare, Discipline, Loader>
             lower_bound(const Query& query) const;
 
             [[nodiscard]] std::pair<Node* _Nullable, bool>
@@ -224,11 +243,14 @@ namespace wry {
             _try_emplace(size_t i, AtomicSlot<Node* _Nullable>* _Nonnull left, Keylike&& keylike, Args&&... args);
 
             template<typename Keylike, typename... Args>
-            std::pair<iterator, bool>
+            std::pair<basic_iterator<Key, Compare, Discipline, LoadAcquire>, bool>
             try_emplace(Keylike&& keylike, Args&&... args);
 
+            template<typename Action> [[nodiscard]] Coroutine::Task
+            coroutine_parallel_for_each(Action&& action) const;
+
         };
-        
+
         // Cursor for use after a "freeze" point — i.e., once all writers
         // to this skiplist have stopped and happens-before with the
         // current thread has been established (e.g. via an epoch advance).
@@ -239,7 +261,12 @@ namespace wry {
         // _next points into either Head's or a Node's _next[] array — the
         // arrays have the same element type, so the cursor is unaware
         // which kind of object it currently sits in.
+        template<typename Key, typename Compare, typename Discipline>
         struct FrozenCursor {
+
+            template<typename T> using AtomicSlot = Discipline::template AtomicSlot<T>;
+            using Node = Node<Key, Compare, Discipline>;
+
             AtomicSlot<Node* _Nullable> const* _Nullable _next;
             size_t _level;
 
@@ -273,8 +300,17 @@ namespace wry {
 
         };
 
+    }
+
+    template<typename Key, typename Compare, typename Discipline>
+    struct ConcurrentSkiplistSet {
+
+        using iterator = _skiplist_detail::basic_iterator<Key, Compare, Discipline, _skiplist_detail::LoadAcquire>;
+
+        using Head = _skiplist_detail::Head<Key, Compare, Discipline>;
         Head* _Nonnull _head;
 
+        using FrozenCursor = _skiplist_detail::FrozenCursor<Key, Compare, Discipline>;
         FrozenCursor make_cursor() const {
             return FrozenCursor{
                 &_head->_next[0],
@@ -299,7 +335,7 @@ namespace wry {
         [[nodiscard]] iterator end() const {
             return iterator{nullptr};
         }
-        
+
         template<typename Query>
         [[nodiscard]] iterator find(Query const& query) const {
             assert(_head);
@@ -318,22 +354,22 @@ namespace wry {
             return _head->try_emplace(FORWARD(keylike), FORWARD(args)...);
             
         }
-        
-        
+
     }; // ConcurrentSkiplistSet<Key, Compare, IntrusiveAllocator>
 
     
     template<typename Key, typename Compare, typename Discipline>
-    template<typename Query>
-    [[nodiscard]] ConcurrentSkiplistSet<Key, Compare, Discipline>::iterator
-    ConcurrentSkiplistSet<Key, Compare, Discipline>::Head
+    template<typename Loader, typename Query>
+    [[nodiscard]] _skiplist_detail::basic_iterator<Key, Compare, Discipline, Loader>
+    _skiplist_detail::Head<Key, Compare, Discipline>
     ::find(Query const& query) const
     {
+        using iterator = _skiplist_detail::basic_iterator<Key, Compare, Discipline, Loader>;
         size_t i = _top.load_relaxed() - 1;
         assert((i + 1) > 0);
         auto left = _next + i;
         for (;;) {
-            Node* _Nullable candidate = left->load_acquire();
+            Node* _Nullable candidate = Loader{}(*left);
             if (!candidate || _compare(query, candidate->_key)) {
                 if (i == 0)
                     return iterator{nullptr};
@@ -348,11 +384,12 @@ namespace wry {
     }
 
     template<typename Key, typename Compare, typename Discipline>
-    template<typename Query>
-    [[nodiscard]] typename ConcurrentSkiplistSet<Key, Compare, Discipline>::iterator
-    ConcurrentSkiplistSet<Key, Compare, Discipline>::Head
+    template<typename Loader, typename Query>
+    [[nodiscard]] _skiplist_detail::basic_iterator<Key, Compare, Discipline, Loader>
+    _skiplist_detail::Head<Key, Compare, Discipline>
     ::lower_bound(const Query& query) const
     {
+        using iterator = _skiplist_detail::basic_iterator<Key, Compare, Discipline, Loader>;
         // First node whose key is not less than query (>= query), or end().
         // Same top-down descent as find(); the only difference is what we
         // return when there is no exact match: the level-0 successor of the
@@ -361,7 +398,7 @@ namespace wry {
         assert((i + 1) > 0);
         auto left = _next + i;
         for (;;) {
-            Node* _Nullable candidate = left->load_acquire();
+            Node* _Nullable candidate = Loader{}(*left);
             if (!candidate || _compare(query, candidate->_key)) {
                 // candidate is null or strictly greater than query; no equal
                 // key was found at a higher level, so at level 0 this is the
@@ -380,12 +417,12 @@ namespace wry {
     }
 
     template<typename Key, typename Compare, typename Discipline>
-    [[nodiscard]] std::pair<typename ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nullable, bool>
-    ConcurrentSkiplistSet<Key, Compare, Discipline>::Head
+    [[nodiscard]] std::pair<_skiplist_detail::Node<Key, Compare, Discipline>* _Nullable, bool>
+    _skiplist_detail::Head<Key, Compare, Discipline>
     ::_link_level(size_t i,
-                  ConcurrentSkiplistSet<Key, Compare, Discipline>::template AtomicSlot<ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nullable>* _Nonnull left,
-                  ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nullable expected,
-                  ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nonnull desired)
+                  AtomicSlot<Node* _Nullable>* _Nonnull left,
+                  Node* _Nullable expected,
+                  Node* _Nonnull desired)
     {
         // STYLE: GOTO considered helpful for concurrent code that
         // handles failure by restarting from an earlier step.
@@ -413,12 +450,10 @@ namespace wry {
     
     template<typename Key, typename Compare, typename Discipline>
     template<typename Keylike, typename... Args>
-    std::pair<typename ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nullable, bool>
-    ConcurrentSkiplistSet<Key, Compare, Discipline>::Head
+    std::pair<typename _skiplist_detail::Node<Key, Compare, Discipline>* _Nullable, bool>
+    _skiplist_detail::Head<Key, Compare, Discipline>
     ::_try_emplace(size_t i,
-                   ConcurrentSkiplistSet<Key, Compare, Discipline>::template AtomicSlot<
-                       ConcurrentSkiplistSet<Key, Compare, Discipline>::Node* _Nullable
-                   >* _Nonnull left,
+                   AtomicSlot<Node* _Nullable>* _Nonnull left,
                    Keylike&& keylike,
                    Args&&... args)
     {
@@ -458,8 +493,8 @@ namespace wry {
     // `java.util.concurrentConcurrentHashMap.compute` is an example
     template<typename Key, typename Compare, typename Discipline>
     template<typename Keylike, typename... Args>
-    std::pair<typename ConcurrentSkiplistSet<Key, Compare, Discipline>::iterator, bool>
-    ConcurrentSkiplistSet<Key, Compare, Discipline>::Head
+    std::pair<typename _skiplist_detail::basic_iterator<Key, Compare, Discipline, _skiplist_detail::LoadAcquire>, bool>
+    _skiplist_detail::Head<Key, Compare, Discipline>
     ::try_emplace(Keylike&& keylike, Args&&... args)
     {
         size_t i = _top.load_relaxed();
@@ -478,7 +513,7 @@ namespace wry {
                 ++i;
             }
         }
-        return { iterator{ result.first }, result.second };
+        return { basic_iterator<Key, Compare, Discipline, _skiplist_detail::LoadAcquire>{ result.first }, result.second };
     }
     
 
@@ -586,7 +621,7 @@ namespace wry {
     template<typename Cur, typename CodeOf>
     void skiplist_partition_assign(Cur c, __uint128_t lo, __uint128_t hi,
                                    __uint128_t frame_lo, int shift,
-                                   std::optional<Cur>* result, CodeOf code_of) {
+                                   std::optional<Cur>* _Nonnull result, CodeOf code_of) {
         const __uint128_t BEYOND = ((__uint128_t)1 << 64); // > any uint64 code
         auto codeof = [&](const Cur& x) -> __uint128_t {
             auto* k = x.key();
@@ -622,12 +657,98 @@ namespace wry {
 
     template<typename Cur, typename CodeOf>
     void skiplist_partition_frame(Cur entry, uint64_t frame_lo, int shift, int n_slots,
-                                  std::optional<Cur>* result, CodeOf code_of) {
+                                  std::optional<Cur>* _Nonnull result, CodeOf code_of) {
         __uint128_t lo = frame_lo;
         __uint128_t hi = lo + ((__uint128_t)n_slots << shift);
         skiplist_partition_assign(entry, lo, hi, lo, shift, result, code_of);
     }
 
+
+    template<typename Key, typename Compare, typename Discipline>
+    template<typename Action>
+    Coroutine::Task _skiplist_detail::Head<Key, Compare, Discipline>
+    ::coroutine_parallel_for_each(Action&& action) const {
+        Node* bound = nullptr;
+        Coroutine::Nursery nursery;
+        for (size_t i = _top.load_relaxed(); i--;) {
+            Node* a = _next[i].nonatomic_load();
+            if (a != bound) {
+                assert(a);
+                nursery.soon(a->coroutine_parallel_for_each(bound, action));
+            }
+            bound = a;
+        }
+        co_await nursery.join();
+    }
+
+    template<typename Key, typename Compare, typename Discipline>
+    template<typename Action> Coroutine::Task
+    _skiplist_detail::Node<Key, Compare, Discipline>::
+    coroutine_parallel_for_each(Node* _Nullable bound,
+                                Action const& action) const {
+        Coroutine::Nursery nursery;
+        for (size_t i = _size; i--;) {
+            Node* a = _next[i].nonatomic_load();
+            if (a != bound) {
+                assert(a);
+                nursery.soon(a->coroutine_parallel_for_each(bound, action));
+            }
+            bound = a;
+        }
+        action(_key);
+        co_await nursery.join();
+    }
+
+
+    template<typename Key, typename Compare, typename Discipline>
+    struct FrozenSkiplistSet {
+
+        using Head = _skiplist_detail::Head<Key, Compare, Discipline>;
+        using Node = _skiplist_detail::Node<Key, Compare, Discipline>;
+        template<typename T>
+        using AtomicSlot = Discipline::template AtomicSlot<T>;
+        using iterator = _skiplist_detail::basic_iterator<Key, Compare, Discipline, _skiplist_detail::LoadNonatomic>;
+
+        Head const* _Nonnull _head;
+
+        FrozenSkiplistSet()
+        : FrozenSkiplistSet(Compare{}) {
+        }
+
+        explicit FrozenSkiplistSet(Compare comp)
+        : _head(Head::make(std::move(comp))) {
+        }
+
+        // Move a mutable skiplist into an immutable interface.  Every mutation
+        // must happen-before every frozen read; this is usually accomplished by
+        // the nursery join.  We take an rvalue to express the intent that the
+        // mutable view is no longer used, but we can't enforce it.
+        explicit FrozenSkiplistSet(ConcurrentSkiplistSet<Key, Compare, Discipline>&& other)
+        : _head(other._head) {
+        }
+
+        template<typename Query> [[nodiscard]] iterator
+        find(Query const& query) const {
+            assert(_head);
+            return _head->find(query, _skiplist_detail::LoadNonatomic{});
+        }
+
+        template<typename Query> [[nodiscard]] iterator
+        lower_bound(Query const& query) const {
+            assert(_head);
+            return _head->lower_bound(query, _skiplist_detail::LoadNonatomic{});
+        }
+        template<typename Action> [[nodiscard]] Coroutine::Task
+        coroutine_parallel_for_each(Action&& action) const {
+            return _head->coroutine_parallel_for_each(FORWARD(action));
+        }
+
+    };
+
+    template<typename Key, typename Compare, typename Discipline>
+    void garbage_collected_scan(FrozenSkiplistSet<Key, Compare, Discipline> const& x) {
+        garbage_collected_scan(x._head);
+    }
 
 } // namespace wry
 

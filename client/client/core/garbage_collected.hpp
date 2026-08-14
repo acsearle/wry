@@ -53,6 +53,7 @@ namespace wry {
 #endif
 
         static void* _Nonnull operator new(std::size_t count);
+        static void* _Nonnull operator new(std::size_t count, std::align_val_t al);
         static void operator delete(void* _Nullable pointer);
 
         // Derived objects must be nothrow
@@ -122,7 +123,14 @@ namespace wry {
         ++_thread_local_gc_allocated_objects;
         return calloc(count, 1);
     }
-    
+
+    inline void* _Nonnull GarbageCollected::operator new(std::size_t count, std::align_val_t al) {
+        assert((size_t)al <= alignof(std::max_align_t));
+        _thread_local_gc_allocated_bytes += count;
+        ++_thread_local_gc_allocated_objects;
+        return calloc(count, 1);
+    }
+
     inline void GarbageCollected::operator delete(void* _Nullable pointer) {
         free(pointer);
     }
@@ -589,13 +597,7 @@ MAKE_WRY_ATOMIC_ROOT_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal
             static_assert(std::is_base_of_v<GarbageCollected, T>);
         }
 
-        ~AtomicScanSlot() {
-            // AtomicScanSlot lives in a GC-derived parent and is
-            // destroyed only by the collector on the collector thread; no
-            // barrier is needed (and the pointee may already be destroyed,
-            // so loading it would be unsafe).  Trap any other thread.
-            assert_this_thread_is_collector();
-        }
+        // NOTE: Nontrivial destructor is prohibited by use in FAMs
 
         AtomicScanSlot(const AtomicScanSlot&) = delete;
         AtomicScanSlot& operator=(const AtomicScanSlot&) = delete;

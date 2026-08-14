@@ -270,8 +270,8 @@ namespace wry {
             return bump::this_thread_state.allocate(size);
         }
 
-        void* _Nonnull operator new(std::size_t size, std::align_val_t align) {
-            return bump::this_thread_state.allocate(size, (std::size_t)align);
+        void* _Nonnull operator new(std::size_t size, std::align_val_t al) {
+            return bump::this_thread_state.allocate(size, (std::size_t)al);
         }
         
         void* _Nonnull operator new(std::size_t size, void* _Nonnull ptr) {
