@@ -34,6 +34,40 @@ namespace wry {
     };
      */
 
+    void World::hack_repair_invariant() {
+        std::pair<Time, wry::EntityID> victim;
+        if (_waiting_on_time.try_front(victim)) {
+            assert(victim.first >= _time);
+            if (victim.first == _time) {
+
+                // TODO: Require the arguments to already be partitioned
+
+                // HACK: We've been given a waiting_on_time that includes
+                // elements that should be in _ready.
+
+                Set waiting_on_now;
+                std::tie(waiting_on_now, _waiting_on_time) = partition_first(_waiting_on_time, _time);
+
+                // HACK: If the world is in a bad state from being manually
+                // constructed, the ready set should be empty
+                assert(_ready.is_empty());
+
+                ConcurrentSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline> mut_ready;
+
+                // Copy the EntityIDs waiting on now to the _ready skiplist
+                waiting_on_now.for_each([this, &mut_ready] (std::pair<Time, EntityID> x) {
+                    assert(x.first == _time);
+                    (void) mut_ready.try_emplace(ReadyKey{x.second, -1});
+                });
+
+                _ready = FrozenSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline>(std::move(mut_ready));
+
+                // HACK: _ready is now populated, _waiting_on_time is now pruned
+
+            }
+        }
+    }
+
     Coroutine::Future<Root<World*>> World::step() const {
 #ifndef NDEBUG
         {
@@ -60,7 +94,7 @@ namespace wry {
         // this->_waiting_on_time contains all EntityIDs to notify after this->_time
 
         auto [waiting_on_next_time, next_waiting_on_time] = partition_first(_waiting_on_time, next_time);
-        ConcurrentSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline> next_ready;
+        ConcurrentSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline> next_ready;
 
         // Mutable:
         // waiting_on_next_time contains all EntityIDs to notify at next_time
@@ -77,9 +111,9 @@ namespace wry {
             // On notification, entities will typically examine the World and
             // may propose a Transaction to change it.
             co_await nursery.fork(_ready
-                                  .coroutine_parallel_for_each([this, &context] (EntityID k) {
+                                  .coroutine_parallel_for_each([this, &context] (ReadyKey kn) {
                 const Entity* a = nullptr;
-                (void) _entity_for_entity_id.try_get(k, a);
+                (void) _entity_for_entity_id.try_get(kn.id, a);
                 assert(a);
                 a->notify(&context);
             }));
@@ -88,7 +122,7 @@ namespace wry {
             co_await nursery.fork(waiting_on_next_time
                                   .coroutine_parallel_for_each([next_time, &next_ready](std::pair<Time, EntityID> kv) {
                 assert(kv.first == next_time);
-                next_ready.try_emplace(kv.second);
+                next_ready.try_emplace(ReadyKey{kv.second, -1});
             }));
 
             co_await nursery.join();
@@ -146,11 +180,11 @@ namespace wry {
                     WaitSet ws;
                     if (_term_for_coordinate.ki.try_get(kv.first, ws))
                         ws.for_each([&next_ready](EntityID waiter) {
-                            next_ready.try_emplace(waiter);
+                            next_ready.try_emplace(ReadyKey{waiter, -1});
                         });
                 }
                 for (EntityID key : waiters) {
-                    next_ready.try_emplace(key);
+                    next_ready.try_emplace(ReadyKey{key, -1});
                 }
                 
             } else if (!waiters.empty()) {
@@ -201,11 +235,11 @@ namespace wry {
                     WaitSet ws;
                     if (_entity_id_for_coordinate.ki.try_get(kv.first, ws))
                         ws.for_each([&next_ready](EntityID waiter) {
-                            next_ready.try_emplace(waiter);
+                            next_ready.try_emplace(ReadyKey{waiter, -1});
                         });
                 }
                 for (EntityID key : waiters) {
-                    next_ready.try_emplace(key);
+                    next_ready.try_emplace(ReadyKey{key, -1});
                 }
                 
             } else if (!waiters.empty()) {
@@ -256,11 +290,11 @@ namespace wry {
                     WaitSet ws;
                     if (_located_for_coordinate.ki.try_get(kv.first, ws))
                         ws.for_each([&next_ready](EntityID waiter) {
-                            next_ready.try_emplace(waiter);
+                            next_ready.try_emplace(ReadyKey{waiter, -1});
                         });
                 }
                 for (EntityID key : waiters) {
-                    next_ready.try_emplace(key);
+                    next_ready.try_emplace(ReadyKey{key, -1});
                 }
 
             } else if (!waiters.empty()) {
@@ -311,11 +345,11 @@ namespace wry {
                     WaitSet ws;
                     if (_entity_for_entity_id.ki.try_get(kv.first, ws))
                         ws.for_each([&next_ready](EntityID waiter) {
-                            next_ready.try_emplace(waiter);
+                            next_ready.try_emplace(ReadyKey{waiter, -1});
                         });
                 }
                 for (EntityID key : waiters) {
-                    next_ready.try_emplace(key);
+                    next_ready.try_emplace(ReadyKey{key, -1});
                 }
                 
             } else if (!waiters.empty()) {
@@ -338,7 +372,7 @@ namespace wry {
                     EntityID entity_id = get<EntityID>(head->_desired);
                     // State and Condition are bit-compatible
                     if (head->resolve() & head->_operation) {
-                        next_ready.try_emplace(entity_id);
+                        next_ready.try_emplace(ReadyKey{entity_id, -1});
                     }
                 }
             } else {
@@ -393,7 +427,8 @@ namespace wry {
 
         co_return new World{
             next_time,
-            FrozenSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline>(std::move(next_ready)),
+            _entity_id_source,
+            FrozenSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline>(std::move(next_ready)),
             new_entity_id_for_coordinate,
             new_located_for_coordinate,
             new_entity_for_entity_id,

@@ -328,7 +328,7 @@ namespace wry {
 
         // To save _ready and _waiting_on_time we merge them
         Set t{_waiting_on_time};
-        for (EntityID entity_id : _ready)
+        for (auto [entity_id, _] : _ready)
             t.set({_time, entity_id});
         SaveRef waiting_on_time  = s.visit<NodeSet_U128>(t._inner);
 
@@ -343,6 +343,7 @@ namespace wry {
         SaveRef ter_for_coord_ki = s.visit<NodeWaitSet_U64>(_terrain_for_coordinate.ki._inner);
 
         s.write_u64((uint64_t)_time);
+        s.write_u64(_entity_id_source.data);
         s.write_ref(eid_for_coord_kv);
         s.write_ref(eid_for_coord_ki);
         s.write_ref(loc_for_coord_kv);
@@ -361,6 +362,7 @@ namespace wry {
         SaveRef stack_head_ref = s.visit<PersistentStack<Term>>(_stack);
 
         s.write_u64(_entity_id.data);
+        s.write_u64(_free_entity_id.data);
         s.write_u32((uint32_t)_phase);
         s.write_u64((uint64_t)_on_arrival);
         s.write_ref(stack_head_ref);
@@ -376,6 +378,7 @@ namespace wry {
     // no state beyond identity and location; Source adds the Term it emits.
     static void save_localized_entity_fields(const LocalizedEntity* p, Saver& s) {
         s.write_u64(p->_entity_id.data);
+        s.write_u64(p->_free_entity_id.data);
         s.write_pod(p->_location);
     }
 
@@ -395,6 +398,7 @@ namespace wry {
         // _queue is client-local pending input, consumed by notify(); it is
         // not simulation state.  Only identity persists.
         s.write_u64(_entity_id.data);
+        s.write_u64(_free_entity_id.data);
     }
 
     void HeapInt64::_save_body(Saver& s) const {
@@ -434,12 +438,18 @@ namespace wry {
     // populate loader._ptrs[id].
     // -----------------------------------------------------------------------
 
+    static EntityID read_entity_id(Loader& L) {
+        EntityID id{ L.read_u64() };
+        return id;
+    }
+
     // World load
     static void load_into_world(Loader& L, SaveRef id) {
         World* w = new World;
         L._ptrs[id] = w;
 
         w->_time = (Time)L.read_u64();
+        w->_entity_id_source = read_entity_id(L);
         SaveRef eid_kv  = L.read_u32();
         SaveRef eid_ki  = L.read_u32();
         SaveRef loc_kv  = L.read_u32();
@@ -468,19 +478,11 @@ namespace wry {
         w->_terrain_for_coordinate.ki._inner   = (NodeWaitSet_U64*)L._ptrs[ter_ki];
     }
 
-    // Loaded entities carry their saved EntityIDs, but the oracle that mints
-    // new IDs restarts at zero each process; advance it past every loaded ID
-    // so post-load spawns cannot collide (IDs are never reused).
-    static EntityID read_entity_id(Loader& L) {
-        EntityID id{ L.read_u64() };
-        EntityID::oracle_advance_past(id);
-        return id;
-    }
-
     static void load_into_machine(Loader& L, SaveRef id) {
         Machine* m = new Machine;
         L._ptrs[id] = m;
         m->_entity_id = read_entity_id(L);
+        m->_free_entity_id = read_entity_id(L);
         m->_phase = (decltype(m->_phase))L.read_u32();
         m->_on_arrival = (int64_t)L.read_u64();
         SaveRef stack_ref = L.read_u32();
@@ -498,6 +500,7 @@ namespace wry {
         T* p = new T;
         L._ptrs[id] = p;
         p->_entity_id = read_entity_id(L);
+        p->_free_entity_id = read_entity_id(L);
         p->_location = L.read_pod<Coordinate>();
     }
 
@@ -505,6 +508,7 @@ namespace wry {
         Source* p = new Source;
         L._ptrs[id] = p;
         p->_entity_id = read_entity_id(L);
+        p->_free_entity_id = read_entity_id(L);
         p->_location = L.read_pod<Coordinate>();
         p->_of_this = decode_value(L.read_u64(), L);
     }
@@ -513,6 +517,7 @@ namespace wry {
         Player* p = new Player;
         L._ptrs[id] = p;
         p->_entity_id = read_entity_id(L);
+        p->_free_entity_id = read_entity_id(L);
     }
 
     static void load_into_heap_int64(Loader& L, SaveRef id) {
@@ -811,6 +816,7 @@ namespace wry {
 
         World* w = new World;
         Counter* counter = new Counter;
+        counter->_entity_id = w->generate_entity_id();
         counter->_location = Coordinate{0, 0};
         w->_entity_for_entity_id.set(counter->_entity_id, counter);
         { WaitSet s; s.set(counter->_entity_id);
@@ -870,9 +876,13 @@ namespace wry {
         World* w = new World;
 
         Player* player = new Player;
+        player->_entity_id = w->generate_entity_id();
         Spawner* spawner = new Spawner;
+        spawner->_entity_id = w->generate_entity_id();
         Source* source = new Source;
+        source->_entity_id = w->generate_entity_id();
         Sink* sink = new Sink;
+        sink->_entity_id = w->generate_entity_id();
 
         spawner->_location = Coordinate{0, 0};
         source->_location = Coordinate{2, 2};
@@ -921,9 +931,9 @@ namespace wry {
         assert(sk2->_save_type_tag() == Sink::SAVE_TYPE_TAG);
         assert((static_cast<const Sink*>(sk2)->_location == Coordinate{4, 2}));
 
-        // The oracle must have advanced past every loaded ID.
-        assert(EntityID::oracle().data > 1000000);
-
+        // TODO: assert that the world's entity_id source is greater than
+        // any entity observed in the save
+        
         co_return;
     };
 
@@ -949,14 +959,21 @@ namespace wry {
         Term shared_term = Term((const HeapTerm*)shared);
 
         Player* player = new Player;
+        player->_entity_id = w->generate_entity_id();
         Spawner* spawner = new Spawner;  spawner->_location = Coordinate{0, 0};
+        spawner->_entity_id = w->generate_entity_id();
         Source* source = new Source;     source->_location = Coordinate{2, 2};
                                          source->_of_this = shared_term;
+        source->_entity_id = w->generate_entity_id();
         Sink* sink = new Sink;           sink->_location = Coordinate{4, 2};
+        sink->_entity_id = w->generate_entity_id();
         Counter* counter = new Counter;  counter->_location = Coordinate{-2, 2};
+        counter->_entity_id = w->generate_entity_id();
         Evenator* even = new Evenator;   even->_location = Coordinate{3, 3};
+        even->_entity_id = w->generate_entity_id();
 
         Machine* machine = new Machine;
+        machine->_entity_id = w->generate_entity_id();
         machine->_phase = Machine::PHASE_TRAVELLING;
         machine->_on_arrival = OPCODE_NOOP;
         machine->_old_heading = HEADING_EAST;

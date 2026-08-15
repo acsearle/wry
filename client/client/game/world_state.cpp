@@ -37,6 +37,7 @@ namespace wry {
 
             {
                 Player* p = new Player;
+                p->_entity_id = world->generate_entity_id();
                 world->_entity_for_entity_id.set(p->_entity_id, p);
                 world->_waiting_on_time.set({Time{0}, p->_entity_id});
             }
@@ -56,6 +57,8 @@ namespace wry {
             {
                 // new machine spawner at origin
                 Spawner* p = new Spawner;
+                p->_entity_id = world->generate_entity_id();
+                p->_free_entity_id = world->generate_entity_id();
                 p->_location = Coordinate{0, 0};
                 insert_localized_entity(p);
             }
@@ -63,6 +66,7 @@ namespace wry {
             {
                 // value source
                 Source* q = new Source;
+                q->_entity_id = world->generate_entity_id();
                 q->_location = Coordinate{2, 2};
                 q->_of_this = Term(1);
                 insert_localized_entity(q);
@@ -71,6 +75,7 @@ namespace wry {
             {
                 // value sink
                 Sink* r = new Sink;
+                r->_entity_id = world->generate_entity_id();
                 r->_location = Coordinate{4, 2};
                 insert_localized_entity(r);
             }
@@ -105,6 +110,7 @@ namespace wry {
 
             {
                 Player* p = new Player;
+                p->_entity_id = world->generate_entity_id();
                 world->_entity_for_entity_id.set(p->_entity_id, p);
                 world->_waiting_on_time.set({Time{0}, p->_entity_id});
             }
@@ -153,6 +159,8 @@ namespace wry {
                     world->_entity_id_for_coordinate.try_get(destination, occupant))
                     continue;
                 Machine* machine = new Machine;
+                machine->_entity_id = world->generate_entity_id();
+                machine->_free_entity_id.data = 0;
                 machine->_phase = Machine::PHASE_TRAVELLING;
                 machine->_old_heading = heading;
                 machine->_new_heading = heading;

@@ -53,7 +53,8 @@ namespace wry {
     }
 
     World* restart_game() {
-        return new World;
+        World* world = new World;
+        return world;
     }
 
     // Serialize the (immutable) world into a byte buffer.  Pure read of the

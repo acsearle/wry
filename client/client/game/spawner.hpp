@@ -32,12 +32,15 @@ namespace wry {
         }
 
                 
-        virtual void notify(TransactionContext*) const override;
+        virtual int64_t notify(TransactionContext*) const override;
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Spawner");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override final;
 
+        [[nodiscard]] virtual Spawner* make_mutable_clone() const override {
+            return new Spawner(*this);
+        }
 
     };
 
@@ -50,7 +53,7 @@ namespace wry {
         
         Term _of_this;
         
-        virtual void notify(TransactionContext*) const override;
+        virtual int64_t notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {
             garbage_collected_scan(_of_this);
         }
@@ -59,6 +62,9 @@ namespace wry {
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override final;
 
+        [[nodiscard]] virtual Source* make_mutable_clone() const override {
+            return new Source(*this);
+        }
 
     };
 
@@ -69,7 +75,7 @@ namespace wry {
         }
 
                 
-        virtual void notify(TransactionContext*) const override;
+        virtual int64_t notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {
         }
 
@@ -77,6 +83,9 @@ namespace wry {
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override final;
 
+        [[nodiscard]] virtual Sink* make_mutable_clone() const override {
+            return new Sink(*this);
+        }
 
     };
     
@@ -87,12 +96,16 @@ namespace wry {
         }
 
         
-        virtual void notify(TransactionContext*) const override;
+        virtual int64_t notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {
         }
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Counter");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override final;
+
+        [[nodiscard]] virtual Counter* make_mutable_clone() const override {
+            return new Counter(*this);
+        }
 
     };
     
@@ -102,13 +115,17 @@ namespace wry {
             printf("%s\n", __PRETTY_FUNCTION__);
         }
 
-        virtual void notify(TransactionContext*) const override;
+        virtual int64_t notify(TransactionContext*) const override;
         virtual void _garbage_collected_scan() const override {
         }
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Evenator");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override final;
+
+        [[nodiscard]] virtual Evenator* make_mutable_clone() const override {
+            return new Evenator(*this);
+        }
 
     };
 

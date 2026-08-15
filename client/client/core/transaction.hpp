@@ -16,6 +16,7 @@
 #include "garbage_collected.hpp"
 #include "persistent_map.hpp"
 #include "waitable_map.hpp"
+#include "world.hpp"
 
 namespace wry {
 
@@ -221,7 +222,11 @@ namespace wry {
     struct TransactionContext {
         
         const World* _world = nullptr;
-        
+
+        // Convenience functions
+        Time now() const { return _world->_time; }
+        Time next_now() const { return _world->_time + 1; }
+
         template<typename Key>
         using Map = ConcurrentMap<Key, Atomic<const Transaction::Node*>, DefaultKeyService<Key>, EpochDiscipline>;
         

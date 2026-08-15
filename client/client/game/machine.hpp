@@ -51,7 +51,7 @@ namespace wry {
         Time _old_time = 0;
         Time _new_time = 0;
         
-        Machine* make_mutable_clone() const {
+        [[nodiscard]] virtual Machine* make_mutable_clone() const override {
             return new Machine(*this);
         }
         
@@ -96,7 +96,7 @@ namespace wry {
             _stack = PersistentStack<Term>::push(_stack, x);
         }
         
-        virtual void notify(TransactionContext* context) const override;
+        virtual int64_t notify(TransactionContext* context) const override;
 
         void _schedule_arrival(World* world);
         

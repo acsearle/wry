@@ -323,7 +323,7 @@ namespace wry {
 
     } // anonymous namespace
 
-    void Machine::notify(TransactionContext* context) const {
+    int64_t Machine::notify(TransactionContext* context) const {
 
         Transaction* tx = Transaction::make(context, this, 10);
 
@@ -340,10 +340,10 @@ namespace wry {
             case PHASE_TRAVELLING: {
                 // Machine is travelling from old location to new location
                 assert(_old_location != _new_location);
-                if ((context->_world->_time - _new_time) < 0) {
+                if ((context->now() - _new_time) < 0) {
                     // This was a spurious wakeup
                     // printf("EntityID %lld experienced spurious wakeup\n", _entity_id.data);
-                    return;
+                    return 0;
                 }
                 new_this->_phase = PHASE_WAITING_FOR_OLD;
             } [[fallthrough]];
@@ -402,7 +402,7 @@ namespace wry {
                         new_this->_on_arrival = OPCODE_NOOP;
                         tx->write_entity_for_entity_id(this->_entity_id, new_this);
                         tx->wait_on_value_for_coordinate(_new_location);
-                        return;
+                        return 0;
 
                     case ArrivalPlan::PARK_STORE_GUARD:
                         // the pending STORE may not act yet (see the
@@ -411,7 +411,7 @@ namespace wry {
                         tx->write_entity_for_entity_id(this->_entity_id, new_this);
                         tx->wait_on_value_for_coordinate(_new_location);
                         tx->on_abort_retry();
-                        return;
+                        return 0;
 
                     case ArrivalPlan::PARK_OCCUPIED:
                         tx->write_entity_for_entity_id(this->_entity_id, new_this);
@@ -424,7 +424,7 @@ namespace wry {
                         // whoever wrote our state is responsible for
                         // scheduling us
                         tx->on_abort_retry();
-                        return;
+                        return 0;
 
                     case ArrivalPlan::PARK_VALVE:
                         tx->write_entity_for_entity_id(this->_entity_id, new_this);
@@ -433,7 +433,7 @@ namespace wry {
                         // or for the instruction under us to change
                         tx->wait_on_value_for_coordinate(_new_location);
                         tx->on_abort_retry();
-                        return;
+                        return 0;
 
                     case ArrivalPlan::PARK_JUNCTION:
                         tx->write_entity_for_entity_id(this->_entity_id, new_this);
@@ -444,7 +444,7 @@ namespace wry {
                         // or for the instruction under us to change
                         tx->wait_on_value_for_coordinate(_new_location);
                         tx->on_abort_retry();
-                        return;
+                        return 0;
 
                     case ArrivalPlan::PROCEED:
                         break;
@@ -827,12 +827,12 @@ namespace wry {
                 new_this->_on_arrival = latched;
                 new_this->_new_heading = plan.next_heading;
                 new_this->_new_location = plan.next_location;
-                new_this->_old_time = context->_world->_time;
-                new_this->_new_time = context->_world->_time + 64;
+                new_this->_old_time = context->now();
+                new_this->_new_time = context->now() + 64;
                 new_this->_phase = PHASE_TRAVELLING;
                 tx->wait_on_time(new_this->_new_time);
                 tx->on_abort_retry();
-                return;
+                return 0;
             }
                 
             default:
@@ -874,6 +874,7 @@ namespace wry {
         EntityID test_machine_at_rest(World* w, i32 x, i32 y,
                                       i64 heading = HEADING_NORTH) {
             Machine* m = new Machine;
+            m->_entity_id = w->generate_entity_id();
             m->_old_location = Coordinate{x, y};
             m->_new_location = Coordinate{x, y};
             m->_old_heading = heading;

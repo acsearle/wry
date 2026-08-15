@@ -31,16 +31,15 @@ namespace wry {
 
     struct Entity : HeapTerm {
 
-        virtual ~Entity() = default;
-
-        virtual void notify(TransactionContext*) const {}
-
         EntityID _entity_id;
-
-        Entity();
+        mutable EntityID _free_entity_id;
 
         // _save_type_tag and _save_body are inherited as pure virtuals
         // from HeapTerm; concrete subclasses (Machine, ...) override.
+
+        [[nodiscard]] virtual int64_t notify(TransactionContext*) const { return 0; }
+        [[nodiscard]] virtual Entity* make_mutable_clone() const = 0;
+
 
     }; // struct Entity
 

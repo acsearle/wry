@@ -181,7 +181,7 @@ namespace wry {
 
     auto Transaction::
     write_entity_id_for_time(Time key, EntityID value, int operation) -> void {
-        assert(key > _context->_world->_time);
+        assert(key > _context->now());
         transaction_verb_generic(this,
                                  &(_context->_wait_on_time),
                                  key,
@@ -194,7 +194,7 @@ namespace wry {
     wait_on_time(Time key,
                  int operation) -> void {
         // Can't schedule things for past or present
-        assert(key > _context->_world->_time);
+        assert(key > _context->now());
         transaction_verb_generic(this,
                                     &(_context->_wait_on_time),
                                     key,
@@ -206,12 +206,12 @@ namespace wry {
     on_commit_sleep_for(uint64_t ticks)
     -> void {
         assert(ticks > 0);
-        wait_on_time(_context->_world->_time + ticks, WAIT_ON_COMMIT);
+        wait_on_time(_context->now() + ticks, WAIT_ON_COMMIT);
     }
 
     auto Transaction::on_abort_retry()
     -> void {
-        wait_on_time(_context->_world->_time + 1, WAIT_ON_ABORT);
+        wait_on_time(_context->next_now(), WAIT_ON_ABORT);
     }
     
     
@@ -252,7 +252,7 @@ namespace wry {
                                (unsigned long long)priority,
                                (unsigned long long)_entity->_entity_id.data,
                                (unsigned long long)head->_parent->_entity->_entity_id.data,
-                               (long long)_context->_world->_time);
+                               (long long)_context->now());
                         abort();
                     }
                     // If that transaction is higher priority than us, we must

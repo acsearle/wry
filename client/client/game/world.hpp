@@ -33,6 +33,22 @@ namespace wry {
 
     Time world_get_time(const World* world);
 
+    struct ReadyKey {
+        EntityID id;
+        mutable int64_t n;
+    };
+
+    inline void garbage_collected_scan(ReadyKey const&) {}
+
+    struct ReadyKeyCompare {
+        constexpr bool operator()(ReadyKey a, ReadyKey b) const {
+            return a.id < b.id;
+        }
+    };
+
+    inline void garbage_collected_scan(ReadyKeyCompare const&) {}
+
+
     // World IS-A HeapTerm.  It can travel as the OBJECT payload of a
     // Term, which unifies the save-format polymorphic dispatch path
     // (every snapshotable thing reaches the registry through
@@ -48,9 +64,13 @@ namespace wry {
             printf("%s\n", __PRETTY_FUNCTION__);
         }
 
-
         Time _time;
-        FrozenSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline> _ready;
+
+        // Starts at 1; 0 is used to represent no EntityID
+        EntityID _entity_id_source;
+
+
+        FrozenSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline> _ready;
 
         // Occupancy vs location (split 2026-07-26):
         //
@@ -82,6 +102,7 @@ namespace wry {
 
         World()
         : _time{0}
+        , _entity_id_source{1}
         , _ready{}
         , _entity_id_for_coordinate{}
         , _located_for_coordinate{}
@@ -93,7 +114,8 @@ namespace wry {
         }
 
         World(Time time,
-              FrozenSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline> ready,
+              EntityID entity_id_source,
+              FrozenSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline> ready,
               WaitableMap<Coordinate, EntityID> entity_id_for_coordinate,
               WaitableMap<Coordinate, WaitSet> located_for_coordinate,
               WaitableMap<EntityID, const Entity*> entity_for_entity_id,
@@ -101,6 +123,7 @@ namespace wry {
               WaitableMap<Coordinate, Terrain> terrain_for_coordinate,
               Set waiting_on_time)
         : _time(time)
+        , _entity_id_source(entity_id_source)
         , _ready(ready)
         , _entity_id_for_coordinate(entity_id_for_coordinate)
         , _located_for_coordinate(located_for_coordinate)
@@ -115,39 +138,7 @@ namespace wry {
             // printf("~World at %p\n", this);
         }
 
-        void hack_repair_invariant() {
-            std::pair<Time, wry::EntityID> victim;
-            if (_waiting_on_time.try_front(victim)) {
-                assert(victim.first >= _time);
-                if (victim.first == _time) {
-
-                    // TODO: Require the arguments to already be partitioned
-
-                    // HACK: We've been given a waiting_on_time that includes
-                    // elements that should be in _ready.
-
-                    Set waiting_on_now;
-                    std::tie(waiting_on_now, _waiting_on_time) = partition_first(_waiting_on_time, _time);
-
-                    // HACK: If the world is in a bad state from being manually
-                    // constructed, the ready set should be empty
-                    assert(_ready.is_empty());
-
-                    ConcurrentSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline> mut_ready;
-
-                    // Copy the EntityIDs waiting on now to the _ready skiplist
-                    waiting_on_now.for_each([this, &mut_ready] (std::pair<Time, EntityID> x) {
-                        assert(x.first == _time);
-                        (void) mut_ready.try_emplace(x.second);
-                    });
-
-                    _ready = FrozenSkiplistSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline>(std::move(mut_ready));
-
-                    // HACK: _ready is now populated, _waiting_on_time is now pruned
-
-                }
-            }
-        }
+        void hack_repair_invariant();
 
         virtual void _garbage_collected_scan() const override;
 
@@ -157,6 +148,8 @@ namespace wry {
         virtual void _save_body(Saver& saver) const override;
 
         Coroutine::Future<Root<World*>> step() const;
+
+        EntityID generate_entity_id() { return _entity_id_source++; }
 
     }; // World
         

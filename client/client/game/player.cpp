@@ -29,11 +29,11 @@ namespace wry {
     }
 
     
-    void Player::notify(TransactionContext* context) const {
+    int64_t Player::notify(TransactionContext* context) const {
         
         // always wait again
         Transaction* tx = Transaction::make(context, this, 2);
-        tx->wait_on_time(context->_world->_time + 1);
+        tx->wait_on_time(context->next_now());
         
         Action action = {};
         if (_queue.try_pop_front(action)) {
@@ -46,7 +46,9 @@ namespace wry {
                 default:
                     abort();
             };
-        }        
+        }
+
+        return 0;
     }
     
 } // namespace wry

@@ -38,7 +38,7 @@ namespace wry {
         
         mutable BlockingDeque<Action> _queue;
                 
-        virtual void notify(TransactionContext*) const override;
+        virtual int64_t notify(TransactionContext*) const override;
 
         virtual void _garbage_collected_scan() const override;
 
@@ -47,6 +47,9 @@ namespace wry {
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override final;
 
+        [[nodiscard]] virtual Player* make_mutable_clone() const override {
+            abort();
+        }
 
     };
     
