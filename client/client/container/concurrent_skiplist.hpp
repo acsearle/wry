@@ -753,6 +753,16 @@ namespace wry {
             return _head->is_empty();
         }
 
+        [[nodiscard]] iterator begin() const {
+            return iterator{
+                _head->_next[0].nonatomic_load()
+            };
+        }
+
+        [[nodiscard]] iterator end() const {
+            return iterator{nullptr};
+        }
+
     };
 
     template<typename Key, typename Compare, typename Discipline>

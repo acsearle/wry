@@ -1,5 +1,20 @@
 # Todo
 
+List of one-line reminders of things to think and do
+- Saving AMTs saves their in-memory structure, which is strange and brittle
+- ThreadPublic should probably not be GC and be more like a Crossbeam list
+- The `_ready` skiplist should probably have a per-object allocator
+- Transactional non-exclusive commutative operations, like addition
+- Strip the WRY_GC_DEBUG crash-trap tier once the UAF stays silent (condition in garbage_collected.cpp banner)
+- Sweep the GUI with WRY-GC-UNPINNED watched, then promote the detector print to assert
+- thread_public.cpp comments still say "static Root" / "drop the root" over the raw-pointer code
+
+
+
+## Old below
+
+Clean this up sometime:
+
 Interface
 
 - How to hide delay of anything drawn in Metal to represent cursor

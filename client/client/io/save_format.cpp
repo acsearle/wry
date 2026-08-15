@@ -30,6 +30,7 @@
 
 #include "array_mapped_trie.hpp"
 #include "entity.hpp"
+#include "epoch.hpp"
 #include "HeapString.hpp"
 #include "machine.hpp"
 #include "persistent_set.hpp"
@@ -324,7 +325,12 @@ namespace wry {
         SaveRef ent_for_eid_kv   = s.visit<NodeEntityPtr_U64>(_entity_for_entity_id.kv._inner);
         SaveRef val_for_coord_kv = s.visit<NodeValue_U64>(_term_for_coordinate.kv._inner);
         SaveRef ter_for_coord_kv = s.visit<NodeTerrain_U64>(_terrain_for_coordinate.kv._inner);
-        SaveRef waiting_on_time  = s.visit<NodeSet_U128>(_waiting_on_time._inner);
+
+        // To save _ready and _waiting_on_time we merge them
+        Set t{_waiting_on_time};
+        for (EntityID entity_id : _ready)
+            t.set({_time, entity_id});
+        SaveRef waiting_on_time  = s.visit<NodeSet_U128>(t._inner);
 
         // The ki waiter index is semantic state, not a regenerable cache: a
         // waiter registered before the save must still be registered after a
@@ -789,6 +795,70 @@ namespace wry {
         assert(has);
         assert(t._data == term_make_integer_with(7)._data);
         assert(w2->_waiting_on_time.contains({Time{78}, EntityID{101}}));
+
+        co_return;
+    };
+
+    // The ready-set round-trip: step until _ready is live, save (which folds
+    // _ready into the emitted time wheel as the current-time bucket), load,
+    // repair (which unfolds it back out), then step BOTH worlds onward and
+    // require identical behavior.  The oracle is byte-equality of re-saves,
+    // valid here because the world is deterministic and mints no EntityIDs
+    // while stepping (a Counter, no Spawner): the process-global ID oracle
+    // would otherwise diverge between the two lineages -- making spawning
+    // worlds pass this test is the deterministic-EntityID milestone.
+    define_test("save_format_ready_roundtrip") {
+
+        World* w = new World;
+        Counter* counter = new Counter;
+        counter->_location = Coordinate{0, 0};
+        w->_entity_for_entity_id.set(counter->_entity_id, counter);
+        { WaitSet s; s.set(counter->_entity_id);
+          w->_located_for_coordinate.set(counter->_location, s); }
+        w->_waiting_on_time.set({Time{0}, counter->_entity_id});
+        w->hack_repair_invariant();
+
+        // Step to time 3.  The Counter re-arms every tick via
+        // on_commit_sleep_for(1), so every boundary has a nonempty _ready.
+        Root<World*> a{w};
+        for (int i = 0; i != 3; ++i) {
+            epoch::Epoch pin = pin_global_epoch();
+            Root<World*> next = co_await a._ptr->step();
+            unpin_global_epoch(pin);
+            a = std::move(next);
+        }
+        assert(a._ptr->_time == Time{3});
+        assert(!a._ptr->_ready.is_empty());
+
+        // Save mid-flight, reload, unfold the bucket into _ready.
+        std::vector<uint8_t> b1 = test_save_to_buffer(a._ptr);
+        World* l = test_load_from_buffer(b1);
+        assert(l);
+        assert(l->_ready.is_empty());
+        assert(l->_waiting_on_time.contains({Time{3}, counter->_entity_id}));
+        l->hack_repair_invariant();
+        assert(!l->_ready.is_empty());
+        Root<World*> b{l};
+
+        // Both lineages step onward and must not diverge.
+        for (int i = 0; i != 3; ++i) {
+            epoch::Epoch pin = pin_global_epoch();
+            Root<World*> next_a = co_await a._ptr->step();
+            Root<World*> next_b = co_await b._ptr->step();
+            unpin_global_epoch(pin);
+            a = std::move(next_a);
+            b = std::move(next_b);
+        }
+
+        Term ta{}, tb{};
+        assert(a._ptr->_term_for_coordinate.try_get(Coordinate{0, 0}, ta));
+        assert(b._ptr->_term_for_coordinate.try_get(Coordinate{0, 0}, tb));
+        assert(ta.as_int64_t() == 6);
+        assert(tb.as_int64_t() == 6);
+
+        std::vector<uint8_t> ba = test_save_to_buffer(a._ptr);
+        std::vector<uint8_t> bb = test_save_to_buffer(b._ptr);
+        assert(ba == bb);
 
         co_return;
     };
