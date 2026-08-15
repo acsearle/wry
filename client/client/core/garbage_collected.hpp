@@ -181,7 +181,7 @@ namespace wry {
     // root registry via the report channel.
     void _garbage_collected_root_up(GarbageCollected const* _Nonnull);
 
-    // Subtract (increment the multiplicity of) an object from the implicit
+    // Add (increment the multiplicity of) an object to the implicit
     // Roots multiset.
 
     inline void garbage_collected_roots_add(GarbageCollected const* _Nullable ptr) {
@@ -261,7 +261,6 @@ namespace wry {
             return *this;
         }
 
-        // constexpr so a thread_local Root can be constinit
         constexpr Root() : _ptr(nullptr) {}
 
         Root(Root const& other)
@@ -282,9 +281,7 @@ namespace wry {
             // (root vs pointer-to-root distinction?)
             //
             // Destroying an *empty* Root performs no collected-heap action
-            // and is permitted on any thread; a thread_local Root that was
-            // nulled by thread_public_deregister must be destructible on the
-            // collector thread at its exit.
+            // and is permitted on any thread
             if (_ptr) {
                 assert_this_thread_is_mutator();
                 garbage_collected_roots_subtract(_ptr);

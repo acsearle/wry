@@ -9,6 +9,8 @@
 #define bag_hpp
 
 #include <cstdio>
+#include <type_traits>
+#include <pthread.h>   // TEMP (2026-08-15): thread-reap diagnostics in ~Bag
 #include "utility.hpp"
 
 namespace wry {
@@ -132,6 +134,32 @@ namespace wry {
         }
         
         ~SinglyLinkedListOfInlineStacksBag() {
+            // The destructor does no work; it is purely a tripwire.  A
+            // nonempty bag at destruction is a lost mutator report (first
+            // seen as a rare abort when libdispatch reaped an idle thread
+            // whose TLS Root destructor shaded after its final report,
+            // 2026-08).  Narrate before asserting so any occurrence
+            // identifies the thread and the stranded pointers.
+            if (_head || _tail || _size) {
+                char name[64] = {};
+                pthread_getname_np(pthread_self(), name, sizeof name);
+                size_t nodes = 0;
+                for (Node* n = _head; n; n = n->_next)
+                    ++nodes;
+                fprintf(stderr,
+                        "WRY-BAG-LEAK: ~Bag %p on thread \"%s\" (%p): "
+                        "size=%zu nodes=%zu\n",
+                        (void*)this, name, (void*)pthread_self(),
+                        _size, nodes);
+                if constexpr (std::is_pointer_v<T>) {
+                    size_t printed = 0;
+                    for (Node* n = _head; n && printed < 8; n = n->_next)
+                        for (size_t i = 0; i < n->_size && printed < 8; ++i, ++printed)
+                            fprintf(stderr, "WRY-BAG-LEAK:   [%zu] %p\n",
+                                    printed, (const void*)n->_elements[i]);
+                }
+            }
+            // END TEMP
             assert(_head == nullptr);
             assert(_tail == nullptr);
             assert(_size == 0);

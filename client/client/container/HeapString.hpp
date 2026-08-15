@@ -110,8 +110,13 @@ namespace wry {
     using WeakDict = Ctrie<std::string, WeakHolder<HeapString> const*, std_string_Hasher>;
 
     inline WeakDict* heap_string_weak_dictionary() {
-        static Root<WeakDict*> _ct{new WeakDict};
-        return _ct._ptr;
+        static WeakDict* _ct{[]() {
+            auto a = new WeakDict;
+            // Add to root set; we never remove this static lifetime singleton
+            garbage_collected_roots_add(a);
+            return a;
+        }()};
+        return _ct;
     }
 
     // `did_emplace`, when supplied, reports whether the call installed a

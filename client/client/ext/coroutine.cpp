@@ -105,15 +105,18 @@ namespace wry {
 
 namespace wry::Coroutine {
 
-    namespace {
-        // libdispatch invokes this with the suspended coroutine handle's address
-        // as its context argument; reconstruct the handle and resume.  The
-        // coroutine then runs on the dispatch worker thread until its next
-        // suspension or completion.
-        void resume_coroutine_from_dispatch(void* context) noexcept {
-            std::coroutine_handle<>::from_address(context).resume();
-        }
+    inline void resume_coroutine_from_context(void* context) {
+        (*((void(**)(void*))context))(context);
     }
+
+    void ScheduleOnBlockableThread::await_suspend(std::coroutine_handle<> handle) const noexcept {
+        dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
+                         handle.address(),
+                         &resume_coroutine_from_context);
+    }
+
+    // Policy: We use libdispatch to implement waiting, but on waking we send
+    // the actual work back to the global work queue
 
     void Until::await_suspend(std::coroutine_handle<> handle) const noexcept {
         // await_ready already handled the already-past case, but clamp anyway so
@@ -126,13 +129,7 @@ namespace wry::Coroutine {
         dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, ns),
                          dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
                          handle.address(),
-                         &resume_coroutine_from_dispatch);
-    }
-
-    void ScheduleOnBlockableThread::await_suspend(std::coroutine_handle<> handle) const noexcept {
-        dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
-                         handle.address(),
-                         &resume_coroutine_from_dispatch);
+                         &global_work_queue_schedule);
     }
 
     bool OneShotEvent::WaitUntil::await_suspend(std::coroutine_handle<> handle) noexcept {

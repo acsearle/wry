@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "thread_public.hpp"
@@ -17,7 +18,18 @@
 
 namespace wry {
 
-    constinit thread_local Root<ThreadPublic*> _thread_local_thread_public{};
+    // Non-owning thread_local raw pointer trusts in the list to keep its nodes
+    // alive
+    constinit thread_local ThreadPublic* _thread_local_thread_public = nullptr;
+
+    // Policy: GC-adjacent TLS must be trivially destructible.  constinit is
+    // only half the discipline -- a nontrivial destructor still registers at
+    // first use, so destruction order is the reverse of an invisible access
+    // order, and it runs on dying threads in states (unpinned) that violate
+    // GC entry contracts.  A Root here shaded from dying threads' TLS
+    // destructors into bags that would never report again (2026-08).
+    static_assert(std::is_trivially_destructible_v<
+                      decltype(_thread_local_thread_public)>);
 
     static int64_t _thread_public_now() {
         return std::chrono::steady_clock::now().time_since_epoch().count();
@@ -45,16 +57,18 @@ namespace wry {
         // static Root keeps the sentinel rooted for the life of the
         // process; it is never marked, so never unlinked.
         assert(epoch::local_state.is_pinned);
-        static Root<ThreadPublic*> _sentinel{[] {
+        static ThreadPublic* _sentinel{[] {
             ThreadPublic* s = new ThreadPublic("(ring)");
             s->_next.nonatomic_store(s, false); // self-loop, pre-publication
+            // Add to root set; we never remove this static lifetime singleton
+            garbage_collected_roots_add(s);
             return s;
         }()};
-        return _sentinel._ptr;
+        return _sentinel;
     }
 
     ThreadPublic* thread_public_this_thread() {
-        return _thread_local_thread_public._ptr;
+        return _thread_local_thread_public;
     }
 
     void thread_public_register(const char* name) {
@@ -80,7 +94,7 @@ namespace wry {
 
     void thread_public_deregister() {
         assert(epoch::local_state.is_pinned);
-        ThreadPublic* node = _thread_local_thread_public._ptr;
+        ThreadPublic* node = _thread_local_thread_public;
         assert(node);
         // Final stamps: after this call the pin/unpin hooks can no longer
         // see the node, so leave it showing unpinned rather than stuck

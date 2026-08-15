@@ -185,8 +185,7 @@ namespace wry::Coroutine {
                 if (_state.compare_exchange_weak_acq_rel_relaxed(expected,
                                                                  terminal)) {
                     if (expected != EMPTY)
-                        global_work_queue_schedule(
-                            std::coroutine_handle<>::from_address((void*)expected));
+                        global_work_queue_schedule((void*)expected);
                     return;
                 }
             }
