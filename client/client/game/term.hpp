@@ -745,9 +745,13 @@ namespace wry {
     // EntityID packing: 60 bits of the underlying uint64_t identity, in
     // bits 4..63, with TERM_TAG_ENTITY_ID in the low 4 bits.  The
     // unconditional assert documents that EntityID issuance must respect
-    // the 60-bit ceiling; the existing oracle()-based scheme will need to
-    // honour this (or saves must compact IDs at load time, per
-    // entity_id.hpp's note).
+    // the 60-bit ceiling.  IDs are minted from the World's cursor by rank
+    // in the ready set and are PERMANENT: never reused, and never
+    // compacted at load -- priority is hash(id, t), so any remap changes
+    // conflict resolution and silently forks the sim from its own save
+    // (decided 2026-08-16).  The ceiling is far off (~300 years at 10^6
+    // ready entities per tick); if it ever nears, the remedy is a wider
+    // or tick-scoped packing, not a remap.
     constexpr Term term_make_entity_id(EntityID eid) {
         assert((eid.data >> 60) == 0 && "EntityID overflows 60-bit Term packing");
         Term result;

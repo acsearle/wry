@@ -804,14 +804,26 @@ namespace wry {
         co_return;
     };
 
-    // The ready-set round-trip: step until _ready is live, save (which folds
-    // _ready into the emitted time wheel as the current-time bucket), load,
-    // repair (which unfolds it back out), then step BOTH worlds onward and
-    // require identical behavior.  The oracle is byte-equality of re-saves,
-    // valid here because the world is deterministic and mints no EntityIDs
-    // while stepping (a Counter, no Spawner): the process-global ID oracle
-    // would otherwise diverge between the two lineages -- making spawning
-    // worlds pass this test is the deterministic-EntityID milestone.
+    // The ready-set and deterministic-EntityID round-trip.
+    //
+    // Step a world until its ready set is live and it has spawned, save
+    // (which folds _ready into the emitted time wheel as the current-time
+    // bucket, and carries the EntityID cursor and any held tickets), load,
+    // repair (which unfolds the bucket back out), then step BOTH lineages
+    // onward and require identical behavior -- byte-equality of re-saves,
+    // the strongest oracle available, valid because stepping is a pure
+    // function of the World: EntityIDs are minted from the World's own
+    // cursor by rank in the ready set, never from process state, so the
+    // two lineages must agree on every ID they assign.
+    //
+    // The population: a Counter (re-arms every tick, so every boundary has
+    // a nonempty _ready) and Spawners.  A Spawner needs two ticks per
+    // machine -- one to request a ticket, one to spend it -- and spawns
+    // only while its cell is unoccupied; the spawned machine, on an empty
+    // value plane, parks in place, so each Spawner yields exactly one
+    // machine.  Two Spawners exercise the prefix sum: their tickets in one
+    // tick are ranked by EntityID order in the ready set, and the
+    // assertions below check the ranks landed disjoint and in order.
     define_test("save_format_ready_roundtrip") {
 
         World* w = new World;
@@ -822,38 +834,70 @@ namespace wry {
         { WaitSet s; s.set(counter->_entity_id);
           w->_located_for_coordinate.set(counter->_location, s); }
         w->_waiting_on_time.set({Time{0}, counter->_entity_id});
+
+        Spawner* spawners[2] = { new Spawner, new Spawner };
+        Coordinate spawner_at[2] = { Coordinate{5, 5}, Coordinate{-7, 3} };
+        for (int i = 0; i != 2; ++i) {
+            spawners[i]->_entity_id = w->generate_entity_id();
+            spawners[i]->_location = spawner_at[i];
+            w->_entity_for_entity_id.set(spawners[i]->_entity_id, spawners[i]);
+            { WaitSet s; s.set(spawners[i]->_entity_id);
+              w->_located_for_coordinate.set(spawner_at[i], s); }
+            w->_waiting_on_time.set({Time{0}, spawners[i]->_entity_id});
+        }
+        EntityID cursor0 = w->_entity_id_source;
         w->hack_repair_invariant();
 
-        // Step to time 3.  The Counter re-arms every tick via
-        // on_commit_sleep_for(1), so every boundary has a nonempty _ready.
-        Root<World*> a{w};
-        for (int i = 0; i != 3; ++i) {
+        auto step_once = [](Root<World*>& r) -> Coroutine::Task {
             epoch::Epoch pin = pin_global_epoch();
-            Root<World*> next = co_await a._ptr->step();
+            Root<World*> next = co_await r._ptr->step();
             unpin_global_epoch(pin);
-            a = std::move(next);
-        }
+            r = std::move(next);
+        };
+
+        // Step to time 3.  Tick 0: both spawners request (two tickets, the
+        // cursor advances by 2, and the delivery lands in each spawner's
+        // installed successor).  Tick 1: both spend, each installing a new
+        // Machine under the ID it was dealt.  Tick 2: the machines wake.
+        Root<World*> a{w};
+        for (int i = 0; i != 3; ++i)
+            co_await step_once(a);
         assert(a._ptr->_time == Time{3});
         assert(!a._ptr->_ready.is_empty());
+
+        // The cursor advanced (by at least the two first-tick requests),
+        // and both spawn cells are now occupied by machines whose IDs were
+        // dealt from the block above the starting cursor: distinct, in the
+        // block, and ordered like their spawners (rank order == EntityID
+        // order of the requesters).
+        assert(a._ptr->_entity_id_source.data >= cursor0.data + 2);
+        EntityID spawned[2] = {};
+        for (int i = 0; i != 2; ++i) {
+            assert(a._ptr->_entity_id_for_coordinate.try_get(spawner_at[i], spawned[i]));
+            assert(spawned[i]);
+            assert(spawned[i].data >= cursor0.data);
+            assert(spawned[i].data < a._ptr->_entity_id_source.data);
+        }
+        assert(spawned[0] != spawned[1]);
+        assert((spawners[0]->_entity_id < spawners[1]->_entity_id)
+               == (spawned[0] < spawned[1]));
 
         // Save mid-flight, reload, unfold the bucket into _ready.
         std::vector<uint8_t> b1 = test_save_to_buffer(a._ptr);
         World* l = test_load_from_buffer(b1);
         assert(l);
         assert(l->_ready.is_empty());
+        assert(l->_entity_id_source == a._ptr->_entity_id_source);
         assert(l->_waiting_on_time.contains({Time{3}, counter->_entity_id}));
         l->hack_repair_invariant();
         assert(!l->_ready.is_empty());
         Root<World*> b{l};
 
-        // Both lineages step onward and must not diverge.
+        // Both lineages step onward and must not diverge -- including in
+        // every EntityID minted from here on.
         for (int i = 0; i != 3; ++i) {
-            epoch::Epoch pin = pin_global_epoch();
-            Root<World*> next_a = co_await a._ptr->step();
-            Root<World*> next_b = co_await b._ptr->step();
-            unpin_global_epoch(pin);
-            a = std::move(next_a);
-            b = std::move(next_b);
+            co_await step_once(a);
+            co_await step_once(b);
         }
 
         Term ta{}, tb{};
@@ -861,10 +905,17 @@ namespace wry {
         assert(b._ptr->_term_for_coordinate.try_get(Coordinate{0, 0}, tb));
         assert(ta.as_int64_t() == 6);
         assert(tb.as_int64_t() == 6);
+        assert(a._ptr->_entity_id_source == b._ptr->_entity_id_source);
 
         std::vector<uint8_t> ba = test_save_to_buffer(a._ptr);
         std::vector<uint8_t> bb = test_save_to_buffer(b._ptr);
         assert(ba == bb);
+
+        printf("ready_roundtrip: cursor %llu -> %llu, spawned EntityID{%llu} and EntityID{%llu}\n",
+               (unsigned long long)cursor0.data,
+               (unsigned long long)a._ptr->_entity_id_source.data,
+               (unsigned long long)spawned[0].data,
+               (unsigned long long)spawned[1].data);
 
         co_return;
     };

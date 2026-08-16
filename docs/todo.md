@@ -8,7 +8,10 @@ List of one-line reminders of things to think and do
 - Strip the WRY_GC_DEBUG crash-trap tier once the UAF stays silent (condition in garbage_collected.cpp banner)
 - Sweep the GUI with WRY-GC-UNPINNED watched, then promote the detector print to assert
 - thread_public.cpp comments still say "static Root" / "drop the root" over the raw-pointer code
-
+- Rewrite transaction.md's "Open design: deterministic EntityID assignment" (lazy-span/relative-refs scheme is obsolete) to the landed ready-set-rank + ticket design; also its "Waiting and scheduling" section still describes the old single-partition/copy-back flow
+- DECIDED 2026-08-16: EntityIDs are permanent, never compacted at load (remap changes hash priorities => conflict resolution => forks the sim from its own save; also breaks peer replay and Term-embedded ids); ceiling is a design-around, not a per-session budget.  Ticket hoarding equilibrium (O(spawn-capable entities) reserved-unspent ids, burned at entity death) is therefore just accepted burn
+- Worldgen pre-loads Spawner tickets: confirm every pre-loaded _free_entity_id is minted from the World cursor (generate_entity_id), never a literal, or it collides with the first dealt block
+- ReadyKey requested/n and Entity _free_entity_id: the "late-written mutable field on a published-immutable object" contract lives in comments only; consider a doc paragraph naming both instances
 
 
 ## Old below

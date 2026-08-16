@@ -68,33 +68,63 @@ namespace wry {
         }
     }
 
+    // Fused dispatch-and-accumulate over the frozen ready set.
+    //
+    // A frozen skiplist is the left-child/right-sibling encoding of a tree:
+    // each node is discovered exactly once, at its own top level, by the
+    // frame whose interval [self, bound) contains it.  One frame per node
+    // (and one for the head): spawn a child frame for each successor in the
+    // tower, top level first (each successor tightens the bound for the
+    // levels below it), notify our own entity while the children run, join,
+    // then prefix-sum.  With successors laid out so that a HIGHER level
+    // covers a LATER key interval, the level-i child's subtree is preceded
+    // within this frame by self plus the children at levels below i -- that
+    // is the value written into its `n`.  The frame returns its subtree
+    // total; the head frame's return is the tick's total, which advances the
+    // World's EntityID cursor.
+    //
+    // `n` and `requested` are written exactly once, by the parent frame
+    // (n) and the owning frame (requested), and are complete only once the
+    // notify nursery in step() has joined; try_lookup_cumulant reads them
+    // in the rebuild, on the far side of that barrier.  Two frames never
+    // touch the same field.
+    //
+    // The lookup that consumes `n` adds it for every node it ENTERS on the
+    // way down, so the head needs none.  The head frame is the same code
+    // with a null entity: no self-notify, weight zero.
     using ReadyNode = _skiplist_detail::Node<ReadyKey, ReadyKeyCompare, ScanDiscipline>;
     using Next = ReadyNode::AtomicSlot<ReadyNode* _Nullable>;
     [[nodiscard]] Coroutine::Future<int64_t> notify_and_accumulate(Next const* _Nonnull self_next,
                                                                    size_t self_levels,
-                                                                   int64_t self_weight,
-                                                                   ReadyNode const* bound,
+                                                                   ReadyNode const* _Nullable self,
+                                                                   ReadyNode const* _Nullable bound,
                                                                    TransactionContext* context) {
         Coroutine::Nursery nursery;
 
+        // results[0] is our own weight; results[i + 1] receives the level-i
+        // child's subtree total (or stays zero for a level with no child).
         // TODO: memory waste; worst case is much bigger than likely cases
         assert(self_levels <= 64);
-        int64_t results[65] = { self_weight, }; // zero-initialized tail
+        int64_t results[65] = {};
         ReadyNode const* bound2 = bound;
         for (size_t i = self_levels; i--;) {
             ReadyNode const* child = self_next[i].nonatomic_load();
             if (child != bound2) {
                 assert(child);
-                // Compute the contribution
-                Entity const* entity = nullptr;
-                bool flag = context->try_read_entity_for_entity_id(child->_key.id, entity);
-                assert(flag && entity);
-                int64_t child_weight = entity->notify(context);
-                child->_key.requested = child_weight;
                 // TODO: fork or soon?
-                nursery.soon(results[i + 1], notify_and_accumulate(child->_next, child->_size, child_weight, bound2, context));
+                nursery.soon(results[i + 1],
+                             notify_and_accumulate(child->_next, child->_size, child, bound2, context));
                 bound2 = child;
             }
+        }
+        // Our own contribution, while the children run.  The head has no
+        // entity and contributes nothing.
+        if (self) {
+            Entity const* entity = nullptr;
+            bool flag = context->try_read_entity_for_entity_id(self->_key.id, entity);
+            assert(flag && entity);
+            results[0] = entity->notify(context);
+            self->_key.requested = results[0];
         }
         // Wait for results
         co_await nursery.join();
@@ -135,12 +165,18 @@ namespace wry {
                 --i;
                 --left;
             } else if (candidate->_key.id < id) {
-                // Move right and add subtree weight
+                // Move right: we enter candidate's interval, so add its
+                // prefix-within-frame; the target lies inside it.
                 left = candidate->_next + i;
                 assert(candidate->_key.n >= 0);
                 n += candidate->_key.n;
             } else {
-                printf("Looked up %lld for EntityID{%llu}\n", n, id.data);
+                // Found: we enter the target too, and its n is the last
+                // term -- its own prefix within the frame we reached it
+                // from.  The entered nodes' n telescope to the absolute
+                // exclusive prefix.
+                assert(candidate->_key.n >= 0);
+                n += candidate->_key.n;
                 victim = n;
                 assert(candidate->_key.requested >= 0);
                 return candidate->_key.requested;
@@ -188,26 +224,16 @@ namespace wry {
 
             // For each EntityID ready now, look up the Entity and notify it.
             // On notification, entities will typically examine the World and
-            // may propose a Transaction to change it.
-//            co_await nursery.fork(_ready
-//                                  .coroutine_parallel_for_each([this, &context] (ReadyKey kn) {
-//                const Entity* a = nullptr;
-//                (void) _entity_for_entity_id.try_get(kn.id, a);
-//                assert(a);
-//                a->notify(&context);
-//            }));
-
-            // For each EntityID ready now, look up the Entity and notify it
-            // Each notified Entity may request some number of new EntityIDs
-            // The traversal augments the structure with the cumulant of these
-            // requests
+            // may propose a Transaction to change it, and may request some
+            // number of new EntityIDs; the traversal augments the ready set
+            // with the cumulant of those requests (see notify_and_accumulate).
             // TODO: Rummaging in the skiplist implementation
             assert(_ready._head);
             co_await nursery.fork(entity_id_requests,
                                   notify_and_accumulate(_ready._head->_next,
                                                         _ready._head->_top.nonatomic_load(),
-                                                        0,
-                                                        nullptr,
+                                                        nullptr,   // head: no entity
+                                                        nullptr,   // bound: +infinity
                                                         &context));
 
             // For each EntityID ready next_time, copy it into next_ready
@@ -433,8 +459,15 @@ namespace wry {
                 } else {
                     result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::CLEAR_VALUE;
                 }
-                // TODO: Installing a new Entity clobbers its _entity_id_free
-                // even if it didn't request new ids.  OK for the one-Spawner world
+                // Deliver a requested EntityID block to the requester's
+                // installed successor: base = this tick's cursor plus the
+                // requester's exclusive prefix over the ready set.  The
+                // lookup is false for keys not in the ready set (an entity
+                // installed by another's transaction, e.g. a spawn) and for
+                // ready entities that requested nothing, so a held ticket is
+                // never clobbered.  Single writer: this leaf action is the
+                // unique committer of kv.first, and the successor is not yet
+                // published.
                 int64_t cumulant = 0;
                 if (try_lookup_cumulant(_ready, kv.first, cumulant)) {
                     result.first.value->_free_entity_id = _entity_id_source + cumulant;
