@@ -36,6 +36,14 @@ namespace wry {
     struct ReadyKey {
         EntityID id;
         mutable int64_t n;
+        mutable int64_t requested;
+
+        constexpr /* implicit */ ReadyKey(EntityID k)
+        : id(k)
+        , n{-1}
+        , requested{-1} {            
+        }
+
     };
 
     inline void garbage_collected_scan(ReadyKey const&) {}
@@ -47,7 +55,6 @@ namespace wry {
     };
 
     inline void garbage_collected_scan(ReadyKeyCompare const&) {}
-
 
     // World IS-A HeapTerm.  It can travel as the OBJECT payload of a
     // Term, which unifies the save-format polymorphic dispatch path

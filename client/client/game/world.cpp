@@ -57,13 +57,93 @@ namespace wry {
                 // Copy the EntityIDs waiting on now to the _ready skiplist
                 waiting_on_now.for_each([this, &mut_ready] (std::pair<Time, EntityID> x) {
                     assert(x.first == _time);
-                    (void) mut_ready.try_emplace(ReadyKey{x.second, -1});
+                    (void) mut_ready.try_emplace(x.second);
                 });
 
                 _ready = FrozenSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline>(std::move(mut_ready));
 
                 // HACK: _ready is now populated, _waiting_on_time is now pruned
 
+            }
+        }
+    }
+
+    using ReadyNode = _skiplist_detail::Node<ReadyKey, ReadyKeyCompare, ScanDiscipline>;
+    using Next = ReadyNode::AtomicSlot<ReadyNode* _Nullable>;
+    [[nodiscard]] Coroutine::Future<int64_t> notify_and_accumulate(Next const* _Nonnull self_next,
+                                                                   size_t self_levels,
+                                                                   int64_t self_weight,
+                                                                   ReadyNode const* bound,
+                                                                   TransactionContext* context) {
+        Coroutine::Nursery nursery;
+
+        // TODO: memory waste; worst case is much bigger than likely cases
+        assert(self_levels <= 64);
+        int64_t results[65] = { self_weight, }; // zero-initialized tail
+        ReadyNode const* bound2 = bound;
+        for (size_t i = self_levels; i--;) {
+            ReadyNode const* child = self_next[i].nonatomic_load();
+            if (child != bound2) {
+                assert(child);
+                // Compute the contribution
+                Entity const* entity = nullptr;
+                bool flag = context->try_read_entity_for_entity_id(child->_key.id, entity);
+                assert(flag && entity);
+                int64_t child_weight = entity->notify(context);
+                child->_key.requested = child_weight;
+                // TODO: fork or soon?
+                nursery.soon(results[i + 1], notify_and_accumulate(child->_next, child->_size, child_weight, bound2, context));
+                bound2 = child;
+            }
+        }
+        // Wait for results
+        co_await nursery.join();
+        // Accumulate
+        for (size_t i = 0; i != self_levels; ++i) {
+            results[i + 1] += results[i];
+        }
+        // Write back if bounds permit
+        bound2 = bound;
+        for (size_t i = self_levels; i--;) {
+            ReadyNode const* child = self_next[i].nonatomic_load();
+            if (child != bound2) {
+                assert(child);
+                child->_key.n = results[i];
+                bound2 = child;
+            }
+        }
+        // Kick the total up to the next level
+        co_return results[self_levels];
+    }
+
+    [[nodiscard]] bool try_lookup_cumulant(FrozenSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline> const& ready,
+                                           EntityID id,
+                                           int64_t& victim) {
+        int64_t n = 0;
+        size_t i = ready._head->_top.load_relaxed() - 1;
+        assert((i + 1) > 0);
+        auto left = ready._head->_next + i;
+        for (;;) {
+            ReadyNode* _Nullable candidate = left->nonatomic_load();
+            if (!candidate || (id < candidate->_key.id)) {
+                // Descend a level
+                if (i == 0) {
+                    // Looked up an EntityID that wasn't ready, such as when
+                    // one Entity creates another
+                    return false;
+                }
+                --i;
+                --left;
+            } else if (candidate->_key.id < id) {
+                // Move right and add subtree weight
+                left = candidate->_next + i;
+                assert(candidate->_key.n >= 0);
+                n += candidate->_key.n;
+            } else {
+                printf("Looked up %lld for EntityID{%llu}\n", n, id.data);
+                victim = n;
+                assert(candidate->_key.requested >= 0);
+                return candidate->_key.requested;
             }
         }
     }
@@ -77,8 +157,6 @@ namespace wry {
             }
         }
 #endif // NDEBUG
-
-        using Set = PersistentSet<std::pair<Time, EntityID>, DefaultKeyService<std::pair<Time, EntityID>>, ScanDiscipline>;
 
         TransactionContext context{._world = this};
         
@@ -104,25 +182,39 @@ namespace wry {
         // TODO: We don't need to create waiting_on_next_time, we just need a
         // masked for_each on _waiting_on_time
 
+        int64_t entity_id_requests = 0;
         {
             Coroutine::Nursery nursery;
 
             // For each EntityID ready now, look up the Entity and notify it.
             // On notification, entities will typically examine the World and
             // may propose a Transaction to change it.
-            co_await nursery.fork(_ready
-                                  .coroutine_parallel_for_each([this, &context] (ReadyKey kn) {
-                const Entity* a = nullptr;
-                (void) _entity_for_entity_id.try_get(kn.id, a);
-                assert(a);
-                a->notify(&context);
-            }));
+//            co_await nursery.fork(_ready
+//                                  .coroutine_parallel_for_each([this, &context] (ReadyKey kn) {
+//                const Entity* a = nullptr;
+//                (void) _entity_for_entity_id.try_get(kn.id, a);
+//                assert(a);
+//                a->notify(&context);
+//            }));
+
+            // For each EntityID ready now, look up the Entity and notify it
+            // Each notified Entity may request some number of new EntityIDs
+            // The traversal augments the structure with the cumulant of these
+            // requests
+            // TODO: Rummaging in the skiplist implementation
+            assert(_ready._head);
+            co_await nursery.fork(entity_id_requests,
+                                  notify_and_accumulate(_ready._head->_next,
+                                                        _ready._head->_top.nonatomic_load(),
+                                                        0,
+                                                        nullptr,
+                                                        &context));
 
             // For each EntityID ready next_time, copy it into next_ready
             co_await nursery.fork(waiting_on_next_time
                                   .coroutine_parallel_for_each([next_time, &next_ready](std::pair<Time, EntityID> kv) {
                 assert(kv.first == next_time);
-                next_ready.try_emplace(ReadyKey{kv.second, -1});
+                next_ready.try_emplace(kv.second);
             }));
 
             co_await nursery.join();
@@ -180,11 +272,11 @@ namespace wry {
                     WaitSet ws;
                     if (_term_for_coordinate.ki.try_get(kv.first, ws))
                         ws.for_each([&next_ready](EntityID waiter) {
-                            next_ready.try_emplace(ReadyKey{waiter, -1});
+                            next_ready.try_emplace(waiter);
                         });
                 }
                 for (EntityID key : waiters) {
-                    next_ready.try_emplace(ReadyKey{key, -1});
+                    next_ready.try_emplace(key);
                 }
                 
             } else if (!waiters.empty()) {
@@ -235,11 +327,11 @@ namespace wry {
                     WaitSet ws;
                     if (_entity_id_for_coordinate.ki.try_get(kv.first, ws))
                         ws.for_each([&next_ready](EntityID waiter) {
-                            next_ready.try_emplace(ReadyKey{waiter, -1});
+                            next_ready.try_emplace(waiter);
                         });
                 }
                 for (EntityID key : waiters) {
-                    next_ready.try_emplace(ReadyKey{key, -1});
+                    next_ready.try_emplace(key);
                 }
                 
             } else if (!waiters.empty()) {
@@ -290,11 +382,11 @@ namespace wry {
                     WaitSet ws;
                     if (_located_for_coordinate.ki.try_get(kv.first, ws))
                         ws.for_each([&next_ready](EntityID waiter) {
-                            next_ready.try_emplace(ReadyKey{waiter, -1});
+                            next_ready.try_emplace(waiter);
                         });
                 }
                 for (EntityID key : waiters) {
-                    next_ready.try_emplace(ReadyKey{key, -1});
+                    next_ready.try_emplace(key);
                 }
 
             } else if (!waiters.empty()) {
@@ -341,15 +433,21 @@ namespace wry {
                 } else {
                     result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::CLEAR_VALUE;
                 }
+                // TODO: Installing a new Entity clobbers its _entity_id_free
+                // even if it didn't request new ids.  OK for the one-Spawner world
+                int64_t cumulant = 0;
+                if (try_lookup_cumulant(_ready, kv.first, cumulant)) {
+                    result.first.value->_free_entity_id = _entity_id_source + cumulant;
+                }
                 {
                     WaitSet ws;
                     if (_entity_for_entity_id.ki.try_get(kv.first, ws))
                         ws.for_each([&next_ready](EntityID waiter) {
-                            next_ready.try_emplace(ReadyKey{waiter, -1});
+                            next_ready.try_emplace(waiter);
                         });
                 }
                 for (EntityID key : waiters) {
-                    next_ready.try_emplace(ReadyKey{key, -1});
+                    next_ready.try_emplace(key);
                 }
                 
             } else if (!waiters.empty()) {
@@ -372,7 +470,7 @@ namespace wry {
                     EntityID entity_id = get<EntityID>(head->_desired);
                     // State and Condition are bit-compatible
                     if (head->resolve() & head->_operation) {
-                        next_ready.try_emplace(ReadyKey{entity_id, -1});
+                        next_ready.try_emplace(entity_id);
                     }
                 }
             } else {
@@ -427,7 +525,7 @@ namespace wry {
 
         co_return new World{
             next_time,
-            _entity_id_source,
+            _entity_id_source + entity_id_requests,
             FrozenSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline>(std::move(next_ready)),
             new_entity_id_for_coordinate,
             new_located_for_coordinate,

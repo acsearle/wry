@@ -373,6 +373,7 @@ namespace wry {
         using iterator = _skiplist_detail::basic_iterator<Key, Compare, Discipline, Loader>;
         size_t i = _top.load_relaxed() - 1;
         assert((i + 1) > 0);
+        // TODO: Why is this called left?
         auto left = _next + i;
         for (;;) {
             Node* _Nullable candidate = Loader{}(*left);

@@ -328,7 +328,7 @@ namespace wry {
 
         // To save _ready and _waiting_on_time we merge them
         Set t{_waiting_on_time};
-        for (auto [entity_id, _] : _ready)
+        for (auto [entity_id, _, _2] : _ready)
             t.set({_time, entity_id});
         SaveRef waiting_on_time  = s.visit<NodeSet_U128>(t._inner);
 

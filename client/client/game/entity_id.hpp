@@ -21,6 +21,7 @@ namespace wry {
         constexpr EntityID& operator++() { ++data; return *this; }
         constexpr EntityID operator++(int) { return EntityID{data++}; }
         constexpr EntityID& operator+=(uint64_t n) { data += n; return *this; }
+        constexpr EntityID operator+(uint64_t n) const { return EntityID{data + n}; }
     };
     
     inline u64 hash(const EntityID& x) {
