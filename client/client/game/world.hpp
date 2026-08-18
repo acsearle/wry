@@ -33,28 +33,12 @@ namespace wry {
 
     Time world_get_time(const World* world);
 
-    struct ReadyKey {
-        EntityID id;
-        mutable int64_t n;
-        mutable int64_t requested;
-
-        constexpr /* implicit */ ReadyKey(EntityID k)
-        : id(k)
-        , n{-1}
-        , requested{-1} {            
-        }
-
+    struct ReadyValue {
+        mutable int64_t n = -1;
+        mutable int64_t requested = -1;
     };
 
-    inline void garbage_collected_scan(ReadyKey const&) {}
-
-    struct ReadyKeyCompare {
-        constexpr bool operator()(ReadyKey a, ReadyKey b) const {
-            return a.id < b.id;
-        }
-    };
-
-    inline void garbage_collected_scan(ReadyKeyCompare const&) {}
+    inline void garbage_collected_scan(ReadyValue const&) {}
 
     // World IS-A HeapTerm.  It can travel as the OBJECT payload of a
     // Term, which unifies the save-format polymorphic dispatch path
@@ -77,7 +61,7 @@ namespace wry {
         EntityID _entity_id_source;
 
 
-        FrozenSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline> _ready;
+        FrozenSkiplistMap<EntityID, ReadyValue, DefaultKeyService<EntityID>, ScanDiscipline> _ready;
 
         // Occupancy vs location (split 2026-07-26):
         //
@@ -122,7 +106,7 @@ namespace wry {
 
         World(Time time,
               EntityID entity_id_source,
-              FrozenSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline> ready,
+              FrozenSkiplistMap<EntityID, ReadyValue, DefaultKeyService<EntityID>, ScanDiscipline> ready,
               WaitableMap<Coordinate, EntityID> entity_id_for_coordinate,
               WaitableMap<Coordinate, WaitSet> located_for_coordinate,
               WaitableMap<EntityID, const Entity*> entity_for_entity_id,

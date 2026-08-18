@@ -139,7 +139,7 @@ namespace wry {
              typename U, typename F, typename S2, typename D2>
     [[nodiscard]] Coroutine::Future<PersistentMap<Key, T, H, D>>
     coroutine_parallel_rebuild(const PersistentMap<Key, T, H, D>& source,
-                               const ConcurrentMap<Key, U, S2, D2>& modifier,
+                               const FrozenMap<Key, U, S2, D2>& modifier,
                                F&& action_for_key) {
         using Action = ParallelRebuildAction<T>;
         std::vector<std::pair<typename H::code_type, Action>> mods;

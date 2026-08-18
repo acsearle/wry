@@ -15,6 +15,9 @@ namespace wry {
     template<typename Key, typename T, typename KeyService, typename Discipline>
     using ConcurrentMap = ConcurrentSkiplistMap<Key, T, KeyService, Discipline>;
 
+    template<typename Key, typename T, typename KeyService, typename Discipline>
+    using FrozenMap = FrozenSkiplistMap<Key, T, KeyService, Discipline>;
+
 } // namespace wry
 
 #endif /* concurrent_map_hpp */

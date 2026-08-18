@@ -145,7 +145,7 @@ namespace wry {
     template<typename Key, typename H, typename D, typename Key2, typename U, typename F, typename S2, typename D2>
     Coroutine::Future<PersistentSet<Key, H, D>>
     coroutine_parallel_rebuild(const PersistentSet<Key, H, D>& source,
-                               const ConcurrentMap<Key2, U, S2, D2>& modifier,
+                               const FrozenMap<Key2, U, S2, D2>& modifier,
                                F&& action_for_key) {
         PersistentSet<Key, H, D> result{source};
         auto first = modifier.begin();

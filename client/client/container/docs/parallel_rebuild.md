@@ -11,6 +11,9 @@ tick (see `core/docs/transaction.md`). Each rebuild reads two immutable inputs:
   code.
 - `modifier`: a `ConcurrentMap` (ordered skiplist) of the keys touched this
   tick, each carrying a `ParallelRebuildAction` (WRITE / CLEAR / MERGE / NONE).
+  The rebuilds take it as a `FrozenMap` (`freeze(map)` after the tick's barrier;
+  the frozen view is the type-level statement that the map is no longer
+  mutated and may be read with plain loads).
 
 and produces a new AMT with every action applied. Both inputs are frozen for the
 duration -- the tick's barrier publishes them and nothing mutates them during
@@ -76,17 +79,20 @@ Stage 1 re-seeks from the head for every subtree. Stage 2 threads a skiplist
 cursor down in loose synchronization with the AMT descent, so each level refines
 the cursor instead of restarting.
 
-The substrate already exists: `ConcurrentSkiplistSet::FrozenCursor`
-(`concurrent_skiplist.hpp`) is a post-freeze, non-atomic, multi-level cursor with
-`down()` (drop a level), `right()` (advance at the current level), `key()`, and
-`make_cursor()` (enter at head / top level). `down` / `right` are exactly the
-operations needed.
+The substrate already exists: `FrozenSkiplistSet::FrozenCursor`
+(`concurrent_skiplist.hpp`) is a post-freeze, non-atomic, multi-level *gap*
+cursor -- the position just after a predecessor node at a level, looking right --
+with `down()` (drop a level, same predecessor), `succ()` (advance at the current
+level), `key()` (peek at the successor's key), and `make_cursor()` on the frozen
+view (enter at the head / top level; the head is itself a node).  `down` / `succ`
+are exactly the operations needed.  (Earlier revisions of this document called
+`succ()` `right()` and hung `make_cursor()` on the live set.)
 
 Position the cursor entering a subtree `[lo, hi)` at `pred(lo)` at the **highest
-level whose `right()` step stays within `[lo, hi)`** -- equivalently, the cursor
+level whose `succ()` step stays within `[lo, hi)`** -- equivalently, the cursor
 whose topmost skip spans the whole range; one level up would overshoot it. To
 split among children at increasing boundaries `lo = b0 < b1 < ... < bk = hi`,
-sweep the cursor forward with `right()` at the current level, dropping with
+sweep the cursor forward with `succ()` at the current level, dropping with
 `down()` as each child's range narrows, locating each `pred(b_i)` in one monotone
 left-to-right pass: O(span at this level + level drops), never re-seeking from the
 head. Hand each child its sub-cursor, re-fitting the level to the child's narrower
@@ -128,7 +134,7 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
   2 primitive and is not yet on this path.  The test checks content equivalence
   (try_get over the key domain), not byte-identical trie shape -- shape is a
   derived structure (see `core/docs/transaction.md` on determinism).
-- Stage 1 wrapper: `coroutine_parallel_rebuild(PersistentMap, ConcurrentMap,
+- Stage 1 wrapper: `coroutine_parallel_rebuild(PersistentMap, FrozenMap,
   action_for_key)` in `persistent_map.hpp` materializes a *real* skiplist
   modifier (NONE-filtered) and drives the AMT core, returning a new
   PersistentMap.  Differential test `persistentmap_parallel_rebuild` (real
@@ -213,7 +219,7 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
   Cursor descent (revisiting the "FrozenCursor unnecessary" finding): the forward
   sweep is correct but has an **O(N) serial** delimiting prefix per frame (the top
   frame scans all N mods before the deepest fork) and O(N log M) total -- the
-  express lanes *do* fix this.  Implementation finding: a level-L `right()` hops
+  express lanes *do* fix this.  Implementation finding: a level-L `succ()` hops
   over lower-level mods, so it cannot by itself prove a child empty; the clean form
   is a **recursive descend-just-enough split** (`skiplist_partition_{assign,frame}`
   in `concurrent_skiplist.hpp`), not the iterative q-stack.  It splits [lo,hi) into
@@ -227,7 +233,8 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
     (descend only where needed) but not separately asserted -- best seen by
     profiling or an op-count bound.
   - Step (cursor-2) done: `unified_frame`/`unified_leaf` now thread the
-    `FrozenCursor` -- the entry is `modifier.make_cursor()`, each frame calls
+    `FrozenCursor` -- the entry is `modifier.make_cursor()` on the frozen
+    modifier (`freeze(map)` at the call site), each frame calls
     `skiplist_partition_frame` to hand its non-empty children covering cursors,
     and the leaf walks level-0 from its own cursor.  The partitioner's frame
     arithmetic moved to `__uint128_t` so the top frame `[0, 2^64)` and boundaries

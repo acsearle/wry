@@ -67,11 +67,6 @@ namespace wry {
         }
     };
 
-    template<typename T>
-    void garbage_collected_scan(DefaultKeyService<T> const& x) {
-        // stateless
-    }
-
 }
 
 #endif /* key_service_hpp */

@@ -96,7 +96,7 @@ namespace wry {
         static constexpr bool _is_native = std::is_integral_v<T> || std::is_pointer_v<T>;
         using U = std::conditional_t<_is_native, T, integer_of_byte_width_t<sizeof(T)>>;
 
-        U value;
+        mutable U value;
         
         constexpr Atomic() noexcept
         : value{} {
@@ -119,7 +119,7 @@ return std::bit_cast<T>(__atomic_load_n(&value, _WRY_ATOMIC_##order));\
         MAKE_WRY_ATOMIC_LOAD(seq_cst)
 
 #define MAKE_WRY_ATOMIC_STORE(order) \
-void store_##order(T desired) noexcept {\
+void store_##order(T desired) const noexcept {\
 __atomic_store_n(&value, std::bit_cast<U>(desired), _WRY_ATOMIC_##order);\
 }
         
@@ -141,12 +141,12 @@ __atomic_store_n(&value, std::bit_cast<U>(desired), _WRY_ATOMIC_##order);\
             return std::bit_cast<T>(value);
         }
 
-        void nonatomic_store(T desired) noexcept {
+        void nonatomic_store(T desired) const noexcept {
             value = std::bit_cast<U>(desired);
         }
 
 #define MAKE_WRY_ATOMIC_EXCHANGE(order) \
-T exchange_##order(T desired) noexcept {\
+T exchange_##order(T desired) const noexcept {\
 return std::bit_cast<T>(__atomic_exchange_n(&value, std::bit_cast<U>(desired), _WRY_ATOMIC_##order));\
 }
         
@@ -164,7 +164,7 @@ return std::bit_cast<T>(__atomic_exchange_n(&value, std::bit_cast<U>(desired), _
 // a post-publication store is a data race.  (TSan-caught 2026-07-12 when
 // immediate report reads removed the epoch embargo that had hidden it.)
 #define MAKE_WRY_ATOMIC_COMPARE_EXCHANGE(strength, success, failure)\
-bool compare_exchange_##strength##_##success##_##failure(T& expected, T desired) noexcept {\
+bool compare_exchange_##strength##_##success##_##failure(T& expected, T desired) const noexcept {\
 U expected2{std::bit_cast<U>(expected)};\
 bool result{__atomic_compare_exchange_n(&value,\
 &expected2,\
@@ -197,11 +197,11 @@ MAKE_WRY_ATOMIC_COMPARE_EXCHANGE(strong, success, failure)
 
 #define MAKE_WRY_ATOMIC_RMW(operation, order) \
 \
-T fetch_##operation##_##order(T operand) noexcept {\
+T fetch_##operation##_##order(T operand) const noexcept {\
 return __atomic_fetch_##operation(&value, operand, _WRY_ATOMIC_##order);\
 }\
 \
-T operation##_fetch_##order(T operand) noexcept {\
+T operation##_fetch_##order(T operand) const noexcept {\
 return __atomic_##operation##_fetch(&value, operand, _WRY_ATOMIC_##order);\
 }
         
@@ -224,7 +224,7 @@ return __atomic_##operation##_fetch(&value, operand, _WRY_ATOMIC_##order);\
         
 #if defined(__APPLE__)
         
-        void wait(T& expected, Ordering order) noexcept {
+        void wait(T& expected, Ordering order) const noexcept {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             uint64_t buffer = {};
             __builtin_memcpy(&buffer, &expected, sizeof(T));
@@ -249,7 +249,7 @@ return __atomic_##operation##_fetch(&value, operand, _WRY_ATOMIC_##order);\
             }
         }
         
-        AtomicWaitResult wait_until(T& expected, Ordering order, uint64_t deadline) noexcept {
+        AtomicWaitResult wait_until(T& expected, Ordering order, uint64_t deadline) const noexcept {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             uint64_t buffer = {};
             __builtin_memcpy(&buffer, &expected, sizeof(T));
@@ -278,13 +278,13 @@ return __atomic_##operation##_fetch(&value, operand, _WRY_ATOMIC_##order);\
             }
         }
         
-        AtomicWaitResult wait_for(T& expected, Ordering order, uint64_t timeout_ns) noexcept {
+        AtomicWaitResult wait_for(T& expected, Ordering order, uint64_t timeout_ns) const noexcept {
             struct mach_timebase_info info;
             mach_timebase_info(&info);
             return wait_until(expected, order, mach_absolute_time() + (timeout_ns * info.denom) / info.numer);
         }
         
-        void notify_one() noexcept {
+        void notify_one() const noexcept {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             int result = os_sync_wake_by_address_any(&value,
                                                      sizeof(T),
@@ -298,7 +298,7 @@ return __atomic_##operation##_fetch(&value, operand, _WRY_ATOMIC_##order);\
             }
         }
         
-        void notify_all() noexcept {
+        void notify_all() const noexcept {
             int result = os_sync_wake_by_address_all(&value,
                                                      sizeof(T),
                                                      OS_SYNC_WAKE_BY_ADDRESS_NONE);
@@ -317,7 +317,7 @@ return __atomic_##operation##_fetch(&value, operand, _WRY_ATOMIC_##order);\
         
         // TODO: This code sketch is untested
         
-        void wait(T& expected, Ordering order) noexcept {
+        void wait(T& expected, Ordering order) const noexcept {
             uint64_t buffer = {};
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             for (;;) {
@@ -342,7 +342,7 @@ return __atomic_##operation##_fetch(&value, operand, _WRY_ATOMIC_##order);\
             }
         }
         
-        AtomicWaitResult wait_for(T& expected, Ordering order, uint64_t timeout_ns) noexcept {
+        AtomicWaitResult wait_for(T& expected, Ordering order, uint64_t timeout_ns) const noexcept {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             uint64_t buffer;
             for (;;) {
@@ -369,12 +369,12 @@ return __atomic_##operation##_fetch(&value, operand, _WRY_ATOMIC_##order);\
             }
         }
         
-        void notify_one() noexcept {
+        void notify_one() const noexcept {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             WakeByAddressSingle(&value);
         }
         
-        void notify_all() noexcept {
+        void notify_all() const noexcept {
             static_assert(sizeof(T) == 4 || sizeof(T) == 8);
             WakeByAddressAll(&value);
         }
@@ -385,16 +385,16 @@ return __atomic_##operation##_fetch(&value, operand, _WRY_ATOMIC_##order);\
         
         // TODO: This code sketch is untested
         
-        void wait(T& expected, Ordering order) requires(sizeof(T) == 4) noexcept {
+        void wait(T& expected, Ordering order) requires(sizeof(T) == 4) const noexcept {
             (void) syscall(SYS_futex, &value, FUTEX_WAIT_PRIVATE, &expected, nullptr, nullptr, 0);
         }
         
-        void notify_one() requires { sizeof(T) == 4 } noexcept {
+        void notify_one() requires { sizeof(T) == 4 } const noexcept {
             static_assert(sizeof(T) == 4);
             (void) syscall(SYS_futex, &value, FUTEX_WAKE_PRIVATE, 1, nullptr, nullptr, 0);
         }
         
-        void notify_all() requires { sizeof(T) == 4 } noexcept {
+        void notify_all() requires { sizeof(T) == 4 } const noexcept {
             static_assert(sizeof(T) == 4);
             (void) syscall(SYS_futex, &value, FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
         }

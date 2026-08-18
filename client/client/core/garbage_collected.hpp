@@ -621,7 +621,7 @@ T* _Nullable load_##public_order() const noexcept {\
             return raw.nonatomic_load();
         }
 
-        void nonatomic_store(T* _Nullable desired) noexcept {
+        void nonatomic_store(T* _Nullable desired) const noexcept {
             raw.nonatomic_store(desired);
         }
 
@@ -630,7 +630,7 @@ T* _Nullable load_##public_order() const noexcept {\
         // shade can dereference the displaced pointer's _gray field.
 
 #define MAKE_WRY_ATOMIC_GC_STORE(public_order, internal_order) \
-void store_##public_order(T* _Nullable desired) noexcept {\
+void store_##public_order(T* _Nullable desired) const noexcept {\
     T* _Nullable old = raw.exchange_##internal_order(desired);\
     garbage_collected_shade(old);\
 }
@@ -643,7 +643,7 @@ void store_##public_order(T* _Nullable desired) noexcept {\
         // also returned to the caller (after being shaded).
 
 #define MAKE_WRY_ATOMIC_GC_EXCHANGE(public_order, internal_order) \
-T* _Nullable exchange_##public_order(T* _Nullable desired) noexcept {\
+T* _Nullable exchange_##public_order(T* _Nullable desired) const noexcept {\
     T* _Nullable old = raw.exchange_##internal_order(desired);\
     garbage_collected_shade(old);\
     return old;\
@@ -666,7 +666,7 @@ T* _Nullable exchange_##public_order(T* _Nullable desired) noexcept {\
         // updated expected).  seq_cst stays seq_cst.
 
 #define MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strength, public_succ, public_fail, internal_succ, internal_fail) \
-bool compare_exchange_##strength##_##public_succ##_##public_fail(T* _Nullable& expected, T* _Nullable desired) noexcept {\
+bool compare_exchange_##strength##_##public_succ##_##public_fail(T* _Nullable& expected, T* _Nullable desired) const noexcept {\
     bool ok = raw.compare_exchange_##strength##_##internal_succ##_##internal_fail(expected, desired);\
     if (ok)\
         garbage_collected_shade(expected);\
@@ -694,8 +694,8 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
 #undef MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE
 #undef MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE2
 
-        void notify_one() noexcept { raw.notify_one(); }
-        void notify_all() noexcept { raw.notify_all(); }
+        void notify_one() const noexcept { raw.notify_one(); }
+        void notify_all() const noexcept { raw.notify_all(); }
 
         // TODO: wait variants — same shape as elsewhere; left until a
         // concrete need arises.
@@ -771,13 +771,13 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
             return _decode(raw.nonatomic_load());
         }
 
-        void nonatomic_store(T* _Nullable p, bool m) noexcept {
+        void nonatomic_store(T* _Nullable p, bool m) const noexcept {
             raw.nonatomic_store(_encode(p, m));
         }
 
         // On failure, expected is updated to the observed value.
         bool compare_exchange_strong(MarkedPointer& expected,
-                                     MarkedPointer desired) noexcept {
+                                     MarkedPointer desired) const noexcept {
             uintptr_t e = _encode(expected.ptr, expected.marked);
             bool ok = raw.compare_exchange_strong_acq_rel_acquire(
                 e, _encode(desired.ptr, desired.marked));

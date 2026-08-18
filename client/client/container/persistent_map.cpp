@@ -214,7 +214,7 @@ namespace wry {
                 co_return kv.second;
             };
 
-            PM result = co_await coroutine_parallel_rebuild(src, modifier, action_for_key);
+            PM result = co_await coroutine_parallel_rebuild(src, freeze(modifier), action_for_key);
 
             for (uint64_t k = 0; k != key_domain; ++k) {
                 int v = 0;

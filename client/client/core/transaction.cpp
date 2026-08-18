@@ -70,7 +70,7 @@ namespace wry {
         // Race to initialize the atomic linked list with our desired value
         auto [iterator, flag] = map->try_emplace(key, node);
         // We always get back its address
-        Atomic<Transaction::Node const*>& head = iterator->second;
+        Atomic<Transaction::Node const*> const& head = iterator->second;
         node->_head = &head;
         if (!flag) {
             // If we lost the race to construct the atomic, we need to atomically

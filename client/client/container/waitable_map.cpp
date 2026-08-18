@@ -132,7 +132,7 @@ namespace wry {
 
             // WM parallel = co_await coroutine_parallel_rebuild2(source, modifier, action_for_key);
             // WM serial   = co_await coroutine_parallel_rebuild2_serial(source, modifier, action_for_key);
-            WM unified  = co_await coroutine_parallel_rebuild2_unified(source, modifier, action_for_key);
+            WM unified  = co_await coroutine_parallel_rebuild2_unified(source, freeze(modifier), action_for_key);
 
             for (uint64_t k = 0; k != key_domain; ++k) {
                 // kv: parallel == serial == unified == oracle

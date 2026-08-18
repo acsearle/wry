@@ -5,8 +5,12 @@
 //  Created by Antony Searle on 30/7/2023.
 //
 
+#include <map>
+
 #include "transaction.hpp"
 #include "world.hpp"
+
+#include "test.hpp"
 
 namespace wry {
     
@@ -52,7 +56,7 @@ namespace wry {
                 // constructed, the ready set should be empty
                 assert(_ready.is_empty());
 
-                ConcurrentSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline> mut_ready;
+                ConcurrentSkiplistMap<EntityID, ReadyValue, DefaultKeyService<EntityID>, ScanDiscipline> mut_ready;
 
                 // Copy the EntityIDs waiting on now to the _ready skiplist
                 waiting_on_now.for_each([this, &mut_ready] (std::pair<Time, EntityID> x) {
@@ -60,7 +64,7 @@ namespace wry {
                     (void) mut_ready.try_emplace(x.second);
                 });
 
-                _ready = FrozenSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline>(std::move(mut_ready));
+                _ready = freeze(mut_ready);
 
                 // HACK: _ready is now populated, _waiting_on_time is now pruned
 
@@ -72,16 +76,15 @@ namespace wry {
     //
     // A frozen skiplist is the left-child/right-sibling encoding of a tree:
     // each node is discovered exactly once, at its own top level, by the
-    // frame whose interval [self, bound) contains it.  One frame per node
-    // (and one for the head): spawn a child frame for each successor in the
-    // tower, top level first (each successor tightens the bound for the
-    // levels below it), notify our own entity while the children run, join,
-    // then prefix-sum.  With successors laid out so that a HIGHER level
-    // covers a LATER key interval, the level-i child's subtree is preceded
-    // within this frame by self plus the children at levels below i -- that
-    // is the value written into its `n`.  The frame returns its subtree
-    // total; the head frame's return is the tick's total, which advances the
-    // World's EntityID cursor.
+    // frame whose interval [self, bound) contains it (Node::for_each_child).
+    // One frame per node (and one for the head): spawn a child frame for
+    // each child, weigh our own entity while the children run, join, then
+    // prefix-sum.  A child of height h covers a LATER key interval than
+    // every child of lower height, so the height-h child's subtree is
+    // preceded within this frame by self plus the children of height below
+    // h -- that is the value written into its `n`.  The frame returns its
+    // subtree total; the head frame's return is the tick's total, which
+    // advances the World's EntityID cursor.
     //
     // `n` and `requested` are written exactly once, by the parent frame
     // (n) and the owning frame (requested), and are complete only once the
@@ -90,98 +93,81 @@ namespace wry {
     // touch the same field.
     //
     // The lookup that consumes `n` adds it for every node it ENTERS on the
-    // way down, so the head needs none.  The head frame is the same code
-    // with a null entity: no self-notify, weight zero.
-    using ReadyNode = _skiplist_detail::Node<ReadyKey, ReadyKeyCompare, ScanDiscipline>;
-    using Next = ReadyNode::AtomicSlot<ReadyNode* _Nullable>;
-    [[nodiscard]] Coroutine::Future<int64_t> notify_and_accumulate(Next const* _Nonnull self_next,
-                                                                   size_t self_levels,
-                                                                   ReadyNode const* _Nullable self,
-                                                                   ReadyNode const* _Nullable bound,
-                                                                   TransactionContext* context) {
+    // way down.  A search enters each node on its path from that node's
+    // left-child/right-sibling parent, at the node's own top level, so the
+    // per-frame prefixes telescope to the absolute exclusive prefix; the
+    // head is never entered and needs no `n`.
+    //
+    // Generic over the node type and the weighing so the rank test below
+    // can drive it with synthetic weights on an epoch-allocated map; the
+    // world instantiates it for the GC ready map with Entity::notify.
+    // `weigh` is taken by value: a coroutine parameter must own what it
+    // uses after its first suspension.
+    using ReadyMap = FrozenSkiplistMap<EntityID, ReadyValue, DefaultKeyService<EntityID>, ScanDiscipline>;
+    using ReadyNode = ReadyMap::Node;
+
+    template<typename Node, typename Weigh>
+    [[nodiscard]] Coroutine::Future<int64_t> rank_frame(Node const* _Nonnull self,
+                                                        std::type_identity_t<Node> const* _Nullable bound,
+                                                        Weigh weigh,
+                                                        bool is_head) {
         Coroutine::Nursery nursery;
 
-        // results[0] is our own weight; results[i + 1] receives the level-i
-        // child's subtree total (or stays zero for a level with no child).
+        // results[0] is our own weight; results[h] receives the height-h
+        // child's subtree total (or stays zero for a height with no child).
         // TODO: memory waste; worst case is much bigger than likely cases
-        assert(self_levels <= 64);
-        int64_t results[65] = {};
-        ReadyNode const* bound2 = bound;
-        for (size_t i = self_levels; i--;) {
-            ReadyNode const* child = self_next[i].nonatomic_load();
-            if (child != bound2) {
-                assert(child);
-                // TODO: fork or soon?
-                nursery.soon(results[i + 1],
-                             notify_and_accumulate(child->_next, child->_size, child, bound2, context));
-                bound2 = child;
-            }
-        }
-        // Our own contribution, while the children run.  The head has no
-        // entity and contributes nothing.
-        if (self) {
-            Entity const* entity = nullptr;
-            bool flag = context->try_read_entity_for_entity_id(self->_key.id, entity);
-            assert(flag && entity);
-            results[0] = entity->notify(context);
-            self->_key.requested = results[0];
+        int64_t results[Node::MAX_HEIGHT + 1] = {};
+        self->for_each_child(bound, [&] (Node const* _Nonnull child, Node const* _Nullable child_bound) {
+            nursery.soon(results[child->_height.nonatomic_load()],
+                         rank_frame(child, child_bound, weigh, false));
+        });
+        // Our own contribution, while the children run.
+        if (!is_head) {
+            results[0] = weigh(self->_key.first);
+            self->_key.second.requested = results[0];
         }
         // Wait for results
         co_await nursery.join();
         // Accumulate
-        for (size_t i = 0; i != self_levels; ++i) {
+        for (size_t i = 0; i != self->_height.nonatomic_load(); ++i) {
             results[i + 1] += results[i];
         }
-        // Write back if bounds permit
-        bound2 = bound;
-        for (size_t i = self_levels; i--;) {
-            ReadyNode const* child = self_next[i].nonatomic_load();
-            if (child != bound2) {
-                assert(child);
-                child->_key.n = results[i];
-                bound2 = child;
-            }
-        }
+        // Write back
+        self->for_each_child(bound, [&] (Node const* _Nonnull child, Node const* _Nullable) {
+            child->_key.second.n = results[child->_height.nonatomic_load() - 1];
+        });
         // Kick the total up to the next level
-        co_return results[self_levels];
+        co_return results[self->_height.nonatomic_load()];
     }
 
-    [[nodiscard]] bool try_lookup_cumulant(FrozenSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline> const& ready,
+    [[nodiscard]] Coroutine::Future<int64_t> notify_and_accumulate(ReadyMap const& ready,
+                                                                   TransactionContext* _Nonnull context) {
+        return rank_frame(ready._head, nullptr, [context](EntityID id) -> int64_t {
+            Entity const* entity = nullptr;
+            bool flag = context->try_read_entity_for_entity_id(id, entity);
+            assert(flag && entity);
+            return entity->notify(context);
+        }, true);
+    }
+
+    // The exclusive prefix (over ready-set order) of `id`'s requests, if `id`
+    // is ready and requested anything this tick.  False for absent ids and
+    // for zero requesters: the caller must leave a held ticket alone in both
+    // cases.
+    template<typename Map>
+    [[nodiscard]] bool try_lookup_cumulant(Map const& ready,
                                            EntityID id,
                                            int64_t& victim) {
         int64_t n = 0;
-        size_t i = ready._head->_top.load_relaxed() - 1;
-        assert((i + 1) > 0);
-        auto left = ready._head->_next + i;
-        for (;;) {
-            ReadyNode* _Nullable candidate = left->nonatomic_load();
-            if (!candidate || (id < candidate->_key.id)) {
-                // Descend a level
-                if (i == 0) {
-                    // Looked up an EntityID that wasn't ready, such as when
-                    // one Entity creates another
-                    return false;
-                }
-                --i;
-                --left;
-            } else if (candidate->_key.id < id) {
-                // Move right: we enter candidate's interval, so add its
-                // prefix-within-frame; the target lies inside it.
-                left = candidate->_next + i;
-                assert(candidate->_key.n >= 0);
-                n += candidate->_key.n;
-            } else {
-                // Found: we enter the target too, and its n is the last
-                // term -- its own prefix within the frame we reached it
-                // from.  The entered nodes' n telescope to the absolute
-                // exclusive prefix.
-                assert(candidate->_key.n >= 0);
-                n += candidate->_key.n;
-                victim = n;
-                assert(candidate->_key.requested >= 0);
-                return candidate->_key.requested;
-            }
-        }
+        auto it = ready.find(id, [&n](auto const& kv) {
+            assert(kv.second.n >= 0);
+            assert(kv.second.requested >= 0);
+            n += kv.second.n;
+        });
+        if (it == ready.end())
+            return false;
+        victim = n;
+        return it->second.requested > 0;
     }
 
     Coroutine::Future<Root<World*>> World::step() const {
@@ -208,7 +194,7 @@ namespace wry {
         // this->_waiting_on_time contains all EntityIDs to notify after this->_time
 
         auto [waiting_on_next_time, next_waiting_on_time] = partition_first(_waiting_on_time, next_time);
-        ConcurrentSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline> next_ready;
+        ConcurrentSkiplistMap<EntityID, ReadyValue, DefaultKeyService<EntityID>, ScanDiscipline> next_ready;
 
         // Mutable:
         // waiting_on_next_time contains all EntityIDs to notify at next_time
@@ -227,14 +213,8 @@ namespace wry {
             // may propose a Transaction to change it, and may request some
             // number of new EntityIDs; the traversal augments the ready set
             // with the cumulant of those requests (see notify_and_accumulate).
-            // TODO: Rummaging in the skiplist implementation
-            assert(_ready._head);
             co_await nursery.fork(entity_id_requests,
-                                  notify_and_accumulate(_ready._head->_next,
-                                                        _ready._head->_top.nonatomic_load(),
-                                                        nullptr,   // head: no entity
-                                                        nullptr,   // bound: +infinity
-                                                        &context));
+                                  notify_and_accumulate(_ready, &context));
 
             // For each EntityID ready next_time, copy it into next_ready
             co_await nursery.fork(waiting_on_next_time
@@ -526,27 +506,27 @@ namespace wry {
         
         co_await nursery.fork(new_value_for_coordinate,
                               coroutine_parallel_rebuild2_unified(_term_for_coordinate,
-                                                         context._verb_value_for_coordinate,
+                                                         freeze(context._verb_value_for_coordinate),
                                                          value_for_coordinate_action));
         
         co_await nursery.fork(new_entity_id_for_coordinate,
                               coroutine_parallel_rebuild2_unified(_entity_id_for_coordinate,
-                                                         context._verb_entity_id_for_coordinate,
+                                                         freeze(context._verb_entity_id_for_coordinate),
                                                          action_for_entity_id_for_coordinate));
 
         co_await nursery.fork(new_located_for_coordinate,
                               coroutine_parallel_rebuild2_unified(_located_for_coordinate,
-                                                         context._verb_located_for_coordinate,
+                                                         freeze(context._verb_located_for_coordinate),
                                                          action_for_located_for_coordinate));
 
         co_await nursery.fork(new_entity_for_entity_id,
                               coroutine_parallel_rebuild2_unified(_entity_for_entity_id,
-                                                         context._verb_entity_for_entity_id,
+                                                         freeze(context._verb_entity_for_entity_id),
                                                          action_for_entity_for_entity_id));
         
         co_await nursery.fork(next_waiting_on_time,
                               coroutine_parallel_rebuild(next_waiting_on_time,
-                                                         context._wait_on_time,
+                                                         freeze(context._wait_on_time),
                                                          action_for_waiting_on_time));
 
         co_await nursery.join();
@@ -559,7 +539,7 @@ namespace wry {
         co_return new World{
             next_time,
             _entity_id_source + entity_id_requests,
-            FrozenSkiplistSet<ReadyKey, ReadyKeyCompare, ScanDiscipline>(std::move(next_ready)),
+            freeze(next_ready),
             new_entity_id_for_coordinate,
             new_located_for_coordinate,
             new_entity_for_entity_id,
@@ -569,7 +549,61 @@ namespace wry {
         };
         
     } // World::step
-    
+
+
+    // Rank oracle for the deterministic-EntityID machinery: random ready
+    // maps with synthetic weights (some zero), the frame accumulate run
+    // exactly as step() runs it, then every lookup checked against the
+    // brute-force exclusive prefix over EntityID order.  Also pins the two
+    // contract points a save/load round trip cannot see: absent ids and
+    // zero requesters must report false, so a held ticket is never
+    // clobbered.  Epoch-allocated so the test needs only the epoch floor,
+    // held in this frame across the co_await; the world's ScanDiscipline
+    // instantiation differs only in the slot type.
+    define_test("ready_rank") {
+        using Map = ConcurrentSkiplistMap<EntityID, ReadyValue, DefaultKeyService<EntityID>, EpochDiscipline>;
+        epoch::Epoch guard = pin_global_epoch();
+        for (int iter = 0; iter != 100; ++iter) {
+            Map m;
+            std::map<EntityID, int64_t> weights; // the oracle; std::map order == ready-set order
+            int n = std::rand() % 64;
+            for (int i = 0; i != n; ++i) {
+                EntityID id{1 + (uint64_t)(std::rand() % 256)};
+                int64_t w = (std::rand() % 3) ? (std::rand() % 5) : 0;
+                if (weights.try_emplace(id, w).second)
+                    (void) m.try_emplace(id);
+            }
+            auto f = freeze(m);
+            int64_t total = co_await rank_frame(f._head, nullptr, [&weights](EntityID id) -> int64_t {
+                return weights.at(id);
+            }, true);
+            int64_t sum = 0;
+            for (auto const& [id, w] : weights)
+                sum += w;
+            assert(total == sum);
+            int64_t prefix = 0;
+            for (auto const& [id, w] : weights) {
+                int64_t cumulant = -1;
+                bool dealt = try_lookup_cumulant(f, id, cumulant);
+                assert(dealt == (w > 0));
+                if (dealt)
+                    assert(cumulant == prefix);
+                prefix += w;
+            }
+            for (int i = 0; i != 8; ++i) {
+                EntityID id{1 + (uint64_t)(std::rand() % 256)};
+                if (weights.contains(id))
+                    continue;
+                int64_t cumulant = -1;
+                assert(!try_lookup_cumulant(f, id, cumulant));
+            }
+            if (!(iter & 15))
+                mutator_repin();
+        }
+        unpin_global_epoch(guard);
+        co_return;
+    };
+
 } // namespace wry
 
 

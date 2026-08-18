@@ -214,13 +214,13 @@ namespace wry {
         while (!c.bottom())
             c = c.down();
         while (codeof(c) < lo128)
-            c = c.right();
+            c = c.succ();
         const KvAMT* kv2 = kv;
         const KiAMT* ki2 = ki;
         while (codeof(c) < hi128) {
             Code code = (Code)codeof(c);
             std::pair<ValA, KiA> p = co_await action_for_key(*c.key());
-            c = c.right();
+            c = c.succ();
             if (p.first.tag != ValA::NONE) {
                 T old{};
                 bool has = kv2 && kv2->try_get(code, old);
@@ -305,7 +305,7 @@ namespace wry {
     template<typename Key, typename T, typename U, typename F, typename S2, typename D2>
     Coroutine::Future<WaitableMap<Key, T>>
     coroutine_parallel_rebuild2_unified(const WaitableMap<Key, T>& source,
-                                        const ConcurrentMap<Key, U, S2, D2>& modifier,
+                                        const FrozenMap<Key, U, S2, D2>& modifier,
                                         F&& action_for_key) {
         using KvMap = PersistentMap<Key, T, DefaultKeyService<Key>, ScanDiscipline>;
         using KiMap = PersistentMap<Key, WaitSet, DefaultKeyService<Key>, ScanDiscipline>;
