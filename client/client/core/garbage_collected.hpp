@@ -876,8 +876,21 @@ MAKE_WRY_ATOMIC_GC_COMPARE_EXCHANGE(strong, public_succ, public_fail, internal_s
             for (;;) {
                 switch (expected) {
                     case READY:
-                        // Not loaded since last decision
-                        if (_weak->_black & next_delete_mask) {
+                        // Not loaded since last decision.
+                        //
+                        // Mirror of the sweep's any-bit predicate: the
+                        // referent survives only if it is black for EVERY
+                        // deciding bit; white for any one of them and that
+                        // bit's sweep will delete it (2026-08-19).  Testing
+                        // "black for any deciding bit" was exact when bits
+                        // decided one at a time; with several deciding in
+                        // one pass a referent black for an older bit and
+                        // white for a younger one was judged reachable, the
+                        // younger bit's sweep freed it, and this holder --
+                        // still READY -- dereferenced it at the next
+                        // decision (seen as a use-after-poison in
+                        // decide_weak under quarantine).
+                        if (!(~_weak->_black & next_delete_mask)) {
                             // Is reachable
                             return;
                         }

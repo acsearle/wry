@@ -228,6 +228,26 @@ namespace wry {
                 }
             }
 
+            // A release read-modify-write of the state that changes nothing
+            // and returns the current epoch.  Used to stamp a colour publish
+            // AFTER the colour store: every modification of `state` is a
+            // read-modify-write, so this one is totally ordered against
+            // every pin/repin.  A pin ordered before it is reflected in the
+            // returned epoch; a pin ordered after it reads (acquire) a value
+            // in this release's sequence and so observes the store that
+            // preceded the call.  Hence a mutator whose colour sample
+            // predates the publish is pinned in a generation <= the returned
+            // epoch -- the fact the collector's +2/+3 gates need.  (A plain
+            // load after the store would not do: store-then-load on one
+            // side against CAS-then-load on the other is the store-buffering
+            // pattern, and both sides may read stale values.)
+            [[nodiscard]] Epoch stamp() {
+                State expected = state.load_relaxed();
+                while (!state.compare_exchange_weak_release_relaxed(expected, expected))
+                    ;
+                return expected.current;
+            }
+
             Epoch unpin(Epoch occupied) {
                 State expected = state.load_relaxed();
                 State desired;
@@ -300,6 +320,11 @@ namespace wry {
 
     inline void pin_global_epoch_explicit(epoch::Epoch epoch) {
         return wry::epoch::global_service.pin_explicit(epoch);
+    }
+
+    // See Service::stamp.
+    [[nodiscard]] inline epoch::Epoch stamp_global_epoch() {
+        return wry::epoch::global_service.stamp();
     }
 
 } // namespace wry

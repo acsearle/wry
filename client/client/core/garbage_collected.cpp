@@ -38,14 +38,20 @@
 // silent.  Candidate for print->assert promotion once a GUI session has
 // been observed clean.
 //
-// CRASH-1 TRAP (remove when that question closes): the freed-object ring,
-// walk phase/object labels, ASan report narration, and WRY_GC_QUARANTINE
-// mode -- forensics for the unresolved collector-trace use-after-free (a
-// swept FrozenSkiplistSet Head read by a later child-marking pass; possibly
-// a stale incremental build, never reproduced from a clean build).  If it
-// stays silent through the save/load milestone under routine
-// WRY_GC_QUARANTINE=1 runs, strip this tier in its own commit, stall-
-// instrumentation style: recover from git if it ever recurs.
+// CRASH-1 TRAP (remove once the fixes below have soaked): the freed-object
+// ring, walk phase/object labels, ASan report narration, and
+// WRY_GC_QUARANTINE mode.  Built for the collector-trace use-after-free (a
+// swept next_ready skiplist head read by a later child-marking pass); its
+// narration root-caused that crash on 2026-08-18/19 -- a k-white birth
+// under a stale colour sample adopted by a born-k-black World inside one
+// pinned World::step, made possible by phase gates stamped one epoch too
+// early -- and, on the fix's soak, a second latent one (weak decision
+// judging a referent reachable when black for ANY deciding bit while the
+// sweep deletes on white for ANY sweeping bit).  Both fixed 2026-08-19; see
+// docs 4.12 and WeakHolder::_garbage_collected_decide_weak.  Keep running
+// WRY_GC_QUARANTINE=1 routinely for a while; when it stays silent, strip
+// this tier in its own commit, stall-instrumentation style: recover from git
+// if it ever recurs.
 #ifndef NDEBUG
 #define WRY_GC_DEBUG 1
 #endif
@@ -691,21 +697,34 @@ namespace wry {
         std::array<uint64_t, 16> _cycle_pass0 = {};
         std::array<std::chrono::steady_clock::time_point, 16> _cycle_t0 = {};
         
-        // Immediate-report bookkeeping (stage 3).
+        // Immediate-report bookkeeping (stage 3; stamps corrected 2026-08-19,
+        // see 4.12 in the docs).
         //
-        // _k_last_work[k] is the latest mutator-pinned epoch whose report
-        // carried k-work: a flip of some object white->gray on bit k, or --
-        // via the did_shade initialization at color load -- the continued
-        // existence of a mutator still allocating k-gray.  Epoch is cyclic
-        // on timescales far longer than a collection; comparisons use the
-        // wrap-aware operators.
+        // _k_last_work[k] is the collector's OWN pinned epoch at the last
+        // moment k-work was seen: a received report whose gray_did_shade
+        // carried k (a mutator flipped some object white->gray on k, or --
+        // via the did_shade initialization at color load -- was still
+        // allocating k-gray), or a trace pass in which the collector itself
+        // marked something for k (promoted arrivals, the deferred warm-up
+        // bag at black publish, late roots) and so read slots whose hiding
+        // shades may still be unreported.  Stamped with the collector's
+        // known epoch, not the reporter's: an event the collector observes
+        // at its known epoch E happened at true epoch <= E + 1, so the
+        // "+2 empties every generation a witness could be pinned in" lemma
+        // applies to E + 1 -- hence the gate reads +3 from this stamp.
+        // Epoch is cyclic on timescales far longer than a collection;
+        // comparisons use the wrap-aware operators.
         //
-        // _passes_since_k_work[k] counts scans completed with no new k-work
-        // received; >= 1 means the last-received k-work has been traced to
-        // fixpoint (a scan drains the graystack before returning, and
+        // _passes_since_k_work[k] counts scans completed with no k-work
+        // received or performed; >= 1 means the last k-work has been traced
+        // to fixpoint (a scan drains the graystack before returning, and
         // reports are received only between scans).
+        //
+        // _marked_bits_this_pass accumulates, over one trace pass, the bits
+        // for which some object was newly blackened (and hence scanned).
         std::array<Epoch, 16> _k_last_work = {};
         std::array<uint32_t, 16> _passes_since_k_work = {};
+        uint16_t _marked_bits_this_pass = 0;
 
         // Cycle-completion counter and pending callback list.  Bumped each
         // time any kbit transitions CLEARING -> UNUSED (i.e., one full cycle
@@ -778,6 +797,7 @@ namespace wry {
             if (did_set_black) {
                 object->_black = after_black;
                 ++_marked_since_line;
+                _marked_bits_this_pass |= did_set_black;
                 _graystack.push(object);
             }
             // Gray for a bit still warming up: park for re-promotion at
@@ -794,7 +814,7 @@ namespace wry {
             // of the objects it shaded and the headers of the objects it
             // allocated -- is readable now.  No embargo: epochs are no
             // longer needed to make report contents visible, only to bound
-            // WHEN a mutator could still hold unpublished work (the +2
+            // WHEN a mutator could still hold unpublished work (the +2/+3
             // gates in the phase machine).  Because an exchange reads the
             // head's latest modification-order value, one exchange takes
             // every report published so far: "gate, then exchange, then
@@ -858,7 +878,13 @@ namespace wry {
                 for (int k = 0; k != 16; ++k) {
                     uint16_t bit = 1 << k;
                     if (head->gray_did_shade & bit) {
-                        _k_last_work[k] = std::max(_k_last_work[k], H);
+                        // Stamped with OUR epoch at receipt, not the
+                        // reporter's H: the quiet gate must outlast every
+                        // mutator that could still hold a k-flip made
+                        // before this work was traced, and those are
+                        // bounded by our own known epoch (E + 1 at most),
+                        // not by where the reporter happened to be pinned.
+                        _k_last_work[k] = std::max(_k_last_work[k], E);
                         _passes_since_k_work[k] = 0;
                     }
                 }
@@ -907,13 +933,12 @@ namespace wry {
 
                 if (current_epoch != epoch_at_last_change) {
 
+                    // Advances phases, publishes the resulting colours, and
+                    // stamps every transition with the epoch read (by a
+                    // release RMW) AFTER the publish -- see the tail of
+                    // try_advance_collection_phases for why the stamp must
+                    // follow the store.
                     try_advance_collection_phases();
-                    
-                    Color color = {
-                        .gray = _gray_for_allocation,
-                        .black = _black_for_allocation
-                    };
-                    _global_atomic_color_for_allocation.store_relaxed(color);
 
                     epoch_at_last_change = current_epoch;
 
@@ -961,11 +986,33 @@ namespace wry {
             //
             // *Has time passed?* - i.e., have all mutators observed a color
             // publish?  Answered by counting epochs against kstate[k].since.
-            // Used by `GRAY_PUBLISHED`, `WHITE_PUBLISHED`.  With immediate
-            // (release/acquire) reports there is no separate "finalization"
-            // clock: at since+2 every mutator has repinned, its
-            // pre-transition report was pushed before that repin, and the
-            // per-iteration exchange has therefore already received it.
+            // Used by `GRAY_PUBLISHED`, `BLACK_PUBLISHED`, `WHITE_PUBLISHED`.
+            // With immediate (release/acquire) reports there is no separate
+            // "finalization" clock: at since+2 every mutator has repinned,
+            // its pre-transition report was pushed before that repin, and
+            // the per-iteration exchange has therefore already received it.
+            //
+            // The stamp matters (2026-08-19, docs 4.12).  `since` is the
+            // epoch read by a release RMW AFTER the colour store, at the
+            // tail of this function.  Our own `known` at the transition is
+            // not good enough: it can trail the true epoch by one (our pin
+            // caps true at known+1), and a mutator that pinned into
+            // true(store) just before the store then keeps a pre-publish
+            // sample past known+2 -- true reaching known+2 empties only
+            // generation known.  Measured from the post-store stamp S, every
+            // mutator holding a pre-publish sample is pinned at <= S, and
+            // S+2 empties them all.
+            //
+            // GRAY_PUBLISHED -> BLACK_PUBLISHED waits ONE MORE epoch than
+            // acknowledgement needs (S+3), so that no k can go white->black
+            // within one advance of any pinned generation: a k-white BIRTH
+            // (allocator's sample pre-publish, pinned at <= S, so the birth
+            // is at true <= S+1) and a k-black birth (>= true(black store))
+            // can then never fall inside one globally-pinned interval,
+            // which is what makes "possess a bare GC pointer across a
+            // suspension or hand-off only under a covering global epoch
+            // pin" a sufficient contract for World::step's frame-held
+            // structures.  This is the fix for the swept next_ready head.
             //
             // *Has all the work been done?* -- i.e., has every known object been
             // visited? Answered by `kstate[k].scans >= 1`. Used by `SWEEPING`,
@@ -978,12 +1025,26 @@ namespace wry {
             // `_k_last_work` + `_passes_since_k_work`.  Used only by
             // `BLACK_PUBLISHED`, because tracing termination depends on what
             // the mutators wrote, not just on time.
-            
+
             assert(epoch::local_state.is_pinned);
             epoch::Epoch E = epoch::local_state.known;
 
+            // Receive-time promotion (this iteration, before us) may already
+            // have marked for some bits; that is k-work for the quiet gate
+            // below, so count it now rather than only at the trace's end.
+            // (The accumulator is left for the trace end to re-apply; the
+            // max is idempotent.)
+            for (int k = 0; k != 16; ++k) {
+                if (_marked_bits_this_pass & (1 << k)) {
+                    _k_last_work[k] = std::max(_k_last_work[k], E);
+                    _passes_since_k_work[k] = 0;
+                }
+            }
+
             bool first = true;
             bool splice_deferred = false;
+            uint16_t transitioned = 0;   // bits whose phase changed this call
+            uint16_t started = 0;        // subset: UNUSED -> GRAY_PUBLISHED
 
             for (int k = 0; k != 16; ++k) {
                 auto p = UNUSED;
@@ -1041,22 +1102,29 @@ namespace wry {
                             _window_base = k;
                         ++_live_count;
                         _next_start = (k + 1) & 15;
-                        kstate[k] = { GRAY_PUBLISHED, E, 0 };
+                        kstate[k] = { GRAY_PUBLISHED, E, 0 };   // since re-stamped post-store below
+                        transitioned |= bit;
+                        started |= bit;
                         // Conservative: treat cycle start as k-work, so the
                         // quiet window cannot open before warm-up completes.
+                        // (Re-stamped with the post-store epoch below.)
                         _k_last_work[k] = E;
                         _passes_since_k_work[k] = 0;
                         _cycle_pass0[k] = _scan_passes;
                         _cycle_t0[k] = std::chrono::steady_clock::now();
                         _on_cycle_started(bit);
                         break;
-                        
+
                     case GRAY_PUBLISHED:
-                        // Wait until all mutators have updated to run k-gray.
-                        // We don't need to wait for reports or scans.
-                        if (E < kstate[k].since + 2)
+                        // Wait until all mutators have updated to run k-gray
+                        // (since+2), PLUS one epoch so that no k-white birth
+                        // and k-black birth can share a pinned interval
+                        // (since+3); see the header comment.  We don't need
+                        // to wait for reports or scans.
+                        if (E < kstate[k].since + 3)
                             break;
-                        kstate[k] = { BLACK_PUBLISHED, E, 0 };
+                        kstate[k] = { BLACK_PUBLISHED, E, 0 };   // since re-stamped post-store below
+                        transitioned |= bit;
                         // (No sweep gate to record: newborn cohorts key by
                         // their reports' allocation color, which carries
                         // "born k-marked" exactly rather than bounding it
@@ -1085,22 +1153,31 @@ namespace wry {
                         //     warm-up walk);
                         //
                         // (2) a full quiet window has passed since the last
-                        //     reported k-work: at E >= _k_last_work[k] + 2,
-                        //     the epoch has advanced twice past that work,
-                        //     which requires every then-pinned mutator to
-                        //     have repinned -- hence reported -- since it,
-                        //     so an unreported k-flip cannot exist.  (New
-                        //     flips would have re-bumped _k_last_work: a
-                        //     mutator that can still reach a k-white object
-                        //     contradicts trace completeness, per the
-                        //     snapshot induction -- see the docs); and
+                        //     k-work -- received (a report's gray_did_shade)
+                        //     or performed (a trace pass that marked for k
+                        //     and so read slots).  A k-white reachable
+                        //     object can survive a fixpoint trace only if
+                        //     its last snapshot path was overwritten before
+                        //     the trace read that slot; that overwrite
+                        //     shaded it (Yuasa), and the shade is reported
+                        //     at the shader's next repin.  The shader was
+                        //     pinned at generation <= our known + 1 when it
+                        //     shaded (true is at most known+1 during our
+                        //     pass), so it has repinned -- and reported --
+                        //     once our known reaches _k_last_work + 3.  If
+                        //     that report carries k-work the window resets;
+                        //     if none arrives, no such shade existed.  A
+                        //     shade AFTER the last marking pass cannot hide
+                        //     anything: hiding is relative to a slot read,
+                        //     and nothing was read since.  (Was +2 from the
+                        //     REPORTER's epoch, which is one short whenever
+                        //     the reporter lagged us: 4.12); and
                         //
                         // (3) at least one trace completed after the last
-                        //     k-work was received, so that work has been
-                        //     traced to fixpoint (a trace drains the
-                        //     graystack before returning), and the standing
-                        //     roots have been grayed by the trace's root
-                        //     registry walk.
+                        //     k-work, so that work has been traced to
+                        //     fixpoint (a trace drains the graystack before
+                        //     returning), and the standing roots have been
+                        //     grayed by the trace's root registry walk.
                         //
                         // After this: no k-gray objects exist, no mutator
                         // can produce one, and every reachable object is
@@ -1108,12 +1185,13 @@ namespace wry {
 
                         if (E < kstate[k].since + 2)
                             break;
-                        if (E < _k_last_work[k] + 2)
+                        if (E < _k_last_work[k] + 3)
                             break;
                         if (_passes_since_k_work[k] < 1)
                             break;
 
                         kstate[k] = { WEAK_DECIDING, E, 0 };
+                        transitioned |= bit;
                     }
                         break; // from switch
 
@@ -1121,6 +1199,7 @@ namespace wry {
                         if (!kstate[k].scans)
                             break;
                         kstate[k] = { SWEEPING, E, 0 };
+                        transitioned |= bit;
                         break;
 
                     case SWEEPING:
@@ -1129,13 +1208,16 @@ namespace wry {
                             break;
                         // All k-white objects are deleted
                         // All objects are k-black
-                        kstate[k] = { WHITE_PUBLISHED, E, 0 };
+                        kstate[k] = { WHITE_PUBLISHED, E, 0 };   // since re-stamped post-store below
+                        transitioned |= bit;
                         break;
                         
                     case WHITE_PUBLISHED: {
                         Epoch F = kstate[k].since;
                         // At F+2 every mutator has repinned since the white
-                        // publish: no one allocates or shades k any more,
+                        // publish (F is the post-store stamp, so F+2 empties
+                        // every generation a pre-publish sample could be
+                        // pinned in): no one allocates or shades k any more,
                         // and the final k-black-allocating reports were
                         // pushed before those repins, so the per-iteration
                         // exchange already received them.  k is stable and
@@ -1143,6 +1225,7 @@ namespace wry {
                         if (E < F + 2)
                             break;
                         kstate[k] = { CLEARING, E, 0 };
+                        transitioned |= bit;
                         // Flag k for stripping on every nonempty keyed
                         // cohort: at the white publish every live object
                         // was k-marked, wherever its key placed it.
@@ -1179,6 +1262,7 @@ namespace wry {
                         if (pending)
                             break;
                         kstate[k] = { UNUSED, E, 0 };
+                        transitioned |= bit;
                         --_live_count;
                         _window_base = _live_count ? (k + 1) & 15 : _next_start;
                         printf("C0: k=%d cycle complete: iters=%llu in %.3gs\n",
@@ -1213,6 +1297,36 @@ namespace wry {
             _gray_for_allocation = (_is_gray_published | _is_black_published | _is_weak_deciding | _is_sweeping).raw;
             _debug_assert_white = _is_unused.raw;
             _debug_assert_nonblack = (_is_unused | _is_gray_published).raw;
+
+            // Publish the colours, THEN stamp.  The stamp is a release RMW
+            // on the epoch state, so it is totally ordered against every
+            // mutator pin: a mutator that pinned before the stamp is
+            // reflected in the epoch it returns, and one that pinned after
+            // it observes this store (its pin is an acquire on the same
+            // word).  Therefore every mutator whose colour sample predates
+            // this publish is pinned at <= S, and S+2 empties them all --
+            // the fact every "since + n" gate above relies on.  Stamping
+            // with our own known epoch (as before 2026-08-19) was one short
+            // whenever true had advanced past our pin, and stamping with a
+            // plain load after the store would be a store-buffering race.
+            {
+                Color color = {
+                    .gray = _gray_for_allocation,
+                    .black = _black_for_allocation
+                };
+                _global_atomic_color_for_allocation.store_relaxed(color);
+                if (transitioned) {
+                    Epoch S = stamp_global_epoch();
+                    assert(!(S < E));
+                    for (int k = 0; k != 16; ++k) {
+                        uint16_t bit = 1 << k;
+                        if (transitioned & bit)
+                            kstate[k].since = S;
+                        if (started & bit)
+                            _k_last_work[k] = S;
+                    }
+                }
+            }
 
             // Deferred from the GRAY -> BLACK transition, after the masks
             // above include the new black bit: re-feed the warm-up's parked
@@ -1367,6 +1481,7 @@ namespace wry {
                     uint16_t did_set_black = ~before_black & after_black;
                     if (did_set_black) {
                         ++_marked_since_line;
+                        _marked_bits_this_pass |= did_set_black;
                         _graystack.push(object);
                     }
                     keep.push(object);
@@ -1410,6 +1525,7 @@ namespace wry {
                         uint16_t did_set_black = ~before_black & after_black;
                         if (did_set_black) {
                             ++_marked_since_line;
+                            _marked_bits_this_pass |= did_set_black;
                             _graystack.push(child);
                         }
                     }
@@ -1455,11 +1571,29 @@ namespace wry {
             assert(global_children.debug_is_empty());
 
             // Quiet accounting: this trace ran the graystack dry (reports
-            // are received only between traces), so it counts toward every
-            // bit's quiet window; and the weak walk ran for every deciding
-            // bit.
-            for (auto& n : _passes_since_k_work)
-                ++n;
+            // are received only between traces).  For a bit it marked
+            // nothing for, it counts toward the quiet window; for a bit it
+            // DID mark for, it is k-work -- the pass read slots, and a shade
+            // that hid something behind one of them may still be
+            // unreported for up to +3 (see the BLACK_PUBLISHED gate) -- so
+            // the window restarts from our epoch now.  (Marking here can
+            // come from received work, from the deferred warm-up bag at
+            // black publish, or from a late root; only the first was
+            // previously counted, via the report's gray_did_shade.)  The
+            // weak walk ran for every deciding bit.
+            {
+                Epoch E = epoch::local_state.known;
+                uint16_t marked = std::exchange(_marked_bits_this_pass, uint16_t{0});
+                for (int k = 0; k != 16; ++k) {
+                    uint16_t bit = 1 << k;
+                    if (marked & bit) {
+                        _k_last_work[k] = std::max(_k_last_work[k], E);
+                        _passes_since_k_work[k] = 0;
+                    } else {
+                        ++_passes_since_k_work[k];
+                    }
+                }
+            }
             for (int k = 0; k != 16; ++k)
                 if (_is_weak_deciding[k])
                     kstate[k].scans += 1;

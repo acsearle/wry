@@ -1,6 +1,7 @@
 # Todo
 
 List of one-line reminders of things to think and do
+- Full implications of the next_ready GC bug; clean rederive from epoch formulation
 - Saving AMTs saves their in-memory structure, which is strange and brittle
 - ThreadPublic should probably not be GC and be more like a Crossbeam list
 - The `_ready` skiplist should probably have a per-object allocator

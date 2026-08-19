@@ -587,8 +587,13 @@ The number of k-gray objects is non-decreasing.
 
 ### 4.2 Publish k-black (k-gray acknowledged by all mutators)
 
-Trigger: the collector pins an epoch F >= E + 2, where E is the epoch of the
-k-gray publish.
+Trigger: the collector is pinned at an epoch F >= S + 3, where S is the
+post-publish stamp of the k-gray publish (4.12): the epoch read by a release
+read-modify-write of the epoch state made *after* the colour store.  S + 2
+would suffice for acknowledgement; the extra epoch keeps a k-white birth and
+a k-black birth out of any single globally-pinned interval (4.12).  *(Before
+2026-08-19 this read F >= E + 2 with E the collector's own pinned epoch at
+the transition, which can trail the true epoch by one; see 4.12.)*
 
 Transition: the collector publishes k-black in epoch F.  It records the
 sweep gate `_k_sweep_gate[k] = F + 2` (every allocation from the gate on is
@@ -750,14 +755,15 @@ and the collector's exchange is an acquire.  Consequences:
   published so far.  Every completeness argument reduces to the pattern
   *gate, then exchange, then decide*.
 
-**Completeness lemma.** If X happened at epoch $Q$ (a color publish; the
-last received k-work), then once the collector is pinned at $E \ge Q + 2$,
+**Completeness lemma.** If X happened at *true* epoch $Q$ (a color publish;
+the last received k-work), then once the collector is pinned at $E \ge Q + 2$,
 every mutator has repinned since $Q$ -- the epoch cannot reach $Q+2$ while
 a $Q$-pinned thread remains -- and each mutator's report push is sequenced
 before its repin.  The per-iteration exchange therefore already received
 every report a mutator published before adopting the state change at $Q$.
 The two atomics (epoch, report head) need no joint consistency: each
-conclusion rides exactly one edge.
+conclusion rides exactly one edge.  *The stamp must not undershoot the true
+epoch of X* -- see 4.12 for the two places the implementation did.
 
 **Shadelists.** `garbage_collected_shade` records the object into a
 thread-local bag exactly when its `fetch_or` flipped a bit (record-once;
@@ -769,15 +775,22 @@ rule), routing each entry by the object's *current* `_gray` word.
 **Termination (replaces the original 4.3 search).** Bit k leaves
 BLACK_PUBLISHED when:
 
-1. $E \ge \mathrm{since} + 2$: every mutator allocates k-black, and (by the
+1. $E \ge \mathrm{since} + 2$, with `since` the post-store stamp of the
+   k-black publish (4.12): every mutator allocates k-black, and (by the
    lemma) every k-gray warm-up allocation has been received;
-2. $E \ge \mathrm{k\_last\_work}[k] + 2$: a full quiet window -- any
-   mutator that flipped k has since reported, so an unreported k-flip
-   cannot exist; a *future* flip requires reaching a k-white object, which
-   contradicts trace completeness by the snapshot induction;
-3. at least one scan completed after the last k-work was received, so that
-   work is traced to fixpoint and rooted-but-unshaded objects were grayed
-   by the scan's root check.
+2. $E \ge \mathrm{k\_last\_work}[k] + 3$, with `k_last_work` the
+   *collector's own* pinned epoch at the last k-work -- received (a report's
+   `gray_did_shade`) or performed (a trace pass that marked for k and so read
+   slots) (4.12): a k-white reachable object can survive a fixpoint trace
+   only if its last snapshot path was overwritten before the trace read that
+   slot; that overwrite shaded it, and the shader was pinned at generation
+   at most our known + 1 when it did, so by known + 3 its report is in.  If
+   it carries k-work the window restarts; if no such report arrives, no
+   hiding shade existed, and a shade after the last marking pass hides
+   nothing (hiding is relative to a slot read);
+3. at least one scan completed after the last k-work, so that work is
+   traced to fixpoint and rooted-but-unshaded objects were grayed by the
+   scan's root check.
 
 `k_last_work` is fed by `gray_did_shade`, whose initialization at color
 load (`gray & ~black`) also flags the continued existence of k-gray
@@ -1026,6 +1039,73 @@ re-observed the whole heap every cycle; idle sweeps visit the
 (section 5) is still to be re-measured on this design.
 
 ---
+
+### 4.12 Stamp and gate corrections (2026-08-19)
+
+*(Prompted by a swept `next_ready` skiplist head: born k-white by a pool
+thread with a stale colour sample, adopted by a `World` born k-black in the
+same `World::step`, under a caller's epoch pin held for the whole call.  The
+narration read parent gray=black=c00f, child gray=e003, sweep_mask=0006.)*
+
+**Two one-epoch slacks in the same shape.**  A mutator's colour sample is
+loaded at its last pin/repin and is valid until its next; a pinned thread's
+generation can trail the true epoch by one.  The completeness lemma of 4.8
+is exact when its $Q$ is the *true* epoch of the event.  The implementation
+stamped two kinds of event too early:
+
+- *Publishes* were stamped with the collector's own pinned epoch, taken
+  before the colour store.  The collector's pin caps the true epoch at
+  known+1, so a mutator that pinned into true(store) just before the store
+  keeps a pre-publish sample, and true reaching known+2 empties only
+  generation known.  Now the stamp is the epoch returned by a **release
+  read-modify-write of the epoch state made after the store**
+  (`Service::stamp`).  Every modification of the state is an RMW, so this
+  one is totally ordered against every pin: a pin ordered before it is
+  reflected in the returned epoch S; a pin ordered after it acquires the
+  store.  Hence every mutator with a pre-publish sample is pinned at
+  $\le S$, and $S+2$ empties them all.  (A plain load after the store would
+  be the store-buffering pattern against the mutator's CAS-then-load, and
+  both sides may read stale values.)
+- *k-work* was stamped with the reporter's pinned epoch, which likewise can
+  trail.  Now `k_last_work` is the collector's own epoch at receipt or at
+  the marking pass, and the quiet gate reads +3: an event the collector
+  observes at its known E happened at true $\le E+1$, so the lemma applies
+  to $E+1$.  The window also restarts when the collector itself marks for k
+  (deferred warm-up bag at black publish, late roots), since hiding is
+  relative to a slot read, not to a report.
+
+**GRAY -> BLACK waits one epoch more than acknowledgement needs.**  A
+k-white *birth* can occur as late as true $S+1$ (allocator pinned at
+$\le S$ with a pre-publish sample; its pin keeps the epoch $\le$ its
+generation + 1); a globally pinned interval containing that birth extends to
+$S+2$; a k-black birth must therefore wait for the black store at true
+$\ge S+3$.  With that, no k goes white->black within one advance of any
+pinned generation, and the following contract is *sufficient*:
+
+> A bare GC pointer may be possessed across any suspension or hand-off --
+> a coroutine frame migrating threads, a closure in the work queue, a
+> thread-local cache -- only under a covering global epoch pin.  Anything
+> held longer must be rooted or heap-reachable.
+
+`World::step` satisfies it (every driver pins for the call's extent, and
+every frame-built structure is adopted by the new `World` inside that
+extent).  The pin was always necessary; this makes it enough.
+
+**Rejected alternatives.**  Pinning the oldest open generation ("pin the
+allocating thread's epoch") is stronger but self-defeating: with overlapping
+pins the next pinner always finds prior open, so prior never empties and the
+epoch never advances until all pins are gone -- global quiescence.  A
+per-task colour refresh is thread-scoped and cannot cover a bare pointer
+handed between concurrently running tasks.  Shading the new World's children
+at publication fixes one caller, not the contract.  Deleting on any sweeping
+bit is innocent: whiteness for a bit past its quiet gate is a per-bit proof,
+and the possession violation falsifies it only for the violated bit.
+
+Cost: one epoch more of warm-up per collection and a three-epoch quiet
+window; epoch dynamics unchanged.  The bump allocator already budgets the
+same one-generation slack for lagging pins (three slabs, 4.10's drain-pin
+contract); the colour ladder was the one consumer of epoch progress that had
+not.
 
 ## 5. Throughput model
 
