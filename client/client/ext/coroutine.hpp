@@ -17,6 +17,8 @@
 #include <memory>
 #include <semaphore>
 #include <thread>
+#include <mutex>
+#include <queue>
 
 #include "atomic.hpp"
 #include "utility.hpp"
@@ -75,148 +77,20 @@ namespace wry::Coroutine {
         }
     };
 
-    // co_await Until(t): suspend until steady_clock time point `t`, then resume
-    // on a libdispatch global-queue thread.  Backed by dispatch_after_f (defined
-    // in coroutine.cpp so this header stays libdispatch-free).  NOTE: the
-    // coroutine resumes on a dispatch worker, NOT a GC-pinned mutator thread --
-    // co_await SuspendAndSchedule and re-pin before touching GC state after the
-    // wait.  If `t` is already past, await_ready short-circuits (no thread hop).
     struct Until {
         std::chrono::steady_clock::time_point _when;
         bool await_ready() const noexcept {
             return std::chrono::steady_clock::now() >= _when;
         }
-        void await_suspend(std::coroutine_handle<>) const noexcept;  // coroutine.cpp
+        void await_suspend(std::coroutine_handle<>) const noexcept;
         void await_resume() const noexcept {}
     };
 
-    // co_await ScheduleOnBlockableThread: hop the coroutine onto a libdispatch
-    // global concurrent queue, whose threads may block (file IO, syscalls) and
-    // grow unbounded on demand -- the opposite of our bounded, non-blocking GC
-    // work queue.  Use for blocking work that must not occupy a mutator-pool
-    // thread (cf. SuspendAndSchedule, which keeps the coroutine on the GC pool).
-    // Backed by dispatch_async_f (coroutine.cpp).
     struct ScheduleOnBlockableThread {
         bool await_ready() const noexcept { return false; }
         void await_suspend(std::coroutine_handle<>) const noexcept;  // coroutine.cpp
         void await_resume() const noexcept {}
     };
-
-    // Suspend until `cycles` full collection cycles have completed since
-    // the suspend.  The collector schedules the resume via the global work
-    // queue, so the coroutine resumes on a worker thread.  `cycles == 0`
-    // is ready (no suspension).
-    //
-    // Useful for tests that need the collector to have had a chance to
-    // observe and react to mutator-side changes.  Two cycles are typically
-    // needed for the WAS_LOADED → READY → GONE progression of the weak
-    // protocol; pass `cycles >= 3` to absorb the cycle that may have
-    // already been in flight when the wait was requested.
-    struct WaitForCollectionCycles {
-        uint64_t cycles;
-        bool await_ready() const noexcept { return cycles == 0; }
-        void await_suspend(std::coroutine_handle<> handle) const noexcept {
-            collector_register_cycle_callback(cycles, handle.address());
-        }
-        void await_resume() const noexcept {}
-    };
-
-    // ---- OneShotEvent: timed one-shot completion / cancellable timer -------
-    //
-    // One cell, two ends.  co_await cell->wait_until(t) is simultaneously
-    //   - a completion wait that signal() resolves early (returns true), and
-    //   - a timer that signal() cancels (the same race, seen from the other
-    //     end); if the deadline arrives first the wait resolves false.
-    // signal() may be called from any thread, before or after the wait
-    // begins, and repeatedly (idempotent).  Single waiter, single use.
-    //
-    // The waiter resumes on the GC pool via global_work_queue_schedule (a
-    // pinned mutator worker) -- unlike Until, which resumes on a dispatch
-    // thread.
-    //
-    // Lifetime: the cell is shared_ptr-managed (construct via make()) so the
-    // coordination state outlives whichever of {signaler, deadline fire,
-    // waiter} finishes last; it must not live in the winner's scope.  A
-    // timed-out wait leaves a detached signaler (e.g. a still-running
-    // background save) holding its own reference harmlessly.
-    //
-    // The deadline is dispatch_after_f, which has no cancellation:
-    // "cancelling the timer" is losing the race -- the fire still happens at
-    // the deadline, no-ops against the decided state, and drops its
-    // reference.  Upgrade the backend to a dispatch source if early physical
-    // release ever matters.
-    //
-    // State (one atomic word): EMPTY, SIGNALED, TIMED_OUT, or the waiter's
-    // coroutine handle address (frame allocations are aligned, so 1 and 2
-    // cannot alias a real handle).
-    //
-    //   EMPTY -> SIGNALED       signal() before the wait; wait is ready
-    //   EMPTY -> <handle>       await_suspend installs the waiter
-    //   <handle> -> SIGNALED    signal() wins and schedules the waiter
-    //   <handle> -> TIMED_OUT   deadline wins and schedules the waiter
-    //
-    // Terminal states absorb the loser's attempt.  (EMPTY -> TIMED_OUT is
-    // unreachable single-use: the timer is armed only after the install.)
-    //
-    // ORDER: await_suspend publishes the suspended frame with a release CAS;
-    // the deciding CAS in _decide is acq_rel (acquire: take ownership of
-    // that frame before scheduling it; release: publish the signaler's
-    // preceding writes -- the payload -- into the state word).  await_ready
-    // and await_resume load with acquire, closing the payload edge when the
-    // waiter observes SIGNALED.
-
-    struct OneShotEvent : std::enable_shared_from_this<OneShotEvent> {
-
-        static constexpr uintptr_t EMPTY = 0;
-        static constexpr uintptr_t SIGNALED = 1;
-        static constexpr uintptr_t TIMED_OUT = 2;
-
-        Atomic<uintptr_t> _state{EMPTY};
-
-        static std::shared_ptr<OneShotEvent> make() {
-            return std::make_shared<OneShotEvent>();
-        }
-
-        void _decide(uintptr_t terminal) {
-            uintptr_t expected = _state.load_relaxed();
-            for (;;) {
-                if ((expected == SIGNALED) || (expected == TIMED_OUT))
-                    return;  // already decided; late or duplicate, a no-op
-                if (_state.compare_exchange_weak_acq_rel_relaxed(expected,
-                                                                 terminal)) {
-                    if (expected != EMPTY)
-                        global_work_queue_schedule((void*)expected);
-                    return;
-                }
-            }
-        }
-
-        void signal() { _decide(SIGNALED); }
-
-        struct WaitUntil {
-            std::shared_ptr<OneShotEvent> _cell;
-            std::chrono::steady_clock::time_point _when;
-
-            bool await_ready() const noexcept {
-                return _cell->_state.load_acquire() == SIGNALED;
-            }
-            // Defined in coroutine.cpp (libdispatch).  Returns false --
-            // resume immediately -- when signal() beat the install.
-            bool await_suspend(std::coroutine_handle<> handle) noexcept;
-            bool await_resume() const noexcept {
-                return _cell->_state.load_acquire() == SIGNALED;
-            }
-        };
-
-        [[nodiscard]] WaitUntil wait_until(std::chrono::steady_clock::time_point when) {
-            return WaitUntil{shared_from_this(), when};
-        }
-
-        [[nodiscard]] WaitUntil wait_for(std::chrono::nanoseconds duration) {
-            return wait_until(std::chrono::steady_clock::now() + duration);
-        }
-
-    }; // struct OneShotEvent
 
 
 
@@ -233,7 +107,8 @@ namespace wry::Coroutine {
         struct Promise {
             
             std::coroutine_handle<> _continuation;
-                                    
+            std::stop_token _stop_token;
+
             Future get_return_object() {
                 return Future{this};
             }
@@ -246,7 +121,7 @@ namespace wry::Coroutine {
             void return_void() const noexcept {}
             
             auto final_suspend() const noexcept {
-                struct Awaitable : SuspendAndDestroy {
+                struct Awaitable : ResumeNever {
                     std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> handle) const noexcept {
                         std::coroutine_handle<> continuation = std::move(handle.promise()._continuation);
                         handle.destroy();
@@ -269,7 +144,15 @@ namespace wry::Coroutine {
             void set_continuation(void* ptr) {
                 _continuation = std::coroutine_handle<>::from_address(ptr);
             }
-            
+
+            void set_stop_token(std::stop_token t) {
+                _stop_token = t;
+            }
+
+            std::stop_token get_stop_token() {
+                return _stop_token;
+            }
+
             std::coroutine_handle<> take_continuation() {
                 return std::exchange(_continuation, nullptr);
             }
@@ -294,16 +177,21 @@ namespace wry::Coroutine {
             return *this;
         }
 
-        
+
+        struct _awaitable {
+            Promise* promise;
+            constexpr bool await_ready() const noexcept { return false; }
+            template<typename OuterPromise>
+            std::coroutine_handle<Promise> await_suspend(std::coroutine_handle<OuterPromise> continuation) noexcept {
+                promise->set_stop_token(continuation.promise().get_stop_token());
+                promise->set_continuation(std::move(continuation));
+                return promise->get_handle();
+            }
+            void await_resume() const noexcept {}
+        };
+
         auto operator co_await() {
-            struct Awaitable : std::suspend_always {
-                Future _future;
-                std::coroutine_handle<Promise> await_suspend(std::coroutine_handle<> continuation) noexcept {
-                    _future._set_continuation(std::move(continuation));
-                    return std::move(_future)._into_handle();
-                }
-            };
-            return Awaitable{{}, std::move(*this)};
+            return _awaitable{std::exchange(this->_promise, nullptr)};
         }
         
         void _set_continuation(std::coroutine_handle<> continuation) {
@@ -330,7 +218,8 @@ namespace wry::Coroutine {
             
             std::coroutine_handle<> _continuation{};
             T* _target{};
-            
+            std::stop_token _stop_token;
+
             Future get_return_object() {
                 return Future{this};
             }
@@ -345,7 +234,7 @@ namespace wry::Coroutine {
             }
             
             auto final_suspend() const noexcept {
-                struct Awaitable : SuspendAndDestroy {
+                struct Awaitable : ResumeNever {
                     std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> handle) const noexcept {
                         std::coroutine_handle<> continuation = std::move(handle.promise()._continuation);
                         handle.destroy();
@@ -373,7 +262,15 @@ namespace wry::Coroutine {
                 assert(!_target);
                 _target = target;
             }
-            
+
+            void set_stop_token(std::stop_token t) {
+                _stop_token = t;
+            }
+
+            std::stop_token get_stop_token() {
+                return _stop_token;
+            }
+
             std::coroutine_handle<> take_continuation() {
                 return std::exchange(_continuation, nullptr);
             }
@@ -398,21 +295,32 @@ namespace wry::Coroutine {
             return *this;
         }
         
-        
+
+        struct _awaitable {
+
+            Future _future;
+            T _result;
+
+            constexpr bool await_ready() const noexcept {
+                return false;
+            }
+
+            template<typename OuterPromise>
+            std::coroutine_handle<Promise> await_suspend(std::coroutine_handle<OuterPromise> continuation) noexcept {
+                _future._set_stop_token(continuation.promise().get_stop_token());
+                _future._set_continuation(std::move(continuation));
+                _future._set_target(&_result);
+                return std::move(_future)._into_handle();
+            }
+
+            T await_resume() {
+                return std::move(_result);
+            }
+
+        };
+
         auto operator co_await() {
-            struct Awaitable : std::suspend_always {
-                Future _future;
-                T _result;
-                std::coroutine_handle<Promise> await_suspend(std::coroutine_handle<> continuation) noexcept {
-                    _future._set_continuation(std::move(continuation));
-                    _future._set_target(&_result);
-                    return std::move(_future)._into_handle();
-                }
-                T await_resume() {
-                    return std::move(_result);
-                }
-            };
-            return Awaitable{{}, std::move(*this)};
+            return _awaitable{std::move(*this)};
         }
         
         void _set_continuation(std::coroutine_handle<> continuation) {
@@ -426,13 +334,33 @@ namespace wry::Coroutine {
         void _set_target(T* target) {
             _promise->set_target(target);
         }
-        
+
+        void _set_stop_token(std::stop_token t) {
+            _promise->set_stop_token(t);
+        }
+
         std::coroutine_handle<Promise> _into_handle() && {
             return std::exchange(_promise, nullptr)->get_handle();
         }
         
     };
-    
+
+
+    struct GetStopToken {
+        std::stop_token _stop_token;
+        constexpr bool await_suspend() const noexcept { return false; }
+        template<typename Promise>
+        std::coroutine_handle<Promise> await_suspend(std::coroutine_handle<Promise> continuation) {
+            _stop_token = continuation.promise().get_stop_token();
+            return continuation;
+        }
+        std::stop_token await_resume() {
+            return _stop_token;
+        }
+    };
+
+
+
     template<typename T> constexpr bool is_coroutine(T const&) { return false; }
     template<typename T> constexpr bool is_coroutine(Future<T> const&) { return true; }
 
@@ -568,7 +496,192 @@ namespace wry::Coroutine {
         }
         return awaitable.await_resume();
     }
-    
+
+
+
+
+
+    template<typename T>
+    struct SingleProducerSingleConsumerQueue {
+
+        // TODO:
+        // - Lock-free
+        // - Bounded (backpressure on push)
+        // - Bidirectional with paired endpoints
+        // - Cancel
+
+        std::mutex _mutex;
+        std::queue<T> _queue;
+        std::coroutine_handle<> _pop_continuation;
+
+        void emplace(auto&&... args) {
+            std::unique_lock guard{_mutex};
+            _queue.emplace(FORWARD(args)...);
+            if (_pop_continuation)
+                global_work_queue_schedule(std::exchange(_pop_continuation, nullptr));
+        }
+
+        struct _pop_awaitable : std::suspend_always {
+            SingleProducerSingleConsumerQueue& _context;
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) {
+                std::unique_lock guard{_context._mutex};
+                if (_context._queue.empty()) {
+                    if (_context._pop_continuation) {
+                        // SingleConsumer violated
+                        abort();
+                    }
+                    _context._pop_continuation = continuation;
+                    return std::noop_coroutine();
+                } else {
+                    return continuation;
+                }
+            }
+            T await_resume() {
+                std::unique_lock guard{_context._mutex};
+                assert(!_context._queue.empty());
+                T result{std::move(_context._queue.front())};
+                _context._queue.pop();
+                return result;
+            }
+        };
+
+        auto pop() {
+            return _pop_awaitable{*this};
+        };
+
+        bool try_pop(T& victim) {
+            std::unique_lock guard{_mutex};
+            assert(!_pop_continuation);
+            bool result = !_queue.empty();
+            if (result) {
+                victim = std::move(_queue.front());
+                _queue.pop_front();
+            }
+            return result;
+        }
+
+    };
+
+
+    // Suspend until `cycles` full collection cycles have completed since
+    // the suspend.  The collector schedules the resume via the global work
+    // queue, so the coroutine resumes on a worker thread.  `cycles == 0`
+    // is ready (no suspension).
+    //
+    // Useful for tests that need the collector to have had a chance to
+    // observe and react to mutator-side changes.  Two cycles are typically
+    // needed for the WAS_LOADED → READY → GONE progression of the weak
+    // protocol; pass `cycles >= 3` to absorb the cycle that may have
+    // already been in flight when the wait was requested.
+    struct WaitForCollectionCycles {
+        uint64_t cycles;
+        bool await_ready() const noexcept { return cycles == 0; }
+        void await_suspend(std::coroutine_handle<> handle) const noexcept {
+            collector_register_cycle_callback(cycles, handle.address());
+        }
+        void await_resume() const noexcept {}
+    };
+
+    // ---- OneShotEvent: timed one-shot completion / cancellable timer -------
+    //
+    // One cell, two ends.  co_await cell->wait_until(t) is simultaneously
+    //   - a completion wait that signal() resolves early (returns true), and
+    //   - a timer that signal() cancels (the same race, seen from the other
+    //     end); if the deadline arrives first the wait resolves false.
+    // signal() may be called from any thread, before or after the wait
+    // begins, and repeatedly (idempotent).  Single waiter, single use.
+    //
+    // The waiter resumes on the GC pool via global_work_queue_schedule (a
+    // pinned mutator worker) -- unlike Until, which resumes on a dispatch
+    // thread.
+    //
+    // Lifetime: the cell is shared_ptr-managed (construct via make()) so the
+    // coordination state outlives whichever of {signaler, deadline fire,
+    // waiter} finishes last; it must not live in the winner's scope.  A
+    // timed-out wait leaves a detached signaler (e.g. a still-running
+    // background save) holding its own reference harmlessly.
+    //
+    // The deadline is dispatch_after_f, which has no cancellation:
+    // "cancelling the timer" is losing the race -- the fire still happens at
+    // the deadline, no-ops against the decided state, and drops its
+    // reference.  Upgrade the backend to a dispatch source if early physical
+    // release ever matters.
+    //
+    // State (one atomic word): EMPTY, SIGNALED, TIMED_OUT, or the waiter's
+    // coroutine handle address (frame allocations are aligned, so 1 and 2
+    // cannot alias a real handle).
+    //
+    //   EMPTY -> SIGNALED       signal() before the wait; wait is ready
+    //   EMPTY -> <handle>       await_suspend installs the waiter
+    //   <handle> -> SIGNALED    signal() wins and schedules the waiter
+    //   <handle> -> TIMED_OUT   deadline wins and schedules the waiter
+    //
+    // Terminal states absorb the loser's attempt.  (EMPTY -> TIMED_OUT is
+    // unreachable single-use: the timer is armed only after the install.)
+    //
+    // ORDER: await_suspend publishes the suspended frame with a release CAS;
+    // the deciding CAS in _decide is acq_rel (acquire: take ownership of
+    // that frame before scheduling it; release: publish the signaler's
+    // preceding writes -- the payload -- into the state word).  await_ready
+    // and await_resume load with acquire, closing the payload edge when the
+    // waiter observes SIGNALED.
+
+    struct OneShotEvent : std::enable_shared_from_this<OneShotEvent> {
+
+        static constexpr uintptr_t EMPTY = 0;
+        static constexpr uintptr_t SIGNALED = 1;
+        static constexpr uintptr_t TIMED_OUT = 2;
+
+        Atomic<uintptr_t> _state{EMPTY};
+
+        static std::shared_ptr<OneShotEvent> make() {
+            return std::make_shared<OneShotEvent>();
+        }
+
+        void _decide(uintptr_t terminal) {
+            uintptr_t expected = _state.load_relaxed();
+            for (;;) {
+                if ((expected == SIGNALED) || (expected == TIMED_OUT))
+                    return;  // already decided; late or duplicate, a no-op
+                if (_state.compare_exchange_weak_acq_rel_relaxed(expected,
+                                                                 terminal)) {
+                    if (expected != EMPTY)
+                        global_work_queue_schedule((void*)expected);
+                    return;
+                }
+            }
+        }
+
+        void signal() { _decide(SIGNALED); }
+
+        struct WaitUntil {
+            std::shared_ptr<OneShotEvent> _cell;
+            std::chrono::steady_clock::time_point _when;
+
+            bool await_ready() const noexcept {
+                return _cell->_state.load_acquire() == SIGNALED;
+            }
+            // Defined in coroutine.cpp (libdispatch).  Returns false --
+            // resume immediately -- when signal() beat the install.
+            bool await_suspend(std::coroutine_handle<> handle) noexcept;
+            bool await_resume() const noexcept {
+                return _cell->_state.load_acquire() == SIGNALED;
+            }
+        };
+
+        [[nodiscard]] WaitUntil wait_until(std::chrono::steady_clock::time_point when) {
+            return WaitUntil{shared_from_this(), when};
+        }
+
+        [[nodiscard]] WaitUntil wait_for(std::chrono::nanoseconds duration) {
+            return wait_until(std::chrono::steady_clock::now() + duration);
+        }
+
+    }; // struct OneShotEvent
+
+
+
+
 } // namespace wry::Coroutine
 
 namespace wry {

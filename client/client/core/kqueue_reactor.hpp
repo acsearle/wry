@@ -10,10 +10,12 @@
 
 #include <sanitizer/tsan_interface.h>
 
-// kqueue
-#include <sys/types.h>
 #include <sys/event.h>
+#include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+#include <unistd.h>
 
 #include <cassert>
 #include <cstdio>
@@ -24,11 +26,39 @@
 #include "execution.hpp"
 
 namespace wry {
-    
-    void global_reactor_cancel();
-    bool global_reactor_kevent64_change(kevent64_s const* changelist, int nchanges);
 
-    void global_reactor_service();
+    // First pass
+
+    // For simplicity:
+    // - we abort if the kqueue fails
+    // - no provision for cancellation
+    // - throw system_error
+
+    namespace detail {
+
+        struct kevent64_awaitable : std::suspend_always {
+            kevent64_s _change;
+            std::coroutine_handle<> _continuation;
+            int _result;
+            union {
+                kevent64_s _event;
+                int _errno;
+            };
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) /* yesexcept */;
+            kevent64_s await_resume() /* yesexcept */;
+            void set_value(kevent64_s event);
+        };
+
+
+    }
+
+
+    Coroutine::Future<size_t> recv_some(int fildes, void* buf, size_t nbyte);
+    Coroutine::Future<size_t> send_some(int fildes, void* buf, size_t nbyte);
+
+
+
+
 
     // We use a dedicated thread waiting on a platform-specific mechanism for
     // asynchronous event handling, notably IO, and run the callback run on
@@ -38,61 +68,14 @@ namespace wry {
     // Windows  : IOCP
     // Linux    : epoll (io_uring?)
     // Fallback : select
-    
-    // kqueue
 
-    template<typename Receiver>
-    struct _kevent64_operation {
-        void (*_callback)(kevent64_s);
-        kevent64_s event;
-        Receiver _receiver;
-        
-        static void _static_callback(kevent64_s event) {
-            auto* that = (_kevent64_operation*)event.udata;
-            std::move(that->_receiver).set_value(std::move(event));
-        }
-        
-        void start() {
-            _callback = &_static_callback;
-            // ThreadSanitizer doesn't understand kevent64
-            __tsan_release(&_callback);
-            event.flags = EV_ADD | EV_ONESHOT | EV_UDATA_SPECIFIC;
-            event.udata = (uint64_t)this;
-            (void) global_reactor_kevent64_change(&event, 1);
-        }
-        
-    };
-    
-    struct kevent64_sender {
-        kevent64_s event;
-        template<typename Receiver>
-        auto connect(Receiver receiver) {
-            return _kevent64_operation<Receiver>{{}, std::move(event), std::move(receiver)};
-        }
-    };
-    
-    
-    // Sender factories
-    
-    auto async_read(int fd) {
-        return execution::then(kevent64_sender{
-            kevent64_s{
-                .ident = (uint64_t)fd,
-                .filter = EVFILT_READ,
-            }}, [](kevent64_s event) {
-                return event.data;
-            });
-    }
-    
-    auto async_write(int fd) {
-        return execution::then(kevent64_sender{
-            kevent64_s{
-                .ident = (uint64_t)fd,
-                .filter = EVFILT_WRITE,
-            }}, [](kevent64_s event) {
-                return event.data;
-            });
-    }
+    void global_reactor_cancel();
+    bool global_reactor_kevent64_change(kevent64_s const* changelist, int nchanges);
+
+    void global_reactor_service();
+
+
+
 
 } // namespace wry
 
