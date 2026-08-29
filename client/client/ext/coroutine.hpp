@@ -20,6 +20,7 @@
 #include <mutex>
 #include <queue>
 #include <variant>
+#include <stop_token>
 
 #include "atomic.hpp"
 #include "utility.hpp"
@@ -98,8 +99,6 @@ namespace wry::Coroutine {
         void await_resume() const noexcept {}
     };
 
-
-
     // Basic coroutine
 
     template<typename T>
@@ -111,7 +110,7 @@ namespace wry::Coroutine {
             _target = target;
         }
         template<typename U>
-        void return_value(U&& u) const noexcept(std::is_nothrow_constructible_v<T, U&&>) {
+        void return_value(U&& u) const noexcept(std::is_nothrow_assignable_v<T&, U&&>) {
             *_target = std::forward<U>(u);
         }
     };
@@ -149,7 +148,7 @@ namespace wry::Coroutine {
         struct FinalAwaitable : ResumeNever {
             template<typename DerivedPromise>
             std::coroutine_handle<> await_suspend(std::coroutine_handle<DerivedPromise> handle) const noexcept {
-                std::coroutine_handle<> continuation = std::move(handle.promise()._continuation);
+                std::coroutine_handle<> continuation = std::exchange(handle.promise()._continuation, nullptr);
                 handle.destroy();
                 assert(continuation);
                 return continuation;
@@ -158,6 +157,14 @@ namespace wry::Coroutine {
 
         auto final_suspend() const noexcept {
             return FinalAwaitable{};
+        }
+
+        ~Promise() {
+            if (_continuation) {
+                // We did not resume our continuation, therefore we are
+                // participants in a cancellation unwinding
+                _continuation.destroy();
+            }
         }
 
         void set_continuation(std::coroutine_handle<> continuation) {
@@ -183,20 +190,55 @@ namespace wry::Coroutine {
             _exception = xpp;
         }
 
+    }; // Promise<T>
 
+    template<typename T>
+    std::coroutine_handle<Promise<T>> handle_from_promise(Promise<T>* promise) {
+        assert(promise);
+        return std::coroutine_handle<typename Future<T>::promise_type>::from_promise(*promise);
+    }
+
+    // SuspendAndDestroy, but restricted to Promise<T> that perform unwinding
+    struct SuspendAndCancel : ResumeNever {
+        template<typename T>
+        void await_suspend(std::coroutine_handle<Promise<T>> handle) {
+            handle.destroy();
+        }
+    };
+
+    // TODO: We could imagine returning a common base class of Promise with all
+    // the T-invariant features available.
+    struct GetStopToken {
+        std::stop_token _stop_token;
+        constexpr bool await_ready() const noexcept { return false; }
+        template<typename T>
+        std::coroutine_handle<Promise<T>> await_suspend(std::coroutine_handle<Promise<T>> continuation) {
+            _stop_token = continuation.promise().get_stop_token();
+            return continuation;
+        }
+        std::stop_token await_resume() {
+            return _stop_token;
+        }
     };
 
     template<typename T>
     struct Future {
 
         using promise_type = Promise<T>;
-        promise_type* _promise;
+        promise_type* _promise = nullptr;
         explicit Future(promise_type* promise) : _promise(promise) {}
 
         Future() = delete;
         Future(Future const&) = delete;
         Future(Future&& other) : _promise(exchange(other._promise, nullptr)) {}
-        ~Future() { if (_promise) abort(); }
+        ~Future() {
+            // This could happen if we create a future, hold it across a
+            // suspension point, and then resume it.  But it's more likely to
+            // just have been forgotten.  See if we ever have a compelling need
+            // to do the former.
+            if (_promise)
+                abort();
+        }
         Future& operator=(Future const&) = delete;
         Future& operator=(Future&& other) {
             Future a{std::move(other)};
@@ -238,31 +280,10 @@ namespace wry::Coroutine {
         return Future<T>{this};
     }
 
-
-    template<typename T>
-    std::coroutine_handle<Promise<T>> handle_from_promise(Promise<T>* promise) {
-        assert(promise);
-        return std::coroutine_handle<typename Future<T>::promise_type>::from_promise(*promise);
-    }
-
     template<typename T>
     std::coroutine_handle<typename Future<T>::promise_type> handle_from_future(Future<T>&& future) {
         return handle_from_promise(std::exchange(future._promise, nullptr));
     }
-
-
-    struct GetStopToken {
-        std::stop_token _stop_token;
-        constexpr bool await_ready() const noexcept { return false; }
-        template<typename Promise>
-        std::coroutine_handle<Promise> await_suspend(std::coroutine_handle<Promise> continuation) {
-            _stop_token = continuation.promise().get_stop_token();
-            return continuation;
-        }
-        std::stop_token await_resume() {
-            return _stop_token;
-        }
-    };
 
     template<typename T> constexpr bool is_coroutine(T const&) { return false; }
     template<typename T> constexpr bool is_coroutine(Future<T> const&) { return true; }
@@ -270,23 +291,73 @@ namespace wry::Coroutine {
     struct Nursery {
         
         void (*_resume)(void*) = &_static_resume;
+        void (*_destroy)(void*) = &_static_destroy;
         Atomic<std::ptrdiff_t> _counter{0};
+        Atomic<std::ptrdiff_t> _cancelled_count{0};
         std::ptrdiff_t _children = 0;
         std::coroutine_handle<> _continuation;
-        std::stop_token _stop_token;
+        std::stop_token _outer_stop_token;
+        std::stop_source _inner_stop_source;
 
-        // TODO: On creation Nursery needs to query its context for the StopToken
+        struct Callback {
+            std::stop_source _inner_stop_source;
+            void operator()() {
+                _inner_stop_source.request_stop();
+            }
+        };
+
+        std::stop_callback<Callback> _outer_stop_callback;
 
         static void _static_resume(void* ptr) {
             auto self = (Nursery*)ptr;
             auto count = self->_counter.sub_fetch_release(1);
             if (count == 0) {
                 (void) self->_counter.load_acquire();
-                ptr = self->_continuation.address();
-                [[clang::musttail]] return (*(void(**)(void*))ptr)(ptr);
+                ptr = std::exchange(self->_continuation, nullptr).address();
+                if (!self->_outer_stop_token.stop_requested()) {
+                    [[clang::musttail]] return (*(void(**)(void*))ptr)(ptr);
+                } else {
+                    [[clang::musttail]] return (*((void(**)(void*))ptr + 1))(ptr);
+                }
             }
         }
-         
+
+        static void _static_destroy(void* ptr) {
+            auto self = (Nursery*)ptr;
+            self->_cancelled_count.fetch_add_relaxed(1);
+            _static_resume(ptr);
+        }
+
+        bool request_stop() {
+            return _inner_stop_source.request_stop();
+        }
+
+        Nursery() : Nursery(std::stop_token{}) {}
+        explicit Nursery(std::stop_token token)
+        : _outer_stop_token(token)
+        , _outer_stop_callback(_outer_stop_token, Callback{_inner_stop_source}) {
+        }
+
+        ~Nursery() {
+            // Detect destruction of a coroutine containing a running nursery
+            assert(!_children && !_counter.load_relaxed());
+        }
+
+        struct Factory {
+            std::stop_token _stop_token;
+            constexpr bool await_ready() const noexcept {
+                return false;
+            }
+            template<typename T>
+            bool await_suspend(std::coroutine_handle<Promise<T>> continuation) noexcept {
+                _stop_token = continuation.promise()._stop_token;
+                return false;
+            }
+            [[nodiscard]] Nursery await_resume() noexcept {
+                return Nursery(std::move(_stop_token));
+            }
+        };
+
         // co_await nursery.fork(foo(x)) immediately starts foo on the current thread
         // and schedules the caller to execute soon
         [[nodiscard]] auto fork(Future<>&& future) {
@@ -296,7 +367,7 @@ namespace wry::Coroutine {
                 std::coroutine_handle<Future<>::promise_type> await_suspend(std::coroutine_handle<> continuation) noexcept {
                     ++(_nursery->_children);
                     _promise->set_continuation(_nursery);
-                    _promise->set_stop_token(_nursery->_stop_token);
+                    _promise->set_stop_token(_nursery->_inner_stop_source.get_token());
                     // set_exception_target deliberately omitted
                     auto handle = handle_from_promise(std::exchange(_promise, nullptr));
                     global_work_queue_schedule(std::move(continuation));
@@ -322,7 +393,7 @@ namespace wry::Coroutine {
                 std::coroutine_handle<typename Future<T>::promise_type> await_suspend(std::coroutine_handle<> continuation) noexcept {
                     ++(_nursery->_children);
                     _promise->set_continuation(_nursery);
-                    _promise->set_stop_token(_nursery->_stop_token);
+                    _promise->set_stop_token(_nursery->_inner_stop_source.get_token());
                     _promise->set_target(_target);
                     // set_exception_target deliberately omitted
                     auto handle = handle_from_promise(std::exchange(_promise, nullptr));
@@ -342,7 +413,7 @@ namespace wry::Coroutine {
         void soon(Future<>&& future) {
             ++_children;
             future._promise->set_continuation(this);
-            future._promise->set_stop_token(_stop_token);
+            future._promise->set_stop_token(_inner_stop_source.get_token());
             // set_exception_target deliberately omitted
             global_work_queue_schedule(handle_from_future(std::move(future)));
         }
@@ -357,7 +428,7 @@ namespace wry::Coroutine {
             future._promise->set_continuation(this);
             future._promise->set_target(&target);
             // set_exception_target deliberately omitted
-            future._promise->set_stop_token(_stop_token);
+            future._promise->set_stop_token(_inner_stop_source.get_token());
             global_work_queue_schedule(handle_from_future(std::move(future)));
         }
 
@@ -368,7 +439,7 @@ namespace wry::Coroutine {
                 Nursery* _nursery;
                 bool await_ready() noexcept {
                     auto count = _nursery->_counter.load_relaxed();
-                    bool result = (count == -_nursery->_children);
+                    bool result = (count == -_nursery->_children) && !_nursery->_outer_stop_token.stop_requested();
                     if (result) {
                         _nursery->_counter.exchange_acquire(0);
                         _nursery->_children = 0;
@@ -380,19 +451,25 @@ namespace wry::Coroutine {
                     auto count = _nursery->_counter.add_fetch_release(std::exchange(_nursery->_children, 0));
                     if (count == 0) {
                         (void) _nursery->_counter.load_acquire();
+                        if (_nursery->_outer_stop_token.stop_requested()) {
+                            continuation.destroy();
+                            return std::noop_coroutine();
+                        }
                         return _nursery->_continuation;
                     } else {
                         return std::noop_coroutine();
                     }
                 }
-                void await_resume() noexcept {
-                    _nursery = nullptr;
+                std::ptrdiff_t await_resume() noexcept {
+                    return std::exchange(_nursery, nullptr)->_cancelled_count.nonatomic_exchange(0);
                 }
-                ~Awaitable() { assert(!_nursery); }
+                ~Awaitable() {
+                    assert(!_nursery || _nursery->_outer_stop_token.stop_requested());
+                }
             };
             return Awaitable{this};
         }
-                        
+
     }; // struct Nursery
 
 
@@ -402,11 +479,13 @@ namespace wry::Coroutine {
     auto sync_wait(T&& awaitable) {
         struct Frame {
             void (*_resume)(void*) = &_static_resume;
+            void (*_destroy)(void*) = &_static_resume;
             std::binary_semaphore _semaphore{0}; // start in unavailable state
             static void _static_resume(void* ptr) {
                 auto self = (Frame*)ptr;
                 self->_semaphore.release();
             }
+            // TODO: We have no way to communicate cancellation into a generic awaitable
         };
         Frame frame;
         if (!awaitable.await_ready()) {
@@ -455,9 +534,6 @@ namespace wry::Coroutine {
                 _context->_queue.pop();
                 _context = nullptr;
                 return result;
-            }
-            ~_pop_awaitable() {
-                assert(!_context);
             }
         };
 

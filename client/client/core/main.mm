@@ -178,6 +178,7 @@ int main(int argc, const char** argv) {
             // coroutine layout-compatible, with resume as first member
             struct callback_t {
                 void (*resume)(void*);
+                void (*destroy)(void*);
                 wry::Atomic<bool> done{false};
             };
             callback_t c;
@@ -194,7 +195,7 @@ int main(int argc, const char** argv) {
                 [[NSApplication sharedApplication] postEvent:event atStart:NO];
                 ((callback_t*)p)->done.store_release(true);
             };
-
+            c.destroy = c.resume;
             wry::wait_group_set_callback(&c);
 
             do {

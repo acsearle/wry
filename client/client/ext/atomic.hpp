@@ -28,6 +28,7 @@
 #endif // defined(LINUX)
 
 #include <atomic>
+#include <utility>
 
 #include "stdint.hpp"
 
@@ -143,6 +144,10 @@ __atomic_store_n(&value, std::bit_cast<U>(desired), _WRY_ATOMIC_##order);\
 
         void nonatomic_store(T desired) const noexcept {
             value = std::bit_cast<U>(desired);
+        }
+
+        T nonatomic_exchange(T desired) const noexcept {
+            return std::bit_cast<T>(std::exchange(value, std::bit_cast<U>(desired)));
         }
 
 #define MAKE_WRY_ATOMIC_EXCHANGE(order) \
