@@ -45,7 +45,7 @@ namespace wry::network {
 
     Coroutine::Task server() {
         Coroutine::Nursery nursery;        
-        nursery.join();
+        co_await nursery.join();
         co_return;
     }
 

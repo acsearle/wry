@@ -371,6 +371,10 @@ namespace wry {
                                                   + std::chrono::seconds(30));
         assert(signaled);
         assert(result->load(std::memory_order_relaxed) == 1);
+        // TODO: Without these asserts, save_game_async is not joined and we
+        // have violated structured concurrency in the local context.
+        // save_game_async itself uses the global wait group to join the main
+        // thread before exit.
 
         int found = -1;
         for (auto& [name, id] : enumerate_games())

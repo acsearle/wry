@@ -1815,7 +1815,7 @@ namespace wry {
         }
         // Let several full cycles complete so the sweeps run under the
         // violation checks.
-        co_await Coroutine::WaitForCollectionCycles{4};
+        co_await Coroutine::DebugWaitForCollectionCycles{4};
         co_return;
     };
 

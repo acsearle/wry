@@ -109,7 +109,7 @@ namespace wry {
         co_await nursery.join();
         printf("JOIN\n");
 
-        co_await Coroutine::WaitForCollectionCycles{1};
+        co_await Coroutine::DebugWaitForCollectionCycles{1};
 
         printf("FORK2\n");
         for (int i = 0; i != 1 << 17; i += m) {
@@ -150,12 +150,12 @@ namespace wry {
         co_await nursery.join();
         printf("JOIN3\n");
 
-        co_await Coroutine::WaitForCollectionCycles{1};
+        co_await Coroutine::DebugWaitForCollectionCycles{1};
 
         printf("ERASED\n");
         trie = nullptr;
 
-        co_await Coroutine::WaitForCollectionCycles{1};
+        co_await Coroutine::DebugWaitForCollectionCycles{1};
 
 
         co_return;
@@ -281,7 +281,7 @@ namespace wry {
         co_await nursery.join();
         printf("[ctrie_commutative] JOIN\n");
 
-        co_await Coroutine::WaitForCollectionCycles{1};
+        co_await Coroutine::DebugWaitForCollectionCycles{1};
 
         // Verify: for each key, the final state must match its target count
         // exactly, with the convention that count==0 means absent.
@@ -329,7 +329,7 @@ namespace wry {
         assert(mismatches == 0);
 
         trie = nullptr;
-        co_await Coroutine::WaitForCollectionCycles{1};
+        co_await Coroutine::DebugWaitForCollectionCycles{1};
 
         co_return;
     };

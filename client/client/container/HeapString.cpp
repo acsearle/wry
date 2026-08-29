@@ -110,7 +110,7 @@ namespace wry {
         assert(a_emplaced);
         assert(!b_emplaced);
 
-        co_await Coroutine::WaitForCollectionCycles{3};
+        co_await Coroutine::DebugWaitForCollectionCycles{3};
         // SAFETY: a and b are now dangling
 
         bool c_emplaced = false;

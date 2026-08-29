@@ -73,8 +73,8 @@ namespace wry {
     void wait_group_spawn(Coroutine::Task task) {
         std::ptrdiff_t observed = g_wait_group_count.fetch_add_relaxed(1);
         assert(observed && "wait_group_spawn after wait_group_wait");
-        task._set_continuation(&g_wait_group_continuation);
-        global_work_queue_schedule(std::move(task)._into_handle());
+        task._promise->set_continuation(&g_wait_group_continuation);
+        global_work_queue_schedule(handle_from_future(std::move(task)));
     }
 
     void wait_group_wait() {
@@ -211,9 +211,8 @@ namespace wry::Coroutine {
             co_await nursery.join();
         }
 
-        // race hammer: randomized signal delay vs deadline.  The signaler
-        // resumes from Until on a dispatch thread, exercising the any-thread
-        // contract of signal().  Either outcome is valid per round; a true
+        // race hammer: randomized signal delay vs deadline.  Either outcome is
+        // valid per round; a true
         // wait must see the payload.
         {
             std::mt19937_64 gen{20260710};
