@@ -12,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <random>
+#include <stdexcept>
 #include <stop_token>
 
 #include <dispatch/dispatch.h>
@@ -100,7 +101,7 @@ namespace wry {
             // If all the tasks were finished, invoke immediately
             std::atomic_thread_fence(std::memory_order_acquire);
             tsan_acquire(&g_wait_group_count);
-            (*((void(**)(void*))g_wait_group_callback))(g_wait_group_callback);
+            Coroutine::resume_by_address(g_wait_group_callback);
         }
     }
 
@@ -108,31 +109,29 @@ namespace wry {
 
 namespace wry::Coroutine {
 
-    inline void resume_coroutine_from_context(void* context) {
-        (*((void(**)(void*))context))(context);
-    }
-
-    void ScheduleOnBlockableThread::await_suspend(std::coroutine_handle<> handle) const noexcept {
+    void TransferToBlockableExecutor::await_suspend(std::coroutine_handle<> handle) const noexcept {
         dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
                          handle.address(),
-                         &resume_coroutine_from_context);
+                         &resume_by_address);
     }
 
     // Policy: We use libdispatch to implement waiting, but on waking we send
     // the actual work back to the global work queue
 
-    void Until::await_suspend(std::coroutine_handle<> handle) const noexcept {
-        // await_ready already handled the already-past case, but clamp anyway so
-        // a deadline that slipped between the two calls schedules at +0 rather
-        // than wrapping negative.
+    void global_work_queue_schedule_after(std::chrono::steady_clock::time_point when, void* address) {
         auto now = std::chrono::steady_clock::now();
-        int64_t ns = (_when > now)
-            ? std::chrono::duration_cast<std::chrono::nanoseconds>(_when - now).count()
-            : 0;
+        int64_t ns = (when > now)
+        ? std::chrono::duration_cast<std::chrono::nanoseconds>(when - now).count()
+        : 0;
         dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, ns),
                          dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
-                         handle.address(),
+                         address,
                          &global_work_queue_schedule);
+    }
+
+
+    void Until::await_suspend(std::coroutine_handle<> handle) const noexcept {
+        global_work_queue_schedule_after(_when, handle.address());
     }
 
     bool OneShotEvent::WaitUntil::await_suspend(std::coroutine_handle<> handle) noexcept {
@@ -204,7 +203,7 @@ namespace wry::Coroutine {
             co_await nursery.fork(
                 [](std::shared_ptr<OneShotEvent> c,
                    std::shared_ptr<std::atomic<int>> p) -> Task {
-                    co_await SuspendAndSchedule{};
+                    co_await TransferToPoolExecutor{};
                     p->store(42, std::memory_order_relaxed);
                     c->signal();
                 }(cell, payload));
@@ -285,7 +284,7 @@ namespace wry::Coroutine {
 
         Task unwind_completing_task(std::atomic<int>* destroyed) {
             UnwindProbe probe{destroyed};
-            co_await SuspendAndSchedule{};
+            co_await TransferToPoolExecutor{};
             co_return;
         }
 
@@ -328,7 +327,7 @@ namespace wry::Coroutine {
             task._promise->set_continuation(&fence);
             global_work_queue_schedule(handle_from_future(std::move(task)));
             while (fence._outcome.load(std::memory_order_acquire) == 0)
-                co_await SuspendAndSchedule{};
+                co_await TransferToPoolExecutor{};
             assert(fence._outcome.load(std::memory_order_relaxed) == 1);
             assert(destroyed.load(std::memory_order_relaxed) == 1);
         }
@@ -345,7 +344,7 @@ namespace wry::Coroutine {
             task._promise->set_continuation(&fence);
             global_work_queue_schedule(handle_from_future(std::move(task)));
             while (fence._outcome.load(std::memory_order_acquire) == 0)
-                co_await SuspendAndSchedule{};
+                co_await TransferToPoolExecutor{};
             assert(fence._outcome.load(std::memory_order_relaxed) == 2);
             assert(reached.load(std::memory_order_relaxed) == 1);
             assert(destroyed.load(std::memory_order_relaxed) == 3);
@@ -367,7 +366,7 @@ namespace wry::Coroutine {
         }
 
         Future<int> unwind_ok_child(int value) {
-            co_await SuspendAndSchedule{};
+            co_await TransferToPoolExecutor{};
             co_return value;
         }
 
@@ -449,7 +448,7 @@ namespace wry::Coroutine {
         task._promise->set_continuation(&fence);
         global_work_queue_schedule(handle_from_future(std::move(task)));
         while (fence._outcome.load(std::memory_order_acquire) == 0)
-            co_await SuspendAndSchedule{};
+            co_await TransferToPoolExecutor{};
         assert(fence._outcome.load(std::memory_order_relaxed) == 2);
         assert(reached.load(std::memory_order_relaxed) == 1);
         assert(destroyed.load(std::memory_order_relaxed) == 2);
@@ -475,7 +474,7 @@ namespace wry::Coroutine {
             started->fetch_add(1, std::memory_order_release);
             std::stop_token token = co_await GetStopToken{};
             while (!token.stop_requested())
-                co_await SuspendAndSchedule{};
+                co_await TransferToPoolExecutor{};
             co_await SuspendAndCancel{};
         }
 
@@ -522,7 +521,7 @@ namespace wry::Coroutine {
         task._promise->set_continuation(&fence);
         global_work_queue_schedule(handle_from_future(std::move(task)));
         while (fence._outcome.load(std::memory_order_acquire) == 0)
-            co_await SuspendAndSchedule{};
+            co_await TransferToPoolExecutor{};
         assert(fence._outcome.load(std::memory_order_relaxed) == 2);
         assert(destroyed.load(std::memory_order_relaxed) == 1);
         assert(resumed_past.load(std::memory_order_relaxed) == 0);
@@ -545,11 +544,180 @@ namespace wry::Coroutine {
         task._promise->set_continuation(&fence);
         global_work_queue_schedule(handle_from_future(std::move(task)));
         while (fence._outcome.load(std::memory_order_acquire) == 0)
-            co_await SuspendAndSchedule{};
+            co_await TransferToPoolExecutor{};
         assert(fence._outcome.load(std::memory_order_relaxed) == 1);
         assert(started.load(std::memory_order_relaxed) == 2);
         assert(destroyed.load(std::memory_order_relaxed) == 3);
         assert(tally.load(std::memory_order_relaxed) == 2);
+
+        co_return;
+    };
+
+    namespace {
+
+        Future<int> osfs_value_child() {
+            co_await TransferToPoolExecutor{};
+            co_return 17;
+        }
+
+        Future<int> osfs_throwing_child() {
+            co_await TransferToPoolExecutor{};
+            throw std::runtime_error("osfs");
+        }
+
+        Future<int> osfs_stoppable_child() {
+            std::stop_token token = co_await GetStopToken{};
+            // Bounded, so a broken token chain fails the test instead of
+            // hanging it: if the stop request never becomes visible here,
+            // fall through and complete with a sentinel the test rejects.
+            for (int i = 0; i != (1 << 16); ++i) {
+                if (token.stop_requested())
+                    co_await SuspendAndCancel{};
+                co_await TransferToPoolExecutor{};
+            }
+            co_return -1;
+        }
+
+        Task osfs_host(std::atomic<int>* value,
+                       std::atomic<int>* caught,
+                       std::atomic<int>* stopped_ok) {
+            // Value channel passes through
+            std::optional<int> a = co_await stopped_as_optional(osfs_value_child());
+            if (a && (*a == 17))
+                value->store(17, std::memory_order_relaxed);
+
+            // Exception channel passes through
+            try {
+                (void) co_await stopped_as_optional(osfs_throwing_child());
+            } catch (std::runtime_error const&) {
+                caught->fetch_add(1, std::memory_order_relaxed);
+            }
+
+            // Stopped channel becomes nullopt: the child observes the
+            // requested token through the adaptor, cancels itself, the
+            // cascade is absorbed at the adaptor's destroy word, and THIS
+            // frame is resumed rather than destroyed
+            std::optional<int> c = co_await stopped_as_optional(osfs_stoppable_child());
+            if (!c)
+                stopped_ok->fetch_add(1, std::memory_order_relaxed);
+        }
+
+    }
+
+    define_test("coroutine_optional_from_stopped") {
+
+        UnwindFence fence;
+        std::stop_source source;
+        std::atomic<int> value{0};
+        std::atomic<int> caught{0};
+        std::atomic<int> stopped_ok{0};
+
+        // The scope is cancelled from the start: children that do not look
+        // at the token still complete on their own channels; the one that
+        // looks must complete stopped.
+        source.request_stop();
+        Task task = osfs_host(&value, &caught, &stopped_ok);
+        task._promise->set_stop_token(source.get_token());
+        task._promise->set_continuation(&fence);
+        global_work_queue_schedule(handle_from_future(std::move(task)));
+        while (fence._outcome.load(std::memory_order_acquire) == 0)
+            co_await TransferToPoolExecutor{};
+
+        // The host absorbed a child cancellation and still completed
+        // normally through word 0
+        assert(fence._outcome.load(std::memory_order_relaxed) == 1);
+        assert(value.load(std::memory_order_relaxed) == 17);
+        assert(caught.load(std::memory_order_relaxed) == 1);
+        assert(stopped_ok.load(std::memory_order_relaxed) == 1);
+
+        co_return;
+    };
+
+    namespace {
+
+        // Watches an explicitly-passed token (not the promise's), so a plain
+        // nursery can host it while the token under test belongs to a
+        // TimedStopSource.
+        Task tss_watcher(std::stop_token token, std::atomic<int>* observed) {
+            while (!token.stop_requested())
+                co_await TransferToPoolExecutor{};
+            observed->fetch_add(1, std::memory_order_relaxed);
+        }
+
+        Task tss_timer_host(std::atomic<int>* observed,
+                            std::atomic<int64_t>* waited_ms) {
+            using namespace std::chrono;
+            std::stop_source source;
+            Nursery nursery;
+            nursery.soon(tss_watcher(source.get_token(), observed));
+            auto t0 = steady_clock::now();
+            co_await request_stop_after(source, milliseconds(30));
+            // Deadline fired: the inner source is requested (the watcher can
+            // complete) and we were resumed rather than destroyed
+            waited_ms->store(
+                duration_cast<milliseconds>(steady_clock::now() - t0).count(),
+                std::memory_order_relaxed);
+            co_await nursery.join();
+        }
+
+        Task tss_cancel_host(std::atomic<int>* started,
+                             std::atomic<int>* destroyed) {
+            using namespace std::chrono;
+            UnwindProbe probe{destroyed};
+            started->fetch_add(1, std::memory_order_release);
+            std::stop_source source;
+            co_await request_stop_after(source, seconds(10));
+            // unreachable: outer cancellation destroys this frame
+            abort();
+        }
+
+    }
+
+    define_test("coroutine_timed_stop_source") {
+
+        using namespace std::chrono;
+
+        // Deadline path: at the deadline the inner source is requested and
+        // the sleeping host resumes normally.
+        {
+            UnwindFence fence;
+            std::atomic<int> observed{0};
+            std::atomic<int64_t> waited_ms{-1};
+            Task task = tss_timer_host(&observed, &waited_ms);
+            task._promise->set_continuation(&fence);
+            global_work_queue_schedule(handle_from_future(std::move(task)));
+            while (fence._outcome.load(std::memory_order_acquire) == 0)
+                co_await TransferToPoolExecutor{};
+            assert(fence._outcome.load(std::memory_order_relaxed) == 1);
+            assert(observed.load(std::memory_order_relaxed) == 1);
+            assert(waited_ms.load(std::memory_order_relaxed) >= 25);
+            assert(waited_ms.load(std::memory_order_relaxed) < 5000);
+        }
+
+        // Outer-cancel path: a stop request against the sleeping host must
+        // promptly destroy it (10 second deadline, millisecond resolution),
+        // requesting the inner source on the way.
+        {
+            UnwindFence fence;
+            std::stop_source source;
+            std::atomic<int> started{0};
+            std::atomic<int> destroyed{0};
+            Task task = tss_cancel_host(&started, &destroyed);
+            task._promise->set_stop_token(source.get_token());
+            task._promise->set_continuation(&fence);
+            global_work_queue_schedule(handle_from_future(std::move(task)));
+            while (started.load(std::memory_order_acquire) != 1)
+                co_await TransferToPoolExecutor{};
+            co_await Until{steady_clock::now() + milliseconds(10)};
+            auto t0 = steady_clock::now();
+            source.request_stop();
+            while (fence._outcome.load(std::memory_order_acquire) == 0)
+                co_await TransferToPoolExecutor{};
+            auto elapsed = steady_clock::now() - t0;
+            assert(fence._outcome.load(std::memory_order_relaxed) == 2);
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert(elapsed < seconds(2));
+        }
 
         co_return;
     };
@@ -571,10 +739,10 @@ namespace wry::Coroutine {
         task._promise->set_continuation(&fence);
         global_work_queue_schedule(handle_from_future(std::move(task)));
         while (started.load(std::memory_order_acquire) != 2)
-            co_await SuspendAndSchedule{};
+            co_await TransferToPoolExecutor{};
         source.request_stop();
         while (fence._outcome.load(std::memory_order_acquire) == 0)
-            co_await SuspendAndSchedule{};
+            co_await TransferToPoolExecutor{};
         assert(fence._outcome.load(std::memory_order_relaxed) == 2);
         assert(destroyed.load(std::memory_order_relaxed) == 3);
         assert(resumed_past.load(std::memory_order_relaxed) == 0);

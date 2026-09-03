@@ -178,7 +178,7 @@ namespace wry {
                                                      std::function<void(bool)> on_done) {
         std::vector<uint8_t> buffer = serialize_world(&*snapshot);
 
-        co_await Coroutine::SuspendAndSchedule{};  // yield after the walk
+        co_await Coroutine::TransferToPoolExecutor{};  // yield after the walk
 
         bool ok = false;
         std::filesystem::path temp;
@@ -191,7 +191,7 @@ namespace wry {
                 wrote = write_all(fd, buffer.data() + off, n);
                 off += n;
                 if (wrote && off < buffer.size())
-                    co_await Coroutine::SuspendAndSchedule{};  // yield between chunks
+                    co_await Coroutine::TransferToPoolExecutor{};  // yield between chunks
             }
 
             bool flushed = false;
@@ -202,9 +202,9 @@ namespace wry {
                 // load-bearing: when this coroutine completes its final_suspend
                 // destroys the frame and its Root, and ~Root asserts a mutator
                 // thread -- the throwaway thread is not one.
-                co_await Coroutine::SuspendAndScheduleOnTemporaryThread{};
+                co_await Coroutine::TransferToBlockableExecutor{};
                 flushed = flush_temp_save(fd);
-                co_await Coroutine::SuspendAndSchedule{};
+                co_await Coroutine::TransferToPoolExecutor{};
 #else
                 flushed = flush_temp_save(fd);
 #endif

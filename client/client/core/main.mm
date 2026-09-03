@@ -19,6 +19,7 @@
 #include "world_state.hpp"
 #include "test.hpp"
 #include "coroutine.hpp"
+#include "kqueue_reactor.hpp"
 #include "thread_public.hpp"
 
 #import "WryDelegate.h"
@@ -223,6 +224,10 @@ int main(int argc, const char** argv) {
         heartbeat_stop.store(true, std::memory_order_relaxed);
         heartbeat_thread.join();
     }
+
+    // All tasks have drained (wait group), so no I/O waits are outstanding;
+    // stop the reactor before cancelling the workers its wake-ups target.
+    wry::global_reactor_stop();
 
     printf("main is joining worker threads\n");
     // Transient pin only (like collector_cancel's poke): main must not

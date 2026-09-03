@@ -61,7 +61,7 @@ namespace wry {
                     t = TERRAIN_KIND_COUNT - 1;
                 plot(*map, xy, TERRAIN_COLOR_SRGB[t]);
             });
-            co_await Coroutine::SuspendAndSchedule{};
+            co_await Coroutine::TransferToPoolExecutor{};
         }
 
         // Sparse layers, one visit each: any Term on the ground, then any
@@ -72,7 +72,7 @@ namespace wry {
                         [map](Coordinate xy, Term) {
             plot(*map, xy, MAP_TERM_SRGB);
         });
-        co_await Coroutine::SuspendAndSchedule{};
+        co_await Coroutine::TransferToPoolExecutor{};
 
         visit_in_region(world->_entity_id_for_coordinate,
                         Coordinate{X0, Y0}, Coordinate{X0 + E - 1, Y0 + E - 1},
@@ -131,7 +131,7 @@ namespace wry {
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         while (handoff->in_flight.load_acquire()
                && (std::chrono::steady_clock::now() < deadline))
-            co_await Coroutine::SuspendAndSchedule{};
+            co_await Coroutine::TransferToPoolExecutor{};
         assert(!handoff->in_flight.load_acquire());
 
         WorldMap* m = handoff->take_finished();

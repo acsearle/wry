@@ -8,26 +8,25 @@
 #ifndef coroutine_hpp
 #define coroutine_hpp
 
-#include <cassert>
-#include <chrono>
 #include <coroutine>
-#include <cstdint>
+
+#include <chrono>
 #include <deque>
 #include <exception>
-#include <memory>
 #include <semaphore>
 #include <thread>
-#include <mutex>
 #include <queue>
-#include <variant>
 #include <stop_token>
 
+#include "assert.hpp"
 #include "atomic.hpp"
 #include "utility.hpp"
+#include "mutex.hpp"
+#include "variant.hpp"
+#include "memory.hpp"
+#include "stdint.hpp"
 
 #include "epoch_allocator.hpp"
-#include "mutex.hpp"
-
 #include "global_work_queue.hpp"
 
 namespace wry {
@@ -37,21 +36,44 @@ namespace wry {
     void collector_register_cycle_callback(uint64_t k,
                                            void* callback) noexcept;
 
-}
+} // namespace wry
 
 namespace wry::Coroutine {
-    
-    // Basic functions
-    
+
+#pragma mark Explicit frame header
+
+    struct Header {
+        void (*resume )(void*);
+        void (*destroy)(void*);
+    };
+
+    inline void resume_by_address(void* ptr) {
+        [[clang::musttail]] return ((Header*)ptr)->resume(ptr);
+    }
+
+    inline void destroy_by_address(void* ptr) {
+        [[clang::musttail]] return ((Header*)ptr)->destroy(ptr);
+    }
+
+    inline void global_work_queue_schedule_destroy(void* ptr) {
+        auto header = (Header*)ptr;
+        header->resume = header->destroy;
+        global_work_queue_schedule(ptr);
+    }
+
+#pragma mark Helper functions
+
     inline std::coroutine_handle<> null_to_noop(std::coroutine_handle<> handle) {
         return handle ? handle : std::noop_coroutine();
     }
 
-    // Basic awaitables
-    
+    void global_work_queue_schedule_after(std::chrono::steady_clock::time_point when, void* address);
+
+#pragma mark Basic Awaitables
+
     struct ResumeNever : std::suspend_always {
         void await_resume() const noexcept {
-            abort();
+            std::unreachable();
         }
     };
     
@@ -62,32 +84,18 @@ namespace wry::Coroutine {
     };
     
     struct DebugSuspendAndLeak : ResumeNever {
-        void await_suspend(std::coroutine_handle<> handle) const noexcept {}
+        void await_suspend(std::coroutine_handle<> handle) const noexcept {            
+        }
     };
     
-    struct SuspendAndSchedule : std::suspend_always {
+    struct TransferToPoolExecutor : std::suspend_always {
         void await_suspend(std::coroutine_handle<> handle) const noexcept {
             global_work_queue_schedule(handle);
         }
     };
 
-    struct SuspendAndScheduleOnTemporaryThread : std::suspend_always {
-        void await_suspend(std::coroutine_handle<> handle) const noexcept {
-            std::thread{handle}.detach();
-        }
-    };
-
-    struct ScheduleOnBlockableThread : std::suspend_always {
+    struct TransferToBlockableExecutor : std::suspend_always {
         void await_suspend(std::coroutine_handle<>) const noexcept;
-    };
-
-    struct Until {
-        std::chrono::steady_clock::time_point _when;
-        bool await_ready() const noexcept {
-            return std::chrono::steady_clock::now() >= _when;
-        }
-        void await_suspend(std::coroutine_handle<>) const noexcept;
-        void await_resume() const noexcept {}
     };
 
     struct DebugWaitForCollectionCycles {
@@ -99,7 +107,112 @@ namespace wry::Coroutine {
         void await_resume() const noexcept {}
     };
 
-    // Basic coroutine
+    struct Until {
+        std::chrono::steady_clock::time_point _when;
+        bool await_ready() const noexcept {
+            return std::chrono::steady_clock::now() >= _when;
+        }
+        void await_suspend(std::coroutine_handle<>) const noexcept;
+        void await_resume() const noexcept {}
+    };
+
+
+
+    // Hoist value, error, stopped into value
+
+    enum TerminalReceiverState {
+        TERMINAL_RECEIVER_STATE_NONE,
+        TERMINAL_RECEIVER_STATE_VALUE,
+        TERMINAL_RECEIVER_STATE_ERROR,
+        TERMINAL_RECEIVER_STATE_STOPPED,
+        TERMINAL_RECEIVER_STATE_FINAL,
+    };
+
+    template<typename T>
+    struct TerminalReceiver {
+
+        TerminalReceiverState _state = TERMINAL_RECEIVER_STATE_NONE;
+        union {
+            T _value;
+            std::exception_ptr _error;
+        };
+
+        TerminalReceiver()
+        : _state(TERMINAL_RECEIVER_STATE_NONE) {
+        }
+
+        TerminalReceiver(TerminalReceiver const&) = delete;
+        TerminalReceiver(TerminalReceiver&&) = delete;
+
+        ~TerminalReceiver() {
+            switch (_state) {
+                case TERMINAL_RECEIVER_STATE_VALUE:
+                    std::destroy_at(&_value);
+                    break;
+                case TERMINAL_RECEIVER_STATE_ERROR:
+                    std::destroy_at(&_error);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        template<typename... Args>
+        void set_value(Args&&... args) {
+            switch (_state) {
+                case TERMINAL_RECEIVER_STATE_NONE:
+                    std::construct_at(&_value, std::forward<Args>(args)...);
+                    _state = TERMINAL_RECEIVER_STATE_VALUE;
+                    break;
+                default:
+                    abort();
+            }
+        }
+
+        template<typename... Args>
+        void set_error(std::exception_ptr error) {
+            switch (_state) {
+                case TERMINAL_RECEIVER_STATE_NONE:
+                    std::construct_at(&_error, std::move(error));
+                    _state = TERMINAL_RECEIVER_STATE_ERROR;
+                    break;
+                default:
+                    abort();
+            }
+        }
+
+        void set_stopped() {
+            switch (_state) {
+                case TERMINAL_RECEIVER_STATE_NONE:
+                    _state = TERMINAL_RECEIVER_STATE_STOPPED;
+                    break;
+                default:
+                    abort();
+            }
+        }
+
+        bool is_value() const { return _state == TERMINAL_RECEIVER_STATE_VALUE; };
+        bool is_error() const { return _state == TERMINAL_RECEIVER_STATE_ERROR; };
+        bool is_stopped() const { return _state == TERMINAL_RECEIVER_STATE_STOPPED; };
+
+        T get_value() {
+            switch (_state) {
+                case TERMINAL_RECEIVER_STATE_VALUE:
+                    // TODO: Tricky empty-by-exceptional-move state
+                    _state = TERMINAL_RECEIVER_STATE_FINAL;
+                    return std::move(_value);
+                case TERMINAL_RECEIVER_STATE_ERROR:
+                    _state = TERMINAL_RECEIVER_STATE_FINAL;
+                    std::rethrow_exception(_error);
+                default:
+                    abort();
+            }
+        }
+
+    };
+
+
+#pragma mark Future
 
     template<typename T>
     struct ReturnChannel {
@@ -206,8 +319,19 @@ namespace wry::Coroutine {
         }
     };
 
-    // TODO: We could imagine returning a common base class of Promise with all
-    // the T-invariant features available.
+    template<typename T>
+    struct GetPromise {
+        Promise<T>* _promise;
+        constexpr bool await_ready() const noexcept { return false; }
+        std::coroutine_handle<Promise<T>> await_suspend(std::coroutine_handle<Promise<T>> continuation) {
+            _promise = &continuation.promise();
+            return std::move(continuation);
+        }
+        Promise<T>& await_resume() {
+            return *_promise;
+        }
+    };
+
     struct GetStopToken {
         std::stop_token _stop_token;
         constexpr bool await_ready() const noexcept { return false; }
@@ -285,13 +409,167 @@ namespace wry::Coroutine {
         return handle_from_promise(std::exchange(future._promise, nullptr));
     }
 
-    template<typename T> constexpr bool is_coroutine(T const&) { return false; }
-    template<typename T> constexpr bool is_coroutine(Future<T> const&) { return true; }
+#pragma mark Complex Awaitables
+
+
+    struct RequestStopAfterAwaitable {
+
+        struct Frame {
+
+            Header _header = { &static_resume, &static_destroy };
+            std::stop_source _inner_stop_source;
+            std::stop_token _outer_stop_token;
+            std::atomic<void*> _continuation{nullptr};
+            std::atomic<std::ptrdiff_t> _reference_count_minus_one{0};
+
+            explicit Frame(std::stop_source ss)
+            : _inner_stop_source(std::move(ss)) {
+            }
+
+            void acquire() {
+                _reference_count_minus_one.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            void release() {
+                if (!_reference_count_minus_one.fetch_sub(1, std::memory_order_release)) {
+                    (void) _reference_count_minus_one.load(std::memory_order_acquire);
+                    [[maybe_unused]] auto observed = _continuation.load(std::memory_order_relaxed);
+                    assert((observed == nullptr) || (observed == this));
+                    delete this;
+                }
+            }
+
+            static void static_resume(void* ptr) {
+                Frame* self = (Frame*)ptr;
+                // Race to stop inner (idempotent)
+                self->_inner_stop_source.request_stop();
+                // Race to take the continuation
+                void* continuation = self->_continuation.exchange(nullptr, std::memory_order_acquire);
+                // Poll cancellation
+                bool stopped = self->_outer_stop_token.stop_requested();
+                // Release ownership
+                self->release();
+                // *self might now be destroyed
+                if (continuation == ptr) {
+                    // The continuation was taken by stop_callback
+                    // We are done.
+                } else {
+                    assert(continuation != nullptr);
+                    // We took the continuation
+                    if (stopped) {
+                        [[clang::musttail]] return destroy_by_address(continuation);
+                    } else {
+                        [[clang::musttail]] return resume_by_address(continuation);
+                    }
+                }
+            }
+
+            static void static_destroy(void*) {
+                std::unreachable();
+            }
+
+        }; // struct Frame
+
+        struct Callback {
+
+            Frame* _frame;
+
+            void operator()() {
+                // We were called because outer was stopped
+                assert(_frame->_outer_stop_token.stop_requested());
+                // Race to stop inner (idempotent)
+                _frame->_inner_stop_source.request_stop();
+                // Race to take the continuation and replace it with the
+                // final state marked by the frame address
+                void* continuation = _frame->_continuation.exchange(_frame, std::memory_order_acquire);
+                if (continuation == 0) {
+                    // The real continuation was not installed yet.
+                    // Our exchange notifies await_suspend to clean up.
+                } else if (continuation == _frame) {
+                    // The real continuation was already consumed.
+                    // The timer ran before the outer scope was cancelled.
+                    // The outer source canceled before the callback was torn
+                    // down.
+                    // We are done.
+                } else {
+                    // The real continuation is taken by us.
+                    // The outer scope was cancelled before the timer ran.
+                    global_work_queue_schedule_destroy(continuation);
+                }
+                // *this might now be destroyed
+            }
+
+        }; // struct Callback
+
+        Frame* _frame;
+        std::chrono::steady_clock::time_point _deadline;
+        std::optional<std::stop_callback<Callback>> _callback;
+
+        RequestStopAfterAwaitable() = delete;
+
+        RequestStopAfterAwaitable(std::stop_source stop_source, std::chrono::steady_clock::time_point deadline)
+        : _frame(new Frame(std::move(stop_source)))
+        , _deadline(deadline) {
+        }
+
+        RequestStopAfterAwaitable(RequestStopAfterAwaitable const&) = delete;
+        RequestStopAfterAwaitable(RequestStopAfterAwaitable&&) = delete;
+
+        ~RequestStopAfterAwaitable() {
+            // Make sure we tear down the stop_callback before we potentially
+            // destroy the Frame
+            _callback.reset();
+            _frame->release();
+        }
+
+        RequestStopAfterAwaitable& operator=(RequestStopAfterAwaitable const&) = delete;
+        RequestStopAfterAwaitable& operator=(RequestStopAfterAwaitable&&) = delete;
+
+        constexpr bool await_ready() const noexcept {
+            return false;
+        }
+
+        template<typename OuterPromise>
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<OuterPromise> continuation) noexcept {
+            // Copies guard against the Awaitable being destroyed under us
+            auto deadline = _deadline;
+            auto frame = _frame;
+            frame->acquire();
+            frame->_outer_stop_token = continuation.promise().get_stop_token();
+            // The stop callback and the timer race to cancel the inner.
+            // Arm the stop callback before we have installed the continuation
+            _callback.emplace(frame->_outer_stop_token, Callback{frame});
+            // Install the continuation
+            void* before = frame->_continuation.exchange(continuation.address(), std::memory_order_acq_rel);
+            if (before == 0) {
+                // The stop callback did not run before we installed the real continuation
+                global_work_queue_schedule_after(deadline, frame);
+            } else {
+                assert(before == frame);
+                // The stop callback did run before we installed the real continuation
+                frame->release();
+                destroy_by_address(continuation.address());
+            }
+            // *this might now be destroyed
+            return std::noop_coroutine();
+        }
+
+        void await_resume() const noexcept {
+        }
+
+    };
+
+    inline auto request_stop_after(std::stop_source stop_source, std::chrono::steady_clock::duration timeout) {
+        return RequestStopAfterAwaitable(std::move(stop_source), std::chrono::steady_clock::now() + timeout);
+    }
+
+
+
+#pragma mark Nursery / counted_scope
 
     struct Nursery {
-        
-        void (*_resume)(void*) = &_static_resume;
-        void (*_destroy)(void*) = &_static_destroy;
+
+        Header _header = { &_static_resume, &_static_destroy };
         Atomic<std::ptrdiff_t> _counter{0};
         Atomic<std::ptrdiff_t> _cancelled_count{0};
         std::ptrdiff_t _children = 0;
@@ -315,9 +593,9 @@ namespace wry::Coroutine {
                 (void) self->_counter.load_acquire();
                 ptr = std::exchange(self->_continuation, nullptr).address();
                 if (!self->_outer_stop_token.stop_requested()) {
-                    [[clang::musttail]] return (*(void(**)(void*))ptr)(ptr);
+                    [[clang::musttail]] return resume_by_address(ptr);
                 } else {
-                    [[clang::musttail]] return (*((void(**)(void*))ptr + 1))(ptr);
+                    [[clang::musttail]] return destroy_by_address(ptr);
                 }
             }
         }
@@ -471,7 +749,6 @@ namespace wry::Coroutine {
         }
 
     }; // struct Nursery
-
 
     // Block the current thread until the awaitable completes.
     
@@ -657,6 +934,138 @@ namespace wry::Coroutine {
         }
 
     }; // struct OneShotEvent
+
+
+    template<typename T>
+    struct BasicFromStopped {
+
+        void (*_resume)(void*) = &_static_resume;
+        void (*_destroy)(void*) = &_static_destroy;
+        Promise<T>* _inner_promise;
+        std::coroutine_handle<> _continuation = nullptr;
+
+        T _value = {};
+        std::exception_ptr _exception = nullptr;
+        bool _stopped = false;
+
+        static void _static_resume(void* ptr) {
+            auto self = (BasicFromStopped*)ptr;
+            // Normal flow ==> tail call the continuation
+            [[clang::musttail]] return resume_by_address(std::exchange(self->_continuation, nullptr).address());
+        }
+
+        static void _static_destroy(void* ptr) {
+            auto self = (BasicFromStopped*)ptr;
+            self->_stopped = true;
+            // Stack unwinding, we are in nested destructors ==> schedule the continuation
+            global_work_queue_schedule(std::exchange(self->_continuation, nullptr));
+        }
+
+        explicit BasicFromStopped(Future<T>&& future)
+        : _inner_promise{std::exchange(future._promise, nullptr)} {
+        }
+
+        BasicFromStopped(BasicFromStopped const&) = delete;
+        BasicFromStopped(BasicFromStopped&&) = delete;
+
+        ~BasicFromStopped() {
+            if (_inner_promise) {
+                abort();
+            }
+        }
+
+        constexpr bool await_ready() const noexcept {
+            return false;
+        }
+
+        template<typename OuterPromise>
+        std::coroutine_handle<Promise<T>> _await_suspend(std::coroutine_handle<OuterPromise> continuation) {
+            _continuation = continuation;
+            _inner_promise->set_continuation(this);
+            _inner_promise->set_target(&_value);
+            _inner_promise->set_exception_target(&_exception);
+            return std::coroutine_handle<Promise<T>>::from_promise(*std::exchange(_inner_promise, nullptr));
+        }
+
+        std::optional<T> await_resume() {
+            if (_exception)
+                std::rethrow_exception(_exception);
+            if (_stopped)
+                return {};
+            else
+                return { std::move(_value) };
+        }
+
+    }; // OptionalFromStopped
+
+    template<typename T>
+    struct OptionalFromStopped : BasicFromStopped<T> {
+
+        explicit OptionalFromStopped(Future<T>&& future) : BasicFromStopped<T>(std::move(future)) {}
+
+        template<typename OuterPromise>
+        std::coroutine_handle<Promise<T>> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
+            this->_inner_promise->set_stop_token(continuation.promise().get_stop_token());
+            return this->_await_suspend(std::move(continuation));
+        }
+
+    };
+
+    template<typename T>
+    struct Shield : BasicFromStopped<T> {
+
+        std::stop_source _stop_source;
+
+        explicit Shield(Future<T>&& future) : BasicFromStopped<T>(std::move(future)) {}
+
+        template<typename OuterPromise>
+        std::coroutine_handle<Promise<T>> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
+            this->_inner_promise->set_stop_token(_stop_source.get_token());
+            return this->_await_suspend(std::move(continuation));
+        }
+    };
+
+
+    template<typename T>
+    auto stopped_as_optional(Future<T>&& future) {
+        return OptionalFromStopped<T>{std::move(future)};
+    }
+
+    template<typename T>
+    auto shield(Future<T>&& future) {
+        return Shield<T>{std::move(future)};
+    }
+
+
+
+    struct Race : Nursery {
+
+        Atomic<std::ptrdiff_t> _winner{-1};
+
+        bool claim(std::ptrdiff_t index) {
+            std::ptrdiff_t expected = -1;
+            if (!_winner.compare_exchange_strong_release_relaxed(expected, index))
+                return false;
+            this->request_stop();            // hasten the losers
+            return true;
+        }
+
+    };
+
+
+    template<typename T>
+    Coroutine::Task race_entry(Race* race, std::ptrdiff_t index,
+                               std::optional<T>* target, Future<T> inner) {
+        T value = co_await std::move(inner);    // cancelled while parked -> this
+                                                // frame unwinds, nursery tallies
+        if (race->claim(index))
+            *target = std::move(value);
+        // a tie-loser falls through: its value is destroyed right here
+    }
+
+
+
+
 
 
 

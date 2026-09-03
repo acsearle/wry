@@ -11,6 +11,7 @@
 #include <span>
 
 #include "coroutine.hpp"
+#include "kqueue_reactor.hpp"
 
 namespace wry::network {
 
@@ -20,10 +21,6 @@ namespace wry::network {
     // Multiplayer:
     // - client only on all machines, +server on one
     // - promote existing client to server when server departs?
-
-    // TODO:
-    // Coroutine::Future exception support
-    // Coroutine SPSC queue
 
     // rough sketch
 
@@ -36,8 +33,16 @@ namespace wry::network {
     Coroutine::Future<Socket> accept();
     Coroutine::Task connect();
 
-    Coroutine::Future<size_t> recv_some(Socket const&, std::span<std::byte const>);
-    Coroutine::Future<size_t> send_some(Socket const&, std::span<std::byte>);
+    // See kqueue_reactor.hpp for the semantics (deadline, cancellation
+    // unwinding, single waiter per fd).
+    inline Coroutine::Future<std::expected<size_t, int>>
+    recv_some(Socket const& socket,
+              std::span<std::byte> buffer,
+              std::chrono::steady_clock::time_point deadline) {
+        return wry::recv_some(socket.file_descriptor, buffer, deadline);
+    }
+
+    // TODO: send_some symmetrically (EVFILT_WRITE) when a caller exists
 
     Coroutine::Task client() {
         co_return;

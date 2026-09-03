@@ -1810,7 +1810,7 @@ namespace wry {
     define_test("gc_root_churn") {
         for (int i = 0; i != 400; ++i) {
             Root<HeapInt64*> r{new HeapInt64(i)};
-            co_await Coroutine::SuspendAndSchedule{};
+            co_await Coroutine::TransferToPoolExecutor{};
             // r drops here: a 1 -> 0 shade on a registry-resident object.
         }
         // Let several full cycles complete so the sweeps run under the
