@@ -586,7 +586,14 @@ namespace wry::Coroutine {
         struct Callback {
             std::stop_source _inner_stop_source;
             void operator()() {
-                _inner_stop_source.request_stop();
+                // A child parked in a cancelable leaf (recv_some) unwinds
+                // synchronously inside this request_stop; the last child's
+                // retire can destroy the joiner frame -- this Nursery, this
+                // functor, and _inner_stop_source with it -- and free the
+                // inner stop state under the iteration.  Pin it on the
+                // native stack for the call (cf. WithDeadlineAwaitable).
+                std::stop_source keepalive = _inner_stop_source;
+                keepalive.request_stop();
             }
         };
 

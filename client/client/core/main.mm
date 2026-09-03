@@ -66,6 +66,8 @@ int main(int argc, const char** argv) {
         workers.emplace_back(&wry::global_work_queue_service);
     }
 
+    wry::global_reactor_start();
+
     // In --test-only mode there is no NSApp event loop driving the epoch
     // forward, so phase transitions that gate on `_finalized` (which only
     // advances when the collector ingests fresh mutator reports) would

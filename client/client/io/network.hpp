@@ -33,13 +33,12 @@ namespace wry::network {
     Coroutine::Future<Socket> accept();
     Coroutine::Task connect();
 
-    // See kqueue_reactor.hpp for the semantics (deadline, cancellation
-    // unwinding, single waiter per fd).
-    inline Coroutine::Future<std::expected<size_t, int>>
-    recv_some(Socket const& socket,
-              std::span<std::byte> buffer,
-              std::chrono::steady_clock::time_point deadline) {
-        return wry::recv_some(socket.file_descriptor, buffer, deadline);
+    // See kqueue_reactor.hpp for the semantics (kernel-convention result,
+    // cancellation unwinding, single waiter per socket).  Deadlines compose
+    // from outside: co_await with_deadline(t, recv_some(socket, buffer)).
+    [[nodiscard]] inline Coroutine::Future<ssize_t>
+    recv_some(Socket const& socket, std::span<std::byte> buffer) {
+        return wry::recv_some(socket.file_descriptor, buffer.data(), buffer.size(), 0);
     }
 
     // TODO: send_some symmetrically (EVFILT_WRITE) when a caller exists

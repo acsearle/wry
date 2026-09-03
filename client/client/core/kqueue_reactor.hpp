@@ -27,7 +27,7 @@ namespace wry {
     //   Linux    : epoll (io_uring?)
     //   Fallback : select
 
-    // Idempotent; called lazily by the operations below.
+    // Called once by main() before any IO
     void global_reactor_start();
 
     // Trigger the shutdown doorbell and join the reactor thread.  No-op if
@@ -35,24 +35,30 @@ namespace wry {
     // (the wait group has drained) and before the worker pool is cancelled.
     void global_reactor_stop();
 
-    // Suspend until file_descriptor is readable or the deadline passes, then
-    // perform one recv into buffer.
+    // At `duration` from now, start `future` on the pool with `token` as its
+    // stop token -- unless `token` is requested first, in which case the
+    // future never runs.  After request_stop(token) returns, the timer
+    // provably will not fire and the future provably will not run:
+    // cancellation is a synchronous join.  A failed timer registration
+    // aborts (it is resource-exhaustion grade).
+    void cancelable_after(std::stop_token token,
+                          std::chrono::steady_clock::duration duration,
+                          Coroutine::Future<>&& future);
+
+    // Suspend until `socket` is readable, then perform one recv.  Returns the
+    // recv result in kernel convention: bytes received, 0 for end-of-stream
+    // (peer close arrives as EV_EOF readability), or -errno for a failed
+    // registration (e.g. -EBADF) or a failed recv.
     //
-    //   - value: bytes received; 0 is end-of-stream (the peer closed; kqueue
-    //     delivers EV_EOF as readability and recv returns 0)
-    //   - error: ETIMEDOUT if the deadline won, otherwise the errno from
-    //     registration (e.g. EBADF) or from recv itself
-    //
-    // A stop request on the awaiting chain's token cancels the wait promptly:
-    // the parked frame is destroyed (cancellation unwinding), the knotes are
-    // withdrawn, and the operation completes on no channel.  At most one
-    // recv_some may wait on a given fd at a time (the knote is keyed by fd).
-    //
-    // Pass steady_clock::time_point::max() for no deadline.
-    Coroutine::Future<std::expected<size_t, int>>
-    recv_some(int file_descriptor,
-              std::span<std::byte> buffer,
-              std::chrono::steady_clock::time_point deadline);
+    // No deadline here: compose one with with_deadline (kqueue_reactor.cpp),
+    // which times out the wait by requesting an interior stop source.  A stop
+    // request on the awaiting chain's token destroys the parked frame
+    // (cancellation unwinding); the knote is withdrawn promptly.  At most one
+    // recv_some may wait on a given socket at a time: a second waiter's knote
+    // also fires on readability, and on a blocking socket the loser blocks
+    // its worker in recv.
+    [[nodiscard]] Coroutine::Future<ssize_t>
+    recv_some(int socket, void* buffer, size_t length, int flags);
 
 } // namespace wry
 
