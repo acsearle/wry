@@ -294,16 +294,22 @@ namespace wry::Coroutine {
             _stop_token = t;
         }
 
-        std::stop_token get_stop_token() {
-            return _stop_token;
-        }
-
         void set_exception_target(std::exception_ptr* xpp) {
             assert(!_exception && xpp);
             _exception = xpp;
         }
 
     }; // Promise<T>
+
+    template<typename T>
+    [[nodiscard]] std::stop_token get_stop_token(Promise<T> const& promise) {
+        return promise._stop_token;
+    }
+
+    template<typename T>
+    [[nodiscard]] std::stop_token get_stop_token(std::coroutine_handle<Promise<T>> handle) {
+        return get_stop_token(handle.promise());
+    }
 
     template<typename T>
     std::coroutine_handle<Promise<T>> handle_from_promise(Promise<T>* promise) {
@@ -337,7 +343,7 @@ namespace wry::Coroutine {
         constexpr bool await_ready() const noexcept { return false; }
         template<typename T>
         std::coroutine_handle<Promise<T>> await_suspend(std::coroutine_handle<Promise<T>> continuation) {
-            _stop_token = continuation.promise().get_stop_token();
+            _stop_token = get_stop_token(continuation);
             return continuation;
         }
         std::stop_token await_resume() {
@@ -381,7 +387,7 @@ namespace wry::Coroutine {
                 if constexpr (!std::is_void_v<T>)
                     _promise->set_target(&_target);
                 _promise->set_exception_target(&_exception);
-                _promise->set_stop_token(continuation.promise().get_stop_token());
+                _promise->set_stop_token(get_stop_token(continuation));
                 _promise->set_continuation(std::move(continuation));
                 return handle_from_promise(std::exchange(_promise, nullptr));
             }
@@ -535,7 +541,7 @@ namespace wry::Coroutine {
             auto deadline = _deadline;
             auto frame = _frame;
             frame->acquire();
-            frame->_outer_stop_token = continuation.promise().get_stop_token();
+            frame->_outer_stop_token = get_stop_token(continuation);
             // The stop callback and the timer race to cancel the inner.
             // Arm the stop callback before we have installed the continuation
             _callback.emplace(frame->_outer_stop_token, Callback{frame});
@@ -1005,7 +1011,7 @@ namespace wry::Coroutine {
 
         template<typename OuterPromise>
         std::coroutine_handle<Promise<T>> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
-            this->_inner_promise->set_stop_token(continuation.promise().get_stop_token());
+            this->_inner_promise->set_stop_token(get_stop_token(continuation));
             return this->_await_suspend(std::move(continuation));
         }
 

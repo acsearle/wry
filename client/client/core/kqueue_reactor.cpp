@@ -317,7 +317,7 @@ namespace wry {
 
             template<typename U>
             bool await_suspend(std::coroutine_handle<Coroutine::Promise<U>> handle) {
-                std::stop_token token = handle.promise().get_stop_token();
+                std::stop_token token = get_stop_token(handle);
 
                 // Early-out keeps the already-cancelled path synchronous: we
                 // must not let the callback constructor run the cancellation
@@ -502,9 +502,9 @@ namespace wry {
     // of {timer fired, stop requested} -- which is invisible without this.
     constinit std::atomic<std::ptrdiff_t> g_cancelable_timer_frame_count{0};
 
-    struct CancelableTimerFrame {
+    struct CancelableKEventFrame {
 
-        using Frame = CancelableTimerFrame;
+        using Frame = CancelableKEventFrame;
 
         enum : uintptr_t {
             RESUMED = 1,
@@ -523,7 +523,7 @@ namespace wry {
                 intptr_t continuation = before & ~(STOPPED | RESUMED);
                 assert(!stopped);
                 if (!resumed) {
-                    switch (frame->_delete_event()) {
+                    switch (frame->_delete_knote()) {
                         case 0: // Won race; responsible for release
                             frame->release();
                             break;
@@ -543,11 +543,12 @@ namespace wry {
             }
         };
 
-        Coroutine::Header _header = { &static_resume, &static_destroy };
+        Coroutine::Header _header = { &static_resume, nullptr };
         std::stop_token _stop_token;
         std::atomic<uintptr_t> _continuation{0};
         std::atomic<ptrdiff_t> _reference_count_minus_one{2}; // initial condition: 3 owners
         std::optional<std::stop_callback<Callback>> _stop_callback;
+        kevent64_s _change;
 
         void acquire() {
             _reference_count_minus_one.fetch_add(1, std::memory_order_relaxed);
@@ -556,7 +557,6 @@ namespace wry {
         void release() {
             if (!_reference_count_minus_one.fetch_sub(1, std::memory_order_release)) {
                 (void) _reference_count_minus_one.load(std::memory_order_acquire);
-                assert(_continuation.load(std::memory_order_relaxed) & (STOPPED | RESUMED));
                 delete this;
                 g_cancelable_timer_frame_count.fetch_sub(1, std::memory_order_release);
             }
@@ -564,7 +564,7 @@ namespace wry {
 
         static void static_resume(void* ptr) {
             // We have reached here because the timer event fired
-            CancelableTimerFrame* frame = (CancelableTimerFrame*)ptr;
+            CancelableKEventFrame* frame = (CancelableKEventFrame*)ptr;
             // Because the timer fired, we can kill the stop_callback
             // Safety: ~_stop_callback and request_stop are mutually excluded
             frame->_stop_callback.reset();
@@ -588,21 +588,11 @@ namespace wry {
             frame->release();
         }
 
-
-        static void static_destroy(void*) {
-            std::unreachable();
-        }
-
-        [[nodiscard]] int64_t _add_event(int64_t nanoseconds) {
-            kevent64_s change = {
-                .ident = 0,
-                .filter = EVFILT_TIMER,
-                .flags = EV_ADD | EV_ONESHOT | EV_RECEIPT | EV_UDATA_SPECIFIC,
-                .fflags = NOTE_NSECONDS,
-                .data = nanoseconds,
-                .udata = (uint64_t)this,
-            };
+        [[nodiscard]] int64_t _kevent64(uint16_t flags) {
+            kevent64_s change = _change;
             kevent64_s event = {};
+            change.flags = flags;
+            change.udata =  (uint64_t)this;
             g_reactor_tsan_helper.fetch_or(0, std::memory_order_release);
             int n = kevent64(g_reactor_kqueue, &change, 1, &event, 1, IMMEDIATE, nullptr);
             if (n != 1)
@@ -610,38 +600,36 @@ namespace wry {
             return event.data;
         }
 
-        [[nodiscard]] int64_t _delete_event() {
-            kevent64_s change = {
-                .ident = 0,
-                .filter = EVFILT_TIMER,
-                .flags = EV_DELETE | EV_RECEIPT | EV_UDATA_SPECIFIC,
-                .fflags = 0,
-                .data = 0,
-                .udata = (uint64_t)this,
-            };
-            kevent64_s event = {};
-            g_reactor_tsan_helper.fetch_or(0, std::memory_order_release);
-            int n = kevent64(g_reactor_kqueue, &change, 1, &event, 1, IMMEDIATE, nullptr);
-            if (n != 1)
-                abort();
-            return event.data;
+        [[nodiscard]] int64_t _add_knote() {
+            return _kevent64(EV_ADD | EV_ONESHOT | EV_RECEIPT | EV_UDATA_SPECIFIC);
+        }
+
+        [[nodiscard]] int64_t _delete_knote() {
+            return _kevent64(EV_DELETE | EV_RECEIPT | EV_UDATA_SPECIFIC);
         }
 
 
-        static void spawn(std::stop_token stop_token, int64_t nanoseconds, uintptr_t continuation) {
+        [[nodiscard]] static int64_t spawn(std::stop_token stop_token, kevent64_s change, uintptr_t continuation) {
             assert(continuation);
             g_cancelable_timer_frame_count.fetch_add(1, std::memory_order_relaxed);
             auto frame = new Frame;
             frame->_stop_token = stop_token;
+            frame->_change = change;
 
             // No early-out, it pessimizes the happy path to accelerate the rare path
 
             frame->_stop_callback.emplace(frame->_stop_token, Callback{frame});
-            switch (frame->_add_event(nanoseconds)) {
-                case 0: // Success
+            int64_t result = frame->_add_knote();
+
+            switch (result) {
+                case 0: // Did add
                     break;
-                default: // Unhandled errno value
-                    abort();
+                default: // Did not add
+                    // Release static_resume's ownership
+                    frame->release();
+                    // Disarm cancellation
+                    frame->_stop_callback.reset();
+                    break;
             }
 
             // Check our pointer-tagging is ok
@@ -650,44 +638,217 @@ namespace wry {
             auto before = frame->_continuation.fetch_or(continuation, std::memory_order_release);
             auto resumed = before & RESUMED;
             auto stopped = before & STOPPED;
-            if (stopped) [[unlikely]] {
-                Coroutine::destroy_by_address((void*)continuation);
-                if (!resumed) {
-                    // We may have deleted before we added, leaving a doomed
-                    // timer running.  Kill it ASAP.
-                    switch (frame->_delete_event()) {
-                        case 0: // The event will never fire
-                            frame->release();
-                            break;
-                        case ENOENT: // Nothing to clean up
-                            break;
-                        default: // Unhandled errno
-                            abort();
+
+            switch (result) {
+                case 0: // Did add
+                    if (stopped) [[unlikely]] {
+                        Coroutine::destroy_by_address((void*)continuation);
+                        if (!resumed) {
+                            // We may have deleted before we added, leaving a doomed
+                            // timer running.  Kill it ASAP.
+                            switch (frame->_delete_knote()) {
+                                case 0: // The event will never fire
+                                    // Release static_resume's ownership
+                                    frame->release();
+                                    break;
+                                case ENOENT: // Nothing to clean up
+                                    break;
+                                default: // Unhandled errno
+                                    abort();
+                            }
+                        }
+                    } else if (resumed) [[unlikely]] {
+                        Coroutine::resume_by_address((void*)continuation);
                     }
-                }
-            } else if (resumed) [[unlikely]] {
-                Coroutine::resume_by_address((void*)continuation);
+                    break;
+                default: // Did not add
+                    assert(!resumed); // Impossible
+                    if (stopped) {
+                        // Callback released its ownership
+                    } else {
+                        // Callback did not release its ownesrhip
+                        frame->release();
+                    }
+                    break;
             }
             frame->release();
+            return result;
         }
 
     };
 
-    void cancelable_after(std::stop_token stop_token, std::chrono::steady_clock::duration duration, Coroutine::Future<>&& future) {
+    void cancelable_after(std::stop_token stop_token,
+                          std::chrono::steady_clock::duration duration,
+                          Coroutine::Future<>&& future) {
+        // TODO: start the reactor eagerly in main, not lazily everywhere
         global_reactor_start();
         // Set the stop_token before we erase the necessary type information
         future._promise->set_stop_token(stop_token);
-        // The fired task completes into nothing: FinalAwaitable transfers to
-        // (and ~Promise, on the cancel path, harmlessly destroys) the noop
-        // coroutine.  TODO: wait-group accounting instead, so shutdown can
+        // TODO: continue with wait-group accounting instead, so shutdown can
         // observe pending arms (see the cancellable_after spec discussion).
         future._promise->set_continuation(std::noop_coroutine());
-        auto continuation = Coroutine::handle_from_promise(std::exchange(future._promise, nullptr)).address();
         auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
-        CancelableTimerFrame::spawn(stop_token,
-                                    nanoseconds,
-                                    (uintptr_t)continuation);
+        kevent64_s change = {
+            .ident = 0,
+            .filter = EVFILT_TIMER,
+            .flags = 0,
+            .fflags = NOTE_NSECONDS,
+            .data = nanoseconds,
+        };
+        auto continuation = Coroutine::handle_from_promise(std::exchange(future._promise, nullptr));
+        int64_t result = CancelableKEventFrame::spawn(stop_token,
+                                                      change,
+                                                      (uintptr_t)continuation.address());
+        if (result != 0) {
+            // kevent registration failed unexpectedly
+            // continuation has been neither resumed nor destroyed
+            perror("cancelable_after");
+            abort();
+        }
     }
+
+    struct CancelableRecvAwaitable {
+        int _socket;
+        void* _buffer;
+        size_t _length;
+        int _flags;
+        int64_t _result = 0;
+        constexpr bool await_ready() const noexcept {
+            return false;
+        }
+        template<typename OuterPromise>
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
+            std::stop_token stop_token = get_stop_token(continuation);
+
+            kevent64_s change = {
+                .ident = (uint64_t) _socket,
+                .filter = EVFILT_READ,
+                .flags = 0,
+                .fflags = 0,
+                .data = 0,
+            };
+            _result = CancelableKEventFrame::spawn(stop_token,
+                                                   change,
+                                                   (uintptr_t)continuation.address());
+            switch (_result) {
+                case 0: // success
+                    return std::noop_coroutine();
+                default: // kevent returned an error
+                    // we still own the continuation
+                    return continuation;
+            }
+        }
+        [[nodiscard]] ssize_t await_resume() {
+            switch (_result) {
+                case 0: // _socket is readable
+                    _result = ::recv(_socket, _buffer, _length, _flags);
+                    break;
+                default: // kevent add returned an error
+                    // negate it to match ::recv convention
+                    _result = -_result;
+                    break;
+            }
+            return (ssize_t)_result;
+        }
+    };
+
+    // NOTE: The reactor will not prevent or detect multiple readers waiting
+    // on a socket, so don't do that
+    [[nodiscard]] Coroutine::Future<ssize_t> recv_some(int socket, void* buffer, size_t length, int flags) {
+        co_return co_await CancelableRecvAwaitable{socket, buffer, length, flags};
+    }
+
+
+    template<typename T>
+    struct WithDeadlineAwaitable {
+
+        struct Callback {
+            std::stop_source stop_source;
+            void operator()() {
+                stop_source.request_stop();
+            }
+        };
+
+        Coroutine::Header _header = { &_static_resume, &_static_destroy };
+
+        std::chrono::steady_clock::time_point _deadline;
+        Coroutine::Future<T> _future;
+        std::coroutine_handle<> _continuation;
+        std::stop_token _outer_stop_token;
+        std::stop_source _inner_stop_source;
+        std::optional<std::stop_callback<Callback>> _stop_callback;
+
+        T _value;
+        std::exception_ptr _error;
+        bool _stopped = false;
+
+        WithDeadlineAwaitable(std::chrono::steady_clock::time_point deadline,
+                              Coroutine::Future<T> future)
+        : _deadline(std::move(deadline))
+        , _future(std::move(future)) {
+        }
+
+        constexpr bool await_ready() const noexcept {
+            return false;
+        }
+
+        template<typename Promise>
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> handle) noexcept {
+            _continuation = handle;
+            using Coroutine::get_stop_token;
+            _outer_stop_token = get_stop_token(handle);
+            _stop_callback.emplace(_outer_stop_token, Callback{_inner_stop_source});
+            cancelable_after(_inner_stop_source.get_token(),
+                             _deadline - std::chrono::steady_clock::now(),
+                             [](std::stop_source stop_source) mutable -> Coroutine::Future<> {
+                stop_source.request_stop();
+                co_return;  // co_ keyword makes this a coroutine, not a plain fn
+            } (_inner_stop_source));
+            _future._promise->set_stop_token(_inner_stop_source.get_token());
+            _future._promise->set_target(&_value);
+            _future._promise->set_exception_target(&_error);
+            _future._promise->set_continuation(std::coroutine_handle<>::from_address(this));
+            return handle_from_future(std::move(_future));
+        }
+
+#define CONTINUE\
+        if (self->_outer_stop_token.stop_requested()) {\
+            [[clang::musttail]] return Coroutine::destroy_by_address(self->_continuation.address());\
+        } else {\
+            [[clang::musttail]] return Coroutine::resume_by_address(self->_continuation.address());\
+        }
+
+        static void _static_resume(void* ptr) {
+            auto self = (WithDeadlineAwaitable*)ptr;
+            CONTINUE
+        }
+
+        static void _static_destroy(void* ptr) {
+            auto self = (WithDeadlineAwaitable*)ptr;
+            self->_stopped = true;
+            CONTINUE
+        }
+
+#undef CONTINUE
+
+        std::optional<T> await_resume() {
+            _inner_stop_source.request_stop();
+            if (_stopped)
+                return {};
+            if (_error)
+                std::rethrow_exception(std::move(_error));
+            return std::move(_value);
+        }
+
+    };
+
+    template<typename T>
+    Coroutine::Future<std::optional<T>> with_deadline(std::chrono::steady_clock::time_point deadline, Coroutine::Future<T>&& future) {
+        co_return co_await WithDeadlineAwaitable<T>(std::move(deadline), std::move(future));
+    };
+
+
+
 
 
 
@@ -970,6 +1131,147 @@ namespace wry {
                 co_await Coroutine::TransferToPoolExecutor{};
         }
 
+        co_return;
+    };
+
+    // ---- with_deadline over the new recv_some -----------------------------
+    //
+    // These port the six kqueue_recv_* tests onto the composed stack:
+    //   optional<ssize_t> = co_await with_deadline(t, recv_task(fd,buf,len))
+    // where a timeout is nullopt, a peer close is 0, and a byte count is n.
+    // The old RecvWait recv_some(span, deadline) and its tests remain until
+    // this stack is proven, then both are deleted.
+
+    namespace {
+
+        // Interpose a Future so with_deadline has a promise seam to drive; the
+        // bare awaitable is hardwired to whoever co_awaits it.
+        Coroutine::Future<ssize_t> recv_task(int fd, void* buffer, size_t length) {
+            co_return co_await recv_some(fd, buffer, length, 0);
+        }
+
+        Coroutine::Task wd_recv_child(int fd,
+                                      std::chrono::steady_clock::time_point deadline,
+                                      std::atomic<int>* started,
+                                      std::atomic<int>* destroyed,
+                                      std::atomic<int>* resumed_past) {
+            ReactorProbe probe{destroyed};
+            started->fetch_add(1, std::memory_order_release);
+            std::byte buffer[8];
+            (void) co_await with_deadline(deadline, recv_task(fd, buffer, sizeof buffer));
+            resumed_past->fetch_add(1, std::memory_order_relaxed);
+        }
+
+    }
+
+    define_test("kqueue_wd_ready") {
+        SocketPair sockets;
+        char message[] = "hello";
+        assert(::send(sockets.writer(), message, 5, 0) == 5);
+
+        std::byte buffer[16];
+        auto r = co_await with_deadline(steady_clock::now() + seconds(10),
+                                        recv_task(sockets.reader(), buffer, sizeof buffer));
+        assert(r.has_value() && (*r == 5) && (std::memcmp(buffer, "hello", 5) == 0));
+
+        // Peer close is readability; recv returns 0 (end of stream), engaged
+        sockets.close_writer();
+        auto r2 = co_await with_deadline(steady_clock::now() + seconds(10),
+                                         recv_task(sockets.reader(), buffer, sizeof buffer));
+        assert(r2.has_value() && (*r2 == 0));
+        co_return;
+    };
+
+    define_test("kqueue_wd_late_data") {
+        SocketPair sockets;
+        Coroutine::Nursery nursery;
+        nursery.soon(reactor_late_writer(sockets.writer()));
+
+        std::byte buffer[16];
+        auto t0 = steady_clock::now();
+        auto r = co_await with_deadline(steady_clock::now() + seconds(10),
+                                        recv_task(sockets.reader(), buffer, sizeof buffer));
+        assert(r.has_value() && (*r == 5) && (std::memcmp(buffer, "later", 5) == 0));
+        assert(steady_clock::now() - t0 < seconds(5));
+
+        assert((co_await nursery.join()) == 0);
+        co_return;
+    };
+
+    define_test("kqueue_wd_deadline") {
+        SocketPair sockets;
+        std::byte buffer[16];
+        auto t0 = steady_clock::now();
+        auto r = co_await with_deadline(t0 + milliseconds(50),
+                                        recv_task(sockets.reader(), buffer, sizeof buffer));
+        auto elapsed = steady_clock::now() - t0;
+        // Timeout is the nullopt channel
+        assert(!r.has_value());
+        assert(elapsed >= milliseconds(45));
+        assert(elapsed < seconds(5));
+        co_return;
+    };
+
+    define_test("kqueue_wd_bad_fd") {
+        std::byte buffer[16];
+        auto r = co_await with_deadline(steady_clock::now() + seconds(10),
+                                        recv_task(-1, buffer, sizeof buffer));
+        // A synchronous registration error is a completion, NOT a timeout:
+        // the optional is engaged (distinguishing it from the deadline path).
+        // NOTE: the value carries the errno in the same ssize_t as a byte
+        // count -- the triune-encoding ambiguity still open on recv_some.
+        assert(r.has_value());
+        co_return;
+    };
+
+    define_test("kqueue_wd_cancel") {
+        // Outer cancellation of a parked composed wait: 10s deadline, stop
+        // lands milliseconds in, the whole tower (recv leaf, timer, recv_task,
+        // with_deadline, child) unwinds promptly via the destroy cascade.
+        SocketPair sockets;
+        std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
+
+        Coroutine::Nursery nursery;
+        nursery.soon(wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
+                                   &started, &destroyed, &resumed_past));
+        while (started.load(std::memory_order_acquire) != 1)
+            co_await Coroutine::TransferToPoolExecutor{};
+        co_await Coroutine::Until{steady_clock::now() + milliseconds(10)};
+
+        auto t0 = steady_clock::now();
+        nursery.request_stop();
+        std::ptrdiff_t cancelled = co_await nursery.join();
+        auto elapsed = steady_clock::now() - t0;
+
+        assert(cancelled == 1);
+        assert(destroyed.load(std::memory_order_relaxed) == 1);
+        assert(resumed_past.load(std::memory_order_relaxed) == 0);
+        assert(elapsed < seconds(2));
+        // Both CancelableKEventFrames (recv leaf + deadline timer) retired
+        while (g_cancelable_timer_frame_count.load(std::memory_order_acquire) != 0)
+            co_await Coroutine::TransferToPoolExecutor{};
+        co_return;
+    };
+
+    define_test("kqueue_wd_early_completion_drains") {
+        // The scope-exit law, made observable: a recv that completes far
+        // before its deadline must reap the deadline timer PROMPTLY, not at
+        // the deadline.  With data already waiting, both frames should drain
+        // in milliseconds despite a 10 second deadline.
+        SocketPair sockets;
+        assert(::send(sockets.writer(), "x", 1, 0) == 1);
+
+        std::byte buffer[16];
+        auto r = co_await with_deadline(steady_clock::now() + seconds(10),
+                                        recv_task(sockets.reader(), buffer, sizeof buffer));
+        assert(r.has_value() && (*r == 1));
+
+        auto t0 = steady_clock::now();
+        while ((g_cancelable_timer_frame_count.load(std::memory_order_acquire) != 0)
+               && (steady_clock::now() - t0 < seconds(1)))
+            co_await Coroutine::TransferToPoolExecutor{};
+        // If the timer is only reaped when it fires, this is still 1 here
+        assert(g_cancelable_timer_frame_count.load(std::memory_order_acquire) == 0);
         co_return;
     };
 
