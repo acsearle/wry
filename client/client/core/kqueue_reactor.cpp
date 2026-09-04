@@ -36,13 +36,6 @@ namespace wry {
         // The shutdown doorbell is a persistent EVFILT_USER knote, ident 0.
         constexpr uint64_t DOORBELL_IDENT = 0;
 
-        // All kevent64 calls made off the reactor thread pass
-        // KEVENT_FLAG_ERROR_EVENTS so an immediate call can never retrieve
-        // (and thereby consume) another operation's one-shot event into its
-        // own eventlist; errors and receipts come back, deliveries do not.
-        constexpr unsigned IMMEDIATE =
-            KEVENT_FLAG_IMMEDIATE | KEVENT_FLAG_ERROR_EVENTS;
-
         // ---- Reactor contract ----------------------------------------------
         //
         // The reactor is protocol-free.  Every knote it delivers, other than
@@ -71,11 +64,11 @@ namespace wry {
             bool stop_requested = false;
             for (;;) {
                 const int NEVENTS = 16;
-                kevent64_s events[NEVENTS];
-                int n = ::kevent64(g_reactor_kqueue,
-                                   nullptr, 0, events, NEVENTS,
-                                   (stop_requested ? KEVENT_FLAG_IMMEDIATE : 0),
-                                   nullptr);
+                struct kevent events[NEVENTS];
+                struct timespec immediate = {};
+                int n = ::kevent(g_reactor_kqueue,
+                                 nullptr, 0, events, NEVENTS,
+                                 stop_requested ? &immediate : nullptr);
                 // AFTER the harvest, before touching any udata: pairs with
                 // the publishers' release pokes before their kevent ADDs.
                 g_reactor_tsan_helper.load(std::memory_order_acquire);
@@ -85,11 +78,11 @@ namespace wry {
                 if (n == -1) {
                     if (errno == EINTR)
                         continue;
-                    perror("reactor kevent64");
+                    perror("reactor kevent");
                     abort();
                 }
                 for (int i = 0; i != n; ++i) {
-                    kevent64_s const& event = events[i];
+                    struct kevent const& event = events[i];
                     assert(!(event.flags & EV_ERROR));
                     if (event.filter == EVFILT_USER) {
                         // Only the shutdown doorbell registers EVFILT_USER
@@ -127,14 +120,14 @@ namespace wry {
             perror("kqueue");
             abort();
         }
-        kevent64_s change = {
+        struct kevent change = {
             .ident = DOORBELL_IDENT,
             .filter = EVFILT_USER,
             .flags = EV_ADD | EV_CLEAR,
         };
-        if (::kevent64(g_reactor_kqueue, &change, 1, nullptr, 0,
-                       IMMEDIATE, nullptr) != 0) {
-            perror("kevent64");
+        struct timespec immediate = {};
+        if (::kevent(g_reactor_kqueue, &change, 1, nullptr, 0,  &immediate) != 0) {
+            perror("kevent");
         }
         g_reactor_thread = std::thread(&reactor_run);
     }
@@ -142,13 +135,13 @@ namespace wry {
     void global_reactor_stop() {
         if (!g_reactor_thread.joinable())
             return;
-        kevent64_s change = {
+        struct kevent change = {
             .ident = DOORBELL_IDENT,
             .filter = EVFILT_USER,
             .fflags = NOTE_TRIGGER,
         };
-        if (::kevent64(g_reactor_kqueue, &change, 1, nullptr, 0,
-                       IMMEDIATE, nullptr) != 0)
+        struct timespec immediate = {};
+        if (::kevent(g_reactor_kqueue, &change, 1, nullptr, 0, &immediate) != 0)
             abort();
         g_reactor_thread.join();
         ::close(g_reactor_kqueue);
@@ -208,7 +201,7 @@ namespace wry {
         std::atomic<uintptr_t> _continuation{0};
         std::atomic<ptrdiff_t> _reference_count_minus_one{2}; // initial condition: 3 owners
         std::optional<std::stop_callback<Callback>> _stop_callback;
-        kevent64_s _change;
+        struct kevent _change;
 
         void acquire() {
             _reference_count_minus_one.fetch_add(1, std::memory_order_relaxed);
@@ -250,33 +243,41 @@ namespace wry {
             frame->release();
         }
 
-        [[nodiscard]] int64_t _kevent64(uint16_t flags) {
-            kevent64_s change = _change;
-            kevent64_s event = {};
+        [[nodiscard]] int64_t _kevent(uint16_t flags) {
+            struct kevent change = _change;
+            struct kevent event = {};
             change.flags = flags;
-            change.udata =  (uint64_t)this;
+            change.udata = this;
+            struct timespec immediate = {};
             g_reactor_tsan_helper.fetch_or(0, std::memory_order_release);
-            int n = kevent64(g_reactor_kqueue, &change, 1, &event, 1, IMMEDIATE, nullptr);
+            // EV_RECEIPT and nchange == nevent means we get only change results
+            int n = kevent(g_reactor_kqueue, &change, 1, &event, 1, &immediate);
             if (n != 1)
                 abort();
             return event.data;
         }
 
         [[nodiscard]] int64_t _add_knote() {
-            return _kevent64(EV_ADD | EV_ONESHOT | EV_RECEIPT | EV_UDATA_SPECIFIC);
+            return _kevent(EV_ADD | EV_ONESHOT | EV_RECEIPT);
         }
 
         [[nodiscard]] int64_t _delete_knote() {
-            return _kevent64(EV_DELETE | EV_RECEIPT | EV_UDATA_SPECIFIC);
+            return _kevent(EV_DELETE | EV_RECEIPT);
         }
 
 
-        [[nodiscard]] static int64_t spawn(std::stop_token stop_token, kevent64_s change, uintptr_t continuation) {
+        [[nodiscard]] static int64_t spawn(std::stop_token stop_token, struct kevent change, uintptr_t continuation) {
             assert(continuation);
 #ifndef NDEBUG
             g_cancelable_kevent_frame_count.fetch_add(1, std::memory_order_relaxed);
 #endif
             auto frame = new Frame;
+
+            if (change.filter == EVFILT_TIMER) {
+                assert(change.ident == 0);
+                change.ident = (uintptr_t)frame;
+            }
+
             frame->_stop_token = stop_token;
             frame->_change = change;
 
@@ -322,7 +323,7 @@ namespace wry {
                             }
                         }
                     } else if (resumed) [[unlikely]] {
-                        Coroutine::resume_by_address((void*)continuation);
+                        global_work_queue_schedule((void*)continuation);
                     }
                     break;
                 default: // Did not add
@@ -350,7 +351,7 @@ namespace wry {
         // observe pending arms (see the cancellable_after spec discussion).
         future._promise->set_continuation(std::noop_coroutine());
         auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
-        kevent64_s change = {
+        struct kevent change = {
             .ident = 0,
             .filter = EVFILT_TIMER,
             .flags = 0,
@@ -383,7 +384,7 @@ namespace wry {
         std::coroutine_handle<> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
             std::stop_token stop_token = get_stop_token(continuation);
 
-            kevent64_s change = {
+            struct kevent change = {
                 .ident = (uint64_t) _socket,
                 .filter = EVFILT_READ,
                 .flags = 0,

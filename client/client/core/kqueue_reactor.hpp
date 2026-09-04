@@ -16,7 +16,7 @@
 
 namespace wry {
 
-    // A dedicated reactor thread blocked in kevent64 waits on kernel events
+    // A dedicated reactor thread blocked in kevent waits on kernel events
     // (fd readiness, timers) and reschedules the interested coroutines onto
     // the global work queue.  The reactor is a foreign thread: it never runs
     // GC code and never resumes or destroys frames itself -- completions and

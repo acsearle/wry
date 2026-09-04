@@ -57,14 +57,15 @@ namespace wry {
         // Not atomic; protected by sentinel
         void* g_wait_group_callback = nullptr;
 
-        void (*g_wait_group_continuation)(void*) = [](void*) {
+        void wait_group_retire(void*) {
             std::ptrdiff_t n = g_wait_group_count.sub_fetch_release(1);
             assert(n >= 0);
-            if (n == 0) {
-                std::atomic_thread_fence(std::memory_order::acquire);
-                tsan_acquire(&g_wait_group_count);
-                (*((void(**)(void*))g_wait_group_callback))(g_wait_group_callback);
-            }
+            if (n == 0) { std::atomic_thread_fence(std::memory_order::acquire); tsan_acquire(&g_wait_group_count);
+                Coroutine::resume_by_address(g_wait_group_callback); }
+        }
+        constinit Coroutine::Header g_wait_group_sentinel = {
+            &wait_group_retire,
+            &wait_group_retire
         };
 
         void (*g_wait_group_notify_all)(void*) = [](void*) {
@@ -76,7 +77,7 @@ namespace wry {
     void wait_group_spawn(Coroutine::Task task) {
         std::ptrdiff_t observed = g_wait_group_count.fetch_add_relaxed(1);
         assert(observed && "wait_group_spawn after wait_group_wait");
-        task._promise->set_continuation(&g_wait_group_continuation);
+        task._promise->set_continuation(&g_wait_group_sentinel);
         global_work_queue_schedule(handle_from_future(std::move(task)));
         assert(task._promise == nullptr);
     }

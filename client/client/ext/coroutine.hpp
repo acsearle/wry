@@ -197,13 +197,19 @@ namespace wry::Coroutine {
 
         T get_value() {
             switch (_state) {
-                case TERMINAL_RECEIVER_STATE_VALUE:
+                case TERMINAL_RECEIVER_STATE_VALUE: {
                     // TODO: Tricky empty-by-exceptional-move state
                     _state = TERMINAL_RECEIVER_STATE_FINAL;
-                    return std::move(_value);
-                case TERMINAL_RECEIVER_STATE_ERROR:
+                    T value = std::move(_value);
+                    std::destroy_at(&value);
+                    return value;
+                }
+                case TERMINAL_RECEIVER_STATE_ERROR: {
                     _state = TERMINAL_RECEIVER_STATE_FINAL;
-                    std::rethrow_exception(_error);
+                    std::exception_ptr error;
+                    std::destroy_at(&error);
+                    std::rethrow_exception(std::move(error));
+                }
                 default:
                     abort();
             }
@@ -799,36 +805,65 @@ namespace wry::Coroutine {
         void emplace(auto&&... args) {
             std::unique_lock guard{_mutex};
             _queue.emplace(FORWARD(args)...);
-            if (_pop_continuation)
-                global_work_queue_schedule(std::exchange(_pop_continuation, nullptr));
+            auto continuation = std::exchange(_pop_continuation, nullptr);
+            if (continuation)
+                global_work_queue_schedule(continuation);
         }
 
-        struct _pop_awaitable : std::suspend_always {
-            SingleProducerSingleConsumerQueue* _context;
-            std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) {
-                assert(_context);
-                std::unique_lock guard{_context->_mutex};
-                if (_context->_queue.empty()) {
-                    assert(!_context->_pop_continuation); // single consumer violated
-                    _context->_pop_continuation = continuation;
-                    return std::noop_coroutine();
-                } else {
-                    return continuation;
+        struct PopAwaitable {
+
+            struct Callback {
+                SingleProducerSingleConsumerQueue* _context;
+                void operator()() {
+                    std::coroutine_handle<> continuation;
+                    {
+                        std::unique_lock guard{_context->_mutex};
+                        continuation = std::exchange(_context->_pop_continuation, nullptr);
+                    }
+                    if (continuation)
+                        continuation.destroy();
                 }
+            };
+
+            SingleProducerSingleConsumerQueue* _context;
+            std::optional<std::stop_callback<Callback>> _stop_callback;
+
+            constexpr bool await_ready() const noexcept {
+                return false;
             }
+
+            template<typename OuterPromise>
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
+
+                auto stop_token = get_stop_token(continuation);
+                _stop_callback.emplace(stop_token, Callback{_context});
+                {
+                    std::unique_lock guard{_context->_mutex};
+                    assert(!_context->_pop_continuation); // single consumer violated
+                    if (!stop_token.stop_requested()) {
+                        if (_context->_queue.empty()) {
+                            _context->_pop_continuation = continuation;
+                            return std::noop_coroutine();
+                        }
+                        return continuation;
+                    }
+                }
+                continuation.destroy();
+                return std::noop_coroutine();
+            }
+
             T await_resume() {
                 assert(_context);
                 std::unique_lock guard{_context->_mutex};
                 assert(!_context->_queue.empty());
                 T result{std::move(_context->_queue.front())};
                 _context->_queue.pop();
-                _context = nullptr;
                 return result;
             }
         };
 
         [[nodiscard]] auto pop() {
-            return _pop_awaitable{this};
+            return PopAwaitable{this};
         };
 
         bool try_pop(T& victim) {
