@@ -14,6 +14,8 @@
 #include <random>
 #include <stdexcept>
 #include <stop_token>
+#include <string_view>
+#include <variant>
 
 #include <dispatch/dispatch.h>
 
@@ -539,6 +541,241 @@ namespace wry::Coroutine {
         assert(fence._outcome.load(std::memory_order_relaxed) == 2);
         assert(destroyed.load(std::memory_order_relaxed) == 3);
         assert(resumed_past.load(std::memory_order_relaxed) == 0);
+
+        co_return;
+    };
+
+
+    // ---- Sender / receiver seam ---------------------------------------------
+
+    // Routes a sender through the generic path even when it is also
+    // awaitable (a Future would otherwise take its direct path)
+    template<Sender S>
+    struct ViaSender {
+        S _inner;
+    };
+
+    template<Sender S>
+    struct SenderTraits<ViaSender<S>> {
+        using value_type = SenderValueType<S>;
+    };
+
+    template<Sender S, typename R>
+    auto connect(ViaSender<S>&& via, R&& receiver) {
+        return connect(std::move(via._inner), std::forward<R>(receiver));
+    }
+
+    namespace {
+
+        template<typename T>
+        using Outcome = std::variant<std::monostate,
+                                     typename ReturnChannel<T>::stored_type,
+                                     std::exception_ptr,
+                                     std::monostate>;
+
+        // Records the outcome into a cell and flags completion; the flag's
+        // release / acquire is the publishing edge for a completion that
+        // arrives on another worker
+        template<typename T>
+        struct OutcomeReceiver {
+            Outcome<T>* _outcome;
+            std::atomic<int>* _done;
+            std::stop_token _stop_token;
+        };
+
+        template<typename T>
+        void set_value(OutcomeReceiver<T>&& receiver, T&& value) {
+            receiver._outcome->template emplace<1>(std::move(value));
+            receiver._done->store(1, std::memory_order_release);
+        }
+
+        void set_value(OutcomeReceiver<void>&& receiver) {
+            receiver._outcome->template emplace<1>();
+            receiver._done->store(1, std::memory_order_release);
+        }
+
+        template<typename T>
+        void set_error(OutcomeReceiver<T>&& receiver, std::exception_ptr&& error) {
+            receiver._outcome->template emplace<2>(std::move(error));
+            receiver._done->store(1, std::memory_order_release);
+        }
+
+        template<typename T>
+        void set_stopped(OutcomeReceiver<T>&& receiver) {
+            receiver._outcome->template emplace<3>();
+            receiver._done->store(1, std::memory_order_release);
+        }
+
+        template<typename T>
+        std::stop_token get_stop_token(OutcomeReceiver<T> const& receiver) {
+            return receiver._stop_token;
+        }
+
+        Future<int> sr_one() {
+            co_return 1;
+        }
+
+        Future<int> sr_add(int x) {
+            int y = co_await Just<int>{2};          // generic path, synchronous
+            int z = co_await sr_one();              // direct path
+            int w = co_await ViaSender{sr_one()};   // generic path, Future as sender
+            co_return x + y + z + w;
+        }
+
+        Future<int> sr_thrower() {
+            throw std::runtime_error("boom");
+            co_return 0;
+        }
+
+        Future<int> sr_catcher() {
+            try {
+                (void) co_await ViaSender{sr_thrower()};
+            } catch (std::runtime_error const&) {
+                co_return 42;
+            }
+            co_return 0;
+        }
+
+        Task sr_void_child(std::atomic<int>* ran) {
+            ran->fetch_add(1, std::memory_order_relaxed);
+            co_return;
+        }
+
+        // A real leaf: parks on the reactor
+        Future<int> sr_leaf(double seconds, std::atomic<int>* destroyed) {
+            UnwindProbe probe{destroyed};
+            co_await cancelable_sleep(seconds);
+            co_return 7;
+        }
+
+        Future<int> sr_trunk(double seconds,
+                             std::atomic<int>* started,
+                             std::atomic<int>* destroyed) {
+            UnwindProbe probe{destroyed};
+            started->fetch_add(1, std::memory_order_release);
+            int v = co_await ViaSender{sr_leaf(seconds, destroyed)};
+            co_return v;
+        }
+
+    }
+
+    define_test("coroutine_sender_seam") {
+
+        // value: Just (synchronous, generic path), the direct path, and a
+        // Future routed through the generic sender path; nothing suspends
+        // for real, so the whole thing completes inside start
+        {
+            Outcome<int> outcome;
+            std::atomic<int> done{0};
+            auto op = connect(sr_add(10), OutcomeReceiver<int>{&outcome, &done, {}});
+            start(op);
+            assert(done.load(std::memory_order_acquire) == 1);
+            assert(outcome.index() == 1);
+            assert(std::get<1>(outcome) == 14);
+        }
+
+        // error crossing two seams and caught in the middle
+        {
+            Outcome<int> outcome;
+            std::atomic<int> done{0};
+            auto op = connect(sr_catcher(), OutcomeReceiver<int>{&outcome, &done, {}});
+            start(op);
+            assert(done.load(std::memory_order_acquire) == 1);
+            assert(outcome.index() == 1);
+            assert(std::get<1>(outcome) == 42);
+        }
+
+        // error reaching the terminal receiver
+        {
+            Outcome<int> outcome;
+            std::atomic<int> done{0};
+            auto op = connect(sr_thrower(), OutcomeReceiver<int>{&outcome, &done, {}});
+            start(op);
+            assert(done.load(std::memory_order_acquire) == 1);
+            assert(outcome.index() == 2);
+            bool caught = false;
+            try {
+                std::rethrow_exception(std::get<2>(outcome));
+            } catch (std::runtime_error const& e) {
+                caught = (std::string_view(e.what()) == "boom");
+            }
+            assert(caught);
+        }
+
+        // a Task (void) as a sender
+        {
+            Outcome<void> outcome;
+            std::atomic<int> done{0};
+            std::atomic<int> ran{0};
+            auto op = connect(sr_void_child(&ran), OutcomeReceiver<void>{&outcome, &done, {}});
+            start(op);
+            assert(done.load(std::memory_order_acquire) == 1);
+            assert(outcome.index() == 1);
+            assert(ran.load(std::memory_order_relaxed) == 1);
+        }
+
+        co_return;
+    };
+
+    define_test("coroutine_sender_seam_cancel") {
+
+        using namespace std::chrono;
+
+        // Parked cancel: the trunk awaits its leaf through the generic sender
+        // path and the leaf parks on the reactor.  Requesting the terminal
+        // receiver's token reaches the leaf through both seams, and the
+        // destroy cascade comes back through both -- synchronously, inside
+        // request_stop
+        {
+            Outcome<int> outcome;
+            std::atomic<int> done{0}, started{0}, destroyed{0};
+            std::stop_source source;
+            auto op = connect(sr_trunk(10.0, &started, &destroyed),
+                              OutcomeReceiver<int>{&outcome, &done, source.get_token()});
+            start(op);  // runs the trunk inline until the leaf parks
+            assert(started.load(std::memory_order_acquire) == 1);
+            co_await cancelable_sleep(0.010);  // settle past the arming window
+            auto t0 = steady_clock::now();
+            source.request_stop();
+            auto elapsed = steady_clock::now() - t0;
+            assert(done.load(std::memory_order_acquire) == 1);
+            assert(outcome.index() == 3);
+            assert(destroyed.load(std::memory_order_relaxed) == 2);
+            assert(elapsed < seconds(2));
+        }
+
+        // Cancel before park: the token is already requested when the leaf
+        // reaches its cancellation point, so the whole tower is torn down
+        // inside start
+        {
+            Outcome<int> outcome;
+            std::atomic<int> done{0}, started{0}, destroyed{0};
+            std::stop_source source;
+            source.request_stop();
+            auto op = connect(sr_trunk(10.0, &started, &destroyed),
+                              OutcomeReceiver<int>{&outcome, &done, source.get_token()});
+            start(op);
+            assert(done.load(std::memory_order_acquire) == 1);
+            assert(outcome.index() == 3);
+            assert(started.load(std::memory_order_relaxed) == 1);
+            assert(destroyed.load(std::memory_order_relaxed) == 2);
+        }
+
+        // Not stopped: the same tower completes normally on a worker after
+        // the leaf's timer fires
+        {
+            Outcome<int> outcome;
+            std::atomic<int> done{0}, started{0}, destroyed{0};
+            std::stop_source source;
+            auto op = connect(sr_trunk(0.0, &started, &destroyed),
+                              OutcomeReceiver<int>{&outcome, &done, source.get_token()});
+            start(op);
+            while (done.load(std::memory_order_acquire) == 0)
+                co_await TransferToPoolExecutor{};
+            assert(outcome.index() == 1);
+            assert(std::get<1>(outcome) == 7);
+            assert(destroyed.load(std::memory_order_relaxed) == 2);
+        }
 
         co_return;
     };

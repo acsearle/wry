@@ -65,7 +65,7 @@ namespace wry {
 
 
 
-    
+
 
     template<typename T>
     struct WithDeadlineAwaitable {
@@ -117,7 +117,7 @@ namespace wry {
                 co_return;
             } (_inner_stop_source));
             _future._promise->set_stop_token(_inner_stop_source.get_token());
-            _future._promise->set_target(&_value);
+            _future._promise->set_value_target(&_value);
             _future._promise->set_exception_target(&_error);
             _future._promise->set_continuation(std::coroutine_handle<>::from_address(this));
             return handle_from_future(std::move(_future));
