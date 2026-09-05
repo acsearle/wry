@@ -107,17 +107,6 @@ namespace wry::Coroutine {
         void await_resume() const noexcept {}
     };
 
-    struct Until {
-        std::chrono::steady_clock::time_point _when;
-        bool await_ready() const noexcept {
-            return std::chrono::steady_clock::now() >= _when;
-        }
-        void await_suspend(std::coroutine_handle<>) const noexcept;
-        void await_resume() const noexcept {}
-    };
-
-
-
     // Hoist value, error, stopped into value
 
     enum TerminalReceiverState {
@@ -198,16 +187,16 @@ namespace wry::Coroutine {
         T get_value() {
             switch (_state) {
                 case TERMINAL_RECEIVER_STATE_VALUE: {
-                    // TODO: Tricky empty-by-exceptional-move state
-                    _state = TERMINAL_RECEIVER_STATE_FINAL;
                     T value = std::move(_value);
                     std::destroy_at(&value);
+                    _state = TERMINAL_RECEIVER_STATE_FINAL;
                     return value;
                 }
                 case TERMINAL_RECEIVER_STATE_ERROR: {
                     _state = TERMINAL_RECEIVER_STATE_FINAL;
                     std::exception_ptr error;
                     std::destroy_at(&error);
+                    _state = TERMINAL_RECEIVER_STATE_FINAL;
                     std::rethrow_exception(std::move(error));
                 }
                 default:
@@ -420,162 +409,6 @@ namespace wry::Coroutine {
     std::coroutine_handle<typename Future<T>::promise_type> handle_from_future(Future<T>&& future) {
         return handle_from_promise(std::exchange(future._promise, nullptr));
     }
-
-#pragma mark Complex Awaitables
-
-
-    struct RequestStopAfterAwaitable {
-
-        struct Frame {
-
-            Header _header = { &static_resume, &static_destroy };
-            std::stop_source _inner_stop_source;
-            std::stop_token _outer_stop_token;
-            std::atomic<void*> _continuation{nullptr};
-            std::atomic<std::ptrdiff_t> _reference_count_minus_one{0};
-
-            explicit Frame(std::stop_source ss)
-            : _inner_stop_source(std::move(ss)) {
-            }
-
-            void acquire() {
-                _reference_count_minus_one.fetch_add(1, std::memory_order_relaxed);
-            }
-
-            void release() {
-                if (!_reference_count_minus_one.fetch_sub(1, std::memory_order_release)) {
-                    (void) _reference_count_minus_one.load(std::memory_order_acquire);
-                    [[maybe_unused]] auto observed = _continuation.load(std::memory_order_relaxed);
-                    assert((observed == nullptr) || (observed == this));
-                    delete this;
-                }
-            }
-
-            static void static_resume(void* ptr) {
-                Frame* self = (Frame*)ptr;
-                // Race to stop inner (idempotent)
-                self->_inner_stop_source.request_stop();
-                // Race to take the continuation
-                void* continuation = self->_continuation.exchange(nullptr, std::memory_order_acquire);
-                // Poll cancellation
-                bool stopped = self->_outer_stop_token.stop_requested();
-                // Release ownership
-                self->release();
-                // *self might now be destroyed
-                if (continuation == ptr) {
-                    // The continuation was taken by stop_callback
-                    // We are done.
-                } else {
-                    assert(continuation != nullptr);
-                    // We took the continuation
-                    if (stopped) {
-                        [[clang::musttail]] return destroy_by_address(continuation);
-                    } else {
-                        [[clang::musttail]] return resume_by_address(continuation);
-                    }
-                }
-            }
-
-            static void static_destroy(void*) {
-                std::unreachable();
-            }
-
-        }; // struct Frame
-
-        struct Callback {
-
-            Frame* _frame;
-
-            void operator()() {
-                // We were called because outer was stopped
-                assert(_frame->_outer_stop_token.stop_requested());
-                // Race to stop inner (idempotent)
-                _frame->_inner_stop_source.request_stop();
-                // Race to take the continuation and replace it with the
-                // final state marked by the frame address
-                void* continuation = _frame->_continuation.exchange(_frame, std::memory_order_acquire);
-                if (continuation == 0) {
-                    // The real continuation was not installed yet.
-                    // Our exchange notifies await_suspend to clean up.
-                } else if (continuation == _frame) {
-                    // The real continuation was already consumed.
-                    // The timer ran before the outer scope was cancelled.
-                    // The outer source canceled before the callback was torn
-                    // down.
-                    // We are done.
-                } else {
-                    // The real continuation is taken by us.
-                    // The outer scope was cancelled before the timer ran.
-                    global_work_queue_schedule_destroy(continuation);
-                }
-                // *this might now be destroyed
-            }
-
-        }; // struct Callback
-
-        Frame* _frame;
-        std::chrono::steady_clock::time_point _deadline;
-        std::optional<std::stop_callback<Callback>> _callback;
-
-        RequestStopAfterAwaitable() = delete;
-
-        RequestStopAfterAwaitable(std::stop_source stop_source, std::chrono::steady_clock::time_point deadline)
-        : _frame(new Frame(std::move(stop_source)))
-        , _deadline(deadline) {
-        }
-
-        RequestStopAfterAwaitable(RequestStopAfterAwaitable const&) = delete;
-        RequestStopAfterAwaitable(RequestStopAfterAwaitable&&) = delete;
-
-        ~RequestStopAfterAwaitable() {
-            // Make sure we tear down the stop_callback before we potentially
-            // destroy the Frame
-            _callback.reset();
-            _frame->release();
-        }
-
-        RequestStopAfterAwaitable& operator=(RequestStopAfterAwaitable const&) = delete;
-        RequestStopAfterAwaitable& operator=(RequestStopAfterAwaitable&&) = delete;
-
-        constexpr bool await_ready() const noexcept {
-            return false;
-        }
-
-        template<typename OuterPromise>
-        std::coroutine_handle<> await_suspend(std::coroutine_handle<OuterPromise> continuation) noexcept {
-            // Copies guard against the Awaitable being destroyed under us
-            auto deadline = _deadline;
-            auto frame = _frame;
-            frame->acquire();
-            frame->_outer_stop_token = get_stop_token(continuation);
-            // The stop callback and the timer race to cancel the inner.
-            // Arm the stop callback before we have installed the continuation
-            _callback.emplace(frame->_outer_stop_token, Callback{frame});
-            // Install the continuation
-            void* before = frame->_continuation.exchange(continuation.address(), std::memory_order_acq_rel);
-            if (before == 0) {
-                // The stop callback did not run before we installed the real continuation
-                global_work_queue_schedule_after(deadline, frame);
-            } else {
-                assert(before == frame);
-                // The stop callback did run before we installed the real continuation
-                frame->release();
-                destroy_by_address(continuation.address());
-            }
-            // *this might now be destroyed
-            return std::noop_coroutine();
-        }
-
-        void await_resume() const noexcept {
-        }
-
-    };
-
-    inline auto request_stop_after(std::stop_source stop_source, std::chrono::steady_clock::duration timeout) {
-        return RequestStopAfterAwaitable(std::move(stop_source), std::chrono::steady_clock::now() + timeout);
-    }
-
-
 
 #pragma mark Nursery / counted_scope
 
@@ -879,109 +712,6 @@ namespace wry::Coroutine {
 
     };
 
-
-
-
-    // TODO: OneShotEvent's single usage circumvents structured concurrency
-    // and leaves the non-timed-out branch detached (hence the shared_ptr).
-    // Since the use case is a unit test, maybe OK
-
-    // ---- OneShotEvent: timed one-shot completion / cancellable timer -------
-    //
-    // One cell, two ends.  co_await cell->wait_until(t) is simultaneously
-    //   - a completion wait that signal() resolves early (returns true), and
-    //   - a timer that signal() cancels (the same race, seen from the other
-    //     end); if the deadline arrives first the wait resolves false.
-    // signal() may be called from any thread, before or after the wait
-    // begins, and repeatedly (idempotent).  Single waiter, single use.
-    //
-    // The waiter resumes on the GC pool via global_work_queue_schedule (a
-    // pinned mutator worker) -- unlike Until, which resumes on a dispatch
-    // thread.
-    //
-    // Lifetime: the cell is shared_ptr-managed (construct via make()) so the
-    // coordination state outlives whichever of {signaler, deadline fire,
-    // waiter} finishes last; it must not live in the winner's scope.  A
-    // timed-out wait leaves a detached signaler (e.g. a still-running
-    // background save) holding its own reference harmlessly.
-    //
-    // The deadline is dispatch_after_f, which has no cancellation:
-    // "cancelling the timer" is losing the race -- the fire still happens at
-    // the deadline, no-ops against the decided state, and drops its
-    // reference.  Upgrade the backend to a dispatch source if early physical
-    // release ever matters.
-    //
-    // State (one atomic word): EMPTY, SIGNALED, TIMED_OUT, or the waiter's
-    // coroutine handle address (frame allocations are aligned, so 1 and 2
-    // cannot alias a real handle).
-    //
-    //   EMPTY -> SIGNALED       signal() before the wait; wait is ready
-    //   EMPTY -> <handle>       await_suspend installs the waiter
-    //   <handle> -> SIGNALED    signal() wins and schedules the waiter
-    //   <handle> -> TIMED_OUT   deadline wins and schedules the waiter
-    //
-    // Terminal states absorb the loser's attempt.  (EMPTY -> TIMED_OUT is
-    // unreachable single-use: the timer is armed only after the install.)
-    //
-    // ORDER: await_suspend publishes the suspended frame with a release CAS;
-    // the deciding CAS in _decide is acq_rel (acquire: take ownership of
-    // that frame before scheduling it; release: publish the signaler's
-    // preceding writes -- the payload -- into the state word).  await_ready
-    // and await_resume load with acquire, closing the payload edge when the
-    // waiter observes SIGNALED.
-
-    struct OneShotEvent : std::enable_shared_from_this<OneShotEvent> {
-
-        static constexpr uintptr_t EMPTY = 0;
-        static constexpr uintptr_t SIGNALED = 1;
-        static constexpr uintptr_t TIMED_OUT = 2;
-
-        Atomic<uintptr_t> _state{EMPTY};
-
-        static std::shared_ptr<OneShotEvent> make() {
-            return std::make_shared<OneShotEvent>();
-        }
-
-        void _decide(uintptr_t terminal) {
-            uintptr_t expected = _state.load_relaxed();
-            for (;;) {
-                if ((expected == SIGNALED) || (expected == TIMED_OUT))
-                    return;  // already decided; late or duplicate, a no-op
-                if (_state.compare_exchange_weak_acq_rel_relaxed(expected,
-                                                                 terminal)) {
-                    if (expected != EMPTY)
-                        global_work_queue_schedule((void*)expected);
-                    return;
-                }
-            }
-        }
-
-        void signal() { _decide(SIGNALED); }
-
-        struct WaitUntil {
-            std::shared_ptr<OneShotEvent> _cell;
-            std::chrono::steady_clock::time_point _when;
-
-            bool await_ready() const noexcept {
-                return _cell->_state.load_acquire() == SIGNALED;
-            }
-            // Defined in coroutine.cpp (libdispatch).  Returns false --
-            // resume immediately -- when signal() beat the install.
-            bool await_suspend(std::coroutine_handle<> handle) noexcept;
-            bool await_resume() const noexcept {
-                return _cell->_state.load_acquire() == SIGNALED;
-            }
-        };
-
-        [[nodiscard]] WaitUntil wait_until(std::chrono::steady_clock::time_point when) {
-            return WaitUntil{shared_from_this(), when};
-        }
-
-        [[nodiscard]] WaitUntil wait_for(std::chrono::nanoseconds duration) {
-            return wait_until(std::chrono::steady_clock::now() + duration);
-        }
-
-    }; // struct OneShotEvent
 
 
     template<typename T>

@@ -391,16 +391,13 @@ namespace wry {
                 .fflags = 0,
                 .data = 0,
             };
-            _result = CancelableKEventFrame::spawn(stop_token,
-                                                   change,
-                                                   (uintptr_t)continuation.address());
-            switch (_result) {
-                case 0: // success
-                    return std::noop_coroutine();
-                default: // kevent returned an error
-                    // we still own the continuation
-                    return continuation;
-            }
+            int64_t result = CancelableKEventFrame::spawn(stop_token,
+                                                          change,
+                                                          (uintptr_t)continuation.address());
+            if (result == 0)
+                return std::noop_coroutine();   // the frame may be running or gone: no *this past here
+            _result = result;                   // registration failed: we still own the frame
+            return continuation;
         }
         [[nodiscard]] ssize_t await_resume() {
             switch (_result) {
@@ -423,97 +420,40 @@ namespace wry {
     }
 
 
-    template<typename T>
-    struct WithDeadlineAwaitable {
-
-        struct Callback {
-            std::stop_source _stop_source;
-            void operator()() {
-                // Local copy to survive possible self-destruct
-                std::stop_source stop_source{std::move(_stop_source)};
-                stop_source.request_stop();
-            }
-        };
-
-        Coroutine::Header _header = { &_static_resume, &_static_destroy };
-
-        std::chrono::steady_clock::time_point _deadline;
-        Coroutine::Future<T> _future;
-        std::coroutine_handle<> _continuation;
-        std::stop_token _outer_stop_token;
-        std::stop_source _inner_stop_source;
-        std::optional<std::stop_callback<Callback>> _stop_callback;
-
-        T _value;
-        std::exception_ptr _error;
-        bool _stopped = false;
-
-        WithDeadlineAwaitable(std::chrono::steady_clock::time_point deadline,
-                              Coroutine::Future<T> future)
-        : _deadline(std::move(deadline))
-        , _future(std::move(future)) {
-        }
-
+    // TODO: send, accept, etc. also follow this pattern
+    struct CancelableSleepAwaitable {
+        intptr_t _nanoseconds;
         constexpr bool await_ready() const noexcept {
             return false;
         }
+        template<typename OuterPromise>
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
+            std::stop_token stop_token = get_stop_token(continuation);
 
-        template<typename Promise>
-        std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> handle) noexcept {
-            _continuation = handle;
-            using Coroutine::get_stop_token;
-            _outer_stop_token = get_stop_token(handle);
-            _stop_callback.emplace(_outer_stop_token, Callback{_inner_stop_source});
-            cancelable_after(_inner_stop_source.get_token(),
-                             _deadline - std::chrono::steady_clock::now(),
-                             [](std::stop_source stop_source) mutable -> Coroutine::Future<> {
-                // request_stop returns bool; a non-void co_return would route
-                // to return_value, which Promise<void> lacks
-                (void) stop_source.request_stop();
-                co_return;
-            } (_inner_stop_source));
-            _future._promise->set_stop_token(_inner_stop_source.get_token());
-            _future._promise->set_target(&_value);
-            _future._promise->set_exception_target(&_error);
-            _future._promise->set_continuation(std::coroutine_handle<>::from_address(this));
-            return handle_from_future(std::move(_future));
+            struct kevent change = {
+                .ident = 0,
+                .filter = EVFILT_TIMER,
+                .flags = 0,
+                .fflags = NOTE_NSECONDS,
+                .data = _nanoseconds,
+            };
+            int64_t result = CancelableKEventFrame::spawn(stop_token,
+                                                          change,
+                                                          (uintptr_t)continuation.address());
+            if (result != 0)
+                abort();
+            return std::noop_coroutine();
         }
-
-#define CONTINUE\
-        if (self->_outer_stop_token.stop_requested()) {\
-            [[clang::musttail]] return Coroutine::destroy_by_address(self->_continuation.address());\
-        } else {\
-            [[clang::musttail]] return Coroutine::resume_by_address(self->_continuation.address());\
-        }
-
-        static void _static_resume(void* ptr) {
-            auto self = (WithDeadlineAwaitable*)ptr;
-            CONTINUE
-        }
-
-        static void _static_destroy(void* ptr) {
-            auto self = (WithDeadlineAwaitable*)ptr;
-            self->_stopped = true;
-            CONTINUE
-        }
-
-#undef CONTINUE
-
-        std::optional<T> await_resume() {
-            _inner_stop_source.request_stop();
-            if (_stopped)
-                return {};
-            if (_error)
-                std::rethrow_exception(std::move(_error));
-            return std::move(_value);
-        }
-
+        void await_resume() const {}
     };
 
-    template<typename T>
-    Coroutine::Future<std::optional<T>> with_deadline(std::chrono::steady_clock::time_point deadline, Coroutine::Future<T>&& future) {
-        co_return co_await WithDeadlineAwaitable<T>(std::move(deadline), std::move(future));
-    };
+    // NOTE: The reactor will not prevent or detect multiple readers waiting
+    // on a socket, so don't do that
+    [[nodiscard]] Coroutine::Future<> cancelable_sleep(double seconds) {
+        co_return co_await CancelableSleepAwaitable{(intptr_t)(seconds * NSEC_PER_SEC)};
+    }
+
+
 
 
 
@@ -556,7 +496,7 @@ namespace wry {
         };
 
         Coroutine::Task reactor_late_writer(int fd) {
-            co_await Coroutine::Until{steady_clock::now() + milliseconds(10)};
+            co_await cancelable_sleep(0.010);
             char message[] = "later";
             ssize_t n = ::send(fd, message, 5, 0);
             assert(n == 5);
@@ -623,7 +563,7 @@ namespace wry {
                              cancelable_task(CancelableProbe{&destroyed}, &ran));
             // Settle past the arming window so this exercises the parked
             // cancel, not the install race
-            co_await Coroutine::Until{steady_clock::now() + milliseconds(5)};
+            co_await cancelable_sleep(0.005);
             source.request_stop();
             assert(destroyed.load(std::memory_order_relaxed) == 1);
             assert(ran.load(std::memory_order_relaxed) == 0);
@@ -768,7 +708,7 @@ namespace wry {
                                    &started, &destroyed, &resumed_past));
         while (started.load(std::memory_order_acquire) != 1)
             co_await Coroutine::TransferToPoolExecutor{};
-        co_await Coroutine::Until{steady_clock::now() + milliseconds(10)};
+        co_await cancelable_sleep(0.010);
 
         auto t0 = steady_clock::now();
         nursery.request_stop();
@@ -806,5 +746,152 @@ namespace wry {
         assert(g_cancelable_kevent_frame_count.load(std::memory_order_acquire) == 0);
         co_return;
     };
+
+    namespace {
+
+        // A child parked in cancelable_sleep.  The probe counts its frame's
+        // destruction; resumed_past counts a resume past the sleep.
+        Coroutine::Task sleep_child(double seconds,
+                                    std::atomic<int>* started,
+                                    std::atomic<int>* destroyed,
+                                    std::atomic<int>* resumed_past) {
+            ReactorProbe probe{destroyed};
+            started->fetch_add(1, std::memory_order_release);
+            co_await cancelable_sleep(seconds);
+            resumed_past->fetch_add(1, std::memory_order_relaxed);
+        }
+
+        // A child parked in a bare recv_some (no deadline)
+        Coroutine::Task recv_child(int fd,
+                                   std::atomic<int>* started,
+                                   std::atomic<int>* destroyed,
+                                   std::atomic<int>* resumed_past) {
+            ReactorProbe probe{destroyed};
+            started->fetch_add(1, std::memory_order_release);
+            std::byte buffer[16];
+            (void) co_await recv_some(fd, buffer, sizeof buffer, 0);
+            resumed_past->fetch_add(1, std::memory_order_relaxed);
+        }
+
+    }
+
+    // Replaces coroutine_timed_stop_source (deleted with
+    // RequestStopAfterAwaitable): a sleeping host resumes normally at the
+    // deadline, and an outer stop request destroys a sleeping host promptly.
+    // The watchdog half of that test -- request an interior source at a
+    // deadline -- is with_deadline's timer, covered by kqueue_recv_deadline.
+    define_test("kqueue_cancelable_sleep") {
+
+        // Duration path: the sleeper resumes after the deadline and its
+        // frame is reaped promptly on the fire, token never requested
+        {
+            auto t0 = steady_clock::now();
+            co_await cancelable_sleep(0.020);
+            auto elapsed = steady_clock::now() - t0;
+            assert(elapsed >= milliseconds(15));
+            assert(elapsed < seconds(5));
+            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
+                co_await Coroutine::TransferToPoolExecutor{};
+        }
+
+        // Zero-duration burst: the fire races spawn's own installation of
+        // the continuation (the awaitable form of the early-fire path).
+        // Every sleep must resume exactly once and every frame must retire.
+        {
+            for (int i = 0; i != 100; ++i)
+                co_await cancelable_sleep(0.0);
+            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
+                co_await Coroutine::TransferToPoolExecutor{};
+        }
+
+        // Parked cancel: a stop request against a child asleep for 10s
+        // destroys it promptly through the destroy cascade; the timer knote
+        // is withdrawn and its frame retired
+        {
+            std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
+            Coroutine::Nursery nursery;
+            nursery.soon(sleep_child(10.0, &started, &destroyed, &resumed_past));
+            while (started.load(std::memory_order_acquire) != 1)
+                co_await Coroutine::TransferToPoolExecutor{};
+            // Settle past the arming window so this exercises the parked
+            // cancel, not the install race
+            co_await cancelable_sleep(0.010);
+
+            auto t0 = steady_clock::now();
+            nursery.request_stop();
+            std::ptrdiff_t cancelled = co_await nursery.join();
+            auto elapsed = steady_clock::now() - t0;
+
+            assert(cancelled == 1);
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert(resumed_past.load(std::memory_order_relaxed) == 0);
+            assert(elapsed < seconds(2));
+            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
+                co_await Coroutine::TransferToPoolExecutor{};
+        }
+
+        // Cancel before park: the child's token is already requested when it
+        // reaches the sleep, so the stop callback fires synchronously inside
+        // spawn, which destroys the child right there -- inside the
+        // awaitable's own await_suspend.  The awaitable must not touch its
+        // frame after spawn returns.
+        {
+            std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
+            Coroutine::Nursery nursery;
+            nursery.request_stop();  // interior source requested before the fork
+            nursery.soon(sleep_child(10.0, &started, &destroyed, &resumed_past));
+            std::ptrdiff_t cancelled = co_await nursery.join();
+            assert(cancelled == 1);
+            assert(started.load(std::memory_order_relaxed) == 1);
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert(resumed_past.load(std::memory_order_relaxed) == 0);
+            // The nursery retires inside the child's destroy, which spawn
+            // runs before it releases the Frame: spin rather than assert
+            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
+                co_await Coroutine::TransferToPoolExecutor{};
+        }
+
+        co_return;
+    };
+
+    // The recv awaitable's copy of the cancel-before-park path, bare and
+    // composed with with_deadline (whose bridge callback fires synchronously
+    // against a pre-requested outer token, cancelling both arms at arm time)
+    define_test("kqueue_recv_cancel_before_park") {
+
+        {
+            SocketPair sockets;
+            std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
+            Coroutine::Nursery nursery;
+            nursery.request_stop();
+            nursery.soon(recv_child(sockets.reader(), &started, &destroyed, &resumed_past));
+            std::ptrdiff_t cancelled = co_await nursery.join();
+            assert(cancelled == 1);
+            assert(started.load(std::memory_order_relaxed) == 1);
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert(resumed_past.load(std::memory_order_relaxed) == 0);
+            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
+                co_await Coroutine::TransferToPoolExecutor{};
+        }
+
+        {
+            SocketPair sockets;
+            std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
+            Coroutine::Nursery nursery;
+            nursery.request_stop();
+            nursery.soon(wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
+                                       &started, &destroyed, &resumed_past));
+            std::ptrdiff_t cancelled = co_await nursery.join();
+            assert(cancelled == 1);
+            assert(started.load(std::memory_order_relaxed) == 1);
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert(resumed_past.load(std::memory_order_relaxed) == 0);
+            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
+                co_await Coroutine::TransferToPoolExecutor{};
+        }
+
+        co_return;
+    };
+
 
 } // namespace wry

@@ -19,6 +19,7 @@
 
 #include "coroutine.hpp"
 
+#include "kqueue_reactor.hpp"
 #include "execution.hpp"
 #include "test.hpp"
 
@@ -129,126 +130,6 @@ namespace wry::Coroutine {
                          address,
                          &global_work_queue_schedule);
     }
-
-
-    void Until::await_suspend(std::coroutine_handle<> handle) const noexcept {
-        global_work_queue_schedule_after(_when, handle.address());
-    }
-
-    bool OneShotEvent::WaitUntil::await_suspend(std::coroutine_handle<> handle) noexcept {
-        // Copy everything the deadline arm needs out of the awaitable first:
-        // the moment the install CAS succeeds, a racing signal() can schedule
-        // and resume the waiter on a worker, and the frame -- this awaitable
-        // included -- may be gone before we return.  Only locals below.
-        std::shared_ptr<OneShotEvent> cell = _cell;
-        auto when = _when;
-
-        uintptr_t expected = EMPTY;
-        if (!cell->_state.compare_exchange_strong_release_acquire(
-                expected, (uintptr_t)handle.address())) {
-            // signal() won before we suspended.  (Single-use excludes a
-            // second waiter and a pre-install deadline.)
-            assert(expected == SIGNALED);
-            return false;
-        }
-
-        // Arm the deadline.  The fire's context owns a heap-held reference,
-        // so the cell outlives the timer even if all other owners are gone.
-        auto now = std::chrono::steady_clock::now();
-        int64_t ns = (when > now)
-            ? std::chrono::duration_cast<std::chrono::nanoseconds>(when - now).count()
-            : 0;
-        dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, ns),
-                         dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
-                         new std::shared_ptr<OneShotEvent>(std::move(cell)),
-                         [](void* context) noexcept {
-                             auto* holder = (std::shared_ptr<OneShotEvent>*)context;
-                             (*holder)->_decide(TIMED_OUT);
-                             delete holder;
-                         });
-        return true;
-    }
-
-    // OneShotEvent differential exercise: each configuration must resolve
-    // exactly once, and a true wait must observe the payload written before
-    // signal() -- the cell's release/acquire edge, so the payload stores are
-    // deliberately relaxed.
-    define_test("coroutine_oneshot_event") {
-
-        using namespace std::chrono;
-
-        // signal before wait: ready path, no timer armed
-        {
-            auto cell = OneShotEvent::make();
-            cell->signal();
-            cell->signal();  // duplicate signal is a no-op
-            bool ok = co_await cell->wait_until(steady_clock::now() + seconds(10));
-            assert(ok);
-        }
-
-        // deadline with no signal: resolves false, after the deadline
-        {
-            auto cell = OneShotEvent::make();
-            auto t0 = steady_clock::now();
-            bool ok = co_await cell->wait_for(milliseconds(5));
-            assert(!ok);
-            assert(steady_clock::now() - t0 >= milliseconds(5));
-            cell->signal();  // late signal after timeout: benign no-op
-        }
-
-        // signal from a forked task wins against a generous deadline
-        {
-            auto cell = OneShotEvent::make();
-            auto payload = std::make_shared<std::atomic<int>>(0);
-            Nursery nursery;
-            co_await nursery.fork(
-                [](std::shared_ptr<OneShotEvent> c,
-                   std::shared_ptr<std::atomic<int>> p) -> Task {
-                    co_await TransferToPoolExecutor{};
-                    p->store(42, std::memory_order_relaxed);
-                    c->signal();
-                }(cell, payload));
-            bool ok = co_await cell->wait_until(steady_clock::now() + seconds(10));
-            assert(ok);
-            assert(payload->load(std::memory_order_relaxed) == 42);
-            co_await nursery.join();
-        }
-
-        // race hammer: randomized signal delay vs deadline.  Either outcome is
-        // valid per round; a true
-        // wait must see the payload.
-        {
-            std::mt19937_64 gen{20260710};
-            int signals = 0, timeouts = 0;
-            for (int i = 0; i != 100; ++i) {
-                auto cell = OneShotEvent::make();
-                auto payload = std::make_shared<std::atomic<int>>(0);
-                int64_t signal_us = (int64_t)(gen() % 2000);
-                int64_t deadline_us = (int64_t)(gen() % 2000);
-                Nursery nursery;
-                co_await nursery.fork(
-                    [](std::shared_ptr<OneShotEvent> c,
-                       std::shared_ptr<std::atomic<int>> p,
-                       int64_t us) -> Task {
-                        co_await Until{steady_clock::now() + microseconds(us)};
-                        p->store(1, std::memory_order_relaxed);
-                        c->signal();
-                    }(cell, payload, signal_us));
-                bool ok = co_await cell->wait_until(steady_clock::now()
-                                                    + microseconds(deadline_us));
-                if (ok) {
-                    ++signals;
-                    assert(payload->load(std::memory_order_relaxed) == 1);
-                } else {
-                    ++timeouts;
-                }
-                co_await nursery.join();  // signaler done before the next round
-            }
-            printf("oneshot race: %d signaled, %d timed out\n", signals, timeouts);
-        }
-
-        co_return;
-    };
 
     // Unwinding exercise.  A cancelled leaf destroys its own frame; each
     // ~Promise in the continuation chain then destroys its caller's frame in
@@ -634,95 +515,6 @@ namespace wry::Coroutine {
         co_return;
     };
 
-    namespace {
-
-        // Watches an explicitly-passed token (not the promise's), so a plain
-        // nursery can host it while the token under test belongs to a
-        // TimedStopSource.
-        Task tss_watcher(std::stop_token token, std::atomic<int>* observed) {
-            while (!token.stop_requested())
-                co_await TransferToPoolExecutor{};
-            observed->fetch_add(1, std::memory_order_relaxed);
-        }
-
-        Task tss_timer_host(std::atomic<int>* observed,
-                            std::atomic<int64_t>* waited_ms) {
-            using namespace std::chrono;
-            std::stop_source source;
-            Nursery nursery;
-            nursery.soon(tss_watcher(source.get_token(), observed));
-            auto t0 = steady_clock::now();
-            co_await request_stop_after(source, milliseconds(30));
-            // Deadline fired: the inner source is requested (the watcher can
-            // complete) and we were resumed rather than destroyed
-            waited_ms->store(
-                duration_cast<milliseconds>(steady_clock::now() - t0).count(),
-                std::memory_order_relaxed);
-            co_await nursery.join();
-        }
-
-        Task tss_cancel_host(std::atomic<int>* started,
-                             std::atomic<int>* destroyed) {
-            using namespace std::chrono;
-            UnwindProbe probe{destroyed};
-            started->fetch_add(1, std::memory_order_release);
-            std::stop_source source;
-            co_await request_stop_after(source, seconds(10));
-            // unreachable: outer cancellation destroys this frame
-            abort();
-        }
-
-    }
-
-    define_test("coroutine_timed_stop_source") {
-
-        using namespace std::chrono;
-
-        // Deadline path: at the deadline the inner source is requested and
-        // the sleeping host resumes normally.
-        {
-            UnwindFence fence;
-            std::atomic<int> observed{0};
-            std::atomic<int64_t> waited_ms{-1};
-            Task task = tss_timer_host(&observed, &waited_ms);
-            task._promise->set_continuation(&fence);
-            global_work_queue_schedule(handle_from_future(std::move(task)));
-            while (fence._outcome.load(std::memory_order_acquire) == 0)
-                co_await TransferToPoolExecutor{};
-            assert(fence._outcome.load(std::memory_order_relaxed) == 1);
-            assert(observed.load(std::memory_order_relaxed) == 1);
-            assert(waited_ms.load(std::memory_order_relaxed) >= 25);
-            assert(waited_ms.load(std::memory_order_relaxed) < 5000);
-        }
-
-        // Outer-cancel path: a stop request against the sleeping host must
-        // promptly destroy it (10 second deadline, millisecond resolution),
-        // requesting the inner source on the way.
-        {
-            UnwindFence fence;
-            std::stop_source source;
-            std::atomic<int> started{0};
-            std::atomic<int> destroyed{0};
-            Task task = tss_cancel_host(&started, &destroyed);
-            task._promise->set_stop_token(source.get_token());
-            task._promise->set_continuation(&fence);
-            global_work_queue_schedule(handle_from_future(std::move(task)));
-            while (started.load(std::memory_order_acquire) != 1)
-                co_await TransferToPoolExecutor{};
-            co_await Until{steady_clock::now() + milliseconds(10)};
-            auto t0 = steady_clock::now();
-            source.request_stop();
-            while (fence._outcome.load(std::memory_order_acquire) == 0)
-                co_await TransferToPoolExecutor{};
-            auto elapsed = steady_clock::now() - t0;
-            assert(fence._outcome.load(std::memory_order_relaxed) == 2);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(elapsed < seconds(2));
-        }
-
-        co_return;
-    };
-
     define_test("coroutine_unwind_outer_bridge") {
 
         // A live outer request (after the children are demonstrably running)
@@ -754,24 +546,7 @@ namespace wry::Coroutine {
 }
 
 namespace wry::execution {
-    
-    /*
-    define_test("coroutine") {
-        []() -> co_future<int> {
-            co_await []() -> co_future<double> {
-                co_return 8.0;
-            }();
-            co_return 7;
-        }();
-        
-        Flow flow;
-        
-        flow.fork([]() -> co_future<int> { co_return 7; }());
-        
-        co_return;
-    };
-     */
-    
+
     define_test("co_sender") {
         
         auto a = []() -> co_sender<int> {
@@ -791,7 +566,6 @@ namespace wry::execution {
         a.connect(execution::_trivial_receiver{}).start();
         b.connect(execution::_trivial_receiver{}).start();
 
-        
         co_return;
     };
     

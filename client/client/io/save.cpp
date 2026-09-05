@@ -30,6 +30,7 @@
 #include "save_format.hpp"
 #include "term.hpp"
 #include "test.hpp"
+#include "kqueue_reactor.hpp"
 
 namespace wry {
 
@@ -174,8 +175,7 @@ namespace wry {
     // pin across the whole save, letting the epoch advance in between.  The
     // blocking F_FULLFSYNC is offloaded to a throwaway thread.  When the save
     // finishes, on_done(ok) reports the result.
-    static Coroutine::Task background_save_coroutine(Root<World const*> snapshot,
-                                                     std::function<void(bool)> on_done) {
+    static Coroutine::Future<bool> background_save_coroutine(Root<World const*> snapshot) {
         std::vector<uint8_t> buffer = serialize_world(&*snapshot);
 
         co_await Coroutine::TransferToPoolExecutor{};  // yield after the walk
@@ -211,20 +211,19 @@ namespace wry {
             }
             ok = publish_or_discard(fd, temp, wrote && flushed);
         }
-
-        if (on_done)
-            on_done(ok);
-
         // Fall off the end: final_suspend frees this frame (and the Root, on a
         // mutator worker) and resumes the continuation, which releases the
         // WaitGroup count.
-        co_return;
+        co_return ok;
     }
 
     void save_game_async(Root<World const*> snapshot, std::function<void(bool)> on_done) {
         // Anchor the save in the process-lifetime WaitGroup so a shutdown can't
         // abandon it mid-yield; the coroutine owns the Root snapshot in its frame.
-        wait_group_spawn(background_save_coroutine(std::move(snapshot), std::move(on_done)));
+        wait_group_spawn([](Root<World const*> snapshot, std::function<void(bool)> on_done)
+                         -> Coroutine::Future<>{
+            on_done(co_await background_save_coroutine(std::move(snapshot)));
+        }(std::move(snapshot), std::move(on_done)));
     }
 
     World* load_game(int id) {
@@ -359,22 +358,10 @@ namespace wry {
         // save still writes somewhere valid; the payload store is relaxed
         // because signal()'s release / the wait's acquire is the publishing
         // edge.
-        auto result = std::make_shared<std::atomic<int>>(-1);
-        auto done = Coroutine::OneShotEvent::make();
         Root<World const*> root(w);
-        save_game_async(root, [result, done](bool ok) {
-            result->store(ok ? 1 : 0, std::memory_order_relaxed);
-            done->signal();
-        });
-
-        bool signaled = co_await done->wait_until(std::chrono::steady_clock::now()
-                                                  + std::chrono::seconds(30));
-        assert(signaled);
-        assert(result->load(std::memory_order_relaxed) == 1);
-        // TODO: Without these asserts, save_game_async is not joined and we
-        // have violated structured concurrency in the local context.
-        // save_game_async itself uses the global wait group to join the main
-        // thread before exit.
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        std::optional<bool> result = co_await with_deadline(deadline, background_save_coroutine(std::move(root)));
+        assert(result.value_or(false));
 
         int found = -1;
         for (auto& [name, id] : enumerate_games())
