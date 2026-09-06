@@ -260,8 +260,8 @@ namespace wry::Coroutine {
 
         std::atomic<int> reached{0};
         std::atomic<int> destroyed{0};
-        std::optional<int> target{};  // cancelled child must never write this
-        int ok_result = 0;
+        Outcome<std::optional<int>> target{};
+        Outcome<int> ok_result;
 
         // A child's self-cancellation is absorbed in any retire order: the
         // outer token is unrequested, so the policy always resumes the
@@ -274,15 +274,16 @@ namespace wry::Coroutine {
         assert(cancelled == 1);
         assert(reached.load(std::memory_order_relaxed) == 1);
         assert(destroyed.load(std::memory_order_relaxed) == 1);
-        assert(!target.has_value());
-        assert(ok_result == 7);
+        assert(target.is_stopped());
+        assert((co_await ok_result) == 7);
 
         // A nursery that absorbed a cancellation is reusable, and the tally
         // was reset by the previous join
+        ok_result._variant.template emplace<0>();
         nursery.soon(ok_result, unwind_ok_child(42));
         cancelled = co_await nursery.join();
         assert(cancelled == 0);
-        assert(ok_result == 42);
+        assert((co_await ok_result) == 42);
 
         co_return;
     };
@@ -306,7 +307,8 @@ namespace wry::Coroutine {
                                std::atomic<int>* resumed_past) {
             UnwindProbe probe{destroyed};
             Nursery nursery = co_await Nursery::Factory{};
-            nursery.soon(unwind_scope_child(reached, destroyed));
+            Outcome<> outcome;
+            nursery.soon(outcome, unwind_scope_child(reached, destroyed));
             co_await nursery.join();
             resumed_past->fetch_add(1, std::memory_order_relaxed);
         }
@@ -367,8 +369,9 @@ namespace wry::Coroutine {
                                   std::atomic<std::ptrdiff_t>* tally) {
             UnwindProbe probe{destroyed};
             Nursery nursery = co_await Nursery::Factory{};
-            nursery.soon(unwind_token_watching_child(started, destroyed));
-            nursery.soon(unwind_token_watching_child(started, destroyed));
+            Outcome<> o1, o2;
+            nursery.soon(o1, unwind_token_watching_child(started, destroyed));
+            nursery.soon(o2, unwind_token_watching_child(started, destroyed));
             // Scope-internal cancellation: hastens the children, but the
             // outer token is unrequested, so the join resumes normally and
             // reports.
@@ -381,8 +384,9 @@ namespace wry::Coroutine {
                                 std::atomic<int>* resumed_past) {
             UnwindProbe probe{destroyed};
             Nursery nursery = co_await Nursery::Factory{};
-            nursery.soon(unwind_token_watching_child(started, destroyed));
-            nursery.soon(unwind_token_watching_child(started, destroyed));
+            Outcome<> o1, o2;
+            nursery.soon(o1, unwind_token_watching_child(started, destroyed));
+            nursery.soon(o2, unwind_token_watching_child(started, destroyed));
             co_await nursery.join();
             resumed_past->fetch_add(1, std::memory_order_relaxed);
         }
@@ -567,12 +571,6 @@ namespace wry::Coroutine {
 
     namespace {
 
-        template<typename T>
-        using Outcome = std::variant<std::monostate,
-                                     typename ReturnChannel<T>::stored_type,
-                                     std::exception_ptr,
-                                     std::monostate>;
-
         // Records the outcome into a cell and flags completion; the flag's
         // release / acquire is the publishing edge for a completion that
         // arrives on another worker
@@ -585,24 +583,24 @@ namespace wry::Coroutine {
 
         template<typename T>
         void set_value(OutcomeReceiver<T>&& receiver, T&& value) {
-            receiver._outcome->template emplace<1>(std::move(value));
+            set_value(*receiver._outcome, std::move(value));
             receiver._done->store(1, std::memory_order_release);
         }
 
         void set_value(OutcomeReceiver<void>&& receiver) {
-            receiver._outcome->template emplace<1>();
+            set_value(*receiver._outcome);
             receiver._done->store(1, std::memory_order_release);
         }
 
         template<typename T>
         void set_error(OutcomeReceiver<T>&& receiver, std::exception_ptr&& error) {
-            receiver._outcome->template emplace<2>(std::move(error));
+            set_error(*receiver._outcome, std::move(error));
             receiver._done->store(1, std::memory_order_release);
         }
 
         template<typename T>
         void set_stopped(OutcomeReceiver<T>&& receiver) {
-            receiver._outcome->template emplace<3>();
+            set_stopped(*receiver._outcome);
             receiver._done->store(1, std::memory_order_release);
         }
 
@@ -670,8 +668,8 @@ namespace wry::Coroutine {
             auto op = connect(sr_add(10), OutcomeReceiver<int>{&outcome, &done, {}});
             start(op);
             assert(done.load(std::memory_order_acquire) == 1);
-            assert(outcome.index() == 1);
-            assert(std::get<1>(outcome) == 14);
+            assert(outcome._variant.index() == 1);
+            assert(std::get<1>(outcome._variant) == 14);
         }
 
         // error crossing two seams and caught in the middle
@@ -681,8 +679,8 @@ namespace wry::Coroutine {
             auto op = connect(sr_catcher(), OutcomeReceiver<int>{&outcome, &done, {}});
             start(op);
             assert(done.load(std::memory_order_acquire) == 1);
-            assert(outcome.index() == 1);
-            assert(std::get<1>(outcome) == 42);
+            assert(outcome._variant.index() == 1);
+            assert(std::get<1>(outcome._variant) == 42);
         }
 
         // error reaching the terminal receiver
@@ -692,10 +690,10 @@ namespace wry::Coroutine {
             auto op = connect(sr_thrower(), OutcomeReceiver<int>{&outcome, &done, {}});
             start(op);
             assert(done.load(std::memory_order_acquire) == 1);
-            assert(outcome.index() == 2);
+            assert(outcome._variant.index() == 2);
             bool caught = false;
             try {
-                std::rethrow_exception(std::get<2>(outcome));
+                std::rethrow_exception(std::get<2>(outcome._variant));
             } catch (std::runtime_error const& e) {
                 caught = (std::string_view(e.what()) == "boom");
             }
@@ -710,7 +708,7 @@ namespace wry::Coroutine {
             auto op = connect(sr_void_child(&ran), OutcomeReceiver<void>{&outcome, &done, {}});
             start(op);
             assert(done.load(std::memory_order_acquire) == 1);
-            assert(outcome.index() == 1);
+            assert(outcome._variant.index() == 1);
             assert(ran.load(std::memory_order_relaxed) == 1);
         }
 
@@ -739,7 +737,7 @@ namespace wry::Coroutine {
             source.request_stop();
             auto elapsed = steady_clock::now() - t0;
             assert(done.load(std::memory_order_acquire) == 1);
-            assert(outcome.index() == 3);
+            assert(outcome._variant.index() == 3);
             assert(destroyed.load(std::memory_order_relaxed) == 2);
             assert(elapsed < seconds(2));
         }
@@ -756,7 +754,7 @@ namespace wry::Coroutine {
                               OutcomeReceiver<int>{&outcome, &done, source.get_token()});
             start(op);
             assert(done.load(std::memory_order_acquire) == 1);
-            assert(outcome.index() == 3);
+            assert(outcome._variant.index() == 3);
             assert(started.load(std::memory_order_relaxed) == 1);
             assert(destroyed.load(std::memory_order_relaxed) == 2);
         }
@@ -772,8 +770,8 @@ namespace wry::Coroutine {
             start(op);
             while (done.load(std::memory_order_acquire) == 0)
                 co_await TransferToPoolExecutor{};
-            assert(outcome.index() == 1);
-            assert(std::get<1>(outcome) == 7);
+            assert(outcome._variant.index() == 1);
+            assert(std::get<1>(outcome._variant) == 7);
             assert(destroyed.load(std::memory_order_relaxed) == 2);
         }
 

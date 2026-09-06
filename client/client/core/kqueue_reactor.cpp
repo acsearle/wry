@@ -659,7 +659,8 @@ namespace wry {
     define_test("kqueue_recv_late_data") {
         SocketPair sockets;
         Coroutine::Nursery nursery;
-        nursery.soon(reactor_late_writer(sockets.writer()));
+        Coroutine::Outcome<> outcome;
+        nursery.soon(outcome, reactor_late_writer(sockets.writer()));
 
         std::byte buffer[16];
         auto t0 = steady_clock::now();
@@ -704,7 +705,8 @@ namespace wry {
         std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
 
         Coroutine::Nursery nursery;
-        nursery.soon(wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
+        Coroutine::Outcome<> outcome;
+        nursery.soon(outcome, wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
                                    &started, &destroyed, &resumed_past));
         while (started.load(std::memory_order_acquire) != 1)
             co_await Coroutine::TransferToPoolExecutor{};
@@ -810,7 +812,8 @@ namespace wry {
         {
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
             Coroutine::Nursery nursery;
-            nursery.soon(sleep_child(10.0, &started, &destroyed, &resumed_past));
+            Coroutine::Outcome<> outcome;
+            nursery.soon(outcome, sleep_child(10.0, &started, &destroyed, &resumed_past));
             while (started.load(std::memory_order_acquire) != 1)
                 co_await Coroutine::TransferToPoolExecutor{};
             // Settle past the arming window so this exercises the parked
@@ -839,7 +842,8 @@ namespace wry {
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
             Coroutine::Nursery nursery;
             nursery.request_stop();  // interior source requested before the fork
-            nursery.soon(sleep_child(10.0, &started, &destroyed, &resumed_past));
+            Coroutine::Outcome<> outcome;
+            nursery.soon(outcome, sleep_child(10.0, &started, &destroyed, &resumed_past));
             std::ptrdiff_t cancelled = co_await nursery.join();
             assert(cancelled == 1);
             assert(started.load(std::memory_order_relaxed) == 1);
@@ -864,7 +868,8 @@ namespace wry {
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
             Coroutine::Nursery nursery;
             nursery.request_stop();
-            nursery.soon(recv_child(sockets.reader(), &started, &destroyed, &resumed_past));
+            Coroutine::Outcome<> outcome;
+            nursery.soon(outcome, recv_child(sockets.reader(), &started, &destroyed, &resumed_past));
             std::ptrdiff_t cancelled = co_await nursery.join();
             assert(cancelled == 1);
             assert(started.load(std::memory_order_relaxed) == 1);
@@ -879,7 +884,8 @@ namespace wry {
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
             Coroutine::Nursery nursery;
             nursery.request_stop();
-            nursery.soon(wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
+            Coroutine::Outcome<> outcome;
+            nursery.soon(outcome, wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
                                        &started, &destroyed, &resumed_past));
             std::ptrdiff_t cancelled = co_await nursery.join();
             assert(cancelled == 1);

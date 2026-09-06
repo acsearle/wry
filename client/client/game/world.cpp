@@ -116,12 +116,13 @@ namespace wry {
         // results[0] is our own weight; results[h] receives the height-h
         // child's subtree total (or stays zero for a height with no child).
         // TODO: memory waste; worst case is much bigger than likely cases
-        int64_t results[Node::MAX_HEIGHT + 1] = {};
+        Coroutine::Outcome<int64_t> outcomes[Node::MAX_HEIGHT + 1] = {};
         self->for_each_child(bound, [&] (Node const* _Nonnull child, Node const* _Nullable child_bound) {
-            nursery.soon(results[child->_height.nonatomic_load()],
+            nursery.soon(outcomes[child->_height.nonatomic_load()],
                          rank_frame(child, child_bound, weigh, false));
         });
         // Our own contribution, while the children run.
+        int64_t results[Node::MAX_HEIGHT + 1] = {};
         if (!is_head) {
             results[0] = weigh(self->_key.first);
             self->_key.second.requested = results[0];
@@ -130,7 +131,7 @@ namespace wry {
         co_await nursery.join();
         // Accumulate
         for (size_t i = 0; i != self->_height.nonatomic_load(); ++i) {
-            results[i + 1] += results[i];
+            results[i + 1] = results[i] + (co_await outcomes[i + 1]);
         }
         // Write back
         self->for_each_child(bound, [&] (Node const* _Nonnull child, Node const* _Nullable) {
@@ -204,7 +205,7 @@ namespace wry {
         // TODO: We don't need to create waiting_on_next_time, we just need a
         // masked for_each on _waiting_on_time
 
-        int64_t entity_id_requests = 0;
+        Coroutine::Outcome<int64_t> entity_id_requests;
         {
             Coroutine::Nursery nursery;
 
@@ -217,7 +218,8 @@ namespace wry {
                                   notify_and_accumulate(_ready, &context));
 
             // For each EntityID ready next_time, copy it into next_ready
-            co_await nursery.fork(waiting_on_next_time
+            Coroutine::Outcome<void> _;
+            co_await nursery.fork(_, waiting_on_next_time
                                   .coroutine_parallel_for_each([next_time, &next_ready](std::pair<Time, EntityID> kv) {
                 assert(kv.first == next_time);
                 next_ready.try_emplace(kv.second);
@@ -232,12 +234,12 @@ namespace wry {
         // Build the new map from the old map by resolving transactions and
         // implementing the resulting mutations
 
-        WaitableMap<Coordinate, Term> new_value_for_coordinate;
-        WaitableMap<Coordinate, EntityID> new_entity_id_for_coordinate;
-        WaitableMap<Coordinate, WaitSet> new_located_for_coordinate;
-        WaitableMap<EntityID, Entity const*> new_entity_for_entity_id;
+        Coroutine::Outcome<WaitableMap<Coordinate, Term>> new_value_for_coordinate;
+        Coroutine::Outcome<WaitableMap<Coordinate, EntityID>> new_entity_id_for_coordinate;
+        Coroutine::Outcome<WaitableMap<Coordinate, WaitSet>> new_located_for_coordinate;
+        Coroutine::Outcome<WaitableMap<EntityID, Entity const*>> new_entity_for_entity_id;
+        Coroutine::Outcome<Set> new_next_waiting_on_time;
 
-                
         auto value_for_coordinate_action
         = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
@@ -524,7 +526,7 @@ namespace wry {
                                                          freeze(context._verb_entity_for_entity_id),
                                                          action_for_entity_for_entity_id));
         
-        co_await nursery.fork(next_waiting_on_time,
+        co_await nursery.fork(new_next_waiting_on_time,
                               coroutine_parallel_rebuild(next_waiting_on_time,
                                                          freeze(context._wait_on_time),
                                                          action_for_waiting_on_time));
@@ -538,14 +540,14 @@ namespace wry {
 
         co_return new World{
             next_time,
-            _entity_id_source + entity_id_requests,
+            _entity_id_source + (co_await entity_id_requests),
             freeze(next_ready),
-            new_entity_id_for_coordinate,
-            new_located_for_coordinate,
-            new_entity_for_entity_id,
-            new_value_for_coordinate,
+            (co_await new_entity_id_for_coordinate),
+            (co_await new_located_for_coordinate),
+            (co_await new_entity_for_entity_id),
+            (co_await new_value_for_coordinate),
             _terrain_for_coordinate,
-            next_waiting_on_time
+            (co_await new_next_waiting_on_time)
         };
         
     } // World::step

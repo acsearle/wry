@@ -88,9 +88,7 @@ namespace wry {
         std::stop_source _inner_stop_source;
         std::optional<std::stop_callback<Callback>> _stop_callback;
 
-        T _value;
-        std::exception_ptr _error;
-        bool _stopped = false;
+        Coroutine::Outcome<T> _outcome;
 
         WithDeadlineAwaitable(std::chrono::steady_clock::time_point deadline,
                               Coroutine::Future<T> future)
@@ -117,8 +115,7 @@ namespace wry {
                 co_return;
             } (_inner_stop_source));
             _future._promise->set_stop_token(_inner_stop_source.get_token());
-            _future._promise->set_value_target(&_value);
-            _future._promise->set_exception_target(&_error);
+            _future._promise->set_target(&_outcome);
             _future._promise->set_continuation(std::coroutine_handle<>::from_address(this));
             return handle_from_future(std::move(_future));
         }
@@ -137,7 +134,7 @@ if (self->_outer_stop_token.stop_requested()) { \
 
         static void _static_destroy(void* ptr) {
             auto self = (WithDeadlineAwaitable*)ptr;
-            self->_stopped = true;
+            set_stopped(self->_outcome);
             CONTINUE
         }
 
@@ -145,11 +142,7 @@ if (self->_outer_stop_token.stop_requested()) { \
 
         std::optional<T> await_resume() {
             _inner_stop_source.request_stop();
-            if (_stopped)
-                return {};
-            if (_error)
-                std::rethrow_exception(std::move(_error));
-            return std::move(_value);
+            return _outcome.await_resume_stopped_as_optional();
         }
 
     };
