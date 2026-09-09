@@ -155,6 +155,7 @@ namespace wry {
     constinit std::atomic<std::ptrdiff_t> g_cancelable_kevent_frame_count{0};
 #endif // !NDEBUG
 
+    template<typename F>
     struct CancelableKEventFrame {
 
         using Frame = CancelableKEventFrame;
@@ -162,6 +163,7 @@ namespace wry {
         enum : uintptr_t {
             RESUMED = 1,
             STOPPED = 2,
+            STARTED = 4,
         };
 
         struct Callback {
@@ -170,7 +172,7 @@ namespace wry {
                 // We have reached here because stop was requested
                 assert(frame->_stop_token.stop_requested());
                 // Race to claim the continuation
-                intptr_t before = frame->_continuation.fetch_or(STOPPED, std::memory_order_relaxed);
+                intptr_t before = frame->_state.fetch_or(STOPPED, std::memory_order_relaxed);
                 intptr_t resumed = before & RESUMED;
                 intptr_t stopped = before & STOPPED;
                 intptr_t continuation = before & ~(STOPPED | RESUMED);
@@ -187,21 +189,20 @@ namespace wry {
                     }
                 }
                 if (continuation && !resumed) {
-                    frame->_continuation.load(std::memory_order_acquire);
-                    // Inline destruction keeps us ordered with respect to
-                    // request_stop returning
-                    Coroutine::destroy_by_address((void*)before);
+                    frame->_state.load(std::memory_order_acquire);
                 }
                 frame->release();
+                // _f may be destroyed
             }
         };
 
         Coroutine::Header _header = { &static_resume, nullptr };
         std::stop_token _stop_token;
-        std::atomic<uintptr_t> _continuation{0};
+        std::atomic<uintptr_t> _state{0};
         std::atomic<ptrdiff_t> _reference_count_minus_one{2}; // initial condition: 3 owners
         std::optional<std::stop_callback<Callback>> _stop_callback;
         struct kevent _change;
+        F _f;
 
         void acquire() {
             _reference_count_minus_one.fetch_add(1, std::memory_order_relaxed);
@@ -224,10 +225,10 @@ namespace wry {
             // Safety: ~_stop_callback and request_stop are mutually excluded
             frame->_stop_callback.reset();
             // Race to take the continuation
-            intptr_t before = frame->_continuation.fetch_or(RESUMED, std::memory_order_relaxed);
-            intptr_t resumed = before & RESUMED;
-            intptr_t stopped = before & STOPPED;
-            intptr_t continuation = before & ~(STOPPED | RESUMED);
+            auto before = frame->_state.fetch_or(RESUMED, std::memory_order_relaxed);
+            auto resumed = before & RESUMED;
+            auto stopped = before & STOPPED;
+            auto started = before & STARTED;
             assert(!resumed);
             // We deliberately don't poll the stop_token because doing so
             // doesn't prevent the race, it just narrows the window
@@ -236,9 +237,10 @@ namespace wry {
                 // its ownership
                 frame->release();
             }
-            if (continuation && !stopped) {
-                frame->_continuation.load(std::memory_order_acquire);
-                global_work_queue_schedule((void*)before);
+            if (started && !stopped) {
+                // frame->_continuation.load(std::memory_order_acquire);
+                // global_work_queue_schedule((void*)before);
+                std::invoke(frame->_f);
             }
             frame->release();
         }
@@ -265,13 +267,22 @@ namespace wry {
             return _kevent(EV_DELETE | EV_RECEIPT);
         }
 
+        template<typename G>
+        CancelableKEventFrame(std::stop_token stop_token, struct kevent change, G&& g)
+        : _stop_token(std::move(stop_token))
+        , _change(std::move(change))
+        , _f(std::forward<G>(g))
+        {
+        }
 
-        [[nodiscard]] static int64_t spawn(std::stop_token stop_token, struct kevent change, uintptr_t continuation) {
-            assert(continuation);
+        template<typename G>
+        [[nodiscard]] static int64_t spawn(std::stop_token stop_token, struct kevent change, G&& g) {
 #ifndef NDEBUG
             g_cancelable_kevent_frame_count.fetch_add(1, std::memory_order_relaxed);
 #endif
-            auto frame = new Frame;
+            auto frame = new CancelableKEventFrame<F>(std::move(stop_token),
+                                                      std::move(change),
+                                                      std::forward<G>(g));
 
             if (change.filter == EVFILT_TIMER) {
                 assert(change.ident == 0);
@@ -298,16 +309,14 @@ namespace wry {
             }
 
             // Check our pointer-tagging is ok
-            assert(!(continuation & STOPPED));
-            assert(!(continuation & RESUMED));
-            auto before = frame->_continuation.fetch_or(continuation, std::memory_order_release);
+            auto before = frame->_state.fetch_or(STARTED, std::memory_order_release);
             auto resumed = before & RESUMED;
             auto stopped = before & STOPPED;
 
             switch (result) {
                 case 0: // Did add
                     if (stopped) [[unlikely]] {
-                        Coroutine::destroy_by_address((void*)continuation);
+                        // never invoked, destroyed with frame
                         if (!resumed) {
                             // We may have deleted before we added, leaving a doomed
                             // timer running.  Kill it ASAP.
@@ -323,7 +332,7 @@ namespace wry {
                             }
                         }
                     } else if (resumed) [[unlikely]] {
-                        global_work_queue_schedule((void*)continuation);
+                        std::invoke(frame->_f);
                     }
                     break;
                 default: // Did not add
@@ -342,14 +351,10 @@ namespace wry {
 
     }; // CancelableKEventFrame
 
+    template<typename F>
     void cancelable_after(std::stop_token stop_token,
                           std::chrono::steady_clock::duration duration,
-                          Coroutine::Future<>&& future) {
-        // Set the stop_token before we erase the necessary type information
-        future._promise->set_stop_token(stop_token);
-        // TODO: continue with wait-group accounting instead, so shutdown can
-        // observe pending arms (see the cancellable_after spec discussion).
-        future._promise->set_continuation(std::noop_coroutine());
+                          F&& f) {
         auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
         struct kevent change = {
             .ident = 0,
@@ -358,10 +363,9 @@ namespace wry {
             .fflags = NOTE_NSECONDS,
             .data = nanoseconds,
         };
-        auto continuation = Coroutine::handle_from_promise(std::exchange(future._promise, nullptr));
-        int64_t result = CancelableKEventFrame::spawn(stop_token,
+        int64_t result = CancelableKEventFrame<std::decay_t<F>>::spawn(stop_token,
                                                       change,
-                                                      (uintptr_t)continuation.address());
+                                                      std::forward<F>(f));
         if (result != 0) {
             // kevent registration failed unexpectedly
             // continuation has been neither resumed nor destroyed
@@ -391,11 +395,24 @@ namespace wry {
                 .fflags = 0,
                 .data = 0,
             };
-            int64_t result = CancelableKEventFrame::spawn(stop_token,
-                                                          change,
-                                                          (uintptr_t)continuation.address());
-            if (result == 0)
-                return std::noop_coroutine();   // the frame may be running or gone: no *this past here
+            struct F {
+                std::coroutine_handle<> _handle;
+                void operator()() {
+                    assert(_handle);
+                    global_work_queue_schedule(std::exchange(_handle, nullptr));
+                };
+                ~F() {
+                    if (_handle)
+                        _handle.destroy();
+                }
+            };
+            int64_t result = CancelableKEventFrame<F>::spawn(stop_token,
+                                                             change,
+                                                             F{std::move(continuation)});
+            if (result == 0) {
+                // the frame may be running or gone: no *this past here
+                return std::noop_coroutine();
+            }
             _result = result;                   // registration failed: we still own the frame
             return continuation;
         }
@@ -437,9 +454,20 @@ namespace wry {
                 .fflags = NOTE_NSECONDS,
                 .data = _nanoseconds,
             };
-            int64_t result = CancelableKEventFrame::spawn(stop_token,
-                                                          change,
-                                                          (uintptr_t)continuation.address());
+            struct F {
+                std::coroutine_handle<> _handle;
+                void operator()() {
+                    assert(_handle);
+                    global_work_queue_schedule(std::exchange(_handle, nullptr));
+                };
+                ~F() {
+                    if (_handle)
+                        _handle.destroy();
+                }
+            };
+            int64_t result = CancelableKEventFrame<F>::spawn(stop_token,
+                                                             change,
+                                                             F{continuation});
             if (result != 0)
                 abort();
             return std::noop_coroutine();
@@ -659,8 +687,7 @@ namespace wry {
     define_test("kqueue_recv_late_data") {
         SocketPair sockets;
         Coroutine::Nursery nursery;
-        Coroutine::Outcome<> outcome;
-        nursery.soon(outcome, reactor_late_writer(sockets.writer()));
+        nursery.soon(reactor_late_writer(sockets.writer()));
 
         std::byte buffer[16];
         auto t0 = steady_clock::now();
@@ -705,8 +732,7 @@ namespace wry {
         std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
 
         Coroutine::Nursery nursery;
-        Coroutine::Outcome<> outcome;
-        nursery.soon(outcome, wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
+        nursery.soon(wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
                                    &started, &destroyed, &resumed_past));
         while (started.load(std::memory_order_acquire) != 1)
             co_await Coroutine::TransferToPoolExecutor{};
@@ -812,8 +838,7 @@ namespace wry {
         {
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
             Coroutine::Nursery nursery;
-            Coroutine::Outcome<> outcome;
-            nursery.soon(outcome, sleep_child(10.0, &started, &destroyed, &resumed_past));
+            nursery.soon(sleep_child(10.0, &started, &destroyed, &resumed_past));
             while (started.load(std::memory_order_acquire) != 1)
                 co_await Coroutine::TransferToPoolExecutor{};
             // Settle past the arming window so this exercises the parked
@@ -842,8 +867,7 @@ namespace wry {
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
             Coroutine::Nursery nursery;
             nursery.request_stop();  // interior source requested before the fork
-            Coroutine::Outcome<> outcome;
-            nursery.soon(outcome, sleep_child(10.0, &started, &destroyed, &resumed_past));
+            nursery.soon(sleep_child(10.0, &started, &destroyed, &resumed_past));
             std::ptrdiff_t cancelled = co_await nursery.join();
             assert(cancelled == 1);
             assert(started.load(std::memory_order_relaxed) == 1);
@@ -868,8 +892,7 @@ namespace wry {
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
             Coroutine::Nursery nursery;
             nursery.request_stop();
-            Coroutine::Outcome<> outcome;
-            nursery.soon(outcome, recv_child(sockets.reader(), &started, &destroyed, &resumed_past));
+            nursery.soon(recv_child(sockets.reader(), &started, &destroyed, &resumed_past));
             std::ptrdiff_t cancelled = co_await nursery.join();
             assert(cancelled == 1);
             assert(started.load(std::memory_order_relaxed) == 1);
@@ -884,8 +907,7 @@ namespace wry {
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
             Coroutine::Nursery nursery;
             nursery.request_stop();
-            Coroutine::Outcome<> outcome;
-            nursery.soon(outcome, wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
+            nursery.soon(wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
                                        &started, &destroyed, &resumed_past));
             std::ptrdiff_t cancelled = co_await nursery.join();
             assert(cancelled == 1);

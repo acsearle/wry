@@ -156,32 +156,76 @@ namespace wry::Coroutine {
             handle.destroy();
         }
 
+        // Taking the result consumes it: the outcome returns to empty, so a
+        // second take aborts instead of yielding a moved-from value or a
+        // null exception
         auto await_resume() {
-            // TODO: do we want to leave the variant in some particular state?
             switch (_variant.index()) {
                 case 1:
-                    if constexpr (std::is_void_v<T>)
+                    if constexpr (std::is_void_v<T>) {
+                        _variant.template emplace<0>();
                         return;
-                    else
-                        return std::move(std::get<1>(_variant));
-                case 2:
-                    std::rethrow_exception(std::move(std::get<2>(_variant)));
+                    } else {
+                        T value = std::move(std::get<1>(_variant));
+                        _variant.template emplace<0>();
+                        return value;
+                    }
+                case 2: {
+                    std::exception_ptr error = std::move(std::get<2>(_variant));
+                    _variant.template emplace<0>();
+                    std::rethrow_exception(std::move(error));
+                }
                 default:
                     // empty or valueless-by-exception
                     abort();
             }
         }
 
-        std::optional<stored_type> await_resume_stopped_as_optional() {
+
+        auto value() {
+            return await_resume();
+        }
+
+        auto value_or(auto&& x) {
             switch (_variant.index()) {
                 case 1:
-                    if constexpr (std::is_void_v<T>)
-                        return std::optional<std::monostate>{std::monostate{}};
-                    else
-                        return std::optional<T>{std::move(std::get<1>(_variant))};
-                case 2:
-                    std::rethrow_exception(std::move(std::get<2>(_variant)));
+                    if constexpr (std::is_void_v<T>) {
+                        _variant.template emplace<0>();
+                        return;
+                    } else {
+                        T value = std::move(std::get<1>(_variant));
+                        _variant.template emplace<0>();
+                        return value;
+                    }
+                case 2: {
+                    std::exception_ptr error = std::move(std::get<2>(_variant));
+                    _variant.template emplace<0>();
+                    std::rethrow_exception(std::move(error));
+                }
+                case 3: {
+                    _variant.template emplace<0>();
+                    return std::forward<decltype(x)>(x);
+                }
+                default:
+                    // empty or valueless-by-exception
+                    abort();
+            }
+        }
+
+        std::optional<stored_type> stopped_as_optional() {
+            switch (_variant.index()) {
+                case 1: {
+                    std::optional<stored_type> value{std::move(std::get<1>(_variant))};
+                    _variant.template emplace<0>();
+                    return value;
+                }
+                case 2: {
+                    std::exception_ptr error = std::move(std::get<2>(_variant));
+                    _variant.template emplace<0>();
+                    std::rethrow_exception(std::move(error));
+                }
                 case 3:
+                    _variant.template emplace<0>();
                     return std::nullopt;
                 default:
                     abort();
@@ -275,107 +319,118 @@ namespace wry::Coroutine {
     concept Awaitable = requires(A& a) { a.await_ready(); }
                      || requires(A& a) { a.operator co_await(); };
 
-    template<Sender S> struct SenderAwaitable;
+    template<typename OuterPromise, Sender S> struct SenderAwaitable;
 
 #pragma mark Future
 
-    template<typename T>
-    struct BasicReturnChannel {
-        using stored_type = Outcome<T>::stored_type;
-        Outcome<T>* _target = nullptr;
-        void set_target(Outcome<T>* target) noexcept {
-            assert(!_target);
-            _target = target;
-        }
-        void unhandled_exception() noexcept {
-            set_error(*std::exchange(_target, nullptr), std::current_exception());
-        }
-        void unhandled_stopped() noexcept {
-            set_stopped(*std::exchange(_target, nullptr));
-        }
-    };
-
-    template<typename T>
-    struct ReturnChannel : BasicReturnChannel<T> {
-        template<typename U>
-        void return_value(U&& u) noexcept(std::is_nothrow_assignable_v<T&, U&&>) {
-            set_value(*std::exchange(this->_target, nullptr), std::forward<U>(u));
-        }
-    };
-
-    template<>
-    struct ReturnChannel<void> : BasicReturnChannel<void> {
-        void return_void() noexcept {
-            set_value(*std::exchange(this->_target, nullptr));
-        }
-    };
-
-
+    template<typename = void> struct Delegate;
+    template<typename = void> struct Promise;
     template<typename = void> struct Future;
     using Task = Future<>;
 
     template<typename T>
-    struct Promise : ReturnChannel<T> {
+    struct Delegate {
+        virtual ~Delegate() = default;
+        virtual std::coroutine_handle<> final_await_suspend() noexcept = 0;
+        virtual void return_value(T value) noexcept { /* discard */ };
+        virtual void unhandled_exception() noexcept { abort(); }
+        virtual void unhandled_stopped() noexcept { abort(); }
+        virtual std::stop_token get_stop_token() noexcept { return std::stop_token{}; }
+    };
 
-        std::coroutine_handle<> _continuation = nullptr;
-        std::stop_token _stop_token;
+    template<>
+    struct Delegate<void> {
+        virtual ~Delegate() = default;
+        virtual std::coroutine_handle<> final_await_suspend() noexcept = 0;
+        virtual void return_void() noexcept {};
+        virtual void unhandled_exception() noexcept { abort(); }
+        virtual void unhandled_stopped() noexcept { abort(); }
+        virtual std::stop_token get_stop_token() noexcept { return std::stop_token{}; }
+    };
+
+    template<typename T>
+    struct BasicPromise {
+
+        Delegate<T>* _delegate;
+
+        void set_delegate(Delegate<T>* delegate) {
+            _delegate = delegate;
+        }
 
         constexpr std::suspend_always initial_suspend() const noexcept {
             return std::suspend_always{};
         }
 
-        Future<T> get_return_object();
+        // TODO: pass this to all delegate calls?
+        // TODO: do the exchange inside the delegate call?
 
+        void unhandled_exception() {
+            Delegate<T>* delegate = std::exchange(_delegate, nullptr);
+            delegate->unhandled_exception();
+        }
+
+        void unhandled_stopped() {
+            Delegate<T>* delegate = std::exchange(_delegate, nullptr);
+            delegate->unhandled_exception();
+        }
 
         struct FinalAwaitable : ResumeNever {
             template<typename DerivedPromise>
             std::coroutine_handle<> await_suspend(std::coroutine_handle<DerivedPromise> handle) const noexcept {
-                std::coroutine_handle<> continuation = std::exchange(handle.promise()._continuation, nullptr);
+                Delegate<T>* delegate = std::exchange(handle.promise()._delegate, nullptr);
+                // TODO: do the destroy inside the delegate call?
                 handle.destroy();
-                assert(continuation);
-                return continuation;
+                return delegate->final_await_suspend();
             }
         };
 
-        auto final_suspend() const noexcept {
+        constexpr FinalAwaitable final_suspend() const noexcept {
             return FinalAwaitable{};
         }
 
-        ~Promise() {
-            if (_continuation) {
-                // We did not resume our continuation, therefore we are
-                // participants in a cancellation unwinding
-                this->unhandled_stopped();
-                _continuation.destroy();
-            }
+        ~BasicPromise() {
+            if (_delegate)
+                std::exchange(_delegate, nullptr)->unhandled_stopped();
         }
 
-        void set_continuation(std::coroutine_handle<> continuation) {
-            assert(!_continuation);
-            _continuation = std::move(continuation);
+        std::stop_token get_stop_token() const noexcept {
+            return _delegate->get_stop_token();
         }
 
-        void set_continuation(void* ptr) {
-            assert(!_continuation);
-            _continuation = std::coroutine_handle<>::from_address(ptr);
-        }
+    };
 
-        void set_stop_token(std::stop_token t) {
-            _stop_token = t;
+    template<typename T>
+    struct MixinPromise : BasicPromise<T> {
+        void return_value(T value) {
+            this->_delegate->return_value(std::move(value));
         }
+    };
+
+    template<>
+    struct MixinPromise<void> : BasicPromise<void> {
+        void return_void() {
+            this->_delegate->return_void();
+        }
+    };
+
+
+    template<typename T>
+    struct Promise : MixinPromise<T> {
+
+        Future<T> get_return_object();
 
         template<typename A>
         decltype(auto) await_transform(A&& a) {
-            // Use a helper function to permit custom overloads like GetStopToken
             return await_transform_helper(this, std::forward<A>(a));
         }
 
-    }; // Promise<T>
+    };
+
 
     // Identity for awaitables; a sender is wrapped in a SenderAwaitable
     // (see Senders below)
     template<typename T, typename A>
-    decltype(auto) await_transform_helper(Promise<T>*, A&& a) {
+    decltype(auto) await_transform_helper(Promise<T>* promise, A&& a) {
         using D = std::remove_cvref_t<A>;
         if constexpr (Awaitable<D>) {
             return std::forward<A>(a);
@@ -383,7 +438,7 @@ namespace wry::Coroutine {
             static_assert(std::is_rvalue_reference_v<A&&>,
                           "co_await a sender as an rvalue");
             // TODO: SenderAwaitable can profit from early access to the promise
-            return SenderAwaitable<D>(std::move(a));
+            return SenderAwaitable<Promise<T>, D>(promise, std::move(a));
         } else {
             return std::forward<A>(a);  // the co_await will diagnose
         }
@@ -392,7 +447,7 @@ namespace wry::Coroutine {
 
     template<typename T>
     [[nodiscard]] std::stop_token get_stop_token(Promise<T> const& promise) {
-        return promise._stop_token;
+        return promise._delegate->get_stop_token();
     }
 
     template<typename T>
@@ -471,26 +526,6 @@ namespace wry::Coroutine {
             return *this;
         }
 
-        struct Awaitable {
-            promise_type* _promise = nullptr;
-            Outcome<T> _outcome;
-            constexpr bool await_ready() const noexcept { return false; }
-            template<typename OuterPromise>
-            std::coroutine_handle<promise_type> await_suspend(std::coroutine_handle<OuterPromise> continuation) noexcept {
-                _promise->set_target(&_outcome);
-                _promise->set_stop_token(get_stop_token(continuation));
-                _promise->set_continuation(std::move(continuation));
-                return handle_from_promise(std::exchange(_promise, nullptr));
-            }
-            auto await_resume() {
-                return _outcome.await_resume();
-            }
-        };
-
-        auto operator co_await() {
-            return Awaitable{std::exchange(this->_promise, nullptr)};
-        }
-
     };
 
     template<typename T>
@@ -502,6 +537,74 @@ namespace wry::Coroutine {
     std::coroutine_handle<typename Future<T>::promise_type> handle_from_future(Future<T>&& future) {
         return handle_from_promise(std::exchange(future._promise, nullptr));
     }
+
+    template<typename OuterPromise, typename T>
+    struct BasicFutureAwaitable : Delegate<T> {
+
+        using InnerPromise = Promise<T>;
+
+        OuterPromise* _outer_promise;
+        Future<T> _future;
+        Outcome<T> _outcome;
+
+        BasicFutureAwaitable(OuterPromise* outer_promise, Future<T>&& future)
+        : _outer_promise(outer_promise)
+        , _future(std::move(future)) {
+        }
+
+        virtual void unhandled_exception() noexcept override {
+            set_error(_outcome, std::current_exception());
+        }
+        virtual void unhandled_stopped() noexcept override {
+            set_stopped(_outcome);
+            handle_from_promise(std::exchange(_outer_promise, nullptr)).destroy();
+        }
+        virtual std::coroutine_handle<> final_await_suspend() noexcept override {
+            return handle_from_promise(_outer_promise);
+        }
+        virtual std::stop_token get_stop_token() noexcept override {
+            using Coroutine::get_stop_token;
+            return get_stop_token(*_outer_promise);
+        }
+
+        constexpr bool await_ready() const noexcept {
+            return false;
+        }
+
+        std::coroutine_handle<InnerPromise> await_suspend(std::coroutine_handle<OuterPromise> continuation) noexcept {
+            assert(_outer_promise == &continuation.promise());
+            _future._promise->set_delegate(this);
+            return handle_from_future(std::move(_future));
+        }
+
+        auto await_resume() {
+            return _outcome.await_resume();
+        }
+
+    };
+
+    template<typename OuterPromise, typename T>
+    struct FutureAwaitable : BasicFutureAwaitable<OuterPromise, T> {
+        using BasicFutureAwaitable<OuterPromise, T>::BasicFutureAwaitable;
+        virtual void return_value(T value) noexcept override {
+            set_value(this->_outcome, std::move(value));
+        }
+    };
+
+    template<typename OuterPromise>
+    struct FutureAwaitable<OuterPromise, void> : BasicFutureAwaitable<OuterPromise, void> {
+        using BasicFutureAwaitable<OuterPromise, void>::BasicFutureAwaitable;
+        virtual void return_void() noexcept override {
+            set_value(this->_outcome);
+        }
+    };
+
+    template<typename U, typename T>
+    auto await_transform_helper(Promise<U>* promise, Future<T>&& future) {
+        return FutureAwaitable<Promise<U>, T>(promise, std::move(future));
+    }
+
+
 
 #pragma mark Senders
 
@@ -550,58 +653,96 @@ namespace wry::Coroutine {
     };
 
     template<typename T, typename R>
-    struct FutureOperationState {
-        Header _header = { &_static_resume, &_static_destroy };
-        Outcome<T> _outcome;
-        Future<T> _future;
-        R _receiver;
+    struct BasicFutureOperationState : Delegate<T> {
 
-        static void _static_resume(void* ptr) {
-            auto self = (FutureOperationState*)ptr;
-            // last touch of self on every path
-            switch (self->_outcome._variant.index()) {
-                case 1:
-                    if constexpr (std::is_void_v<T>) {
-                        set_value(std::move(self->_receiver));
-                    } else {
-                        set_value(std::move(self->_receiver), std::move(std::get<1>(self->_outcome._variant)));
-                    }
-                    break;
-                case 2:
-                    set_error(std::move(self->_receiver), std::move(std::get<2>(self->_outcome._variant)));
-                    break;
-                default:
-                    abort();
+        struct Frame {
+            Header _header = { &_static_resume, &_static_destroy };
+            Outcome<T> _outcome;
+            Future<T> _future;
+            R _receiver;
+            static void _static_resume(void* ptr) {
+                auto self = (BasicFutureOperationState*)ptr;
+                // last touch of self on every path
+                switch (self->_outcome._variant.index()) {
+                    case 1:
+                        if constexpr (std::is_void_v<T>) {
+                            set_value(std::move(self->_receiver));
+                        } else {
+                            set_value(std::move(self->_receiver), std::move(std::get<1>(self->_outcome._variant)));
+                        }
+                        break;
+                    case 2:
+                        set_error(std::move(self->_receiver), std::move(std::get<2>(self->_outcome._variant)));
+                        break;
+                    default:
+                        abort();
+                }
             }
+
+            static void _static_destroy(void* ptr) {
+                auto self = (BasicFutureOperationState*)ptr;
+                // last touch of self on every path
+                switch (self->_outcome._variant.index()) {
+                    case 3:
+                        set_stopped(std::move(self->_receiver));
+                        break;
+                    default:
+                        abort();
+                }
+            }
+
+        };
+
+        Frame _frame;
+        virtual void unhandled_exception() noexcept override {
+            set_error(_frame._outcome, std::current_exception());
+        }
+        virtual void unhandled_stopped() noexcept override {
+            set_stopped(_frame._outcome);
+        }
+        virtual std::coroutine_handle<> final_await_suspend() noexcept override {
+            return std::coroutine_handle<>::from_address(&_frame);
+        }
+        virtual std::stop_token get_stop_token() noexcept override {
+            return get_stop_token(_frame._receiver);
         }
 
-        static void _static_destroy(void* ptr) {
-            auto self = (FutureOperationState*)ptr;
-            // last touch of self on every path
-            switch (self->_outcome._variant.index()) {
-                case 3:
-                    set_stopped(std::move(self->_receiver));
-                    break;
-                default:
-                    abort();
-            }
+        template<typename R2>
+        BasicFutureOperationState(Future<T>&& future, R2&& receiver)
+        : _frame{Frame{std::move(future), std::forward<R>(receiver)}} {
+        }
+
+    };
+
+    template<typename T, typename R>
+    struct FutureOperationState : BasicFutureOperationState<T, R> {
+        using BasicFutureOperationState<T, R>::BasicFutureOperationState;
+        virtual void return_value(T value) noexcept override {
+            set_value(this->_frame._outcome, std::move(value));
+        }
+    };
+
+    template<typename R>
+    struct FutureOperationState<void, R> : BasicFutureOperationState<void, R> {
+        using BasicFutureOperationState<void, R>::BasicFutureOperationState;
+        virtual void return_void() noexcept override {
+            set_value(this->_frame._outcome);
         }
     };
 
     template<typename T, typename R>
     auto connect(Future<T>&& future, R&& receiver) {
-        return FutureOperationState<T, std::remove_cvref_t<R>>{
-            ._future = std::move(future),
-            ._receiver = std::forward<R>(receiver)
-        };
+        return FutureOperationState<T, std::remove_cvref_t<R>>(
+            std::move(future),
+            std::forward<R>(receiver)
+        );
     }
 
     template<typename T, typename R>
     void start(FutureOperationState<T, R>& op) {
         Promise<T>* promise = std::exchange(op._future._promise, nullptr);
         assert(promise);
-        promise->set_target(&op._outcome);
-        promise->set_continuation((void*)&op);
+        promise->set_delegate(&op);
         // last touch of op: the coroutine may run to completion inline
         handle_from_promise(promise).resume();
     }
@@ -614,74 +755,68 @@ namespace wry::Coroutine {
     // Completions are delivered on a pinned mutator thread and continue
     // inline, like every other leaf.
 
-    template<typename T>
+    template<typename OuterPromise, typename T>
     struct AwaitableBase {
-
-        using stored_type = typename ReturnChannel<T>::stored_type;
-
+        OuterPromise* _outer_promise;
         Outcome<T> _outcome;
-        std::coroutine_handle<> _continuation;
-        std::stop_token _stop_token;
-
     };
 
-    template<typename T>
+    template<typename OuterPromise, typename T>
     struct AwaitableReceiver {
-        AwaitableBase<T>* _base;
+        AwaitableBase<OuterPromise, T>* _base;
     };
 
-    template<typename T>
-    void set_value(AwaitableReceiver<T>&& receiver, T&& value) {
+    template<typename OuterPromise, typename T>
+    void set_value(AwaitableReceiver<OuterPromise, T>&& receiver, T&& value) {
         set_value(receiver._base->_outcome, std::move(value));
-        std::exchange(receiver._base->_continuation, nullptr).resume();
+        handle_from_promise(*std::exchange(receiver._base->_outer_promise, nullptr)).resume();
 
     }
-
-    inline void set_value(AwaitableReceiver<void>&& receiver) {
+    template<typename OuterPromise>
+    void set_value(AwaitableReceiver<OuterPromise, void>&& receiver) {
         set_value(receiver._base->_outcome);
-        std::exchange(receiver._base->_continuation, nullptr).resume();
+        handle_from_promise(*std::exchange(receiver._base->_outer_promise, nullptr)).resume();
     }
 
-    template<typename T>
-    void set_error(AwaitableReceiver<T>&& receiver, std::exception_ptr&& error) {
+    template<typename OuterPromise, typename T>
+    void set_error(AwaitableReceiver<OuterPromise, T>&& receiver, std::exception_ptr&& error) {
         set_error(receiver._base->_outcome, std::move(error));
-        std::exchange(receiver._base->_continuation, nullptr).resume();
+        handle_from_promise(*std::exchange(receiver._base->_outer_promise, nullptr)).resume();
     }
 
-    template<typename T>
-    void set_stopped(AwaitableReceiver<T>&& receiver) {
+    template<typename OuterPromise, typename T>
+    void set_stopped(AwaitableReceiver<OuterPromise, T>&& receiver) {
         set_stopped(receiver._base->_outcome);
-        std::exchange(receiver._base->_continuation, nullptr).destroy();
+        handle_from_promise(*std::exchange(receiver._base->_outer_promise, nullptr)).destroy();
     }
 
-    template<typename T>
-    std::stop_token get_stop_token(AwaitableReceiver<T> const& receiver) {
-        return receiver._base->_stop_token;
+    template<typename OuterPromise, typename T>
+    std::stop_token get_stop_token(AwaitableReceiver<OuterPromise, T> const& receiver) {
+        return get_stop_token(*(receiver._base->_outer_promise));
     }
 
-    template<Sender S>
-    struct SenderAwaitable : AwaitableBase<SenderValueType<S>> {
+    template<typename OuterPromise, Sender S>
+    struct SenderAwaitable : AwaitableBase<OuterPromise, SenderValueType<S>> {
 
         using T = SenderValueType<S>;
-        using R = AwaitableReceiver<T>;
+        using R = AwaitableReceiver<OuterPromise, T>;
         using OperationState = decltype(connect(std::declval<S&&>(), std::declval<R&&>()));
 
         // The sender waits here until await_suspend, where this object has
         // its final address and the receiver may point at it
         std::variant<S, OperationState> _state;
 
-        explicit SenderAwaitable(S&& sender)
-        : _state(std::in_place_index<0>, std::move(sender)) {
+        explicit SenderAwaitable(OuterPromise* promise, S&& sender)
+        : AwaitableBase<OuterPromise, SenderValueType<S>>{promise}
+        , _state(std::in_place_index<0>, std::move(sender)) {
         }
 
         SenderAwaitable(SenderAwaitable const&) = delete;
 
         constexpr bool await_ready() const noexcept { return false; }
 
-        template<typename OuterPromise>
         void await_suspend(std::coroutine_handle<OuterPromise> continuation) {
-            this->_continuation = continuation;
-            this->_stop_token = get_stop_token(continuation);
+            assert(this->_outer_promise == &continuation.promise());
             S sender = std::move(std::get<0>(_state));
             OperationState& op = _state.template emplace<1>(connect(std::move(sender), R{this}));
             start(op);
@@ -690,7 +825,7 @@ namespace wry::Coroutine {
         }
 
         auto await_resume() {
-            assert(!this->_continuation);
+            assert(!this->_outer_promise);
             return this->_outcome.await_resume();
         }
 
@@ -707,6 +842,22 @@ namespace wry::Coroutine {
         std::coroutine_handle<> _continuation;
         std::stop_token _outer_stop_token;
         std::stop_source _inner_stop_source;
+
+        struct Inner : Delegate<> {
+
+            Nursery* _self;
+
+            virtual void return_void() noexcept override {}
+            virtual void unhandled_exception() noexcept override { abort(); }
+            virtual void unhandled_stopped() noexcept override { _static_destroy(_self); }
+            virtual std::stop_token get_stop_token() noexcept override { return _self->_inner_stop_source.get_token(); }
+            virtual std::coroutine_handle<> final_await_suspend() noexcept override {
+                return std::coroutine_handle<>::from_address(_self);
+            }
+
+        };
+        Inner _inner;
+
 
         struct Callback {
             std::stop_source _inner_stop_source;
@@ -774,21 +925,23 @@ namespace wry::Coroutine {
             }
         };
 
-        // co_await nursery.fork(y, bar(x)) immediately starts bar on the current
-        // thread and schedules the caller to execute soon.  When bar completes
-        // it assigns to y; it is racy to access y until the nursery has been
-        // joined
         template<typename T>
-        [[nodiscard]] auto fork(Outcome<T>& target, Future<T>&& future) {
+        [[nodiscard]] auto fork(Future<>&& future) {
+
+        };
+
+
+        // co_await nursery.fork(foo(x)) immediately starts foo on the current
+        // thread and schedules the caller to execute soon.  No target: foo's
+        // value, if any, is discarded and an unhandled exception aborts (see
+        // BasicReturnChannel)
+        [[nodiscard]] auto fork(Future<>&& future) {
             struct Awaitable : std::suspend_always {
                 Nursery* _nursery;
-                Outcome<T>* _target;
-                Future<T>::promise_type* _promise;
-                std::coroutine_handle<typename Future<T>::promise_type> await_suspend(std::coroutine_handle<> continuation) noexcept {
+                Future<>::promise_type* _promise;
+                std::coroutine_handle<Future<>::promise_type> await_suspend(std::coroutine_handle<> continuation) noexcept {
                     ++(_nursery->_children);
-                    _promise->set_continuation(_nursery);
-                    _promise->set_stop_token(_nursery->_inner_stop_source.get_token());
-                    _promise->set_target(_target);
+                    _promise->set_delegate(&_nursery->_inner);
                     auto handle = handle_from_promise(std::exchange(_promise, nullptr));
                     global_work_queue_schedule(std::move(continuation));
                     return handle;
@@ -797,7 +950,46 @@ namespace wry::Coroutine {
                     assert(!_promise);
                 }
             };
-            return Awaitable{{}, this, &target, std::exchange(future._promise, nullptr)};
+            return Awaitable{{}, this, std::exchange(future._promise, nullptr)};
+        }
+
+        // co_await nursery.fork(y, bar(x)) immediately starts bar on the current
+        // thread and schedules the caller to execute soon.  When bar completes
+        // it assigns to y; it is racy to access y until the nursery has been
+        // joined
+        template<typename T>
+        [[nodiscard]] auto fork(Outcome<T>& target, Future<T>&& future) {
+//            struct Awaitable : std::suspend_always {
+//                Nursery* _nursery;
+//                Outcome<T>* _target;
+//                Future<T>::promise_type* _promise;
+//                std::coroutine_handle<typename Future<T>::promise_type> await_suspend(std::coroutine_handle<> continuation) noexcept {
+//                    ++(_nursery->_children);
+//                    _promise->set_delegate(&_nursery->_inner);
+//                    auto handle = handle_from_promise(std::exchange(_promise, nullptr));
+//                    global_work_queue_schedule(std::move(continuation));
+//                    return handle;
+//                }
+//                ~Awaitable() {
+//                    assert(!_promise);
+//                }
+//            };
+//            return Awaitable{{}, this, &target, std::exchange(future._promise, nullptr)};
+            return fork([](Outcome<T>& target, Future<T>&& future) -> Future<> {
+                // target = co_await std::move(future);
+                set_value(target, co_await std::move(future));
+            } (target, std::move(future)));
+        }
+
+        // nursery.soon(foo(x)) schedules foo to execute soon and continues
+        // the calling context normally.  The calling context does not have to
+        // be a coroutine.  No target: see fork(Future<>&&)
+        void soon(Future<>&& future) {
+            ++_children;
+            // future._promise->set_continuation(this);
+            // future._promise->set_stop_token(_inner_stop_source.get_token());
+            future._promise->set_delegate(&_inner);
+            global_work_queue_schedule(handle_from_future(std::move(future)));
         }
 
         // nursery.soon(y, bar(x)) schedules bar to execute soon and
@@ -806,11 +998,15 @@ namespace wry::Coroutine {
         // it is racy to access y until the nursery has been joined
         template<typename T>
         void soon(Outcome<T>& target, Future<T>&& future) {
-            _children++;
-            future._promise->set_continuation(this);
-            future._promise->set_target(&target);
-            future._promise->set_stop_token(_inner_stop_source.get_token());
-            global_work_queue_schedule(handle_from_future(std::move(future)));
+            //_children++;
+            //future._promise->set_continuation(this);
+            //future._promise->set_target(&target);
+            //future._promise->set_stop_token(_inner_stop_source.get_token());
+            //global_work_queue_schedule(handle_from_future(std::move(future)));
+            return soon([](Outcome<T>& target, Future<T>&& future) -> Future<> {
+                // target = co_await std::move(future);
+                set_value(target, co_await std::move(future));
+            } (target, std::move(future)));
         }
 
         // co await nursery.join() suspends the caller and resumes it after
@@ -982,7 +1178,9 @@ namespace wry::Coroutine {
 
         static void _static_destroy(void* ptr) {
             auto self = (BasicFromStopped*)ptr;
-            set_stopped(self->_outcome);
+            // The inner promise recorded STOPPED in _outcome before destroying
+            // us (its continuation); this word only continues
+            assert(self->_outcome.is_stopped());
             // Stack unwinding, we are in nested destructors ==> schedule the continuation
             global_work_queue_schedule(std::exchange(self->_continuation, nullptr));
         }

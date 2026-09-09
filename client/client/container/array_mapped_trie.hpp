@@ -623,9 +623,8 @@ namespace wry {
             if (has_children()) {
                 int n = std::popcount(_bitmap);
                 Coroutine::Nursery nursery;
-                Coroutine::Outcome<void> outcome[64];
                 for (int i = 0; i != n; ++i)
-                    co_await nursery.fork(outcome[i], _children[i]->coroutine_parallel_for_each(action));
+                    co_await nursery.fork(_children[i]->coroutine_parallel_for_each(action));
                 co_await nursery.join();
             } else {
                 Bitmap b = _bitmap;
@@ -775,10 +774,14 @@ namespace wry {
 
             // Assemble the surviving disjoint children (already in index order),
             // collapsing to honour the ">= 2 children" invariant.
+            // Take each outcome exactly once (taking consumes it)
             int nz = 0;
             const ArrayMappedTrie* only = nullptr;
+            std::vector<const ArrayMappedTrie*> children;
+            children.reserve(outs.size());
             for (auto& outcome : outs) {
                 const ArrayMappedTrie* c = (co_await outcome);
+                children.push_back(c);
                 if (c) { ++nz; only = c; }
             }
             if (nz == 0)
@@ -786,10 +789,8 @@ namespace wry {
             if (nz == 1)
                 co_return only;
             ArrayMappedTrie* node = make(prefix, sh, nz, 0, 0);
-            for (auto& outcome : outs) {
-                const ArrayMappedTrie* c = (co_await outcome); // TODO: dodgy to double-traverse
-                if (c) { ++nz; only = c; }
-            }
+            for (const ArrayMappedTrie* c : children)
+                if (c) node->insert_child(c);
             co_return node;
         }
 

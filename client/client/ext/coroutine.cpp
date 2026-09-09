@@ -75,12 +75,20 @@ namespace wry {
             g_wait_group_count.notify_all();
         };
 
+        struct WaitGroupDelegate : Coroutine::Delegate<> {
+            virtual std::coroutine_handle<> final_await_suspend() noexcept override {
+                return std::coroutine_handle<>::from_address(&g_wait_group_sentinel);
+            }
+        };
+
+        WaitGroupDelegate g_wait_group_delegate;
+
     }
 
     void wait_group_spawn(Coroutine::Task task) {
         std::ptrdiff_t observed = g_wait_group_count.fetch_add_relaxed(1);
         assert(observed && "wait_group_spawn after wait_group_wait");
-        task._promise->set_continuation(&g_wait_group_sentinel);
+        task._promise->set_delegate(&g_wait_group_delegate);
         global_work_queue_schedule(handle_from_future(std::move(task)));
         assert(task._promise == nullptr);
     }
@@ -279,7 +287,6 @@ namespace wry::Coroutine {
 
         // A nursery that absorbed a cancellation is reusable, and the tally
         // was reset by the previous join
-        ok_result._variant.template emplace<0>();
         nursery.soon(ok_result, unwind_ok_child(42));
         cancelled = co_await nursery.join();
         assert(cancelled == 0);
@@ -307,8 +314,7 @@ namespace wry::Coroutine {
                                std::atomic<int>* resumed_past) {
             UnwindProbe probe{destroyed};
             Nursery nursery = co_await Nursery::Factory{};
-            Outcome<> outcome;
-            nursery.soon(outcome, unwind_scope_child(reached, destroyed));
+            nursery.soon(unwind_scope_child(reached, destroyed));
             co_await nursery.join();
             resumed_past->fetch_add(1, std::memory_order_relaxed);
         }
@@ -369,9 +375,8 @@ namespace wry::Coroutine {
                                   std::atomic<std::ptrdiff_t>* tally) {
             UnwindProbe probe{destroyed};
             Nursery nursery = co_await Nursery::Factory{};
-            Outcome<> o1, o2;
-            nursery.soon(o1, unwind_token_watching_child(started, destroyed));
-            nursery.soon(o2, unwind_token_watching_child(started, destroyed));
+            nursery.soon(unwind_token_watching_child(started, destroyed));
+            nursery.soon(unwind_token_watching_child(started, destroyed));
             // Scope-internal cancellation: hastens the children, but the
             // outer token is unrequested, so the join resumes normally and
             // reports.
@@ -384,9 +389,8 @@ namespace wry::Coroutine {
                                 std::atomic<int>* resumed_past) {
             UnwindProbe probe{destroyed};
             Nursery nursery = co_await Nursery::Factory{};
-            Outcome<> o1, o2;
-            nursery.soon(o1, unwind_token_watching_child(started, destroyed));
-            nursery.soon(o2, unwind_token_watching_child(started, destroyed));
+            nursery.soon(unwind_token_watching_child(started, destroyed));
+            nursery.soon(unwind_token_watching_child(started, destroyed));
             co_await nursery.join();
             resumed_past->fetch_add(1, std::memory_order_relaxed);
         }

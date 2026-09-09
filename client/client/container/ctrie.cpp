@@ -89,8 +89,7 @@ namespace wry {
         int m = 1 << 9;
         for (int i = 0; i != 1 << 17; i += m) {
             std::span s{data.data() + i, data.data() + i + m};
-            Coroutine::Outcome<> outcome;
-            co_await nursery.fork(outcome, [](auto trie, std::span<T> s) -> Coroutine::Future<> {
+            co_await nursery.fork([](auto trie, std::span<T> s) -> Coroutine::Future<> {
                 for (auto& [k, f, v] : s) {
                     if (f) {
                         auto [w, x] = trie->alter(k, [&](std::optional<ValueType> const& in) -> AlterChoice {
@@ -115,8 +114,7 @@ namespace wry {
         printf("FORK2\n");
         for (int i = 0; i != 1 << 17; i += m) {
             std::span s{data.data() + i, data.data() + i + m};
-            Coroutine::Outcome<> outcome;
-            co_await nursery.fork(outcome, [](auto trie, std::span<T> s) -> Coroutine::Future<> {
+            co_await nursery.fork([](auto trie, std::span<T> s) -> Coroutine::Future<> {
                 for (auto [k, f, v] : s) {
                     auto w = trie->find(k);
                     assert(w.has_value() == f);
@@ -135,8 +133,7 @@ namespace wry {
         printf("FORK3\n");
         for (int i = 0; i != 1 << 17; i += m) {
             std::span s{data.data() + i, data.data() + i + m};
-            Coroutine::Outcome<> outcome;
-            co_await nursery.fork(outcome, [](auto trie, std::span<T> s) -> Coroutine::Future<> {
+            co_await nursery.fork([](auto trie, std::span<T> s) -> Coroutine::Future<> {
                 for (auto [k, f, v] : s) {
                     auto [w, x] = trie->alter(k, [](std::optional<ValueType> const& in) {
                         return AlterChoice::erase();
@@ -264,8 +261,7 @@ namespace wry {
         for (size_t i = 0; i < ops.size(); i += batch) {
             size_t hi = std::min(i + batch, ops.size());
             std::span s{ops.data() + i, ops.data() + hi};
-            Coroutine::Outcome<> outcome;
-            co_await nursery.fork(outcome,
+            co_await nursery.fork(
                 [](auto trie, std::span<std::pair<CommKey, int>> s)
                 -> Coroutine::Future<> {
                     for (auto [k, delta] : s) {

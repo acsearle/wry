@@ -131,7 +131,10 @@ namespace wry {
         co_await nursery.join();
         // Accumulate
         for (size_t i = 0; i != self->_height.nonatomic_load(); ++i) {
-            results[i + 1] = results[i] + (co_await outcomes[i + 1]);
+            // A height with no child has an empty outcome: nothing ran there
+            results[i + 1] = results[i];
+            if (!outcomes[i + 1].is_empty())
+                results[i + 1] += (co_await outcomes[i + 1]);
         }
         // Write back
         self->for_each_child(bound, [&] (Node const* _Nonnull child, Node const* _Nullable) {
@@ -218,8 +221,7 @@ namespace wry {
                                   notify_and_accumulate(_ready, &context));
 
             // For each EntityID ready next_time, copy it into next_ready
-            Coroutine::Outcome<void> _;
-            co_await nursery.fork(_, waiting_on_next_time
+            co_await nursery.fork(waiting_on_next_time
                                   .coroutine_parallel_for_each([next_time, &next_ready](std::pair<Time, EntityID> kv) {
                 assert(kv.first == next_time);
                 next_ready.try_emplace(kv.second);
@@ -538,18 +540,28 @@ namespace wry {
         // Terrain has no transaction channel yet; the persistent map is
         // carried over unchanged (an O(1) structural share, not a copy).
 
-        co_return new World{
+        // Take every result before the allocation: a stopped outcome unwinds
+        // this frame, and a new-expression abandoned mid-initializer is never
+        // deallocated
+        int64_t entity_id_requests_total = co_await entity_id_requests;
+        auto entity_id_for_coordinate = co_await new_entity_id_for_coordinate;
+        auto located_for_coordinate = co_await new_located_for_coordinate;
+        auto entity_for_entity_id = co_await new_entity_for_entity_id;
+        auto value_for_coordinate = co_await new_value_for_coordinate;
+        auto next_waiting_on_time_result = co_await new_next_waiting_on_time;
+
+        co_return Root<World*>{new World{
             next_time,
-            _entity_id_source + (co_await entity_id_requests),
+            _entity_id_source + entity_id_requests_total,
             freeze(next_ready),
-            (co_await new_entity_id_for_coordinate),
-            (co_await new_located_for_coordinate),
-            (co_await new_entity_for_entity_id),
-            (co_await new_value_for_coordinate),
+            std::move(entity_id_for_coordinate),
+            std::move(located_for_coordinate),
+            std::move(entity_for_entity_id),
+            std::move(value_for_coordinate),
             _terrain_for_coordinate,
-            (co_await new_next_waiting_on_time)
-        };
-        
+            std::move(next_waiting_on_time_result)
+        }};
+
     } // World::step
 
 
