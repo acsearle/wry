@@ -20,6 +20,13 @@
 
 namespace wry {
 
+    template<typename T>
+    [[nodiscard]] T take(T& x) noexcept(std::is_nothrow_default_constructible_v<T>
+                                        && std::is_nothrow_move_constructible_v<T>
+                                        && std::is_nothrow_assignable_v<T&, T>) {
+        return std::exchange(x, T{});
+    }
+
     // this is pretty objectionable but makes life much easier
     
 #define FORWARD( X ) std::forward<decltype( X )>( X )

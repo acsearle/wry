@@ -9,10 +9,12 @@
 #define kqueue_reactor_hpp
 
 #include <chrono>
+#include <functional>
 #include <expected>
 #include <span>
 
 #include "coroutine.hpp"
+#include "functional.hpp"
 
 namespace wry {
 
@@ -35,15 +37,16 @@ namespace wry {
     // (the wait group has drained) and before the worker pool is cancelled.
     void global_reactor_stop();
 
-    // At `duration` from now, start `future` on the pool with `token` as its
-    // stop token -- unless `token` is requested first, in which case the
-    // future never runs.  After request_stop(token) returns, the timer
-    // provably will not fire and the future provably will not run:
-    // cancellation is a synchronous join.  A failed timer registration
-    // aborts (it is resource-exhaustion grade).
+
+    // At `duration` from now, invoke `f` on the pool -- unless `token` is
+    // requested first, in which case `f` is destroyed unrun.  A stop request
+    // against an unfired timer withdraws it synchronously; a timer that has
+    // already fired runs `f` regardless, so `f` must tolerate a late stop
+    // (with_deadline's does: a second request_stop is idempotent).  A failed
+    // timer registration aborts (it is resource-exhaustion grade).
     void cancelable_after(std::stop_token token,
                           std::chrono::steady_clock::duration duration,
-                          Coroutine::Future<>&& future);
+                          move_only_function<void()> f);
 
     // Suspend until `socket` is readable, then perform one recv.  Returns the
     // recv result in kernel convention: bytes received, 0 for end-of-stream
@@ -64,9 +67,6 @@ namespace wry {
     cancelable_sleep(double seconds);
 
 
-
-
-
     template<typename OuterPromise, typename T>
     struct BasicWithDeadlineAwaitable : Coroutine::Delegate<T> {
 
@@ -80,8 +80,6 @@ namespace wry {
                     stop_source.request_stop();
                 }
             };
-
-            Coroutine::Header _header = { &_static_resume, &_static_destroy };
 
             OuterPromise* _outer_promise;
             std::chrono::steady_clock::time_point _deadline;
@@ -98,27 +96,6 @@ namespace wry {
             , _future(std::move(future)) {
             }
 
-#define CONTINUE \
-if (Coroutine::get_stop_token(*(self->_outer_promise)).stop_requested()) { \
-[[clang::musttail]] return Coroutine::destroy_by_address(Coroutine::handle_from_promise(self->_outer_promise).address()); \
-} else { \
-[[clang::musttail]] return Coroutine::resume_by_address(Coroutine::handle_from_promise(self->_outer_promise).address()); \
-}
-
-            static void _static_resume(void* ptr) {
-                auto self = (Frame*)ptr;
-                CONTINUE
-            }
-
-            static void _static_destroy(void* ptr) {
-                auto self = (Frame*)ptr;
-                // The inner promise recorded STOPPED in _outcome before destroying
-                // us (its continuation); this word only continues
-                assert(self->_outcome.is_stopped());
-                CONTINUE
-            }
-
-#undef CONTINUE
 
         } _frame;
 
@@ -140,10 +117,11 @@ if (Coroutine::get_stop_token(*(self->_outer_promise)).stop_requested()) { \
                                           typename Frame::Callback{_frame._inner_stop_source});
             cancelable_after(_frame._inner_stop_source.get_token(),
                              _frame._deadline - std::chrono::steady_clock::now(),
-                             [](std::stop_source stop_source) -> Coroutine::Future<> {
-                (void) stop_source.request_stop();
-                co_return;
-            } (_frame._inner_stop_source));
+                             [stop_source = _frame._inner_stop_source]() mutable {
+                // Local copy: the callbacks this fires may unwind the owner
+                std::stop_source keepalive = stop_source;
+                keepalive.request_stop();
+            });
             return handle_from_future(std::move(_frame._future));
         }
 
@@ -157,16 +135,26 @@ if (Coroutine::get_stop_token(*(self->_outer_promise)).stop_requested()) { \
         };
 
         virtual void unhandled_stopped() noexcept override {
-            handle_from_promise(std::exchange(_frame._outer_promise, nullptr)).destroy();
+            // Absorb: the inner stopped (usually by our own timer), so the
+            // outer resumes with nullopt -- unless the outer's own token is
+            // requested, in which case the unwinding continues through it
+            using Coroutine::get_stop_token;
+            set_stopped(_frame._outcome);
+            OuterPromise* outer = take(_frame._outer_promise);
+            if (get_stop_token(*outer).stop_requested())
+                handle_from_promise(outer).destroy();
+            else
+                handle_from_promise(outer).resume();
         }
 
         virtual std::coroutine_handle<> final_await_suspend() noexcept override {
-            return handle_from_promise(std::exchange(_frame._outer_promise, nullptr));
+            return handle_from_promise(take(_frame._outer_promise));
         }
 
         virtual std::stop_token get_stop_token() noexcept override {
-            using Coroutine::get_stop_token;
-            return get_stop_token(*_frame._outer_promise);
+            // The inner runs under the interior source, which the timer
+            // requests at the deadline and the outer's token is bridged to
+            return _frame._inner_stop_source.get_token();
         }
 
     };
@@ -181,7 +169,7 @@ if (Coroutine::get_stop_token(*(self->_outer_promise)).stop_requested()) { \
 
     template<typename OuterPromise>
     struct WithDeadlineAwaitable<OuterPromise, void> : BasicWithDeadlineAwaitable<OuterPromise, void> {
-        using BasicWithDeadlineAwaitable<OuterPromise, void>::BasicBasicWithDeadlineAwaitable;
+        using BasicWithDeadlineAwaitable<OuterPromise, void>::BasicWithDeadlineAwaitable;
         virtual void return_void() noexcept override {
             set_value(this->_frame._outcome);
         }
@@ -203,13 +191,10 @@ if (Coroutine::get_stop_token(*(self->_outer_promise)).stop_requested()) { \
         return WithDeadlineSender<T>(std::move(deadline), std::move(future));
     };
 
-    template<typename OuterPromise, typename T>
-    auto await_transform_helper(OuterPromise* outer_promise, WithDeadlineSender<T>&& s) {
-        return WithDeadlineAwaitable<OuterPromise, T>{outer_promise, std::move(s._deadline), std::move(s._future)};
+    template<typename U, typename T>
+    auto await_transform_helper(Coroutine::Promise<U>* outer_promise, WithDeadlineSender<T>&& s) {
+        return WithDeadlineAwaitable<Coroutine::Promise<U>, T>(outer_promise, std::move(s._deadline), std::move(s._future));
     }
-
-
-
 
 
 } // namespace wry

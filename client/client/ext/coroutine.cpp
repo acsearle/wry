@@ -79,6 +79,10 @@ namespace wry {
             virtual std::coroutine_handle<> final_await_suspend() noexcept override {
                 return std::coroutine_handle<>::from_address(&g_wait_group_sentinel);
             }
+            // A cancelled top-level task still owes the group its retire
+            virtual void unhandled_stopped() noexcept override {
+                wait_group_retire(nullptr);
+            }
         };
 
         WaitGroupDelegate g_wait_group_delegate;
@@ -155,15 +159,20 @@ namespace wry::Coroutine {
 
     namespace {
 
-        struct UnwindFence {
-            void (*_resume)(void*) = &_static_resume;
-            void (*_destroy)(void*) = &_static_destroy;
+        // A top-level host's delegate: records whether the task completed
+        // (1) or was unwound (2), and lends it the test's stop token
+        struct UnwindFence : Delegate<> {
             std::atomic<int> _outcome{0};  // 0 pending, 1 completed, 2 cancelled
-            static void _static_resume(void* ptr) {
-                ((UnwindFence*)ptr)->_outcome.store(1, std::memory_order_release);
+            std::stop_token _stop_token;
+            virtual std::coroutine_handle<> final_await_suspend() noexcept override {
+                _outcome.store(1, std::memory_order_release);
+                return std::noop_coroutine();
             }
-            static void _static_destroy(void* ptr) {
-                ((UnwindFence*)ptr)->_outcome.store(2, std::memory_order_release);
+            virtual void unhandled_stopped() noexcept override {
+                _outcome.store(2, std::memory_order_release);
+            }
+            virtual std::stop_token get_stop_token() noexcept override {
+                return _stop_token;
             }
         };
 
@@ -216,7 +225,7 @@ namespace wry::Coroutine {
             UnwindFence fence;
             std::atomic<int> destroyed{0};
             Task task = unwind_completing_task(&destroyed);
-            task._promise->set_continuation(&fence);
+            task._promise->set_delegate(&fence);
             global_work_queue_schedule(handle_from_future(std::move(task)));
             while (fence._outcome.load(std::memory_order_acquire) == 0)
                 co_await TransferToPoolExecutor{};
@@ -233,7 +242,7 @@ namespace wry::Coroutine {
             std::atomic<int> destroyed{0};      // leaf + mid + host
             std::atomic<int> resumed_past{0};   // must stay zero
             Task task = unwind_host(&reached, &destroyed, &resumed_past);
-            task._promise->set_continuation(&fence);
+            task._promise->set_delegate(&fence);
             global_work_queue_schedule(handle_from_future(std::move(task)));
             while (fence._outcome.load(std::memory_order_acquire) == 0)
                 co_await TransferToPoolExecutor{};
@@ -336,8 +345,8 @@ namespace wry::Coroutine {
 
         source.request_stop();
         Task task = unwind_scope_host(&reached, &destroyed, &resumed_past);
-        task._promise->set_stop_token(source.get_token());
-        task._promise->set_continuation(&fence);
+        fence._stop_token = source.get_token();
+        task._promise->set_delegate(&fence);
         global_work_queue_schedule(handle_from_future(std::move(task)));
         while (fence._outcome.load(std::memory_order_acquire) == 0)
             co_await TransferToPoolExecutor{};
@@ -409,8 +418,8 @@ namespace wry::Coroutine {
 
         source.request_stop();
         Task task = unwind_empty_host(&destroyed, &resumed_past);
-        task._promise->set_stop_token(source.get_token());
-        task._promise->set_continuation(&fence);
+        fence._stop_token = source.get_token();
+        task._promise->set_delegate(&fence);
         global_work_queue_schedule(handle_from_future(std::move(task)));
         while (fence._outcome.load(std::memory_order_acquire) == 0)
             co_await TransferToPoolExecutor{};
@@ -433,7 +442,7 @@ namespace wry::Coroutine {
         std::atomic<std::ptrdiff_t> tally{-1};
 
         Task task = unwind_interior_host(&started, &destroyed, &tally);
-        task._promise->set_continuation(&fence);
+        task._promise->set_delegate(&fence);
         global_work_queue_schedule(handle_from_future(std::move(task)));
         while (fence._outcome.load(std::memory_order_acquire) == 0)
             co_await TransferToPoolExecutor{};
@@ -509,8 +518,8 @@ namespace wry::Coroutine {
         // looks must complete stopped.
         source.request_stop();
         Task task = osfs_host(&value, &caught, &stopped_ok);
-        task._promise->set_stop_token(source.get_token());
-        task._promise->set_continuation(&fence);
+        fence._stop_token = source.get_token();
+        task._promise->set_delegate(&fence);
         global_work_queue_schedule(handle_from_future(std::move(task)));
         while (fence._outcome.load(std::memory_order_acquire) == 0)
             co_await TransferToPoolExecutor{};
@@ -538,8 +547,8 @@ namespace wry::Coroutine {
         std::atomic<int> resumed_past{0};
 
         Task task = unwind_bridge_host(&started, &destroyed, &resumed_past);
-        task._promise->set_stop_token(source.get_token());
-        task._promise->set_continuation(&fence);
+        fence._stop_token = source.get_token();
+        task._promise->set_delegate(&fence);
         global_work_queue_schedule(handle_from_future(std::move(task)));
         while (started.load(std::memory_order_acquire) != 2)
             co_await TransferToPoolExecutor{};

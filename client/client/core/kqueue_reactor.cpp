@@ -175,7 +175,7 @@ namespace wry {
                 intptr_t before = frame->_state.fetch_or(STOPPED, std::memory_order_relaxed);
                 intptr_t resumed = before & RESUMED;
                 intptr_t stopped = before & STOPPED;
-                intptr_t continuation = before & ~(STOPPED | RESUMED);
+                intptr_t started = before & STARTED;
                 assert(!stopped);
                 if (!resumed) {
                     switch (frame->_delete_knote()) {
@@ -188,7 +188,7 @@ namespace wry {
                             abort();
                     }
                 }
-                if (continuation && !resumed) {
+                if (started && !resumed) {
                     frame->_state.load(std::memory_order_acquire);
                 }
                 frame->release();
@@ -275,8 +275,13 @@ namespace wry {
         {
         }
 
+        struct Unarmed {
+            int error;
+            F callable;
+        };
+
         template<typename G>
-        [[nodiscard]] static int64_t spawn(std::stop_token stop_token, struct kevent change, G&& g) {
+        [[nodiscard]] static std::expected<void, Unarmed> spawn(std::stop_token stop_token, struct kevent change, G&& g) {
 #ifndef NDEBUG
             g_cancelable_kevent_frame_count.fetch_add(1, std::memory_order_relaxed);
 #endif
@@ -289,7 +294,6 @@ namespace wry {
                 change.ident = (uintptr_t)frame;
             }
 
-            frame->_stop_token = stop_token;
             frame->_change = change;
 
             // No early-out, it pessimizes the happy path to accelerate the rare path
@@ -337,6 +341,9 @@ namespace wry {
                     break;
                 default: // Did not add
                     assert(!resumed); // Impossible
+                    // The callable goes back to the caller unconsumed inside
+                    // the expected's error (below), never through g: g may be
+                    // a temporary whose destructor would consume it
                     if (stopped) {
                         // Callback released its ownership
                     } else {
@@ -345,16 +352,22 @@ namespace wry {
                     }
                     break;
             }
-            frame->release();
-            return result;
+            if (result == 0) {
+                frame->release();
+                return std::expected<void, Unarmed>();
+            } else {
+                F temp(std::move(frame->_f));
+                frame->release();
+                return std::expected<void, Unarmed>(std::unexpect, Unarmed{(int)result, std::move(temp)});
+            }
         }
 
     }; // CancelableKEventFrame
 
     template<typename F>
-    void cancelable_after(std::stop_token stop_token,
-                          std::chrono::steady_clock::duration duration,
-                          F&& f) {
+    void spawn_after(std::stop_token stop_token,
+                     std::chrono::steady_clock::duration duration,
+                     F&& f) {
         auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
         struct kevent change = {
             .ident = 0,
@@ -363,15 +376,21 @@ namespace wry {
             .fflags = NOTE_NSECONDS,
             .data = nanoseconds,
         };
-        int64_t result = CancelableKEventFrame<std::decay_t<F>>::spawn(stop_token,
-                                                      change,
-                                                      std::forward<F>(f));
-        if (result != 0) {
-            // kevent registration failed unexpectedly
-            // continuation has been neither resumed nor destroyed
+        auto e = CancelableKEventFrame<std::decay_t<F>>::spawn(stop_token,
+                                                               change,
+                                                               std::forward<F>(f));
+        if (!e.has_value()) {
+            errno = e.error().error;
             perror("cancelable_after");
             abort();
         }
+    }
+
+    // The exported form erases the callable at the API boundary
+    void cancelable_after(std::stop_token stop_token,
+                          std::chrono::steady_clock::duration duration,
+                          move_only_function<void()> f) {
+        spawn_after(std::move(stop_token), duration, std::move(f));
     }
 
     // TODO: send, accept, etc. also follow this pattern
@@ -397,24 +416,34 @@ namespace wry {
             };
             struct F {
                 std::coroutine_handle<> _handle;
+                explicit F(std::coroutine_handle<> handle) : _handle(handle) {}
+                F(F&& other) : _handle(take(other._handle)) {}
+                F& operator=(F&& other) {
+                    assert(!_handle);
+                    _handle = take(other._handle);
+                    return *this;
+                }
                 void operator()() {
                     assert(_handle);
-                    global_work_queue_schedule(std::exchange(_handle, nullptr));
+                    global_work_queue_schedule(take(_handle));
                 };
                 ~F() {
                     if (_handle)
                         _handle.destroy();
                 }
+                std::coroutine_handle<> release() {
+                    return take(_handle);
+                }
             };
-            int64_t result = CancelableKEventFrame<F>::spawn(stop_token,
-                                                             change,
-                                                             F{std::move(continuation)});
-            if (result == 0) {
+            auto e = CancelableKEventFrame<F>::spawn(stop_token, change, F{take(continuation)});
+            if (e.has_value()) {
                 // the frame may be running or gone: no *this past here
                 return std::noop_coroutine();
             }
-            _result = result;                   // registration failed: we still own the frame
-            return continuation;
+            // Registration failed: spawn gave f back, so the frame is still
+            // ours; take the handle back from f before its destructor destroys the handle
+            _result = e.error().error;
+            return e.error().callable.release();
         }
         [[nodiscard]] ssize_t await_resume() {
             switch (_result) {
@@ -456,19 +485,25 @@ namespace wry {
             };
             struct F {
                 std::coroutine_handle<> _handle;
+                explicit F(std::coroutine_handle<> handle) : _handle(handle) {}
+                F(F&& other) : _handle(take(other._handle)) {}
+                F& operator=(F&& other) {
+                    assert(!_handle);
+                    _handle = take(other._handle);
+                    return *this;
+                }
                 void operator()() {
                     assert(_handle);
-                    global_work_queue_schedule(std::exchange(_handle, nullptr));
+                    global_work_queue_schedule(take(_handle));
                 };
                 ~F() {
                     if (_handle)
                         _handle.destroy();
                 }
             };
-            int64_t result = CancelableKEventFrame<F>::spawn(stop_token,
-                                                             change,
-                                                             F{continuation});
-            if (result != 0)
+            F f{continuation};
+            auto e = CancelableKEventFrame<F>::spawn(stop_token, change, std::move(f));
+            if (!e.has_value())
                 abort();
             return std::noop_coroutine();
         }
@@ -543,17 +578,20 @@ namespace wry {
             explicit CancelableProbe(std::atomic<int>* counter)
             : _counter(counter) {}
             CancelableProbe(CancelableProbe&& other)
-            : _counter(std::exchange(other._counter, nullptr)) {}
+            : _counter(take(other._counter)) {}
             ~CancelableProbe() {
                 if (_counter)
                     _counter->fetch_add(1, std::memory_order_relaxed);
             }
         };
 
-        Coroutine::Task cancelable_task(CancelableProbe probe,
-                                        std::atomic<int>* ran) {
-            ran->fetch_add(1, std::memory_order_relaxed);
-            co_return;
+        // The probe rides in the callable, so it is destroyed exactly once
+        // whether the callable ran or was dropped unrun
+        auto cancelable_task(CancelableProbe probe,
+                             std::atomic<int>* ran) {
+            return [probe = std::move(probe), ran]() mutable {
+                ran->fetch_add(1, std::memory_order_relaxed);
+            };
         }
 
     }
