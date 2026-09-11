@@ -127,9 +127,9 @@ namespace wry {
         SinglyLinkedListOfInlineStacksBag(const SinglyLinkedListOfInlineStacksBag&) = delete;
         
         SinglyLinkedListOfInlineStacksBag(SinglyLinkedListOfInlineStacksBag&& other)
-        : _head(std::exchange(other._head, nullptr))
-        , _tail(std::exchange(other._tail, nullptr))
-        , _size(std::exchange(other._size, 0))
+        : _head(take(other._head))
+        , _tail(take(other._tail))
+        , _size(take(other._size))
         {
         }
         
@@ -211,13 +211,13 @@ namespace wry {
             if (other._head) {
                 if (_head) {
                     assert(_tail && !(_tail->_next));
-                    _tail->_next = std::exchange(other._head, nullptr);
+                    _tail->_next = take(other._head);
                 } else {
                     assert(!_tail);
-                    _head = std::exchange(other._head, nullptr);
+                    _head = take(other._head);
                 }
-                _tail = std::exchange(other._tail, nullptr);
-                _size += std::exchange(other._size, 0);
+                _tail = take(other._tail);
+                _size += take(other._size);
             }
         }
         

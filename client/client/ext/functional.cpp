@@ -10,6 +10,7 @@
 
 #include "functional.hpp"
 #include "test.hpp"
+#include "utility.hpp"
 
 namespace wry {
 
@@ -20,7 +21,7 @@ namespace wry {
             std::atomic<int>* _destroyed;
             explicit Probe(std::atomic<int>* destroyed) : _destroyed(destroyed) {}
             Probe(Probe const&) = delete;
-            Probe(Probe&& other) noexcept : _destroyed(std::exchange(other._destroyed, nullptr)) {}
+            Probe(Probe&& other) noexcept : _destroyed(take(other._destroyed)) {}
             ~Probe() {
                 if (_destroyed)
                     _destroyed->fetch_add(1, std::memory_order_relaxed);

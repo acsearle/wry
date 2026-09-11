@@ -16,6 +16,7 @@
 #include "stdfloat.hpp"
 #include "stdint.hpp"
 #include "string.hpp"
+#include "utility.hpp"
 
 namespace wry {
 
@@ -336,7 +337,7 @@ return std::forward<V>(visitor).visit_##T (x);\
         file_stream_byte_source(const file_stream_byte_source&) = delete;
         
         file_stream_byte_source(file_stream_byte_source&& other)
-        : _stream(std::exchange(other._stream, nullptr)) {
+        : _stream(take(other._stream)) {
         }
 
         ~file_stream_byte_source() {

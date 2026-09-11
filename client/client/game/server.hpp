@@ -13,6 +13,7 @@
 
 #include "entity.hpp"   // EntityID
 #include "player.hpp"   // Player::Action
+#include "utility.hpp"
 
 namespace wry {
 
@@ -64,7 +65,7 @@ namespace wry {
         }
 
         std::vector<Command> poll() override {
-            return std::exchange(_pending, {});
+            return take(_pending);
         }
 
         EntityID _localPlayer;

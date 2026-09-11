@@ -23,6 +23,7 @@
 
 #include "Option.hpp"
 #include "stddef.hpp"
+#include "utility.hpp"
 
 namespace wry::json {
     
@@ -557,7 +558,7 @@ namespace wry::json {
         Json() : _ptr(nullptr) {}
         explicit Json(_json_value* p) : _ptr(p) {}
         Json(Json const&);
-        Json(Json&& x) : _ptr(std::exchange(x._ptr, nullptr)) {}
+        Json(Json&& x) : _ptr(take(x._ptr)) {}
         ~Json();
         Json& operator=(Json const&);
         Json& operator=(Json&& x) { Json tmp(std::move(x)); std::swap(_ptr, tmp._ptr); return *this; }

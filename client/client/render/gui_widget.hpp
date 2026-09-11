@@ -58,6 +58,7 @@
 #include "rect.hpp"
 #include "simd.hpp"
 #include "string.hpp"
+#include "functional.hpp"
 
 namespace wry::gui {
 
@@ -155,7 +156,7 @@ namespace wry::gui {
         // implicit `const char*` -> StringView path is fine, and we
         // explicitly construct a String for the owned label inside.
         // Passing an existing String also works (implicit String -> StringView).
-        Button(StringView label, std::function<void()> on_click);
+        Button(StringView label, move_only_function<void()> on_click);
 
         Size measure(SizeConstraints, MeasureContext const&) override;
         void arrange(rect<float>) override;
@@ -187,7 +188,7 @@ namespace wry::gui {
         static constexpr float kFallbackHeight = 48.0f;
 
         String _label;
-        std::function<void()> _on_click;
+        move_only_function<void()> _on_click;
         rect<float> _rect = {0, 0, 0, 0};
         bool _hover    = false;
         bool _pressed  = false;

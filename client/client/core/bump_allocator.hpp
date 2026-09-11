@@ -229,7 +229,7 @@ namespace wry {
                 _begin = 0;
                 _end = 0;
                 _cursor = nullptr;
-                Slab* _Nullable head = std::exchange(_head, nullptr);
+                Slab* _Nullable head = take(_head);
                 while (head) {
                     free(std::exchange(head, head->_next));
                 }

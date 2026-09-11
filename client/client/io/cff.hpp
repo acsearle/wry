@@ -22,6 +22,7 @@
 #include "stddef.hpp"
 #include "bezier.hpp"
 #include "span.hpp"
+#include "utility.hpp"
 
 namespace wry::cff {
 
@@ -44,7 +45,7 @@ namespace wry::cff {
         Handle(Handle const&) = delete;
 
         Handle(Handle&& other)
-        : _inner(std::exchange(other._inner, nullptr)) {
+        : _inner(take(other._inner)) {
         }
 
         ~Handle();

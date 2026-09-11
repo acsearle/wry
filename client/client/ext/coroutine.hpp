@@ -8,20 +8,18 @@
 #ifndef coroutine_hpp
 #define coroutine_hpp
 
-#include <coroutine>
 #include <cstdio>
 
 #include <chrono>
+#include <coroutine>
 #include <deque>
 #include <exception>
 #include <semaphore>
 #include <thread>
 #include <queue>
-#include <memory>
 #include <optional>
 #include <stop_token>
 #include <typeinfo>
-#include <variant>
 
 #include "assert.hpp"
 #include "atomic.hpp"
@@ -536,7 +534,7 @@ namespace wry::Coroutine {
 
         Future() = delete;
         Future(Future const&) = delete;
-        Future(Future&& other) : _promise(exchange(other._promise, nullptr)) {}
+        Future(Future&& other) : _promise(take(other._promise)) {}
         ~Future() {
             // This could happen if we create a future, hold it across a
             // suspension point, and then resume it.  But it's more likely to

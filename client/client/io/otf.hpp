@@ -38,7 +38,7 @@ namespace wry::otf {
         Handle(Handle const&) = delete;
 
         Handle(Handle&& other)
-        : _inner(std::exchange(other._inner, nullptr)) {
+        : _inner(take(other._inner)) {
         }
 
         ~Handle();

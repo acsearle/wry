@@ -17,6 +17,7 @@
 #include <utility>
 
 #include "assert.hpp"
+#include "utility.hpp"
 
 namespace wry {
 
@@ -81,7 +82,7 @@ namespace wry {
             G* _p;
             explicit Boxed(G* p) noexcept : _p(p) {}
             Boxed(Boxed const&) = delete;
-            Boxed(Boxed&& other) noexcept : _p(std::exchange(other._p, nullptr)) {}
+            Boxed(Boxed&& other) noexcept : _p(take(other._p)) {}
             ~Boxed() { delete _p; }
             template<typename... A>
             decltype(auto) operator()(A&&... a) {
@@ -103,14 +104,14 @@ namespace wry {
         }
 
         void _reset() noexcept {
-            if (Ops const* ops = std::exchange(_ops, nullptr))
+            if (Ops const* ops = take(_ops))
                 ops->destroy(_storage);
         }
 
         void _take(move_only_function& other) noexcept {
             if (other._ops) {
                 other._ops->relocate(_storage, other._storage);
-                _ops = std::exchange(other._ops, nullptr);
+                _ops = take(other._ops);
             }
         }
 

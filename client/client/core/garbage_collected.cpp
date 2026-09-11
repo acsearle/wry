@@ -411,7 +411,7 @@ namespace wry {
     void _mutator_publishes_report() {
         Report* desired = new Report{
             .next = nullptr,
-            .gray_did_shade = std::exchange(_thread_local_gray_did_shade, 0),
+            .gray_did_shade = take(_thread_local_gray_did_shade),
             .gray_for_allocation = _thread_local_gray_for_allocation,
             .allocations = std::move(_thread_local_new_objects),
             .shaded = std::move(_thread_local_shaded_objects),
@@ -1653,7 +1653,7 @@ namespace wry {
                     // not delete, so it is skipped.
                     continue;
                 Cohort& c = _cohorts_by_key[key];
-                uint16_t strip = std::exchange(c.needs_strip, 0);
+                uint16_t strip = take(c.needs_strip);
                 stripped |= strip;
                 // Key-invariant oracle: members promised nonwhite for
                 // every sweep-pending bit older than their key in window

@@ -6,6 +6,7 @@
 //
 
 #include "filesystem.hpp"
+#include "utility.hpp"
 
 namespace wry {
 
@@ -34,10 +35,10 @@ namespace wry {
         // boundary cast we accept: bytes that pass UTF-8 validation enter
         // the "validated text" world as chars.
         ContiguousDeque<char> chars(
-            (char*)std::exchange(raw._allocation_begin, nullptr),
-            (char*)std::exchange(raw._begin, nullptr),
-            (char*)std::exchange(raw._end, nullptr),
-            (char*)std::exchange(raw._allocation_end, nullptr)
+            (char*)take(raw._allocation_begin),
+            (char*)take(raw._begin),
+            (char*)take(raw._end),
+            (char*)take(raw._allocation_end)
         );
         return String(std::move(chars));  // validates; throws on invalid UTF-8
     }

@@ -15,6 +15,7 @@
 #include "matrix_transpose_view.hpp"
 #include "matrix_view.hpp"
 #include "simd.hpp"
+#include "utility.hpp"
 
 namespace wry {
     
@@ -125,11 +126,11 @@ namespace wry {
         }
         
         matrix(matrix&& other)
-        : base(exchange(other.base, nullptr))
-        , _minor(exchange(other._minor, 0))
-        , _major(exchange(other._major, 0))
-        , _allocation(exchange(other._allocation, nullptr))
-        , _capacity(exchange(other._capacity, 0)) {
+        : base(take(other.base))
+        , _minor(take(other._minor))
+        , _major(take(other._major))
+        , _allocation(take(other._allocation))
+        , _capacity(take(other._capacity)) {
         }
         
         ~matrix() {

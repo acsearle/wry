@@ -11,6 +11,7 @@
 #include <functional>
 
 #include "world.hpp"
+#include "functional.hpp"
 
 namespace wry {
 
@@ -26,7 +27,7 @@ bool save_game(const World* world);
 // World must be immutable; the Root keeps it alive for the duration.  When the
 // save finishes, `on_done(ok)` is invoked on a worker thread (ok == false on any
 // I/O failure).  Returns immediately.
-void save_game_async(Root<World const*> snapshot, std::function<void(bool)> on_done = {});
+void save_game_async(Root<World const*> snapshot, move_only_function<void(bool)> on_done = {});
 void delete_game(int id);
 
 std::vector<std::pair<std::string, int>> enumerate_games();

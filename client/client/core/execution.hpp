@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "coroutine.hpp"
+#include "utility.hpp"
 
 namespace wry::execution {
 
@@ -61,7 +62,7 @@ namespace wry::execution {
         
         any_operation() = default;
         any_operation(any_operation const&) = delete;
-        any_operation(any_operation&& other) : _ptr(std::exchange(other._ptr, nullptr)) {}
+        any_operation(any_operation&& other) : _ptr(take(other._ptr)) {}
         
         ~any_operation() { delete _ptr; }
         

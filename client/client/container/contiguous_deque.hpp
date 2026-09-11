@@ -124,10 +124,10 @@ namespace wry {
         }
         
         ContiguousDeque(ContiguousDeque&& other) noexcept
-        : _allocation_begin(std::exchange(other._allocation_begin, nullptr))
-        , _begin(std::exchange(other._begin, nullptr))
-        , _end(std::exchange(other._end, nullptr))
-        , _allocation_end(std::exchange(other._allocation_end, nullptr)) {
+        : _allocation_begin(take(other._allocation_begin))
+        , _begin(take(other._begin))
+        , _end(take(other._end))
+        , _allocation_end(take(other._allocation_end)) {
         }
         
         ~ContiguousDeque() {
@@ -162,10 +162,10 @@ namespace wry {
         
         ContiguousDeque& operator=(ContiguousDeque&& other) {
             _destroy();
-            _allocation_begin = std::exchange(other._allocation_begin, nullptr);
-            _begin = std::exchange(other._begin, nullptr);
-            _end = std::exchange(other._end, nullptr);
-            _allocation_end = std::exchange(other._allocation_end, nullptr);
+            _allocation_begin = take(other._allocation_begin);
+            _begin = take(other._begin);
+            _end = take(other._end);
+            _allocation_end = take(other._allocation_end);
             return *this;
         }
 
@@ -571,10 +571,10 @@ namespace wry {
         
         std::tuple<T*, T*, T*, T*> into_raw_parts() && {
             return {
-                std::exchange(_allocation_begin, nullptr),
-                std::exchange(_begin, nullptr),
-                std::exchange(_end, nullptr),
-                std::exchange(_allocation_end, nullptr),
+                take(_allocation_begin),
+                take(_begin),
+                take(_end),
+                take(_allocation_end),
             };
         }
         

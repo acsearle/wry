@@ -16,6 +16,7 @@
 #include "concepts.hpp"
 #include "typeinfo.hpp"
 #include "type_traits.hpp"
+#include "utility.hpp"
 
 namespace wry {
 
@@ -269,7 +270,7 @@ namespace wry {
         }
         
         Root(Root&& other)
-        : _ptr(std::exchange(other._ptr, nullptr)) {
+        : _ptr(take(other._ptr)) {
         }
         
         ~Root() {
@@ -310,7 +311,7 @@ namespace wry {
         
         template<typename U>
         Root(Root<U>&& other)
-        : _ptr(std::exchange(other._ptr, nullptr)) {
+        : _ptr(take(other._ptr)) {
         }
         
         template<typename U>
@@ -395,7 +396,7 @@ namespace wry {
         constexpr Atomic() noexcept : raw{} {}
 
         explicit Atomic(Root<T*> desired) noexcept
-        : raw(std::exchange(desired._ptr, nullptr)) {
+        : raw(take(desired._ptr)) {
             // raw adopts desired's +1; nulling desired prevents its dtor
             // from subtracting it back off again.
         }
@@ -431,7 +432,7 @@ Root<T*> load_##public_order() const noexcept {\
 
 #define MAKE_WRY_ATOMIC_ROOT_STORE(public_order, internal_order) \
 void store_##public_order(Root<T*> desired) noexcept {\
-    T* d = std::exchange(desired._ptr, nullptr);\
+    T* d = take(desired._ptr);\
     T* old = raw.exchange_##internal_order(d);\
     garbage_collected_roots_subtract(old);\
 }
@@ -446,7 +447,7 @@ void store_##public_order(Root<T*> desired) noexcept {\
 
 #define MAKE_WRY_ATOMIC_ROOT_EXCHANGE(public_order, internal_order) \
 Root<T*> exchange_##public_order(Root<T*> desired) noexcept {\
-    T* d = std::exchange(desired._ptr, nullptr);\
+    T* d = take(desired._ptr);\
     T* old = raw.exchange_##internal_order(d);\
     /* Adopt old into the returned Root without touching its count: */\
     /* the +1 the atomic was holding is now the +1 the caller holds. */\

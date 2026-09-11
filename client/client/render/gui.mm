@@ -342,7 +342,7 @@ namespace wry {
         // Button
         // ================================================================
 
-        Button::Button(StringView label, std::function<void()> on_click)
+        Button::Button(StringView label, move_only_function<void()> on_click)
         : _label(label)
         , _on_click(std::move(on_click)) {
         }

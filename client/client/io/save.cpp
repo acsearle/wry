@@ -217,12 +217,14 @@ namespace wry {
         co_return ok;
     }
 
-    void save_game_async(Root<World const*> snapshot, std::function<void(bool)> on_done) {
+    void save_game_async(Root<World const*> snapshot, move_only_function<void(bool)> on_done) {
         // Anchor the save in the process-lifetime WaitGroup so a shutdown can't
         // abandon it mid-yield; the coroutine owns the Root snapshot in its frame.
-        wait_group_spawn([](Root<World const*> snapshot, std::function<void(bool)> on_done)
+        wait_group_spawn([](Root<World const*> snapshot, move_only_function<void(bool)> on_done)
                          -> Coroutine::Future<>{
-            on_done(co_await background_save_coroutine(std::move(snapshot)));
+            bool ok = co_await background_save_coroutine(std::move(snapshot));
+            if (on_done)
+                on_done(ok);
         }(std::move(snapshot), std::move(on_done)));
     }
 

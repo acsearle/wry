@@ -51,7 +51,7 @@ namespace wry {
             // blocks a worker or saturates the queue cannot starve the
             // others.  (Tests that want internal parallelism fork their
             // own nurseries.)
-            base* head = exchange(get_head(), nullptr);
+            base* head = take(get_head());
             while (head) {
                 base* test = exchange(head, head->next);
                 if (!_matches_filter(test, filter)) {
