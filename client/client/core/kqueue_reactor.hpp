@@ -68,7 +68,7 @@ namespace wry {
 
 
     template<typename OuterPromise, typename T>
-    struct BasicWithDeadlineAwaitable : Coroutine::Delegate<T> {
+    struct WithDeadlineAwaitable : Coroutine::OutcomeDelegate<WithDeadlineAwaitable<OuterPromise, T>, T> {
 
         struct Frame {
 
@@ -100,10 +100,14 @@ namespace wry {
         } _frame;
 
 
-        BasicWithDeadlineAwaitable(OuterPromise* outer_promise,
-                                   std::chrono::steady_clock::time_point deadline,
-                                   Coroutine::Future<T> future)
+        WithDeadlineAwaitable(OuterPromise* outer_promise,
+                              std::chrono::steady_clock::time_point deadline,
+                              Coroutine::Future<T> future)
         : _frame{outer_promise, std::move(deadline), std::move(future)} {
+        }
+
+        Coroutine::Outcome<T>& outcome() noexcept {
+            return _frame._outcome;
         }
 
         constexpr bool await_ready() const noexcept {
@@ -130,10 +134,6 @@ namespace wry {
             return _frame._outcome.stopped_as_optional();
         }
 
-        virtual void unhandled_exception() noexcept override {
-            set_error(_frame._outcome, std::current_exception());
-        };
-
         virtual void unhandled_stopped() noexcept override {
             // Absorb: the inner stopped (usually by our own timer), so the
             // outer resumes with nullopt -- unless the outer's own token is
@@ -157,22 +157,6 @@ namespace wry {
             return _frame._inner_stop_source.get_token();
         }
 
-    };
-
-    template<typename OuterPromise, typename T>
-    struct WithDeadlineAwaitable : BasicWithDeadlineAwaitable<OuterPromise, T> {
-        using BasicWithDeadlineAwaitable<OuterPromise, T>::BasicWithDeadlineAwaitable;
-        virtual void return_value(T value) noexcept override {
-            set_value(this->_frame._outcome, std::move(value));
-        }
-    };
-
-    template<typename OuterPromise>
-    struct WithDeadlineAwaitable<OuterPromise, void> : BasicWithDeadlineAwaitable<OuterPromise, void> {
-        using BasicWithDeadlineAwaitable<OuterPromise, void>::BasicWithDeadlineAwaitable;
-        virtual void return_void() noexcept override {
-            set_value(this->_frame._outcome);
-        }
     };
 
     template<typename T>

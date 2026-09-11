@@ -348,6 +348,40 @@ namespace wry::Coroutine {
         virtual std::stop_token get_stop_token() noexcept { return std::stop_token{}; }
     };
 
+    // The value and error channels of a delegate that completes into an
+    // Outcome<T>.  Such delegates differ between T and void only in the name
+    // of the value hook, return_value(T) or return_void(); this mixin spells
+    // both as set_value on the outcome that Derived names through outcome()
+    // -- owned, held in a frame, or pointed at, the mixin does not care, and
+    // adds no state.  The stopped hook stays with Derived: it is the destroy
+    // word, and what it must continue or forward to differs per delegate.
+    //
+    // Derived is the class that provides outcome(); it is incomplete while
+    // this base is instantiated, and complete by the time the virtuals are
+    template<typename Derived, typename T>
+    struct BasicOutcomeDelegate : Delegate<T> {
+        Outcome<T>& _outcome_of_derived() noexcept {
+            return static_cast<Derived*>(this)->outcome();
+        }
+        virtual void unhandled_exception() noexcept override {
+            set_error(_outcome_of_derived(), std::current_exception());
+        }
+    };
+
+    template<typename Derived, typename T>
+    struct OutcomeDelegate : BasicOutcomeDelegate<Derived, T> {
+        virtual void return_value(T value) noexcept override {
+            set_value(this->_outcome_of_derived(), std::move(value));
+        }
+    };
+
+    template<typename Derived>
+    struct OutcomeDelegate<Derived, void> : BasicOutcomeDelegate<Derived, void> {
+        virtual void return_void() noexcept override {
+            set_value(this->_outcome_of_derived());
+        }
+    };
+
     template<typename T>
     struct BasicPromise {
 
@@ -564,7 +598,7 @@ namespace wry::Coroutine {
     }
 
     template<typename OuterPromise, typename T>
-    struct BasicFutureAwaitable : Delegate<T> {
+    struct FutureAwaitable : OutcomeDelegate<FutureAwaitable<OuterPromise, T>, T> {
 
         using InnerPromise = Promise<T>;
 
@@ -572,14 +606,15 @@ namespace wry::Coroutine {
         Future<T> _future;
         Outcome<T> _outcome;
 
-        BasicFutureAwaitable(OuterPromise* outer_promise, Future<T>&& future)
+        FutureAwaitable(OuterPromise* outer_promise, Future<T>&& future)
         : _outer_promise(outer_promise)
         , _future(std::move(future)) {
         }
 
-        virtual void unhandled_exception() noexcept override {
-            set_error(_outcome, std::current_exception());
+        Outcome<T>& outcome() noexcept {
+            return _outcome;
         }
+
         virtual void unhandled_stopped() noexcept override {
             set_stopped(_outcome);
             handle_from_promise(take(_outer_promise)).destroy();
@@ -606,22 +641,6 @@ namespace wry::Coroutine {
             return _outcome.await_resume();
         }
 
-    };
-
-    template<typename OuterPromise, typename T>
-    struct FutureAwaitable : BasicFutureAwaitable<OuterPromise, T> {
-        using BasicFutureAwaitable<OuterPromise, T>::BasicFutureAwaitable;
-        virtual void return_value(T value) noexcept override {
-            set_value(this->_outcome, std::move(value));
-        }
-    };
-
-    template<typename OuterPromise>
-    struct FutureAwaitable<OuterPromise, void> : BasicFutureAwaitable<OuterPromise, void> {
-        using BasicFutureAwaitable<OuterPromise, void>::BasicFutureAwaitable;
-        virtual void return_void() noexcept override {
-            set_value(this->_outcome);
-        }
     };
 
     template<typename U, typename T>
@@ -678,7 +697,7 @@ namespace wry::Coroutine {
     };
 
     template<typename T, typename R>
-    struct BasicFutureOperationState : Delegate<T> {
+    struct FutureOperationState : OutcomeDelegate<FutureOperationState<T, R>, T> {
 
         struct Frame {
             Header _header = { &_static_resume, &_static_destroy };
@@ -719,9 +738,11 @@ namespace wry::Coroutine {
         };
 
         Frame _frame;
-        virtual void unhandled_exception() noexcept override {
-            set_error(_frame._outcome, std::current_exception());
+
+        Outcome<T>& outcome() noexcept {
+            return _frame._outcome;
         }
+
         virtual void unhandled_stopped() noexcept override {
             set_stopped(_frame._outcome);
             // This hook is the destroy word: forward stopped to the receiver,
@@ -737,26 +758,10 @@ namespace wry::Coroutine {
         }
 
         template<typename R2>
-        BasicFutureOperationState(Future<T>&& future, R2&& receiver)
+        FutureOperationState(Future<T>&& future, R2&& receiver)
         : _frame{._future = std::move(future), ._receiver = std::forward<R2>(receiver)} {
         }
 
-    };
-
-    template<typename T, typename R>
-    struct FutureOperationState : BasicFutureOperationState<T, R> {
-        using BasicFutureOperationState<T, R>::BasicFutureOperationState;
-        virtual void return_value(T value) noexcept override {
-            set_value(this->_frame._outcome, std::move(value));
-        }
-    };
-
-    template<typename R>
-    struct FutureOperationState<void, R> : BasicFutureOperationState<void, R> {
-        using BasicFutureOperationState<void, R>::BasicFutureOperationState;
-        virtual void return_void() noexcept override {
-            set_value(this->_frame._outcome);
-        }
     };
 
     template<typename T, typename R>
@@ -1069,15 +1074,15 @@ namespace wry::Coroutine {
     // child's promise (emplace_delegate): the only object with the child's
     // lifetime, since the fork awaitable is gone once the child is running.
     template<typename T>
-    struct BasicNurseryChildDelegate : Delegate<T> {
+    struct NurseryChildDelegate : OutcomeDelegate<NurseryChildDelegate<T>, T> {
         Nursery* _nursery;
         Outcome<T>* _target;
-        BasicNurseryChildDelegate(Nursery* nursery, Outcome<T>* target)
+        NurseryChildDelegate(Nursery* nursery, Outcome<T>* target)
         : _nursery(nursery)
         , _target(target) {
         }
-        virtual void unhandled_exception() noexcept override {
-            set_error(*_target, std::current_exception());
+        Outcome<T>& outcome() noexcept {
+            return *_target;
         }
         virtual void unhandled_stopped() noexcept override {
             set_stopped(*_target);
@@ -1088,22 +1093,6 @@ namespace wry::Coroutine {
         }
         virtual std::coroutine_handle<> final_await_suspend() noexcept override {
             return std::coroutine_handle<>::from_address(_nursery);
-        }
-    };
-
-    template<typename T>
-    struct NurseryChildDelegate : BasicNurseryChildDelegate<T> {
-        using BasicNurseryChildDelegate<T>::BasicNurseryChildDelegate;
-        virtual void return_value(T value) noexcept override {
-            set_value(*this->_target, std::move(value));
-        }
-    };
-
-    template<>
-    struct NurseryChildDelegate<void> : BasicNurseryChildDelegate<void> {
-        using BasicNurseryChildDelegate<void>::BasicNurseryChildDelegate;
-        virtual void return_void() noexcept override {
-            set_value(*this->_target);
         }
     };
 
@@ -1223,22 +1212,22 @@ namespace wry::Coroutine {
     // driven through this delegate, and its cancellation resumes the outer
     // with a stopped outcome instead of unwinding it
     template<typename T>
-    struct BasicFromStopped : Delegate<T> {
+    struct FromStopped : OutcomeDelegate<FromStopped<T>, T> {
 
         Future<T> _future;
         std::coroutine_handle<> _continuation = nullptr;
         std::stop_token _stop_token;  // the inner's, chosen by the derived class
         Outcome<T> _outcome;
 
-        explicit BasicFromStopped(Future<T>&& future)
+        explicit FromStopped(Future<T>&& future)
         : _future(std::move(future)) {
         }
 
-        BasicFromStopped(BasicFromStopped const&) = delete;
-        BasicFromStopped(BasicFromStopped&&) = delete;
+        FromStopped(FromStopped const&) = delete;
+        FromStopped(FromStopped&&) = delete;
 
-        virtual void unhandled_exception() noexcept override {
-            set_error(_outcome, std::current_exception());
+        Outcome<T>& outcome() noexcept {
+            return _outcome;
         }
 
         virtual void unhandled_stopped() noexcept override {
@@ -1271,27 +1260,11 @@ namespace wry::Coroutine {
             return _outcome.stopped_as_optional();
         }
 
-    }; // BasicFromStopped
+    }; // FromStopped
 
     template<typename T>
-    struct FromStoppedMixin : BasicFromStopped<T> {
-        using BasicFromStopped<T>::BasicFromStopped;
-        virtual void return_value(T value) noexcept override {
-            set_value(this->_outcome, std::move(value));
-        }
-    };
-
-    template<>
-    struct FromStoppedMixin<void> : BasicFromStopped<void> {
-        using BasicFromStopped<void>::BasicFromStopped;
-        virtual void return_void() noexcept override {
-            set_value(this->_outcome);
-        }
-    };
-
-    template<typename T>
-    struct OptionalFromStopped : FromStoppedMixin<T> {
-        explicit OptionalFromStopped(Future<T>&& future) : FromStoppedMixin<T>(std::move(future)) {}
+    struct OptionalFromStopped : FromStopped<T> {
+        explicit OptionalFromStopped(Future<T>&& future) : FromStopped<T>(std::move(future)) {}
         template<typename OuterPromise>
         std::coroutine_handle<Promise<T>> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
             return this->_await_suspend(continuation, get_stop_token(continuation));
@@ -1299,9 +1272,9 @@ namespace wry::Coroutine {
     };
 
     template<typename T>
-    struct Shield : FromStoppedMixin<T> {
+    struct Shield : FromStopped<T> {
         std::stop_source _stop_source;
-        explicit Shield(Future<T>&& future) : FromStoppedMixin<T>(std::move(future)) {}
+        explicit Shield(Future<T>&& future) : FromStopped<T>(std::move(future)) {}
         template<typename OuterPromise>
         std::coroutine_handle<Promise<T>> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
             return this->_await_suspend(continuation, _stop_source.get_token());
