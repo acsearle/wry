@@ -762,7 +762,7 @@ namespace wry {
                 p = q;
             }
 
-            std::vector<Coroutine::Outcome<const ArrayMappedTrie*>> outs(work.size());
+            std::vector<const ArrayMappedTrie*> outs(work.size(), nullptr);
             {
                 Coroutine::Nursery nursery;
                 for (size_t t = 0; t != work.size(); ++t)
@@ -774,22 +774,16 @@ namespace wry {
 
             // Assemble the surviving disjoint children (already in index order),
             // collapsing to honour the ">= 2 children" invariant.
-            // Take each outcome exactly once (taking consumes it)
             int nz = 0;
             const ArrayMappedTrie* only = nullptr;
-            std::vector<const ArrayMappedTrie*> children;
-            children.reserve(outs.size());
-            for (auto& outcome : outs) {
-                const ArrayMappedTrie* c = (co_await outcome);
-                children.push_back(c);
+            for (const ArrayMappedTrie* c : outs)
                 if (c) { ++nz; only = c; }
-            }
             if (nz == 0)
                 co_return nullptr;
             if (nz == 1)
                 co_return only;
             ArrayMappedTrie* node = make(prefix, sh, nz, 0, 0);
-            for (const ArrayMappedTrie* c : children)
+            for (const ArrayMappedTrie* c : outs)
                 if (c) node->insert_child(c);
             co_return node;
         }

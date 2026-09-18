@@ -116,13 +116,12 @@ namespace wry {
         // results[0] is our own weight; results[h] receives the height-h
         // child's subtree total (or stays zero for a height with no child).
         // TODO: memory waste; worst case is much bigger than likely cases
-        Coroutine::Outcome<int64_t> outcomes[Node::MAX_HEIGHT + 1] = {};
+        int64_t results[Node::MAX_HEIGHT + 1] = {};
         self->for_each_child(bound, [&] (Node const* _Nonnull child, Node const* _Nullable child_bound) {
-            nursery.soon(outcomes[child->_height.nonatomic_load()],
+            nursery.soon(results[child->_height.nonatomic_load()],
                          rank_frame(child, child_bound, weigh, false));
         });
         // Our own contribution, while the children run.
-        int64_t results[Node::MAX_HEIGHT + 1] = {};
         if (!is_head) {
             results[0] = weigh(self->_key.first);
             self->_key.second.requested = results[0];
@@ -131,10 +130,7 @@ namespace wry {
         co_await nursery.join();
         // Accumulate
         for (size_t i = 0; i != self->_height.nonatomic_load(); ++i) {
-            // A height with no child has an empty outcome: nothing ran there
-            results[i + 1] = results[i];
-            if (!outcomes[i + 1].is_empty())
-                results[i + 1] += (co_await outcomes[i + 1]);
+            results[i + 1] += results[i];
         }
         // Write back
         self->for_each_child(bound, [&] (Node const* _Nonnull child, Node const* _Nullable) {
@@ -208,7 +204,7 @@ namespace wry {
         // TODO: We don't need to create waiting_on_next_time, we just need a
         // masked for_each on _waiting_on_time
 
-        Coroutine::Outcome<int64_t> entity_id_requests;
+        int64_t entity_id_requests = 0;
         {
             Coroutine::Nursery nursery;
 
@@ -236,11 +232,11 @@ namespace wry {
         // Build the new map from the old map by resolving transactions and
         // implementing the resulting mutations
 
-        Coroutine::Outcome<WaitableMap<Coordinate, Term>> new_value_for_coordinate;
-        Coroutine::Outcome<WaitableMap<Coordinate, EntityID>> new_entity_id_for_coordinate;
-        Coroutine::Outcome<WaitableMap<Coordinate, WaitSet>> new_located_for_coordinate;
-        Coroutine::Outcome<WaitableMap<EntityID, Entity const*>> new_entity_for_entity_id;
-        Coroutine::Outcome<Set> new_next_waiting_on_time;
+        WaitableMap<Coordinate, Term> new_value_for_coordinate;
+        WaitableMap<Coordinate, EntityID> new_entity_id_for_coordinate;
+        WaitableMap<Coordinate, WaitSet> new_located_for_coordinate;
+        WaitableMap<EntityID, Entity const*> new_entity_for_entity_id;
+        Set new_next_waiting_on_time;
 
         auto value_for_coordinate_action
         = [this, &next_ready]
@@ -540,26 +536,16 @@ namespace wry {
         // Terrain has no transaction channel yet; the persistent map is
         // carried over unchanged (an O(1) structural share, not a copy).
 
-        // Take every result before the allocation: a stopped outcome unwinds
-        // this frame, and a new-expression abandoned mid-initializer is never
-        // deallocated
-        int64_t entity_id_requests_total = co_await entity_id_requests;
-        auto entity_id_for_coordinate = co_await new_entity_id_for_coordinate;
-        auto located_for_coordinate = co_await new_located_for_coordinate;
-        auto entity_for_entity_id = co_await new_entity_for_entity_id;
-        auto value_for_coordinate = co_await new_value_for_coordinate;
-        auto next_waiting_on_time_result = co_await new_next_waiting_on_time;
-
         co_return Root<World*>{new World{
             next_time,
-            _entity_id_source + entity_id_requests_total,
+            _entity_id_source + entity_id_requests,
             freeze(next_ready),
-            std::move(entity_id_for_coordinate),
-            std::move(located_for_coordinate),
-            std::move(entity_for_entity_id),
-            std::move(value_for_coordinate),
+            std::move(new_entity_id_for_coordinate),
+            std::move(new_located_for_coordinate),
+            std::move(new_entity_for_entity_id),
+            std::move(new_value_for_coordinate),
             _terrain_for_coordinate,
-            std::move(next_waiting_on_time_result)
+            std::move(new_next_waiting_on_time)
         }};
 
     } // World::step

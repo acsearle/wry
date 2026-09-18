@@ -275,14 +275,14 @@ namespace wry {
         skiplist_partition_frame(cursor, (uint64_t)prefix, shift, n_slots, child_cur,
                                  [](const auto& key) -> uint64_t { return H{}.encode(key.first); });
 
-        Coroutine::Outcome<std::pair<const KvAMT*, const KiAMT*>> results[SLOTS] = {};
+        std::pair<const KvAMT*, const KiAMT*> results[SLOTS] = {};
         Coroutine::Nursery nursery;
         for (int c = 0; c < n_slots; ++c) {
             Code child_prefix = prefix | ((Code)c << shift);
             const KvAMT* kv_c = unified_extract_child(kv, c, shift);
             const KiAMT* ki_c = unified_extract_child(ki, c, shift);
             if (!child_cur[c]) {
-                set_value(results[c], std::pair{kv_c, ki_c}); // no mods: share
+                results[c] = {kv_c, ki_c}; // no mods: share
             } else {
                 co_await nursery.fork(results[c],
                     unified_frame<Key, T>(child_prefix, child_shift, kv_c, ki_c,
@@ -294,7 +294,8 @@ namespace wry {
         const KvAMT* kv_out[SLOTS];
         const KiAMT* ki_out[SLOTS];
         for (int c = 0; c < n_slots; ++c) {
-            std::tie(kv_out[c], ki_out[c]) = (co_await results[c]);
+            kv_out[c] = results[c].first;
+            ki_out[c] = results[c].second;
         }
         const KvAMT* kv2 = unified_assemble(prefix, shift, kv_out, n_slots);
         const KiAMT* ki2 = unified_assemble(prefix, shift, ki_out, n_slots);

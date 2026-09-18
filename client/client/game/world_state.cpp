@@ -379,10 +379,8 @@ namespace wry {
         (void) _worlds.try_pop_front(old_world);
         assert(old_world);
         Coroutine::Nursery nursery;
-        Coroutine::Outcome<Root<World*>> outcome;
-        nursery.soon(outcome, old_world->step());
+        nursery.soon(_world_to_render, old_world->step());
         sync_wait(nursery.join());
-        _world_to_render = outcome.value();
         _worlds.emplace_back(_world_to_render);
         assert(_world_to_render);
 

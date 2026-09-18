@@ -988,4 +988,18 @@ namespace wry::Coroutine {
         co_return;
     };
 
+    define_test("coroutine_nursery_value_target") {
+        // A bald target: the value is assigned through, with no Outcome per
+        // child and no await per result.  An exception or a stop on such a
+        // child aborts; these have neither
+        int results[3] = {};
+        Nursery nursery;
+        nursery.soon(results[0], sr_one());
+        co_await nursery.fork(results[1], race_fast(2));
+        co_await nursery.fork(results[2], sr_add(10));
+        co_await nursery.join();
+        assert((results[0] == 1) && (results[1] == 2) && (results[2] == 14));
+        co_return;
+    };
+
 }

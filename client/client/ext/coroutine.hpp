@@ -913,6 +913,7 @@ namespace wry::Coroutine {
 #pragma mark Nursery / counted_scope
 
     template<typename T> struct NurseryChildDelegate;
+    template<typename T> struct NurseryChildValueDelegate;
 
     struct Nursery {
 
@@ -1040,6 +1041,30 @@ namespace wry::Coroutine {
             return Awaitable{{}, this, &target, take(future._promise)};
         }
 
+        // co_await nursery.fork(y, bar(x)) with a bald target: bar's value is
+        // assigned to y on completion, and the paths an Outcome would carry,
+        // an exception or a stop, abort instead.  For work that has neither,
+        // which then needs no Outcome per child and no await per result
+        template<typename T>
+        [[nodiscard]] auto fork(T& target, Future<T>&& future) {
+            struct Awaitable : std::suspend_always {
+                Nursery* _nursery;
+                T* _target;
+                Future<T>::promise_type* _promise;
+                std::coroutine_handle<typename Future<T>::promise_type> await_suspend(std::coroutine_handle<> continuation) noexcept {
+                    ++(_nursery->_children);
+                    _promise->template emplace_delegate<NurseryChildValueDelegate<T>>(_nursery, _target);
+                    auto handle = handle_from_promise(take(_promise));
+                    global_work_queue_schedule(std::move(continuation));
+                    return handle;
+                }
+                ~Awaitable() {
+                    assert(!_promise);
+                }
+            };
+            return Awaitable{{}, this, &target, take(future._promise)};
+        }
+
         // nursery.soon(foo(x)) schedules foo to execute soon and continues
         // the calling context normally.  The calling context does not have to
         // be a coroutine.  No target: see fork(Future<>&&)
@@ -1057,6 +1082,14 @@ namespace wry::Coroutine {
         void soon(Outcome<T>& target, Future<T>&& future) {
             ++_children;
             future._promise->template emplace_delegate<NurseryChildDelegate<T>>(this, &target);
+            global_work_queue_schedule(handle_from_future(std::move(future)));
+        }
+
+        // nursery.soon(y, bar(x)) with a bald target: see fork(T&, Future<T>&&)
+        template<typename T>
+        void soon(T& target, Future<T>&& future) {
+            ++_children;
+            future._promise->template emplace_delegate<NurseryChildValueDelegate<T>>(this, &target);
             global_work_queue_schedule(handle_from_future(std::move(future)));
         }
 
@@ -1124,6 +1157,28 @@ namespace wry::Coroutine {
             // virtuous sign of same-interface everywhere.  Is _static_destroy
             // called exclusively via this path?
             Nursery::_static_destroy(_nursery);
+        }
+        virtual std::stop_token get_stop_token() noexcept override {
+            return _nursery->_inner_stop_source.get_token();
+        }
+        virtual std::coroutine_handle<> final_await_suspend() noexcept override {
+            return std::coroutine_handle<>::from_address(_nursery);
+        }
+    };
+
+    // Per-child delegate for a fork or soon with a bald target: only the
+    // value channel is wired, and an exception or a stop takes Delegate's
+    // default, which aborts.  Parked like NurseryChildDelegate
+    template<typename T>
+    struct NurseryChildValueDelegate : Delegate<T> {
+        Nursery* _nursery;
+        T* _target;
+        NurseryChildValueDelegate(Nursery* nursery, T* target)
+        : _nursery(nursery)
+        , _target(target) {
+        }
+        virtual void return_value(T value) noexcept override {
+            *_target = std::move(value);
         }
         virtual std::stop_token get_stop_token() noexcept override {
             return _nursery->_inner_stop_source.get_token();
