@@ -14,11 +14,12 @@
 #include <coroutine>
 #include <deque>
 #include <exception>
-#include <semaphore>
-#include <thread>
-#include <queue>
 #include <optional>
+#include <queue>
+#include <semaphore>
 #include <stop_token>
+#include <thread>
+#include <tuple>
 #include <typeinfo>
 
 #include "assert.hpp"
@@ -43,7 +44,56 @@ namespace wry {
 
 namespace wry::Coroutine {
 
-#pragma mark Explicit frame header
+#pragma mark Senders: concepts
+
+    // A sender S declares SenderTraits<S>::value_type and provides
+    //
+    //   connect(S&&, R&&) -> operation state, a prvalue elided into its home
+    //   start(op&)        -> begins the operation
+    //
+    // The operation completes by calling exactly one of
+    //
+    //   set_value(R&&, T&&)   (set_value(R&&) when T is void)
+    //   set_error(R&&, std::exception_ptr&&)
+    //   set_stopped(R&&)
+    //
+    // on its receiver, on a pinned mutator thread.  That call is the
+    // operation's LAST touch of itself: the receiver may destroy the
+    // operation state before the call returns.  get_stop_token(R const&) is
+    // the receiver's environment; a coroutine started as a sender inherits
+    // it.  Operation states are IMMOVABLE: one is constructed where it will
+    // live (an awaitable, a sync_wait local, a slot in a parent operation
+    // state), so connect may build self-referential structure at once, such
+    // as child operation states whose receivers point at the parent.
+    // Registering a stop callback is a side effect (an already-requested
+    // token fires it immediately) and belongs in start.
+    //
+    // co_await accepts a sender: Promise::await_transform wraps it in a
+    // SenderAwaitable whose receiver resumes (value, error) or destroys
+    // (stopped) the awaiting frame.  transform_await (see Promise) is
+    // consulted first, which is how Future keeps its symmetric-transfer path.
+
+    template<typename S> struct SenderTraits;
+
+    template<typename S>
+    concept Sender = requires {
+        typename SenderTraits<std::remove_cvref_t<S>>::value_type;
+    };
+
+    template<typename S>
+    using SenderValueType = typename SenderTraits<std::remove_cvref_t<S>>::value_type;
+
+    // Awaitable as the language sees it, for A's own value category:
+    // await_ready and friends, or a member or non-member operator co_await
+    template<typename A>
+    concept Awaitable = requires(A&& a) { std::forward<A>(a).await_ready(); }
+                     || requires(A&& a) { std::forward<A>(a).operator co_await(); }
+                     || requires(A&& a) { operator co_await(std::forward<A>(a)); };
+
+    template<typename OuterPromise, Sender S> struct SenderAwaitable;
+
+
+#pragma mark Coroutine punning
 
     struct Header {
         void (*resume )(void*);
@@ -119,9 +169,15 @@ namespace wry::Coroutine {
     };
 
 
+#pragma mark Type-erased awaitables
 
-    template<typename T>
-    struct Promise;
+    template<typename = void> struct Delegate;
+    template<typename = void> struct Promise;
+    template<typename = void> struct Future;
+    using Task = Future<>;
+
+
+#pragma mark Reified operation result
 
     template<typename T = void>
     struct Outcome {
@@ -129,39 +185,15 @@ namespace wry::Coroutine {
         using stored_type = std::conditional_t<std::is_void_v<T>, std::monostate, T>;
         std::variant<std::monostate, stored_type, std::exception_ptr, std::monostate> _variant;
 
-
         bool is_empty() const { return _variant.index() == 0; }
         bool has_value() const { return _variant.index() == 1; }
         bool has_error() const { return _variant.index() == 2; }
         bool is_stopped() const { return _variant.index() == 3; }
 
-        // Awaitable
-        // TODO: Use await_transform_helper instead of polluting the interface
-
-        bool await_ready() const noexcept {
-            switch (_variant.index()) {
-                case 1: // value
-                    return true;
-                case 2: // error
-                    return true;
-                case 3: // stopped
-                    return false;
-                default:
-                    // empty or valueless-by-exception
-                    abort();
-            }
-        }
-
-        template<typename U>
-        void await_suspend(std::coroutine_handle<Promise<U>> handle) const {
-            assert(_variant.index() == 3);
-            handle.destroy();
-        }
-
         // Taking the result consumes it: the outcome returns to empty, so a
         // second take aborts instead of yielding a moved-from value or a
         // null exception
-        auto await_resume() {
+        auto value() {
             switch (_variant.index()) {
                 case 1:
                     if constexpr (std::is_void_v<T>) {
@@ -181,11 +213,6 @@ namespace wry::Coroutine {
                     // empty or valueless-by-exception
                     abort();
             }
-        }
-
-
-        auto value() {
-            return await_resume();
         }
 
         auto value_or(auto&& x) requires (!std::is_void_v<T>) {
@@ -232,6 +259,50 @@ namespace wry::Coroutine {
 
     };
 
+    // co_await outcome: a value returns, an error rethrows, stopped destroys
+    // the awaiting frame (the cancellation continues through it).  An
+    // Outcome is not an awaitable in its own right; a Promise reaches this
+    // through transform_await, for an lvalue or an rvalue outcome
+    template<typename T>
+    struct OutcomeAwaitable {
+        Outcome<T>* _outcome;
+        bool await_ready() const noexcept {
+            switch (_outcome->_variant.index()) {
+                case 1: // value
+                    return true;
+                case 2: // error
+                    return true;
+                case 3: // stopped
+                    return false;
+                default:
+                    // empty or valueless-by-exception
+                    abort();
+            }
+        }
+        void await_suspend(std::coroutine_handle<> handle) const noexcept {
+            assert(_outcome->_variant.index() == 3);
+            handle.destroy();
+        }
+        auto await_resume() {
+            return _outcome->value();
+        }
+    };
+
+    template<typename U, typename T>
+    OutcomeAwaitable<T> transform_await(Promise<U>*, Outcome<T>& outcome) {
+        return OutcomeAwaitable<T>{&outcome};
+    }
+
+    template<typename U, typename T>
+    OutcomeAwaitable<T> transform_await(Promise<U>*, Outcome<T>&& outcome) {
+        return OutcomeAwaitable<T>{&outcome};
+    }
+
+    // As a sink.  These are the verbs a receiver that targets an Outcome
+    // calls (SyncWaitReceiver, a nursery child's delegate); an Outcome is
+    // not itself a receiver, since completion consumes a receiver and an
+    // Outcome must outlive completion to be read
+
     template<typename T, typename... Args>
     void set_value(Outcome<T>& outcome, Args&&... args) {
         switch (outcome._variant.index()) {
@@ -275,56 +346,7 @@ namespace wry::Coroutine {
         }
     }
 
-
-
-#pragma mark Senders: concepts
-
-    // A sender S declares SenderTraits<S>::value_type and provides
-    //
-    //   connect(S&&, R&&) -> operation state, a prvalue; MOVABLE UNTIL STARTED
-    //   start(op&)        -> begins the operation; op must not move afterwards
-    //
-    // The operation completes by calling exactly one of
-    //
-    //   set_value(R&&, T&&)   (set_value(R&&) when T is void)
-    //   set_error(R&&, std::exception_ptr&&)
-    //   set_stopped(R&&)
-    //
-    // on its receiver, on a pinned mutator thread.  That call is the
-    // operation's LAST touch of itself: the receiver may destroy the
-    // operation state before the call returns.  get_stop_token(R const&) is
-    // the receiver's environment; a coroutine started as a sender inherits
-    // it.  Anything immovable an operation needs (a stop_callback, a
-    // self-pointer) is constructed inside start, never in connect.
-    //
-    // co_await accepts a sender: Promise::await_transform wraps it in a
-    // SenderAwaitable whose receiver resumes (value, error) or destroys
-    // (stopped) the awaiting frame.  Awaitable-ness wins over sender-ness:
-    // a type with await_ready or operator co_await is awaited as itself, so
-    // Future stays on its symmetric-transfer path.
-
-    template<typename S> struct SenderTraits;
-
-    template<typename S>
-    concept Sender = requires {
-        typename SenderTraits<std::remove_cvref_t<S>>::value_type;
-    };
-
-    template<typename S>
-    using SenderValueType = typename SenderTraits<std::remove_cvref_t<S>>::value_type;
-
-    template<typename A>
-    concept Awaitable = requires(A& a) { a.await_ready(); }
-                     || requires(A& a) { a.operator co_await(); };
-
-    template<typename OuterPromise, Sender S> struct SenderAwaitable;
-
 #pragma mark Future
-
-    template<typename = void> struct Delegate;
-    template<typename = void> struct Promise;
-    template<typename = void> struct Future;
-    using Task = Future<>;
 
     // A delegate is never owned through this interface -- it lives in an
     // awaitable, an operation state, a static, or a promise's parking space
@@ -347,6 +369,9 @@ namespace wry::Coroutine {
         virtual void unhandled_stopped() noexcept { abort(); }
         virtual std::stop_token get_stop_token() noexcept { return std::stop_token{}; }
     };
+
+    // TODO: Should Delegate take Promise<T>* as an argument?  Is that enough
+    // to allow us to not hold a Promise<T>* in the delegate?
 
     // The value and error channels of a delegate that completes into an
     // Outcome<T>.  Such delegates differ between T and void only in the name
@@ -417,9 +442,6 @@ namespace wry::Coroutine {
             return std::suspend_always{};
         }
 
-        // TODO: pass this to all delegate calls?
-        // TODO: do the exchange inside the delegate call?
-
         // Records the exception only: final_suspend still runs afterwards
         // and needs the delegate, so it is not released here
         void unhandled_exception() noexcept {
@@ -436,6 +458,7 @@ namespace wry::Coroutine {
                 // names the continuation; completion's side effects (a
                 // nursery's retire, the wait group's) belong to that
                 // continuation's resume, which runs after the frame is gone
+                // TODO: should handle.destroy be moved inside delegate::final_await_suspend?
                 Delegate<T>* delegate = take(handle.promise()._delegate);
                 std::coroutine_handle<> continuation = delegate->final_await_suspend();
                 handle.destroy();
@@ -485,13 +508,19 @@ namespace wry::Coroutine {
 
     };
 
-
-    // Identity for awaitables; a sender is wrapped in a SenderAwaitable
-    // (see Senders below)
+    // co_await x: the promise offers x to transform_await first, a
+    // customization point that receives the promise and x in x's own value
+    // category (Future, Outcome, the GetPromise and GetStopToken tags and
+    // WithDeadlineSender customize it; an overload that takes only an
+    // rvalue leaves lvalues to fall through).  Failing that an awaitable is
+    // awaited as itself, and a sender is wrapped in a SenderAwaitable (see
+    // Senders below).  Anything else is diagnosed here
     template<typename T, typename A>
     decltype(auto) await_transform_helper(Promise<T>* promise, A&& a) {
         using D = std::remove_cvref_t<A>;
-        if constexpr (Awaitable<D>) {
+        if constexpr (requires { transform_await(promise, std::forward<A>(a)); }) {
+            return transform_await(promise, std::forward<A>(a));
+        } else if constexpr (Awaitable<A>) {
             return std::forward<A>(a);
         } else if constexpr (Sender<D>) {
             static_assert(std::is_rvalue_reference_v<A&&>,
@@ -499,7 +528,8 @@ namespace wry::Coroutine {
             // TODO: SenderAwaitable can profit from early access to the promise
             return SenderAwaitable<Promise<T>, D>(promise, std::move(a));
         } else {
-            return std::forward<A>(a);  // the co_await will diagnose
+            static_assert(Sender<D>,
+                          "co_await of something that is not transformable, awaitable or a sender");
         }
     }
 
@@ -542,16 +572,17 @@ namespace wry::Coroutine {
         }
     };
 
+
     struct GetPromise {};
 
     template<typename T>
-    decltype(auto) await_transform_helper(Promise<T>* promise, GetPromise) {
+    decltype(auto) transform_await(Promise<T>* promise, GetPromise) {
         return JustAwaitable<Promise<T>*>{ promise };
     }
     struct GetStopToken {};
 
     template<typename T>
-    decltype(auto) await_transform_helper(Promise<T>* promise, GetStopToken) {
+    decltype(auto) transform_await(Promise<T>* promise, GetStopToken) {
         return JustAwaitable<std::stop_token>{ get_stop_token(*promise) };
     }
 
@@ -638,13 +669,15 @@ namespace wry::Coroutine {
         }
 
         auto await_resume() {
-            return _outcome.await_resume();
+            return _outcome.value();
         }
 
     };
 
+    // Rvalues only: a Future is consumed by the await.  An lvalue falls
+    // through to the Sender branch, whose static_assert says so
     template<typename U, typename T>
-    auto await_transform_helper(Promise<U>* promise, Future<T>&& future) {
+    auto transform_await(Promise<U>* promise, Future<T>&& future) {
         return FutureAwaitable<Promise<U>, T>(promise, std::move(future));
     }
 
@@ -668,6 +701,12 @@ namespace wry::Coroutine {
     struct JustOperationState {
         T _value;
         R _receiver;
+        template<typename R2>
+        JustOperationState(T&& value, R2&& receiver)
+        : _value(std::move(value))
+        , _receiver(std::forward<R2>(receiver)) {
+        }
+        JustOperationState(JustOperationState const&) = delete;
     };
 
     template<typename T, typename R>
@@ -682,6 +721,11 @@ namespace wry::Coroutine {
         // last touch of op
         set_value(std::move(op._receiver), std::move(op._value));
     }
+
+    // This is an example of a type with a very simple specialized Awaitable
+    // (JustAwaitable) above, that gets shunted into the generic SenderAwaitable
+    // by the current resolution
+
 
     // ---- Future as a sender: the operation state is a fake frame ----------
     //
@@ -762,6 +806,8 @@ namespace wry::Coroutine {
         : _frame{._future = std::move(future), ._receiver = std::forward<R2>(receiver)} {
         }
 
+        FutureOperationState(FutureOperationState const&) = delete;
+
     };
 
     template<typename T, typename R>
@@ -836,13 +882,14 @@ namespace wry::Coroutine {
         using R = AwaitableReceiver<OuterPromise, T>;
         using OperationState = decltype(connect(std::declval<S&&>(), std::declval<R&&>()));
 
-        // The sender waits here until await_suspend, where this object has
-        // its final address and the receiver may point at it
-        std::variant<S, OperationState> _state;
+        // Connected here: this object is a prvalue all the way through
+        // await_transform, materialized in the awaiting frame, so its
+        // address is final and the receiver may point at it
+        OperationState _operation_state;
 
         explicit SenderAwaitable(OuterPromise* promise, S&& sender)
-        : AwaitableBase<OuterPromise, SenderValueType<S>>{promise}
-        , _state(std::in_place_index<0>, std::move(sender)) {
+        : AwaitableBase<OuterPromise, T>{promise}
+        , _operation_state(connect(std::move(sender), R{this})) {
         }
 
         SenderAwaitable(SenderAwaitable const&) = delete;
@@ -851,16 +898,14 @@ namespace wry::Coroutine {
 
         void await_suspend(std::coroutine_handle<OuterPromise> continuation) {
             assert(this->_outer_promise == &continuation.promise());
-            S sender = std::move(std::get<0>(_state));
-            OperationState& op = _state.template emplace<1>(connect(std::move(sender), R{this}));
-            start(op);
+            start(_operation_state);
             // No *this past here: the operation may have completed inline,
             // resuming (and perhaps finishing) the coroutine that owns *this
         }
 
         auto await_resume() {
             assert(!this->_outer_promise);
-            return this->_outcome.await_resume();
+            return this->_outcome.value();
         }
 
     };
@@ -948,21 +993,6 @@ namespace wry::Coroutine {
             // Detect destruction of a coroutine containing a running nursery
             assert(!_children && !_counter.load_relaxed());
         }
-
-        struct Factory {
-            std::stop_token _stop_token;
-            constexpr bool await_ready() const noexcept {
-                return false;
-            }
-            template<typename T>
-            bool await_suspend(std::coroutine_handle<Promise<T>> continuation) noexcept {
-                _stop_token = get_stop_token(continuation);
-                return false;
-            }
-            [[nodiscard]] Nursery await_resume() noexcept {
-                return Nursery(std::move(_stop_token));
-            }
-        };
 
         // co_await nursery.fork(foo(x)) immediately starts foo on the current
         // thread and schedules the caller to execute soon.  No target: foo's
@@ -1068,6 +1098,10 @@ namespace wry::Coroutine {
             return Awaitable{this};
         }
 
+        // TODO: How to we fork / spawn Senders?  We have to put the
+        // OperationState on the heap, is using a coroutine thunk therefore as
+        // good as a bespoke solution?
+
     }; // struct Nursery
 
     // Per-child delegate for a targeted fork or soon.  It lives in the
@@ -1086,6 +1120,9 @@ namespace wry::Coroutine {
         }
         virtual void unhandled_stopped() noexcept override {
             set_stopped(*_target);
+            // TODO: Is this type-info-discarding static call a wart or a
+            // virtuous sign of same-interface everywhere.  Is _static_destroy
+            // called exclusively via this path?
             Nursery::_static_destroy(_nursery);
         }
         virtual std::stop_token get_stop_token() noexcept override {
@@ -1096,29 +1133,95 @@ namespace wry::Coroutine {
         }
     };
 
-    // Block the current thread until the awaitable completes.
-    
+    // ---- sync_wait: block the calling thread on a sender ------------------
+    //
+    // The receiver records the outcome and releases a semaphore; the
+    // release / acquire pair is the publishing edge for a completion that
+    // arrives on a worker.  start is handed to the pool through a two-word
+    // thunk rather than called here, so the work runs on a pinned worker
+    // whatever the caller is, and a worker that blocks here cannot recurse
+    // into its own queue.  The caller's token, if any, is the receiver's
+    // environment.  Returns the Outcome, never empty: take value(),
+    // value_or(x) or stopped_as_optional() from it as the call site prefers.
+
     template<typename T>
-    auto sync_wait(T&& awaitable) {
-        struct Frame {
-            void (*_resume)(void*) = &_static_resume;
-            void (*_destroy)(void*) = &_static_resume;
-            std::binary_semaphore _semaphore{0}; // start in unavailable state
-            static void _static_resume(void* ptr) {
-                auto self = (Frame*)ptr;
-                self->_semaphore.release();
-            }
-            // TODO: We have no way to communicate cancellation into a generic awaitable
-        };
-        Frame frame;
-        if (!awaitable.await_ready()) {
-            global_work_queue_schedule(awaitable.await_suspend(std::coroutine_handle<>::from_address(&frame)));
-            frame._semaphore.acquire();
-        }
-        return awaitable.await_resume();
+    struct SyncWaitReceiver {
+        Outcome<T>* _outcome;
+        std::binary_semaphore* _semaphore;
+        std::stop_token _stop_token;
+    };
+
+    template<typename T>
+    void set_value(SyncWaitReceiver<T>&& receiver, T&& value) {
+        set_value(*receiver._outcome, std::move(value));
+        receiver._semaphore->release();
     }
 
+    inline void set_value(SyncWaitReceiver<void>&& receiver) {
+        set_value(*receiver._outcome);
+        receiver._semaphore->release();
+    }
 
+    template<typename T>
+    void set_error(SyncWaitReceiver<T>&& receiver, std::exception_ptr&& error) {
+        set_error(*receiver._outcome, std::move(error));
+        receiver._semaphore->release();
+    }
+
+    template<typename T>
+    void set_stopped(SyncWaitReceiver<T>&& receiver) {
+        set_stopped(*receiver._outcome);
+        receiver._semaphore->release();
+    }
+
+    template<typename T>
+    std::stop_token get_stop_token(SyncWaitReceiver<T> const& receiver) {
+        return receiver._stop_token;
+    }
+
+    template<Sender S>
+    Outcome<SenderValueType<S>> sync_wait(S&& sender, std::stop_token stop_token = {}) {
+        using T = SenderValueType<S>;
+        using OperationState = decltype(connect(std::declval<S&&>(),
+                                                std::declval<SyncWaitReceiver<T>&&>()));
+        struct Starter {
+            Header _header = { &_static_resume, &_static_destroy };
+            OperationState* _operation_state;
+            static void _static_resume(void* ptr) {
+                // last touch of the thunk and of the operation state: the
+                // completion may release the caller before start returns
+                start(*((Starter*)ptr)->_operation_state);
+            }
+            static void _static_destroy(void*) {
+                abort();
+            }
+        };
+        Outcome<T> outcome;
+        std::binary_semaphore semaphore{0};
+        OperationState operation_state = connect(std::forward<S>(sender),
+                                                 SyncWaitReceiver<T>{&outcome, &semaphore, std::move(stop_token)});
+        Starter starter{ ._operation_state = &operation_state };
+        global_work_queue_schedule((void*)&starter);
+        semaphore.acquire();
+        return outcome;
+    }
+
+    // An awaitable that is not a sender (a nursery's join) is lifted into a
+    // coroutine, which awaits the caller's object in place through a
+    // pointer: the argument outlives the call, which blocks until the lifted
+    // frame is gone, and a copy would be a second awaiter of a single-use
+    // awaitable (a join's copy asserts when it dies unawaited).  The value
+    // category the caller supplied is the one awaited
+    template<typename A>
+        requires (!Sender<A>) && Awaitable<A>
+    auto sync_wait(A&& awaitable, std::stop_token stop_token = {}) {
+        using D = std::remove_cvref_t<A>;
+        using V = decltype(std::declval<D&>().await_resume());
+        auto lift = [](D* a) -> Future<V> {
+            co_return co_await std::forward<A>(*a);
+        };
+        return sync_wait(lift(&awaitable), std::move(stop_token));
+    }
 
 
 
@@ -1204,126 +1307,337 @@ namespace wry::Coroutine {
             return result;
         }
 
+        // TODO: Sender/receiver-level interface?
+
     };
 
 
 
-    // Adaptors over a Future that absorb the stopped channel: the inner is
-    // driven through this delegate, and its cancellation resumes the outer
-    // with a stopped outcome instead of unwinding it
-    template<typename T>
-    struct FromStopped : OutcomeDelegate<FromStopped<T>, T> {
+    // ---- stopped_as_optional, shield: receiver adaptors -------------------
+    //
+    // The stopped channel becomes a value, nullopt, at the receiver; there is
+    // nothing to connect or start beyond the inner's own operation state.
+    // The inner runs under the token the adaptor puts in the receiver's
+    // environment: the outer's (stopped_as_optional), or one the caller
+    // supplies (shield; by default a detached token, which nobody can
+    // request, so the inner cannot be cancelled from outside at all).  A
+    // shielded inner can still stop of its own accord, hence optional either
+    // way.  A shield with a budget is shield(f, s.get_token()) plus a
+    // cancelable_after that requests s.
 
-        Future<T> _future;
-        std::coroutine_handle<> _continuation = nullptr;
-        std::stop_token _stop_token;  // the inner's, chosen by the derived class
-        Outcome<T> _outcome;
-
-        explicit FromStopped(Future<T>&& future)
-        : _future(std::move(future)) {
-        }
-
-        FromStopped(FromStopped const&) = delete;
-        FromStopped(FromStopped&&) = delete;
-
-        Outcome<T>& outcome() noexcept {
-            return _outcome;
-        }
-
-        virtual void unhandled_stopped() noexcept override {
-            set_stopped(_outcome);
-            // Stack unwinding, we are in nested destructors ==> schedule the continuation
-            global_work_queue_schedule(take(_continuation));
-        }
-
-        virtual std::coroutine_handle<> final_await_suspend() noexcept override {
-            return take(_continuation);
-        }
-
-        virtual std::stop_token get_stop_token() noexcept override {
-            return _stop_token;
-        }
-
-        constexpr bool await_ready() const noexcept {
-            return false;
-        }
-
-        std::coroutine_handle<Promise<T>> _await_suspend(std::coroutine_handle<> continuation,
-                                                        std::stop_token stop_token) {
-            _continuation = continuation;
-            _stop_token = std::move(stop_token);
-            _future._promise->set_delegate(this);
-            return handle_from_future(std::move(_future));
-        }
-
-        auto await_resume() {
-            return _outcome.stopped_as_optional();
-        }
-
-    }; // FromStopped
-
-    template<typename T>
-    struct OptionalFromStopped : FromStopped<T> {
-        explicit OptionalFromStopped(Future<T>&& future) : FromStopped<T>(std::move(future)) {}
-        template<typename OuterPromise>
-        std::coroutine_handle<Promise<T>> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
-            return this->_await_suspend(continuation, get_stop_token(continuation));
-        }
+    template<Sender S>
+    struct StoppedAsOptional {
+        S _sender;
+        std::optional<std::stop_token> _stop_token;  // engaged: replaces the outer's
     };
 
-    template<typename T>
-    struct Shield : FromStopped<T> {
-        std::stop_source _stop_source;
-        explicit Shield(Future<T>&& future) : FromStopped<T>(std::move(future)) {}
-        template<typename OuterPromise>
-        std::coroutine_handle<Promise<T>> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
-            return this->_await_suspend(continuation, _stop_source.get_token());
-        }
+    template<Sender S>
+    struct SenderTraits<StoppedAsOptional<S>> {
+        using value_type = std::optional<typename Outcome<SenderValueType<S>>::stored_type>;
     };
 
-    template<typename T>
-    auto stopped_as_optional(Future<T>&& future) {
-        return OptionalFromStopped<T>{std::move(future)};
+    template<typename T, typename R>
+    struct StoppedAsOptionalReceiver {
+        R _receiver;
+        std::optional<std::stop_token> _stop_token;
+    };
+
+    template<typename T, typename R>
+    void set_value(StoppedAsOptionalReceiver<T, R>&& receiver, T&& value) {
+        set_value(std::move(receiver._receiver), std::optional<T>{std::move(value)});
     }
 
-    template<typename T>
-    auto shield(Future<T>&& future) {
-        return Shield<T>{std::move(future)};
+    template<typename R>
+    void set_value(StoppedAsOptionalReceiver<void, R>&& receiver) {
+        set_value(std::move(receiver._receiver), std::optional<std::monostate>{std::in_place});
     }
 
+    template<typename T, typename R>
+    void set_error(StoppedAsOptionalReceiver<T, R>&& receiver, std::exception_ptr&& error) {
+        set_error(std::move(receiver._receiver), std::move(error));
+    }
 
+    template<typename T, typename R>
+    void set_stopped(StoppedAsOptionalReceiver<T, R>&& receiver) {
+        set_value(std::move(receiver._receiver), std::optional<typename Outcome<T>::stored_type>{});
+    }
 
-    struct Race : Nursery {
+    template<typename T, typename R>
+    std::stop_token get_stop_token(StoppedAsOptionalReceiver<T, R> const& receiver) {
+        return receiver._stop_token ? *receiver._stop_token : get_stop_token(receiver._receiver);
+    }
 
+    template<Sender S, typename R>
+    auto connect(StoppedAsOptional<S>&& sender, R&& receiver) {
+        return connect(std::move(sender._sender),
+                       StoppedAsOptionalReceiver<SenderValueType<S>, std::remove_cvref_t<R>>{
+                           std::forward<R>(receiver), std::move(sender._stop_token)});
+    }
+
+    template<Sender S>
+    auto stopped_as_optional(S&& sender) {
+        return StoppedAsOptional<std::remove_cvref_t<S>>{std::forward<S>(sender), std::nullopt};
+    }
+
+    template<Sender S>
+    auto shield(S&& sender, std::stop_token stop_token = {}) {
+        return StoppedAsOptional<std::remove_cvref_t<S>>{std::forward<S>(sender), std::move(stop_token)};
+    }
+
+    // ---- race: the first value or error wins ------------------------------
+    //
+    // Entrants are senders of one value type.  They run under an interior
+    // stop source that the winner requests to hasten the losers, and that
+    // the outer's token is bridged into.  A stopped entrant is a retiree,
+    // not a winner: a race whose entrants all stop completes stopped, and a
+    // tie-loser's value or error is dropped.  The winner's outcome, tagged
+    // with its index, is delivered when the LAST entrant retires, on that
+    // retiree's thread; until then this state is alive for every entrant.
+    //
+    // The entrant operation states live here by value, connected in the
+    // constructor with receivers that point back here: like every operation
+    // state this one is constructed where it lives.  The bridge is
+    // registered in start.
+
+    template<typename T>
+    struct RaceWinner {
+        std::size_t index;
+        T value;
+    };
+
+    template<>
+    struct RaceWinner<void> {
+        std::size_t index;
+    };
+
+    template<Sender... Ss>
+    struct Race {
+        std::tuple<Ss...> _senders;
+    };
+
+    template<Sender S, Sender... Ss>
+    struct SenderTraits<Race<S, Ss...>> {
+        static_assert((std::is_same_v<SenderValueType<S>, SenderValueType<Ss>> && ...),
+                      "race entrants must have one value type");
+        using value_type = RaceWinner<SenderValueType<S>>;
+    };
+
+    template<typename T, typename R>
+    struct RaceBase {
+
+        struct Bridge {
+            std::stop_source _stop_source;
+            void operator()() {
+                // Local copy: the entrants this unwinds may retire the race
+                // and free this functor with it
+                std::stop_source keepalive = std::move(_stop_source);
+                keepalive.request_stop();
+            }
+        };
+
+        R _receiver;
+        std::stop_source _stop_source;                       // interior
+        std::optional<std::stop_callback<Bridge>> _bridge;   // outer -> interior
         Atomic<std::ptrdiff_t> _winner{-1};
+        Atomic<std::ptrdiff_t> _live;
+        Outcome<T> _outcome;                                 // the winner's
+
+        template<typename R2>
+        RaceBase(R2&& receiver, std::ptrdiff_t entrants)
+        : _receiver(std::forward<R2>(receiver))
+        , _live(entrants) {
+        }
+
+        RaceBase(RaceBase const&) = delete;
 
         bool claim(std::ptrdiff_t index) {
+            // Mutual exclusion only; the winner's outcome is published by
+            // the retire below, not by this exchange
             std::ptrdiff_t expected = -1;
-            if (!_winner.compare_exchange_strong_release_relaxed(expected, index))
-                return false;
-            this->request_stop();            // hasten the losers
-            return true;
+            return _winner.compare_exchange_strong_relaxed_relaxed(expected, index);
+        }
+
+        void hasten() {
+            // Losers parked in cancelable leaves unwind and retire inside
+            // this call; none is the last, the caller has not retired yet
+            _stop_source.request_stop();
+        }
+
+        void retire() {
+            // Every retire is a release decrement of one word; only the
+            // last, seeing zero, takes an acquire.  That load reads its own
+            // decrement, an RMW that lies in the release sequence headed by
+            // each earlier retire (RMWs extend a release sequence), so it
+            // synchronizes with all of them: the winner's outcome and the
+            // losers' unwinding happen before the delivery
+            if (_live.sub_fetch_release(1) == 0) {
+                (void) _live.load_acquire();
+                deliver();
+            }
+        }
+
+        void deliver() {
+            // last touch of this on every path
+            std::size_t index = (std::size_t) _winner.load_relaxed();
+            switch (_outcome._variant.index()) {
+                case 1:
+                    if constexpr (std::is_void_v<T>) {
+                        set_value(std::move(_receiver), RaceWinner<void>{index});
+                    } else {
+                        set_value(std::move(_receiver),
+                                  RaceWinner<T>{index, std::move(std::get<1>(_outcome._variant))});
+                    }
+                    break;
+                case 2:
+                    set_error(std::move(_receiver), std::move(std::get<2>(_outcome._variant)));
+                    break;
+                case 0:
+                    // no claim: every entrant stopped
+                    set_stopped(std::move(_receiver));
+                    break;
+                default:
+                    abort();
+            }
         }
 
     };
 
+    template<typename T, typename R, std::size_t I>
+    struct RaceReceiver {
+        RaceBase<T, R>* _base;
+    };
 
-    template<typename T>
-    Coroutine::Task race_entry(Race* race, std::ptrdiff_t index,
-                               std::optional<T>* target, Future<T> inner) {
-        T value = co_await std::move(inner);    // cancelled while parked -> this
-                                                // frame unwinds, nursery tallies
-        if (race->claim(index))
-            *target = std::move(value);
-        // a tie-loser falls through: its value is destroyed right here
+    template<typename T, typename R, std::size_t I>
+    void set_value(RaceReceiver<T, R, I>&& receiver, T&& value) {
+        RaceBase<T, R>* base = receiver._base;
+        if (base->claim(I)) {
+            set_value(base->_outcome, std::move(value));
+            base->hasten();
+        }
+        base->retire();  // last touch
     }
 
+    template<typename R, std::size_t I>
+    void set_value(RaceReceiver<void, R, I>&& receiver) {
+        RaceBase<void, R>* base = receiver._base;
+        if (base->claim(I)) {
+            set_value(base->_outcome);
+            base->hasten();
+        }
+        base->retire();  // last touch
+    }
 
+    template<typename T, typename R, std::size_t I>
+    void set_error(RaceReceiver<T, R, I>&& receiver, std::exception_ptr&& error) {
+        RaceBase<T, R>* base = receiver._base;
+        if (base->claim(I)) {
+            set_error(base->_outcome, std::move(error));
+            base->hasten();
+        }
+        base->retire();  // last touch
+    }
 
+    template<typename T, typename R, std::size_t I>
+    void set_stopped(RaceReceiver<T, R, I>&& receiver) {
+        receiver._base->retire();  // last touch
+    }
 
+    template<typename T, typename R, std::size_t I>
+    std::stop_token get_stop_token(RaceReceiver<T, R, I> const& receiver) {
+        return receiver._base->_stop_source.get_token();
+    }
 
+    // A tuple whose elements are constructed in place, each from its own
+    // factory: a connect prvalue returned by the factory is elided into the
+    // slot, where std::tuple would have to move it.  The slots are bases so
+    // that a pack of them is initialized in one expansion
+    template<std::size_t I, typename V>
+    struct InPlaceSlot {
+        V _value;
+        template<typename F>
+        explicit InPlaceSlot(F&& factory) : _value(factory()) {}
+    };
 
+    template<typename Indices, typename... Vs> struct InPlaceTuple;
 
+    template<std::size_t... Is, typename... Vs>
+    struct InPlaceTuple<std::index_sequence<Is...>, Vs...> : InPlaceSlot<Is, Vs>... {
+        template<typename... Fs>
+        explicit InPlaceTuple(Fs&&... factories) : InPlaceSlot<Is, Vs>(factories)... {}
+        InPlaceTuple(InPlaceTuple const&) = delete;
+        template<std::size_t I>
+        auto& get() {
+            return static_cast<InPlaceSlot<I, std::tuple_element_t<I, std::tuple<Vs...>>>&>(*this)._value;
+        }
+    };
+
+    template<typename T, typename R, typename Indices, Sender... Ss>
+    struct RaceOperationStates;
+
+    template<typename T, typename R, std::size_t... Is, Sender... Ss>
+    struct RaceOperationStates<T, R, std::index_sequence<Is...>, Ss...> {
+        using type = InPlaceTuple<std::index_sequence<Is...>,
+                                  decltype(connect(std::declval<Ss&&>(),
+                                                   std::declval<RaceReceiver<T, R, Is>&&>()))...>;
+    };
+
+    // TODO: Unlike Nursery, this formulation prevents runtime determination
+    // of participants.  Not sure if that is a good thing.  In a "download
+    // from multiple remotes" race, the remotes would be a runtime list.
+    // But, in a with_deadline race, we have a small number of known
+    // participants.
+
+    template<typename T, typename R, Sender... Ss>
+    struct RaceOperationState : RaceBase<T, R> {
+
+        using Indices = std::index_sequence_for<Ss...>;
+        using OperationStates = typename RaceOperationStates<T, R, Indices, Ss...>::type;
+
+        // The entrants, each connected to a receiver that points at the base
+        OperationStates _operation_states;
+
+        template<typename R2>
+        RaceOperationState(std::tuple<Ss...>&& senders, R2&& receiver)
+        : RaceOperationState(std::move(senders), std::forward<R2>(receiver), Indices{}) {
+        }
+
+        template<typename R2, std::size_t... Is>
+        RaceOperationState(std::tuple<Ss...>&& senders, R2&& receiver, std::index_sequence<Is...>)
+        : RaceBase<T, R>(std::forward<R2>(receiver), sizeof...(Ss))
+        , _operation_states([&] {
+            return connect(std::move(std::get<Is>(senders)), RaceReceiver<T, R, Is>{this});
+        }...) {
+        }
+
+    };
+
+    template<typename T, typename R, Sender... Ss>
+    void start(RaceOperationState<T, R, Ss...>& op) {
+        using Bridge = typename RaceBase<T, R>::Bridge;
+        // The bridge fires here if the outer's token is already requested:
+        // the entrants then start under a requested interior token
+        op._bridge.emplace(get_stop_token(op._receiver), Bridge{op._stop_source});
+        [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            // Any entrant may complete inside its start and retire; the last
+            // retire delivers and may destroy op, but only once every entrant
+            // has started, so the last start is the last touch of op
+            (start(op._operation_states.template get<Is>()), ...);
+        }(std::index_sequence_for<Ss...>{});
+    }
+
+    template<Sender... Ss, typename R>
+    auto connect(Race<Ss...>&& race, R&& receiver) {
+        using T = SenderValueType<std::tuple_element_t<0, std::tuple<Ss...>>>;
+        return RaceOperationState<T, std::remove_cvref_t<R>, Ss...>(std::move(race._senders),
+                                                                    std::forward<R>(receiver));
+    }
+
+    template<Sender... Ss>
+    auto race(Ss&&... senders) {
+        return Race<std::remove_cvref_t<Ss>...>{
+            std::tuple<std::remove_cvref_t<Ss>...>{std::forward<Ss>(senders)...}
+        };
+    }
 
 } // namespace wry::Coroutine
 

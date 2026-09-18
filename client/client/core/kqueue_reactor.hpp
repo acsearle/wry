@@ -176,7 +176,7 @@ namespace wry {
     };
 
     template<typename U, typename T>
-    auto await_transform_helper(Coroutine::Promise<U>* outer_promise, WithDeadlineSender<T>&& s) {
+    auto transform_await(Coroutine::Promise<U>* outer_promise, WithDeadlineSender<T>&& s) {
         return WithDeadlineAwaitable<Coroutine::Promise<U>, T>(outer_promise, std::move(s._deadline), std::move(s._future));
     }
 
