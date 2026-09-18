@@ -29,6 +29,7 @@ List of one-line reminders of things to think and do
 - ext/functional.hpp: wry::move_only_function<R(Args...)> (subset: plain signature only, no in_place_type, empty call asserts) -- retire in favor of std::move_only_function when libc++ ships it
 - Nits: soon(y, bar(x)) comment says "schedules foo"; test metadata prints interleave with collector logging (flaky counts in log greps, bit again 2026-09-11); co_await of an error Outcome (the rethrow path) has no direct test
 
+- Player drops a queued write when its transaction loses a same-cell conflict (popped before resolution, never re-proposed); liveness fixed 2026-09-18 with WAIT_ALWAYS, retry is a design choice: peek-then-pop on the next notify, or WAIT_ON_ABORT re-propose, vs. accept the drop as the exclusive-write contract
 
 ## Old below
 
