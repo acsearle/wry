@@ -343,6 +343,16 @@ namespace wry {
             void clear_cursor_refresh()      { _cursor_dirty = false; }
             void request_cursor_refresh()    { _cursor_dirty = true; }
 
+            // Rewrite the cell showing `previous` so it shows `next`.  The
+            // reorientation actions (R / Shift-R / H / V) call this so the
+            // palette tracks the orientation in hand: the glyph turns with
+            // the cursor, and a re-click picks that orientation back up.
+            // Cells are one per orbit and pairwise distinct, so at most
+            // one matches.  No-op when none does (hand and palette have
+            // drifted apart; leave the palette alone rather than clobber
+            // some other cell).
+            void replace_glyph(Term previous, Term next);
+
         private:
             wry::Palette<wry::Term> _controls;
             int _selected_i = -1;

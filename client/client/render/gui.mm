@@ -338,6 +338,20 @@ namespace wry {
             return true;
         }
 
+        void PaletteOverlay::replace_glyph(Term previous, Term next) {
+            // Same walk order as the renderer's palette pass: i indexes
+            // the minor extent (rows), j the major (columns).
+            auto& m = _controls._payload;
+            for (difference_type j = 0; j != m.major(); ++j) {
+                for (difference_type i = 0; i != m.minor(); ++i) {
+                    if (m[i, j]._data == previous._data) {
+                        m[i, j] = next;
+                        return;
+                    }
+                }
+            }
+        }
+
         // ================================================================
         // Button
         // ================================================================

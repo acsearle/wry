@@ -478,7 +478,11 @@ namespace wry {
                         ? opcode_mirrored_horizontal(held)
                         : opcode_mirrored_vertical(held);
                 if (reoriented != held) {
-                    _holding_value = term_make_opcode(reoriented);
+                    Term next = term_make_opcode(reoriented);
+                    // The palette follows the hand: its cell for this
+                    // orbit now shows the orientation you are holding.
+                    _palette_overlay.replace_glyph(_holding_value._value, next);
+                    _holding_value = next;
                     _palette_overlay.request_cursor_refresh();
                 }
                 std::snprintf(buffer, sizeof(buffer), "Holding %s",
