@@ -698,8 +698,14 @@
                             _opcode_to_coordinate[p->second] = coordinate;
                             
                             
-                            matrix<RGBA8Unorm_sRGB> tile(64, 64);
-                            MTLRegion region = MTLRegionMake2D(j*64, i*64, 64, 64);
+                            // One atlas cell.  The atlas is a 32 x 32
+                            // grid at whatever resolution it ships in
+                            // (assets.png is 4096 px, so 128 px cells);
+                            // the label glyphs are stamped at their
+                            // native pixel size regardless.
+                            const NSUInteger cell = _symbols.width / 32;
+                            matrix<RGBA8Unorm_sRGB> tile(cell, cell);
+                            MTLRegion region = MTLRegionMake2D(j*cell, i*cell, cell, cell);
                             [_symbols getBytes:tile.data()
                                    bytesPerRow:tile.stride_bytes()
                                     fromRegion:region
@@ -714,7 +720,7 @@
                                     cursor.y += 4;
                                     continue;
                                 }
-                                if (cursor.x + advance.x >= 64) {
+                                if (cursor.x + advance.x >= (float) cell) {
                                     cursor.x = 0;
                                     cursor.y += advance.y + 4;
                                 }
@@ -922,10 +928,14 @@
     // on_event during pump; we consume the flag here.
     if (_model->_palette_overlay.cursor_needs_refresh()) {
         auto coordinate = _opcode_to_coordinate[term_as_opcode(_model->_holding_value)];
-        matrix<RGBA8Unorm_sRGB> tile(64, 64);
+        // One atlas cell (32 x 32 grid), cut out at its native resolution;
+        // the NSImage below is still 32 points, so a higher-resolution
+        // atlas just makes a sharper cursor.
+        const NSUInteger cell = _symbols.width / 32;
+        matrix<RGBA8Unorm_sRGB> tile(cell, cell);
         MTLRegion region = MTLRegionMake2D(coordinate.x * _symbols.width,
                                            coordinate.y * _symbols.height,
-                                           64, 64);
+                                           cell, cell);
         [_symbols getBytes:tile.data()
                bytesPerRow:tile.stride_bytes()
                 fromRegion:region
@@ -934,8 +944,8 @@
         p[0] = (unsigned char*) tile.data();
         NSBitmapImageRep* a = [[NSBitmapImageRep alloc]
                               initWithBitmapDataPlanes:p
-                                            pixelsWide:64
-                                            pixelsHigh:64
+                                            pixelsWide:(NSInteger) cell
+                                            pixelsHigh:(NSInteger) cell
                                          bitsPerSample:8
                                        samplesPerPixel:4
                                               hasAlpha:YES
