@@ -20,6 +20,7 @@
 #include "matter.hpp"
 #include "save.hpp"
 #include "terrain.hpp"
+#include "test.hpp"
 
 namespace wry {
 
@@ -418,7 +419,8 @@ namespace wry {
 
         // Click: write the held value at the tile under the cursor.  (The
         // palette claims palette-area clicks before _outstanding_click is set,
-        // so anything here is for the world tile.)
+        // so anything here is for the world tile; and the pump only sets it
+        // while the hand is full.)
         if (_outstanding_click) {
             int i = round(_mouse4.x);
             int j = round(_mouse4.y);
@@ -430,6 +432,21 @@ namespace wry {
             _server->submit(std::move(a));
             printf(" Clicked world (%d, %d)\n", i, j);
             _outstanding_click = false;
+        }
+
+        // Right click: erase the tile under the cursor.  A null write
+        // erases the cell's key (the value-plane combine in World::step);
+        // matter included -- this is the editing tool, not a machine's
+        // guarded STORE.
+        if (_outstanding_erase) {
+            int i = round(_mouse4.x);
+            int j = round(_mouse4.y);
+            Player::Action a;
+            a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
+            a.coordinate = Coordinate{i, j};
+            a.value = term_make_null();
+            _server->submit(std::move(a));
+            _outstanding_erase = false;
         }
 
         // Hex keys: write the digit at the tile under the cursor.
@@ -447,6 +464,23 @@ namespace wry {
                 _server->submit(std::move(a));
             }
         }
+    }
+
+    // Empty the hand: the palette forgets its selection and the renderer's
+    // cursor refresh puts the platform arrow back.
+    void WorldState::drop_hand() {
+        if (!is_holding())
+            return;
+        char buffer[100];
+        const Term held = _holding_value._value;
+        std::snprintf(buffer, sizeof(buffer), "Dropped %s",
+                      held.is_opcode()
+                          ? name_from_OPCODE((OPCODE) held.as_opcode()) + 7
+                          : "value");
+        _holding_value = term_make_null();
+        _palette_overlay.clear_selection();
+        _palette_overlay.request_cursor_refresh();
+        _gui.append_log(buffer);
     }
 
     // Perform a bound game action -- the target half of the keymap
@@ -531,9 +565,17 @@ namespace wry {
         switch (e.kind) {
 
             case WryEventKindMouseUp:
-                // No world edits in map mode.
-                if (!_show_map && (e.button == MouseButton::Left))
-                    _outstanding_click = true;
+                // No world edits in map mode.  Left places what the hand
+                // holds -- an empty hand places nothing, so erasing is
+                // never an accident -- and right erases.
+                if (_show_map)
+                    break;
+                if (e.button == MouseButton::Left) {
+                    if (is_holding())
+                        _outstanding_click = true;
+                } else if (e.button == MouseButton::Right) {
+                    _outstanding_erase = true;
+                }
                 break;
 
             case WryEventKindScroll: {
@@ -594,10 +636,15 @@ namespace wry {
             }
 
             case WryEventKindKeyDown: {
-                // Escape is reserved (not bindable): it opens the in-game
-                // menu.
+                // Escape is reserved (not bindable).  Holding a glyph is
+                // a modal state and Escape leaves the innermost one first:
+                // with something in hand it drops the hand; with an empty
+                // hand it opens the in-game menu.
                 if (e.key == key::Escape) {
-                    _stack.push(&_main_menu_overlay);
+                    if (is_holding())
+                        drop_hand();
+                    else
+                        _stack.push(&_main_menu_overlay);
                     break;
                 }
 
@@ -672,5 +719,70 @@ namespace wry {
                     pump_legacy_event(e);
         }
     }
+
+    // ----------------------------------------------------------------
+    // Tests.
+
+    // The pump's contract for the hand and the erase gesture: an
+    // empty-hand left click places nothing, a right click queues an erase
+    // (resolved in update as a null write, which erases the cell's key),
+    // map mode edits nothing, and Escape drops a full hand before it opens
+    // the menu.  The click-to-tile projection and the server round trip
+    // are covered elsewhere (player_null_write_erases_key).
+    define_test("world_state_hand_and_erase_input") {
+        GuiContext gc;
+        WorldState ws(gc);
+
+        auto mouse_up = [](gui::MouseButton b) {
+            gui::Event e{};
+            e.kind = WryEventKindMouseUp;
+            e.button = b;
+            return e;
+        };
+        auto key_down = [](uint32_t k) {
+            gui::Event e{};
+            e.kind = WryEventKindKeyDown;
+            e.key = k;
+            return e;
+        };
+
+        // Empty hand: left places nothing, right queues an erase.
+        assert(!ws.is_holding());
+        ws.pump_legacy_event(mouse_up(gui::MouseButton::Left));
+        assert(!ws._outstanding_click);
+        ws.pump_legacy_event(mouse_up(gui::MouseButton::Right));
+        assert(ws._outstanding_erase);
+        ws._outstanding_erase = false;
+
+        // Full hand: left queues a placement.
+        ws._holding_value = term_make_opcode(OPCODE_HALT);
+        assert(ws.is_holding());
+        ws.pump_legacy_event(mouse_up(gui::MouseButton::Left));
+        assert(ws._outstanding_click);
+        ws._outstanding_click = false;
+
+        // Map mode: neither button edits.
+        ws._show_map = true;
+        ws.pump_legacy_event(mouse_up(gui::MouseButton::Left));
+        ws.pump_legacy_event(mouse_up(gui::MouseButton::Right));
+        assert(!ws._outstanding_click);
+        assert(!ws._outstanding_erase);
+        ws._show_map = false;
+
+        // Escape: the first drops the hand without opening the menu, the
+        // second opens the menu.
+        const std::size_t depth = ws._stack.size();
+        ws.pump_legacy_event(key_down(gui::key::Escape));
+        assert(!ws.is_holding());
+        assert(ws._stack.size() == depth);
+        assert(!ws._stack.contains(&ws._main_menu_overlay));
+        assert(ws._palette_overlay.selected_i() == -1);
+        assert(ws._palette_overlay.cursor_needs_refresh());
+        ws.pump_legacy_event(key_down(gui::key::Escape));
+        assert(ws._stack.size() == depth + 1);
+        assert(ws._stack.contains(&ws._main_menu_overlay));
+
+        co_return;
+    };
 
 } // namespace wry

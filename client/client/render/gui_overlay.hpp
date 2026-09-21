@@ -342,6 +342,8 @@ namespace wry {
             bool cursor_needs_refresh() const { return _cursor_dirty; }
             void clear_cursor_refresh()      { _cursor_dirty = false; }
             void request_cursor_refresh()    { _cursor_dirty = true; }
+            // The hand was dropped: no slot is the held one any more.
+            void clear_selection()           { _selected_i = _selected_j = -1; }
 
             // Rewrite the cell showing `previous` so it shows `next`.  The
             // reorientation actions (R / Shift-R / H / V) call this so the

@@ -926,6 +926,12 @@
     // If the palette overlay selected a new opcode this frame, swap the
     // platform cursor to its icon.  The overlay flagged this from its
     // on_event during pump; we consume the flag here.
+    if (_model->_palette_overlay.cursor_needs_refresh() && !_model->is_holding()) {
+        // The hand was dropped (Escape): back to the platform arrow.
+        _cursor = [NSCursor arrowCursor];
+        [_cursor set];
+        _model->_palette_overlay.clear_cursor_refresh();
+    }
     if (_model->_palette_overlay.cursor_needs_refresh()) {
         auto coordinate = _opcode_to_coordinate[term_as_opcode(_model->_holding_value)];
         // One atlas cell (32 x 32 grid), cut out at its native resolution;

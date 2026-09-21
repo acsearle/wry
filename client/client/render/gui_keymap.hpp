@@ -30,7 +30,7 @@
 //  never participate in bindings.
 //
 //  A combo activates at most one action; an action may be activated by
-//  any number of combos.  Escape is reserved for the GUI (menu open /
+//  any number of combos.  Escape is reserved for the GUI (drop the hand / menu open /
 //  close, capture cancel) and cannot be bound.
 //
 

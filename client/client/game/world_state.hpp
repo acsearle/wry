@@ -96,7 +96,8 @@ namespace wry {
         float2 _mouse = {};               // NDC cursor (palette reads it)
         float2 _looking_at = {};          // scroll-pan accumulator
         simd_float4 _mouse4 = {};         // cursor projected onto the ground plane
-        bool _outstanding_click = false;  // pending world click
+        bool _outstanding_click = false;  // pending world click (hand full)
+        bool _outstanding_erase = false;  // pending right-click erase
         String _outstanding_keysdown;     // pending hex-key writes
 
         // Map mode (TAB): the renderer draws the world-map quad instead of
@@ -192,6 +193,12 @@ namespace wry {
         void submit_local_commands();                 // input -> commands (from update)
         void pump_legacy_event(gui::Event const& e);  // legacy world-input fallback
         void perform_action(gui::Action);             // a bound action fired
+
+        // The hand.  Holding a glyph is a modal state: left click places
+        // it, R / H / V reorient it, Escape drops it (and only with an
+        // empty hand opens the menu).
+        bool is_holding() const { return !term_is_null(_holding_value._value); }
+        void drop_hand();
 
         ~WorldState() {
             fprintf(stderr, "%s\n", __PRETTY_FUNCTION__);

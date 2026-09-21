@@ -279,9 +279,6 @@ namespace wry {
             if (e.kind != WryEventKindMouseMove &&
                 e.kind != WryEventKindMouseUp)
                 return false;
-            if (e.kind == WryEventKindMouseUp &&
-                e.button != MouseButton::Left)
-                return false;
 
             const float vw = _model->_gui.viewport_size.x;
             const float vh = _model->_gui.viewport_size.y;
@@ -328,8 +325,11 @@ namespace wry {
                 return false;   // hover is non-consuming.
             }
 
-            // MouseUp Left.
+            // MouseUp.  Outside the palette it is the world's.  Inside, a
+            // non-left button is swallowed: right click erases world
+            // tiles, and the palette floats over world tiles.
             if (!in_bounds) return false;
+            if (e.button != MouseButton::Left) return true;
 
             _selected_i = (int)i;
             _selected_j = (int)j;
