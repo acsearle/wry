@@ -39,6 +39,25 @@ namespace wry {
      */
 
     void World::hack_repair_invariant() {
+        // Absence is the one representation of an empty cell (see the
+        // value-plane combine in step: a committed null write erases the
+        // key).  A world built by hand, or loaded from a save written
+        // before that rule, may still carry null entries; drop them here
+        // so every commissioned world satisfies the invariant.  Collect
+        // first: erasing path-copies the map, so it must not run inside
+        // the iteration.
+        {
+            std::vector<Coordinate> nulls;
+            _term_for_coordinate.kv.for_each([&nulls](Coordinate xy, Term t) {
+                if (term_is_null(t))
+                    nulls.push_back(xy);
+            });
+            for (Coordinate xy : nulls) {
+                Term dropped{};
+                (void) _term_for_coordinate.kv.try_erase(xy, dropped);
+            }
+        }
+
         std::pair<Time, wry::EntityID> victim;
         if (_waiting_on_time.try_front(victim)) {
             assert(victim.first >= _time);
@@ -266,8 +285,16 @@ namespace wry {
             
             if (writer) {
                 assert(writer->_operation & Transaction::Operation::WRITE_ON_COMMIT);
+                // Absence is the one representation of an empty cell: a
+                // committed write of the null Term erases the key instead
+                // of storing a null entry.  No reader can tell the two
+                // apart (try_get leaves its out-param null on a miss), so
+                // machines see no change; the map, the minimap, the ground
+                // renderer and saves stop accumulating phantom entries.
                 result.first.value = get<Term>(writer->_desired);
-                result.first.tag = ParallelRebuildAction<Term>::WRITE_VALUE;
+                result.first.tag = term_is_null(result.first.value)
+                    ? ParallelRebuildAction<Term>::CLEAR_VALUE
+                    : ParallelRebuildAction<Term>::WRITE_VALUE;
                 if (writer->_operation & Transaction::Operation::WAIT_ON_COMMIT) {
                     result.second.value.push_back(writer->_parent->_entity->_entity_id);
                     result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::WRITE_VALUE;

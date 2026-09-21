@@ -3,6 +3,13 @@
 List of one-line reminders of things to think and do
 - Full implications of the next_ready GC bug; clean rederive from epoch formulation
 - Saving AMTs saves their in-memory structure, which is strange and brittle
+  - Save as a flat key-value list.  AMT structure is unique at the moment but
+    that's not a guarantee for all structures. 
+- Hash of data structures for file self-validation and multiplayer desync detection
+  - Hash, like save, must be content only, not relying on structure
+- Does AMT enforce no null values?
+  - Do all desired value types have a null value?
+  - Pros/cons?
 - ThreadPublic should probably not be GC and be more like a Crossbeam list
 - The `_ready` skiplist should probably have a per-object allocator
 - Transactional non-exclusive commutative operations, like addition

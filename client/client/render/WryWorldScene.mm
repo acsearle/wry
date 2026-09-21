@@ -1639,6 +1639,11 @@
                     // printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::Coordinate{i, j}.data(), q._data);
                     if (!not_empty)
                         continue;
+                    // A committed null write erases the cell, so a stored
+                    // null only survives from older worlds; either way it
+                    // is the empty cell, not something to mark with a dot.
+                    if (wry::term_is_null(q))
+                        continue;
                     if (wry::term_is_boolean(q)) {
                         coordinate = wry::term_as_boolean(q)
                             ? _true_coordinate : _false_coordinate;

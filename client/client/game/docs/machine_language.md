@@ -15,7 +15,8 @@ apparent intent disagree, both are stated and the discrepancy is flagged.
 
 The world is an unbounded 2D grid.  Each cell has two independent planes:
 
-- a **value plane**: one `Term` per cell (empty = null Term), holding
+- a **value plane**: one `Term` per cell (empty = null Term, represented
+  by absence: a committed write of null erases the cell's key), holding
   numbers, opcode glyphs, matter, or any other Term;
 - an **occupancy plane**: at most one entity (machine) per cell.
 
@@ -670,7 +671,8 @@ is the only law, soften the comments.
 
 Pop of an empty stack yields null, and STORE writes it: a machine with
 nothing to give wipes the operand cell (of information; the matter guard
-still protects matter).  Handy as an eraser, alarming as an accident --
+still protects matter).  Since 2026-09-21 the wipe is literal: the
+committed null write erases the cell's key.  Handy as an eraser, alarming as an accident --
 an under-provisioned producer silently deletes the very signal cell it
 was meant to feed.  Either bless it as the eraser idiom or make
 empty-stack STORE a no-op (park-and-wait would also be coherent: "wait
@@ -1004,9 +1006,10 @@ Noted, not built:
 - Wait granularities beyond "the set at this key changed" (regions; a
   specific id entering or leaving), and region-query granularity
   (pyramidal maps, wide entities registered at shallow branches).
-- There is no transactional key-erase, so a cell whose last resident
-  leaves keeps an empty set, matching the occupancy map's id-0
-  tombstones.
+- There is no transactional key-erase for the location and occupancy
+  maps, so a cell whose last resident leaves keeps an empty set,
+  matching the occupancy map's id-0 tombstones.  (The value plane has
+  one since 2026-09-21: a committed null write erases the key.)
 
 ### 10.8 Terrain and placement
 

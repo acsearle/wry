@@ -1207,11 +1207,10 @@ namespace wry {
             assert(m->_new_heading == HEADING_EAST);
             assert((test_stack_is(m, {})));
 
-            // try_get leaves its out-param untouched on a miss, so a
-            // default (null) Term covers both "erased" and "stored null"
+            // A committed null write erases the key: the emptied cell is
+            // absent, not present-with-null
             Term taken{};
-            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{40, 2}, taken);
-            assert(term_is_null(taken));
+            assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{40, 2}, taken));
 
             Term placed{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{42, 5}, placed);
@@ -1281,8 +1280,7 @@ namespace wry {
             assert((m->_new_location == Coordinate{80, 7}));
             assert((test_stack_is(m, {Term(true)})));
             Term moved{};
-            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{80, 2}, moved);
-            assert(term_is_null(moved));
+            assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{80, 2}, moved));
         }
 
         {
@@ -1317,11 +1315,9 @@ namespace wry {
             assert((test_stack_is(m, {})));
             assert(m->_new_time >= Time{360});
             Term taken{};
-            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{100, 2}, taken);
-            assert(term_is_null(taken));
+            assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{100, 2}, taken));
             Term sunk{};
-            (void) world._ptr->_term_for_coordinate.try_get(Coordinate{100, 4}, sunk);
-            assert(term_is_null(sunk));
+            assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{100, 4}, sunk));
             WaitSet at_sink{};
             (void) world._ptr->_located_for_coordinate.try_get(Coordinate{100, 4}, at_sink);
             assert(at_sink.contains(sink_id));

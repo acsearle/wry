@@ -168,4 +168,48 @@ namespace wry {
         co_return;
     };
 
+    // A committed write of the null Term erases the cell's key: absence is
+    // the one representation of "no term".  (Until 2026-09-21 the null was
+    // stored; nothing could read it back as different from absent, but
+    // the minimap plotted it and the ground renderer drew a dot.)
+    define_test("player_null_write_erases_key") {
+
+        World* w = new World;
+
+        Player* p = new Player;
+        p->_entity_id = w->generate_entity_id();
+        w->_entity_for_entity_id.set(p->_entity_id, p);
+        w->_waiting_on_time.set({Time{0}, p->_entity_id});
+
+        w->hack_repair_invariant();
+        Root<World*> world{w};
+
+        const Coordinate xy{5, 5};
+        player_test_submit(p, xy, term_make_integer_with(7));
+        co_await player_test_step(world);
+        {
+            Term t{};
+            assert(world._ptr->_term_for_coordinate.try_get(xy, t));
+            assert(t._data == term_make_integer_with(7)._data);
+        }
+
+        player_test_submit(p, xy, term_make_null());
+        co_await player_test_step(world);
+        {
+            Term t{};
+            assert(!world._ptr->_term_for_coordinate.try_get(xy, t));
+        }
+
+        // Erasing a cell that was never written inserts nothing.
+        const Coordinate never{6, 6};
+        player_test_submit(p, never, term_make_null());
+        co_await player_test_step(world);
+        {
+            Term t{};
+            assert(!world._ptr->_term_for_coordinate.try_get(never, t));
+        }
+
+        co_return;
+    };
+
 } // namespace wry
