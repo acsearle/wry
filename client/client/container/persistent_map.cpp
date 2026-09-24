@@ -395,4 +395,147 @@ namespace wry {
         co_return;
 
     };
+
+    // The sorted builder must produce, in one pass, exactly the trie that
+    // insertion builds, for maps and for sets, across key distributions that
+    // stress each part of the algorithm: dense blocks (full leaves), sparse
+    // keys (deep divergence, singleton leaves), clustered blocks with gaps,
+    // and codes at the top of the word where the last symbol is narrower.
+    // Also the loader's own use: walking a canonical trie in code order and
+    // rebuilding from the walk must reproduce it.
+    define_test("amt_sorted_builder") {
+
+        using A = PersistentMap<uint64_t, int>::AMT;
+        using S = ArrayMappedTrie<__uint128_t, std::monostate, ScanDiscipline>;
+
+        auto rand64 = []() -> uint64_t {
+            return ((uint64_t)std::rand() << 42) ^ ((uint64_t)std::rand() << 21) ^ (uint64_t)std::rand();
+        };
+
+        // Fisher-Yates over std::rand, so a run is reproducible from the
+        // suite's seed.
+        auto shuffle = [](auto& v) {
+            for (size_t i = v.size(); i > 1; --i)
+                std::swap(v[i - 1], v[std::rand() % i]);
+        };
+
+        // Build from the oracle's sorted contents; check shape against an
+        // insertion build in random order, then content, code-ordered
+        // iteration, the range convenience, and the walk-and-rebuild round
+        // trip a loader performs.
+        auto check_map = [&shuffle](const std::map<uint64_t, int>& oracle) {
+            A::SortedBuilder b;
+            for (auto [k, v] : oracle)
+                b.push(k, v);
+            const A* built = b.finish();
+            A::assert_canonical(built);
+
+            std::vector<std::pair<uint64_t, int>> entries(oracle.begin(), oracle.end());
+            shuffle(entries);
+            const A* ref = nullptr;
+            for (auto [k, v] : entries)
+                ref = A::insert(ref, k, v);
+            assert(A::same_shape(built, ref));
+
+            for (auto [k, v] : oracle) {
+                int u = 0;
+                assert(built->try_get(k, u) && u == v);
+            }
+
+            std::vector<uint64_t> walked;
+            if (built)
+                built->for_each([&walked](uint64_t k, int) { walked.push_back(k); });
+            assert(walked.size() == oracle.size());
+            size_t i = 0;
+            for (auto [k, v] : oracle)
+                assert(walked[i++] == k);
+
+            std::vector<std::pair<uint64_t, int>> sorted(oracle.begin(), oracle.end());
+            assert(A::same_shape(A::build_from_sorted(sorted.begin(), sorted.end()), built));
+
+            A::SortedBuilder b2;
+            if (built)
+                built->for_each([&b2](uint64_t k, int v) { b2.push(k, v); });
+            assert(A::same_shape(b2.finish(), built));
+        };
+
+        // Edges: empty, singleton, one block, sibling leaves, divergence at
+        // the top symbol (4 bits wide at shift 60), the top bit alone.
+        {
+            A::SortedBuilder b;
+            assert(b.finish() == nullptr);
+            check_map({});
+            check_map({{5, 50}});
+            check_map({{0, 1}, {31, 2}});
+            check_map({{0, 1}, {32, 2}});
+            check_map({{0, 1}, {~(uint64_t)0, 2}});
+            check_map({{(uint64_t)1 << 63, 1}, {((uint64_t)1 << 63) | 1, 2}});
+            check_map({{0, 1}, {32, 2}, {(uint64_t)1 << 40, 3}, {((uint64_t)1 << 40) | 32, 4}});
+        }
+
+        for (int iter = 0; iter != 100; ++iter) {
+            std::map<uint64_t, int> oracle;
+            int n = 1 + std::rand() % 400;
+            switch (iter % 4) {
+                case 0: // dense small domain: full and near-full leaves
+                    for (int i = 0; i != n; ++i)
+                        oracle[std::rand() % 300] = std::rand();
+                    break;
+                case 1: // sparse: singleton leaves under deep divergence
+                    for (int i = 0; i != n; ++i)
+                        oracle[rand64()] = std::rand();
+                    break;
+                case 2: { // clustered: a few blocks, some completely full
+                    int blocks = 1 + std::rand() % 8;
+                    for (int j = 0; j != blocks; ++j) {
+                        uint64_t base = rand64() & ~(uint64_t)31;
+                        if (std::rand() & 1) {
+                            for (int m = 0; m != 32; ++m)
+                                oracle[base + m] = std::rand();
+                        } else {
+                            int members = 1 + std::rand() % 31;
+                            for (int m = 0; m != members; ++m)
+                                oracle[base + std::rand() % 32] = std::rand();
+                        }
+                    }
+                    break;
+                }
+                case 3: // top of the word: the shift-60 symbol is 4 bits wide
+                    for (int i = 0; i != n; ++i)
+                        oracle[((uint64_t)(std::rand() & 15) << 60) | (uint64_t)(std::rand() % 64)] = std::rand();
+                    break;
+            }
+            check_map(oracle);
+            if (!(iter & 7))
+                mutator_repin();
+        }
+
+        // A set over 128-bit codes, as the time wheel uses: (time, entity)
+        // packed high and low.  Bare codes go through the set overload.
+        for (int iter = 0; iter != 20; ++iter) {
+            std::set<__uint128_t> oracle;
+            int n = std::rand() % 300;
+            for (int i = 0; i != n; ++i) {
+                __uint128_t t = (__uint128_t)(std::rand() % 8);
+                __uint128_t e = (__uint128_t)(std::rand() % 500);
+                oracle.insert((t << 64) | e);
+            }
+            std::vector<__uint128_t> codes(oracle.begin(), oracle.end());
+            const S* built = S::build_from_sorted(codes.begin(), codes.end());
+            S::assert_canonical(built);
+            shuffle(codes);
+            const S* ref = nullptr;
+            for (__uint128_t k : codes)
+                ref = S::insert(ref, k, std::monostate{});
+            assert(S::same_shape(built, ref));
+            for (__uint128_t k : oracle)
+                assert(built->contains(k));
+            assert(!built || !built->contains(((__uint128_t)9 << 64) | 1));
+            if (!(iter & 7))
+                mutator_repin();
+        }
+
+        co_return;
+
+    };
 }

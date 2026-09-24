@@ -418,6 +418,172 @@ namespace wry {
             return merge(make_singleton(key, value), ArrayMappedTrie);
         }
 
+        // ------------------------------------------------------------------
+        // Bulk construction from code-ordered input.
+        //
+        // SortedBuilder assembles the canonical trie for a strictly ascending
+        // sequence of codes in one left-to-right pass, bottom up, with every
+        // node allocated once at its exact size.  It is the loader's tool: a
+        // code-ordered (code, value) list is the save format's shape for a
+        // map, and inserting the entries one by one would instead path-copy
+        // about depth nodes per entry.
+        //
+        // The pass keeps a stack of open internal nodes with shifts strictly
+        // decreasing upward, plus the leaf being filled.  Consecutive codes in
+        // the same aligned block extend the leaf.  When a code leaves the
+        // block, the divergence shift s between it and the previous code (the
+        // highest symbol where they differ) says where the completed leaf
+        // belongs: every open node below s is complete, so each is closed in
+        // turn and handed to the one above it; then the subtree joins the
+        // open node at s, opened here if there is none.  A node is opened with
+        // one child and always gains a second, because the code whose arrival
+        // opened it lands in a later child of that same node.  So internal
+        // nodes have at least two children, leaves sit at shift zero, and the
+        // result is the trie that insertion in any order builds (same_shape).
+        //
+        // Frozen-phase only: run push and finish under one mutator pin; the
+        // nodes are unpublished until finish returns the root.
+        // ------------------------------------------------------------------
+
+        struct SortedBuilder {
+
+            static constexpr int LEAF_CAPACITY = 1 << SYMBOL_WIDTH;
+            // Internal shifts are the multiples of SYMBOL_WIDTH in
+            // [SYMBOL_WIDTH, WORD_WIDTH), each open at most once.
+            static constexpr int MAX_DEPTH = ((int)WORD_WIDTH - 1) / SYMBOL_WIDTH;
+
+            static_assert(_is_set || std::is_default_constructible_v<T>,
+                          "SortedBuilder buffers a leaf's values by value");
+
+            struct Frame {
+                Word prefix;
+                int shift;
+                int count;
+                ArrayMappedTrie const* _Nonnull children[LEAF_CAPACITY];
+            };
+
+            Frame _frames[MAX_DEPTH];
+            int _depth = 0;
+
+            bool _has_prev = false;
+            Word _prev = 0;
+
+            Word _leaf_prefix = 0;
+            Bitmap _leaf_bitmap = 0;
+            int _leaf_count = 0;
+            T _leaf_values[_is_set ? 1 : LEAF_CAPACITY];
+
+            void push(Word key, [[maybe_unused]] T value) {
+                if (!_has_prev) {
+                    _has_prev = true;
+                    _begin_leaf(key);
+                } else {
+                    assert(key > _prev); // strictly ascending
+                    if ((key & PREFIX_MASK) != _leaf_prefix) {
+                        _attach(_close_leaf(), shift_from_keys(_prev, key));
+                        _begin_leaf(key);
+                    }
+                }
+                int index = (int)(key & INDEX_MASK);
+                _leaf_bitmap |= (Bitmap)1 << index;
+                if constexpr (!_is_set)
+                    _leaf_values[_leaf_count] = std::move(value);
+                ++_leaf_count;
+                _prev = key;
+            }
+
+            void push(Word key) requires (_is_set) {
+                push(key, T{});
+            }
+
+            // Close everything and return the root; the builder is then
+            // empty and may be reused.
+            [[nodiscard]] ArrayMappedTrie const* _Nullable finish() {
+                if (!_has_prev)
+                    return nullptr;
+                ArrayMappedTrie const* current = _close_leaf();
+                while (_depth) {
+                    Frame& f = _frames[--_depth];
+                    f.children[f.count++] = current;
+                    current = _close(f);
+                }
+                _has_prev = false;
+                return current;
+            }
+
+            void _begin_leaf(Word key) {
+                _leaf_prefix = key & PREFIX_MASK;
+                _leaf_bitmap = 0;
+                _leaf_count = 0;
+            }
+
+            [[nodiscard]] ArrayMappedTrie* _Nonnull _close_leaf() {
+                ArrayMappedTrie* leaf = make(_leaf_prefix, 0, _leaf_count, _leaf_count, _leaf_bitmap);
+                if constexpr (!_is_set)
+                    for (int i = 0; i != _leaf_count; ++i)
+                        leaf->_values[i] = std::move(_leaf_values[i]);
+#ifndef NDEBUG
+                leaf->_assert_invariant_shallow();
+#endif
+                return leaf;
+            }
+
+            [[nodiscard]] static ArrayMappedTrie* _Nonnull _close(Frame& f) {
+                assert(f.count >= 2);
+                Bitmap bitmap = 0;
+                for (int i = 0; i != f.count; ++i) {
+                    Bitmap select = (Bitmap)1 << (int)((f.children[i]->_prefix >> f.shift) & INDEX_MASK);
+                    assert(select > bitmap); // strictly ascending indices
+                    bitmap |= select;
+                }
+                ArrayMappedTrie* node = make(f.prefix, f.shift, f.count, f.count, bitmap);
+                for (int i = 0; i != f.count; ++i)
+                    node->_children[i] = f.children[i];
+#ifndef NDEBUG
+                node->_assert_invariant_shallow();
+#endif
+                return node;
+            }
+
+            // Place a completed subtree whose last code diverges from the
+            // next code at shift s.
+            void _attach(ArrayMappedTrie const* _Nonnull current, int s) {
+                while (_depth && _frames[_depth - 1].shift < s) {
+                    Frame& f = _frames[--_depth];
+                    f.children[f.count++] = current;
+                    current = _close(f);
+                }
+                if (_depth && _frames[_depth - 1].shift == s) {
+                    Frame& f = _frames[_depth - 1];
+                    assert(f.count < LEAF_CAPACITY);
+                    f.children[f.count++] = current;
+                } else {
+                    assert(_depth < MAX_DEPTH);
+                    Frame& f = _frames[_depth++];
+                    f.prefix = prefix_from_key_and_shift(_prev, s);
+                    f.shift = s;
+                    f.count = 1;
+                    f.children[0] = current;
+                }
+            }
+
+        }; // struct SortedBuilder
+
+        // Convenience over SortedBuilder for a range in code order: (code,
+        // value) pairs for a map, bare codes for a set.
+        template<typename InputIt, typename Sentinel>
+        [[nodiscard]] static ArrayMappedTrie const* _Nullable
+        build_from_sorted(InputIt first, Sentinel last) {
+            SortedBuilder builder;
+            for (; first != last; ++first) {
+                if constexpr (_is_set)
+                    builder.push((Word)*first);
+                else
+                    builder.push((*first).first, (*first).second);
+            }
+            return builder.finish();
+        }
+
 
 
 
