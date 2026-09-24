@@ -66,7 +66,8 @@ namespace wry::gui {
     X(toggle_console,   "toggle-console",   "Toggle console",           "`",       false) \
     X(toggle_jacobians, "toggle-jacobians", "Toggle Jacobians (debug)", "J",       false) \
     X(toggle_points,    "toggle-points",    "Toggle points (debug)",    "P",       false) \
-    X(toggle_wireframe, "toggle-wireframe", "Toggle wireframe (debug)", "W",       false)
+    X(toggle_wireframe, "toggle-wireframe", "Toggle wireframe (debug)", "W",       false) \
+    X(pipette,          "pipette",          "Pipette",                  "Q",       false)
 
     enum class Action : uint32_t {
 #define WRY_X(SYM, ID, NAME, COMBO, REPEATS) SYM,

@@ -22,6 +22,7 @@
 #include "settings.hpp"
 #include "test.hpp"
 #include "world_state.hpp"
+#include "opcode.hpp"
 #include "save.hpp"
 #include "SpriteAtlas.hpp"
 #include "font.hpp"
@@ -350,6 +351,26 @@ namespace wry {
                     }
                 }
             }
+        }
+
+        void PaletteOverlay::select_orbit_of(Term picked) {
+            assert(picked.is_opcode());
+            const OPCODE want =
+                opcode_orbit_representative((OPCODE) picked.as_opcode());
+            auto& m = _controls._payload;
+            for (difference_type j = 0; j != m.major(); ++j) {
+                for (difference_type i = 0; i != m.minor(); ++i) {
+                    Term slot = m[i, j];
+                    if (slot.is_opcode() &&
+                        opcode_orbit_representative((OPCODE) slot.as_opcode()) == want) {
+                        m[i, j] = picked;
+                        _selected_i = (int) i;
+                        _selected_j = (int) j;
+                        return;
+                    }
+                }
+            }
+            _selected_i = _selected_j = -1;
         }
 
         // ================================================================

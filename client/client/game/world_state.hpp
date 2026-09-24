@@ -98,6 +98,7 @@ namespace wry {
         simd_float4 _mouse4 = {};         // cursor projected onto the ground plane
         bool _outstanding_click = false;  // pending world click (hand full)
         bool _outstanding_erase = false;  // pending right-click erase
+        bool _outstanding_pipette = false; // pending Q pick-up (hand empty)
         String _outstanding_keysdown;     // pending hex-key writes
 
         // Map mode (TAB): the renderer draws the world-map quad instead of
@@ -194,11 +195,14 @@ namespace wry {
         void pump_legacy_event(gui::Event const& e);  // legacy world-input fallback
         void perform_action(gui::Action);             // a bound action fired
 
-        // The hand.  Holding a glyph is a modal state: left click places
-        // it, R / H / V reorient it, Escape drops it (and only with an
-        // empty hand opens the menu).
+        // The hand.  Holding a term is a modal state: left click places
+        // it, R / H / V reorient it (opcodes), Escape or Q drops it (and
+        // only with an empty hand does Escape open the menu).  Q with an
+        // empty hand is the pipette: it copies the tile under the cursor
+        // into the hand, matter excepted.
         bool is_holding() const { return !term_is_null(_holding_value._value); }
         void drop_hand();
+        bool pipette_at(Coordinate xy);
 
         ~WorldState() {
             fprintf(stderr, "%s\n", __PRETTY_FUNCTION__);

@@ -933,7 +933,19 @@
         _model->_palette_overlay.clear_cursor_refresh();
     }
     if (_model->_palette_overlay.cursor_needs_refresh()) {
-        auto coordinate = _opcode_to_coordinate[term_as_opcode(_model->_holding_value)];
+        // The hand can hold any non-matter term (pipette); the cursor
+        // shows the glyph the ground would.
+        wry::Term held = _model->_holding_value;
+        simd_float4 coordinate;
+        if (held.is_opcode())
+            coordinate = _opcode_to_coordinate[held.as_opcode()];
+        else if (wry::term_is_boolean(held))
+            coordinate = wry::term_as_boolean(held) ? _true_coordinate : _false_coordinate;
+        else if (held.is_inty())
+            coordinate = _digit_zero_coordinate
+                + make<float4>((held.as_int() & 15) / 32.0f, 0.0f, 0.0f, 0.0f);
+        else
+            coordinate = _cdot_coordinate;
         // One atlas cell (32 x 32 grid), cut out at its native resolution;
         // the NSImage below is still 32 points, so a higher-resolution
         // atlas just makes a sharper cursor.

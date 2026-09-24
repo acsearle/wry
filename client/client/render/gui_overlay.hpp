@@ -354,6 +354,10 @@ namespace wry {
             // drifted apart; leave the palette alone rather than clobber
             // some other cell).
             void replace_glyph(Term previous, Term next);
+            // The pipette picked up an opcode: the slot showing its
+            // reorientation orbit becomes the held slot and shows the
+            // picked orientation (no slot for an opcode without art).
+            void select_orbit_of(Term picked);
 
         private:
             wry::Palette<wry::Term> _controls;

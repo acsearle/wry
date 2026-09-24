@@ -449,6 +449,14 @@ namespace wry {
             _outstanding_erase = false;
         }
 
+        // Q with an empty hand: pick up the tile under the cursor.
+        if (_outstanding_pipette) {
+            int i = round(_mouse4.x);
+            int j = round(_mouse4.y);
+            (void) pipette_at(Coordinate{i, j});
+            _outstanding_pipette = false;
+        }
+
         // Hex keys: write the digit at the tile under the cursor.
         while (!_outstanding_keysdown.empty()) {
             char32_t ch = _outstanding_keysdown.front_and_pop_front();
@@ -481,6 +489,38 @@ namespace wry {
         _palette_overlay.clear_selection();
         _palette_overlay.request_cursor_refresh();
         _gui.append_log(buffer);
+    }
+
+    // Pipette (Q with an empty hand): copy whatever is on the tile into
+    // the hand.  Matter is excepted -- placing the copy would conjure
+    // matter; ghosts are the eventual answer.  Reads the displayed world:
+    // the hand is client state, so no command is involved.
+    bool WorldState::pipette_at(Coordinate xy) {
+        Root<World const*> w;
+        if (!_worlds.try_pop_front(w))
+            return false;
+        Term t{};
+        const bool has = w._ptr->_term_for_coordinate.try_get(xy, t);
+        _worlds.push_front(std::move(w));
+        if (!has || term_is_null(t) || t.is_matter())
+            return false;
+        _holding_value = t;
+        if (t.is_opcode())
+            _palette_overlay.select_orbit_of(t);
+        else
+            _palette_overlay.clear_selection();
+        _palette_overlay.request_cursor_refresh();
+        char buffer[100];
+        if (t.is_opcode())
+            std::snprintf(buffer, sizeof(buffer), "Picked up %s",
+                          name_from_OPCODE((OPCODE) t.as_opcode()) + 7);
+        else if (t.is_inty())
+            std::snprintf(buffer, sizeof(buffer), "Picked up %lld",
+                          (long long) t.as_int());
+        else
+            std::snprintf(buffer, sizeof(buffer), "Picked up a value");
+        _gui.append_log(buffer);
+        return true;
     }
 
     // Perform a bound game action -- the target half of the keymap
@@ -522,6 +562,16 @@ namespace wry {
                 _gui.append_log(buffer);
                 break;
             }
+
+            case Action::pipette:
+                // Factorio's Q: a full hand is emptied; an empty hand picks
+                // up the tile under the cursor (resolved in update, where
+                // the cursor tile is fresh).
+                if (is_holding())
+                    drop_hand();
+                else
+                    _outstanding_pipette = true;
+                break;
 
             case Action::toggle_map:
                 _show_map = !_show_map;
@@ -781,6 +831,40 @@ namespace wry {
         ws.pump_legacy_event(key_down(gui::key::Escape));
         assert(ws._stack.size() == depth + 1);
         assert(ws._stack.contains(&ws._main_menu_overlay));
+
+        co_return;
+    };
+
+    // Pipette: with an empty hand Q copies the tile under the cursor into
+    // the hand, matter excepted; with a full hand Q drops it.  Sampling
+    // reads the displayed world -- here the starting world laid out by
+    // make_starting_world, before any step.
+    define_test("world_state_pipette") {
+        GuiContext gc;
+        WorldState ws(gc);
+
+        // An empty tile: nothing happens.
+        assert(!ws.pipette_at(Coordinate{50, 50}));
+        assert(!ws.is_holding());
+
+        // A number, then an opcode, are copied into the hand.
+        assert(ws.pipette_at(Coordinate{-2, -2}));
+        assert(ws._holding_value._value._data == term_make_integer_with(7)._data);
+        assert(ws.pipette_at(Coordinate{0, 4}));
+        assert(ws._holding_value._value._data == term_make_opcode(OPCODE_FLIP_FLOP)._data);
+        assert(ws._palette_overlay.cursor_needs_refresh());
+
+        // Matter is not: the hand keeps what it had.
+        assert(!ws.pipette_at(Coordinate{-2, 2}));
+        assert(ws._holding_value._value._data == term_make_opcode(OPCODE_FLIP_FLOP)._data);
+
+        // The action itself: a full hand drops, an empty hand queues a
+        // pick-up for update to resolve at the cursor tile.
+        ws.perform_action(gui::Action::pipette);
+        assert(!ws.is_holding());
+        assert(!ws._outstanding_pipette);
+        ws.perform_action(gui::Action::pipette);
+        assert(ws._outstanding_pipette);
 
         co_return;
     };
