@@ -511,13 +511,13 @@ namespace wry {
 
         [[nodiscard]] ArrayMappedTrie* _Nonnull clone_and_erase_child_containing_key(Word key) const {
             assert(has_children());
-            ArrayMappedTrie* new_node = clone_with_capacity(popcount(_bitmap));
+            assert(bitmap_includes_key(key));
+            ArrayMappedTrie* new_node = clone_with_capacity(std::popcount(_bitmap));
             [[maybe_unused]] ArrayMappedTrie const* _ = nullptr;
-            bool did_erase = compressed_array_erase_for_index(new_node->_bitmap,
-                                                              new_node->_children,
-                                                              get_index_for_key(key),
-                                                              _);
-            assert(did_erase);
+            compressed_array_erase_for_index(new_node->_bitmap,
+                                             new_node->_children,
+                                             get_index_for_key(key),
+                                             _);
 #ifndef NDEBUG
             --(new_node->_debug_count);
 #endif
@@ -571,10 +571,15 @@ namespace wry {
             return { new_node, leaf_did_assign };
         }
 
+        // Erase `key`, returning the new root and whether anything changed.
+        //
+        // Canonical form: the empty trie is nullptr, never a node with an
+        // empty bitmap, and an internal node has at least two children.  So
+        // erasing the last member of a leaf yields nullptr, and a parent left
+        // holding one child collapses to that child.  The collapse needs no
+        // help from the caller: every node carries its own prefix and shift,
+        // so a grandchild stands in for its parent anywhere the parent stood.
         [[nodiscard]] std::pair<ArrayMappedTrie const* _Nullable, bool> clone_and_erase_key(Word key, T& victim) const {
-            // TODO: Do we handle all cases correctly?
-            // - Replacing a count one ArrayMappedTrie with nullptr
-            // - Replacing a count two ArrayMappedTrie with surviving child
             if (!prefix_includes_key(key) || !bitmap_includes_key(key))
                 // Word not present
                 return { this, false };
@@ -586,13 +591,25 @@ namespace wry {
                 assert((new_child == child) == !did_erase);
                 if (!did_erase)
                     return { this, false };
-                return {
-                    clone_and_assign_child(new_child),
-                    true
-                };
+                if (new_child)
+                    return { clone_and_assign_child(new_child), true };
+                // The child emptied out.  Drop it, collapsing to the other
+                // child when that leaves only one; the survivor is shared
+                // with the old trie, as any untouched subtree would be.
+                int count = std::popcount(_bitmap);
+                assert(count >= 2);
+                if (count == 2)
+                    return { _children[1 - compressed_index], true };
+                return { clone_and_erase_child_containing_key(key), true };
             } else {
                 assert(has_values());
                 // we already established that bitmap_includes_key(key)
+                if (std::popcount(_bitmap) == 1) {
+                    // Sole member: the leaf goes away rather than lingering
+                    // empty
+                    if constexpr (!_is_set) victim = _values[compressed_index];
+                    return { nullptr, true };
+                }
                 ArrayMappedTrie* _Nonnull new_node = clone();
                 // TODO: we allocate enough for the clone then erase one
                 int index = get_index_for_key(key);
@@ -600,6 +617,9 @@ namespace wry {
                                                  new_node->_values,
                                                  index,
                                                  victim);
+#ifndef NDEBUG
+                --(new_node->_debug_count);
+#endif
                 return { new_node, true };
             }
         }
@@ -852,6 +872,7 @@ namespace wry {
 
 
         void _assert_invariant_shallow() const {
+            using bit::popcount;
             assert(_bitmap);
             int count = popcount(_bitmap);
             assert(count > 0);
@@ -863,24 +884,66 @@ namespace wry {
                     const ArrayMappedTrie* child = _children[j];
                     assert(child->_shift < _shift);
                     if ((child->_prefix & get_prefix_mask) != _prefix) {
-                        printf("%llx : %d\n", _prefix, _shift);
-                        printf("%llx : %d\n", child->_prefix, child->_shift);
+                        printf("%llx : %d\n", (unsigned long long)_prefix, _shift);
+                        printf("%llx : %d\n", (unsigned long long)child->_prefix, child->_shift);
                     }
                     assert((child->_prefix & get_prefix_mask) == _prefix);
                     int child_index = get_index_for_key(child->_prefix);
                     Word select = (Word)1 << child_index;
                     assert(_bitmap & select);
                     if (popcount(_bitmap & (select - 1)) != j) {
-                        printf("%llx : %d\n", _prefix, _shift);
-                        printf("%llx : %d\n", child->_prefix, child->_shift);
+                        printf("%llx : %d\n", (unsigned long long)_prefix, _shift);
+                        printf("%llx : %d\n", (unsigned long long)child->_prefix, child->_shift);
                         printf("j: %d\n", j);
                         printf("child_index : %d\n", child_index);
-                        printf("bitmap : %llx (%d)\n", _bitmap, popcount(_bitmap));
+                        printf("bitmap : %llx (%d)\n", (unsigned long long)_bitmap, popcount(_bitmap));
                         printf("popcount: %d\n", popcount(_bitmap & (select - 1)));
                     }
                     assert(popcount(_bitmap & (select - 1)) == j);
                 }
             }
+        }
+
+        // Whole-subtree check of the canonical-form invariants: no empty
+        // node, at least two children per internal node, leaves at shift 0,
+        // and every child inside its parent's prefix at a strictly lower
+        // shift.  Debug builds only; O(n).
+        void _assert_invariant_deep() const {
+#ifndef NDEBUG
+            _assert_invariant_shallow();
+            if (has_children()) {
+                int count = std::popcount(_bitmap);
+                assert(count >= 2);
+                for (int j = 0; j != count; ++j)
+                    _children[j]->_assert_invariant_deep();
+            } else {
+                assert(_shift == 0);
+            }
+#endif
+        }
+
+        static void assert_canonical(ArrayMappedTrie const* _Nullable root) {
+            if (root)
+                root->_assert_invariant_deep();
+        }
+
+        // Structural equality: same prefix, shift and bitmap at every node.
+        // Values are not compared; pair with a content oracle.  Two tries
+        // holding the same key set are both canonical exactly when this
+        // holds between them.
+        static bool same_shape(ArrayMappedTrie const* _Nullable a,
+                               ArrayMappedTrie const* _Nullable b) {
+            if (!a || !b)
+                return !a && !b;
+            if (a->_prefix != b->_prefix || a->_shift != b->_shift || a->_bitmap != b->_bitmap)
+                return false;
+            if (a->has_children()) {
+                int count = std::popcount(a->_bitmap);
+                for (int j = 0; j != count; ++j)
+                    if (!same_shape(a->_children[j], b->_children[j]))
+                        return false;
+            }
+            return true;
         }
 
 

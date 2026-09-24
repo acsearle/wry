@@ -5,8 +5,16 @@ List of one-line reminders of things to think and do
 - Saving AMTs saves their in-memory structure, which is strange and brittle
   - Save as a flat key-value list.  AMT structure is unique at the moment but
     that's not a guarantee for all structures. 
+    - FIXED 2026-09-24: clone_and_erase_key used to keep an emptied leaf in place, so shape depended on erase history (structural save bytes and any structural hash inherited that).  Now an emptied leaf becomes nullptr and a one-child parent collapses; tests pin shape == sorted-insertion build (amt_erase_canonical + the rebuild differentials).  Old save files may still carry empty leaves
+    - DECIDED 2026-09-24: serialize in code order (not domain-key order); a key-encoding change is a save-breaking version bump, accepted to keep sorting off the save and load paths
+    - NEXT: fast loader = bulk build from the code-ordered (code, value) list, left to right and bottom up on the divergence shift between consecutive codes (stack of open nodes; leaves are 32-aligned blocks; >= 2 children falls out; exact capacities from a lookahead count); never n x insert, which path-copies ~depth nodes per key.  Reusable as rebuild_serial's null-source case.  Test: same_shape vs the insertion build plus a content oracle
 - Hash of data structures for file self-validation and multiplayer desync detection
   - Hash, like save, must be content only, not relying on structure
+  - IDEA 2026-09-24 (not now): hash the LIVE World every step, not only the save; clients upload it per step as proof of sync and liveness
+    - Augment AMT nodes with a hash field and let the rebuild maintain it: untouched subtrees keep theirs, each assembled node recombines its children's.  Cost O(nodes rebuilt per step), which the rebuild already touches.  Nodes are immutable once published, so compute at assembly (or lazily into a mutable cached field, cf. the ReadyValue late-write policy)
+    - Definition (Antony): a combining tree in code order, WORD-ary to match the trie's fanout: leaf = combine of (code, value) hashes in index order, internal = combine of child hashes in index order.  Content-only ONLY BECAUSE shape is canonical (the erase fix above is load-bearing); tied to SYMBOL_WIDTH, which is fine for peers on one build
+    - Alternative (Claude): commutative and associative per-entry combine (128-bit sum of mix(code, value)); node hash = sum of children.  Content-only by construction and structure-agnostic, and equal to the hash of the flat code-ordered save list, so the loader can verify a file by summing as it reads.  Collision resistance is adequate for a non-adversarial tripwire (a poisoned hash is a self-kick)
+    - Value hashes must be content hashes, never pointers: Entity and HeapTerm get a virtual hash cached at freeze; Term OBJECT payloads hash by target content; PersistentStack cells cache a hash (O(1) per push); World = combine(map roots, time, entity id source, ready folded into the time wheel exactly as the save does) so live hash == save hash
 - Does AMT enforce no null values?
   - Do all desired value types have a null value?
   - Pros/cons?

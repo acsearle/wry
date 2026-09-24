@@ -158,6 +158,27 @@ namespace wry {
                 assert(us == es);
             }
 
+            // Canonical shape on both sides: the unified frame's assembly and
+            // its leaf-level erases must leave no emptied leaf or one-child
+            // parent behind.  Shape depends only on the key set, so the ki
+            // reference can carry empty waitsets.
+            {
+                using KvAMT = decltype(unified.kv)::AMT;
+                using KiAMT = decltype(unified.ki)::AMT;
+                const KvAMT* kv_ref = nullptr;
+                for (auto [k, v] : kv_expect)
+                    kv_ref = KvAMT::insert(kv_ref, k, v);
+                const KiAMT* ki_ref = nullptr;
+                for (auto& [k, s] : ki_expect)
+                    ki_ref = KiAMT::insert(ki_ref, k, WaitSet{});
+                const KvAMT* kv_out = unified.kv._inner ? &*unified.kv._inner : nullptr;
+                const KiAMT* ki_out = unified.ki._inner ? &*unified.ki._inner : nullptr;
+                KvAMT::assert_canonical(kv_out);
+                KiAMT::assert_canonical(ki_out);
+                assert(KvAMT::same_shape(kv_out, kv_ref));
+                assert(KiAMT::same_shape(ki_out, ki_ref));
+            }
+
             if (!(iter & 7))
                 mutator_repin();
         }
