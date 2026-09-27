@@ -1409,7 +1409,7 @@
         visit_in_region(new_world->_located_for_coordinate,
                         Coordinate{grid_bounds.a.x, grid_bounds.a.y},
                         Coordinate{grid_bounds.b.x - 1, grid_bounds.b.y - 1},
-                        [&visible_ids](Coordinate, const WaitSet& located) {
+                        [&visible_ids](Coordinate, const EntityIDSet& located) {
                             located.for_each([&visible_ids](EntityID id) {
                                 if (id) visible_ids.push_back(id);
                             });

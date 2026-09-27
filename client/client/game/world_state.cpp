@@ -49,7 +49,7 @@ namespace wry {
                 world->_waiting_on_time.set({Time{0}, entity_id});
                 // located, but not occupying: statics live only in the
                 // location multimap
-                WaitSet located;
+                EntityIDSet located;
                 (void) world->_located_for_coordinate.try_get(entity_ptr->_location, located);
                 located.set(entity_id);
                 world->_located_for_coordinate.set(entity_ptr->_location, located);
@@ -175,9 +175,9 @@ namespace wry {
                 // located at both transit endpoints, mirroring occupancy;
                 // the reject-and-redraw above guarantees no cell sharing,
                 // so singleton sets suffice
-                { WaitSet s; s.set(machine->_entity_id);
+                { EntityIDSet s; s.set(machine->_entity_id);
                   world->_located_for_coordinate.set(xy, s); }
-                { WaitSet s; s.set(machine->_entity_id);
+                { EntityIDSet s; s.set(machine->_entity_id);
                   world->_located_for_coordinate.set(destination, s); }
                 world->_waiting_on_time.set({arrival, machine->_entity_id});
                 ++placed;

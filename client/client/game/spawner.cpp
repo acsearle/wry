@@ -63,7 +63,7 @@ namespace wry {
             {
                 // the new machine is located here, alongside this Spawner
                 // (and any other non-occupying residents)
-                WaitSet located;
+                EntityIDSet located;
                 (void) tx->try_read_located_for_coordinate(this->_location, located);
                 located.set(b);
                 // TODO: This should be a nonexclusive merge

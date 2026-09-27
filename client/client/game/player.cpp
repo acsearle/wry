@@ -117,7 +117,7 @@ namespace wry {
         sink->_entity_id = w->generate_entity_id();
         sink->_location = Coordinate{3, 3};
         w->_entity_for_entity_id.set(sink->_entity_id, sink);
-        { WaitSet s; s.set(sink->_entity_id);
+        { EntityIDSet s; s.set(sink->_entity_id);
           w->_located_for_coordinate.set(sink->_location, s); }
         w->_waiting_on_time.set({Time{0}, sink->_entity_id});
 

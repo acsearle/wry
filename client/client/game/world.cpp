@@ -253,7 +253,7 @@ namespace wry {
 
         WaitableMap<Coordinate, Term> new_value_for_coordinate;
         WaitableMap<Coordinate, EntityID> new_entity_id_for_coordinate;
-        WaitableMap<Coordinate, WaitSet> new_located_for_coordinate;
+        WaitableMap<Coordinate, EntityIDSet> new_located_for_coordinate;
         WaitableMap<EntityID, Entity const*> new_entity_for_entity_id;
         Set new_next_waiting_on_time;
 
@@ -378,9 +378,9 @@ namespace wry {
         auto action_for_located_for_coordinate
         = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<std::pair<ParallelRebuildAction<WaitSet>, ParallelRebuildAction<std::vector<EntityID>>>> {
+        -> Coroutine::Future<std::pair<ParallelRebuildAction<EntityIDSet>, ParallelRebuildAction<std::vector<EntityID>>>> {
 
-            using A = std::pair<ParallelRebuildAction<WaitSet>, ParallelRebuildAction<std::vector<EntityID>>>;
+            using A = std::pair<ParallelRebuildAction<EntityIDSet>, ParallelRebuildAction<std::vector<EntityID>>>;
 
             A result = {};
             const Transaction::Node* writer = nullptr;
@@ -403,8 +403,8 @@ namespace wry {
 
             if (writer) {
                 assert(writer->_operation & Transaction::Operation::WRITE_ON_COMMIT);
-                result.first.value = get<WaitSet>(writer->_desired);
-                result.first.tag = ParallelRebuildAction<WaitSet>::WRITE_VALUE;
+                result.first.value = get<EntityIDSet>(writer->_desired);
+                result.first.tag = ParallelRebuildAction<EntityIDSet>::WRITE_VALUE;
                 if (writer->_operation & Transaction::Operation::WAIT_ON_COMMIT) {
                     result.second.value.push_back(writer->_parent->_entity->_entity_id);
                     result.second.tag = ParallelRebuildAction<std::vector<EntityID>>::WRITE_VALUE;

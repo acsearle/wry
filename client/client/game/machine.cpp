@@ -359,9 +359,9 @@ namespace wry {
                     // cell's set without us (PersistentSet has no erase;
                     // sets here are tiny), preserving any non-occupying
                     // residents
-                    WaitSet located;
+                    EntityIDSet located;
                     (void) tx->try_read_located_for_coordinate(_old_location, located);
-                    WaitSet without;
+                    EntityIDSet without;
                     EntityID self = this->_entity_id;
                     located.for_each([&without, self](EntityID id) {
                         if (id != self)
@@ -458,7 +458,7 @@ namespace wry {
                 {
                     // location mirrors occupancy: join the claimed cell's
                     // set alongside any non-occupying residents
-                    WaitSet located;
+                    EntityIDSet located;
                     (void) tx->try_read_located_for_coordinate(plan.next_location, located);
                     located.set(this->_entity_id);
                     tx->write_located_for_coordinate(plan.next_location, located);
@@ -469,7 +469,7 @@ namespace wry {
                     // junction; the reservation is released by the
                     // ordinary old-cell release as we pass through
                     tx->write_entity_id_for_coordinate(plan.beyond, this->_entity_id);
-                    WaitSet located;
+                    EntityIDSet located;
                     (void) tx->try_read_located_for_coordinate(plan.beyond, located);
                     located.set(this->_entity_id);
                     tx->write_located_for_coordinate(plan.beyond, located);
@@ -881,7 +881,7 @@ namespace wry {
             m->_new_heading = heading;
             w->_entity_for_entity_id.set(m->_entity_id, m);
             w->_entity_id_for_coordinate.set(Coordinate{x, y}, m->_entity_id);
-            { WaitSet s; s.set(m->_entity_id);
+            { EntityIDSet s; s.set(m->_entity_id);
               w->_located_for_coordinate.set(Coordinate{x, y}, s); }
             w->_waiting_on_time.set({Time{0}, m->_entity_id});
             return m->_entity_id;
@@ -891,12 +891,12 @@ namespace wry {
         bool test_located_only_at(const Root<World*>& world, EntityID id,
                                   i32 x, i32 y,
                                   std::initializer_list<Coordinate> not_at) {
-            WaitSet s{};
+            EntityIDSet s{};
             (void) world._ptr->_located_for_coordinate.try_get(Coordinate{x, y}, s);
             if (!s.contains(id))
                 return false;
             for (Coordinate c : not_at) {
-                WaitSet t{};
+                EntityIDSet t{};
                 (void) world._ptr->_located_for_coordinate.try_get(c, t);
                 if (t.contains(id))
                     return false;
@@ -1092,7 +1092,7 @@ namespace wry {
         Sink* sink = new Sink;
         sink->_location = Coordinate{100, 4};
         w->_entity_for_entity_id.set(sink->_entity_id, sink);
-        { WaitSet s; s.set(sink->_entity_id);
+        { EntityIDSet s; s.set(sink->_entity_id);
           w->_located_for_coordinate.set(sink->_location, s); }
         w->_waiting_on_time.set({Time{300}, sink->_entity_id});
         EntityID sink_id = sink->_entity_id;
@@ -1318,7 +1318,7 @@ namespace wry {
             assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{100, 2}, taken));
             Term sunk{};
             assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{100, 4}, sunk));
-            WaitSet at_sink{};
+            EntityIDSet at_sink{};
             (void) world._ptr->_located_for_coordinate.try_get(Coordinate{100, 4}, at_sink);
             assert(at_sink.contains(sink_id));
             assert(!at_sink.contains(mk));
@@ -1409,7 +1409,7 @@ namespace wry {
             (void) world._ptr->_entity_id_for_coordinate.try_get(Coordinate{145, 5},
                                                                  junction_occupant);
             assert(!junction_occupant);
-            WaitSet at_junction{};
+            EntityIDSet at_junction{};
             (void) world._ptr->_located_for_coordinate.try_get(Coordinate{145, 5},
                                                                at_junction);
             assert(!at_junction.contains(mq_a));

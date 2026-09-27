@@ -78,12 +78,12 @@ namespace wry {
         // to treat occupancy as one location source and this map as the
         // non-occupants' side, unioning at query time).  Region queries
         // over this map can surface an entity once per cell it spans;
-        // consumers de-duplicate.  The value type is WaitSet -- the same
-        // PersistentSet<EntityID> instantiation as the ki waiter index --
-        // deliberately, so the save format reuses the existing node
-        // emitters and registry entries.
+        // consumers de-duplicate.  The value type is EntityIDSet, the same
+        // PersistentSet<EntityID> instantiation the ki waiter index uses
+        // under the name WaitSet, deliberately, so the save format reuses
+        // the same entry emitter and registry entry.
         WaitableMap<Coordinate, EntityID> _entity_id_for_coordinate;
-        WaitableMap<Coordinate, WaitSet> _located_for_coordinate;
+        WaitableMap<Coordinate, EntityIDSet> _located_for_coordinate;
         WaitableMap<EntityID, const Entity*> _entity_for_entity_id;
         WaitableMap<Coordinate, Term> _term_for_coordinate;
         WaitableMap<Coordinate, Terrain> _terrain_for_coordinate;
@@ -108,7 +108,7 @@ namespace wry {
               EntityID entity_id_source,
               FrozenSkiplistMap<EntityID, ReadyValue, DefaultKeyService<EntityID>, ScanDiscipline> ready,
               WaitableMap<Coordinate, EntityID> entity_id_for_coordinate,
-              WaitableMap<Coordinate, WaitSet> located_for_coordinate,
+              WaitableMap<Coordinate, EntityIDSet> located_for_coordinate,
               WaitableMap<EntityID, const Entity*> entity_for_entity_id,
               WaitableMap<Coordinate, Term> value_for_coordinate,
               WaitableMap<Coordinate, Terrain> terrain_for_coordinate,

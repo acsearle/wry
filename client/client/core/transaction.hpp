@@ -174,7 +174,7 @@ namespace wry {
 
         bool try_read_value_for_coordinate(Coordinate, Term&) const;
         bool try_read_entity_id_for_coordinate(Coordinate, EntityID&) const;
-        bool try_read_located_for_coordinate(Coordinate, WaitSet&) const;
+        bool try_read_located_for_coordinate(Coordinate, EntityIDSet&) const;
         bool try_read_entity_for_entity_id(EntityID, const Entity*&) const;
 
 
@@ -195,7 +195,7 @@ namespace wry {
         // location updates on occupancy transitions, which already serialize
         // same-key writers.  Non-occupying movers will need set-delta merge
         // semantics here (noted in machine_language.md 10.7; not built).
-        void write_located_for_coordinate(Coordinate, WaitSet, int = WRITE_ON_COMMIT);
+        void write_located_for_coordinate(Coordinate, EntityIDSet, int = WRITE_ON_COMMIT);
         void wait_on_located_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
 
         
@@ -256,7 +256,7 @@ namespace wry {
         
         bool try_read_value_for_coordinate(Coordinate, Term&);
         bool try_read_entity_id_for_coordinate(Coordinate, EntityID&);
-        bool try_read_located_for_coordinate(Coordinate, WaitSet&);
+        bool try_read_located_for_coordinate(Coordinate, EntityIDSet&);
         bool try_read_entity_for_entity_id(EntityID, const Entity*&);
 
     };

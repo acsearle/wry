@@ -18,7 +18,7 @@ namespace wry {
         return this->_world->_entity_id_for_coordinate.try_get(key, victim);
     }
 
-    bool TransactionContext::try_read_located_for_coordinate(Coordinate key, WaitSet& victim) {
+    bool TransactionContext::try_read_located_for_coordinate(Coordinate key, EntityIDSet& victim) {
         return this->_world->_located_for_coordinate.try_get(key, victim);
     }
 
@@ -48,7 +48,7 @@ namespace wry {
         return _context->try_read_entity_id_for_coordinate(key, victim);
     }
 
-    bool Transaction::try_read_located_for_coordinate(Coordinate key, WaitSet& victim) const {
+    bool Transaction::try_read_located_for_coordinate(Coordinate key, EntityIDSet& victim) const {
         return _context->try_read_located_for_coordinate(key, victim);
     }
 
@@ -127,7 +127,7 @@ namespace wry {
     
     auto Transaction::
     write_located_for_coordinate(Coordinate key,
-                                 WaitSet desired,
+                                 EntityIDSet desired,
                                  int operation)
     -> void {
         transaction_verb_generic(this,
@@ -141,7 +141,7 @@ namespace wry {
     wait_on_located_for_coordinate(Coordinate key,
                                    int operation)
     -> void {
-        transaction_verb_generic<Coordinate, WaitSet>(this,
+        transaction_verb_generic<Coordinate, EntityIDSet>(this,
                                  &(_context->_verb_located_for_coordinate),
                                  key,
                                  {},

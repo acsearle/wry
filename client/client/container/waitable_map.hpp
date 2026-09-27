@@ -14,12 +14,22 @@
 
 namespace wry {
     
-    // A key's set of waiting entities.  Nested as the *value* of the ki map
-    // (rather than flattened into pair<Key, EntityID> keys) so that per-key
-    // waitset operations are single-key, which is what the parallel rebuild
-    // eats; see container/docs/parallel_rebuild.md.  Sparse: only keys that
-    // actually have waiters get an entry, so the dense kv map stays lean.
-    using WaitSet = PersistentSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline>;
+    // A persistent set of EntityIDs.  One type, two roles, named by role so
+    // a reader knows which contract applies:
+    //   - WaitSet: a key's set of waiting entities, the value of the ki map.
+    //     Nested as the *value* (rather than flattened into pair<Key,
+    //     EntityID> keys) so that per-key waitset operations are single-key,
+    //     which is what the parallel rebuild eats; see
+    //     container/docs/parallel_rebuild.md.  Sparse: only keys that
+    //     actually have waiters get an entry, so the dense kv map stays
+    //     lean.  Waiters are only ever added, or the whole entry replaced or
+    //     cleared; spurious wakeups are permitted.
+    //   - EntityIDSet: the entities located at a coordinate (World's
+    //     location multimap), rebuilt whole on every change.
+    // PersistentSet has no per-element erase, so both roles replace whole
+    // sets.  Same type: no format or behavior difference.
+    using EntityIDSet = PersistentSet<EntityID, DefaultKeyService<EntityID>, ScanDiscipline>;
+    using WaitSet = EntityIDSet;
 
     template<typename Key, typename T>
     struct WaitableMap {

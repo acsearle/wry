@@ -16,7 +16,7 @@
 //    - ArrayMappedTrie<uint64_t, const Entity*>  // entity-for-entity-id map entries
 //    - ArrayMappedTrie<uint64_t, Terrain>        // terrain-for-coordinate map entries
 //    - ArrayMappedTrie<__uint128_t, std::monostate>  // time wheel set entries
-//    - ArrayMappedTrie<uint64_t, WaitSet>        // ki waiter-index map entries, waitsets inline
+//    - ArrayMappedTrie<uint64_t, WaitSet>        // ki waiter indexes and the location multimap; sets inline
 //    - PersistentStack<Term>                      // machine stack cells
 //
 
@@ -104,6 +104,8 @@ namespace wry {
     template<> struct save_type_traits<Term>           { static constexpr uint64_t value = save_type_tag_fnv1a("wry::Term"); };
     template<> struct save_type_traits<EntityID>        { static constexpr uint64_t value = save_type_tag_fnv1a("wry::EntityID"); };
     template<> struct save_type_traits<const Entity*>   { static constexpr uint64_t value = save_type_tag_fnv1a("wry::Entity*"); };
+    // WaitSet and EntityIDSet are one type; the tag string is a persisted
+    // identifier and keeps the original name.
     template<> struct save_type_traits<WaitSet>         { static constexpr uint64_t value = save_type_tag_fnv1a("wry::WaitSet"); };
     template<> struct save_type_traits<int>             { static constexpr uint64_t value = save_type_tag_fnv1a("int"); };
     template<> struct save_type_traits<std::monostate>   { static constexpr uint64_t value = save_type_tag_fnv1a("unit"); };
@@ -783,7 +785,7 @@ namespace wry {
         counter->_entity_id = w->generate_entity_id();
         counter->_location = Coordinate{0, 0};
         w->_entity_for_entity_id.set(counter->_entity_id, counter);
-        { WaitSet s; s.set(counter->_entity_id);
+        { EntityIDSet s; s.set(counter->_entity_id);
           w->_located_for_coordinate.set(counter->_location, s); }
         w->_waiting_on_time.set({Time{0}, counter->_entity_id});
 
@@ -793,7 +795,7 @@ namespace wry {
             spawners[i]->_entity_id = w->generate_entity_id();
             spawners[i]->_location = spawner_at[i];
             w->_entity_for_entity_id.set(spawners[i]->_entity_id, spawners[i]);
-            { WaitSet s; s.set(spawners[i]->_entity_id);
+            { EntityIDSet s; s.set(spawners[i]->_entity_id);
               w->_located_for_coordinate.set(spawner_at[i], s); }
             w->_waiting_on_time.set({Time{0}, spawners[i]->_entity_id});
         }
@@ -1001,13 +1003,13 @@ namespace wry {
         // Location multimap: statics and the machine, including one
         // multi-member set (spawner + machine sharing a cell) so the
         // nested set encoding is exercised on the kv side too.
-        { WaitSet s; s.set(spawner->_entity_id); s.set(machine->_entity_id);
+        { EntityIDSet s; s.set(spawner->_entity_id); s.set(machine->_entity_id);
           w->_located_for_coordinate.set(spawner->_location, s); }
-        { WaitSet s; s.set(source->_entity_id);
+        { EntityIDSet s; s.set(source->_entity_id);
           w->_located_for_coordinate.set(source->_location, s); }
-        { WaitSet s; s.set(sink->_entity_id);
+        { EntityIDSet s; s.set(sink->_entity_id);
           w->_located_for_coordinate.set(sink->_location, s); }
-        { WaitSet s; s.set(machine->_entity_id);
+        { EntityIDSet s; s.set(machine->_entity_id);
           w->_located_for_coordinate.set(machine->_new_location, s); }
 
         w->_term_for_coordinate.set(Coordinate{0, 1}, term_make_integer_with(1));
@@ -1089,13 +1091,13 @@ namespace wry {
 
         // Location multimap round-trips, including the multi-member set.
         {
-            WaitSet ls;
+            EntityIDSet ls;
             assert(w2->_located_for_coordinate.try_get(spawner->_location, ls));
             std::set<uint64_t> located;
             ls.for_each([&located](EntityID e) { located.insert(e.data); });
             assert((located == std::set<uint64_t>{ spawner->_entity_id.data,
                                                    machine->_entity_id.data }));
-            WaitSet ss;
+            EntityIDSet ss;
             assert(w2->_located_for_coordinate.try_get(sink->_location, ss));
             assert(ss.contains(sink->_entity_id));
         }
@@ -1127,8 +1129,8 @@ namespace wry {
             };
             auto same_ki = [&same](auto const& a, auto const& b) {
                 bool ok = same(a, b);
-                a.for_each([&ok, &b](auto key, WaitSet ws) {
-                    WaitSet ws2;
+                a.for_each([&ok, &b](auto key, EntityIDSet ws) {
+                    EntityIDSet ws2;
                     ok = ok && b.try_get(key, ws2)
                             && NodeSet_U64::same_shape(ws._inner, ws2._inner);
                     NodeSet_U64::assert_canonical(ws2._inner);
