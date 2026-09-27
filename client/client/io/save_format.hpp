@@ -7,6 +7,12 @@
 //  dispatch.  Designed for background-thread save against a persistent-DS
 //  snapshot; load is the latency-critical path.
 //
+//  Maps and sets travel as flat records of (code, value) entries in code
+//  order, one record per trie, carrying nothing of the trie's shape; the
+//  loader rebuilds the canonical trie in one pass (SortedBuilder).  The
+//  file is therefore a function of content alone, independent of the
+//  in-memory representation.
+//
 //  This is v1 sketch quality: in-memory buffers, no zstd, no schema-version
 //  handshake, no incremental save.  All deferrable; the shape is the point.
 //
@@ -45,13 +51,16 @@ namespace wry {
     // Version 4: bumped 2026-07-26; the location multimap
     //            (_located_for_coordinate, the occupancy/location split)
     //            adds its kv and ki refs to the World record.
+    // Version 5: bumped 2026-09-25; maps and sets are flat code-ordered
+    //            entry records rebuilt by ArrayMappedTrie::SortedBuilder,
+    //            replacing one record per trie node; ki waitsets inline.
     //
     // Additive vocabulary (new ENUMERATION metas / codes) does NOT bump
     // the version: layout is unchanged and older files remain loadable.
     //   2026-07-05: TERM_ENUM_META_MATTER = 4 (matter.hpp codes).
     // ---------------------------------------------------------------------
 
-    enum : uint32_t { TERM_SAVE_VERSION = 4 };
+    enum : uint32_t { TERM_SAVE_VERSION = 5 };
 
     // ---------------------------------------------------------------------
     // Load-order ID.  Dense uint32_t assigned in post-order DFS from World.
@@ -200,6 +209,8 @@ namespace wry {
 
         const uint8_t* _cursor = nullptr;
         const uint8_t* _end = nullptr;
+        // End of the record body being loaded; entry records read up to it.
+        const uint8_t* _body_end = nullptr;
 
         // Indexed by SaveRef.  Sized once from the file header.
         std::vector<void*> _ptrs;

@@ -2,12 +2,15 @@
 
 List of one-line reminders of things to think and do
 - Full implications of the next_ready GC bug; clean rederive from epoch formulation
-- Saving AMTs saves their in-memory structure, which is strange and brittle
+- DONE 2026-09-25: Saving AMTs saves their in-memory structure, which is strange and brittle
   - Save as a flat key-value list.  AMT structure is unique at the moment but
     that's not a guarantee for all structures. 
+    - LANDED 2026-09-25 (TERM_SAVE_VERSION 5): one flat code-ordered (code, value) record per trie, ki waitsets inline, loader rebuilds via SortedBuilder; save_format_world_roundtrip asserts loaded shape == original shape; old v4 files are hard-rejected
+    - IDEA 2026-09-27 (not yet; Antony wants to understand the format better first): the inline waitset count is found by a second traversal of each tiny inner set; alternative is reserve a u32 in the open record body and patch it after the members (the body is an in-memory vector until the record closes, so the patch is an O(1) memcpy, same mechanism as the back-edge fixups).  Subtree-size-per-node was rejected for this: +8 bytes per node everywhere, only worth it if size() is wanted elsewhere
     - FIXED 2026-09-24: clone_and_erase_key used to keep an emptied leaf in place, so shape depended on erase history (structural save bytes and any structural hash inherited that).  Now an emptied leaf becomes nullptr and a one-child parent collapses; tests pin shape == sorted-insertion build (amt_erase_canonical + the rebuild differentials).  Old save files may still carry empty leaves
     - DECIDED 2026-09-24: serialize in code order (not domain-key order); a key-encoding change is a save-breaking version bump, accepted to keep sorting off the save and load paths
     - LANDED 2026-09-24 as ArrayMappedTrie::SortedBuilder + build_from_sorted (test amt_sorted_builder); the save-format swap to flat code-ordered records is the remaining step.  Design: bulk build from the code-ordered (code, value) list, left to right and bottom up on the divergence shift between consecutive codes (stack of open nodes; leaves are 32-aligned blocks; >= 2 children falls out; exact capacities from a lookahead count); never n x insert, which path-copies ~depth nodes per key.  Reusable as rebuild_serial's null-source case.  Test: same_shape vs the insertion build plus a content oracle
+- PROPOSED 2026-09-27: name the EntityID set by role.  WaitSet (waitable_map.hpp) is really PersistentSet<EntityID>, and _located_for_coordinate stores occupants in it, which misled a review ("waiters are never removed individually" is true of the waiter role only).  Plan: EntityIDSet as the underlying alias, WaitSet kept as an alias for the ki waiter index, EntityIDSet for the located map and its transaction verbs; same type, so no format or behavior change
 - Hash of data structures for file self-validation and multiplayer desync detection
   - Hash, like save, must be content only, not relying on structure
   - IDEA 2026-09-24 (not now): hash the LIVE World every step, not only the save; clients upload it per step as proof of sync and liveness

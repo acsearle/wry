@@ -11,18 +11,18 @@
 //    - Player (Entity subclass; persists identity only)
 //    - HeapInt64 (HeapTerm subclass, polymorphic via HeapTerm*)
 //    - HeapString (HeapTerm subclass; SKETCH stubs, factory-based load)
-//    - ArrayMappedTrie<uint64_t, Term>          // value-for-coordinate map leaves
-//    - ArrayMappedTrie<uint64_t, EntityID>       // entity-id-for-coordinate map leaves
-//    - ArrayMappedTrie<uint64_t, const Entity*>  // entity-for-entity-id map leaves
-//    - ArrayMappedTrie<uint64_t, Terrain>        // terrain-for-coordinate map leaves
-//    - ArrayMappedTrie<__uint128_t, std::monostate>            // time wheel set node
-//    - ArrayMappedTrie<uint64_t, WaitSet>        // ki waiter-index outer map
-//    - ArrayMappedTrie<uint64_t, std::monostate>            // ki waitset inner set node
+//    - ArrayMappedTrie<uint64_t, Term>          // value-for-coordinate map entries
+//    - ArrayMappedTrie<uint64_t, EntityID>       // entity-id-for-coordinate map entries
+//    - ArrayMappedTrie<uint64_t, const Entity*>  // entity-for-entity-id map entries
+//    - ArrayMappedTrie<uint64_t, Terrain>        // terrain-for-coordinate map entries
+//    - ArrayMappedTrie<__uint128_t, std::monostate>  // time wheel set entries
+//    - ArrayMappedTrie<uint64_t, WaitSet>        // ki waiter-index map entries, waitsets inline
 //    - PersistentStack<Term>                      // machine stack cells
 //
 
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 #include <map>
 #include <set>
 
@@ -110,13 +110,13 @@ namespace wry {
     template<> struct save_type_traits<uint64_t>        { static constexpr uint64_t value = save_type_tag_fnv1a("u64"); };
     template<> struct save_type_traits<__uint128_t>     { static constexpr uint64_t value = save_type_tag_fnv1a("u128"); };
 
-    // AMT Node specializations.  Each (T, U) pair gets a structural tag from
-    // the leaf-type traits above.
+    // Entry records, one per trie.  Each (T, U) pair gets a tag from the
+    // leaf-type traits above.
     template<typename T, typename U>
     struct save_type_traits<ArrayMappedTrie<U, T, ScanDiscipline>> {
         static constexpr uint64_t value = save_type_tag_combine(
             save_type_tag_combine(
-                save_type_tag_fnv1a("wry::ArrayMappedTrie"),
+                save_type_tag_fnv1a("wry::Entries"),
                 save_type_traits<T>::value,
                 17),
             save_type_traits<U>::value,
@@ -209,100 +209,66 @@ namespace wry {
         s.write_u64(payload);
     }
 
-    // AMT Node body, generic over (T, U).  Caller supplies a lambda that
-    // emits one leaf value (either as raw bytes or as a SaveRef after visiting
-    // a referenced GC object).
+    // Map and set bodies: the whole trie as (code, value) entries in code
+    // order, nothing of its shape.  Each value's encoding is written in
+    // place, so entries may be variable-length (the ki waitsets).  Values
+    // that reference other GC objects (Entity*, OBJECT Terms) are visited as
+    // they are met, so their records precede the map's, post-order as
+    // before.  The loader rebuilds the canonical trie in one pass with
+    // SortedBuilder; the bytes are a function of content alone.
 
-    template<typename T, typename U, typename EmitLeaf>
-    static void emit_amt_body(const ArrayMappedTrie<U, T, ScanDiscipline>* n, Saver& s, EmitLeaf&& emit_leaf) {
-        using N = ArrayMappedTrie<U, T, ScanDiscipline>;
-        int count = __builtin_popcountg(n->_bitmap);
-
-        if (n->has_children()) {
-            // Visit children first (post-order).
-            std::vector<SaveRef> child_refs(count);
-            for (int i = 0; i < count; ++i)
-                child_refs[i] = s.visit<N>(n->_children[i]);
-            s.write_pod(n->_prefix);
-            s.write_u32((uint32_t)n->_shift);
-            s.write_u32((uint32_t)n->_bitmap);
-            s.write_u32((uint32_t)count);
-            for (SaveRef r : child_refs)
-                s.write_ref(r);
-        } else if constexpr (std::is_empty_v<T>) {
-            // Set leaf: the bitmap is the membership; no per-member payload.
-            s.write_pod(n->_prefix);
-            s.write_u32((uint32_t)n->_shift);
-            s.write_u32((uint32_t)n->_bitmap);
-            s.write_u32((uint32_t)count);
-        } else {
-            // For leaf values that may carry sub-references (Term, Entity*),
-            // visit them first.  emit_leaf returns the bytes-or-ref to write
-            // and may have triggered child record emissions as a side effect.
-            using Encoded = decltype(emit_leaf(n->_values[0]));
-            std::vector<Encoded> encoded(count);
-            for (int i = 0; i < count; ++i)
-                encoded[i] = emit_leaf(n->_values[i]);
-            s.write_pod(n->_prefix);
-            s.write_u32((uint32_t)n->_shift);
-            s.write_u32((uint32_t)n->_bitmap);
-            s.write_u32((uint32_t)count);
-            for (const auto& e : encoded)
-                s.write_pod(e);
-        }
-    }
-
-    // AMT Node<Term, uint64_t>: leaf Values; OBJECT-tagged ones reference
-    // HeapValues, which we visit and replace with SaveRefs inside the encoded
-    // word.
-    static void emit_body(const ArrayMappedTrie<uint64_t, Term, ScanDiscipline>* n, Saver& s) {
-        emit_amt_body(n, s, [&s](const Term& v) { return encode_value(v, s); });
-    }
-
-    // AMT Node<EntityID, uint64_t>: leaf values are 64-bit ids, no references.
-    static void emit_body(const ArrayMappedTrie<uint64_t, EntityID, ScanDiscipline>* n, Saver& s) {
-        emit_amt_body(n, s, [](EntityID e) { return e.data; });
-    }
-
-    // AMT Node<const Entity*, uint64_t>: leaves are polymorphic Entity refs.
-    static void emit_body(const ArrayMappedTrie<uint64_t, const Entity*, ScanDiscipline>* n, Saver& s) {
-        emit_amt_body(n, s, [&s](const Entity* p) { return s.visit_entity(p); });
-    }
-
-    // AMT Node<int, __uint128_t>: PersistentSet of pair<...,EntityID> keys.
-    static void emit_body(const ArrayMappedTrie<__uint128_t, std::monostate, ScanDiscipline>* n, Saver& s) {
-        // Set-style leaves: int dummy payload carries no information.  Write
-        // zero so encoded width is well defined; loader ignores it.
-        emit_amt_body(n, s, [](std::monostate) { return (int32_t)0; });
-    }
-
-    // AMT Node<int, uint64_t>: the inner waitset of a ki entry; a
-    // PersistentSet of EntityID codes.  Set-style, as above.
-    static void emit_body(const ArrayMappedTrie<uint64_t, std::monostate, ScanDiscipline>* n, Saver& s) {
-        emit_amt_body(n, s, [](std::monostate) { return (int32_t)0; });
-    }
-
-    // AMT Node<WaitSet, uint64_t>: the ki waiter-index outer map.  Leaves
-    // are nested WaitSets, emitted as refs to their inner set root nodes.
-    static void emit_body(const ArrayMappedTrie<uint64_t, WaitSet, ScanDiscipline>* n, Saver& s) {
-        emit_amt_body(n, s, [&s](const WaitSet& ws) {
-            return s.visit<ArrayMappedTrie<uint64_t, std::monostate, ScanDiscipline>>(ws._inner);
+    template<typename T, typename U, typename EmitValue>
+    static void emit_entries(const ArrayMappedTrie<U, T, ScanDiscipline>* root, Saver& s, EmitValue&& emit_value) {
+        root->for_each([&s, &emit_value](U code, T value) {
+            s.write_pod(code);
+            emit_value(value);
         });
     }
 
-    // AMT Node<Terrain, uint64_t>: leaf values are small ints, no references.
-    // (Terrain is an alias of int; the structural tag comes from
-    // save_type_traits<int>.)
-    static void emit_body(const ArrayMappedTrie<uint64_t, Terrain, ScanDiscipline>* n, Saver& s) {
-        emit_amt_body(n, s, [](Terrain t) { return (int32_t)t; });
+    // Entries<Term,u64>: OBJECT-tagged Terms reference HeapTerms, visited
+    // and replaced with SaveRefs inside the encoded word.
+    static void emit_body(const ArrayMappedTrie<uint64_t, Term, ScanDiscipline>* n, Saver& s) {
+        emit_entries(n, s, [&s](const Term& v) { s.write_u64(encode_value(v, s)); });
     }
 
-    // The kv side hashes Coordinate / EntityID keys to u64 codes.  The time
+    // Entries<EntityID,u64>: 64-bit ids, no references.
+    static void emit_body(const ArrayMappedTrie<uint64_t, EntityID, ScanDiscipline>* n, Saver& s) {
+        emit_entries(n, s, [&s](EntityID e) { s.write_u64(e.data); });
+    }
+
+    // Entries<Entity*,u64>: polymorphic Entity refs.
+    static void emit_body(const ArrayMappedTrie<uint64_t, const Entity*, ScanDiscipline>* n, Saver& s) {
+        emit_entries(n, s, [&s](const Entity* p) { s.write_ref(s.visit_entity(p)); });
+    }
+
+    // Entries<unit,u128>: the time wheel; codes only.
+    static void emit_body(const ArrayMappedTrie<__uint128_t, std::monostate, ScanDiscipline>* n, Saver& s) {
+        emit_entries(n, s, [](std::monostate) {});
+    }
+
+    // Entries<WaitSet,u64>: the ki waiter indexes and the location multimap.
+    // Each waitset travels inline as [count u32][member codes u64 ...] in
+    // code order rather than as a record of its own.
+    static void emit_body(const ArrayMappedTrie<uint64_t, WaitSet, ScanDiscipline>* n, Saver& s) {
+        emit_entries(n, s, [&s](const WaitSet& ws) {
+            uint32_t count = 0;
+            ws.for_each([&count](EntityID) { ++count; });
+            s.write_u32(count);
+            ws.for_each([&s](EntityID e) { s.write_u64(e.data); });
+        });
+    }
+
+    // Entries<int,u64>: Terrain is an alias of int; small ints, no
+    // references.  (The tag comes from save_type_traits<int>.)
+    static void emit_body(const ArrayMappedTrie<uint64_t, Terrain, ScanDiscipline>* n, Saver& s) {
+        emit_entries(n, s, [&s](Terrain t) { s.write_pod((int32_t)t); });
+    }
+
+    // The kv side encodes Coordinate / EntityID keys to u64 codes.  The time
     // wheel (_waiting_on_time) is keyed by pair<Time, EntityID>, which the
-    // DefaultKeyService packs into a u128 code, so its set nodes are
-    // Node<int, u128>.  The ki waiter index is a nested map: an outer
-    // Node<WaitSet, u64> whose leaves reference inner Node<int, u64> set
-    // roots holding EntityID codes.
+    // DefaultKeyService packs into a u128 code.  The ki waiter index is a
+    // nested map, Node<WaitSet, u64>, whose waitsets are inner Node<unit,
+    // u64> sets of EntityID codes; on disk they travel inline.
     using NodeEntityID_U64    = ArrayMappedTrie<uint64_t, EntityID, ScanDiscipline>;
     using NodeEntityPtr_U64   = ArrayMappedTrie<uint64_t, const Entity*, ScanDiscipline>;
     using NodeValue_U64       = ArrayMappedTrie<uint64_t, Term, ScanDiscipline>;
@@ -334,8 +300,8 @@ namespace wry {
 
         // The ki waiter index is semantic state, not a regenerable cache: a
         // waiter registered before the save must still be registered after a
-        // load, or its wake is silently lost.  Nested map: the outer
-        // Node<WaitSet,u64> leaves reference inner Node<int,u64> set roots.
+        // load, or its wake is silently lost.  Each entry's waitset travels
+        // inline in the map record.
         SaveRef eid_for_coord_ki = s.visit<NodeWaitSet_U64>(_entity_id_for_coordinate.ki._inner);
         SaveRef loc_for_coord_ki = s.visit<NodeWaitSet_U64>(_located_for_coordinate.ki._inner);
         SaveRef ent_for_eid_ki   = s.visit<NodeWaitSet_U64>(_entity_for_entity_id.ki._inner);
@@ -545,86 +511,57 @@ namespace wry {
         n->_payload = decode_value(payload, L);
     }
 
-    // AMT node loader template, generic over (T, U).  Allocates with the
-    // right capacity via Node::make, then dispatches to fill_values for the
-    // leaf case.
-    template<typename T, typename U, typename FillValues>
-    static void load_amt_node(Loader& L, SaveRef id, FillValues&& fill_values) {
+    // Entry loaders, generic over (T, U): read (code, value) entries up to
+    // the end of the record body and rebuild the trie in one pass.  The
+    // saver wrote the entries in code order, which is SortedBuilder's
+    // precondition (asserted in Debug).
+    template<typename T, typename U, typename DecodeValue>
+    static void load_entries(Loader& L, SaveRef id, DecodeValue&& decode_value) {
         using N = ArrayMappedTrie<U, T, ScanDiscipline>;
-        U prefix = L.read_pod<U>();
-        uint32_t shift  = L.read_u32();
-        uint32_t bitmap = L.read_u32();
-        uint32_t count  = L.read_u32();
-
-        N* n = N::make(prefix, (int)shift, count, count, bitmap);
-        L._ptrs[id] = n;
-
-        if (n->has_children()) {
-            for (uint32_t i = 0; i < count; ++i) {
-                SaveRef child_ref = L.read_u32();
-                n->_children[i] = (const N*)L._ptrs[child_ref];
-            }
-        } else {
-            fill_values(n, count);
+        typename N::SortedBuilder builder;
+        while (L._cursor < L._body_end) {
+            U code = L.read_pod<U>();
+            if constexpr (std::is_empty_v<T>)
+                builder.push(code);
+            else
+                builder.push(code, decode_value());
         }
+        L._ptrs[id] = (void*)builder.finish();
     }
 
-    static void load_into_amt_node_value_u64(Loader& L, SaveRef id) {
-        load_amt_node<Term, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
-            for (uint32_t i = 0; i < count; ++i) {
-                uint64_t word = L.read_u64();
-                n->_values[i] = decode_value(word, L);
-            }
+    static void load_into_entries_value_u64(Loader& L, SaveRef id) {
+        load_entries<Term, uint64_t>(L, id, [&L] { return decode_value(L.read_u64(), L); });
+    }
+
+    static void load_into_entries_entity_id_u64(Loader& L, SaveRef id) {
+        load_entries<EntityID, uint64_t>(L, id, [&L] { return EntityID{ L.read_u64() }; });
+    }
+
+    static void load_into_entries_entity_ptr_u64(Loader& L, SaveRef id) {
+        load_entries<const Entity*, uint64_t>(L, id, [&L] { return (const Entity*)L._ptrs[L.read_u32()]; });
+    }
+
+    static void load_into_entries_set_u128(Loader& L, SaveRef id) {
+        load_entries<std::monostate, __uint128_t>(L, id, [] {});
+    }
+
+    static void load_into_entries_wait_set_u64(Loader& L, SaveRef id) {
+        load_entries<WaitSet, uint64_t>(L, id, [&L] {
+            uint32_t count = L.read_u32();
+            NodeSet_U64::SortedBuilder inner;
+            for (uint32_t i = 0; i != count; ++i)
+                inner.push(L.read_u64());
+            return WaitSet{ inner.finish() };
         });
     }
 
-    static void load_into_amt_node_entity_id_u64(Loader& L, SaveRef id) {
-        load_amt_node<EntityID, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
-            for (uint32_t i = 0; i < count; ++i)
-                n->_values[i] = EntityID{ L.read_u64() };
-        });
-    }
-
-    static void load_into_amt_node_entity_ptr_u64(Loader& L, SaveRef id) {
-        load_amt_node<const Entity*, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
-            for (uint32_t i = 0; i < count; ++i) {
-                SaveRef r = L.read_u32();
-                n->_values[i] = (const Entity*)L._ptrs[r];
-            }
-        });
-    }
-
-    static void load_into_amt_node_int_u128(Loader& L, SaveRef id) {
-        load_amt_node<std::monostate, __uint128_t>(L, id, [](auto*, uint32_t) {
-            // Set leaf: membership is fully in the bitmap; no per-member bytes.
-        });
-    }
-
-    static void load_into_amt_node_int_u64(Loader& L, SaveRef id) {
-        load_amt_node<std::monostate, uint64_t>(L, id, [](auto*, uint32_t) {
-            // Set leaf: membership is fully in the bitmap; no per-member bytes.
-        });
-    }
-
-    static void load_into_amt_node_wait_set_u64(Loader& L, SaveRef id) {
-        load_amt_node<WaitSet, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
-            for (uint32_t i = 0; i < count; ++i) {
-                SaveRef r = L.read_u32();
-                n->_values[i] = WaitSet{ (const NodeSet_U64*)L._ptrs[r] };
-            }
-        });
-    }
-
-    static void load_into_amt_node_terrain_u64(Loader& L, SaveRef id) {
-        load_amt_node<Terrain, uint64_t>(L, id, [&L](auto* n, uint32_t count) {
-            for (uint32_t i = 0; i < count; ++i)
-                n->_values[i] = (Terrain)L.read_pod<int32_t>();
-        });
+    static void load_into_entries_terrain_u64(Loader& L, SaveRef id) {
+        load_entries<Terrain, uint64_t>(L, id, [&L] { return (Terrain)L.read_pod<int32_t>(); });
     }
 
     // The registry table.
 
-    static const SaveableTraits g_saveable_traits[] = {
+    static constexpr SaveableTraits g_saveable_traits[] = {
         { save_type_tag_v<World>,                                            "wry::World",                          &load_into_world },
         { save_type_tag_v<Machine>,                                          "wry::Machine",                        &load_into_machine },
         { save_type_tag_v<Spawner>,                                          "wry::Spawner",                        &load_into_localized_entity<Spawner> },
@@ -636,14 +573,27 @@ namespace wry {
         { save_type_tag_v<HeapInt64>,                                        "wry::HeapInt64",                      &load_into_heap_int64 },
         { save_type_tag_v<HeapString>,                                       "wry::HeapString",                     &load_into_heap_string },
         { save_type_tag_v<PersistentStack<Term>>,                     "wry::PersistentStack<Term>",   &load_into_persistent_stack_node },
-        { save_type_tag_v<NodeValue_U64>,                                    "Node<Term,u64>",                     &load_into_amt_node_value_u64 },
-        { save_type_tag_v<NodeEntityID_U64>,                                 "Node<EntityID,u64>",                  &load_into_amt_node_entity_id_u64 },
-        { save_type_tag_v<NodeEntityPtr_U64>,                                "Node<Entity*,u64>",                   &load_into_amt_node_entity_ptr_u64 },
-        { save_type_tag_v<NodeSet_U128>,                                     "Node<unit,u128>",                      &load_into_amt_node_int_u128 },
-        { save_type_tag_v<NodeWaitSet_U64>,                                  "Node<WaitSet,u64>",                   &load_into_amt_node_wait_set_u64 },
-        { save_type_tag_v<NodeSet_U64>,                                      "Node<unit,u64>",                       &load_into_amt_node_int_u64 },
-        { save_type_tag_v<NodeTerrain_U64>,                                  "Node<int,u64>",                        &load_into_amt_node_terrain_u64 },
+        { save_type_tag_v<NodeValue_U64>,                                    "Entries<Term,u64>",                   &load_into_entries_value_u64 },
+        { save_type_tag_v<NodeEntityID_U64>,                                 "Entries<EntityID,u64>",               &load_into_entries_entity_id_u64 },
+        { save_type_tag_v<NodeEntityPtr_U64>,                                "Entries<Entity*,u64>",                &load_into_entries_entity_ptr_u64 },
+        { save_type_tag_v<NodeSet_U128>,                                     "Entries<unit,u128>",                  &load_into_entries_set_u128 },
+        { save_type_tag_v<NodeWaitSet_U64>,                                  "Entries<WaitSet,u64>",                &load_into_entries_wait_set_u64 },
+        { save_type_tag_v<NodeTerrain_U64>,                                  "Entries<int,u64>",                    &load_into_entries_terrain_u64 },
     };
+
+    // Tags are 64-bit hashes of type names.  A collision between two
+    // registered types would dispatch one type's records to the other's
+    // loader: an assert in Debug, a silently misparsed file in Release.
+    // The tags are constants, so refuse to build such a registry instead.
+    static constexpr bool save_type_tags_are_distinct() {
+        size_t n = std::size(g_saveable_traits);
+        for (size_t i = 0; i != n; ++i)
+            for (size_t j = i + 1; j != n; ++j)
+                if (g_saveable_traits[i].tag == g_saveable_traits[j].tag)
+                    return false;
+        return true;
+    }
+    static_assert(save_type_tags_are_distinct(), "save type tag collision in g_saveable_traits");
 
     const SaveableTraits* find_saveable_traits(uint64_t tag) {
         for (const auto& t : g_saveable_traits) {
@@ -678,6 +628,8 @@ namespace wry {
             uint64_t tag = read_varint();
             uint32_t body_len = read_u32();
             const uint8_t* body_start = _cursor;
+            _body_end = body_start + body_len;
+            assert(_body_end <= _end);
             const SaveableTraits* tr = find_saveable_traits(tag);
             if (!tr) {
                 // Unknown type tag -- skip the record body and leave ptrs[id]
@@ -1163,6 +1115,39 @@ namespace wry {
         }
 
         // Strong backstop: re-saving the loaded world reproduces the stream.
+        // Shape: the loaded tries are rebuilt from flat entries, so each must
+        // be in canonical form and, because the originals were built by
+        // insertion (also canonical), equal to its original node for node.
+        // The ki maps are compared through to their inlined waitsets.
+        {
+            auto same = [](auto const& a, auto const& b) {
+                using N = std::remove_cv_t<std::remove_pointer_t<decltype(a._inner)>>;
+                N::assert_canonical(b._inner);
+                return N::same_shape(a._inner, b._inner);
+            };
+            auto same_ki = [&same](auto const& a, auto const& b) {
+                bool ok = same(a, b);
+                a.for_each([&ok, &b](auto key, WaitSet ws) {
+                    WaitSet ws2;
+                    ok = ok && b.try_get(key, ws2)
+                            && NodeSet_U64::same_shape(ws._inner, ws2._inner);
+                    NodeSet_U64::assert_canonical(ws2._inner);
+                });
+                return ok;
+            };
+            assert(same(w->_term_for_coordinate.kv, w2->_term_for_coordinate.kv));
+            assert(same(w->_entity_id_for_coordinate.kv, w2->_entity_id_for_coordinate.kv));
+            assert(same(w->_entity_for_entity_id.kv, w2->_entity_for_entity_id.kv));
+            assert(same(w->_terrain_for_coordinate.kv, w2->_terrain_for_coordinate.kv));
+            assert(same_ki(w->_located_for_coordinate.kv, w2->_located_for_coordinate.kv));
+            assert(same_ki(w->_term_for_coordinate.ki, w2->_term_for_coordinate.ki));
+            assert(same_ki(w->_entity_id_for_coordinate.ki, w2->_entity_id_for_coordinate.ki));
+            assert(same_ki(w->_located_for_coordinate.ki, w2->_located_for_coordinate.ki));
+            assert(same_ki(w->_entity_for_entity_id.ki, w2->_entity_for_entity_id.ki));
+            assert(same_ki(w->_terrain_for_coordinate.ki, w2->_terrain_for_coordinate.ki));
+            NodeSet_U128::assert_canonical(w2->_waiting_on_time._inner);
+        }
+
         std::vector<uint8_t> b2 = test_save_to_buffer(w2);
         assert(b1 == b2);
 
