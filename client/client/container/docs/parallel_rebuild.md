@@ -132,8 +132,12 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
   the full suite.  Note: this core takes a *materialized* sorted `mods` vector
   and slices it with `std::lower_bound`; the skiplist `lower_bound` is the Stage
   2 primitive and is not yet on this path.  The test checks content equivalence
-  (try_get over the key domain), not byte-identical trie shape -- shape is a
-  derived structure (see `core/docs/transaction.md` on determinism).
+  (try_get over the key domain) and, since 2026-09-24, canonical shape: the
+  result must be `same_shape` to the sorted-insertion build of the expected
+  content and pass `assert_canonical`.  Shape is still a derived structure
+  (see `core/docs/transaction.md` on determinism); it is checkable because the
+  trie is canonical -- erase collapses emptied leaves and one-child parents --
+  and the flat save format and any structural hash lean on exactly that.
 - Stage 1 wrapper: `coroutine_parallel_rebuild(PersistentMap, FrozenMap,
   action_for_key)` in `persistent_map.hpp` materializes a *real* skiplist
   modifier (NONE-filtered) and drives the AMT core, returning a new

@@ -1170,15 +1170,16 @@ namespace wry {
     void print(ArrayMappedTrie<Word, T, Discipline, SYMBOL_WIDTH> const* _Nullable s) {
         if (!s) {
             printf("nullptr\n");
-        }
-        int count = popcount(s->_bitmap);
-        printf("%llx:%d:", s->_prefix, s->_shift);
-        print_binary(s->_bitmap);
-        printf("(%d)\n", count);
-        if (s->has_children()) {
-            assert(count >= 2);
-            for (int i = 0; i != count; ++i)
-                print(s->_children[i]);
+        } else {
+            int count = popcount(s->_bitmap);
+            printf("%llx:%d:", s->_prefix, s->_shift);
+            print_binary(s->_bitmap);
+            printf("(%d)\n", count);
+            if (s->has_children()) {
+                assert(count >= 2);
+                for (int i = 0; i != count; ++i)
+                    print(s->_children[i]);
+            }
         }
     }
 
