@@ -98,6 +98,7 @@ namespace wry {
         size_t _debug_count;
 #endif
         Bitmap _bitmap; // bitmap of which items are present
+        size_t _size;   // entries in this subtree; popcount(_bitmap) at a leaf
         union {
             // compressed flexible member array of children or values
             ArrayMappedTrie const* _Nonnull _children[];
@@ -159,6 +160,27 @@ namespace wry {
             return !has_children();
         }
 
+        // Entries in this subtree.  Every construction site maintains it: a
+        // leaf's is its popcount; an internal node's is the sum over its
+        // children, accumulated by insert_child / exchange_child during the
+        // mutable phase or recomputed after a bulk fill.  Checked against
+        // the children by _assert_invariant_shallow.
+        size_t size() const {
+            return _size;
+        }
+
+        void _recompute_size() {
+            if (has_children()) {
+                int n = std::popcount(_bitmap);
+                size_t sum = 0;
+                for (int i = 0; i != n; ++i)
+                    sum += _children[i]->_size;
+                _size = sum;
+            } else {
+                _size = std::popcount(_bitmap);
+            }
+        }
+
         // Value form of the debug capacity, for feeding the bounds asserts
         // in the compressed_array functions.  An NDEBUG build has no field,
         // and the asserts that would consume the value are gone there too,
@@ -190,7 +212,10 @@ namespace wry {
         , _debug_capacity(debug_capacity)
         , _debug_count(debug_count)
 #endif
-        , _bitmap(bitmap) {
+        , _bitmap(bitmap)
+        // A leaf's size is its membership.  An internal node starts empty
+        // and grows by insert_child, or is recomputed after a bulk fill.
+        , _size(shift ? 0 : bit::popcount(bitmap)) {
             using bit::popcount;
             assert(_debug_capacity >= popcount(_bitmap));
             assert(_debug_count >= popcount(_bitmap));
@@ -400,6 +425,7 @@ namespace wry {
                                         c->_values,
                                         resolver);
             }
+            c->_recompute_size();
             return c;
         } // merge(a, b, f)
 
@@ -539,6 +565,7 @@ namespace wry {
                 ArrayMappedTrie* node = make(f.prefix, f.shift, f.count, f.count, bitmap);
                 for (int i = 0; i != f.count; ++i)
                     node->_children[i] = f.children[i];
+                node->_recompute_size();
 #ifndef NDEBUG
                 node->_assert_invariant_shallow();
 #endif
@@ -660,6 +687,7 @@ namespace wry {
                                               new_node->_children,
                                               get_index_for_key(key),
                                               new_child);
+            new_node->_size += new_child->_size;
             return new_node;
         }
 
@@ -668,10 +696,11 @@ namespace wry {
             Word key = new_child->_prefix;
             assert(prefix_includes_key(key));
             ArrayMappedTrie* _Nonnull new_node = clone_with_capacity(std::popcount(_bitmap));
-            (void) compressed_array_exchange_for_index(new_node->_bitmap,
-                                                       new_node->_children,
-                                                       get_index_for_key(key),
-                                                       new_child);
+            ArrayMappedTrie const* old_child = compressed_array_exchange_for_index(new_node->_bitmap,
+                                                                                    new_node->_children,
+                                                                                    get_index_for_key(key),
+                                                                                    new_child);
+            new_node->_size = new_node->_size - old_child->_size + new_child->_size;
             return new_node;
         }
 
@@ -679,11 +708,12 @@ namespace wry {
             assert(has_children());
             assert(bitmap_includes_key(key));
             ArrayMappedTrie* new_node = clone_with_capacity(std::popcount(_bitmap));
-            [[maybe_unused]] ArrayMappedTrie const* _ = nullptr;
+            ArrayMappedTrie const* victim = nullptr;
             compressed_array_erase_for_index(new_node->_bitmap,
                                              new_node->_children,
                                              get_index_for_key(key),
-                                             _);
+                                             victim);
+            new_node->_size -= victim->_size;
 #ifndef NDEBUG
             --(new_node->_debug_count);
 #endif
@@ -717,12 +747,15 @@ namespace wry {
                                                                                 index,
                                                                                 value,
                                                                                 victim);
+                new_node->_recompute_size();
             } else {
                 assert(has_children());
                 ArrayMappedTrie* _Nullable new_child = nullptr;
+                size_t displaced_size = 0;
                 if (_bitmap & select) {
                     const ArrayMappedTrie* _Nonnull child = _children[compressed_index];
                     std::tie(new_child, leaf_did_assign) = child->clone_and_insert_or_assign_key_value(key, value, victim);
+                    displaced_size = child->_size;
                 } else {
                     new_child = make_singleton(key, value);
                 }
@@ -733,6 +766,7 @@ namespace wry {
                                                                      index,
                                                                      new_child,
                                                                      _);
+                new_node->_size = new_node->_size - displaced_size + new_child->_size;
             }
             return { new_node, leaf_did_assign };
         }
@@ -783,6 +817,7 @@ namespace wry {
                                                  new_node->_values,
                                                  index,
                                                  victim);
+                new_node->_recompute_size();
 #ifndef NDEBUG
                 --(new_node->_debug_count);
 #endif
@@ -1045,6 +1080,14 @@ namespace wry {
             assert(count <= _debug_capacity);
             assert(count == _debug_count);
             if (has_children()) {
+                size_t sum = 0;
+                for (int j = 0; j != count; ++j)
+                    sum += _children[j]->_size;
+                assert(_size == sum);
+            } else {
+                assert(_size == (size_t)count);
+            }
+            if (has_children()) {
                 Word get_prefix_mask = ~INDEX_MASK << _shift;
                 for (int j = 0; j != count; ++j) {
                     const ArrayMappedTrie* child = _children[j];
@@ -1129,6 +1172,7 @@ namespace wry {
             ArrayMappedTrie* _Nonnull node = make(_prefix, _shift, (uint32_t)capacity, count, _bitmap);
             size_t item_size = has_children() ? sizeof(const ArrayMappedTrie*) : _leaf_item_bytes;
             memcpy(node->_children, _children, count * item_size);
+            node->_size = _size;
             return node;
         }
 
@@ -1150,16 +1194,19 @@ namespace wry {
                                               _children,
                                               get_index_for_key(key),
                                               new_child);
+            _size += new_child->_size;
         }
 
         ArrayMappedTrie const* _Nonnull exchange_child(ArrayMappedTrie const* _Nonnull new_child) {
             assert(has_children());
             Word key = new_child->_prefix;
             assert(prefix_includes_key(key));
-            return compressed_array_exchange_for_index(_bitmap,
-                                                       _children,
-                                                       get_index_for_key(key),
-                                                       new_child);
+            ArrayMappedTrie const* old_child = compressed_array_exchange_for_index(_bitmap,
+                                                                                    _children,
+                                                                                    get_index_for_key(key),
+                                                                                    new_child);
+            _size = _size - old_child->_size + new_child->_size;
+            return old_child;
         }
 
 

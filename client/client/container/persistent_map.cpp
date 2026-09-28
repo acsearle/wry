@@ -69,6 +69,7 @@ namespace wry {
                 const A* actual = p._inner ? &*p._inner : nullptr;
                 A::assert_canonical(actual);
                 assert(A::same_shape(actual, ref));
+                assert(p.size() == m.size());
             }
             for (uint64_t k = 0; k != N; ++k) {
                 if (m.count(k)) {
@@ -175,6 +176,7 @@ namespace wry {
                     ref = A::insert(ref, k, v);
                 assert(A::same_shape(result, ref));
             }
+            assert((result ? result->size() : 0) == expect.size());
 
             if (!(iter & 7))
                 mutator_repin();
@@ -263,6 +265,7 @@ namespace wry {
                 A::assert_canonical(actual);
                 assert(A::same_shape(actual, ref));
             }
+            assert(result.size() == expect.size());
 
             if (!(iter & 7))
                 mutator_repin();
@@ -314,6 +317,7 @@ namespace wry {
             A::assert_canonical(u);
             assert(A::same_shape(u, build({0})));
             assert(!A::same_shape(u, t));
+            assert(t->size() == 2 && u->size() == 1);
             int v = 0;
             assert(t->try_get(32, v) && v == 32);
             assert(!u->try_get(32, v));
@@ -334,9 +338,11 @@ namespace wry {
             uint64_t far = (uint64_t)1 << 40;
             const A* t = build({0, 32, far});
             A::assert_canonical(t);
+            assert(t->size() == 3);
             const A* u = erase(t, far);
             A::assert_canonical(u);
             assert(A::same_shape(u, build({0, 32})));
+            assert(u->size() == 2);
             const A* w = erase(erase(t, 0), 32);
             A::assert_canonical(w);
             assert(A::same_shape(w, build({far})));
@@ -387,6 +393,7 @@ namespace wry {
                 const A* actual = p._inner ? &*p._inner : nullptr;
                 A::assert_canonical(actual);
                 assert(A::same_shape(actual, ref));
+                assert(p.size() == oracle.size());
                 if (!(i & 255))
                     mutator_repin();
             }
@@ -429,6 +436,7 @@ namespace wry {
                 b.push(k, v);
             const A* built = b.finish();
             A::assert_canonical(built);
+            assert((built ? built->size() : 0) == oracle.size());
 
             std::vector<std::pair<uint64_t, int>> entries(oracle.begin(), oracle.end());
             shuffle(entries);
@@ -523,6 +531,7 @@ namespace wry {
             std::vector<__uint128_t> codes(oracle.begin(), oracle.end());
             const S* built = S::build_from_sorted(codes.begin(), codes.end());
             S::assert_canonical(built);
+            assert((built ? built->size() : 0) == oracle.size());
             shuffle(codes);
             const S* ref = nullptr;
             for (__uint128_t k : codes)

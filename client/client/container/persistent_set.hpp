@@ -40,6 +40,10 @@ namespace wry {
             return _inner && _inner->contains(j);
         }
 
+        [[nodiscard]] size_t size() const {
+            return _inner ? _inner->size() : 0;
+        }
+
         [[nodiscard]] bool try_front(Key& victim) const  {
             if (_inner)
                 victim = H{}.decode(_inner->front());

@@ -61,6 +61,10 @@ namespace wry {
             return _inner && _inner->try_get(j,
                                              victim);
         }
+
+        size_t size() const {
+            return _inner ? _inner->size() : 0;
+        }
                         
         [[nodiscard]] PersistentMap clone_and_set(Key key, T value) const {
             U j = H{}.encode(key);
