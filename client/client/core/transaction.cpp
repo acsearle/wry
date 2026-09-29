@@ -27,12 +27,14 @@ namespace wry {
     }
 
     
-    uint64_t TransactionContext::entity_get_priority(const Entity* entity) {
-        uint64_t priority = 0;
-        priority = hash_combine(&entity->_entity_id.data, 8);
-        priority = hash_combine(&this->_world->_time, 8, priority);
-        // printf("looked up priority %llu for entity %llu\n", priority, entity->_entity_id.data);
+    uint64_t transaction_priority(EntityID entity_id, Time time) {
+        uint64_t priority = hash_combine(&entity_id.data, 8);
+        priority = hash_combine(&time, 8, priority);
         return priority;
+    }
+
+    uint64_t TransactionContext::entity_get_priority(const Entity* entity) {
+        return transaction_priority(entity->_entity_id, this->_world->_time);
     }
 
     

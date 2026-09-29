@@ -12,7 +12,6 @@
 
 #include <cstddef>
 #include <cstring>
-#include <cmath>
 #include <tuple>
 #include <utility>
 
@@ -20,85 +19,27 @@
 #include "stdint.hpp"
 
 namespace wry {
-    
-    template<typename T>
-    auto sqr(const T& t) {
-        return t * t;
-    }
-    
-    class rand {
-        
-        uint64_t _x;
-        
-    public:
-        
-        explicit rand(uint64_t seed = 0)
-        : _x(4101842887655102017ull) {
-            _x ^= seed;
-        }
-        
-        uint64_t operator()() {
-            _x ^= _x >> 21; _x ^= _x << 35; _x ^= _x >> 4;
-            return _x * 2685821657736338717ull;
-        }
-        
-        using result_type = uint64_t;
-        static constexpr uint64_t min() { return 1; }
-        static constexpr uint64_t max() { return -1ull; }
-        
-    };
-    
-    template<typename T = rand>
-    struct uniform_distribution {
-        T _x;
-        explicit uniform_distribution(uint64_t seed = 0)
-        : _x(seed) {
-        }
-        double operator()() {
-            return _x() * 5.42101086242752217e-20;
-        }
-    };
-    
-    template<typename T = uniform_distribution<>>
-    class normal_distribution {
-        
-        T _x;
-        
-    public:
-        
-        explicit normal_distribution(uint64_t seed = 0) : _x(seed) {}
-        
-        double operator()() {
-            // normal deviate by ratio of uniforms
-            double u, v, q;
-            do {
-                u = _x();
-                v = 1.7156 * (_x() - 0.5);
-                auto x = u - 0.449871;
-                using std::abs;
-                auto y = abs(v) + 0.386595;
-                q = sqr(x) + y * (0.19600 * y - 0.25472 * x);
-            } while ((q > 0.27597)
-                     && ((q > 0.27846)
-                         || (sqr(v) > -4.0 * log(u) * sqr(u))));
-            return v / u;
-        }
-        
-    };
-    
-    // Numerical Recipes 7.1.4
+
+    // Numerical Recipes (3rd ed.) 7.1.4, Ranhash::int64: an LCG step, a
+    // xorshift triple, an odd multiply and a second xorshift triple.  Every
+    // step is invertible, so hash is a bijection on the 64-bit words, and
+    // NR's claim that hash(i++) passes statistical tests holds.
     //
-    // "a random hash of the integers, one that passes serious tests for
-    // randomness, even for very ordered sequences of [input]", i.e. hash(i++)
-    // is a high-quality random number generator
+    // It is not a good bit mixer, though.  Measured against the strict
+    // avalanche criterion (2026-09-28): flipping some input bits flips some
+    // output bits with probability exactly 1 (bias 0.5; rms bias 0.067 over
+    // all bit pairs), where murmur3's fmix64, the splitmix64 finalizer
+    // (already used by term_hash) and moremur all sit at the noise floor;
+    // and it costs about 5.5 ns per dependent call against their 3.8.  The
+    // cause is structural: the only right shift in the final triple is by
+    // 41, so output bits 23 and up receive nothing from above, and the
+    // lowest bit changed by the last multiply, which always changes,
+    // reaches the output unmixed whenever it lies at 23 or above.
     //
-    // hash(x) is also an injective function
-    //
-    // unlike libc++'s trivial std::hash implementation, suitable for direct
-    // use in hash tables (in non-adversarial environments)
-    //
-    // TODO: obsolete for hashing?
-            
+    // Kept for now because hash_combine feeds transaction_priority, which is
+    // simulation-visible and must not change (transaction.cpp).  Any
+    // replacement here must leave transaction_priority bit-identical.
+
     inline constexpr uint64_t hash(uint64_t x) {
         x = x * 3935559000370003845ull + 2691343689449507681ull;
         x ^= x >> 21; x ^= x << 37; x ^= x >> 4;
@@ -106,18 +47,7 @@ namespace wry {
         x ^= x << 20; x ^= x >> 41; x ^= x << 5;
         return x;
     }
-            
-    inline constexpr uint32_t hash32(uint32_t x) {
-        // NR does not provide a 32-bit version of hash(), but we construct one
-        // from the 32-bit versions of the components.  Test to make sure we
-        // haven't gotten unlucky.
-        x = x * 2891336453u + 1640531513u;
-        x ^= x >> 13; x ^= x << 17; x ^= x >> 5;
-        x *= 1597334677u;
-        x ^= x <<  9; x ^= x >> 17; x ^= x << 6;
-        return x;
-    }
-                        
+
     // Interleave bits to achieve a 1D indexing of 2D space with decent
     // locality properties.  Good for spatial hashing
     //

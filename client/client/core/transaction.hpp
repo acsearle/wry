@@ -219,6 +219,16 @@ namespace wry {
                         
     }; // Transaction
     
+    // The conflict-resolution priority of an entity's transaction at a given
+    // time.  Simulation-visible: peers must agree on it, and it must never
+    // change across versions, or a replay or a loaded save forks from its own
+    // history.  Pinned here as its own function so that the general-purpose
+    // hashes it borrows today (hash_combine in hash.hpp) can be replaced
+    // without touching it; a change to those must leave this function
+    // bit-identical, by keeping a private copy of the old mixer here if need
+    // be.
+    uint64_t transaction_priority(EntityID entity_id, Time time);
+
     struct TransactionContext {
         
         const World* _world = nullptr;
