@@ -10,6 +10,7 @@
 
 #include <arm_neon.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <tuple>
@@ -20,32 +21,57 @@
 
 namespace wry {
 
-    // Numerical Recipes (3rd ed.) 7.1.4, Ranhash::int64: an LCG step, a
-    // xorshift triple, an odd multiply and a second xorshift triple.  Every
-    // step is invertible, so hash is a bijection on the 64-bit words, and
-    // NR's claim that hash(i++) passes statistical tests holds.
+    // splitmix64: the output function of Steele, Lea and Flood's SplitMix64
+    // generator (2014), which is Stafford's Mix13 variant of the murmur3
+    // 64-bit finalizer.  A bijection on the 64-bit words, with avalanche at
+    // the measurement noise floor (2026-09-28), for two multiplies and three
+    // xorshifts.  The generator adds 0x9e3779b97f4a7c15 to its state before
+    // each call; this is the mixing function alone, so zero is a fixed
+    // point: splitmix64(0) == 0.
+    //
+    // Pinned: term_hash (language-visible) and transaction_priority
+    // (simulation-visible) are defined through it, so its constants must
+    // never change.
+
+    inline constexpr uint64_t splitmix64(uint64_t x) {
+        x ^= x >> 30;
+        x *= 0xbf58476d1ce4e5b9ull;
+        x ^= x >> 27;
+        x *= 0x94d049bb133111ebull;
+        x ^= x >> 31;
+        return x;
+    }
+
+    // ranhash: Numerical Recipes (3rd ed.) 7.1.4, Ranhash::int64: an LCG
+    // step, a xorshift triple, an odd multiply and a second xorshift triple.
+    // Every step is invertible, so it is a bijection on the 64-bit words,
+    // and NR's claim that ranhash(i++) passes statistical tests holds.
     //
     // It is not a good bit mixer, though.  Measured against the strict
     // avalanche criterion (2026-09-28): flipping some input bits flips some
     // output bits with probability exactly 1 (bias 0.5; rms bias 0.067 over
-    // all bit pairs), where murmur3's fmix64, the splitmix64 finalizer
-    // (already used by term_hash) and moremur all sit at the noise floor;
-    // and it costs about 5.5 ns per dependent call against their 3.8.  The
-    // cause is structural: the only right shift in the final triple is by
-    // 41, so output bits 23 and up receive nothing from above, and the
-    // lowest bit changed by the last multiply, which always changes,
-    // reaches the output unmixed whenever it lies at 23 or above.
-    //
-    // Kept for now because hash_combine feeds transaction_priority, which is
-    // simulation-visible and must not change (transaction.cpp).  Any
-    // replacement here must leave transaction_priority bit-identical.
+    // all bit pairs), where splitmix64 sits at the noise floor; and it costs
+    // about 5.5 ns per dependent call against splitmix64's 3.8.  The cause
+    // is structural: the only right shift in the final triple is by 41, so
+    // output bits 23 and up receive nothing from above, and the lowest bit
+    // changed by the last multiply, which always changes, reaches the output
+    // unmixed whenever it lies at 23 or above.  Retained for reference; it
+    // was hash until 2026-09-30.
 
-    inline constexpr uint64_t hash(uint64_t x) {
+    inline constexpr uint64_t ranhash(uint64_t x) {
         x = x * 3935559000370003845ull + 2691343689449507681ull;
         x ^= x >> 21; x ^= x << 37; x ^= x >> 4;
         x *= 4768777513237032717ull;
         x ^= x << 20; x ^= x >> 41; x ^= x << 5;
         return x;
+    }
+
+    // The general-purpose 64-bit hash, for process-local uses such as table
+    // keys.  Nothing simulation-visible may depend on it, so it is free to
+    // change; today it is splitmix64, which makes hash(0) == 0.
+
+    inline constexpr uint64_t hash(uint64_t x) {
+        return splitmix64(x);
     }
 
     // Interleave bits to achieve a 1D indexing of 2D space with decent
@@ -116,31 +142,116 @@ namespace wry {
         x ^= b | (b << 16);
         return x;
     }
-    
-    
-    
-    
-    // hash bytes
-    
-    inline uint64_t hash_combine(const void* src, ptrdiff_t bytes, uint64_t already_hashed = 0) {
-        while (bytes >= 8) {
-            uint64_t x;
-            std::memcpy(&x, src, 8);
-            already_hashed = hash(already_hashed ^ x);
-            src = ((const unsigned char*) src) + 8;
-            bytes -= 8;
+
+
+    struct hash_bytes_Hasher {
+
+        uint64_t _state = 0;
+        uint64_t _buffer = 0;
+        uint64_t _count = 0;
+
+        hash_bytes_Hasher& _write(unsigned char const* p, uint64_t n) {
+            unsigned char* c = (unsigned char*)&_buffer;
+            // Bytes consumed but not yet hashed
+            uint64_t a = _count & 7;
+            if (a) {
+                // Copy into buffer
+                size_t b = std::min(8 - a, n);
+                std::memcpy(c + a, p, b);
+                p += b;
+                _count += b;
+                n -= b;
+                a = _count & 7;
+                if (a) {
+                    // Not enough data to complete an 8-byte chunk
+                    return *this;
+                }
+                _state = hash(_state ^ _buffer);
+            }
+            // Consume 8-byte chunks
+            while (n >= 8) {
+                assert(!(_count & 7));
+                std::memcpy(&_buffer, p, 8);
+                p += 8;
+                _count += 8;
+                n -= 8;
+                _state = hash(_state ^ _buffer);
+            }
+            // Copy remaining bytes into buffer
+            std::memcpy(&_buffer, p, n);
+            _count += n;
+            // Done
+            return *this;
         }
-        if (bytes) {
-            uint64_t x = 0;
-            std::memcpy(&x, src, bytes);
-            already_hashed = hash(already_hashed ^ x);
+
+        hash_bytes_Hasher& write(void const* p, std::size_t n) {
+            return _write((unsigned char const*)p, (uint64_t)n);
         }
-        return already_hashed;
+
+        uint64_t finish() const {
+            // Bytes that remain unprocessed
+            size_t a = _count & 7;
+            size_t b = _count;
+            // Replace the high bytes of count.
+            std::memcpy((unsigned char*)(&b + 1) - a, &_buffer, a);
+            return hash(_state ^ b);
+        }
+
+    };
+
+    // TODO: Could be a buffering adapter generic over 8-byte-chunked Hashers
+
+
+
+    // hash_combine: fold one 64-bit value into a running 64-bit state, in
+    // the shape Boost has used since 1.81: mix the sum of the state, a
+    // constant and the value.  The sum rather than an xor matters.  With an
+    // xor, a state equal to its value collapses to mix(0) == 0, and from a
+    // zero state a run of zero values never leaves zero; with the constant
+    // added, neither happens.  Measured 2026-09-30: avalanche over the 128
+    // input bits at the noise floor, no collisions over all pairs of 12-bit
+    // values or triples of 8-bit values from a zero seed, about 4 ns per
+    // call.  Order-sensitive by construction.  There is no finalization; a
+    // streaming hasher that folds in its count is the pending redesign.
+
+    inline constexpr uint64_t hash_combine(uint64_t seed, uint64_t value) {
+        return splitmix64(seed + 0x9e3779b97f4a7c15ull + value);
     }
-        
-    
-    
-    
+
+    struct CombineHasher {
+        uint64_t _state = 0;
+        CombineHasher& write_u64(uint64_t i) {
+            _state = hash_combine(_state, i);
+            return *this;
+        }
+        uint64_t finish() const {
+            return _state;
+        }
+    };
+
+    struct hash_u64_Hasher {
+        uint64_t _state = 0;
+        hash_u64_Hasher& write_u64(uint64_t i) {
+            _state = hash_combine(_state, i);
+            return *this;
+        }
+        uint64_t finish() const {
+            return _state;
+        }
+    };
+
+    // Rust-style Hashers
+
+    struct FxHasher {
+        uint64_t state = 0;
+        void write_u64(uint64_t i) {
+            state = (__builtin_rotateleft64(state, 5) ^ i) * 0x517cc1b727220a95;
+        };
+        uint64_t finish() const {
+            return state;
+        }
+    };
+
     // constexpr FNV-1a hash for strings
     // https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
     
@@ -165,13 +276,28 @@ namespace wry {
         }
         return hash;
     }
-    
+
+    struct Fnv1aHasher {
+        uint64_t _state = FNV1A_OFFSET_BASIS;
+        void write(void const* p, std::size_t n) {
+            auto q = (unsigned char const*)p;
+            while (n--) {
+                _state ^= *q++;
+                _state *= FNV1A_PRIME;
+            }
+        }
+        uint64_t finish() const {
+            return _state;
+        }
+    };
+
+
     // TODO: hacked to fix inconsistency bug where Strings and const char* were
     // hashed differently.  If we want to use fnv1a, we need two slightly
     // different versions that are sized and zero-terminated respectively
     constexpr uint64_t hash(const char* str) {
         // return fnv1a(str);
-        return hash_combine(str, strlen(str));
+        return hash_bytes_Hasher{}.write(str, strlen(str)).finish();
     }
     
     // Hashed strings give us a conventional hash of the string's contents that

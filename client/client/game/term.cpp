@@ -401,17 +401,6 @@ namespace wry {
     // the top of term.hpp.
     // ====================================================================
 
-    // Mix function for inline-tag Term hashing.  Variant of the
-    // splitmix64 finalizer; good distribution from a 64-bit input.
-    static constexpr uint64_t _term_inline_mix(uint64_t x) {
-        x ^= x >> 30;
-        x *= 0xbf58476d1ce4e5b9ULL;
-        x ^= x >> 27;
-        x *= 0x94d049bb133111ebULL;
-        x ^= x >> 31;
-        return x;
-    }
-
     Term term_eq(Term a, Term b) {
         // Bitwise short-circuit.  Catches identical inline values,
         // identical pointers, identical SHORT_STRING encodings,
@@ -497,9 +486,9 @@ namespace wry {
             case TERM_TAG_OBJECT: {
                 if (!v._data) {
                     // null OBJECT hashes to the same hash as
-                    // TERM_DATA_NULL (i.e. mix(0)).
+                    // TERM_DATA_NULL (i.e. splitmix64(0)).
                     return term_make_integer_with(
-                        (int64_t)(_term_inline_mix(0) >> 4));
+                        (int64_t)(splitmix64(0) >> 4));
                 }
                 HeapTerm* p = _term_as_object(v);
                 return p->_term_hash();
@@ -512,7 +501,7 @@ namespace wry {
             default: {
                 // Inline tags: hash the _data word, narrow to 60 bits so
                 // it fits in a SMALL_INTEGER without overflow boxing.
-                uint64_t h = _term_inline_mix(v._data) >> 4;
+                uint64_t h = splitmix64(v._data) >> 4;
                 return term_make_integer_with((int64_t)h);
             }
         }
@@ -553,17 +542,7 @@ namespace wry {
         // pre-overflow representation.  Inline path hashes the entire
         // _data word (tag included); we hash _data == (i << 4) | tag.
         uint64_t bits = ((uint64_t)_integer << TERM_SHIFT) | TERM_TAG_SMALL_INTEGER;
-        uint64_t h = 0;
-        {
-            // Replicate _term_inline_mix's splitmix64 finalizer.
-            uint64_t x = bits;
-            x ^= x >> 30;
-            x *= 0xbf58476d1ce4e5b9ULL;
-            x ^= x >> 27;
-            x *= 0x94d049bb133111ebULL;
-            x ^= x >> 31;
-            h = x;
-        }
+        uint64_t h = splitmix64(bits);
         return term_make_integer_with((int64_t)(h >> 4));
     }
 

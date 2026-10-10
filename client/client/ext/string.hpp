@@ -287,7 +287,7 @@ namespace wry {
     };
 
     inline uint64_t hash(const String& x) {
-        return hash_combine(x.chars.data(), x.chars.size());
+        return wry::hash_bytes_Hasher{}.write(x.chars.data(), x.chars.size()).finish();
     }
 
     inline std::ostream& operator<<(std::ostream& a, String const& b) {

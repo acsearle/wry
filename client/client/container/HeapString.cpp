@@ -72,11 +72,6 @@ namespace wry {
 //        std::memcpy(b->_bytes, view.data(), view.size());
 //        return b;
 //    }
-//
-//
-//    HeapString const* HeapString::make(std::string_view view) {
-//        return make(hash_combine(view.data(), view.size()), view);
-//    }
 
 
 

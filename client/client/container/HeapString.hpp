@@ -101,7 +101,7 @@ namespace wry {
 
     struct std_string_Hasher {
         std::size_t operator()(std::string const& x) const {
-            return wry::hash_combine(x.data(), x.size());
+            return wry::hash_bytes_Hasher{}.write(x.data(), x.size()).finish();
         }
     };
 

@@ -34,7 +34,7 @@ namespace wry {
     }; // struct Coordinate
     
     inline u64 hash(const Coordinate& x) {
-        return hash_combine(&x, sizeof(x));
+        return wry::hash(x.data());
     }
     
     // z-order (Morton) keys for the 2D coordinates give the tries a quadtree-

@@ -25,7 +25,7 @@ namespace wry {
     };
     
     inline u64 hash(const EntityID& x) {
-        return hash_combine(&x, sizeof(x));
+        return wry::hash(x.data);
     }
     
     template<typename> struct DefaultKeyService;

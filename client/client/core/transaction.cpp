@@ -28,9 +28,7 @@ namespace wry {
 
     
     uint64_t transaction_priority(EntityID entity_id, Time time) {
-        uint64_t priority = hash_combine(&entity_id.data, 8);
-        priority = hash_combine(&time, 8, priority);
-        return priority;
+        return splitmix64(splitmix64(entity_id.data) ^ (uint64_t)time);
     }
 
     uint64_t TransactionContext::entity_get_priority(const Entity* entity) {

@@ -94,7 +94,7 @@ namespace wry::mesh {
     };
 
     inline uint64_t hash(edge e) {
-        return hash_combine(&e, sizeof(e));
+        return wry::hash_bytes_Hasher{}.write(&e, sizeof(e)).finish();
     }
 
     struct triangle {

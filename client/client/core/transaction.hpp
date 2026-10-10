@@ -222,11 +222,12 @@ namespace wry {
     // The conflict-resolution priority of an entity's transaction at a given
     // time.  Simulation-visible: peers must agree on it, and it must never
     // change across versions, or a replay or a loaded save forks from its own
-    // history.  Pinned here as its own function so that the general-purpose
-    // hashes it borrows today (hash_combine in hash.hpp) can be replaced
-    // without touching it; a change to those must leave this function
-    // bit-identical, by keeping a private copy of the old mixer here if need
-    // be.
+    // history.  It is defined through splitmix64 alone, whose constants are
+    // fixed by definition, and never through hash or hash_combine, which are
+    // free to change.  For a fixed time it is a bijection of the entity id
+    // (splitmix64, xor with a constant, splitmix64), so distinct entities get
+    // distinct priorities at any one time, which the conflict resolution
+    // relies on: some transaction always holds the unique highest priority.
     uint64_t transaction_priority(EntityID entity_id, Time time);
 
     struct TransactionContext {

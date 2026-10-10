@@ -183,7 +183,9 @@ over `wait_on_time`.
 
 `State` is `INITIAL | COMMITTED | ABORTED`, stored in `Transaction::_state`.
 
-Priority is `hash_combine(entity_id, world_time)`. **Lower number means higher
+Priority is `transaction_priority(entity_id, world_time)`, which is
+`splitmix64(splitmix64(entity_id) ^ world_time)` (changed 2026-09-30; it was
+the old byte hash chained over the two fields). **Lower number means higher
 priority.** Because it is re-salted with the time every tick, an entity that
 loses this tick is likely to win a future one, so no entity starves
 indefinitely.
@@ -192,20 +194,20 @@ indefinitely.
 
 Uniqueness is not luck; it is guaranteed by construction. The priority is
 
-    priority(id, t) = hash( hash(id) ^ t )
+    priority(id, t) = splitmix64( splitmix64(id) ^ t )
 
-where `hash` is the scalar mixer in `core/hash.hpp` (Numerical Recipes 7.1.4),
-which is *invertible* on 64 bits -- a reversible / bijective integer hash, the
+where `splitmix64` is the pinned mixer in `core/hash.hpp` (since 2026-09-30;
+Numerical Recipes' `ranhash` before), which is *invertible* on 64 bits -- a reversible / bijective integer hash, the
 standard term for a function that maps a fixed-width integer domain onto itself
 with no collisions. Composing bijections yields a bijection: `id -> hash(id)`,
-xor with the fixed `t`, and the outer `hash` are each bijective, so for any
+xor with the fixed `t`, and the outer `splitmix64` are each bijective, so for any
 fixed time `priority(., t)` is a permutation of the EntityID space. Distinct
 EntityIDs therefore always receive distinct priorities within a tick.
 
 The chain that must hold:
 
 1. EntityIDs are unique and never reused (see `entity_id.hpp`).
-2. `hash(uint64_t)` is injective, hence bijective on 64 bits.
+2. `splitmix64(uint64_t)` is injective, hence bijective on 64 bits.
 3. Therefore `priority(., t)` is injective in the id, so priorities are unique.
 
 If either (1) or (2) breaks, two conflicting writers could share a priority,

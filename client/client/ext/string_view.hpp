@@ -207,7 +207,7 @@ namespace wry {
     }
 
     inline uint64_t hash(StringView v) {
-        return hash_combine(v.chars.begin(), v.chars.size(), 0);
+        return wry::hash_bytes_Hasher{}.write(v.chars.data(), v.chars.size()).finish();
     }
 
 } // namespace wry
