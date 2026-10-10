@@ -193,7 +193,16 @@ typedef struct
     // vector_uchar4 color;
     // srgba8unorm
     unsigned int color; // 4
-    
+
+    // Rounded-box mode (fragmentShader).  When half_extent.x > 0 the
+    // texture is not sampled; texCoord instead carries the fragment's
+    // position in pixels relative to the box center, and coverage is the
+    // Gaussian-prefiltered rounded box of this half-extent and corner
+    // radius.  Zero (the default) selects ordinary textured-sprite mode.
+    // Occupies what was tail padding; the struct stays 48 bytes.
+    float radius; // 4
+    simd_float2 half_extent; // 8
+
 } MyVertex4;
 
 typedef struct

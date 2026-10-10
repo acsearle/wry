@@ -472,7 +472,11 @@ namespace wry {
                     bg = RGBA8Unorm_sRGB(0.20f, 0.20f, 0.20f, 1.0f);
                 }
             }
-            p.fill_rect(_rect, bg);
+            // Corner radius tracks the font cell so it scales with the UI.
+            const float radius = p.font
+                ? 0.25f * (p.font->ascender - p.font->descender)
+                : 0.0f;
+            p.fill_round_rect(_rect, radius, bg);
 
             // Label.  Horizontally center the text within the button
             // (subject to a minimum left-edge padding), vertically center

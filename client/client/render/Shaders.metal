@@ -1487,6 +1487,9 @@ struct RasterizerData
     float2 texCoord;
     float4 color;
     float3 light_direction;
+    // Rounded-box mode; see MyVertex4.  (radius, half_extent.x,
+    // half_extent.y); x of half_extent == 0 selects textured-sprite mode.
+    float3 box [[flat]];
 };
 
 [[vertex]] RasterizerData
@@ -1500,6 +1503,7 @@ vertexShader(uint vertexID [[ vertex_id ]],
     out.clipSpacePosition = float4(uniforms.position_transform
                                    * float4(vertexArray[vertexID].position, 0, 1));
     out.texCoord = vertexArray[vertexID].texCoord;
+    out.box = float3(0.0);
     
     // out.color = float4(vertexArray[vertexID].color) / 255;
     out.color = unpack_unorm4x8_srgb_to_float(vertexArray[vertexID].color);
@@ -1518,6 +1522,8 @@ vertexShader4(uint vertexID [[ vertex_id ]],
     out.clipSpacePosition = float4(uniforms.position_transform
                                    * float4(vertexArray[vertexID].position));
     out.texCoord = vertexArray[vertexID].texCoord;
+    out.box = float3(vertexArray[vertexID].radius,
+                     vertexArray[vertexID].half_extent);
     
     // out.color = float4(vertexArray[vertexID].color) / 255;
     out.color = unpack_unorm4x8_srgb_to_float(vertexArray[vertexID].color);
@@ -1543,6 +1549,22 @@ struct basicFragmentShaderOut {
 fragmentShader(RasterizerData in [[stage_in]],
                texture2d<half> colorTexture [[ texture(AAPLTextureIndexColor) ]])
 {
+    if (in.box.y > 0.0) {
+        // Rounded box.  texCoord is the pixel-space offset from the box
+        // center; signed distance to the rounded rectangle (negative
+        // inside), then the coverage of a Gaussian-prefiltered half-plane
+        // at that distance.  Same 0.5 px sigma as the rasterized glyphs
+        // (font.mm coverage_at_pixel), so box edges and text edges match.
+        // The half-plane approximation is exact along the straight sides
+        // and close at corners whose radius is a few pixels or more.
+        const float r = in.box.x;
+        const float2 q = abs(in.texCoord) - (in.box.yz - r);
+        const float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+        // 0.5 * erfc(d / (sigma * sqrt(2))) with sigma = 0.5
+        const float coverage = 0.5 * (1.0 - otf::erf6(float2(d * M_SQRT2_F)).x);
+        return { half4(in.color) * half(coverage) };
+    }
+
     constexpr sampler textureSampler (mag_filter::nearest,
                                       min_filter::nearest);
     

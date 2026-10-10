@@ -89,20 +89,34 @@ namespace wry {
             };
         }
 
-        void push_sprite(Sprite s, RGBA8Unorm_sRGB c = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f)) {
+        // A nonzero half_extent selects rounded-box mode (see MyVertex4):
+        // the texCoords are then pixel offsets from the box center rather
+        // than atlas coordinates.
+        void push_sprite(Sprite s,
+                         RGBA8Unorm_sRGB c = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f),
+                         float radius = 0.0f,
+                         float2 half_extent = {0.0f, 0.0f}) {
             // a - x
             // | \ | => abx ayb
             // y - b
-            _vertices.emplace_back(s.a, c);
-            _vertices.push_back({{
+            SpriteVertex a{s.a, c};
+            SpriteVertex x{{
                 { s.b.position.x, s.a.position.y, 0.0f, 1.0f},
-                { s.b.texCoord.x, s.a.texCoord.y}}, c });
-            _vertices.push_back({s.b, c});
-            _vertices.push_back({s.a, c});
-            _vertices.push_back({s.b, c});
-            _vertices.push_back({{
+                { s.b.texCoord.x, s.a.texCoord.y}}, c };
+            SpriteVertex b{s.b, c};
+            SpriteVertex y{{
                 {s.a.position.x, s.b.position.y, 0.0f, 1.0f},
-                {s.a.texCoord.x, s.b.texCoord.y}}, c});
+                {s.a.texCoord.x, s.b.texCoord.y}}, c};
+            for (SpriteVertex* v : {&a, &x, &b, &y}) {
+                v->radius = radius;
+                v->half_extent = half_extent;
+            }
+            _vertices.push_back(a);
+            _vertices.push_back(x);
+            _vertices.push_back(b);
+            _vertices.push_back(a);
+            _vertices.push_back(b);
+            _vertices.push_back(y);
         }
 
         void push_quad(SpriteVertex v[]) {

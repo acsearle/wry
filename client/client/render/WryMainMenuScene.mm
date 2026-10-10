@@ -189,9 +189,10 @@
     // Scrim behind the column so the buttons stay legible over the photo.
     // Pushed before the buttons, so it sits under them in the atlas draw order.
     const float pad = 28.0f;
-    painter.fill_rect(wry::rect<float>{x - pad, y - pad,
-                                       x + desired.w + pad, y + desired.h + pad},
-                      wry::RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.5f));
+    painter.fill_round_rect(wry::rect<float>{x - pad, y - pad,
+                                             x + desired.w + pad, y + desired.h + pad},
+                            0.5f * pad,
+                            wry::RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.5f));
 
     _root->paint(painter);
 

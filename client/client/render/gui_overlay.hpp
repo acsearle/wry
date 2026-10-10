@@ -32,6 +32,7 @@
 #ifndef gui_overlay_hpp
 #define gui_overlay_hpp
 
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <memory>
@@ -124,7 +125,12 @@ namespace wry {
             // to the atlas.  Adjusts position and texCoord proportionally
             // so partially-clipped sprites render correctly.  Degenerate
             // sprites (zero extent) and fully-clipped sprites are dropped.
-            void push_sprite_clipped(Sprite s, RGBA8Unorm_sRGB color) {
+            // The texCoord lerp is also exactly right for rounded boxes,
+            // whose texCoords are affine pixel offsets from the box center;
+            // radius / half_extent pass through untouched.
+            void push_sprite_clipped(Sprite s, RGBA8Unorm_sRGB color,
+                                     float radius = 0.0f,
+                                     float2 half_extent = {0.0f, 0.0f}) {
                 if (!atlas) return;
 
                 const float sa_x = s.a.position.x, sa_y = s.a.position.y;
@@ -142,7 +148,7 @@ namespace wry {
                 // Fast path: fully inside, push as-is.
                 if (ca_x == sa_x && ca_y == sa_y &&
                     cb_x == sb_x && cb_y == sb_y) {
-                    atlas->push_sprite(s, color);
+                    atlas->push_sprite(s, color, radius, half_extent);
                     return;
                 }
 
@@ -162,7 +168,7 @@ namespace wry {
                 cropped.a.texCoord = ta;
                 cropped.b.position = simd_make_float4(cb_x, cb_y, 0.0f, 1.0f);
                 cropped.b.texCoord = tb;
-                atlas->push_sprite(cropped, color);
+                atlas->push_sprite(cropped, color, radius, half_extent);
             }
 
 
@@ -178,6 +184,29 @@ namespace wry {
                 s.b.position.x = r.b.x;
                 s.b.position.y = r.b.y;
                 push_sprite_clipped(s, color);
+            }
+
+            // Solid-color rectangle with rounded corners, antialiased in
+            // the fragment shader (fragmentShader's rounded-box mode).  The
+            // 50%-coverage edge lies on `r`; the quad is padded outward by
+            // kRoundRectSpill so the Gaussian edge falloff isn't cut off.
+            // radius is clamped to the half-extent (a pill at most).
+            static constexpr float kRoundRectSpill = 1.0f;
+
+            void fill_round_rect(rect<float> r, float radius,
+                                 RGBA8Unorm_sRGB color) {
+                if (!atlas) return;
+                const float hw = (r.b.x - r.a.x) * 0.5f;
+                const float hh = (r.b.y - r.a.y) * 0.5f;
+                if (hw <= 0.0f || hh <= 0.0f) return;
+                radius = std::clamp(radius, 0.0f, std::min(hw, hh));
+                const float e = kRoundRectSpill;
+                Sprite s;
+                s.a.position = simd_make_float4(r.a.x - e, r.a.y - e, 0.0f, 1.0f);
+                s.a.texCoord = simd_make_float2(-hw - e, -hh - e);
+                s.b.position = simd_make_float4(r.b.x + e, r.b.y + e, 0.0f, 1.0f);
+                s.b.texCoord = simd_make_float2(+hw + e, +hh + e);
+                push_sprite_clipped(s, color, radius, simd_make_float2(hw, hh));
             }
 
             // Draw a single line of text starting at the given baseline
