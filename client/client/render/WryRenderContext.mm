@@ -104,19 +104,28 @@
 
             _overlayRenderPipelineState = [self newRenderPipelineStateWithDescriptor:renderPipelineDescriptor];
 
-            // A 2D UI pipeline for scenes that draw directly into a single
-            // RGBA16Float color target (splash, menu), rather than into the
-            // world's deferred G-buffer pass.  Same shaders as the overlay
-            // pipeline, but only colorAttachments[Color] is declared, so it
-            // matches a one-attachment, depth-less render pass.  (fragmentShader
-            // writes only color(AAPLColorIndexColor), so the other G-buffer
-            // attachments aren't needed here.)
+            // GUI quads (SpriteAtlas::commit) inside the world's G-buffer
+            // pass: same attachments and blending, instanced quad shaders.
+            {
+                MTLRenderPipelineDescriptor* quad = [renderPipelineDescriptor copy];
+                quad.label = @"Overlay GUI quad pipeline";
+                quad.vertexFunction = [self newFunctionWithName:@"quadVertexShader"];
+                quad.fragmentFunction = [self newFunctionWithName:@"quadFragmentShader"];
+                _overlayQuadRenderPipelineState = [self newRenderPipelineStateWithDescriptor:quad];
+            }
+
+            // GUI quads (SpriteAtlas::commit) for scenes that draw directly
+            // into a single RGBA16Float color target (menu), rather than
+            // into the world's deferred G-buffer pass.  Only
+            // colorAttachments[Color] is declared, so it matches a
+            // one-attachment, depth-less render pass.  (quadFragmentShader
+            // writes only color(AAPLColorIndexColor).)
             {
                 MTLRenderPipelineDescriptor* ui = [[MTLRenderPipelineDescriptor alloc] init];
-                ui.label = @"UI 2D pipeline";
-                ui.vertexFunction = [self newFunctionWithName:@"vertexShader4"];
+                ui.label = @"UI GUI quad pipeline";
+                ui.vertexFunction = [self newFunctionWithName:@"quadVertexShader"];
                 ui.vertexBuffers[0].mutability = MTLMutabilityImmutable;
-                ui.fragmentFunction = [self newFunctionWithName:@"fragmentShader"];
+                ui.fragmentFunction = [self newFunctionWithName:@"quadFragmentShader"];
                 ui.fragmentBuffers[0].mutability = MTLMutabilityImmutable;
                 ui.colorAttachments[AAPLColorIndexColor].pixelFormat = drawablePixelFormat;
                 ui.colorAttachments[AAPLColorIndexColor].blendingEnabled = YES;
@@ -126,7 +135,7 @@
                 ui.colorAttachments[AAPLColorIndexColor].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
                 ui.colorAttachments[AAPLColorIndexColor].sourceAlphaBlendFactor = MTLBlendFactorOne;
                 ui.colorAttachments[AAPLColorIndexColor].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-                _uiRenderPipelineState = [self newRenderPipelineStateWithDescriptor:ui];
+                _uiQuadRenderPipelineState = [self newRenderPipelineStateWithDescriptor:ui];
             }
 
             // Backdrop image pipeline: same shaders as the UI pipeline but with

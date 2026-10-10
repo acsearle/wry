@@ -1487,9 +1487,6 @@ struct RasterizerData
     float2 texCoord;
     float4 color;
     float3 light_direction;
-    // Rounded-box mode; see MyVertex4.  (radius, half_extent.x,
-    // half_extent.y); x of half_extent == 0 selects textured-sprite mode.
-    float3 box [[flat]];
 };
 
 [[vertex]] RasterizerData
@@ -1503,7 +1500,6 @@ vertexShader(uint vertexID [[ vertex_id ]],
     out.clipSpacePosition = float4(uniforms.position_transform
                                    * float4(vertexArray[vertexID].position, 0, 1));
     out.texCoord = vertexArray[vertexID].texCoord;
-    out.box = float3(0.0);
     
     // out.color = float4(vertexArray[vertexID].color) / 255;
     out.color = unpack_unorm4x8_srgb_to_float(vertexArray[vertexID].color);
@@ -1522,8 +1518,6 @@ vertexShader4(uint vertexID [[ vertex_id ]],
     out.clipSpacePosition = float4(uniforms.position_transform
                                    * float4(vertexArray[vertexID].position));
     out.texCoord = vertexArray[vertexID].texCoord;
-    out.box = float3(vertexArray[vertexID].radius,
-                     vertexArray[vertexID].half_extent);
     
     // out.color = float4(vertexArray[vertexID].color) / 255;
     out.color = unpack_unorm4x8_srgb_to_float(vertexArray[vertexID].color);
@@ -1549,22 +1543,6 @@ struct basicFragmentShaderOut {
 fragmentShader(RasterizerData in [[stage_in]],
                texture2d<half> colorTexture [[ texture(AAPLTextureIndexColor) ]])
 {
-    if (in.box.y > 0.0) {
-        // Rounded box.  texCoord is the pixel-space offset from the box
-        // center; signed distance to the rounded rectangle (negative
-        // inside), then the coverage of a Gaussian-prefiltered half-plane
-        // at that distance.  Same 0.5 px sigma as the rasterized glyphs
-        // (font.mm coverage_at_pixel), so box edges and text edges match.
-        // The half-plane approximation is exact along the straight sides
-        // and close at corners whose radius is a few pixels or more.
-        const float r = in.box.x;
-        const float2 q = abs(in.texCoord) - (in.box.yz - r);
-        const float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
-        // 0.5 * erfc(d / (sigma * sqrt(2))) with sigma = 0.5
-        const float coverage = 0.5 * (1.0 - otf::erf6(float2(d * M_SQRT2_F)).x);
-        return { half4(in.color) * half(coverage) };
-    }
-
     constexpr sampler textureSampler (mag_filter::nearest,
                                       min_filter::nearest);
     
@@ -1587,6 +1565,105 @@ imageFragmentShader(RasterizerData in [[stage_in]],
                                       min_filter::linear);
     const half4 colorSample = colorTexture.sample(textureSampler, in.texCoord);
     return { colorSample * half4(in.color) };
+}
+
+#pragma mark - GUI quads
+
+// See WryQuadInstance (ShaderTypes.h).
+
+struct QuadRasterizerData {
+    float4 clipSpacePosition [[position]];
+    float2 texCoord;
+    // Fragment position in pixels relative to the shape center.
+    float2 local;
+    float4 color [[flat]];
+    float4 radii [[flat]];
+    float2 half_extent [[flat]];
+    float sigma [[flat]];
+    uint flags [[flat]];
+};
+
+[[vertex]] QuadRasterizerData
+quadVertexShader(uint vertexID [[ vertex_id ]],
+                 uint instanceID [[ instance_id ]],
+                 const device WryQuadInstance* instances [[ buffer(AAPLBufferIndexVertices) ]],
+                 constant MyUniforms& uniforms [[ buffer(AAPLBufferIndexUniforms) ]])
+{
+    const WryQuadInstance q = instances[instanceID];
+    // Triangle strip: 0 = (x0, y0), 1 = (x1, y0), 2 = (x0, y1), 3 = (x1, y1)
+    const bool2 hi = bool2(vertexID & 1, vertexID & 2);
+    const float2 position = select(q.draw.xy, q.draw.zw, hi);
+    const float2 center = (q.shape.xy + q.shape.zw) * 0.5;
+
+    QuadRasterizerData out;
+    out.clipSpacePosition = uniforms.position_transform * float4(position, 0.0, 1.0);
+    out.texCoord = select(q.uv.xy, q.uv.zw, hi);
+    out.local = position - center;
+    out.color = unpack_unorm4x8_srgb_to_float(q.color);
+    out.radii = q.radii;
+    out.half_extent = (q.shape.zw - q.shape.xy) * 0.5;
+    out.sigma = q.sigma;
+    out.flags = q.flags;
+    return out;
+}
+
+// Coverage of a rounded box blurred by an isotropic Gaussian of standard
+// deviation sigma, at p relative to the box center (y-down).  h is the
+// half-extent; radii are per corner, ordered (x0,y0) (x1,y0) (x1,y1)
+// (x0,y1), each at most min(h).
+//
+// After Evan Wallace, "Fast Rounded Rectangle Shadows", generalized to
+// per-corner radii.  The Gaussian is separable, so integrate exactly in x
+// (each row of a rounded box is one interval, whose ends depend on that
+// row's left and right corner radii) and numerically in y (midpoint rule
+// over the +/- 3 sigma window clipped to the box's rows).  Against brute-
+// force 2D convolution, for sigma 0.5..4 and radii 0..8 px, the maximum
+// error is ~0.006 with 6 samples (4 samples: ~0.014).  The previous
+// distance-to-edge approximation erred by 0.25 at sharp corners, where the
+// true value is the product of two edge integrals.
+static float rounded_box_coverage(float2 p, float2 h, float4 radii, float sigma) {
+    constexpr int N = 6;
+    const float lo = clamp(-3.0f * sigma, p.y - h.y, p.y + h.y);
+    const float hi = clamp(+3.0f * sigma, p.y - h.y, p.y + h.y);
+    const float step = (hi - lo) / N;
+    const float k = M_SQRT1_2_F / sigma; // erf argument scale
+    float sum = 0.0f;
+    for (int i = 0; i != N; ++i) {
+        const float t = lo + step * (i + 0.5f); // Gaussian offset
+        const float y = p.y - t;                // row, relative to center
+        // (left, right) corner radii for this row
+        const float2 r = (y < 0.0f) ? radii.xy : radii.wz;
+        const float2 delta = min(h.y - r - abs(y), 0.0f);
+        // (left, right) extent of the row from the center
+        const float2 e = h.x - r + sqrt(max(0.0f, r * r - delta * delta));
+        // Phi((x + e.l) / sigma) - Phi((x - e.r) / sigma)
+        const float2 E = otf::erf6(float2(p.x + e.x, p.x - e.y) * k);
+        sum += 0.5f * (E.x - E.y) * exp(-0.5f * (t / sigma) * (t / sigma));
+    }
+    return sum * step / (sigma * sqrt(2.0f * M_PI_F));
+}
+
+[[fragment]] basicFragmentShaderOut
+quadFragmentShader(QuadRasterizerData in [[stage_in]],
+                   texture2d<half> colorTexture [[ texture(AAPLTextureIndexColor) ]])
+{
+    half4 color = half4(in.color);
+
+    if (in.flags & WryQuadFlagTextured) {
+        constexpr sampler textureSampler (mag_filter::nearest,
+                                          min_filter::nearest);
+        color *= colorTexture.sample(textureSampler, in.texCoord);
+    }
+
+    if (in.flags & WryQuadFlagMasked) {
+        // sigma = 0.5 for edges matches the prefilter of the rasterized
+        // glyphs (font.mm coverage_at_pixel), so box edges and text edges
+        // agree; larger sigma makes a drop shadow.
+        color *= half(rounded_box_coverage(in.local, in.half_extent,
+                                           in.radii, in.sigma));
+    }
+
+    return { color };
 }
 
 // Fragment function

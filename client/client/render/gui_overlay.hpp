@@ -67,9 +67,9 @@ namespace wry {
         // data; no Metal types leak in.  Constructed afresh each frame by
         // the renderer.
         //
-        // All drawing helpers respect the current `clip` rect: sprites
+        // All drawing helpers respect the current `clip` rect: quads
         // fully outside are discarded, partially overlapping ones are
-        // CPU-cropped on both position and texCoord.  Parents push a
+        // CPU-cropped on both draw rect and uv.  Parents push a
         // tighter clip before drawing children and pop it afterwards.
         struct Painter {
 
@@ -83,11 +83,6 @@ namespace wry {
             // boundary so event.location matches.
             float2 viewport_size_px = {0.0f, 0.0f};
             uint64_t frame_count = 0;   // for cursor blink, etc.
-
-            // A copy of the atlas's reserved white sprite.  Lets widgets
-            // draw solid-color rectangles cheaply via fill_rect.  The
-            // renderer sets this when constructing the Painter each frame.
-            Sprite white_sprite = {};
 
             // Current clip rect in screen-space (logical points).  The
             // renderer initialises this to the viewport rect each frame;
@@ -119,94 +114,105 @@ namespace wry {
             }
 
 
-            // -- Clipped sprite emission ------------------------------------
+            // -- Clipped quad emission --------------------------------------
 
-            // CPU-crop an axis-aligned sprite against `clip` and push it
-            // to the atlas.  Adjusts position and texCoord proportionally
-            // so partially-clipped sprites render correctly.  Degenerate
-            // sprites (zero extent) and fully-clipped sprites are dropped.
-            // The texCoord lerp is also exactly right for rounded boxes,
-            // whose texCoords are affine pixel offsets from the box center;
-            // radius / half_extent pass through untouched.
-            void push_sprite_clipped(Sprite s, RGBA8Unorm_sRGB color,
-                                     float radius = 0.0f,
-                                     float2 half_extent = {0.0f, 0.0f}) {
+            // CPU-crop a quad's draw rect against `clip` and push it to the
+            // atlas.  Adjusts uv proportionally so partially-clipped
+            // textured quads render correctly.  The shape (and hence any
+            // rounded-box mask) is untouched, so a cropped box keeps its
+            // true corners.  Degenerate and fully-clipped quads are dropped.
+            void push_quad_clipped(WryQuadInstance q) {
                 if (!atlas) return;
 
-                const float sa_x = s.a.position.x, sa_y = s.a.position.y;
-                const float sb_x = s.b.position.x, sb_y = s.b.position.y;
-                const float ext_x = sb_x - sa_x;
-                const float ext_y = sb_y - sa_y;
+                const float4 d = q.draw;
+                const float ext_x = d.z - d.x;
+                const float ext_y = d.w - d.y;
                 if (ext_x <= 0.0f || ext_y <= 0.0f) return;
 
-                const float ca_x = std::max(sa_x, clip.a.x);
-                const float ca_y = std::max(sa_y, clip.a.y);
-                const float cb_x = std::min(sb_x, clip.b.x);
-                const float cb_y = std::min(sb_y, clip.b.y);
-                if (ca_x >= cb_x || ca_y >= cb_y) return;
+                const float4 c = simd_make_float4(std::max(d.x, clip.a.x),
+                                                  std::max(d.y, clip.a.y),
+                                                  std::min(d.z, clip.b.x),
+                                                  std::min(d.w, clip.b.y));
+                if (c.x >= c.z || c.y >= c.w) return;
 
-                // Fast path: fully inside, push as-is.
-                if (ca_x == sa_x && ca_y == sa_y &&
-                    cb_x == sb_x && cb_y == sb_y) {
-                    atlas->push_sprite(s, color, radius, half_extent);
-                    return;
+                // Partial crop: lerp uv by the same fractions we moved the
+                // corners.
+                if (simd_any(c != d)) {
+                    const float4 t = q.uv;
+                    q.uv = simd_make_float4(
+                        t.x + (t.z - t.x) * (c.x - d.x) / ext_x,
+                        t.y + (t.w - t.y) * (c.y - d.y) / ext_y,
+                        t.x + (t.z - t.x) * (c.z - d.x) / ext_x,
+                        t.y + (t.w - t.y) * (c.w - d.y) / ext_y);
+                    q.draw = c;
                 }
+                atlas->push_quad(q);
+            }
 
-                // Partial crop: lerp texCoords by the same fractions we
-                // moved the corners.
-                const float2 t0 = s.a.texCoord;
-                const float2 t1 = s.b.texCoord;
-                const float2 ta = simd_make_float2(
-                    t0.x + (t1.x - t0.x) * (ca_x - sa_x) / ext_x,
-                    t0.y + (t1.y - t0.y) * (ca_y - sa_y) / ext_y);
-                const float2 tb = simd_make_float2(
-                    t0.x + (t1.x - t0.x) * (cb_x - sa_x) / ext_x,
-                    t0.y + (t1.y - t0.y) * (cb_y - sa_y) / ext_y);
-
-                Sprite cropped;
-                cropped.a.position = simd_make_float4(ca_x, ca_y, 0.0f, 1.0f);
-                cropped.a.texCoord = ta;
-                cropped.b.position = simd_make_float4(cb_x, cb_y, 0.0f, 1.0f);
-                cropped.b.texCoord = tb;
-                atlas->push_sprite(cropped, color, radius, half_extent);
+            // A sprite (e.g. glyph) tinted by color.
+            void push_sprite_clipped(Sprite s, RGBA8Unorm_sRGB color) {
+                push_quad_clipped(SpriteAtlas::make_quad(s, color));
             }
 
 
             // -- Higher-level helpers ---------------------------------------
 
-            // Solid-color rectangle.  Stretches and tints the atlas's white
-            // sprite, then routes through push_sprite_clipped.
+            // Solid-color rectangle, hard-edged.
             void fill_rect(rect<float> r, RGBA8Unorm_sRGB color) {
-                if (!atlas) return;
-                Sprite s = white_sprite;
-                s.a.position.x = r.a.x;
-                s.a.position.y = r.a.y;
-                s.b.position.x = r.b.x;
-                s.b.position.y = r.b.y;
-                push_sprite_clipped(s, color);
+                push_quad_clipped(SpriteAtlas::make_quad(
+                    simd_make_float4(r.a.x, r.a.y, r.b.x, r.b.y), color));
             }
 
+            // Gaussian prefilter sigma of mask edges, in pixels; matches
+            // the rasterized glyphs (font.mm).
+            static constexpr float kEdgeSigma = 0.5f;
+
+            // Drop shadow defaults, matching the shadow once baked onto the
+            // glyphs: a [1 4 6 4 1]/16 binomial blur (sigma 1 px) of the
+            // shape, offset 2 px down, opaque black.
+            static constexpr float kShadowSigma = 1.0f;
+            static constexpr float2 kShadowOffset = {0.0f, 2.0f};
+
             // Solid-color rectangle with rounded corners, antialiased in
-            // the fragment shader (fragmentShader's rounded-box mode).  The
-            // 50%-coverage edge lies on `r`; the quad is padded outward by
-            // kRoundRectSpill so the Gaussian edge falloff isn't cut off.
-            // radius is clamped to the half-extent (a pill at most).
-            static constexpr float kRoundRectSpill = 1.0f;
+            // quadFragmentShader.  The 50%-coverage edge lies on `r`.
+            // radii are per corner, ordered (x0,y0) (x1,y0) (x1,y1)
+            // (x0,y1), each clamped to the half-extent (a pill at most).
+            void fill_round_rect(rect<float> r, float4 radii,
+                                 RGBA8Unorm_sRGB color) {
+                push_blurred_round_rect(r, radii, kEdgeSigma, color);
+            }
 
             void fill_round_rect(rect<float> r, float radius,
                                  RGBA8Unorm_sRGB color) {
-                if (!atlas) return;
+                fill_round_rect(r, simd_make_float4(radius, radius, radius, radius), color);
+            }
+
+            // The shadow `r` (with corner radii) casts: the same shape,
+            // offset, and blurred by sigma.  Paint it before the shape.
+            void drop_shadow(rect<float> r, float4 radii,
+                             RGBA8Unorm_sRGB color = RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 1.0f),
+                             float sigma = kShadowSigma,
+                             float2 offset = kShadowOffset) {
+                r += offset;
+                push_blurred_round_rect(r, radii, sigma, color);
+            }
+
+            // Rounded rectangle blurred by an isotropic Gaussian of the
+            // given sigma.  The drawn quad extends three sigma beyond the
+            // shape, where the coverage falls below 0.2%.
+            void push_blurred_round_rect(rect<float> r, float4 radii, float sigma,
+                                         RGBA8Unorm_sRGB color) {
                 const float hw = (r.b.x - r.a.x) * 0.5f;
                 const float hh = (r.b.y - r.a.y) * 0.5f;
                 if (hw <= 0.0f || hh <= 0.0f) return;
-                radius = std::clamp(radius, 0.0f, std::min(hw, hh));
-                const float e = kRoundRectSpill;
-                Sprite s;
-                s.a.position = simd_make_float4(r.a.x - e, r.a.y - e, 0.0f, 1.0f);
-                s.a.texCoord = simd_make_float2(-hw - e, -hh - e);
-                s.b.position = simd_make_float4(r.b.x + e, r.b.y + e, 0.0f, 1.0f);
-                s.b.texCoord = simd_make_float2(+hw + e, +hh + e);
-                push_sprite_clipped(s, color, radius, simd_make_float2(hw, hh));
+                const float e = 3.0f * sigma;
+                WryQuadInstance q = SpriteAtlas::make_quad(
+                    simd_make_float4(r.a.x, r.a.y, r.b.x, r.b.y), color);
+                q.draw = q.shape + simd_make_float4(-e, -e, e, e);
+                q.radii = simd_clamp(radii, 0.0f, std::min(hw, hh));
+                q.sigma = sigma;
+                q.flags = WryQuadFlagMasked;
+                push_quad_clipped(q);
             }
 
             // Draw a single line of text starting at the given baseline

@@ -51,6 +51,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "gui_event.hpp"
@@ -170,6 +171,18 @@ namespace wry::gui {
         void set_selected(bool s) { _selected = s; }
         bool is_selected() const  { return _selected; }
 
+        // Per-corner background radii, ordered (x0,y0) (x1,y0) (x1,y1)
+        // (x0,y1).  Containers that group buttons set these so that only
+        // the group's outer corners are rounded.  Unset: every corner gets
+        // the default, proportional to the font cell.
+        void set_corner_radii(float4 r) { _corner_radii = r; }
+
+        // The default background corner radius: a quarter of the font's
+        // ascender-descender cell, so it scales with the text.
+        static float default_corner_radius(Font const* font) {
+            return font ? 0.25f * (font->ascender - font->descender) : 0.0f;
+        }
+
         // The rect this Button was last arranged into (screen-space).
         // Used by parents that want to scroll a particular row into view.
         // Degenerate {0,0,0,0} before the first arrange.
@@ -193,6 +206,7 @@ namespace wry::gui {
         bool _hover    = false;
         bool _pressed  = false;
         bool _selected = false;
+        std::optional<float4> _corner_radii;
     };
 
     // ----------------------------------------------------------------
@@ -222,6 +236,41 @@ namespace wry::gui {
     private:
         std::vector<std::unique_ptr<Widget>> _children;
         float _spacing = 8.0f;
+        rect<float> _rect = {0, 0, 0, 0};
+    };
+
+    // ----------------------------------------------------------------
+    // ButtonPanel: a column of Buttons grouped on a dark rounded panel that
+    // casts a drop shadow.  Buttons are separated from each other, and
+    // from the panel's edge, by a uniform gap of one font stem width, so
+    // each reads as outlined by the panel.  The buttons are square except
+    // at the panel's corners, where they are rounded concentrically with
+    // it: the panel radius is the button default radius plus the gap.
+    // Gap and radii derive from the font at measure time.
+
+    class ButtonPanel : public Widget {
+    public:
+        // Take ownership of `button`.  Returns *this so adds can chain.
+        ButtonPanel& add(std::unique_ptr<Button> button) {
+            _buttons.push_back(button.get());
+            _column.add(std::move(button));
+            return *this;
+        }
+
+        Size measure(SizeConstraints, MeasureContext const&) override;
+        void arrange(rect<float>) override;
+        bool on_event(Event const&) override;
+        void paint(Painter&) override;
+
+        // Linear (pre-sRGB-encoding) gray of the panel, darker than the
+        // default button background.
+        static constexpr float kPanelGray = 0.08f;
+
+    private:
+        Column _column;
+        std::vector<Button*> _buttons;  // non-owning, into _column
+        float _gap = 0.0f;              // font stem width
+        float _radius = 0.0f;           // panel corner radius
         rect<float> _rect = {0, 0, 0, 0};
     };
 

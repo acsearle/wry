@@ -27,6 +27,14 @@ namespace wry {
         float ascender;
         float descender;
         float height;
+
+        // Width in pixels of a vertical stem (measured from 'I'); the
+        // natural thickness for rules and borders that sit beside text.
+        float stem_width;
+
+        // Height in pixels of a flat-topped capital (measured from 'H')
+        // above the baseline.  All-caps labels center this band.
+        float cap_height;
         
     };
     

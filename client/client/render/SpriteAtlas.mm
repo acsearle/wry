@@ -45,20 +45,10 @@ namespace wry {
         descriptor.storageMode = MTLStorageModeShared;
 
         _impl->texture = [device newTextureWithDescriptor:descriptor];
-        _vertices.reserve(65536);
+        _quads.reserve(16384);
         for (auto& x : _impl->buffers) {
-            x = [device newBufferWithLength:sizeof(SpriteVertex) * _vertices.capacity()
+            x = [device newBufferWithLength:sizeof(WryQuadInstance) * _quads.capacity()
                                     options:MTLResourceStorageModeShared];
-        }
-
-        // Reserve a 1x1 white pixel that widgets can stretch and tint to
-        // draw solid-color rectangles.  Allocated at construction so the
-        // sprite handle is stable for the lifetime of the atlas.
-        {
-            RGBA8Unorm_sRGB pixel(1.0f, 1.0f, 1.0f, 1.0f);
-            matrix<RGBA8Unorm_sRGB> one(1, 1);
-            one[0, 0] = pixel;
-            _white = place(one);
         }
     }
 
@@ -67,23 +57,29 @@ namespace wry {
         delete _impl;
     }
 
-    void SpriteAtlas::commit(void* encoder_handle) {
+    void SpriteAtlas::commit(void* encoder_handle, void* pipeline_handle) {
         id<MTLRenderCommandEncoder> renderEncoder =
             (__bridge id<MTLRenderCommandEncoder>)encoder_handle;
+        id<MTLRenderPipelineState> pipeline =
+            (__bridge id<MTLRenderPipelineState>)pipeline_handle;
 
-        assert(_impl->buffers[0].length >= _vertices.size() * sizeof(SpriteVertex));
+        [renderEncoder setRenderPipelineState:pipeline];
+        if (_quads.empty())
+            return;
+        assert(_impl->buffers[0].length >= _quads.size() * sizeof(WryQuadInstance));
         std::memcpy(_impl->buffers[0].contents,
-                    _vertices.data(),
-                    _vertices.size() * sizeof(SpriteVertex));
+                    _quads.data(),
+                    _quads.size() * sizeof(WryQuadInstance));
         [renderEncoder setVertexBuffer:_impl->buffers[0]
                                 offset:0
                                atIndex:AAPLBufferIndexVertices];
         [renderEncoder setFragmentTexture:_impl->texture
                                   atIndex:AAPLTextureIndexColor];
-        [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+        [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                           vertexStart:0
-                          vertexCount:_vertices.size()];
-        _vertices.clear();
+                          vertexCount:4
+                        instanceCount:_quads.size()];
+        _quads.clear();
         std::rotate(_impl->buffers, _impl->buffers + 1, _impl->buffers + 4);
     }
 

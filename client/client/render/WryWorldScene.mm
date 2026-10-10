@@ -1196,7 +1196,6 @@
         painter.font = _ctx.font;
         painter.viewport_size_px = _model->_gui.viewport_size;
         painter.frame_count = (uint64_t)_frame_count;
-        painter.white_sprite = _ctx.atlas->_white;
         // Default clip: the full viewport.  Widgets push tighter clips
         // around their own contents via Painter::push_clip / pop_clip.
         painter.clip = wry::rect<float>{
@@ -1207,7 +1206,8 @@
         _model->_gui.overlays.paint(painter);
     }
 
-    _ctx.atlas->commit((__bridge void*)encoder);
+    _ctx.atlas->commit((__bridge void*)encoder,
+                       (__bridge void*)_ctx.overlayQuadRenderPipelineState);
 }
 
 -(void)resetCursor {

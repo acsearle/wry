@@ -472,15 +472,15 @@ namespace wry {
                     bg = RGBA8Unorm_sRGB(0.20f, 0.20f, 0.20f, 1.0f);
                 }
             }
-            // Corner radius tracks the font cell so it scales with the UI.
-            const float radius = p.font
-                ? 0.25f * (p.font->ascender - p.font->descender)
-                : 0.0f;
-            p.fill_round_rect(_rect, radius, bg);
+            // Default corner radius tracks the font cell so it scales with
+            // the UI.
+            const float r = default_corner_radius(p.font);
+            const float4 radii = _corner_radii.value_or(simd_make_float4(r, r, r, r));
+            p.fill_round_rect(_rect, radii, bg);
 
             // Label.  Horizontally center the text within the button
             // (subject to a minimum left-edge padding), vertically center
-            // the glyph cell.  Push a clip rect at the button bounds so
+            // the capitals (baseline to cap height).  Push a clip rect at the button bounds so
             // an overlong label gets cropped to the button rather than
             // spilling across siblings.
             if (p.font) {
@@ -495,10 +495,13 @@ namespace wry {
                 const float pen_x = _rect.a.x +
                     std::max(kHorizPadding, (button_w - text_w) * 0.5f);
 
-                // Vertical baseline: place glyph cell midpoint at button
-                // midpoint.  See gui_widget.hpp for the derivation.
+                // Vertical baseline: place the midpoint of the cap-height
+                // band at the button midpoint.  (Centering the ascender-
+                // descender cell instead puts caps visibly high, since the
+                // descender part of the cell is empty for them.)  y is
+                // down, so the baseline is below the midpoint.
                 const float baseline = _rect.a.y + button_h * 0.5f
-                    + (p.font->ascender + p.font->descender) * 0.5f;
+                    + p.font->cap_height * 0.5f;
 
                 rect<float> prev_clip = p.push_clip(_rect);
                 p.draw_text_run(simd_make_float2(pen_x, baseline),
@@ -560,6 +563,56 @@ namespace wry {
             for (auto& child : _children) {
                 child->paint(p);
             }
+        }
+
+        // ================================================================
+        // ButtonPanel
+        // ================================================================
+
+        Size ButtonPanel::measure(SizeConstraints c, MeasureContext const& ctx) {
+            _gap = ctx.font ? ctx.font->stem_width : 0.0f;
+            const float button_radius = Button::default_corner_radius(ctx.font);
+            _radius = button_radius + _gap;
+
+            // Only the panel's outer corners are rounded; radii are ordered
+            // (x0,y0) (x1,y0) (x1,y1) (x0,y1), y-down.  A lone button gets
+            // all four.
+            const std::size_t n = _buttons.size();
+            for (std::size_t i = 0; i != n; ++i) {
+                const float top    = (i == 0)     ? button_radius : 0.0f;
+                const float bottom = (i == n - 1) ? button_radius : 0.0f;
+                _buttons[i]->set_corner_radii(
+                    simd_make_float4(top, top, bottom, bottom));
+            }
+
+            _column.set_spacing(_gap);
+            const float g2 = 2.0f * _gap;
+            SizeConstraints inner{
+                Size{ std::max(0.0f, c.min.w - g2), std::max(0.0f, c.min.h - g2) },
+                Size{ std::max(0.0f, c.max.w - g2), std::max(0.0f, c.max.h - g2) },
+            };
+            const Size cs = _column.measure(inner, ctx);
+            _last_measured_size = c.constrain(Size{ cs.w + g2, cs.h + g2 });
+            return _last_measured_size;
+        }
+
+        void ButtonPanel::arrange(rect<float> r) {
+            _rect = r;
+            _column.arrange(rect<float>{
+                r.a.x + _gap, r.a.y + _gap, r.b.x - _gap, r.b.y - _gap,
+            });
+        }
+
+        bool ButtonPanel::on_event(Event const& e) {
+            return _column.on_event(e);
+        }
+
+        void ButtonPanel::paint(Painter& p) {
+            const float4 radii = simd_make_float4(_radius, _radius, _radius, _radius);
+            p.drop_shadow(_rect, radii);
+            p.fill_round_rect(_rect, radii,
+                              RGBA8Unorm_sRGB(kPanelGray, kPanelGray, kPanelGray, 1.0f));
+            _column.paint(p);
         }
 
         // ================================================================
@@ -784,21 +837,20 @@ namespace wry {
         // ================================================================
 
         MainMenuOverlay::MainMenuOverlay() {
-            auto col = std::make_unique<Column>();
-            col->set_spacing(8.0f);
+            auto panel = std::make_unique<ButtonPanel>();
 
             // The CONTINUE button closes the menu by setting our own
             // wants_close.  The lambda captures `this` so the click handler
             // can flag it -- safe because the overlay outlives its widget
             // tree.
-            col->add(std::make_unique<Button>(
+            panel->add(std::make_unique<Button>(
                 "CONTINUE", [this] { this->wants_close = true; }));
 
             // LOAD refreshes the save list from disk, then pushes it onto
             // the model's stack.  The lambda captures `this` and reads
             // `_model` at click time (set_model is called by the model's
             // constructor after both overlays are alive).
-            col->add(std::make_unique<Button>("LOAD", [this] {
+            panel->add(std::make_unique<Button>("LOAD", [this] {
                 if (_model) {
                     _model->_save_list_overlay.refresh();
                     _model->_stack.push(&_model->_save_list_overlay);
@@ -807,7 +859,7 @@ namespace wry {
 
             // NEW replaces the displayed world with a fresh starting world
             // and closes the menu so the user drops straight into it.
-            col->add(std::make_unique<Button>("NEW", [this] {
+            panel->add(std::make_unique<Button>("NEW", [this] {
                 if (_model) {
                     _model->new_game();
                     this->wants_close = true;
@@ -816,7 +868,7 @@ namespace wry {
 
             // SAVE writes the displayed world to a new save file, leaving the
             // menu open.
-            col->add(std::make_unique<Button>("SAVE", [this] {
+            panel->add(std::make_unique<Button>("SAVE", [this] {
                 if (_model)
                     _model->save_current();
             }));
@@ -824,12 +876,12 @@ namespace wry {
             // Push the app-tier settings UI over this menu.  It lives on
             // GuiContext::overlays, which dispatches and paints above this
             // stack, so it layers correctly over the in-game menu.
-            col->add(std::make_unique<Button>("SETTINGS", [this] {
+            panel->add(std::make_unique<Button>("SETTINGS", [this] {
                 if (_model)
                     _model->_gui.open_settings();
             }));
 
-            _root = std::move(col);
+            _root = std::move(panel);
         }
 
         MainMenuOverlay::~MainMenuOverlay() = default;
@@ -1065,9 +1117,11 @@ namespace wry {
 
             col->add(std::make_unique<Label>("Settings"));
 
+            auto buttons = std::make_unique<ButtonPanel>();
+
             // Key bindings: mark the rows stale and push the overlay
             // above us on the app-tier stack.
-            col->add(std::make_unique<Button>("KEY BINDINGS", [this] {
+            buttons->add(std::make_unique<Button>("KEY BINDINGS", [this] {
                 if (!_gui)
                     return;
                 _gui->key_bindings_overlay.refresh();
@@ -1077,7 +1131,7 @@ namespace wry {
 
             // Reset every setting to the compiled-in defaults, backing up
             // the current settings.json first (settings-backup-N.json).
-            col->add(std::make_unique<Button>("RESET TO DEFAULTS", [this] {
+            buttons->add(std::make_unique<Button>("RESET TO DEFAULTS", [this] {
                 if (!_gui)
                     return;
                 std::vector<String> warnings;
@@ -1090,10 +1144,11 @@ namespace wry {
                                      "(backup written)");
             }));
 
-            col->add(std::make_unique<Button>("BACK", [this] {
+            buttons->add(std::make_unique<Button>("BACK", [this] {
                 wants_close = true;
             }));
 
+            col->add(std::move(buttons));
             _root = std::move(col);
         }
 

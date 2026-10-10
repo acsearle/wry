@@ -1,6 +1,7 @@
 # Todo
 
 List of one-line reminders of things to think and do
+- CHECK (2026-10-10): SpriteAtlas::commit rotates a ring of 4 shared MTLBuffers with no fence/semaphore, and the menu scene commits twice per frame; with up to 3 drawables in flight the CPU may overwrite a buffer the GPU is still reading.  Pre-existing, unobserved; fix with a frame-in-flight semaphore or a per-commit offset into a per-frame buffer
 - Full implications of the next_ready GC bug; clean rederive from epoch formulation
 - DONE 2026-09-25: Saving AMTs saves their in-memory structure, which is strange and brittle
   - Save as a flat key-value list.  AMT structure is unique at the moment but

@@ -47,11 +47,14 @@
 @property (nonatomic, readonly, nonnull) wry::Font* font;
 @property (nonatomic, readonly, nonnull) id<MTLRenderPipelineState> overlayRenderPipelineState;
 
-// 2D UI pipeline for scenes that draw directly into their own single
-// RGBA16Float color target (splash, menu), as opposed to the overlay pipeline
-// which runs inside the world's deferred G-buffer pass.  Same shaders, one
-// color attachment, alpha blend, no depth.
-@property (nonatomic, readonly, nonnull) id<MTLRenderPipelineState> uiRenderPipelineState;
+// GUI quad pipelines for SpriteAtlas::commit (quadVertexShader /
+// quadFragmentShader over WryQuadInstance).  The overlay variant runs inside
+// the world's deferred G-buffer pass (same attachments as
+// overlayRenderPipelineState); the ui variant is for scenes that draw
+// directly into their own single RGBA16Float color target (menu): one color
+// attachment, alpha blend, no depth.
+@property (nonatomic, readonly, nonnull) id<MTLRenderPipelineState> overlayQuadRenderPipelineState;
+@property (nonatomic, readonly, nonnull) id<MTLRenderPipelineState> uiQuadRenderPipelineState;
 
 // Returned by reference: callers read the cubic-bezier / glyph tables in
 // place rather than copying the (vector-backed) Font2 each access.

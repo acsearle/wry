@@ -8,6 +8,7 @@
 #ifndef atlas_hpp
 #define atlas_hpp
 
+#include <bit>
 #include <cstddef>
 
 #include "contiguous_deque.hpp"
@@ -18,7 +19,7 @@
 // This header is intentionally Metal-free.  The texture and vertex-buffer
 // ring that back the atlas live in an opaque Impl owned by SpriteAtlas
 // (the pimpl pattern), defined and constructed in SpriteAtlas.mm.  The
-// hot path -- accumulating sprite vertices via push_sprite -- stays inline
+// hot path -- accumulating quad instances via push_quad -- stays inline
 // in the header and is pure C++, so any TU (regardless of whether it ends
 // up compiled as C++ or Objective-C++) can `#include` this header without
 // dragging <Metal/Metal.h> in transitively.
@@ -28,7 +29,7 @@
 // the call site, e.g.
 //
 //     _atlas = new wry::SpriteAtlas(2048, (__bridge void*)device);
-//     _atlas->commit((__bridge void*)encoder);
+//     _atlas->commit((__bridge void*)encoder, (__bridge void*)pipeline);
 
 namespace wry {
 
@@ -52,17 +53,12 @@ namespace wry {
 
     struct SpriteAtlas {
 
-        // Pure C++ state.  Vertex accumulation is the hot path and happens
-        // entirely in pure C++ via push_sprite below.
+        // Pure C++ state.  Quad accumulation is the hot path and happens
+        // entirely in pure C++ via push_quad below.  One WryQuadInstance per
+        // GUI primitive (glyph, fill, rounded box); see ShaderTypes.h.
         std::size_t _size;
         packer<std::size_t> _packer;
-        ContiguousDeque<SpriteVertex> _vertices;
-
-        // A 1x1 white pixel reserved in the atlas at construction.  Lets
-        // widgets draw solid-color rectangles via push_sprite by stretching
-        // a copy of this sprite to the desired rect and passing the colour
-        // through the vertex tint.  See Painter::fill_rect.
-        Sprite _white = {};
+        ContiguousDeque<WryQuadInstance> _quads;
 
         // Opaque pimpl pointer.  Holds id<MTLTexture> _texture and a ring
         // of id<MTLBuffer> _buffers[4].  Defined and constructed in
@@ -89,58 +85,44 @@ namespace wry {
             };
         }
 
-        // A nonzero half_extent selects rounded-box mode (see MyVertex4):
-        // the texCoords are then pixel offsets from the box center rather
-        // than atlas coordinates.
-        void push_sprite(Sprite s,
-                         RGBA8Unorm_sRGB c = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f),
-                         float radius = 0.0f,
-                         float2 half_extent = {0.0f, 0.0f}) {
-            // a - x
-            // | \ | => abx ayb
-            // y - b
-            SpriteVertex a{s.a, c};
-            SpriteVertex x{{
-                { s.b.position.x, s.a.position.y, 0.0f, 1.0f},
-                { s.b.texCoord.x, s.a.texCoord.y}}, c };
-            SpriteVertex b{s.b, c};
-            SpriteVertex y{{
-                {s.a.position.x, s.b.position.y, 0.0f, 1.0f},
-                {s.a.texCoord.x, s.b.texCoord.y}}, c};
-            for (SpriteVertex* v : {&a, &x, &b, &y}) {
-                v->radius = radius;
-                v->half_extent = half_extent;
-            }
-            _vertices.push_back(a);
-            _vertices.push_back(x);
-            _vertices.push_back(b);
-            _vertices.push_back(a);
-            _vertices.push_back(b);
-            _vertices.push_back(y);
+        // Untextured, unmasked: a solid-color rectangle.  Fields not
+        // relevant to a given primitive are zero.
+        static WryQuadInstance make_quad(float4 rect, RGBA8Unorm_sRGB c) {
+            WryQuadInstance q = {};
+            q.shape = rect;
+            q.draw = rect;
+            q.color = std::bit_cast<unsigned int>(c);
+            return q;
         }
 
-        void push_quad(SpriteVertex v[]) {
-            // Draw an arbitrary quad, such as one resulting from a rotation.
-            _vertices.push_back(v[0]);
-            _vertices.push_back(v[1]);
-            _vertices.push_back(v[2]);
-            _vertices.push_back(v[2]);
-            _vertices.push_back(v[1]);
-            _vertices.push_back(v[3]);
+        // Textured, unmasked: a sprite tinted by c.
+        static WryQuadInstance make_quad(Sprite s, RGBA8Unorm_sRGB c) {
+            WryQuadInstance q = make_quad(simd_make_float4(s.a.position.xy,
+                                                           s.b.position.xy), c);
+            q.uv = simd_make_float4(s.a.texCoord, s.b.texCoord);
+            q.flags = WryQuadFlagTextured;
+            return q;
         }
 
-        void push_triangle(SpriteVertex v[]) {
-            _vertices.push_back(v[0]);
-            _vertices.push_back(v[1]);
-            _vertices.push_back(v[2]);
+        void push_quad(WryQuadInstance const& q) {
+            _quads.push_back(q);
+        }
+
+        void push_sprite(Sprite s, RGBA8Unorm_sRGB c = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f)) {
+            push_quad(make_quad(s, c));
         }
 
         void discard() {
-            _vertices.clear();
+            _quads.clear();
         }
 
-        // encoder_handle is (__bridge void*)id<MTLRenderCommandEncoder>.
-        void commit(void* encoder_handle);
+        // Draw and clear the accumulated quads.  encoder_handle is
+        // (__bridge void*)id<MTLRenderCommandEncoder>; pipeline_handle is
+        // (__bridge void*)id<MTLRenderPipelineState>, a quadVertexShader /
+        // quadFragmentShader pipeline matching the encoder's attachments.
+        // Leaves that pipeline bound.  Expects the screen-space MyUniforms
+        // already bound at AAPLBufferIndexUniforms.
+        void commit(void* encoder_handle, void* pipeline_handle);
 
         Sprite place(matrix_view<const RGBA8Unorm_sRGB>, float2 origin = { 0, 0 });
         void release(Sprite);

@@ -193,17 +193,45 @@ typedef struct
     // vector_uchar4 color;
     // srgba8unorm
     unsigned int color; // 4
-
-    // Rounded-box mode (fragmentShader).  When half_extent.x > 0 the
-    // texture is not sampled; texCoord instead carries the fragment's
-    // position in pixels relative to the box center, and coverage is the
-    // Gaussian-prefiltered rounded box of this half-extent and corner
-    // radius.  Zero (the default) selects ordinary textured-sprite mode.
-    // Occupies what was tail padding; the struct stays 48 bytes.
-    float radius; // 4
-    simd_float2 half_extent; // 8
-
+    
 } MyVertex4;
+
+#pragma mark - GUI quads
+
+// One axis-aligned GUI primitive per instance: a quad, optionally sampling
+// the sprite atlas, optionally masked by an antialiased rounded box.  The
+// vertex shader (quadVertexShader) expands each instance to a 4-vertex
+// triangle strip.  Glyphs, solid fills and rounded boxes all share this
+// one instance stream, so draw order is submission order.
+//
+// All coordinates are drawable pixels, y-down.
+//
+// `shape` is the rectangle the rounded-box mask is measured from; `draw`
+// is the rectangle actually rasterized.  They differ when the mask's soft
+// edge spills outside the shape, and when the CPU clips `draw` to a
+// parent's clip rect (the shape, and hence the mask, is unchanged by
+// clipping).  `uv` is the atlas texCoord at draw's (x0, y0) and (x1, y1)
+// corners, so clipping lerps uv along with draw.
+//
+// 128-bit fields first, 32-bit fields after, so the C and MSL layouts
+// agree without hidden padding.
+
+enum WryQuadFlag {
+    WryQuadFlagTextured = 1u << 0,  // multiply by the atlas sample at uv
+    WryQuadFlagMasked   = 1u << 1,  // multiply by rounded-box coverage
+};
+
+typedef struct
+{
+    simd_float4 shape;   // x0, y0, x1, y1
+    simd_float4 draw;    // x0, y0, x1, y1
+    simd_float4 uv;      // u0, v0, u1, v1 at draw's corners
+    simd_float4 radii;   // corner radii: (x0,y0) (x1,y0) (x1,y1) (x0,y1)
+    unsigned int color;  // RGBA8Unorm_sRGB, straight alpha
+    float sigma;         // mask edge Gaussian prefilter, pixels
+    unsigned int flags;  // WryQuadFlag
+    unsigned int _pad;
+} WryQuadInstance;
 
 typedef struct
 {

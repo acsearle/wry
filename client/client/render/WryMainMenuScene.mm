@@ -24,7 +24,7 @@
     id<MTLTexture> _target;
     simd_float2 _viewportPx;       // drawable pixels; widgets lay out in this
     uint64_t _frameCount;
-    std::unique_ptr<wry::gui::Widget> _root;   // the button column
+    std::unique_ptr<wry::gui::Widget> _root;   // the button panel
     id<WryScene> _pendingNext;     // set by NEW / LOAD; -nextScene returns it
     // Wraps a freshly-built WorldState in the world scene.
     id<WryScene> (^_nextFactory)(std::shared_ptr<wry::WorldState>);
@@ -58,43 +58,45 @@
         // (self -> _root -> button -> lambda -> self).
         __unsafe_unretained WryMainMenuScene* uself = self;
 
-        auto col = std::make_unique<Column>();
-        col->set_spacing(12.0f);
+        auto panel = std::make_unique<ButtonPanel>();
+        auto add = [&](wry::StringView label, auto on_click) {
+            panel->add(std::make_unique<Button>(label, std::move(on_click)));
+        };
 
         // NEW GAME: fresh starting world, then drop into it.
-        col->add(std::make_unique<Button>("NEW GAME", [uself] {
+        add("NEW GAME", [uself] {
             // Fresh WorldState (its constructor installs the starting world).
             auto world = std::make_shared<wry::WorldState>(*uself->_gui);
             uself->_pendingNext = uself->_nextFactory ? uself->_nextFactory(world) : nil;
-        }));
+        });
 
         // LOAD GAME: for now load the most recent save (enumerate_games returns
         // (filename, id) newest first); a real save picker is the eventual UX.
-        col->add(std::make_unique<Button>("LOAD GAME", [uself] {
+        add("LOAD GAME", [uself] {
             auto games = wry::enumerate_games();
             if (!games.empty()) {
                 auto world = std::make_shared<wry::WorldState>(*uself->_gui);
                 world->load_from_save(games.front().second);
                 uself->_pendingNext = uself->_nextFactory ? uself->_nextFactory(world) : nil;
             }
-        }));
+        });
 
         // JOIN GAME: multiplayer is a future feature (deterministic lockstep);
         // placeholder no-op for now.
-        col->add(std::make_unique<Button>("JOIN GAME", [] { /* TODO: multiplayer */ }));
+        add("JOIN GAME", [] { /* TODO: multiplayer */ });
 
         // SETTINGS: the app-tier settings UI (GuiContext::overlays), the
         // same overlays the in-game menu opens.
-        col->add(std::make_unique<Button>("SETTINGS", [uself] {
+        add("SETTINGS", [uself] {
             uself->_gui->open_settings();
-        }));
+        });
 
         // QUIT TO DESKTOP: ask the host to end the run loop (graceful shutdown).
-        col->add(std::make_unique<Button>("QUIT TO DESKTOP", [uself] {
+        add("QUIT TO DESKTOP", [uself] {
             if (uself->_quit) uself->_quit();
-        }));
+        });
 
-        _root = std::move(col);
+        _root = std::move(panel);
     }
     return self;
 }
@@ -154,7 +156,7 @@
     [_backdrop encodeInto:enc viewport:_viewportPx];
 
     // --- Foreground: the button column ----------------------------------
-    [enc setRenderPipelineState:_ctx.uiRenderPipelineState];
+    // (SpriteAtlas::commit binds the GUI quad pipeline itself.)
 
     // Screen-space transform: pixel coords -> NDC, y-down.  Same shape as the
     // world overlay's screen-space block.
@@ -174,7 +176,6 @@
     painter.font = _ctx.font;
     painter.viewport_size_px = _viewportPx;
     painter.frame_count = _frameCount;
-    painter.white_sprite = _ctx.atlas->_white;
     painter.clip = wry::rect<float>{0.0f, 0.0f, _viewportPx.x, _viewportPx.y};
 
     MeasureContext mctx{ _ctx.font };
@@ -186,30 +187,23 @@
     float y = (_viewportPx.y - desired.h) * 0.5f;
     _root->arrange(wry::rect<float>{x, y, x + desired.w, y + desired.h});
 
-    // Scrim behind the column so the buttons stay legible over the photo.
-    // Pushed before the buttons, so it sits under them in the atlas draw order.
-    const float pad = 28.0f;
-    painter.fill_round_rect(wry::rect<float>{x - pad, y - pad,
-                                             x + desired.w + pad, y + desired.h + pad},
-                            0.5f * pad,
-                            wry::RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.5f));
-
     _root->paint(painter);
 
-    _ctx.atlas->commit((__bridge void*)enc);
+    _ctx.atlas->commit((__bridge void*)enc,
+                       (__bridge void*)_ctx.uiQuadRenderPipelineState);
 
     // App-tier overlays (floating log, console) on top -- the same GuiContext
-    // stack the world paints, so they're available in the menu too.  The UI
-    // pipeline + screen-space uniforms are already set from the button pass.
+    // stack the world paints, so they're available in the menu too.  The
+    // screen-space uniforms are already set from the button pass.
     Painter overlay_painter;
     overlay_painter.atlas = _ctx.atlas;
     overlay_painter.font = _ctx.font;
     overlay_painter.viewport_size_px = _viewportPx;
     overlay_painter.frame_count = _frameCount;
-    overlay_painter.white_sprite = _ctx.atlas->_white;
     overlay_painter.clip = wry::rect<float>{0.0f, 0.0f, _viewportPx.x, _viewportPx.y};
     _gui->overlays.paint(overlay_painter);
-    _ctx.atlas->commit((__bridge void*)enc);
+    _ctx.atlas->commit((__bridge void*)enc,
+                       (__bridge void*)_ctx.uiQuadRenderPipelineState);
 
     [enc endEncoding];
     return _target;

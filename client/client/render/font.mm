@@ -204,6 +204,8 @@ namespace wry {
     Font build_font(SpriteAtlas& atl) {
 
         Font result;
+        result.stem_width = 1.0f; // fallback if the font lacks 'I'
+        result.cap_height = result.ascender; // fallback if it lacks 'H'
 
         // Load the font file and parse with our bespoke OTF/CFF stack.
         // OTF is a binary container, so go through bytes_from_file rather
@@ -234,6 +236,28 @@ namespace wry {
             auto curves = handle.outline_for_glyph_index(glyph_index);
             auto gb = rasterize_glyph(curves, pixel_size_du);
             matrix<RGBA8Unorm_sRGB> u = rgba_from_a(gb.coverage);
+
+            // Stem width: integrate coverage along the middle row of 'I'.
+            // The Gaussian prefilter preserves the integral, so this is
+            // the stem's width in pixels regardless of subpixel position.
+            // Cap height: the top of 'H' is flat, so the highest control
+            // point is on the outline.
+            if (charcode == 'H') {
+                float top = -INFINITY;
+                for (auto const& curve : curves)
+                    for (int i = 0; i != 4; ++i)
+                        top = std::max(top, curve.columns[i].y);
+                result.cap_height = top / pixel_size_du;
+            }
+
+            if (charcode == 'I') {
+                const auto& c = gb.coverage;
+                const size_t row = c.minor() / 2;
+                float w = 0.0f;
+                for (size_t col = 0; col != c.major(); ++col)
+                    w += c[row, col];
+                result.stem_width = w;
+            }
 
             Sprite s = atl.place(u, make<float2>(-gb.bitmap_left,
                                                   gb.bitmap_top));
