@@ -453,23 +453,25 @@ namespace wry {
             if (!p.atlas) return;
 
             // Background.  Two palettes -- default (gray) and selected
-            // (blue-tinted) -- each with hover and pressed variants.
+            // (blue-tinted) -- each with hover and pressed variants.  Dark
+            // enough for the white, shadow-baked label to read clearly.
+            // (Linear values; RGBA8Unorm_sRGB encodes them.)
             RGBA8Unorm_sRGB bg;
             if (_selected) {
                 if (_pressed) {
-                    bg = RGBA8Unorm_sRGB(0.20f, 0.30f, 0.50f, 1.0f);
+                    bg = RGBA8Unorm_sRGB(0.03f, 0.08f, 0.22f, 1.0f);
                 } else if (_hover) {
-                    bg = RGBA8Unorm_sRGB(0.35f, 0.45f, 0.65f, 1.0f);
+                    bg = RGBA8Unorm_sRGB(0.08f, 0.17f, 0.42f, 1.0f);
                 } else {
-                    bg = RGBA8Unorm_sRGB(0.25f, 0.35f, 0.55f, 1.0f);
+                    bg = RGBA8Unorm_sRGB(0.05f, 0.12f, 0.33f, 1.0f);
                 }
             } else {
                 if (_pressed) {
-                    bg = RGBA8Unorm_sRGB(0.12f, 0.12f, 0.12f, 1.0f);
+                    bg = RGBA8Unorm_sRGB(0.035f, 0.035f, 0.035f, 1.0f);
                 } else if (_hover) {
-                    bg = RGBA8Unorm_sRGB(0.28f, 0.28f, 0.28f, 1.0f);
+                    bg = RGBA8Unorm_sRGB(0.13f, 0.13f, 0.13f, 1.0f);
                 } else {
-                    bg = RGBA8Unorm_sRGB(0.20f, 0.20f, 0.20f, 1.0f);
+                    bg = RGBA8Unorm_sRGB(0.08f, 0.08f, 0.08f, 1.0f);
                 }
             }
             // Default corner radius tracks the font cell so it scales with
@@ -484,7 +486,7 @@ namespace wry {
             // an overlong label gets cropped to the button rather than
             // spilling across siblings.
             if (p.font) {
-                const RGBA8Unorm_sRGB fg(0.0f, 0.0f, 0.0f, 1.0f);
+                const RGBA8Unorm_sRGB fg(1.0f, 1.0f, 1.0f, 1.0f);
 
                 const float button_w = _rect.b.x - _rect.a.x;
                 const float button_h = _rect.b.y - _rect.a.y;

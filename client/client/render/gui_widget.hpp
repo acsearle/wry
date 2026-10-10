@@ -263,8 +263,8 @@ namespace wry::gui {
         void paint(Painter&) override;
 
         // Linear (pre-sRGB-encoding) gray of the panel, darker than the
-        // default button background.
-        static constexpr float kPanelGray = 0.08f;
+        // default button background (0.08).
+        static constexpr float kPanelGray = 0.02f;
 
     private:
         Column _column;
