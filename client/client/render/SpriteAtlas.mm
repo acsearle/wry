@@ -13,6 +13,7 @@
 #import <Metal/Metal.h>
 
 #include "SpriteAtlas.hpp"
+#import "WryBufferArena.h"
 #include "debug.hpp"
 
 namespace wry {
@@ -23,16 +24,17 @@ namespace wry {
     // declaration `struct Impl;` and never inspect this layout.
     struct SpriteAtlas::Impl {
         id<MTLTexture> texture;
-        id<MTLBuffer>  buffers[4];
+        WryBufferArena* arena;
     };
 
-    SpriteAtlas::SpriteAtlas(std::size_t n, void* device_handle)
+    SpriteAtlas::SpriteAtlas(std::size_t n, void* device_handle, void* arena_handle)
     : _size(n)
     , _packer(n) {
 
         id<MTLDevice> device = (__bridge id<MTLDevice>)device_handle;
 
         _impl = new Impl;
+        _impl->arena = (__bridge WryBufferArena*)arena_handle;
 
         MTLTextureDescriptor *descriptor = [[MTLTextureDescriptor alloc] init];
         descriptor.pixelFormat = MTLPixelFormatRGBA8Unorm_sRGB;
@@ -46,10 +48,6 @@ namespace wry {
 
         _impl->texture = [device newTextureWithDescriptor:descriptor];
         _quads.reserve(16384);
-        for (auto& x : _impl->buffers) {
-            x = [device newBufferWithLength:sizeof(WryQuadInstance) * _quads.capacity()
-                                    options:MTLResourceStorageModeShared];
-        }
     }
 
     SpriteAtlas::~SpriteAtlas() {
@@ -66,12 +64,10 @@ namespace wry {
         [renderEncoder setRenderPipelineState:pipeline];
         if (_quads.empty())
             return;
-        assert(_impl->buffers[0].length >= _quads.size() * sizeof(WryQuadInstance));
-        std::memcpy(_impl->buffers[0].contents,
-                    _quads.data(),
-                    _quads.size() * sizeof(WryQuadInstance));
-        [renderEncoder setVertexBuffer:_impl->buffers[0]
-                                offset:0
+        WryBufferSlice slice = [_impl->arena copyBytes:_quads.data()
+                                                length:_quads.size() * sizeof(WryQuadInstance)];
+        [renderEncoder setVertexBuffer:slice.buffer
+                                offset:slice.offset
                                atIndex:AAPLBufferIndexVertices];
         [renderEncoder setFragmentTexture:_impl->texture
                                   atIndex:AAPLTextureIndexColor];
@@ -80,7 +76,6 @@ namespace wry {
                           vertexCount:4
                         instanceCount:_quads.size()];
         _quads.clear();
-        std::rotate(_impl->buffers, _impl->buffers + 1, _impl->buffers + 4);
     }
 
     // Place a sprite within the free space of the atlas.

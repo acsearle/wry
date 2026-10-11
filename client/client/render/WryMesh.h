@@ -11,6 +11,7 @@
 #import <Metal/Metal.h>
 
 #include "ShaderTypes.h"
+#import "WryBufferArena.h"
 
 @interface WryMesh : NSObject
 
@@ -31,9 +32,10 @@
 // Append one instance, growing the backing store as needed.
 -(void) addInstance:(MeshInstanced)instance;
 
--(instancetype _Nonnull)initWithDevice:(id<MTLDevice> _Nonnull)device;
+-(instancetype _Nonnull)init;
 
--(void) drawWithRenderCommandEncoder:(id<MTLRenderCommandEncoder> _Nonnull)encoder commandBuffer:(id<MTLCommandBuffer> _Nonnull)buffer;
+// The instance array is copied into `arena` for this frame's command buffer.
+-(void) drawWithRenderCommandEncoder:(id<MTLRenderCommandEncoder> _Nonnull)encoder arena:(WryBufferArena* _Nonnull)arena;
 
 @end
 

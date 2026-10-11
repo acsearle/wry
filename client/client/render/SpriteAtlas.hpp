@@ -28,7 +28,8 @@
 // so the header has no Objective-C surface.  ObjC++ callers bridge-cast at
 // the call site, e.g.
 //
-//     _atlas = new wry::SpriteAtlas(2048, (__bridge void*)device);
+//     _atlas = new wry::SpriteAtlas(2048, (__bridge void*)device,
+//                                   (__bridge void*)arena);
 //     _atlas->commit((__bridge void*)encoder, (__bridge void*)pipeline);
 
 namespace wry {
@@ -60,16 +61,18 @@ namespace wry {
         packer<std::size_t> _packer;
         ContiguousDeque<WryQuadInstance> _quads;
 
-        // Opaque pimpl pointer.  Holds id<MTLTexture> _texture and a ring
-        // of id<MTLBuffer> _buffers[4].  Defined and constructed in
-        // SpriteAtlas.mm so this header stays Metal-free.
+        // Opaque pimpl pointer.  Holds the id<MTLTexture> and the
+        // WryBufferArena that commit draws instance memory from.  Defined
+        // and constructed in SpriteAtlas.mm so this header stays
+        // Metal-free.
         struct Impl;
         Impl* _impl = nullptr;
 
 
-        // device_handle is an opaque handle that ObjC++ callers obtain by
-        // bridge-casting an id<MTLDevice>; see file comment.
-        SpriteAtlas(std::size_t n, void* device_handle);
+        // device_handle and arena_handle are opaque handles that ObjC++
+        // callers obtain by bridge-casting an id<MTLDevice> and a
+        // WryBufferArena*; see file comment.
+        SpriteAtlas(std::size_t n, void* device_handle, void* arena_handle);
         ~SpriteAtlas();
 
         // Non-copyable, non-movable (would require pimpl ownership semantics

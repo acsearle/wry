@@ -526,7 +526,7 @@
 
         {
             _symbols = [_ctx newTextureFromResource:@"assets" ofType:@"png"];
-            _hackmesh = [[WryMesh alloc] initWithDevice:_ctx.device];
+            _hackmesh = [[WryMesh alloc] init];
             _black = [_ctx newTextureFromResource:@"black" ofType:@"png"];
             _white = [_ctx newTextureFromResource:@"white" ofType:@"png"];
             _blue = [_ctx newTextureFromResource:@"blue"
@@ -581,7 +581,7 @@
                 auto m = wry::from_obj(v);
                 m.MeshVertexify();
                 
-                p = [[WryMesh alloc] initWithDevice:_ctx.device];
+                p = [[WryMesh alloc] init];
                 p.vertexBuffer = newBufferWithArray(m.hack_MeshVertex);
                 p.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
                 
@@ -1095,16 +1095,15 @@
             { 0.0f, 0.0f, 1.0f, 0.0f },
             {-1.0f, +1.0f, 0.0f, 1.0f},
         }};
-        id<MTLBuffer> qb = [_ctx.device newBufferWithLength:quads.size() * sizeof(WryQuadInstance)
-                                                    options:MTLStorageModeShared];
-        memcpy(qb.contents, quads.data(), quads.size() * sizeof(WryQuadInstance));
+        WryBufferSlice qb = [_ctx.arena copyBytes:quads.data()
+                                           length:quads.size() * sizeof(WryQuadInstance)];
 
         [encoder setRenderPipelineState:_ctx.overlayQuadRenderPipelineState];
         [encoder setVertexBytes:&uniforms
                          length:sizeof(uniforms)
                         atIndex:AAPLBufferIndexUniforms ];
-        [encoder setVertexBuffer:qb
-                          offset:0
+        [encoder setVertexBuffer:qb.buffer
+                          offset:qb.offset
                          atIndex:AAPLBufferIndexVertices];
         [encoder setFragmentTexture:_symbols
                             atIndex:AAPLTextureIndexColor];
@@ -1346,17 +1345,18 @@
     
     
     
-    id<MTLBuffer> vertices = nil;
-    id<MTLBuffer> indices = nil;
+    // Per-frame geometry, in transient arena slices.
+    WryBufferSlice vertices = {};
+    WryBufferSlice indices = {};
     NSUInteger index_count = 0;
     // Terrain tiles get their own buffers: same quad pipeline, but drawn
     // with the terrain palette (not the sprite atlas) bound as albedo.
-    id<MTLBuffer> terrain_vertices = nil;
-    id<MTLBuffer> terrain_indices = nil;
+    WryBufferSlice terrain_vertices = {};
+    WryBufferSlice terrain_indices = {};
     NSUInteger terrain_index_count = 0;
     // Map mode: the world-map quad, in place of all of the above.
-    id<MTLBuffer> map_vertices = nil;
-    id<MTLBuffer> map_indices = nil;
+    WryBufferSlice map_vertices = {};
+    WryBufferSlice map_indices = {};
     NSUInteger map_index_count = 0;
     MeshInstanced map_instanced = mesh_instanced_things;
     _furnace_mesh.instanceCount = 0;
@@ -1408,10 +1408,8 @@
         quad[3] = v;
         const uint quad_indices[6] = {0, 0, 1, 3, 2, 2};
 
-        map_vertices = [_ctx.device newBufferWithLength:sizeof(quad) options:MTLStorageModeShared];
-        map_indices = [_ctx.device newBufferWithLength:sizeof(quad_indices) options:MTLStorageModeShared];
-        memcpy(map_vertices.contents, quad, sizeof(quad));
-        memcpy(map_indices.contents, quad_indices, sizeof(quad_indices));
+        map_vertices = [_ctx.arena copyBytes:quad length:sizeof(quad)];
+        map_indices = [_ctx.arena copyBytes:quad_indices length:sizeof(quad_indices)];
         map_index_count = 6;
 
     } else {
@@ -1789,10 +1787,10 @@
             });
             terrain_index_count = terrain_ibuf.size();
             if (terrain_index_count) {
-                terrain_vertices = [_ctx.device newBufferWithLength:terrain_vbuf.size() * sizeof(MeshVertex) options:MTLStorageModeShared];
-                terrain_indices = [_ctx.device newBufferWithLength:terrain_ibuf.size() * sizeof(uint) options:MTLStorageModeShared];
-                memcpy(terrain_vertices.contents, terrain_vbuf.data(), terrain_vbuf.size() * sizeof(MeshVertex));
-                memcpy(terrain_indices.contents, terrain_ibuf.data(), terrain_ibuf.size() * sizeof(uint));
+                terrain_vertices = [_ctx.arena copyBytes:terrain_vbuf.data()
+                                                  length:terrain_vbuf.size() * sizeof(MeshVertex)];
+                terrain_indices = [_ctx.arena copyBytes:terrain_ibuf.data()
+                                                 length:terrain_ibuf.size() * sizeof(uint)];
             }
 
         }
@@ -1840,10 +1838,8 @@
 
         // Upload exactly what we accumulated.
         index_count = ibuf.size();
-        vertices = [_ctx.device newBufferWithLength:vbuf.size() * sizeof(MeshVertex) options:MTLStorageModeShared];
-        indices = [_ctx.device newBufferWithLength:ibuf.size() * sizeof(uint) options:MTLStorageModeShared];
-        memcpy(vertices.contents, vbuf.data(), vbuf.size() * sizeof(MeshVertex));
-        memcpy(indices.contents, ibuf.data(), ibuf.size() * sizeof(uint));
+        vertices = [_ctx.arena copyBytes:vbuf.data() length:vbuf.size() * sizeof(MeshVertex)];
+        indices = [_ctx.arena copyBytes:ibuf.data() length:ibuf.size() * sizeof(uint)];
 
     }
 
@@ -1892,7 +1888,7 @@
                                             length:sizeof(MeshUniforms)
                                            atIndex:AAPLBufferIndexUniforms];
 
-            [render_command_encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
+            [render_command_encoder setVertexBuffer:vertices.buffer offset:vertices.offset atIndex:AAPLBufferIndexVertices];
             [render_command_encoder setVertexBytes:&mesh_instanced_things
                                             length:sizeof(MeshInstanced)
                                            atIndex:AAPLBufferIndexInstanced];
@@ -1905,16 +1901,16 @@
             [render_command_encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
                                                indexCount:index_count
                                                 indexType:MTLIndexTypeUInt32
-                                              indexBuffer:indices
-                                        indexBufferOffset:0];
+                                              indexBuffer:indices.buffer
+                                        indexBufferOffset:indices.offset];
         }
 
         // Draw the 3D entities (each no-ops on zero instances)
 
-        [_furnace_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
-        [_mine_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
-        [_truck_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
-        [_container_mesh drawWithRenderCommandEncoder:render_command_encoder commandBuffer:command_buffer];
+        [_furnace_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
+        [_mine_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
+        [_truck_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
+        [_container_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
         
         // TODO: add an irradiance buffer from the light
         //
@@ -2052,15 +2048,15 @@
                     // Map mode: the world-map quad alone, lit by the same
                     // deferred pipeline as the world it stands in for.
                     [encoder setFragmentTexture:_mapTexture[_mapFrontIndex] atIndex:AAPLTextureIndexAlbedo];
-                    [encoder setVertexBuffer:map_vertices offset:0 atIndex:AAPLBufferIndexVertices];
+                    [encoder setVertexBuffer:map_vertices.buffer offset:map_vertices.offset atIndex:AAPLBufferIndexVertices];
                     [encoder setVertexBytes:&map_instanced
                                      length:sizeof(MeshInstanced)
                                     atIndex:AAPLBufferIndexInstanced];
                     [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
                                         indexCount:map_index_count
                                          indexType:MTLIndexTypeUInt32
-                                       indexBuffer:map_indices
-                                 indexBufferOffset:0];
+                                       indexBuffer:map_indices.buffer
+                                 indexBufferOffset:map_indices.offset];
 
                 } else {
 
@@ -2073,12 +2069,12 @@
                     // them, as it always has been; the depth test makes
                     // the draw order irrelevant to the result.
                     [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
-                    [encoder setVertexBuffer:vertices offset:0 atIndex:AAPLBufferIndexVertices];
+                    [encoder setVertexBuffer:vertices.buffer offset:vertices.offset atIndex:AAPLBufferIndexVertices];
                     [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
                                         indexCount:index_count
                                          indexType:MTLIndexTypeUInt32
-                                       indexBuffer:indices
-                                 indexBufferOffset:0];
+                                       indexBuffer:indices.buffer
+                                 indexBufferOffset:indices.offset];
 
                     // Terrain tiles (a shadow receiver only, so they skip
                     // the shadow pass entirely): the full PBR material
@@ -2090,20 +2086,20 @@
                         [encoder setFragmentTexture:_terrainORM atIndex:AAPLTextureIndexMetallic];
                         [encoder setFragmentTexture:_terrainORM atIndex:AAPLTextureIndexRoughness];
                         [encoder setFragmentTexture:_terrainORM atIndex:AAPLTextureIndexOcclusion];
-                        [encoder setVertexBuffer:terrain_vertices offset:0 atIndex:AAPLBufferIndexVertices];
+                        [encoder setVertexBuffer:terrain_vertices.buffer offset:terrain_vertices.offset atIndex:AAPLBufferIndexVertices];
                         [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
                                             indexCount:terrain_index_count
                                              indexType:MTLIndexTypeUInt32
-                                           indexBuffer:terrain_indices
-                                     indexBufferOffset:0];
+                                           indexBuffer:terrain_indices.buffer
+                                     indexBufferOffset:terrain_indices.offset];
                     }
 
                 }
 
-                [_furnace_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
-                [_mine_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
-                [_truck_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
-                [_container_mesh drawWithRenderCommandEncoder:encoder commandBuffer:command_buffer];
+                [_furnace_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
+                [_mine_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
+                [_truck_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
+                [_container_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
 
                 /*
                 if (show_points) {

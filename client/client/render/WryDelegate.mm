@@ -706,6 +706,9 @@ namespace {
             [command_buffer presentDrawable:drawable];
         }
     }
+    // Every transient buffer slice this frame used is reusable once the GPU
+    // passes this point.
+    [_ctx.arena endFrameOnCommandBuffer:command_buffer];
     [command_buffer commit];
 
     // Scene transition: a scene requests its successor via -nextScene (mouse /

@@ -12,6 +12,7 @@
 
 #include "font.hpp"
 #include "SpriteAtlas.hpp"
+#import "WryBufferArena.h"
 
 // WryRenderContext owns the scene-agnostic rendering infrastructure: the
 // Metal device / command queue / shader library, the small pile of state
@@ -42,6 +43,10 @@
 @property (nonatomic, readonly, nonnull) id<MTLDepthStencilState> disabledDepthStencilState;
 
 // ---- Shared 2D services (menus, splash, and the world HUD all use these) -
+
+// Per-frame transient GPU memory; the host closes each frame with
+// -endFrameOnCommandBuffer: on the frame's command buffer.
+@property (nonatomic, readonly, nonnull) WryBufferArena* arena;
 
 @property (nonatomic, readonly, nonnull) wry::SpriteAtlas* atlas;
 @property (nonatomic, readonly, nonnull) wry::Font* font;

@@ -49,6 +49,7 @@
         _drawablePixelFormat = drawablePixelFormat;
         _library = [_device newDefaultLibrary];
         _commandQueue = [_device newCommandQueue];
+        _arena = [[WryBufferArena alloc] initWithDevice:_device];
 
         // Make full-screen quad
         {
@@ -160,7 +161,8 @@
                 _imageRenderPipelineState = [self newRenderPipelineStateWithDescriptor:img];
             }
 
-            _atlas = new wry::SpriteAtlas(2048, (__bridge void*)device);
+            _atlas = new wry::SpriteAtlas(2048, (__bridge void*)device,
+                                          (__bridge void*)_arena);
             _font = new wry::Font(build_font(*_atlas));
 
             _font2 = build_font2();
