@@ -265,15 +265,18 @@ namespace wry {
         // Load the font file and parse with our bespoke OTF/CFF stack.
         // OTF is a binary container, so go through bytes_from_file rather
         // than the UTF-8-validating string_from_file.
-        ContiguousDeque<byte> bytes = bytes_from_file("Futura Medium Condensed.otf");
+        ContiguousDeque<byte> bytes = bytes_from_file("Noto_Sans/static/NotoSans-Light.ttf");
         auto handle = otf::Handle::parse({
             bytes.data(),
             bytes.size()
         });
 
         int upem = handle.units_per_em();
-        constexpr int target_em_pixels = 40; // matches the old FT_Set_Pixel_Sizes
-        float pixel_size_du = (float)upem / (float)target_em_pixels;
+        // Sized to keep the mean advance over printable ASCII of the font
+        // it replaced, Futura Medium Condensed at a 40 px em: 0.3736 em vs
+        // Noto Sans Light's 0.5171 em, so 40 * 0.3736 / 0.5171 = 28.9 px.
+        constexpr float target_em_pixels = 28.9f;
+        float pixel_size_du = (float)upem / target_em_pixels;
 
         auto m = handle.metrics_for_face();
         result.ascender  = (float)m.ascender  / pixel_size_du;
