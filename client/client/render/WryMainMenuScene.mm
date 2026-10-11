@@ -64,7 +64,7 @@
         };
 
         // NEW GAME: fresh starting world, then drop into it.
-        add("NEW GAME", [uself] {
+        add("New Game", [uself] {
             // Fresh WorldState (its constructor installs the starting world).
             auto world = std::make_shared<wry::WorldState>(*uself->_gui);
             uself->_pendingNext = uself->_nextFactory ? uself->_nextFactory(world) : nil;
@@ -72,7 +72,7 @@
 
         // LOAD GAME: for now load the most recent save (enumerate_games returns
         // (filename, id) newest first); a real save picker is the eventual UX.
-        add("LOAD GAME", [uself] {
+        add("Load Game", [uself] {
             auto games = wry::enumerate_games();
             if (!games.empty()) {
                 auto world = std::make_shared<wry::WorldState>(*uself->_gui);
@@ -83,16 +83,16 @@
 
         // JOIN GAME: multiplayer is a future feature (deterministic lockstep);
         // placeholder no-op for now.
-        add("JOIN GAME", [] { /* TODO: multiplayer */ });
+        add("Join Game", [] { /* TODO: multiplayer */ });
 
         // SETTINGS: the app-tier settings UI (GuiContext::overlays), the
         // same overlays the in-game menu opens.
-        add("SETTINGS", [uself] {
+        add("Settings", [uself] {
             uself->_gui->open_settings();
         });
 
         // QUIT TO DESKTOP: ask the host to end the run loop (graceful shutdown).
-        add("QUIT TO DESKTOP", [uself] {
+        add("Quit to Desktop", [uself] {
             if (uself->_quit) uself->_quit();
         });
 

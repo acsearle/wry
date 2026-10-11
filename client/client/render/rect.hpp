@@ -126,7 +126,7 @@ namespace wry {
     // shift
     template<typename T>
     rect<T> operator+(const rect<T>& a, const simd::Vector_t<T, 2>& b) {
-        return rect{a.a + b, a.b + b};
+        return rect<T>(a.a + b, a.b + b);
     }
     
     template<typename T>
@@ -138,7 +138,7 @@ namespace wry {
     
     template<typename T>
     rect<T> operator-(const rect<T>& a, const simd::Vector_t<T, 2>& b) {
-        return rect{a.a - b, a.b - b};
+        return rect<T>(a.a - b, a.b - b);
     }
     
     template<typename T>

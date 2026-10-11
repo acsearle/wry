@@ -177,6 +177,12 @@ namespace wry::gui {
         // the default, proportional to the font cell.
         void set_corner_radii(float4 r) { _corner_radii = r; }
 
+        // Background color for the given state.  Two palettes -- default
+        // (gray) and selected (blue) -- each with hover and pressed
+        // variants.  Public so other clickable cells (the opcode palette)
+        // match buttons.
+        static RGBA8Unorm_sRGB background_color(bool selected, bool hover, bool pressed);
+
         // The default background corner radius: a quarter of the font's
         // ascender-descender cell, so it scales with the text.
         static float default_corner_radius(Font const* font) {
@@ -240,38 +246,95 @@ namespace wry::gui {
     };
 
     // ----------------------------------------------------------------
-    // ButtonPanel: a column of Buttons grouped on a dark rounded panel that
-    // casts a drop shadow.  Buttons are separated from each other, and
-    // from the panel's edge, by a uniform gap of one font stem width, so
-    // each reads as outlined by the panel.  The buttons are square except
-    // at the panel's corners, where they are rounded concentrically with
-    // it: the panel radius is the button default radius plus the gap.
-    // Gap and radii derive from the font at measure time.
+    // Panel: a dark rounded plate around one child, casting a drop shadow.
+    // The child is inset by a margin of one font stem width, so cells the
+    // child paints flush to its edges read as outlined by the panel.  The
+    // panel's corner radius is the button default radius plus the margin,
+    // so a cell rounded at the default radius in a panel corner is
+    // concentric with it.  Margin and radius derive from the font at
+    // measure time.
 
-    class ButtonPanel : public Widget {
+    class Panel : public Widget {
     public:
-        // Take ownership of `button`.  Returns *this so adds can chain.
-        ButtonPanel& add(std::unique_ptr<Button> button) {
-            _buttons.push_back(button.get());
-            _column.add(std::move(button));
-            return *this;
-        }
+        explicit Panel(std::unique_ptr<Widget> child = nullptr)
+        : _child(std::move(child)) {}
+
+        void set_child(std::unique_ptr<Widget> c) { _child = std::move(c); }
 
         Size measure(SizeConstraints, MeasureContext const&) override;
         void arrange(rect<float>) override;
         bool on_event(Event const&) override;
         void paint(Painter&) override;
 
+        // The margin, which callers also use as the gap between cells
+        // inside the panel: one font stem width.
+        static float gap(Font const* font) {
+            return font ? font->stem_width : 0.0f;
+        }
+
         // Linear (pre-sRGB-encoding) gray of the panel, darker than the
         // default button background (0.08).
         static constexpr float kPanelGray = 0.02f;
 
-    private:
-        Column _column;
-        std::vector<Button*> _buttons;  // non-owning, into _column
-        float _gap = 0.0f;              // font stem width
-        float _radius = 0.0f;           // panel corner radius
+    protected:
+        std::unique_ptr<Widget> _child;
+        float _gap = 0.0f;
+        float _radius = 0.0f;
         rect<float> _rect = {0, 0, 0, 0};
+    };
+
+    // ----------------------------------------------------------------
+    // ButtonPanel: a column of Buttons on a Panel, one gap apart.  By
+    // default every button corner is rounded (grouping related items, as
+    // Blender does); with round_inner_corners false, only the corners at
+    // the panel's corners are, concentrically with it.
+
+    class ButtonPanel : public Panel {
+    public:
+        ButtonPanel();
+
+        // Take ownership of `button`.  Returns *this so adds can chain.
+        ButtonPanel& add(std::unique_ptr<Button> button) {
+            _buttons.push_back(button.get());
+            _column->add(std::move(button));
+            return *this;
+        }
+
+        void set_round_inner_corners(bool b) { _round_inner = b; }
+
+        Size measure(SizeConstraints, MeasureContext const&) override;
+
+    private:
+        Column* _column;                // non-owning, = _child
+        std::vector<Button*> _buttons;  // non-owning, into _column
+        bool _round_inner = true;
+    };
+
+    // ----------------------------------------------------------------
+    // TextCell: a static line of text on a rounded background, sized like
+    // a Button, for read-only cells in rows of buttons.  Text is left-
+    // aligned with Button's horizontal padding and cap-centered.
+
+    class TextCell : public Widget {
+    public:
+        explicit TextCell(StringView text) : _text(text) {}
+
+        // Same ordering and default as Button::set_corner_radii.
+        void set_corner_radii(float4 r) { _corner_radii = r; }
+
+        Size measure(SizeConstraints, MeasureContext const&) override;
+        void arrange(rect<float> r) override { _rect = r; }
+        bool on_event(Event const&) override { return false; }
+        void paint(Painter&) override;
+
+        // Linear gray: between the panel (0.02) and a button (0.08), so
+        // read-only cells are distinct from clickable ones.
+        static constexpr float kCellGray = 0.045f;
+
+    private:
+        String _text;
+        rect<float> _rect = {0, 0, 0, 0};
+        std::optional<float4> _corner_radii;
     };
 
     // ----------------------------------------------------------------

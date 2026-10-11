@@ -318,7 +318,7 @@ namespace wry {
             const auto i = (difference_type)std::floor(mmm.x);
             const auto j = (difference_type)std::floor(mmm.y);
             const bool in_bounds = (0 <= i) && (i < m.minor()) &&
-                                   (0 <= j) && (j < m.minor());
+                                   (0 <= j) && (j < m.major());
 
             if (e.kind == WryEventKindMouseMove) {
                 _hover_i = in_bounds ? (int)i : -1;
@@ -449,31 +449,34 @@ namespace wry {
             }
         }
 
-        void Button::paint(Painter& p) {
-            if (!p.atlas) return;
-
-            // Background.  Two palettes -- default (gray) and selected
-            // (blue-tinted) -- each with hover and pressed variants.  Dark
-            // enough for the white, shadow-baked label to read clearly.
-            // (Linear values; RGBA8Unorm_sRGB encodes them.)
+        RGBA8Unorm_sRGB Button::background_color(bool selected, bool hover, bool pressed) {
+            // Dark enough for the white, shadow-baked label to read
+            // clearly.  (Linear values; RGBA8Unorm_sRGB encodes them.)
             RGBA8Unorm_sRGB bg;
-            if (_selected) {
-                if (_pressed) {
+            if (selected) {
+                if (pressed) {
                     bg = RGBA8Unorm_sRGB(0.03f, 0.08f, 0.22f, 1.0f);
-                } else if (_hover) {
+                } else if (hover) {
                     bg = RGBA8Unorm_sRGB(0.08f, 0.17f, 0.42f, 1.0f);
                 } else {
                     bg = RGBA8Unorm_sRGB(0.05f, 0.12f, 0.33f, 1.0f);
                 }
             } else {
-                if (_pressed) {
+                if (pressed) {
                     bg = RGBA8Unorm_sRGB(0.035f, 0.035f, 0.035f, 1.0f);
-                } else if (_hover) {
+                } else if (hover) {
                     bg = RGBA8Unorm_sRGB(0.13f, 0.13f, 0.13f, 1.0f);
                 } else {
                     bg = RGBA8Unorm_sRGB(0.08f, 0.08f, 0.08f, 1.0f);
                 }
             }
+            return bg;
+        }
+
+        void Button::paint(Painter& p) {
+            if (!p.atlas) return;
+
+            const RGBA8Unorm_sRGB bg = background_color(_selected, _hover, _pressed);
             // Default corner radius tracks the font cell so it scales with
             // the UI.
             const float r = default_corner_radius(p.font);
@@ -568,53 +571,101 @@ namespace wry {
         }
 
         // ================================================================
-        // ButtonPanel
+        // Panel
         // ================================================================
 
-        Size ButtonPanel::measure(SizeConstraints c, MeasureContext const& ctx) {
-            _gap = ctx.font ? ctx.font->stem_width : 0.0f;
-            const float button_radius = Button::default_corner_radius(ctx.font);
-            _radius = button_radius + _gap;
-
-            // Only the panel's outer corners are rounded; radii are ordered
-            // (x0,y0) (x1,y0) (x1,y1) (x0,y1), y-down.  A lone button gets
-            // all four.
-            const std::size_t n = _buttons.size();
-            for (std::size_t i = 0; i != n; ++i) {
-                const float top    = (i == 0)     ? button_radius : 0.0f;
-                const float bottom = (i == n - 1) ? button_radius : 0.0f;
-                _buttons[i]->set_corner_radii(
-                    simd_make_float4(top, top, bottom, bottom));
-            }
-
-            _column.set_spacing(_gap);
+        Size Panel::measure(SizeConstraints c, MeasureContext const& ctx) {
+            _gap = gap(ctx.font);
+            _radius = Button::default_corner_radius(ctx.font) + _gap;
             const float g2 = 2.0f * _gap;
             SizeConstraints inner{
                 Size{ std::max(0.0f, c.min.w - g2), std::max(0.0f, c.min.h - g2) },
                 Size{ std::max(0.0f, c.max.w - g2), std::max(0.0f, c.max.h - g2) },
             };
-            const Size cs = _column.measure(inner, ctx);
+            const Size cs = _child ? _child->measure(inner, ctx) : Size{};
             _last_measured_size = c.constrain(Size{ cs.w + g2, cs.h + g2 });
             return _last_measured_size;
         }
 
-        void ButtonPanel::arrange(rect<float> r) {
+        void Panel::arrange(rect<float> r) {
             _rect = r;
-            _column.arrange(rect<float>{
-                r.a.x + _gap, r.a.y + _gap, r.b.x - _gap, r.b.y - _gap,
-            });
+            if (_child)
+                _child->arrange(rect<float>{
+                    r.a.x + _gap, r.a.y + _gap, r.b.x - _gap, r.b.y - _gap,
+                });
         }
 
-        bool ButtonPanel::on_event(Event const& e) {
-            return _column.on_event(e);
+        bool Panel::on_event(Event const& e) {
+            return _child ? _child->on_event(e) : false;
         }
 
-        void ButtonPanel::paint(Painter& p) {
+        void Panel::paint(Painter& p) {
             const float4 radii = simd_make_float4(_radius, _radius, _radius, _radius);
             p.drop_shadow(_rect, radii);
             p.fill_round_rect(_rect, radii,
                               RGBA8Unorm_sRGB(kPanelGray, kPanelGray, kPanelGray, 1.0f));
-            _column.paint(p);
+            if (_child)
+                _child->paint(p);
+        }
+
+        // ================================================================
+        // ButtonPanel
+        // ================================================================
+
+        ButtonPanel::ButtonPanel() {
+            auto column = std::make_unique<Column>();
+            _column = column.get();
+            _child = std::move(column);
+        }
+
+        Size ButtonPanel::measure(SizeConstraints c, MeasureContext const& ctx) {
+            _column->set_spacing(gap(ctx.font));
+
+            // Radii are ordered (x0,y0) (x1,y0) (x1,y1) (x0,y1), y-down.
+            const float r = Button::default_corner_radius(ctx.font);
+            const std::size_t n = _buttons.size();
+            for (std::size_t i = 0; i != n; ++i) {
+                const float top    = (_round_inner || i == 0)     ? r : 0.0f;
+                const float bottom = (_round_inner || i == n - 1) ? r : 0.0f;
+                _buttons[i]->set_corner_radii(
+                    simd_make_float4(top, top, bottom, bottom));
+            }
+
+            return Panel::measure(c, ctx);
+        }
+
+        // ================================================================
+        // TextCell
+        // ================================================================
+
+        Size TextCell::measure(SizeConstraints c, MeasureContext const& ctx) {
+            // Same natural size rule as Button, so rows mixing the two
+            // line up.
+            float w = 2.0f * Button::kHorizPadding;
+            float h = 0.0f;
+            if (ctx.font) {
+                w += wry::text_run_width(ctx.font, _text);
+                h = ctx.font->ascender - ctx.font->descender
+                    + 2.0f * Button::kVertPadding;
+            }
+            _last_measured_size = c.constrain(Size{ w, h });
+            return _last_measured_size;
+        }
+
+        void TextCell::paint(Painter& p) {
+            const float r = Button::default_corner_radius(p.font);
+            p.fill_round_rect(_rect,
+                              _corner_radii.value_or(simd_make_float4(r, r, r, r)),
+                              RGBA8Unorm_sRGB(kCellGray, kCellGray, kCellGray, 1.0f));
+            if (!p.font)
+                return;
+            const float baseline = (_rect.a.y + _rect.b.y) * 0.5f
+                + p.font->cap_height * 0.5f;
+            rect<float> prev = p.push_clip(_rect);
+            p.draw_text_run(simd_make_float2(_rect.a.x + Button::kHorizPadding,
+                                             baseline),
+                            _text, RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f));
+            p.pop_clip(prev);
         }
 
         // ================================================================
@@ -846,13 +897,13 @@ namespace wry {
             // can flag it -- safe because the overlay outlives its widget
             // tree.
             panel->add(std::make_unique<Button>(
-                "CONTINUE", [this] { this->wants_close = true; }));
+                "Continue", [this] { this->wants_close = true; }));
 
             // LOAD refreshes the save list from disk, then pushes it onto
             // the model's stack.  The lambda captures `this` and reads
             // `_model` at click time (set_model is called by the model's
             // constructor after both overlays are alive).
-            panel->add(std::make_unique<Button>("LOAD", [this] {
+            panel->add(std::make_unique<Button>("Load", [this] {
                 if (_model) {
                     _model->_save_list_overlay.refresh();
                     _model->_stack.push(&_model->_save_list_overlay);
@@ -861,7 +912,7 @@ namespace wry {
 
             // NEW replaces the displayed world with a fresh starting world
             // and closes the menu so the user drops straight into it.
-            panel->add(std::make_unique<Button>("NEW", [this] {
+            panel->add(std::make_unique<Button>("New", [this] {
                 if (_model) {
                     _model->new_game();
                     this->wants_close = true;
@@ -870,7 +921,7 @@ namespace wry {
 
             // SAVE writes the displayed world to a new save file, leaving the
             // menu open.
-            panel->add(std::make_unique<Button>("SAVE", [this] {
+            panel->add(std::make_unique<Button>("Save", [this] {
                 if (_model)
                     _model->save_current();
             }));
@@ -878,7 +929,7 @@ namespace wry {
             // Push the app-tier settings UI over this menu.  It lives on
             // GuiContext::overlays, which dispatches and paints above this
             // stack, so it layers correctly over the in-game menu.
-            panel->add(std::make_unique<Button>("SETTINGS", [this] {
+            panel->add(std::make_unique<Button>("Settings", [this] {
                 if (_model)
                     _model->_gui.open_settings();
             }));
@@ -1123,7 +1174,7 @@ namespace wry {
 
             // Key bindings: mark the rows stale and push the overlay
             // above us on the app-tier stack.
-            buttons->add(std::make_unique<Button>("KEY BINDINGS", [this] {
+            buttons->add(std::make_unique<Button>("Key Bindings", [this] {
                 if (!_gui)
                     return;
                 _gui->key_bindings_overlay.refresh();
@@ -1133,7 +1184,7 @@ namespace wry {
 
             // Reset every setting to the compiled-in defaults, backing up
             // the current settings.json first (settings-backup-N.json).
-            buttons->add(std::make_unique<Button>("RESET TO DEFAULTS", [this] {
+            buttons->add(std::make_unique<Button>("Reset to Defaults", [this] {
                 if (!_gui)
                     return;
                 std::vector<String> warnings;
@@ -1146,7 +1197,7 @@ namespace wry {
                                      "(backup written)");
             }));
 
-            buttons->add(std::make_unique<Button>("BACK", [this] {
+            buttons->add(std::make_unique<Button>("Back", [this] {
                 wants_close = true;
             }));
 
@@ -1199,9 +1250,14 @@ namespace wry {
             _rows_dirty = true;
         }
 
-        void KeyBindingsOverlay::rebuild() {
+        void KeyBindingsOverlay::rebuild(Font const* font) {
             // Column min-widths (drawable px): action name | bindings.
-            // The CLEAR button trails at its natural width.
+            // The Clear button trails at its natural width.
+            //
+            // The rows sit on a Panel, one gap apart, and each row's three
+            // cells are one gap apart, so every cell reads as outlined.
+            // Each row is rounded only at its ends.  Radii are ordered
+            // (x0,y0) (x1,y0) (x1,y1) (x0,y1), y-down.
             constexpr float kActionColumnWidth   = 420.0f;
             constexpr float kBindingsColumnWidth = 360.0f;
 
@@ -1218,8 +1274,11 @@ namespace wry {
                             "Escape closes.");
             }
 
+            const float gap = Panel::gap(font);
+            const float r = Button::default_corner_radius(font);
+
             auto rows = std::make_unique<Column>();
-            rows->set_spacing(2.0f);
+            rows->set_spacing(gap);
             for (size_t i = 0; i != action_count; ++i) {
                 Action a = (Action)i;
 
@@ -1232,6 +1291,7 @@ namespace wry {
                         _rows_dirty = true;
                     });
                 action_button->set_selected(_capturing == a);
+                action_button->set_corner_radii(simd_make_float4(r, 0.0f, 0.0f, r));
 
                 String combos_text;
                 std::vector<KeyCombo> combos = _gui
@@ -1246,7 +1306,7 @@ namespace wry {
 
                 // Remove every binding for this action (and persist).
                 auto clear_button = std::make_unique<Button>(
-                    "CLEAR",
+                    "Clear",
                     [this, a] {
                         if (!_gui)
                             return;
@@ -1256,14 +1316,17 @@ namespace wry {
                             _gui->append_log("Could not save settings.json");
                         _rows_dirty = true;
                     });
+                clear_button->set_corner_radii(simd_make_float4(0.0f, r, r, 0.0f));
+
+                auto combos_cell = std::make_unique<TextCell>(combos_text);
+                combos_cell->set_corner_radii(simd_make_float4(0.0f, 0.0f, 0.0f, 0.0f));
 
                 auto row = std::make_unique<Row>();
-                row->set_spacing(8.0f);
+                row->set_spacing(gap);
                 row->add(std::make_unique<MinWidth>(
                     kActionColumnWidth, std::move(action_button)));
                 row->add(std::make_unique<MinWidth>(
-                    kBindingsColumnWidth,
-                    std::make_unique<Label>(combos_text)));
+                    kBindingsColumnWidth, std::move(combos_cell)));
                 row->add(std::move(clear_button));
                 rows->add(std::move(row));
             }
@@ -1274,7 +1337,7 @@ namespace wry {
 
             auto bar = std::make_unique<Row>();
             bar->set_spacing(8.0f);
-            bar->add(std::make_unique<Button>("BACK", [this] {
+            bar->add(std::make_unique<Button>("Back", [this] {
                 wants_close = true;
             }));
 
@@ -1282,7 +1345,7 @@ namespace wry {
             col->set_spacing(12.0f);
             col->add(std::move(title));
             col->add(std::make_unique<Label>(hint));
-            col->add(std::move(scroll));
+            col->add(std::make_unique<Panel>(std::move(scroll)));
             col->add(std::move(bar));
             _root = std::move(col);
         }
@@ -1351,7 +1414,7 @@ namespace wry {
         void KeyBindingsOverlay::paint(Painter& p) {
             // Deferred tree (re)build: safe here, between dispatches.
             if (_rows_dirty) {
-                rebuild();
+                rebuild(p.font);
                 _rows_dirty = false;
             }
 
@@ -1368,7 +1431,8 @@ namespace wry {
             if (_scroll && p.font) {
                 const int n_visible = 10;
                 const float cell_h = p.font->ascender - p.font->descender;
-                const float row_h = cell_h + 2.0f * Button::kVertPadding;
+                const float row_h = cell_h + 2.0f * Button::kVertPadding
+                    + Panel::gap(p.font);
                 _scroll->set_height_cap((n_visible + 0.5f) * row_h);
             }
 

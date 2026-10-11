@@ -202,9 +202,18 @@ namespace wry {
             // shape, where the coverage falls below 0.2%.
             void push_blurred_round_rect(rect<float> r, float4 radii, float sigma,
                                          RGBA8Unorm_sRGB color) {
+                if (auto q = blurred_round_rect_quad(r, radii, sigma, color))
+                    push_quad_clipped(*q);
+            }
+
+            // The quad push_blurred_round_rect emits, unclipped, for
+            // callers that batch quads themselves.  nullopt if r is empty.
+            static std::optional<WryQuadInstance>
+            blurred_round_rect_quad(rect<float> r, float4 radii, float sigma,
+                                    RGBA8Unorm_sRGB color) {
                 const float hw = (r.b.x - r.a.x) * 0.5f;
                 const float hh = (r.b.y - r.a.y) * 0.5f;
-                if (hw <= 0.0f || hh <= 0.0f) return;
+                if (hw <= 0.0f || hh <= 0.0f) return std::nullopt;
                 const float e = 3.0f * sigma;
                 WryQuadInstance q = SpriteAtlas::make_quad(
                     simd_make_float4(r.a.x, r.a.y, r.b.x, r.b.y), color);
@@ -212,7 +221,7 @@ namespace wry {
                 q.radii = simd_clamp(radii, 0.0f, std::min(hw, hh));
                 q.sigma = sigma;
                 q.flags = WryQuadFlagMasked;
-                push_quad_clipped(q);
+                return q;
             }
 
             // Draw a single line of text starting at the given baseline
@@ -576,7 +585,8 @@ namespace wry {
 
             bool _rows_dirty = true;
 
-            void rebuild();
+            // Gaps and corner radii derive from the font.
+            void rebuild(Font const*);
             void apply_captured_combo(KeyCombo);
         };
 

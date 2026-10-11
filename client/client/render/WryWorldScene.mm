@@ -25,6 +25,7 @@
 #include "csv.hpp"
 #include "debug.hpp"
 #include "font.hpp"
+#include "gui_widget.hpp"
 #include "json.hpp"
 #include "mesh.hpp"
 #include "palette.hpp"
@@ -985,111 +986,134 @@
     // in screen space with no winding discipline, so turn it off.
     [encoder setCullMode:MTLCullModeNone];
 
-    // ----- Palette paint pass (projective transform; reads PaletteOverlay
-    // state for hover/selected highlights).  Hidden in map mode.
+    // ----- Palette paint pass (reads PaletteOverlay state for hover /
+    // selected highlights).  Hidden in map mode.
+    //
+    // The palette's cells are laid out by its projective _transform, which
+    // the hit test also uses; map the cell corners through it to drawable
+    // pixels, then draw in screen space with the GUI quad pipeline: a Panel-
+    // style plate docked to the bottom edge (it extends off-screen, so only
+    // its top corners show and its shadow reads as that of a plate running
+    // on below the edge), and on it a rounded square per opcode, one gap
+    // apart, each under its glyph from _symbols.  One instanced draw with
+    // _symbols bound; the untextured quads ignore it.
     if (!_model->_show_map) {
         auto& palette = _model->_palette_overlay;
         auto& m = palette.controls()._payload;
+        const float vw = _model->_gui.viewport_size.x;
+        const float vh = _model->_gui.viewport_size.y;
 
-        uniforms.position_transform = simd_mul(matrix_float4x4{{
+        // Same composition as PaletteOverlay::on_event's hit test.
+        const simd_float4x4 palette_to_ndc = simd_mul(matrix_float4x4{{
             {1.0f, 0.0f, 0.0f},
-            {0.0f, -_model->_gui.viewport_size.x / _model->_gui.viewport_size.y, 0.0f, 0.0f},
+            {0.0f, -vw / vh, 0.0f, 0.0f},
             { 0.0f, 0.0f, 1.0f, 0.0f },
             {0.0f, -1.0f, 0.0f, 1.0f},
         }}, palette.controls()._transform);
+        auto to_px = [&](float i, float j) {
+            const simd_float4 q = simd_mul(palette_to_ndc, simd_make_float4(i, j, 0.0f, 1.0f));
+            const float2 ndc = q.xy / q.w;
+            return simd_make_float2((ndc.x + 1.0f) * 0.5f * vw,
+                                    (1.0f - ndc.y) * 0.5f * vh);
+        };
+        auto px_rect = [&](float i0, float j0, float i1, float j1) {
+            const float2 a = to_px(i0, j0);
+            const float2 b = to_px(i1, j1);
+            return wry::rect<float>{
+                std::min(a.x, b.x), std::min(a.y, b.y),
+                std::max(a.x, b.x), std::max(a.y, b.y),
+            };
+        };
 
-        wry::ContiguousDeque<wry::SpriteVertex> v;
+        using wry::gui::Button;
+        using wry::gui::Painter;
+        using wry::gui::Panel;
+        const float gap = Panel::gap(_ctx.font);
+        const float cell_radius = Button::default_corner_radius(_ctx.font);
+        const float panel_radius = cell_radius + gap;
+        const float half_gap = 0.5f * gap;
+        auto radii = [](float r) { return simd_make_float4(r, r, r, r); };
+
+        std::vector<WryQuadInstance> quads;
+        auto push = [&](std::optional<WryQuadInstance> q) {
+            if (q) quads.push_back(*q);
+        };
+
+        // The plate: the grid's bounds, outset so the outermost squares
+        // sit one gap in from its edge, run on below the viewport by more
+        // than its corner radius and shadow, so its bottom never shows.
+        {
+            wry::rect<float> plate = px_rect(0.0f, 0.0f,
+                                             (float)m.minor(), (float)m.major());
+            plate.a -= half_gap;
+            plate.b += half_gap;
+            plate.b.y = std::max(plate.b.y, vh + panel_radius
+                                 + 3.0f * Painter::kShadowSigma
+                                 + Painter::kShadowOffset.y);
+            push(Painter::blurred_round_rect_quad(
+                plate + Painter::kShadowOffset, radii(panel_radius),
+                Painter::kShadowSigma, RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 1.0f)));
+            const float k = Panel::kPanelGray;
+            push(Painter::blurred_round_rect_quad(
+                plate, radii(panel_radius), Painter::kEdgeSigma,
+                RGBA8Unorm_sRGB(k, k, k, 1.0f)));
+        }
 
         for (difference_type j = 0; j != m.major(); ++j) {
             for (difference_type i = 0; i != m.minor(); ++i) {
                 Term a = m[i, j];
-                if (a.is_opcode()) {
+                if (!a.is_opcode())
+                    continue;
+                const wry::rect<float> cell = px_rect((float)i, (float)j,
+                                                      (float)(i + 1), (float)(j + 1));
 
-                    SpriteVertex c;
+                const bool hover = (palette.hover_i() == (int)i)
+                    && (palette.hover_j() == (int)j);
+                const bool selected = (palette.selected_i() == (int)i)
+                    && (palette.selected_j() == (int)j);
+                wry::rect<float> square = cell;
+                square.a += half_gap;
+                square.b -= half_gap;
+                push(Painter::blurred_round_rect_quad(
+                    square, radii(cell_radius), Painter::kEdgeSigma,
+                    Button::background_color(selected, hover, false)));
 
-                    simd_float4 position = make<float4>(i, j, 0, 1);
-                    float2 texCoord;
-
-                    c.color = RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.875f);
-                    texCoord = simd_make_float2(9, 9) / 32.0f;
-
-                    if ((palette.hover_i() == (int)i) && (palette.hover_j() == (int)j)) {
-                        c.color.g.write(0.5f);
-                    }
-
-                    if ((palette.selected_i() == (int)i) && (palette.selected_j() == (int)j)) {
-                        c.color.r.write(0.5f);
-                    }
-
-                    c.v.position = make<float4>(0, 0, 0, 0) + position;
-                    c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
-                    v.push_back(c);
-
-                    c.v.position = make<float4>(1, 0, 0, 0) + position;
-                    c.v.texCoord = simd_make_float2(1, 0) / 32.0f + texCoord;
-                    v.push_back(c);
-
-                    c.v.position = make<float4>(1, 1, 0, 0) + position;
-                    c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
-                    v.push_back(c);
-
-                    c.v.position = make<float4>(0, 0, 0, 0) + position;
-                    c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
-                    v.push_back(c);
-
-                    c.v.position = make<float4>(1, 1, 0, 0) + position;
-                    c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
-                    v.push_back(c);
-
-                    c.v.position = make<float4>(0, 1, 0, 0) + position;
-                    c.v.texCoord = simd_make_float2(0, 1) / 32.0f + texCoord;
-                    v.push_back(c);
-
-                    texCoord = _opcode_to_coordinate[term_as_opcode(a)].xy;
-                    c.color = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f);
-
-                    c.v.position = make<float4>(0, 0, 0, 0) + position;
-                    c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
-                    v.push_back(c);
-
-                    c.v.position = make<float4>(1, 0, 0, 0) + position;
-                    c.v.texCoord = simd_make_float2(1, 0) / 32.0f + texCoord;
-                    v.push_back(c);
-
-                    c.v.position = make<float4>(1, 1, 0, 0) + position;
-                    c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
-                    v.push_back(c);
-
-                    c.v.position = make<float4>(0, 0, 0, 0) + position;
-                    c.v.texCoord = simd_make_float2(0, 0)/32.0f + texCoord;
-                    v.push_back(c);
-
-                    c.v.position = make<float4>(1, 1, 0, 0) + position;
-                    c.v.texCoord = simd_make_float2(1, 1) / 32.0f + texCoord;
-                    v.push_back(c);
-
-                    c.v.position = make<float4>(0, 1, 0, 0) + position;
-                    c.v.texCoord = simd_make_float2(0, 1) / 32.0f + texCoord;
-                    v.push_back(c);
-                }
+                // The glyph, over the whole cell as before.
+                const float2 uv = _opcode_to_coordinate[term_as_opcode(a)].xy;
+                WryQuadInstance g = wry::SpriteAtlas::make_quad(
+                    simd_make_float4(cell.a.x, cell.a.y, cell.b.x, cell.b.y),
+                    RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f));
+                g.uv = simd_make_float4(uv, uv + 1.0f / 32.0f);
+                g.flags = WryQuadFlagTextured;
+                quads.push_back(g);
             }
         }
 
-        id<MTLBuffer> vb = [_ctx.device newBufferWithLength:v.size_in_bytes()
-                                                options:MTLStorageModeShared];
-        memcpy(vb.contents, v.data(), v.size_in_bytes());
+        uniforms.position_transform = matrix_float4x4{{
+            {2.0f / vw, 0.0f, 0.0f},
+            {0.0f, -2.0f / vh, 0.0f, 0.0f},
+            { 0.0f, 0.0f, 1.0f, 0.0f },
+            {-1.0f, +1.0f, 0.0f, 1.0f},
+        }};
+        id<MTLBuffer> qb = [_ctx.device newBufferWithLength:quads.size() * sizeof(WryQuadInstance)
+                                                    options:MTLStorageModeShared];
+        memcpy(qb.contents, quads.data(), quads.size() * sizeof(WryQuadInstance));
 
+        [encoder setRenderPipelineState:_ctx.overlayQuadRenderPipelineState];
         [encoder setVertexBytes:&uniforms
                          length:sizeof(uniforms)
                         atIndex:AAPLBufferIndexUniforms ];
-        [encoder setVertexBuffer:vb
+        [encoder setVertexBuffer:qb
                           offset:0
                          atIndex:AAPLBufferIndexVertices];
         [encoder setFragmentTexture:_symbols
                             atIndex:AAPLTextureIndexColor];
-        [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                     vertexStart:0
-                    vertexCount:v.size()];
+                    vertexCount:4
+                  instanceCount:quads.size()];
+        // The minimap below draws SpriteVertex quads.
+        [encoder setRenderPipelineState:_ctx.overlayRenderPipelineState];
     }
 
     // (World input -> commands moved out of the render path into
