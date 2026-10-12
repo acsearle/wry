@@ -26,6 +26,9 @@
 @property (nonatomic, nullable) NSCursor* cursor;
 @property (atomic) BOOL done;
 
+// Shutdown: stop the control socket (if open) and unlink its file.
+- (void)closeControlSocket;
+
 -(void) render;
 
 @end

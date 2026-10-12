@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 
 #include "WryRenderContext.h"
 #include "WryWorldScene.h"
@@ -180,6 +181,23 @@ namespace {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     if ((self = [super init])) {
         _gui = std::make_unique<wry::GuiContext>();
+        // The control socket (core/docs/commands.md section 9) exists only
+        // when asked for: --control-socket [PATH], PATH defaulting to
+        // $TMPDIR/wry-control.sock (what tools/wryctl and tools/wry_mcp.py
+        // look for).  Launch the bundle with
+        //     open client.app --args --control-socket
+        NSArray<NSString*>* arguments = [[NSProcessInfo processInfo] arguments];
+        NSUInteger flag = [arguments indexOfObject:@"--control-socket"];
+        if (flag != NSNotFound) {
+            std::string path;
+            if (flag + 1 < arguments.count && ![arguments[flag + 1] hasPrefix:@"-"]) {
+                path = [arguments[flag + 1] UTF8String];
+            } else {
+                std::error_code ec;
+                path = (std::filesystem::temp_directory_path(ec) / "wry-control.sock").string();
+            }
+            _gui->open_control_socket(wry::String(path.c_str()));
+        }
         // Load (or first-run install) settings.json.  The cwd is already
         // the assets directory (main.mm chdir), so the config/ paths in
         // settings_paths resolve next to saves/.  Any warnings (unknown
@@ -339,6 +357,13 @@ namespace {
 - (void)applicationWillTerminate:(NSNotification *)aNotification {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     self.done = YES;
+    // -terminate: (e.g. an Apple Event quit) exit()s straight after this,
+    // past main's shutdown, so the control socket is closed here too.
+    [self closeControlSocket];
+}
+
+- (void)closeControlSocket {
+    _gui->control_socket.reset();
 }
 
 #pragma mark NSWindowDelegate
@@ -721,6 +746,10 @@ namespace {
     // to, then pending replies polled and lines waiting behind them issued
     // -- before input, so injected events are dispatched this frame.
     _gui->view_size_pt = simd_make_float2((float)sz.width, (float)sz.height);
+    // Every scene's widget pixels are drawable pixels; the world scene also
+    // sets this on resize, but the menu scene does not, so the host does.
+    CGSize drawable = _metalLayer.drawableSize;
+    _gui->viewport_size = simd_make_float2((float)drawable.width, (float)drawable.height);
     _gui->scene_widgets = [_scene respondsToSelector:@selector(widgetRoot)]
         ? [_scene widgetRoot] : nullptr;
     _gui->service_commands();

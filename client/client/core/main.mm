@@ -150,6 +150,9 @@ int main(int argc, const char** argv) {
             // collides with the drain pump below -- see the quit block in
             // WryDelegate for the full rationale.)
             printf("main is terminal\n");
+            // No more commands: stop the control socket's thread and remove
+            // its file (GuiContext itself is not torn down at exit).
+            [delegate closeControlSocket];
             printf("main is joining background work\n");
             wry::mutator_unpin();
             // Hand the menu bar back / drop out of the foreground while we drain:

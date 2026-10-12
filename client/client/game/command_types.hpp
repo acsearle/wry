@@ -32,12 +32,14 @@ namespace wry::command {
 
     template<> struct Type<Coordinate> {
         static constexpr const char* name = "Coordinate";
+        static constexpr const char* example = "Coordinate(12, -34)";
         static std::expected<Coordinate, Error> read(Node const& node);
         static void print(String& out, Coordinate const& x);
     };
 
     template<> struct Type<EntityID> {
         static constexpr const char* name = "EntityID";
+        static constexpr const char* example = "EntityID(7)";
         static std::expected<EntityID, Error> read(Node const& node);
         static void print(String& out, EntityID const& x);
     };
@@ -47,12 +49,14 @@ namespace wry::command {
 
     template<> struct Type<OPCODE> {
         static constexpr const char* name = "OPCODE";
+        static constexpr const char* example = "OPCODE::SWAP (or bare SWAP)";
         static std::expected<OPCODE, Error> read(Node const& node);
         static void print(String& out, OPCODE const& x);
     };
 
     template<> struct Type<MATTER> {
         static constexpr const char* name = "MATTER";
+        static constexpr const char* example = "MATTER::SHIPPING_CONTAINER";
         static std::expected<MATTER, Error> read(Node const& node);
         static void print(String& out, MATTER const& x);
     };
@@ -66,6 +70,7 @@ namespace wry::command {
     // -- has no literal, so cannot be an argument.
     template<> struct Type<Term> {
         static constexpr const char* name = "Term";
+        static constexpr const char* example = "null, true, 42, \"text\", OPCODE::SWAP, EntityID(7)";
         using stored_type = Root<Term>;
         static Term const& unstore(Root<Term> const& x) { return x._value; }
         static std::expected<Term, Error> read(Node const& node);

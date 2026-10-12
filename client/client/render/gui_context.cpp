@@ -5,13 +5,20 @@
 //  Created by Antony Searle on 2026-10-12.
 //
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+
 #include "gui_context.hpp"
 #include "gui_widget.hpp"
 #include "image.hpp"
+#include "json.hpp"
 #include "test.hpp"
 #include "world_state.hpp"
 
@@ -22,6 +29,7 @@ namespace wry::command {
     // combo containing a delimiter must be quoted, `key "="`).
     template<> struct Type<gui::KeyCombo> {
         static constexpr const char* name = "KeyCombo";
+        static constexpr const char* example = "Shift+R";
 
         static std::expected<gui::KeyCombo, Error> read(Node const& node) {
             StringView text;
@@ -153,24 +161,39 @@ namespace wry {
         return outcome;
     }
 
-    void GuiContext::submit(CommandSource& source, StringView text) {
+    void GuiContext::submit(CommandSource& source, StringView text, StringView tag) {
         if (source.origin == Origin::console)
             _echo_input(text);
-        source.queued.push_back(String(text));
+        source.queued.push_back(CommandSource::Queued{String(text), String(tag)});
         _drain(source);
     }
 
     void GuiContext::_drain(CommandSource& source) {
         while (!source.pending && !source.queued.empty()) {
-            String line = std::move(source.queued.front());
+            CommandSource::Queued next = std::move(source.queued.front());
             source.queued.pop_front();
-            Outcome outcome = _issue_now(source.origin, line);
+            Outcome outcome = _issue_now(source.origin, next.line);
             if (outcome.reply.status == Reply::PENDING) {
                 source.pending = outcome.reply.pending;
                 source.pending_seq = history.back().seq;
+                source.pending_tag = std::move(next.tag);
+            } else if (source.on_reply) {
+                source.on_reply(next.tag, outcome.line, outcome.reply);
             }
         }
     }
+
+    namespace {
+
+        // The canonical line of a history entry, for a completed reply.
+        StringView line_of(GuiContext const& gui, uint64_t seq) {
+            for (auto it = gui.history.rbegin(); it != gui.history.rend(); ++it)
+                if (it->seq == seq)
+                    return it->line;
+            return StringView();
+        }
+
+    } // namespace
 
     void GuiContext::_complete(uint64_t seq, Origin origin, Reply const& reply) {
         assert(reply.status != Reply::PENDING);
@@ -193,17 +216,22 @@ namespace wry {
     }
 
     void GuiContext::service_commands() {
+        _service_control_socket();
         auto service = [this](CommandSource& source) {
             if (source.pending) {
                 if (auto reply = source.pending->poll()) {
                     const uint64_t seq = source.pending_seq;
                     source.pending.reset();
                     _complete(seq, source.origin, *reply);
+                    if (source.on_reply)
+                        source.on_reply(source.pending_tag, line_of(*this, seq), *reply);
                 }
             }
             _drain(source);
         };
         service(console_source);
+        for (auto& [id, source] : socket_sources)
+            service(*source);
         for (size_t i = 0; i != detached.size(); ) {
             if (auto reply = detached[i].pending->poll()) {
                 Detached done = std::move(detached[i]);
@@ -216,13 +244,294 @@ namespace wry {
     }
 
     void GuiContext::cancel(CommandSource& source) {
+        // Every request is answered, even the ones that never issued.
+        if (source.pending) {
+            source.pending->cancel();
+            const uint64_t seq = source.pending_seq;
+            source.pending.reset();
+            _complete(seq, source.origin, Reply::cancelled());
+            if (source.on_reply)
+                source.on_reply(source.pending_tag, line_of(*this, seq), Reply::cancelled());
+        }
+        if (source.on_reply)
+            for (auto const& q : source.queued)
+                source.on_reply(q.tag, StringView(), Reply::cancelled());
         source.queued.clear();
-        if (!source.pending)
+    }
+
+    // ----------------------------------------------------------------
+    // The control socket (commands.md section 9).  Requests are lines:
+    //
+    //     {"id": 1, "line": "step 10"}
+    //     {"id": 2, "command": "write", "args": {"at": "Coordinate(3, 4)", "term": "OPCODE::SWAP"}}
+    //     step 10                                  (a bare command line)
+    //
+    // and every request gets exactly one reply line, in order per
+    // connection:
+    //
+    //     {"id": 1, "status": "ok", "line": "step 10", "text": ""}
+    //
+    // with "image": path added when the result is an image file.  Arguments
+    // in JSON: null, booleans, integers and (for String parameters)
+    // strings map directly; any other type travels as a string holding its
+    // literal text.
+
+    namespace {
+
+        void json_quote(String& out, StringView text) {
+            static constexpr char hex[] = "0123456789abcdef";
+            out.push_back('"');
+            for (char c : text.chars) {
+                const unsigned char ch = (unsigned char)c;
+                switch (ch) {
+                    case '"':  out.append(StringView("\\\"")); break;
+                    case '\\': out.append(StringView("\\\\")); break;
+                    case '\n': out.append(StringView("\\n")); break;
+                    case '\r': out.append(StringView("\\r")); break;
+                    case '\t': out.append(StringView("\\t")); break;
+                    default:
+                        if (ch < 0x20) {
+                            out.append(StringView("\\u00"));
+                            out.push_back(hex[ch >> 4]);
+                            out.push_back(hex[ch & 15]);
+                        } else {
+                            // Raw byte of valid UTF-8 (text is a StringView).
+                            out.chars.push_back(c);
+                        }
+                }
+            }
+            out.push_back('"');
+        }
+
+        const char* name_from_status(Reply::Status status) {
+            switch (status) {
+                case Reply::OK:        return "ok";
+                case Reply::ERROR:     return "error";
+                case Reply::PENDING:   return "pending";
+                case Reply::CANCELLED: return "cancelled";
+            }
+            return "?";
+        }
+
+        String reply_json(StringView tag, StringView line, Reply const& reply) {
+            String out("{\"id\": ");
+            if (tag.empty())
+                out.append(StringView("null"));
+            else
+                out.append(tag);
+            out.append(StringView(", \"status\": "));
+            json_quote(out, StringView(name_from_status(reply.status)));
+            out.append(StringView(", \"line\": "));
+            json_quote(out, line);
+            out.append(StringView(", \"text\": "));
+            json_quote(out, reply.text);
+            if (!reply.image.empty()) {
+                out.append(StringView(", \"image\": "));
+                json_quote(out, reply.image);
+            }
+            out.push_back('}');
+            return out;
+        }
+
+        // A decoded request: the line to run and the tag to reply with; or
+        // an error to reply with at once.
+        struct Request {
+            String tag;
+            String line;
+            String error;
+        };
+
+        // A JSON number or string id, re-serialized as its reply tag.
+        std::optional<String> tag_from_id(json::Json const& id) {
+            String tag;
+            if (id.is_string()) {
+                json_quote(tag, id.as_string());
+            } else if (id.is_number()) {
+                char buffer[32];
+                std::snprintf(buffer, sizeof(buffer), "%.17g", id.as_number());
+                tag = String(buffer);
+            } else {
+                return std::nullopt;
+            }
+            return tag;
+        }
+
+        // One argument of a structured invocation, as literal text.
+        std::expected<String, String> argument_text(json::Json const& value,
+                                                    command::ParamInfo const* param) {
+            String out;
+            if (value.is_null()) {
+                out = String("null");
+            } else if (value.is_bool()) {
+                out = String(value.as_bool() ? "true" : "false");
+            } else if (value.is_number()) {
+                const double x = value.as_number();
+                if (!(x == std::floor(x) && std::fabs(x) <= 9007199254740992.0))
+                    return std::unexpected(String("numeric arguments must be integers of magnitude at most 2^53 (pass larger ones as strings)"));
+                char buffer[32];
+                std::snprintf(buffer, sizeof(buffer), "%lld", (long long)x);
+                out = String(buffer);
+            } else if (value.is_string()) {
+                StringView text = value.as_string();
+                if (param && param->type_name == StringView("String")) {
+                    command::print_quoted(out, text);
+                } else {
+                    // Literal text: exactly one node, so it cannot smuggle
+                    // in further arguments.
+                    auto node = command::parse_node(text);
+                    if (!node) {
+                        String message("bad literal ");
+                        message.append(text);
+                        message.append(StringView(": "));
+                        message.append(node.error().message);
+                        return std::unexpected(std::move(message));
+                    }
+                    command::print_node(out, *node);
+                }
+            } else {
+                return std::unexpected(String("arguments must be null, booleans, integers or strings"));
+            }
+            return out;
+        }
+
+        Request decode_request(GuiContext const& gui, std::string const& bytes) {
+            Request request;
+            const char* first = bytes.data();
+            const char* last = first + bytes.size();
+            if (!utf8::isvalid(first, last)) {
+                request.error = String("request is not valid UTF-8");
+                return request;
+            }
+            StringView text(trusted, first, last);
+            const char* p = first;
+            while (p != last && (*p == ' ' || *p == '\t'))
+                ++p;
+            if (p == last || *p != '{') {
+                request.line = String(text);
+                return request;
+            }
+            json::Json json;
+            try {
+                json = json::Json::from(StringView(trusted, first, last));
+            } catch (json::JsonParseError const&) {
+                request.error = String("malformed JSON request");
+                return request;
+            }
+            if (!json.is_object()) {
+                request.error = String("a JSON request must be an object");
+                return request;
+            }
+            json::Json const* line = nullptr;
+            json::Json const* name = nullptr;
+            json::Json const* args = nullptr;
+            for (auto const& [key, value] : json.as_object()) {
+                if (key == StringView("id")) {
+                    if (auto tag = tag_from_id(value))
+                        request.tag = std::move(*tag);
+                } else if (key == StringView("line")) {
+                    line = &value;
+                } else if (key == StringView("command")) {
+                    name = &value;
+                } else if (key == StringView("args")) {
+                    args = &value;
+                }
+            }
+            if (line) {
+                if (!line->is_string()) {
+                    request.error = String("\"line\" must be a string");
+                    return request;
+                }
+                request.line = String(line->as_string());
+                return request;
+            }
+            if (!name || !name->is_string()) {
+                request.error = String("a request needs a \"line\" or a \"command\"");
+                return request;
+            }
+            StringView command_name = name->as_string();
+            if (!command::is_valid_name(command_name)) {
+                request.error = String("bad command name");
+                return request;
+            }
+            auto const* spec = gui.commands.find(command_name);
+            request.line = String(command_name);
+            if (args) {
+                if (!args->is_object()) {
+                    request.error = String("\"args\" must be an object");
+                    return request;
+                }
+                for (auto const& [key, value] : args->as_object()) {
+                    if (!command::is_valid_name(key)) {
+                        request.error = String("bad parameter name");
+                        return request;
+                    }
+                    command::ParamInfo const* param = nullptr;
+                    if (spec)
+                        for (auto const& p : spec->params)
+                            if (p.name == key)
+                                param = &p;
+                    auto literal = argument_text(value, param);
+                    if (!literal) {
+                        request.error = std::move(literal.error());
+                        return request;
+                    }
+                    request.line.push_back(' ');
+                    request.line.append(key);
+                    request.line.push_back('=');
+                    request.line.append(*literal);
+                }
+            }
+            return request;
+        }
+
+    } // namespace
+
+    bool GuiContext::open_control_socket(String const& path) {
+        std::string error;
+        control_socket = ControlSocket::open(std::string(path.data(), path.chars.size()), error);
+        String message;
+        if (control_socket) {
+            message = String("Control socket: ");
+            message.append(path);
+        } else {
+            message = String("Control socket failed: ");
+            message.append(StringView(error.c_str()));
+        }
+        console_overlay.print(message);
+        append_log(message);
+        return control_socket != nullptr;
+    }
+
+    void GuiContext::_service_control_socket() {
+        if (!control_socket)
             return;
-        source.pending->cancel();
-        const uint64_t seq = source.pending_seq;
-        source.pending.reset();
-        _complete(seq, source.origin, Reply::cancelled());
+        for (uint64_t id : control_socket->take_closed()) {
+            auto it = socket_sources.find(id);
+            if (it == socket_sources.end())
+                continue;
+            cancel(*it->second);
+            socket_sources.erase(it);
+        }
+        for (auto& line : control_socket->take_lines()) {
+            const uint64_t id = line.connection;
+            Request request = decode_request(*this, line.bytes);
+            if (!request.error.empty()) {
+                String json = reply_json(request.tag, StringView(), Reply::error(request.error));
+                control_socket->send(id, std::string_view(json.data(), json.chars.size()));
+                continue;
+            }
+            auto& source = socket_sources[id];
+            if (!source) {
+                source = std::make_unique<CommandSource>(Origin::socket);
+                source->on_reply = [this, id](String const& tag, StringView canonical, Reply const& reply) {
+                    if (!control_socket)
+                        return;
+                    String json = reply_json(tag, canonical, reply);
+                    control_socket->send(id, std::string_view(json.data(), json.chars.size()));
+                };
+            }
+            submit(*source, request.line, request.tag);
+        }
     }
 
     Outcome GuiContext::_refuse_unprintable(StringView name) {
@@ -285,7 +594,7 @@ namespace wry {
                     }
                 }
                 to_png(image, request->path);
-                return Reply::ok(request->path);
+                return Reply::image_file(request->path);
             }
 
             void cancel() override {
@@ -449,6 +758,53 @@ namespace wry {
                 console.set_active(!console.active());
                 c.gui.append_log(console.active() ? "[~] Show console" : "[~] Hide console");
                 return Reply::ok();
+            }));
+
+        // The registry as JSON, for tools (the MCP adapter builds one tool
+        // per command from it): [{name, summary, category, params: [{name,
+        // type, example?, summary, default?}]}].
+        registry.add(make_command<Ctx>(
+            "describe", "The command registry as JSON", Category::local,
+            std::tuple<>{},
+            [](Ctx& c) {
+                String out("[");
+                bool first_command = true;
+                for (auto const& spec : c.gui.commands._commands) {
+                    if (!first_command)
+                        out.push_back(',');
+                    first_command = false;
+                    out.append(StringView("{\"name\": "));
+                    json_quote(out, spec.name);
+                    out.append(StringView(", \"summary\": "));
+                    json_quote(out, spec.summary);
+                    out.append(StringView(", \"category\": "));
+                    json_quote(out, StringView(command::name_from_category(spec.category)));
+                    out.append(StringView(", \"params\": ["));
+                    bool first_param = true;
+                    for (auto const& p : spec.params) {
+                        if (!first_param)
+                            out.push_back(',');
+                        first_param = false;
+                        out.append(StringView("{\"name\": "));
+                        json_quote(out, p.name);
+                        out.append(StringView(", \"type\": "));
+                        json_quote(out, p.type_name);
+                        if (!p.type_example.empty()) {
+                            out.append(StringView(", \"example\": "));
+                            json_quote(out, p.type_example);
+                        }
+                        out.append(StringView(", \"summary\": "));
+                        json_quote(out, p.summary);
+                        if (p.has_default) {
+                            out.append(StringView(", \"default\": "));
+                            json_quote(out, p.default_text);
+                        }
+                        out.push_back('}');
+                    }
+                    out.append(StringView("]}"));
+                }
+                out.push_back(']');
+                return Reply::ok(std::move(out));
             }));
 
         // ---- Clock (frames are local; simulation steps are the world's).
@@ -896,6 +1252,134 @@ namespace wry {
             std::filesystem::remove(path, ec);
         }
 
+        co_return;
+    };
+
+    // The control socket end to end: JSON and bare-line requests, one
+    // reply each, in order per connection; errors carry the request's id;
+    // a pending reply arrives when it completes; closing cancels.
+    define_test("gui_context_control_socket") {
+        GuiContext gc;
+        std::string path = "/tmp/wry-gui-context-socket-test-" + std::to_string(::getpid()) + ".sock";
+        const bool opened = gc.open_control_socket(String(path.c_str()));
+        assert(opened);
+        (void) opened;
+
+        int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+        sockaddr_un address = {};
+        address.sun_family = AF_UNIX;
+        std::memcpy(address.sun_path, path.data(), path.size());
+        const int connected = ::connect(fd, (sockaddr const*)&address, sizeof(address));
+        assert(connected == 0);
+        (void) connected;
+
+        const std::string requests =
+            "{\"id\": 1, \"line\": \"help help\"}\n"
+            "{\"id\": \"two\", \"command\": \"click\", \"args\": {\"x\": 3, \"y\": 4, \"button\": \"right\"}}\n"
+            "frame 2\n"
+            "{\"id\": 4, \"command\": \"help\", \"args\": {\"command\": \"frame\"}}\n"
+            "{\"id\": 5, \"command\": \"click\", \"args\": {\"x\": 1.5, \"y\": 0}}\n"
+            "{\"id\": 6, \"nonsense\": true}\n"
+            "{not json\n"
+            "{\"id\": 8, \"command\": \"key\", \"args\": {\"combo\": \"Shift+R x=1\"}}\n";
+        const ssize_t written = ::write(fd, requests.data(), requests.size());
+        assert(written == (ssize_t)requests.size());
+        (void) written;
+
+        // Play the host: frames tick and commands are serviced, while the
+        // client collects reply lines.
+        std::vector<std::string> replies;
+        std::string pending;
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (replies.size() < 8 && std::chrono::steady_clock::now() < deadline) {
+            ++gc.frame;
+            gc.service_commands();
+            pollfd p{fd, POLLIN, 0};
+            if (::poll(&p, 1, 10) > 0) {
+                char buffer[65536];
+                ssize_t n = ::read(fd, buffer, sizeof(buffer));
+                if (n <= 0)
+                    break;
+                pending.append(buffer, (size_t)n);
+                for (size_t nl; (nl = pending.find('\n')) != std::string::npos; ) {
+                    replies.push_back(pending.substr(0, nl));
+                    pending.erase(0, nl + 1);
+                }
+            }
+        }
+        assert(replies.size() == 8);
+
+        // Replies in order, as JSON.  (Errors decoded before issue -- 6, 7
+        // -- are answered at once, so may overtake the queue; check by id.)
+        auto field = [](std::string const& reply, const char* key) -> std::string {
+            json::Json j = json::Json::from(StringView(trusted, reply.data(), reply.data() + reply.size()));
+            for (auto const& [k, v] : j.as_object())
+                if (k == StringView(key)) {
+                    if (v.is_string())
+                        return std::string(v.as_string().chars.begin(), v.as_string().chars.end());
+                    if (v.is_number())
+                        return std::to_string((long long)v.as_number());
+                    if (v.is_null())
+                        return "null";
+                }
+            return "";
+        };
+        std::map<std::string, std::string> status_by_id;
+        std::map<std::string, std::string> line_by_id;
+        for (auto const& r : replies) {
+            status_by_id[field(r, "id")] = field(r, "status");
+            line_by_id[field(r, "id")] = field(r, "line");
+        }
+        assert(status_by_id["1"] == "ok" && line_by_id["1"] == "help \"help\"");
+        assert(status_by_id["two"] == "ok");
+        assert(line_by_id["two"] == "click 3 4 \"right\"");
+        // Two replies have id null: the bare line, and the request too
+        // malformed to have an id.
+        size_t null_ok = 0, null_error = 0;
+        for (auto const& r : replies)
+            if (field(r, "id") == "null") {
+                if (field(r, "status") == "ok" && field(r, "line") == "frame 2") ++null_ok;
+                if (field(r, "status") == "error") ++null_error;
+            }
+        assert(null_ok == 1 && null_error == 1);
+        assert(status_by_id["4"] == "ok");
+        assert(status_by_id["5"] == "error");     // not an integer
+        assert(status_by_id["6"] == "error");     // neither line nor command
+        assert(status_by_id["8"] == "error");     // literal smuggling a second argument
+        // The bare frame 2 was pending: 4 (queued behind it) came after.
+        size_t frame_at = 0, four_at = 0;
+        for (size_t i = 0; i != replies.size(); ++i) {
+            if (field(replies[i], "line") == "frame 2") frame_at = i;
+            if (field(replies[i], "id") == "4") four_at = i;
+        }
+        assert(frame_at < four_at);
+
+        // Socket invocations are recorded with their origin.
+        bool from_socket = false;
+        for (auto const& e : gc.history)
+            if (e.line == StringView("click 3 4 \"right\""))
+                from_socket = (e.origin == Origin::socket);
+        assert(from_socket);
+
+        // Closing the connection with a command pending cancels it.
+        const std::string slow = "frame 1000\n";
+        const ssize_t w2 = ::write(fd, slow.data(), slow.size());
+        assert(w2 == (ssize_t)slow.size());
+        (void) w2;
+        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (gc.socket_sources.empty() || !gc.socket_sources.begin()->second->pending) {
+            gc.service_commands();
+            assert(std::chrono::steady_clock::now() < deadline);
+        }
+        ::close(fd);
+        while (!gc.socket_sources.empty()) {
+            gc.service_commands();
+            assert(std::chrono::steady_clock::now() < deadline);
+        }
+        assert(gc.history.back().line == StringView("frame 1000"));
+        assert(gc.history.back().status == Reply::CANCELLED);
+
+        gc.control_socket.reset();
         co_return;
     };
 

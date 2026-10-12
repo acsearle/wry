@@ -4,9 +4,10 @@ Design for the command system: one registry of named, typed commands
 that every input path compiles to -- GUI gestures, key bindings, the
 drop-down console, a local control socket (scripts, tests, Claude via
 MCP) -- and the literal syntax in which commands and their arguments
-are written.  Agreed 2026-10-12.  Stages 1 to 3 of section 10 are
+are written.  Agreed 2026-10-12.  Stages 1 to 4 of section 10 are
 implemented (core/command.{hpp,cpp}, game/command_types.{hpp,cpp},
-render/gui_context.cpp, the world commands in game/world_state.cpp).
+render/gui_context.cpp, the world commands in game/world_state.cpp,
+io/control_socket.{hpp,cpp}, tools/wryctl, tools/wry_mcp.py).
 
 Status: normative design.  Section 11 lists what remains open.
 
@@ -440,31 +441,60 @@ event handling.  Event-injection commands push onto
 `GuiContext::events`, so injected events are dispatched in that same
 frame exactly like real ones.
 
-**The control socket.**  A Unix domain socket carrying newline-
-delimited JSON.  Requests are either a command line or a structured
-invocation, and carry a client-chosen id echoed in the reply:
+**The control socket.**  Opened only when the game is launched with
+`--control-socket [PATH]` (`open client.app --args --control-socket`);
+PATH defaults to `$TMPDIR/wry-control.sock`, which is also where the
+tools look unless `$WRY_CONTROL_SOCKET` says otherwise.  The file is
+created mode 0600 and removed at exit.
+
+Requests are lines: a JSON object holding a command line or a
+structured invocation, or a bare command line.  An `id` (number or
+string) is echoed in the reply:
 
 ```
 {"id": 1, "line": "step 10"}
 {"id": 2, "command": "write", "args": {"at": "Coordinate(3, 4)", "term": "OPCODE::SWAP"}}
-{"id": 2, "ok": true}
+step 10
 ```
 
-Socket IO is plain bytes on the reactor side and never runs GC code
-(the standing rule for foreign threads); complete request lines are
-queued to the main thread, which parses them -- parsing can create
-Terms, so it must happen on a mutator -- and queues replies back.
+Every request gets exactly one reply line, in request order per
+connection (a request too malformed to queue is answered at once):
 
-**`wryctl`**: a command-line client.  `wryctl step 10` sends the line,
-prints the reply.
+```
+{"id": 2, "status": "ok", "line": "write Coordinate(3, 4) OPCODE::SWAP", "text": ""}
+```
 
-**The MCP adapter**: a small stdlib-only Python program, launched by
-Claude Code over stdio.  At startup it connects to the socket, fetches
-`help --json` (the registry dump), and exposes one MCP tool per
-command, with each tool's JSON Schema generated from the parameter
-types.  `tools/call` becomes a structured invocation.  The adapter
-holds no knowledge of any command; it is a projection of the registry
-and is never edited when commands are added.
+`status` is `ok`, `error` or `cancelled`; `line` is the canonical
+invocation (empty if the request did not bind); `image` is added when
+the result is an image file (`screenshot`).  Each connection is its own
+command source: sequential, and cancelled when the connection closes.
+A structured argument is a JSON string literal of its type unless the
+parameter is a String; a string literal must be exactly one node, so it
+cannot smuggle in further arguments.
+
+Socket IO runs on a dedicated thread that moves bytes only and never
+runs GC code (the standing rule for foreign threads); complete lines
+are taken by the main thread once per frame and parsed there -- parsing
+can create Terms, so it must happen on a mutator -- and replies are
+queued back.  Invocations from the socket echo to the console as
+`[socket] ...`, so a person watching sees what a script or agent does.
+
+**`tools/wryctl`**: a command-line client.  `wryctl step 10` joins its
+arguments into one line, sends it, prints the reply text, and exits 1
+on error or cancellation; `wryctl -` runs lines from stdin in order.
+
+**`tools/wry_mcp.py`**: the MCP adapter, stdlib-only Python, launched
+by the MCP client over stdio (`claude mcp add wry -- python3
+tools/wry_mcp.py`).  It asks the game to `describe` its registry and
+exposes one tool per command, with input schemas generated from the
+parameter types (Int, Bool and String map to JSON types; any other type
+is a string described by its type's example literal), plus a generic
+`wry_command` tool taking a whole line.  A reply with an `image` comes
+back as image content.  If the game is not running when tools are
+listed, only `wry_command` is offered, and the full list is announced
+with `notifications/tools/list_changed` once a call reaches the game.
+The adapter knows no command by name; it is never edited when commands
+are added.
 
 **Headless host.**  A host with no window and no drawable: frames run
 when the driver asks (fixed frame dt), the scene encodes into its own

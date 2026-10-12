@@ -10,11 +10,13 @@
 
 #include <chrono>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <vector>
 
 #include "atomic.hpp"
+#include "control_socket.hpp"
 
 #include "command.hpp"
 #include "gui_event.hpp"
@@ -43,10 +45,24 @@ namespace wry {
     // nothing further while one of its invocations is pending; later lines
     // wait in its queue.
     struct CommandSource {
+        // A line waiting to issue, with the requester's tag for its reply
+        // (a socket request's JSON id; empty for the console).
+        struct Queued {
+            String line;
+            String tag;
+        };
+
         command::Origin origin;
-        std::deque<String> queued;
+        std::deque<Queued> queued;
         uint64_t pending_seq = 0;
+        String pending_tag;
         std::shared_ptr<command::Pending> pending;
+
+        // Told each line's final reply, in order: immediately, or when a
+        // pending reply completes or is cancelled.  `line` is the canonical
+        // invocation, empty if the line did not bind.  The console has
+        // none (it echoes instead); a socket connection writes JSON.
+        std::function<void(String const& tag, StringView line, command::Reply const&)> on_reply;
 
         explicit CommandSource(command::Origin o) : origin(o) {}
         bool busy() const { return pending != nullptr || !queued.empty(); }
@@ -160,7 +176,14 @@ namespace wry {
         std::vector<Detached> detached;
 
         // Queue `line` on `source`, or issue it now if the source is idle.
-        void submit(CommandSource& source, StringView line);
+        void submit(CommandSource& source, StringView line, StringView tag = {});
+
+        // The control socket (commands.md section 9), if the host opened
+        // one (--control-socket), and a command source per connection.
+        std::unique_ptr<ControlSocket> control_socket;
+        std::map<uint64_t, std::unique_ptr<CommandSource>> socket_sources;
+        bool open_control_socket(String const& path);
+        void _service_control_socket();
 
         // Once per frame (the host, before input): poll pending replies,
         // complete those that finished, and issue lines that were waiting

@@ -134,6 +134,8 @@ namespace wry::command {
     //     using stored_type = ...;                 // how a bound argument
     //     static T const& unstore(stored_type const&);  //   is held
     //     static bool printable(T const&);         // default: always
+    //     static constexpr const char* example;    // a literal, for tool
+    //                                              //   schemas and help
     //
     // `read` is contextual: it is called only where a T is expected, so it
     // may accept abbreviations (a bare enumerator, a bare word as a
@@ -255,6 +257,9 @@ namespace wry::command {
         Status status = OK;
         String text;                    // printed result, or error message
         std::shared_ptr<Pending> pending;   // PENDING only
+        String image;                   // path of an image file the result is
+                                        // (a screenshot): the socket reports
+                                        // it, the MCP adapter sends the image
 
         static Reply ok() { return Reply{}; }
         static Reply ok(String text) { return Reply{OK, std::move(text), {}}; }
@@ -262,6 +267,7 @@ namespace wry::command {
         static Reply error(Error const& e);
         static Reply later(std::shared_ptr<Pending> p) { return Reply{PENDING, {}, std::move(p)}; }
         static Reply cancelled() { return Reply{CANCELLED, String("cancelled"), {}}; }
+        static Reply image_file(String path) { return Reply{OK, path, {}, path}; }
     };
 
     // An asynchronous command's reply (commands.md section 8): `step 10`,
@@ -334,6 +340,7 @@ namespace wry::command {
         String name;
         String summary;
         String type_name;
+        String type_example;            // a literal of the type, if it has one
         bool has_default = false;
         String default_text;            // canonical constant, or the
                                         // computed default's description
@@ -394,6 +401,8 @@ namespace wry::command {
             info.name = String(param.name);
             info.summary = String(param.summary);
             info.type_name = String(Type<T>::name);
+            if constexpr (requires { Type<T>::example; })
+                info.type_example = String(Type<T>::example);
             if (auto* constant = std::get_if<T>(&param.default_)) {
                 info.has_default = true;
                 Type<T>::print(info.default_text, *constant);
