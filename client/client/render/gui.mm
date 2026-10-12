@@ -201,6 +201,12 @@ namespace wry {
             // Active: full console keymap.  modal_keyboard() == true so the
             // dispatcher blocks any keyboard events we don't explicitly claim
             // from leaking to lower overlays / legacy handlers.
+            if (e.key == 'c' && e.mods.has(Modifiers::Ctrl)) {
+                if (_cancel)
+                    _cancel();
+                return true;
+            }
+
             switch (e.key) {
                 case key::Enter: {
                     if (!_issue) {

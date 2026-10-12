@@ -570,6 +570,25 @@ namespace wry::command {
                       name_from_origin(entry.origin));
         String out(buffer);
         out.append(entry.line);
+        switch (entry.status) {
+            case Reply::OK:
+                if (entry.completed_frame != entry.frame) {
+                    std::snprintf(buffer, sizeof(buffer), "  -> frame %llu",
+                                  (unsigned long long)entry.completed_frame);
+                    out.append(StringView(buffer));
+                }
+                break;
+            case Reply::ERROR:
+                out.append(StringView("  ! "));
+                out.append(entry.reply);
+                break;
+            case Reply::PENDING:
+                out.append(StringView("  (pending)"));
+                break;
+            case Reply::CANCELLED:
+                out.append(StringView("  (cancelled)"));
+                break;
+        }
         return out;
     }
 

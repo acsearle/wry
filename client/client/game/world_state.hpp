@@ -137,6 +137,16 @@ namespace wry {
         // same frame (the _worlds deque stays the source of truth).
         Root<World*> _world_to_render;
 
+        // The simulation clock, as the clock commands see it (commands.md
+        // section 8).  Paused, update() steps only while _step_budget lasts;
+        // _steps_taken counts every step this WorldState has taken.
+        bool _paused = false;
+        uint64_t _step_budget = 0;
+        uint64_t _steps_taken = 0;
+
+        // Whether update() may step now, spending budget if paused.
+        bool _take_step_permission();
+
         // The command seam: input is submitted here; update() polls the ordered
         // commands back and pushes them to the players' queues before stepping.
         std::unique_ptr<Server> _server;

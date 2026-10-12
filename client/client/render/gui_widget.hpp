@@ -142,6 +142,18 @@ namespace wry::gui {
 
         Size last_measured_size() const { return _last_measured_size; }
 
+        // Introspection, for the `widgets` and `press` commands
+        // (core/docs/commands.md section 7): what the widget is, its text
+        // if it shows one, the rect it was last arranged into (drawable
+        // pixels), whether it clips its children to that rect, and its
+        // children.  The defaults describe an anonymous childless leaf.
+        virtual const char* kind() const { return "Widget"; }
+        virtual StringView label() const { return {}; }
+        virtual rect<float> bounds() const { return {}; }
+        virtual bool clips_children() const { return false; }
+        using ChildVisitor = std::function<void(Widget const&)>;
+        virtual void for_each_child(ChildVisitor const&) const {}
+
     protected:
         Size _last_measured_size = {};
     };
@@ -194,6 +206,10 @@ namespace wry::gui {
         // Degenerate {0,0,0,0} before the first arrange.
         rect<float> arranged_rect() const { return _rect; }
 
+        const char* kind() const override { return "Button"; }
+        StringView label() const override { return _label; }
+        rect<float> bounds() const override { return _rect; }
+
         // Padding constants are public so containers that need to size a
         // ScrollView to "N + 0.5 rows" can ask for the row height without
         // having to measure a sample button.
@@ -230,6 +246,13 @@ namespace wry::gui {
 
         void set_spacing(float s) { _spacing = s; }
 
+        const char* kind() const override { return "Column"; }
+        rect<float> bounds() const override { return _rect; }
+        void for_each_child(ChildVisitor const& f) const override {
+            for (auto const& c : _children)
+                f(*c);
+        }
+
         Size measure(SizeConstraints, MeasureContext const&) override;
         // Stretches children to the column's measured width during the
         // arrange pass (cross-axis fill).  Children must accept being
@@ -260,6 +283,13 @@ namespace wry::gui {
         : _child(std::move(child)) {}
 
         void set_child(std::unique_ptr<Widget> c) { _child = std::move(c); }
+
+        const char* kind() const override { return "Panel"; }
+        rect<float> bounds() const override { return _rect; }
+        void for_each_child(ChildVisitor const& f) const override {
+            if (_child)
+                f(*_child);
+        }
 
         Size measure(SizeConstraints, MeasureContext const&) override;
         void arrange(rect<float>) override;
@@ -302,6 +332,8 @@ namespace wry::gui {
 
         void set_round_inner_corners(bool b) { _round_inner = b; }
 
+        const char* kind() const override { return "ButtonPanel"; }
+
         Size measure(SizeConstraints, MeasureContext const&) override;
 
     private:
@@ -321,6 +353,10 @@ namespace wry::gui {
 
         // Same ordering and default as Button::set_corner_radii.
         void set_corner_radii(float4 r) { _corner_radii = r; }
+
+        const char* kind() const override { return "TextCell"; }
+        StringView label() const override { return _text; }
+        rect<float> bounds() const override { return _rect; }
 
         Size measure(SizeConstraints, MeasureContext const&) override;
         void arrange(rect<float> r) override { _rect = r; }
@@ -351,6 +387,13 @@ namespace wry::gui {
 
         void set_spacing(float s) { _spacing = s; }
 
+        const char* kind() const override { return "Row"; }
+        rect<float> bounds() const override { return _rect; }
+        void for_each_child(ChildVisitor const& f) const override {
+            for (auto const& c : _children)
+                f(*c);
+        }
+
         Size measure(SizeConstraints, MeasureContext const&) override;
         void arrange(rect<float>) override;
         bool on_event(Event const&) override;
@@ -369,6 +412,10 @@ namespace wry::gui {
     class Label : public Widget {
     public:
         explicit Label(StringView text) : _text(text) {}
+
+        const char* kind() const override { return "Label"; }
+        StringView label() const override { return _text; }
+        rect<float> bounds() const override { return _rect; }
 
         Size measure(SizeConstraints, MeasureContext const&) override;
         void arrange(rect<float>) override;
@@ -392,6 +439,14 @@ namespace wry::gui {
         MinWidth(float min_w, std::unique_ptr<Widget> child)
         : _min_w(min_w)
         , _child(std::move(child)) {}
+
+        // Arranged into exactly its child's rect.
+        const char* kind() const override { return "MinWidth"; }
+        rect<float> bounds() const override { return _child ? _child->bounds() : rect<float>{}; }
+        void for_each_child(ChildVisitor const& f) const override {
+            if (_child)
+                f(*_child);
+        }
 
         Size measure(SizeConstraints, MeasureContext const&) override;
         void arrange(rect<float>) override;
@@ -432,6 +487,14 @@ namespace wry::gui {
     public:
         void set_child(std::unique_ptr<Widget> c) { _child = std::move(c); }
         Widget* child() const { return _child.get(); }
+
+        const char* kind() const override { return "ScrollView"; }
+        rect<float> bounds() const override { return _rect; }
+        bool clips_children() const override { return true; }
+        void for_each_child(ChildVisitor const& f) const override {
+            if (_child)
+                f(*_child);
+        }
 
         // Upper bound on the view height in size-space.  See class comment.
         void set_height_cap(float h) { _height_cap = h; }

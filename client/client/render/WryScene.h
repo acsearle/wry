@@ -12,6 +12,10 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <Metal/Metal.h>
 
+#ifdef __cplusplus
+namespace wry::gui { class Widget; }
+#endif
+
 // A WryScene is one screenful of behavior the app can show: the game world,
 // a main menu, a splash screen.  The host (currently WryDelegate) drives the
 // current scene each frame without knowing its concrete type:
@@ -62,6 +66,14 @@
 // does).  Scenes that don't implement this fall through to the host's world
 // pump (the model overlay-stack dispatch).
 - (void)handleEventsWithViewSize:(CGSize)viewSizePoints;
+
+// The scene's own widget tree, if it lays one out (the main menu's button
+// panel), for the `widgets` and `press` commands (core/docs/commands.md
+// section 7).  Overlays report theirs separately.  The host reads it each
+// frame, so it never outlives the scene.
+#ifdef __cplusplus
+- (nullable const wry::gui::Widget*)widgetRoot;
+#endif
 
 // Platform cursor reset on mouse-enter.  Only scenes with a custom cursor
 // (the world's palette cursor) implement it; the host guards the call with

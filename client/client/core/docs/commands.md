@@ -4,7 +4,7 @@ Design for the command system: one registry of named, typed commands
 that every input path compiles to -- GUI gestures, key bindings, the
 drop-down console, a local control socket (scripts, tests, Claude via
 MCP) -- and the literal syntax in which commands and their arguments
-are written.  Agreed 2026-10-12.  Stages 1 and 2 of section 10 are
+are written.  Agreed 2026-10-12.  Stages 1 to 3 of section 10 are
 implemented (core/command.{hpp,cpp}, game/command_types.{hpp,cpp},
 render/gui_context.cpp, the world commands in game/world_state.cpp).
 
@@ -317,10 +317,13 @@ frame it was issued in, and its origin; its reply is recorded against
 the same sequence number when it completes:
 
 ```
-#41 frame 1200 console  step 10
+#41 frame 1200 console  step 10  -> frame 1210
 #42 frame 1203 gui      write Coordinate(3, 4) OPCODE::SWAP
-#41 frame 1210 ->       ok
+#43 frame 1204 console  frame 100  (cancelled)
 ```
+
+A pending entry is completed in place: it records its final status,
+reply text and completion frame, and is shown `(pending)` until then.
 
 Issue happens on the main thread, so the log is one total order across
 sources.  Frame stamps let a replay reissue each line at the frame it
@@ -426,8 +429,8 @@ invocations in order and issues nothing further while one is pending,
 so a script's `step 10` followed by `screenshot` screenshots after the
 tenth step.  Other sources are unaffected: the GUI stays live during a
 socket script's `step 10`.  Every pending command is cancellable;
-cancellation completes it with the reply `cancelled`.  The console
-binds a cancel key to the pending command of its own source.
+cancellation completes it with the reply `cancelled` and drops the
+lines queued behind it.  The console's cancel key is Ctrl-C.
 
 ## 9. Execution and transport
 

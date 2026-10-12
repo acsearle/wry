@@ -138,13 +138,48 @@ namespace wry::gui {
         float magnification = 0.0f;
     };
 
-    // Per-frame event queue.  Producer is WryDelegate's NSResponder
-    // callbacks; consumer is the per-frame pump in `[WryDelegate render]`.
-    // Both run on the main thread, so no synchronization is required.
+    // Mouse moves, scrolls and trackpad magnification arrive at platform-
+    // (even OS-version-) dependent rates, unboundedly many per frame.
+    inline bool is_continuous(WryEventKind kind) {
+        return kind == WryEventKindMouseMove
+            || kind == WryEventKindScroll
+            || kind == WryEventKindMagnify;
+    }
+
+    // Per-frame event queue.  Producers are WryDelegate's NSResponder
+    // callbacks and the event-injection commands; consumer is the per-frame
+    // pump in `[WryDelegate render]`.  All on the main thread, so no
+    // synchronization is required.
     struct EventQueue {
         ContiguousDeque<Event> events;
 
-        void push(Event const& e) { events.push_back(e); }
+        // Continuous events are coalesced as they arrive
+        // (core/docs/commands.md section 7): within the trailing run of
+        // continuous events -- everything since the last discrete event
+        // (button, key) -- at most one of each kind survives.  A move
+        // keeps the latest position; scroll deltas and magnifications
+        // sum.  The merged event moves to the end of the run.  A discrete
+        // event ends the run, so a click is always preceded by the
+        // position it happened at.  The run holds at most three events,
+        // so the walk is bounded.
+        void push(Event const& e) {
+            if (is_continuous(e.kind)) {
+                for (std::size_t i = events.size(); i-- > 0 && is_continuous(events[i].kind); ) {
+                    if (events[i].kind != e.kind)
+                        continue;
+                    Event merged = e;
+                    merged.scroll_delta += events[i].scroll_delta;
+                    merged.magnification += events[i].magnification;
+                    for (std::size_t k = i; k + 1 < events.size(); ++k)
+                        events[k] = events[k + 1];
+                    events.pop_back();
+                    events.push_back(merged);
+                    return;
+                }
+            }
+            events.push_back(e);
+        }
+
         bool empty() const { return events.empty(); }
         std::size_t size() const { return events.size(); }
 

@@ -651,6 +651,56 @@ namespace {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
 }
 
+// Read the presentable back for pending `screenshot` commands (see
+// wry::ScreenshotRequest): a blit into a shared buffer, encoded into this
+// frame's command buffer ahead of the present blit.  The completion handler
+// runs on a Metal thread: it copies the pixels out to every request and
+// publishes each with a release store, and touches nothing else -- in
+// particular no GC object.
+- (void)encodeScreenshotsOf:(id<MTLTexture>)presentable
+                       into:(id<MTLCommandBuffer>)commandBuffer {
+    std::vector<std::shared_ptr<wry::ScreenshotRequest>> requests
+        = std::move(_gui->screenshot_requests);
+    _gui->screenshot_requests.clear();
+    if (presentable.pixelFormat != MTLPixelFormatRGBA16Float) {
+        for (auto& r : requests) {
+            r->error = wry::String("screenshot: unsupported presentable pixel format");
+            r->ready.store_release(true);
+        }
+        return;
+    }
+    const NSUInteger w = presentable.width;
+    const NSUInteger h = presentable.height;
+    const NSUInteger bytesPerRow = w * 4 * sizeof(uint16_t);
+    id<MTLBuffer> buffer = [_ctx.device newBufferWithLength:bytesPerRow * h
+                                                    options:MTLResourceStorageModeShared];
+    id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+    [blit copyFromTexture:presentable
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(w, h, 1)
+                 toBuffer:buffer
+        destinationOffset:0
+   destinationBytesPerRow:bytesPerRow
+ destinationBytesPerImage:bytesPerRow * h];
+    [blit endEncoding];
+    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+        const bool ok = completed.status == MTLCommandBufferStatusCompleted;
+        const uint16_t* p = static_cast<const uint16_t*>(buffer.contents);
+        for (auto& r : requests) {
+            if (ok) {
+                r->width = (uint32_t)w;
+                r->height = (uint32_t)h;
+                r->half_rgba.assign(p, p + w * h * 4);
+            } else {
+                r->error = wry::String("screenshot: the frame failed to render");
+            }
+            r->ready.store_release(true);
+        }
+    }];
+}
+
 -(void)render {
     // Input.  Scenes that own their input (the menu) implement -handleEvents
     // and drain the queue themselves; otherwise the world pump walks each
@@ -666,6 +716,14 @@ namespace {
     ++_gui->frame;
     _gui->drain_notifications();
     NSSize sz = _metalView.bounds.size;
+
+    // Commands: what injected positions and widget queries are relative
+    // to, then pending replies polled and lines waiting behind them issued
+    // -- before input, so injected events are dispatched this frame.
+    _gui->view_size_pt = simd_make_float2((float)sz.width, (float)sz.height);
+    _gui->scene_widgets = [_scene respondsToSelector:@selector(widgetRoot)]
+        ? [_scene widgetRoot] : nullptr;
+    _gui->service_commands();
     if ([_scene respondsToSelector:@selector(handleEventsWithViewSize:)]) {
         [_scene handleEventsWithViewSize:sz];
     } else {
@@ -699,6 +757,8 @@ namespace {
     // the scene's texture into it.
     id<MTLCommandBuffer> command_buffer = [_ctx.commandQueue commandBuffer];
     id<MTLTexture> presentable = [_scene encodeIntoCommandBuffer:command_buffer];
+    if (presentable && !_gui->screenshot_requests.empty())
+        [self encodeScreenshotsOf:presentable into:command_buffer];
     @autoreleasepool {
         id<CAMetalDrawable> drawable = [_metalLayer nextDrawable];
         if (drawable && presentable) {

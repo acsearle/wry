@@ -265,6 +265,10 @@ namespace wry {
             // is deferred until after dispatch returns -- safe to set from
             // inside an event handler without invalidating iteration.
             bool wants_close = false;
+
+            // The widget tree this overlay lays out and paints, if any, for
+            // the `widgets` and `press` commands.
+            virtual Widget const* widget_root() const { return nullptr; }
         };
 
         // Ordered, top-of-stack-last.  Non-owning: the stack just borrows
@@ -292,6 +296,13 @@ namespace wry {
 
             // Bottom-up walk.  Earlier overlays paint first, later on top.
             void paint(Painter& p);
+
+            // Visit overlays topmost first (the order input reaches them).
+            template<typename F>
+            void for_each_top_down(F&& f) const {
+                for (auto it = _overlays.rbegin(); it != _overlays.rend(); ++it)
+                    f(**it);
+            }
 
         private:
             std::vector<Overlay*> _overlays;
@@ -337,6 +348,10 @@ namespace wry {
             using Issue = std::function<void(command::Origin, StringView)>;
             void set_issue(Issue f) { _issue = std::move(f); }
 
+            // Wired by GuiContext: Ctrl-C cancels the console's pending
+            // command and the lines queued behind it.
+            void set_cancel(std::function<void()> f) { _cancel = std::move(f); }
+
             // While active, the console eats keyboard but lets clicks
             // through to whatever is behind it.
             bool modal_keyboard() const override { return _active; }
@@ -360,6 +375,7 @@ namespace wry {
             LogOverlay* _log = nullptr;
             Keymap const* _keymap = nullptr;
             Issue _issue;
+            std::function<void()> _cancel;
             std::vector<String> _recall;        // submitted input, oldest first
             size_t _recall_index = 0;           // == _recall.size(): fresh input
         };
@@ -448,6 +464,7 @@ namespace wry {
             ~MainMenuOverlay() override;
 
             bool on_event(Event const&) override;
+            Widget const* widget_root() const override { return _root.get(); }
             void paint(Painter&) override;
 
             bool modal_mouse()    const override { return true; }
@@ -486,6 +503,7 @@ namespace wry {
             ~SaveListOverlay() override;
 
             bool on_event(Event const&) override;
+            Widget const* widget_root() const override { return _root.get(); }
             void paint(Painter&) override;
 
             bool modal_mouse()    const override { return true; }
@@ -534,6 +552,7 @@ namespace wry {
             ~SettingsOverlay() override;
 
             bool on_event(Event const&) override;
+            Widget const* widget_root() const override { return _root.get(); }
             void paint(Painter&) override;
 
             bool modal_mouse()    const override { return true; }
@@ -572,6 +591,7 @@ namespace wry {
             ~KeyBindingsOverlay() override;
 
             bool on_event(Event const&) override;
+            Widget const* widget_root() const override { return _root.get(); }
             void paint(Painter&) override;
 
             bool modal_mouse()    const override { return true; }

@@ -367,25 +367,33 @@ namespace wry {
         // Service the garbage collector once per frame.
         mutator_repin();
 
-        // Apply this step's authoritative commands (from the Server) to the
-        // players' queues before stepping.  World::step() drains the queues
-        // exactly as before -- the Server is just who fills them.  Single
-        // player: the local player's own actions, round-tripped through
-        // LocalServer (the one-frame submit->apply latency, as before).
-        for (auto&& cmd : _server->poll())
-            _local_player->_queue.push_back(std::move(cmd.action));
+        // Paused (the `pause` command), the world steps only as `step`
+        // budgets allow -- except that a world never yet stepped steps
+        // once, so the renderer always has a world to draw.  Frames go on
+        // regardless.
+        if (!_world_to_render || _take_step_permission()) {
+            // Apply this step's authoritative commands (from the Server) to the
+            // players' queues before stepping.  World::step() drains the queues
+            // exactly as before -- the Server is just who fills them.  Single
+            // player: the local player's own actions, round-tripped through
+            // LocalServer (the one-frame submit->apply latency, as before).
+            for (auto&& cmd : _server->poll())
+                _local_player->_queue.push_back(std::move(cmd.action));
 
-        // Advance the displayed world one simulation step: pop it, step it,
-        // push the result back, and stash it in _world_to_render for the
-        // renderer to draw this same frame.
-        Root<World const*> old_world;
-        (void) _worlds.try_pop_front(old_world);
-        assert(old_world);
-        Coroutine::Nursery nursery;
-        nursery.soon(_world_to_render, old_world->step());
-        sync_wait(nursery.join());
-        _worlds.emplace_back(_world_to_render);
-        assert(_world_to_render);
+            // Advance the displayed world one simulation step: pop it, step it,
+            // push the result back, and stash it in _world_to_render for the
+            // renderer to draw this same frame.
+            Root<World const*> old_world;
+            (void) _worlds.try_pop_front(old_world);
+            assert(old_world);
+            Coroutine::Nursery nursery;
+            nursery.soon(_world_to_render, old_world->step());
+            sync_wait(nursery.join());
+            _worlds.emplace_back(_world_to_render);
+            assert(_world_to_render);
+
+            ++_steps_taken;
+        }
 
         // ~1 Hz: hand a rooted snapshot of the freshly stepped world to the
         // background map builder.  The load_acquire pairs with the builder's
@@ -406,6 +414,15 @@ namespace wry {
         // Project the cursor for the renderer.  (Input became commands
         // as it was pumped; see pump_legacy_event.)
         project_cursor();
+    }
+
+    bool WorldState::_take_step_permission() {
+        if (!_paused)
+            return true;
+        if (_step_budget == 0)
+            return false;
+        --_step_budget;
+        return true;
     }
 
     simd_float4 WorldState::cursor_on_ground() const {
@@ -573,9 +590,76 @@ namespace wry {
             ws._server->submit(std::move(a));
         }
 
+        // `step n`: done once the world has taken n more steps.  Holds the
+        // WorldState by address only to notice that it has gone (the scene
+        // changed); it is never dereferenced unless it is still the live
+        // one.
+        struct StepPending final : command::Pending {
+            GuiContext& gui;
+            WorldState* ws;
+            uint64_t target;
+            StepPending(GuiContext& g, WorldState* w, uint64_t t)
+            : gui(g), ws(w), target(t) {}
+
+            std::optional<Reply> poll() override {
+                if (gui.world != ws)
+                    return Reply::error(String("the world was unloaded"));
+                if (ws->_steps_taken < target)
+                    return std::nullopt;
+                return Reply::ok();
+            }
+
+            // Take back the budget this step has not yet spent, so a
+            // cancelled `step 1000` leaves the world paused, not running.
+            void cancel() override {
+                if (gui.world != ws || ws->_steps_taken >= target)
+                    return;
+                const uint64_t unspent = target - ws->_steps_taken;
+                ws->_step_budget -= std::min(ws->_step_budget, unspent);
+            }
+        };
+
     } // namespace
 
     void register_world_commands(CommandRegistry& registry) {
+
+        // The clock (commands.md section 8).  Today the world steps once
+        // per frame; these decouple the step clock from the frame clock as
+        // far as tests and scripts need.  Under a networked server they
+        // are the same verbs addressed to the local server instance.
+        registry.add(make_command<Ctx>(
+            "pause", "Stop stepping the world (frames continue)", Category::clock,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                ws._paused = true;
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "resume", "Step the world every frame again", Category::clock,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                ws._paused = false;
+                ws._step_budget = 0;
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "step", "Advance the world n steps (one per frame), then reply", Category::clock,
+            std::tuple{
+                Param<Ctx, int64_t>{"n", "how many steps", int64_t{1}},
+            },
+            [](Ctx& c, int64_t n) {
+                if (!c.world)
+                    return Reply::error(String("no world is loaded"));
+                if (n < 0)
+                    return Reply::error(String("n must be non-negative"));
+                WorldState& ws = *c.world;
+                if (ws._paused)
+                    ws._step_budget += (uint64_t)n;
+                return Reply::later(std::make_shared<StepPending>(
+                    c.gui, &ws, ws._steps_taken + (uint64_t)n));
+            }));
 
         registry.add(make_command<Ctx>(
             "rotate", "Rotate the held opcode clockwise", Category::local,
@@ -1039,6 +1123,58 @@ namespace wry {
         // A binding issues its command with defaults resolved.
         gc.issue(command::Origin::binding, "rotate");
         assert(gc.history.back().origin == command::Origin::binding);
+
+        co_return;
+    };
+
+    // The clock commands: pause stops stepping; step n grants n steps of
+    // budget and replies once they are taken; the console's next line
+    // waits behind it; cancelling returns unspent budget.  update() itself
+    // is not driven here (it repins and forks the step); its gate is.
+    define_test("world_state_clock_commands") {
+        GuiContext gc;
+        WorldState ws(gc);
+        using command::Reply;
+
+        assert(ws._take_step_permission());     // running: always
+        gc.issue(command::Origin::console, "pause");
+        assert(ws._paused && !ws._take_step_permission());
+
+        gc.submit(gc.console_source, "step 2");
+        gc.submit(gc.console_source, "help step");
+        assert(ws._step_budget == 2);
+        const uint64_t step_seq = gc.history.back().seq;
+        assert(gc.history.back().status == Reply::PENDING);
+        assert(gc.console_source.queued.size() == 1);   // help waits
+
+        // Take the steps update() would take.
+        int steps = 0;
+        while (ws._take_step_permission()) {
+            ++ws._steps_taken;
+            ++steps;
+        }
+        assert(steps == 2 && ws._step_budget == 0);
+
+        ++gc.frame;
+        gc.service_commands();
+        assert(!gc.console_source.pending);
+        assert(gc.history.back().line == StringView("help \"step\""));
+        for (auto const& e : gc.history)
+            if (e.seq == step_seq)
+                assert(e.status == Reply::OK && e.completed_frame == gc.frame);
+
+        // Cancel: a step 5 that took one step gives back four.
+        gc.submit(gc.console_source, "step 5");
+        assert(ws._take_step_permission());
+        ++ws._steps_taken;
+        assert(ws._step_budget == 4);
+        gc.cancel(gc.console_source);
+        assert(ws._step_budget == 0);
+        assert(gc.history.back().status == Reply::CANCELLED);
+
+        // Resume: stepping every frame again, no stale budget.
+        gc.issue(command::Origin::console, "resume");
+        assert(!ws._paused && ws._take_step_permission());
 
         co_return;
     };

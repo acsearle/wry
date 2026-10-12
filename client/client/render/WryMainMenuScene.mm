@@ -101,6 +101,10 @@
     return self;
 }
 
+- (nullable const wry::gui::Widget*)widgetRoot {
+    return _root.get();
+}
+
 - (void)handleEventsWithViewSize:(CGSize)viewSizePoints {
     // Promote event locations from logical points to drawable pixels (the
     // space the widget tree is laid out in), mirroring gui::pump.

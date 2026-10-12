@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <expected>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <tuple>
@@ -242,18 +243,38 @@ namespace wry::command {
 
     const char* name_from_category(Category);
 
+    struct Pending;
+
     struct Reply {
         enum Status : uint8_t {
             OK,
             ERROR,
+            PENDING,        // completes later; see Pending
+            CANCELLED,      // a pending reply that was abandoned
         };
         Status status = OK;
         String text;                    // printed result, or error message
+        std::shared_ptr<Pending> pending;   // PENDING only
 
         static Reply ok() { return Reply{}; }
-        static Reply ok(String text) { return Reply{OK, std::move(text)}; }
-        static Reply error(String text) { return Reply{ERROR, std::move(text)}; }
+        static Reply ok(String text) { return Reply{OK, std::move(text), {}}; }
+        static Reply error(String text) { return Reply{ERROR, std::move(text), {}}; }
         static Reply error(Error const& e);
+        static Reply later(std::shared_ptr<Pending> p) { return Reply{PENDING, {}, std::move(p)}; }
+        static Reply cancelled() { return Reply{CANCELLED, String("cancelled"), {}}; }
+    };
+
+    // An asynchronous command's reply (commands.md section 8): `step 10`,
+    // `frame 5` and `screenshot` cannot block the main thread.  The
+    // executor polls once per frame, on the main thread, until poll
+    // returns a final reply (never PENDING).  Pending state that holds
+    // Terms must root them itself.
+    struct Pending {
+        virtual ~Pending() = default;
+        virtual std::optional<Reply> poll() = 0;
+        // Abandon the command, undoing what can be undone (a step budget
+        // not yet spent).  The executor then completes it as CANCELLED.
+        virtual void cancel() {}
     };
 
     // Where an invocation came from (commands.md section 3).  For logging
@@ -271,13 +292,17 @@ namespace wry::command {
     // holds no Terms, so it keeps nothing alive.
     struct HistoryEntry {
         uint64_t seq = 0;
-        uint64_t frame = 0;
+        uint64_t frame = 0;             // when issued
         Origin origin = Origin::gui;
         String line;                    // canonical, defaults resolved
-        Reply reply;
+        Reply::Status status = Reply::OK;   // PENDING until completed
+        String reply;                   // the reply's text
+        uint64_t completed_frame = 0;   // when completed (== frame if at once)
     };
 
-    // `#41 frame 1200 console  step 10`
+    // `#41 frame 1200 console  step 10`, then the outcome if it is not a
+    // plain immediate success: `  -> frame 1210`, `  ! message`,
+    // `  (pending)`, `  (cancelled)`.
     String format_history_entry(HistoryEntry const& entry);
 
     // The result of running a line.  `line` is the canonical invocation
