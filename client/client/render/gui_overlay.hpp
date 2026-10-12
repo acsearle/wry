@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -41,6 +42,7 @@
 
 #include <limits>
 
+#include "command.hpp"
 #include "contiguous_deque.hpp"
 #include "font.hpp"
 #include "gui_event.hpp"
@@ -314,14 +316,26 @@ namespace wry {
 
         // Quake-style drop-down console: toggled by the toggle-console
         // binding (backtick by default), captures all keyboard input
-        // while active.
+        // while active.  Enter issues the input line as a command
+        // (core/docs/commands.md); Up / Down recall earlier input.
         class ConsoleOverlay : public Overlay {
         public:
             ConsoleOverlay();
 
             bool active() const { return _active; }
+            void set_active(bool a) { _active = a; }
             bool on_event(Event const&) override;
             void paint(Painter&) override;
+
+            // Append a line of output above the input line.
+            void print(StringView line);
+
+            // Wired by GuiContext to its command issue: the console's
+            // Enter (origin console) and its toggle key (origin binding)
+            // go through it.  Unwired, Enter just opens a new line and
+            // the toggle acts directly.
+            using Issue = std::function<void(command::Origin, StringView)>;
+            void set_issue(Issue f) { _issue = std::move(f); }
 
             // While active, the console eats keyboard but lets clicks
             // through to whatever is behind it.
@@ -341,10 +355,13 @@ namespace wry {
             void set_keymap(Keymap const* k) { _keymap = k; }
 
         private:
-            ContiguousDeque<String> _lines;
+            ContiguousDeque<String> _lines;     // output, then the input line last
             bool _active = false;
             LogOverlay* _log = nullptr;
             Keymap const* _keymap = nullptr;
+            Issue _issue;
+            std::vector<String> _recall;        // submitted input, oldest first
+            size_t _recall_index = 0;           // == _recall.size(): fresh input
         };
 
         // The opcode-picker grid.  For phase 2 this overlay handles input

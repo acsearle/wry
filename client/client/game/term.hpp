@@ -209,8 +209,10 @@ namespace wry {
     constexpr std::pair<int, int> term_as_enum(Term);
     constexpr int64_t term_as_int64_t(Term);
     constexpr int64_t term_as_int64_t_else(Term, int64_t);
-    std::string_view term_as_string_view(Term);
-    std::string_view term_as_string_view_else(Term, std::string_view);
+    // By reference: a short string's bytes live inside the Term word
+    // itself, so the view is valid only while the referenced Term is.
+    std::string_view term_as_string_view(Term const&);
+    std::string_view term_as_string_view_else(Term const&, std::string_view);
     constexpr int term_as_opcode(Term);
     constexpr int term_as_matter(Term);
     

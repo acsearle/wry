@@ -96,10 +96,6 @@ namespace wry {
         float2 _mouse = {};               // NDC cursor (palette reads it)
         float2 _looking_at = {};          // scroll-pan accumulator
         simd_float4 _mouse4 = {};         // cursor projected onto the ground plane
-        bool _outstanding_click = false;  // pending world click (hand full)
-        bool _outstanding_erase = false;  // pending right-click erase
-        bool _outstanding_pipette = false; // pending Q pick-up (hand empty)
-        String _outstanding_keysdown;     // pending hex-key writes
 
         // Map mode (TAB): the renderer draws the world-map quad instead of
         // the world, the palette hides, scroll pans at the map scale, and
@@ -169,6 +165,9 @@ namespace wry {
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();
 
+            // Command handlers reach the world through the app tier.
+            _gui.world = this;
+
         }
 
         // Replace the displayed world wholesale, re-pointing _local_player at
@@ -191,9 +190,17 @@ namespace wry {
         // Defined in model.cpp.
         void update(double dt);
         void handle_events(float2 view_size_pt);
-        void submit_local_commands();                 // input -> commands (from update)
         void pump_legacy_event(gui::Event const& e);  // legacy world-input fallback
-        void perform_action(gui::Action);             // a bound action fired
+
+        // The cursor projected onto the ground plane, from the current
+        // _mouse; project_cursor() stores it in _mouse4 for the renderer.
+        // cursor_tile() is the tile under it: the computed default of the
+        // commands a gesture issues (write, erase, pipette).  Nullopt when
+        // the cursor ray misses the ground or lands beyond the coordinate
+        // range (a non-finite or huge projection).
+        simd_float4 cursor_on_ground() const;
+        void project_cursor();
+        std::optional<Coordinate> cursor_tile() const;
 
         // The hand.  Holding a term is a modal state: left click places
         // it, R / H / V reorient it (opcodes), Escape or Q drops it (and
@@ -202,9 +209,12 @@ namespace wry {
         // into the hand, matter excepted.
         bool is_holding() const { return !term_is_null(_holding_value._value); }
         void drop_hand();
+        void hold(Term t);
         bool pipette_at(Coordinate xy);
 
         ~WorldState() {
+            if (_gui.world == this)
+                _gui.world = nullptr;
             fprintf(stderr, "%s\n", __PRETTY_FUNCTION__);
         }
         

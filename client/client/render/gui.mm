@@ -13,6 +13,7 @@
 
 #include <unistd.h>   // mkdtemp (capture-flow test)
 
+#include "command_types.hpp"
 #include "filesystem.hpp"
 #include "gui_context.hpp"
 #include "gui_event.hpp"
@@ -152,6 +153,12 @@ namespace wry {
             _lines.emplace_back("");
         }
 
+        void ConsoleOverlay::print(StringView line) {
+            String input = std::move(_lines.back());
+            _lines.back() = String(line);
+            _lines.push_back(std::move(input));
+        }
+
         bool ConsoleOverlay::on_event(Event const& e) {
             if (e.kind != WryEventKindKeyDown) return false;
 
@@ -163,11 +170,21 @@ namespace wry {
                 is_toggle = (_keymap->action_from_combo(combo_from_event(e))
                              == Action::toggle_console);
 
+            // The toggle is the toggle-console command (commands.md: a
+            // binding names a command).  Unwired, it acts directly.
+            auto toggle = [this] {
+                if (_issue) {
+                    _issue(command::Origin::binding, StringView("toggle-console"));
+                } else {
+                    _active = !_active;
+                    if (_log) _log->append(_active ? "[~] Show console" : "[~] Hide console");
+                }
+            };
+
             if (!_active) {
                 // Inactive: only the activation hotkey is ours.
                 if (is_toggle) {
-                    _active = true;
-                    if (_log) _log->append("[~] Show console");
+                    toggle();
                     return true;
                 }
                 return false;
@@ -177,8 +194,7 @@ namespace wry {
             // Checked before the editing keys so a printable toggle key
             // closes rather than typing itself into the input line.
             if (is_toggle) {
-                _active = false;
-                if (_log) _log->append("[~] Hide console");
+                toggle();
                 return true;
             }
 
@@ -186,9 +202,22 @@ namespace wry {
             // dispatcher blocks any keyboard events we don't explicitly claim
             // from leaking to lower overlays / legacy handlers.
             switch (e.key) {
-                case key::Enter:
-                    _lines.emplace_back();
+                case key::Enter: {
+                    if (!_issue) {
+                        _lines.emplace_back();
+                        break;
+                    }
+                    String input = std::move(_lines.back());
+                    _lines.back() = String();
+                    if (!input.empty()) {
+                        if (_recall.empty() || _recall.back() != input)
+                            _recall.push_back(input);
+                    }
+                    _recall_index = _recall.size();
+                    if (!input.empty())
+                        _issue(command::Origin::console, input);
                     break;
+                }
                 case key::Escape:
                     _active = false;
                     if (_log) _log->append("[ESC] Hide console");
@@ -199,14 +228,16 @@ namespace wry {
                     }
                     break;
                 case key::ArrowUp:
-                    std::rotate(_lines.begin(),
-                                _lines.end() - 1,
-                                _lines.end());
+                    if (_recall_index > 0)
+                        _lines.back() = _recall[--_recall_index];
                     break;
                 case key::ArrowDown:
-                    std::rotate(_lines.begin(),
-                                _lines.begin() + 1,
-                                _lines.end());
+                    if (_recall_index < _recall.size()) {
+                        if (++_recall_index < _recall.size())
+                            _lines.back() = _recall[_recall_index];
+                        else
+                            _lines.back() = String();
+                    }
                     break;
                 case key::ArrowLeft:
                     if (!_lines.back().empty()) {
@@ -248,8 +279,10 @@ namespace wry {
                 slot_top -= slot_h;
                 const float baseline = slot_top + slot_h * 0.5f
                     + (p.font->ascender + p.font->descender) * 0.5f;
-                const float2 end_pen = p.draw_text_run(
-                    simd_make_float2(left, baseline), *it, color);
+                float2 pen = simd_make_float2(left, baseline);
+                if (first)
+                    pen = p.draw_text_run(pen, "> ", color);
+                const float2 end_pen = p.draw_text_run(pen, *it, color);
                 if (first) {
                     // Blinking cursor on the input (most recent) line.
                     p.draw_text_run(end_pen,
@@ -332,9 +365,11 @@ namespace wry {
             if (!in_bounds) return false;
             if (e.button != MouseButton::Left) return true;
 
+            // Selecting a glyph is the hold command (it also moves the
+            // palette's selection to the glyph's orbit).
             _selected_i = (int)i;
             _selected_j = (int)j;
-            _model->_holding_value = m[i, j];
+            (void) _model->_gui.issue_with(command::Origin::gui, "hold", m[i, j]);
             _cursor_dirty = true;
             return true;
         }

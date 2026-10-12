@@ -82,19 +82,40 @@ namespace wry {
 #undef X
 
     Term term_make_string_with(const char* ntbs) {
+        return term_make_string_with(std::string_view(ntbs));
+    }
+
+    Term term_make_string_with(std::string_view view) {
         Term result;
-        std::size_t n = std::strlen(ntbs);
+        std::size_t n = view.size();
         if (n < 8) {
             _short_string_t s = {};
             s._tag_and_len = (n << 4) | TERM_TAG_SHORT_STRING;
-            __builtin_memcpy(s._chars, ntbs, n);
+            __builtin_memcpy(s._chars, view.data(), n);
             __builtin_memcpy(&result, &s, 8);
             assert(_term_is_short_string(result));
         } else {
-            result._data = (uint64_t)HeapString::make(std::string_view(ntbs, n));
+            result._data = (uint64_t)HeapString::make(view);
             assert(_term_is_object(result));
         }
         return result;
+    }
+
+    std::string_view term_as_string_view_else(Term const& self, std::string_view otherwise) {
+        if (_term_is_short_string(self))
+            return _term_as_short_string(self);
+        if (HeapTerm const* p = _term_as_nullable_pointer(self);
+            p && p->_save_type_tag() == HeapString::SAVE_TYPE_TAG)
+            return static_cast<HeapString const*>(p)->as_string_view();
+        return otherwise;
+    }
+
+    std::string_view term_as_string_view(Term const& self) {
+        assert(_term_is_short_string(self)
+               || (_term_as_nullable_pointer(self)
+                   && _term_as_nullable_pointer(self)->_save_type_tag()
+                      == HeapString::SAVE_TYPE_TAG));
+        return term_as_string_view_else(self, {});
     }
     
     // _term_make_garbage_collected_with was an orphan duplicate of

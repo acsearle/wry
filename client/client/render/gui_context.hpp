@@ -12,6 +12,7 @@
 #include <mutex>
 #include <vector>
 
+#include "command.hpp"
 #include "gui_event.hpp"
 #include "gui_overlay.hpp"
 #include "settings.hpp"
@@ -19,6 +20,25 @@
 #include "string.hpp"
 
 namespace wry {
+
+    struct GuiContext;
+    struct WorldState;
+
+    // What a command handler runs against (core/docs/commands.md).  The
+    // registry and history are app-tier, so they live on GuiContext; the
+    // world, when a world scene is showing, is reached through it.
+    struct CommandContext {
+        GuiContext& gui;
+        WorldState* world;      // null outside the world scene
+    };
+
+    using CommandRegistry = command::Registry<CommandContext>;
+
+    // Registration (commands.md section 5): explicit, called once by the
+    // GuiContext constructor, so the command list is the same whatever
+    // scene is showing.
+    void register_app_commands(CommandRegistry&);      // gui_context.cpp
+    void register_world_commands(CommandRegistry&);    // world_state.cpp
 
     // Host-owned, scene-agnostic GUI state -- the generic "app" tier, lifted out
     // of the world state so it outlives any single scene.  The host
@@ -60,9 +80,48 @@ namespace wry {
         // their own content.  Set up in the constructor below.
         gui::OverlayStack overlays;
 
+        // Commands (core/docs/commands.md).  Every input path -- key
+        // bindings, GUI gestures, the console -- issues through issue().
+        CommandRegistry commands;
+
+        // Every issued invocation, in issue order across origins.  Text
+        // only: holds no Terms.
+        std::vector<command::HistoryEntry> history;
+        uint64_t next_seq = 1;
+
+        // Host frame counter (WryDelegate bumps it once per frame); stamps
+        // history so a replay can reissue each line at its frame.
+        uint64_t frame = 0;
+
+        // The live world scene's state, for handlers; set and cleared by
+        // WorldState itself.
+        WorldState* world = nullptr;
+
+        // Run a command line from `origin`, record it if it was issued,
+        // and echo it to the console.
+        command::Outcome issue(command::Origin origin, StringView line);
+
+        // Issue `name` with typed arguments (GUI gestures): the same path,
+        // via the canonical text.  An argument with no literal form cannot
+        // be issued, and is reported instead.
+        template<command::CommandType... Ts>
+        command::Outcome issue_with(command::Origin origin, StringView name, Ts const&... args) {
+            auto line = command::format_invocation(name, args...);
+            if (!line)
+                return _refuse_unprintable(name);
+            return issue(origin, *line);
+        }
+
+        command::Outcome _refuse_unprintable(StringView name);
+
         GuiContext() {
             console_overlay.set_log(&log_overlay);
             console_overlay.set_keymap(&settings.keymap);
+            console_overlay.set_issue([this](command::Origin origin, StringView line) {
+                (void) issue(origin, line);
+            });
+            register_app_commands(commands);
+            register_world_commands(commands);
             settings_overlay.set_context(this);
             key_bindings_overlay.set_context(this);
             overlays.push(&log_overlay);       // bottom: floating status text

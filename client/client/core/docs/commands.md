@@ -4,7 +4,9 @@ Design for the command system: one registry of named, typed commands
 that every input path compiles to -- GUI gestures, key bindings, the
 drop-down console, a local control socket (scripts, tests, Claude via
 MCP) -- and the literal syntax in which commands and their arguments
-are written.  Agreed 2026-10-12.  Nothing below is implemented yet.
+are written.  Agreed 2026-10-12.  Stages 1 and 2 of section 10 are
+implemented (core/command.{hpp,cpp}, game/command_types.{hpp,cpp},
+render/gui_context.cpp, the world commands in game/world_state.cpp).
 
 Status: normative design.  Section 11 lists what remains open.
 
@@ -117,8 +119,11 @@ Tokens:
 - **word**: a maximal run of characters other than whitespace and the
   delimiters `( ) , = " #`.  `step`, `12`, `-34`, `0x3a80`,
   `OPCODE::SWAP`, `Shift+R`, `toggle-map` are all single words.
-- **string**: `"..."` with escapes `\"`, `\\`, `\n`, `\t`.  Other
-  characters, including non-ASCII UTF-8, stand for themselves.
+- **string**: `"..."` with escapes `\"`, `\\`, `\n`, `\t`, `\r` and
+  `\u{X}` (hex scalar value).  Other characters, including non-ASCII
+  UTF-8, stand for themselves.  The printer escapes the remaining C0
+  controls and DEL as `\u{X}`, so a printed line is always one line of
+  visible text.
 - **punctuation**: `(`, `)`, `,`, `=`.
 - **comment**: `#` outside a string runs to end of line.
 
@@ -135,9 +140,11 @@ node  := word
 
 Top-level arguments are separated by whitespace; arguments to a tagged
 literal are separated by commas, and may contain whitespace, so
-`Coordinate(12, -34)` is one node.  A word directly followed by `=` in
-argument position is a parameter name; a word directly followed by `(`
-is a tag.  No lookahead beyond one token is needed.
+`Coordinate(12, -34)` is one node.  A word followed by `=` in argument
+position is a parameter name; a word followed by `(` is a tag.  Both are
+decided by the next token, so whitespace around `=` and `(` is
+permitted (`at = Coordinate (1, 2)` is `at=Coordinate(1, 2)`), and no
+lookahead beyond one token is needed.
 
 Command names and parameter names are kebab-case words matching
 `[a-z0-9-]+`, never containing `_`.  A `-` inside a word is harmless
@@ -505,3 +512,10 @@ Each landing builds and passes the Debug suite.
    If something ever needs it (drag-painting a line of tiles), keep
    the superseded samples as an opt-in side channel, as Blender does
    with `INBETWEEN_MOUSEMOVE` for paint strokes.
+10. Defaults resolve at bind time, before the handler runs, so a
+    parameter the handler ignores on some branch must still resolve:
+    `pipette` with a full hand drops and never reads `at`, yet fails
+    if the cursor is off the ground.  Harmless while the camera always
+    looks at the ground; if it bites, add optional parameters (absent
+    is a value) rather than lazy defaults, which would break
+    resolved-default printing.

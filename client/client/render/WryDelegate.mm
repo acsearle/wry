@@ -661,7 +661,9 @@ namespace {
     //
     // First surface any messages background work posted since last frame into
     // the app-tier log, once per frame regardless of scene (was in the world's
-    // handle_events; the log is app-tier now).
+    // handle_events; the log is app-tier now).  The frame counter stamps
+    // command history (core/docs/commands.md section 6).
+    ++_gui->frame;
     _gui->drain_notifications();
     NSSize sz = _metalView.bounds.size;
     if ([_scene respondsToSelector:@selector(handleEventsWithViewSize:)]) {

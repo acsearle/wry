@@ -11,9 +11,11 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <random>
 
 #include "base36.hpp"
+#include "command_types.hpp"
 #include "coroutine.hpp"
 #include "ctype.hpp"
 #include "garbage_collected.hpp"
@@ -401,77 +403,35 @@ namespace wry {
             }
         }
 
-        // Turn this frame's input into commands (this also projects the
-        // cursor).  After the step, so a submission applies next frame.
-        submit_local_commands();
+        // Project the cursor for the renderer.  (Input became commands
+        // as it was pumped; see pump_legacy_event.)
+        project_cursor();
     }
 
-    void WorldState::submit_local_commands() {
+    simd_float4 WorldState::cursor_on_ground() const {
         using namespace ::simd;
-
-        // Cursor -> ground plane (the projection the renderer also reads).
         auto lookat = matrix_identity_float4x4;
         lookat.columns[3].x += _looking_at.x / 1024.0f;
         lookat.columns[3].y -= _looking_at.y / 1024.0f;
         simd_float4x4 A = simd_mul(_uniforms.viewprojection_transform, lookat);
         simd_float4 b = make<float4>(_mouse, 0.0f, 1.0f);
-        _mouse4 = make<float4>(project_screen_ray(A, b), 0.0f, 1.0f);
+        return make<float4>(project_screen_ray(A, b), 0.0f, 1.0f);
+    }
 
-        // Click: write the held value at the tile under the cursor.  (The
-        // palette claims palette-area clicks before _outstanding_click is set,
-        // so anything here is for the world tile; and the pump only sets it
-        // while the hand is full.)
-        if (_outstanding_click) {
-            int i = round(_mouse4.x);
-            int j = round(_mouse4.y);
-            Coordinate xy{i, j};
-            Player::Action a;
-            a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
-            a.coordinate = xy;
-            a.value = _holding_value;
-            _server->submit(std::move(a));
-            printf(" Clicked world (%d, %d)\n", i, j);
-            _outstanding_click = false;
-        }
+    void WorldState::project_cursor() {
+        _mouse4 = cursor_on_ground();
+    }
 
-        // Right click: erase the tile under the cursor.  A null write
-        // erases the cell's key (the value-plane combine in World::step);
-        // matter included -- this is the editing tool, not a machine's
-        // guarded STORE.
-        if (_outstanding_erase) {
-            int i = round(_mouse4.x);
-            int j = round(_mouse4.y);
-            Player::Action a;
-            a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
-            a.coordinate = Coordinate{i, j};
-            a.value = term_make_null();
-            _server->submit(std::move(a));
-            _outstanding_erase = false;
-        }
-
-        // Q with an empty hand: pick up the tile under the cursor.
-        if (_outstanding_pipette) {
-            int i = round(_mouse4.x);
-            int j = round(_mouse4.y);
-            (void) pipette_at(Coordinate{i, j});
-            _outstanding_pipette = false;
-        }
-
-        // Hex keys: write the digit at the tile under the cursor.
-        while (!_outstanding_keysdown.empty()) {
-            char32_t ch = _outstanding_keysdown.front_and_pop_front();
-            if (wry::isascii((int) ch) && isxdigit(ch)) {
-                int64_t k = wry::base36::from_base36_table[ch];
-                int i = round(_mouse4.x);
-                int j = round(_mouse4.y);
-                Coordinate xy{i, j};
-                Player::Action a;
-                a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
-                a.coordinate = xy;
-                a.value = k;
-                _server->submit(std::move(a));
-            }
-        }
+    std::optional<Coordinate> WorldState::cursor_tile() const {
+        simd_float4 g = cursor_on_ground();
+        const float x = std::round(g.x);
+        const float y = std::round(g.y);
+        // The comparisons are false for NaN.  2^31 is exactly
+        // representable; anything at or beyond it would overflow i32.
+        constexpr float limit = 2147483648.0f;
+        if (!(x >= -limit && x < limit && y >= -limit && y < limit))
+            return std::nullopt;
+        return Coordinate{(i32)x, (i32)y};
     }
 
     // Empty the hand: the palette forgets its selection and the renderer's
@@ -491,6 +451,21 @@ namespace wry {
         _gui.append_log(buffer);
     }
 
+    // Put a Term in the hand; the palette follows (its selection marks the
+    // held opcode's orbit) and the cursor glyph refreshes.  Null empties it.
+    void WorldState::hold(Term t) {
+        if (term_is_null(t)) {
+            drop_hand();
+            return;
+        }
+        _holding_value = t;
+        if (t.is_opcode())
+            _palette_overlay.select_orbit_of(t);
+        else
+            _palette_overlay.clear_selection();
+        _palette_overlay.request_cursor_refresh();
+    }
+
     // Pipette (Q with an empty hand): copy whatever is on the tile into
     // the hand.  Matter is excepted -- placing the copy would conjure
     // matter; ghosts are the eventual answer.  Reads the displayed world:
@@ -504,12 +479,7 @@ namespace wry {
         _worlds.push_front(std::move(w));
         if (!has || term_is_null(t) || t.is_matter())
             return false;
-        _holding_value = t;
-        if (t.is_opcode())
-            _palette_overlay.select_orbit_of(t);
-        else
-            _palette_overlay.clear_selection();
-        _palette_overlay.request_cursor_refresh();
+        hold(t);
         char buffer[100];
         if (t.is_opcode())
             std::snprintf(buffer, sizeof(buffer), "Picked up %s",
@@ -523,88 +493,225 @@ namespace wry {
         return true;
     }
 
-    // Perform a bound game action -- the target half of the keymap
-    // dispatch in pump_legacy_event.
-    void WorldState::perform_action(gui::Action action) {
-        using namespace ::wry::gui;
-        char buffer[100];
-        switch (action) {
+    // ----------------------------------------------------------------
+    // Commands (core/docs/commands.md).  The keymap's actions are commands
+    // named by their stable ids; gestures in pump_legacy_event issue the
+    // world edits.
 
-            case Action::rotate:
-            case Action::reverse_rotate:
-            case Action::flip_horizontal:
-            case Action::flip_vertical: {
-                // Reorient the held opcode, Factorio-style: rotate is
-                // clockwise, reverse-rotate counterclockwise, the flips
-                // mirror east<->west / north<->south.  The palette shows
-                // one glyph per orbit; these actions reach the rest.
-                if (!_holding_value._value.is_opcode())
-                    break;
-                OPCODE held = (OPCODE)_holding_value._value.as_opcode();
-                OPCODE reoriented =
-                      (action == Action::rotate)
-                        ? opcode_rotated_clockwise(held)
-                    : (action == Action::reverse_rotate)
-                        ? opcode_rotated_counterclockwise(held)
-                    : (action == Action::flip_horizontal)
-                        ? opcode_mirrored_horizontal(held)
-                        : opcode_mirrored_vertical(held);
-                if (reoriented != held) {
-                    Term next = term_make_opcode(reoriented);
-                    // The palette follows the hand: its cell for this
-                    // orbit now shows the orientation you are holding.
-                    _palette_overlay.replace_glyph(_holding_value._value, next);
-                    _holding_value = next;
-                    _palette_overlay.request_cursor_refresh();
-                }
-                std::snprintf(buffer, sizeof(buffer), "Holding %s",
-                              name_from_OPCODE(reoriented) + 7);
-                _gui.append_log(buffer);
-                break;
-            }
+    namespace {
 
-            case Action::pipette:
-                // Factorio's Q: a full hand is emptied; an empty hand picks
-                // up the tile under the cursor (resolved in update, where
-                // the cursor tile is fresh).
-                if (is_holding())
-                    drop_hand();
-                else
-                    _outstanding_pipette = true;
-                break;
+        using command::Category;
+        using command::Param;
+        using command::Reply;
+        using command::make_command;
+        using Ctx = CommandContext;
 
-            case Action::toggle_map:
-                _show_map = !_show_map;
-                break;
-
-            case Action::toggle_console:
-                // The console is app-tier: its overlay dispatches before
-                // the world and consumes its own toggle, so this only
-                // arrives if the console overlay is absent.  Nothing to
-                // do here.
-                break;
-
-            case Action::toggle_jacobians:
-                _show_jacobian = !_show_jacobian;
-                std::snprintf(buffer, sizeof(buffer), "%s Jacobians",
-                              _show_jacobian ? "Show" : "Hide");
-                _gui.append_log(buffer);
-                break;
-
-            case Action::toggle_points:
-                _show_points = !_show_points;
-                std::snprintf(buffer, sizeof(buffer), "%s points",
-                              _show_points ? "Show" : "Hide");
-                _gui.append_log(buffer);
-                break;
-
-            case Action::toggle_wireframe:
-                _show_wireframe = !_show_wireframe;
-                std::snprintf(buffer, sizeof(buffer), "%s wireframe",
-                              _show_wireframe ? "Show" : "Hide");
-                _gui.append_log(buffer);
-                break;
+        // Wrap a handler taking WorldState& so it refuses when no world
+        // scene is showing.
+        template<typename F>
+        auto with_world(F f) {
+            return [f](Ctx& c, auto const&... args) -> Reply {
+                if (!c.world)
+                    return Reply::error(String("no world is loaded"));
+                return f(*c.world, args...);
+            };
         }
+
+        // The tile under the cursor: the default for gesture-shaped
+        // commands, printed resolved in history.
+        Param<Ctx, Coordinate> cursor_param(const char* name, const char* summary) {
+            return Param<Ctx, Coordinate>{
+                name, summary,
+                [](Ctx& c) -> std::expected<Coordinate, String> {
+                    if (!c.world)
+                        return std::unexpected(String("no world is loaded"));
+                    if (auto tile = c.world->cursor_tile())
+                        return *tile;
+                    return std::unexpected(String("the cursor is not over the ground"));
+                },
+                "the tile under the cursor"};
+        }
+
+        // Reorient the held opcode, Factorio-style: rotate is clockwise,
+        // reverse-rotate counterclockwise, the flips mirror east<->west /
+        // north<->south.  The palette shows one glyph per orbit; these
+        // reach the rest.
+        Reply reorient_hand(WorldState& ws, OPCODE (*f)(OPCODE)) {
+            if (!ws._holding_value._value.is_opcode())
+                return Reply::ok();
+            OPCODE held = (OPCODE)ws._holding_value._value.as_opcode();
+            OPCODE reoriented = f(held);
+            if (reoriented != held) {
+                Term next = term_make_opcode((int)reoriented);
+                // The palette follows the hand: its cell for this orbit
+                // now shows the orientation you are holding.
+                ws._palette_overlay.replace_glyph(ws._holding_value._value, next);
+                ws._holding_value = next;
+                ws._palette_overlay.request_cursor_refresh();
+            }
+            char buffer[100];
+            std::snprintf(buffer, sizeof(buffer), "Holding %s",
+                          name_from_OPCODE(reoriented) + 7);
+            ws._gui.append_log(buffer);
+            return Reply::ok();
+        }
+
+        Reply toggle(WorldState& ws, bool& flag, const char* what) {
+            flag = !flag;
+            char buffer[100];
+            std::snprintf(buffer, sizeof(buffer), "%s %s",
+                          flag ? "Show" : "Hide", what);
+            ws._gui.append_log(buffer);
+            return Reply::ok();
+        }
+
+        void submit_write(WorldState& ws, Coordinate at, Term term) {
+            Player::Action a;
+            a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
+            a.coordinate = at;
+            a.value = term;
+            ws._server->submit(std::move(a));
+        }
+
+    } // namespace
+
+    void register_world_commands(CommandRegistry& registry) {
+
+        registry.add(make_command<Ctx>(
+            "rotate", "Rotate the held opcode clockwise", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                return reorient_hand(ws, opcode_rotated_clockwise);
+            })));
+
+        registry.add(make_command<Ctx>(
+            "reverse-rotate", "Rotate the held opcode counterclockwise", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                return reorient_hand(ws, opcode_rotated_counterclockwise);
+            })));
+
+        registry.add(make_command<Ctx>(
+            "flip-horizontal", "Mirror the held opcode east-west", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                return reorient_hand(ws, opcode_mirrored_horizontal);
+            })));
+
+        registry.add(make_command<Ctx>(
+            "flip-vertical", "Mirror the held opcode north-south", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                return reorient_hand(ws, opcode_mirrored_vertical);
+            })));
+
+        registry.add(make_command<Ctx>(
+            "toggle-map", "Switch between the world and the map", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                ws._show_map = !ws._show_map;
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "toggle-jacobians", "Show or hide Jacobians (debug)", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                return toggle(ws, ws._show_jacobian, "Jacobians");
+            })));
+
+        registry.add(make_command<Ctx>(
+            "toggle-points", "Show or hide points (debug)", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                return toggle(ws, ws._show_points, "points");
+            })));
+
+        registry.add(make_command<Ctx>(
+            "toggle-wireframe", "Show or hide wireframe (debug)", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                return toggle(ws, ws._show_wireframe, "wireframe");
+            })));
+
+        // Factorio's Q: a full hand is emptied; an empty hand picks up the
+        // tile.  (So `pipette Coordinate(3, 4)` replays as a drop if the
+        // hand was full -- the hand is part of the state it replays in.)
+        registry.add(make_command<Ctx>(
+            "pipette", "Pick up the Term on a tile, or empty a full hand", Category::local,
+            std::tuple{
+                cursor_param("at", "the tile to pick up from"),
+            },
+            with_world([](WorldState& ws, Coordinate const& at) {
+                if (ws.is_holding())
+                    ws.drop_hand();
+                else
+                    (void) ws.pipette_at(at);
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "hold", "Put a Term in the hand (null empties it)", Category::local,
+            std::tuple{
+                Param<Ctx, Term>{"term", "what to hold"},
+            },
+            with_world([](WorldState& ws, Term const& term) {
+                ws.hold(term);
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "drop", "Empty the hand", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                ws.drop_hand();
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "get", "Show the Term on a tile of the displayed world", Category::local,
+            std::tuple{
+                cursor_param("at", "the tile to read"),
+            },
+            with_world([](WorldState& ws, Coordinate const& at) {
+                Root<World const*> w;
+                if (!ws._worlds.try_pop_front(w))
+                    return Reply::error(String("no displayed world"));
+                Term t{};
+                const bool has = w._ptr->_term_for_coordinate.try_get(at, t);
+                ws._worlds.push_front(std::move(w));
+                if (!has)
+                    t = term_make_null();
+                if (!command::printable(t))
+                    return Reply::ok(String("(a Term with no literal form)"));
+                return Reply::ok(command::to_string(t));
+            })));
+
+        // World edits: built into a Player::Action and submitted; the
+        // Server orders them and they apply when they come back in a step.
+        registry.add(make_command<Ctx>(
+            "write", "Write a Term on a tile", Category::world,
+            std::tuple{
+                cursor_param("at", "the tile to write"),
+                Param<Ctx, Term>{"term", "what to write"},
+            },
+            with_world([](WorldState& ws, Coordinate const& at, Term const& term) {
+                submit_write(ws, at, term);
+                return Reply::ok();
+            })));
+
+        // A null write erases the cell's key (the value-plane combine in
+        // World::step); matter included -- this is the editing tool, not a
+        // machine's guarded STORE.
+        registry.add(make_command<Ctx>(
+            "erase", "Erase a tile", Category::world,
+            std::tuple{
+                cursor_param("at", "the tile to erase"),
+            },
+            with_world([](WorldState& ws, Coordinate const& at) {
+                submit_write(ws, at, term_make_null());
+                return Reply::ok();
+            })));
     }
 
     // Whatever the overlay stack didn't claim: the world's ground-plane click,
@@ -620,11 +727,15 @@ namespace wry {
                 // never an accident -- and right erases.
                 if (_show_map)
                     break;
-                if (e.button == MouseButton::Left) {
-                    if (is_holding())
-                        _outstanding_click = true;
-                } else if (e.button == MouseButton::Right) {
-                    _outstanding_erase = true;
+                // A click off the ground edits nothing.
+                if (auto tile = cursor_tile()) {
+                    if (e.button == MouseButton::Left) {
+                        if (is_holding())
+                            (void) _gui.issue_with(command::Origin::gui, "write",
+                                                   *tile, _holding_value._value);
+                    } else if (e.button == MouseButton::Right) {
+                        (void) _gui.issue_with(command::Origin::gui, "erase", *tile);
+                    }
                 }
                 break;
 
@@ -665,7 +776,7 @@ namespace wry {
                     break;
 
                 // q: the cursor's ground-plane point under the CURRENT map
-                // transform (same projection submit_local_commands does for
+                // transform (same projection cursor_on_ground does for
                 // the world, with the map's model matrix).
                 auto lookat = matrix_identity_float4x4;
                 lookat.columns[3].x += _looking_at.x / 1024.0f;
@@ -706,8 +817,11 @@ namespace wry {
                 if (action) {
                     // Toggles don't re-fire while the key is held; cycles
                     // (rotate) do.  Either way the keystroke is consumed.
+                    // The binding names the command; its parameters take
+                    // their defaults (the tile under the cursor).
                     if (!e.is_repeat || action_fires_on_repeat(*action))
-                        perform_action(*action);
+                        (void) _gui.issue(command::Origin::binding,
+                                          id_from_action(*action));
                     break;
                 }
 
@@ -716,7 +830,10 @@ namespace wry {
                 if (!_show_map &&
                     ((e.key >= '0' && e.key <= '9') ||
                      (e.key >= 'a' && e.key <= 'f'))) {
-                    _outstanding_keysdown.push_back((char32_t)e.key);
+                    int64_t k = wry::base36::from_base36_table[e.key];
+                    if (auto tile = cursor_tile())
+                        (void) _gui.issue_with(command::Origin::gui, "write",
+                                               *tile, term_make_integer_with(k));
                 }
                 break;
             }
@@ -774,14 +891,32 @@ namespace wry {
     // Tests.
 
     // The pump's contract for the hand and the erase gesture: an
-    // empty-hand left click places nothing, a right click queues an erase
-    // (resolved in update as a null write, which erases the cell's key),
-    // map mode edits nothing, and Escape drops a full hand before it opens
-    // the menu.  The click-to-tile projection and the server round trip
-    // are covered elsewhere (player_null_write_erases_key).
+    // empty-hand left click places nothing, a right click issues an erase
+    // (a null write, which erases the cell's key), a full-hand left click
+    // issues a write of what is held, map mode edits nothing, and Escape
+    // drops a full hand before it opens the menu.  Gestures are commands,
+    // so the history records them.  The server round trip is covered
+    // elsewhere (player_null_write_erases_key).
     define_test("world_state_hand_and_erase_input") {
         GuiContext gc;
+
+        // With no viewport the cursor projection is degenerate: a click is
+        // off the ground and edits nothing (and must not trap).
+        {
+            WorldState ws(gc);
+            assert(!ws.cursor_tile());
+            ws._holding_value = term_make_opcode(OPCODE_HALT);
+            const size_t issued = gc.history.size();
+            gui::Event e{};
+            e.kind = WryEventKindMouseUp;
+            ws.pump_legacy_event(e);
+            assert(gc.history.size() == issued);
+        }
+
+        // A real viewport, cursor at its center: over the ground.
+        gc.viewport_size = float2{1280.0f, 800.0f};
         WorldState ws(gc);
+        assert(ws.cursor_tile());
 
         auto mouse_up = [](gui::MouseButton b) {
             gui::Event e{};
@@ -796,27 +931,49 @@ namespace wry {
             return e;
         };
 
-        // Empty hand: left places nothing, right queues an erase.
-        assert(!ws.is_holding());
-        ws.pump_legacy_event(mouse_up(gui::MouseButton::Left));
-        assert(!ws._outstanding_click);
-        ws.pump_legacy_event(mouse_up(gui::MouseButton::Right));
-        assert(ws._outstanding_erase);
-        ws._outstanding_erase = false;
+        // The line most recently issued, and whether it starts with `prefix`.
+        auto last_issued_starts_with = [&](const char* prefix) {
+            if (gc.history.empty())
+                return false;
+            String const& line = gc.history.back().line;
+            const size_t n = std::strlen(prefix);
+            return line.chars.size() >= n
+                && std::memcmp(line.chars.begin(), prefix, n) == 0;
+        };
+        const String tile = command::to_string(*ws.cursor_tile());
 
-        // Full hand: left queues a placement.
+        // Empty hand: left places nothing, right issues an erase.
+        assert(!ws.is_holding());
+        size_t issued = gc.history.size();
+        ws.pump_legacy_event(mouse_up(gui::MouseButton::Left));
+        assert(gc.history.size() == issued);
+        ws.pump_legacy_event(mouse_up(gui::MouseButton::Right));
+        assert(gc.history.size() == issued + 1);
+        assert(gc.history.back().origin == command::Origin::gui);
+        {
+            String expected("erase ");
+            expected.append(tile);
+            assert(gc.history.back().line == expected);
+        }
+
+        // Full hand: left writes what is held, at the cursor tile.
         ws._holding_value = term_make_opcode(OPCODE_HALT);
         assert(ws.is_holding());
         ws.pump_legacy_event(mouse_up(gui::MouseButton::Left));
-        assert(ws._outstanding_click);
-        ws._outstanding_click = false;
+        {
+            String expected("write ");
+            expected.append(tile);
+            expected.append(StringView(" OPCODE::HALT"));
+            assert(gc.history.back().line == expected);
+        }
+        assert(last_issued_starts_with("write "));
 
         // Map mode: neither button edits.
         ws._show_map = true;
+        issued = gc.history.size();
         ws.pump_legacy_event(mouse_up(gui::MouseButton::Left));
         ws.pump_legacy_event(mouse_up(gui::MouseButton::Right));
-        assert(!ws._outstanding_click);
-        assert(!ws._outstanding_erase);
+        assert(gc.history.size() == issued);
         ws._show_map = false;
 
         // Escape: the first drops the hand without opening the menu, the
@@ -841,6 +998,7 @@ namespace wry {
     // make_starting_world, before any step.
     define_test("world_state_pipette") {
         GuiContext gc;
+        gc.viewport_size = float2{1280.0f, 800.0f};   // cursor over the ground
         WorldState ws(gc);
 
         // An empty tile: nothing happens.
@@ -858,13 +1016,29 @@ namespace wry {
         assert(!ws.pipette_at(Coordinate{-2, 2}));
         assert(ws._holding_value._value._data == term_make_opcode(OPCODE_FLIP_FLOP)._data);
 
-        // The action itself: a full hand drops, an empty hand queues a
-        // pick-up for update to resolve at the cursor tile.
-        ws.perform_action(gui::Action::pipette);
+        // The command: a full hand drops, an empty hand picks up at the
+        // given tile (or, by default, the tile under the cursor).
+        gc.issue(command::Origin::console, "pipette");
         assert(!ws.is_holding());
-        assert(!ws._outstanding_pipette);
-        ws.perform_action(gui::Action::pipette);
-        assert(ws._outstanding_pipette);
+        gc.issue(command::Origin::console, "pipette Coordinate(-2, -2)");
+        assert(ws._holding_value._value._data == term_make_integer_with(7)._data);
+        assert(gc.history.back().line == StringView("pipette Coordinate(-2, -2)"));
+
+        // hold / drop / get.
+        gc.issue(command::Origin::console, "hold OPCODE::SWAP");
+        assert(ws._holding_value._value._data == term_make_opcode(OPCODE_SWAP)._data);
+        gc.issue(command::Origin::console, "drop");
+        assert(!ws.is_holding());
+        {
+            auto o = gc.issue(command::Origin::console, "get Coordinate(0, 4)");
+            assert(o.reply.text == StringView("OPCODE::FLIP_FLOP"));
+            auto empty = gc.issue(command::Origin::console, "get Coordinate(50, 50)");
+            assert(empty.reply.text == StringView("null"));
+        }
+
+        // A binding issues its command with defaults resolved.
+        gc.issue(command::Origin::binding, "rotate");
+        assert(gc.history.back().origin == command::Origin::binding);
 
         co_return;
     };
