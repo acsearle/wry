@@ -85,6 +85,22 @@ namespace wry {
 
     ControlSocket::~ControlSocket() {
         if (_thread.joinable()) {
+            // Up to a second for queued output to be written, so a reply
+            // queued just before shutdown (to `quit`) reaches its client.
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            for (;;) {
+                {
+                    std::scoped_lock lock{_mutex};
+                    bool empty = true;
+                    for (auto& [id, c] : _connections)
+                        empty = empty && c.out.empty();
+                    if (empty)
+                        break;
+                }
+                if (std::chrono::steady_clock::now() >= deadline)
+                    break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
             {
                 std::scoped_lock lock{_mutex};
                 _stopping = true;
@@ -115,6 +131,18 @@ namespace wry {
     std::vector<uint64_t> ControlSocket::take_closed() {
         std::scoped_lock lock{_mutex};
         return std::exchange(_closed, {});
+    }
+
+    bool ControlSocket::has_input() {
+        std::scoped_lock lock{_mutex};
+        return !_inbox.empty() || !_closed.empty();
+    }
+
+    void ControlSocket::wait_for_input(std::chrono::milliseconds timeout) {
+        std::unique_lock lock{_mutex};
+        _input.wait_for(lock, timeout, [this] {
+            return !_inbox.empty() || !_closed.empty();
+        });
     }
 
     void ControlSocket::send(uint64_t connection, std::string_view line) {
@@ -195,6 +223,8 @@ namespace wry {
                         c.in.erase(0, start);
                         if (c.in.size() > max_line)
                             dead = true;
+                        if (start)
+                            _input.notify_all();
                     } else if (n == 0 || (errno != EAGAIN && errno != EINTR)) {
                         dead = true;
                     }
@@ -215,6 +245,7 @@ namespace wry {
                     ::close(p.fd);
                     _connections.erase(id);
                     _closed.push_back(id);
+                    _input.notify_all();
                 }
             }
         }

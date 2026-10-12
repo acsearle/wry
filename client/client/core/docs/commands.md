@@ -4,10 +4,14 @@ Design for the command system: one registry of named, typed commands
 that every input path compiles to -- GUI gestures, key bindings, the
 drop-down console, a local control socket (scripts, tests, Claude via
 MCP) -- and the literal syntax in which commands and their arguments
-are written.  Agreed 2026-10-12.  Stages 1 to 4 of section 10 are
+are written.  Agreed 2026-10-12.  All five stages of section 10 are
 implemented (core/command.{hpp,cpp}, game/command_types.{hpp,cpp},
 render/gui_context.cpp, the world commands in game/world_state.cpp,
-io/control_socket.{hpp,cpp}, tools/wryctl, tools/wry_mcp.py).
+io/control_socket.{hpp,cpp}, the --headless host in core/main.mm and
+render/WryDelegate.mm, tools/wryctl, tools/wry_mcp.py,
+tools/wry_smoke.py).  Of the section 7 vocabulary, the session commands
+other than `quit` (new-game, save, load, list-saves) are not yet
+written; the main menu's buttons reach them through `press`.
 
 Status: normative design.  Section 11 lists what remains open.
 
@@ -496,11 +500,31 @@ with `notifications/tools/list_changed` once a call reaches the game.
 The adapter knows no command by name; it is never edited when commands
 are added.
 
-**Headless host.**  A host with no window and no drawable: frames run
-when the driver asks (fixed frame dt), the scene encodes into its own
-target as usual, and `screenshot` reads that target back.  Same
-registry, same socket, same tests; usable under Debug with sanitizers,
-which remains the correctness gate.
+**Headless host.**  `client --headless` (the binary itself; no `open`,
+no window, no Dock icon) runs the same scenes, registry and socket with
+no window, view or layer.  It implies `--control-socket`.  The drawable
+is a fixed 1920 x 1080 pixels viewed at two pixels per point, so
+coordinates and screenshots match a windowed run on a Retina display.
+
+Frames run only while commands have work -- something pending, queued,
+injected and undispatched, or waiting on the socket -- at a fixed dt of
+1/60 s; otherwise main sleeps on the socket, repinning every 100 ms so
+the collector advances.  `step 10` therefore takes ten frames as fast as
+they render, and a script sees the same scene timers on every run.
+Each frame waits for its command buffer to complete (there is no
+drawable to throttle it), which also completes screenshots before the
+next frame.  `quit` ends it, as QUIT TO DESKTOP does in a window.
+
+The headless host never releases its delegate: the scenes own the
+WorldState, whose Root destructors shade, and main unpins for shutdown;
+a shade from an unpinned thread during marking traps.  (Windowed, the
+metal view's strong delegate reference gives the same lifetime.)
+
+**`tools/wry_smoke.py`** is the end-to-end test: it launches the newest
+Debug build headless on a private socket, plays a scripted session
+(menu, NEW GAME, write, step, screenshot), checks every reply, quits,
+and requires exit status 0 -- the whole game under the scheme's
+sanitizers, driven only through the command interface.
 
 ## 10. Staging
 

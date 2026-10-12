@@ -34,8 +34,16 @@ int main(int argc, const char** argv) {
     //       If SUBSTRING is given, only tests whose metadata contains
     //       it (as a substring) are run.
     //
+    //   --headless
+    //       No window: run the game driven through its control socket,
+    //       rendering frames only while commands have work (see
+    //       core/docs/commands.md section 9).  Implies --control-socket.
+    //
+    //   --control-socket [PATH]   (read by WryDelegate)
+    //
     // TODO: paths, immediate load savegame, etc.
     bool test_only = false;
+    bool headless = false;
     std::string_view test_filter;
     for (int i = 1; i < argc; ++i) {
         std::string_view a = argv[i];
@@ -45,6 +53,8 @@ int main(int argc, const char** argv) {
             // isn't itself a flag.
             if (i + 1 < argc && argv[i+1][0] != '-')
                 test_filter = argv[++i];
+        } else if (a == "--headless") {
+            headless = true;
         }
     }
 
@@ -124,8 +134,32 @@ int main(int argc, const char** argv) {
             WryDelegate* delegate = [[WryDelegate alloc] init];
             [application setDelegate:delegate];
 
+            if (headless) {
+                // No window, no Dock icon, no event loop: frames run while
+                // commands have work, and otherwise main sleeps on the
+                // control socket (repinning, so the collector advances).
+                [application setActivationPolicy:NSApplicationActivationPolicyProhibited];
+                // Never release the delegate.  Its scenes own the WorldState,
+                // whose Root destructors shade; run after main unpins for
+                // shutdown (below), a shade during marking traps
+                // (WRY-GC-UNPINNED).  Windowed, the metal view's strong
+                // delegate reference already keeps it alive to exit; headless
+                // has no view, so the same lifetime is made explicit.
+                (void) CFBridgingRetain(delegate);
+                [delegate setUpHeadless];
+                while (![delegate done]) {
+                    @autoreleasepool {
+                        if ([delegate hasCommandWork])
+                            [delegate render];
+                        else
+                            [delegate waitForCommands];
+                    }
+                }
+            }
+
             // return NSApplicationMain(argc, argv); // noreturn
-            [application finishLaunching];
+            if (!headless)
+                [application finishLaunching];
             while (![delegate done]) {
                 @autoreleasepool {
                     while (NSEvent* event = [application nextEventMatchingMask:NSEventMaskAny

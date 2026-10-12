@@ -243,6 +243,16 @@ namespace wry {
         }
     }
 
+    bool GuiContext::idle() const {
+        if (console_source.busy() || !detached.empty() || !events.empty()
+            || !screenshot_requests.empty())
+            return false;
+        for (auto const& [id, source] : socket_sources)
+            if (source->busy())
+                return false;
+        return !(control_socket && control_socket->has_input());
+    }
+
     void GuiContext::cancel(CommandSource& source) {
         // Every request is answered, even the ones that never issued.
         if (source.pending) {
@@ -805,6 +815,16 @@ namespace wry {
                 }
                 out.push_back(']');
                 return Reply::ok(std::move(out));
+            }));
+
+        registry.add(make_command<Ctx>(
+            "quit", "Quit the game, as QUIT TO DESKTOP does", Category::session,
+            std::tuple<>{},
+            [](Ctx& c) {
+                if (!c.gui.on_quit)
+                    return Reply::error(String("this host cannot quit"));
+                c.gui.on_quit();
+                return Reply::ok();
             }));
 
         // ---- Clock (frames are local; simulation steps are the world's).

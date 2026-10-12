@@ -29,6 +29,12 @@
 // Shutdown: stop the control socket (if open) and unlink its file.
 - (void)closeControlSocket;
 
+// Headless host (--headless): set up without a window; main then calls
+// -render while -hasCommandWork, and -waitForCommands otherwise.
+- (void)setUpHeadless;
+- (BOOL)hasCommandWork;
+- (void)waitForCommands;
+
 -(void) render;
 
 @end

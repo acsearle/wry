@@ -190,6 +190,15 @@ namespace wry {
         // behind them.
         void service_commands();
 
+        // Whether there is no command work for a frame to do: nothing
+        // pending, queued, waiting on the socket, or injected and not yet
+        // dispatched.  The headless host runs frames only when not idle.
+        bool idle() const;
+
+        // Set by the host: what the `quit` command does (end the app the way
+        // QUIT TO DESKTOP does).
+        std::function<void()> on_quit;
+
         // Abandon `source`'s pending invocation (completing it CANCELLED)
         // and drop the lines queued behind it.
         void cancel(CommandSource& source);

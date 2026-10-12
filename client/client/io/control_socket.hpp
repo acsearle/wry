@@ -18,6 +18,8 @@
 #ifndef control_socket_hpp
 #define control_socket_hpp
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -41,7 +43,8 @@ namespace wry {
         static std::unique_ptr<ControlSocket> open(std::string const& path,
                                                    std::string& error);
 
-        // Stops the thread, closes every descriptor, unlinks the path.
+        // Gives queued replies a moment to drain (the reply to `quit`), then
+        // stops the thread, closes every descriptor, unlinks the path.
         ~ControlSocket();
 
         ControlSocket(ControlSocket const&) = delete;
@@ -53,6 +56,12 @@ namespace wry {
         // arrival order per connection; and connections that have closed.
         std::vector<Line> take_lines();
         std::vector<uint64_t> take_closed();
+
+        // Main thread: whether lines or closings are waiting, and a wait
+        // for them (the headless host's idle).  Spurious and timed-out
+        // returns are allowed; callers re-check.
+        bool has_input();
+        void wait_for_input(std::chrono::milliseconds timeout);
 
         // Main thread: queue `line` (a '\n' is appended) for `connection`.
         // Silently dropped if the connection has gone.
@@ -86,6 +95,7 @@ namespace wry {
         std::map<uint64_t, Connection> _connections;
         std::vector<Line> _inbox;
         std::vector<uint64_t> _closed;
+        std::condition_variable _input;     // notified on _inbox / _closed
     };
 
 } // namespace wry

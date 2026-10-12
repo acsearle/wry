@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <thread>
 
 #include "WryRenderContext.h"
 #include "WryWorldScene.h"
@@ -159,6 +160,9 @@ namespace {
     NSWindow* _window;
     WryMetalView* _metalView;
     CAMetalLayer* _metalLayer;
+    // Headless (--headless): no window, view or layer; frames run when
+    // commands have work to do, at a fixed dt, and are never presented.
+    BOOL _headless;
     // The shared render context (device + 2D services), owned by this host and
     // borrowed by whatever scene is showing.
     WryRenderContext* _ctx;
@@ -213,6 +217,59 @@ namespace {
     return self;
 }
 
+// The shared render context and the boot scene chain, windowed or headless.
+- (void)buildScenesWithDevice:(id<MTLDevice>)device
+                  pixelFormat:(MTLPixelFormat)pixelFormat {
+    // Build the shared render context, then the boot scene chain against it.
+    // This host owns the context and the per-frame command buffer / drawable /
+    // present; scenes only encode their passes (see -render below).
+    _ctx = [[WryRenderContext alloc] initWithDevice:device
+                                drawablePixelFormat:pixelFormat];
+
+    // Boot flow: splash -> main menu -> world.  The world scene is built lazily
+    // (its asset load is heavy) the moment the menu hands control on.
+    WryRenderContext* ctx = _ctx;
+    // The menu builds a WorldState (NEW / LOAD) and hands it here to be wrapped
+    // in the world scene -- the host no longer owns the world state.
+    id<WryScene> (^makeWorld)(std::shared_ptr<wry::WorldState>) =
+        ^id<WryScene>(std::shared_ptr<wry::WorldState> world) {
+            return [[WryWorldScene alloc] initWithContext:ctx model:world];
+        };
+    __weak WryDelegate* weakSelf = self;
+    void (^quit)(void) = ^{
+        WryDelegate* strongSelf = weakSelf;
+        if (!strongSelf)
+            return;
+        // QUIT TO DESKTOP and the (X) button both HIDE the window (orderOut:)
+        // and end main's render loop; main's shutdown (core/main.mm) then pumps
+        // the run loop to commit the hide to the Window Server, drains
+        // background work, deactivates the app, and exits.
+        //
+        // We deliberately do NOT -close.  A real close tears down the metal
+        // view's CAMetalLayer, and doing that while main's hand-rolled drain
+        // pump is driving CA commits collides with it ("entangle context after
+        // pre-commit" / "Invalid attempt to open a new transaction during CA
+        // commit").  AppKit's own teardown ([NSApp run] + terminate:) would
+        // sequence it cleanly, but terminate: exit()s past our RAII teardown, so
+        // we can't use it.  orderOut: is the platform's hide primitive (it's
+        // what SDL's Cocoa_HideWindow uses); -close is orderOut: PLUS the
+        // teardown that bites us, and formally closing buys a dying process
+        // nothing.
+        [strongSelf->_window orderOut:nil];
+        strongSelf.done = YES;  // ends main's render loop -> shutdown
+    };
+    WryMainMenuScene* menu =
+        [[WryMainMenuScene alloc] initWithContext:_ctx
+                                              gui:_gui.get()
+                                             next:makeWorld
+                                             quit:quit];
+    _scene = [[WrySplashScene alloc] initWithContext:_ctx
+                                     durationSeconds:2.5
+                                                next:menu];
+    // The `quit` command ends the app the same way.
+    _gui->on_quit = [quit] { quit(); };
+}
+
 #pragma mark NSApplicationDelegate
 
 - (void)applicationWillFinishLaunching:(NSNotification *)aNotification {
@@ -260,52 +317,8 @@ namespace {
     _metalView.layer = _metalLayer;
     _metalView.wantsLayer = YES;
 
-    // Build the shared render context, then the boot scene chain against it.
-    // This host owns the context and the per-frame command buffer / drawable /
-    // present; scenes only encode their passes (see -render below).
-    _ctx = [[WryRenderContext alloc] initWithDevice:_metalLayer.device
-                                drawablePixelFormat:_metalLayer.pixelFormat];
-
-    // Boot flow: splash -> main menu -> world.  The world scene is built lazily
-    // (its asset load is heavy) the moment the menu hands control on.
-    WryRenderContext* ctx = _ctx;
-    // The menu builds a WorldState (NEW / LOAD) and hands it here to be wrapped
-    // in the world scene -- the host no longer owns the world state.
-    id<WryScene> (^makeWorld)(std::shared_ptr<wry::WorldState>) =
-        ^id<WryScene>(std::shared_ptr<wry::WorldState> world) {
-            return [[WryWorldScene alloc] initWithContext:ctx model:world];
-        };
-    __weak WryDelegate* weakSelf = self;
-    void (^quit)(void) = ^{
-        WryDelegate* strongSelf = weakSelf;
-        if (!strongSelf)
-            return;
-        // QUIT TO DESKTOP and the (X) button both HIDE the window (orderOut:)
-        // and end main's render loop; main's shutdown (core/main.mm) then pumps
-        // the run loop to commit the hide to the Window Server, drains
-        // background work, deactivates the app, and exits.
-        //
-        // We deliberately do NOT -close.  A real close tears down the metal
-        // view's CAMetalLayer, and doing that while main's hand-rolled drain
-        // pump is driving CA commits collides with it ("entangle context after
-        // pre-commit" / "Invalid attempt to open a new transaction during CA
-        // commit").  AppKit's own teardown ([NSApp run] + terminate:) would
-        // sequence it cleanly, but terminate: exit()s past our RAII teardown, so
-        // we can't use it.  orderOut: is the platform's hide primitive (it's
-        // what SDL's Cocoa_HideWindow uses); -close is orderOut: PLUS the
-        // teardown that bites us, and formally closing buys a dying process
-        // nothing.
-        [strongSelf->_window orderOut:nil];
-        strongSelf.done = YES;  // ends main's render loop -> shutdown
-    };
-    WryMainMenuScene* menu =
-        [[WryMainMenuScene alloc] initWithContext:_ctx
-                                              gui:_gui.get()
-                                             next:makeWorld
-                                             quit:quit];
-    _scene = [[WrySplashScene alloc] initWithContext:_ctx
-                                     durationSeconds:2.5
-                                                next:menu];
+    [self buildScenesWithDevice:_metalLayer.device
+                    pixelFormat:_metalLayer.pixelFormat];
     
     // _audio = [[WryAudio alloc] init];
 
@@ -360,6 +373,47 @@ namespace {
     // -terminate: (e.g. an Apple Event quit) exit()s straight after this,
     // past main's shutdown, so the control socket is closed here too.
     [self closeControlSocket];
+}
+
+// The headless host (core/docs/commands.md section 9): the same scenes,
+// registry and socket, but no window, view or layer.  The drawable is a
+// fixed 1920 x 1080 pixels viewed at two pixels per point (a Retina
+// window's default), so coordinates and screenshots match a windowed run.
+// main drives it: -render while commands have work, -waitForCommands
+// otherwise.
+- (void)setUpHeadless {
+    _headless = YES;
+    // Headless is only useful driven, so the socket is implied.
+    if (!_gui->control_socket) {
+        std::error_code ec;
+        auto path = (std::filesystem::temp_directory_path(ec) / "wry-control.sock").string();
+        _gui->open_control_socket(wry::String(path.c_str()));
+    }
+    [self buildScenesWithDevice:MTLCreateSystemDefaultDevice()
+                    pixelFormat:MTLPixelFormatRGBA16Float];
+    [_scene drawableResize:[self drawableSizePixels]];
+}
+
+- (CGSize)drawableSizePixels {
+    return _headless ? CGSizeMake(1920.0, 1080.0) : _metalLayer.drawableSize;
+}
+
+- (CGSize)viewSizePoints {
+    return _headless ? CGSizeMake(960.0, 540.0) : _metalView.bounds.size;
+}
+
+- (BOOL)hasCommandWork {
+    return !_gui->idle();
+}
+
+// Block until a request arrives on the control socket, for at most 100 ms,
+// repinning so an idle main thread never holds the collector back.
+- (void)waitForCommands {
+    if (_gui->control_socket)
+        _gui->control_socket->wait_for_input(std::chrono::milliseconds(100));
+    else
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    wry::mutator_repin();
 }
 
 - (void)closeControlSocket {
@@ -740,7 +794,7 @@ namespace {
     // command history (core/docs/commands.md section 6).
     ++_gui->frame;
     _gui->drain_notifications();
-    NSSize sz = _metalView.bounds.size;
+    CGSize sz = [self viewSizePoints];
 
     // Commands: what injected positions and widget queries are relative
     // to, then pending replies polled and lines waiting behind them issued
@@ -748,7 +802,7 @@ namespace {
     _gui->view_size_pt = simd_make_float2((float)sz.width, (float)sz.height);
     // Every scene's widget pixels are drawable pixels; the world scene also
     // sets this on resize, but the menu scene does not, so the host does.
-    CGSize drawable = _metalLayer.drawableSize;
+    CGSize drawable = [self drawableSizePixels];
     _gui->viewport_size = simd_make_float2((float)drawable.width, (float)drawable.height);
     _gui->scene_widgets = [_scene respondsToSelector:@selector(widgetRoot)]
         ? [_scene widgetRoot] : nullptr;
@@ -770,9 +824,13 @@ namespace {
     // is the seam scenes use: a splash / menu scene has no world to step, so
     // the step must not live inside the draw call.  Pass real elapsed seconds
     // (clamped, so a stall or the first frame doesn't jump scene timers).
+    // Headless frames run only on demand, so they keep a fixed dt: the same
+    // commands then see the same scene timers on every run.
     const auto now = std::chrono::steady_clock::now();
     double dt = 0.0;
-    if (_haveLastFrameTime)
+    if (_headless)
+        dt = 1.0 / 60.0;
+    else if (_haveLastFrameTime)
         dt = std::clamp(std::chrono::duration<double>(now - _lastFrameTime).count(),
                         0.0, 0.1);
     _lastFrameTime = now;
@@ -788,7 +846,7 @@ namespace {
     id<MTLTexture> presentable = [_scene encodeIntoCommandBuffer:command_buffer];
     if (presentable && !_gui->screenshot_requests.empty())
         [self encodeScreenshotsOf:presentable into:command_buffer];
-    @autoreleasepool {
+    if (!_headless) @autoreleasepool {
         id<CAMetalDrawable> drawable = [_metalLayer nextDrawable];
         if (drawable && presentable) {
             id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
@@ -801,6 +859,10 @@ namespace {
     // passes this point.
     [_ctx.arena endFrameOnCommandBuffer:command_buffer];
     [command_buffer commit];
+    // With no drawable to throttle it, a headless host waits out each
+    // frame; this also completes screenshots before the next frame.
+    if (_headless)
+        [command_buffer waitUntilCompleted];
 
     // Scene transition: a scene requests its successor via -nextScene (mouse /
     // key for the menu, a timer for the splash).  Swap after presenting, and
@@ -808,7 +870,7 @@ namespace {
     id<WryScene> next = _scene.nextScene;
     if (next) {
         _scene = next;
-        [_scene drawableResize:_metalLayer.drawableSize];
+        [_scene drawableResize:[self drawableSizePixels]];
     }
 }
 
