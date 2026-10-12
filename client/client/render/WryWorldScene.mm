@@ -525,7 +525,9 @@
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
 
         {
-            _symbols = [_ctx newTextureFromResource:@"assets" ofType:@"png"];
+            // Mip levels allocated now, generated below once the opcode
+            // labels have been stamped into level 0.
+            _symbols = [_ctx newTextureWithMipStorageFromResource:@"assets" ofType:@"png"];
             _hackmesh = [[WryMesh alloc] init];
             _black = [_ctx newTextureFromResource:@"black" ofType:@"png"];
             _white = [_ctx newTextureFromResource:@"white" ofType:@"png"];
@@ -746,6 +748,10 @@
             } catch (...) {
                 
             }
+
+            // Level 0 is final (label stamping above is its last edit), so
+            // fill the mip chain.  Blocking; nothing has sampled it yet.
+            [_ctx generateMipmapsForTexture:_symbols];
 
             {
                 // Initialize the palette's grid and transform on the
@@ -1078,13 +1084,14 @@
                     square, radii(cell_radius), Painter::kEdgeSigma,
                     Button::background_color(selected, hover, false)));
 
-                // The glyph, over the whole cell as before.
+                // The glyph, over the whole cell as before, minified
+                // through _symbols' mip chain.
                 const float2 uv = _opcode_to_coordinate[term_as_opcode(a)].xy;
                 WryQuadInstance g = wry::SpriteAtlas::make_quad(
                     simd_make_float4(cell.a.x, cell.a.y, cell.b.x, cell.b.y),
                     RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f));
                 g.uv = simd_make_float4(uv, uv + 1.0f / 32.0f);
-                g.flags = WryQuadFlagTextured;
+                g.flags = WryQuadFlagTextured | WryQuadFlagFiltered;
                 quads.push_back(g);
             }
         }

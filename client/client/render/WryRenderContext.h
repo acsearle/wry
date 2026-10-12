@@ -89,10 +89,26 @@
 // load (mesh materials).  Allocates the full mip chain and fills it with
 // a blit generateMipmaps, blocking until complete.  The plain
 // newTextureFromResource stays single-level because some callers mutate
-// the texture bytes after loading (e.g. the symbol atlas).
+// the texture bytes after loading.
 - (nonnull id<MTLTexture>)newMipmappedTextureFromResource:(nonnull NSString*)name
                                                    ofType:(nonnull NSString*)ext
                                           withPixelFormat:(MTLPixelFormat)pixelFormat;
+
+// For textures whose level 0 the caller edits on the CPU after loading
+// (the symbol atlas stamps labels into it): allocates the full mip chain
+// but fills only level 0.  Sampling the other levels is undefined until
+// the caller has finished editing and called -generateMipmapsForTexture:.
+- (nonnull id<MTLTexture>)newTextureWithMipStorageFromResource:(nonnull NSString*)name
+                                                        ofType:(nonnull NSString*)ext;
+
+// Fill levels 1... of `texture` from level 0 with a blit generateMipmaps,
+// blocking until complete.  Call again after any later level-0 edit.  On
+// Apple GPUs this is a 2x2 box filter in linear light (sRGB formats are
+// decoded first): correctly phased, and for an atlas of power-of-two cells
+// on a power-of-two grid, free of bleeding between cells down to one texel
+// per cell.  Apple documents the filter only as implementation-dependent;
+// measured on M1 Max, 2026-10-11.
+- (void)generateMipmapsForTexture:(nonnull id<MTLTexture>)texture;
 
 // ---- Scene backdrop helpers --------------------------------------------
 

@@ -219,6 +219,8 @@ typedef struct
 enum WryQuadFlag {
     WryQuadFlagTextured = 1u << 0,  // multiply by the atlas sample at uv
     WryQuadFlagMasked   = 1u << 1,  // multiply by rounded-box coverage
+    WryQuadFlagFiltered = 1u << 2,  // sample trilinear (default: nearest,
+                                    // for texels drawn 1:1, e.g. glyphs)
 };
 
 typedef struct

@@ -1650,9 +1650,14 @@ quadFragmentShader(QuadRasterizerData in [[stage_in]],
     half4 color = half4(in.color);
 
     if (in.flags & WryQuadFlagTextured) {
-        constexpr sampler textureSampler (mag_filter::nearest,
-                                          min_filter::nearest);
-        color *= colorTexture.sample(textureSampler, in.texCoord);
+        constexpr sampler nearestSampler(mag_filter::nearest,
+                                         min_filter::nearest);
+        constexpr sampler trilinearSampler(mag_filter::linear,
+                                           min_filter::linear,
+                                           mip_filter::linear);
+        color *= (in.flags & WryQuadFlagFiltered)
+            ? colorTexture.sample(trilinearSampler, in.texCoord)
+            : colorTexture.sample(nearestSampler, in.texCoord);
     }
 
     if (in.flags & WryQuadFlagMasked) {

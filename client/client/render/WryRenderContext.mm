@@ -227,6 +227,24 @@
                                   ofType:(NSString*)ext
                          withPixelFormat:(MTLPixelFormat)pixelFormat
 {
+    return [self newTextureFromResource:name ofType:ext withPixelFormat:pixelFormat mipmapped:NO];
+}
+
+// Load `name.ext` into level 0 of a new shared texture, with either one
+// level or storage for the full mip chain (left unfilled).
+//
+// History: an earlier loader allocated a mip chain and encoded
+// generateMipmaps + optimizeContentsForGPUAccess but never committed the
+// blit, so the mips were never filled.  Committing it as-is would have been
+// a trap: some textures (_symbols) are CPU-edited by the caller right after
+// loading, and an in-flight blit (let alone optimizeContentsForGPUAccess)
+// would race those getBytes / replaceRegion calls.  So mip generation is
+// the caller's explicit, blocking step after its last level-0 edit.
+- (id<MTLTexture>)newTextureFromResource:(NSString*)name
+                                  ofType:(NSString*)ext
+                         withPixelFormat:(MTLPixelFormat)pixelFormat
+                               mipmapped:(BOOL)mipmapped
+{
     wry::matrix<wry::RGBA8Unorm_sRGB> image = wry::from_png(wry::path_for_resource([name UTF8String], [ext UTF8String]).c_str());
     wry::multiply_alpha_inplace(image);
 
@@ -235,17 +253,9 @@
     descriptor.pixelFormat = pixelFormat;
     descriptor.width = image.major();
     descriptor.height = image.minor();
-    // Single level: every current sampler reads the base level (mip_filter::none),
-    // so we don't generate mipmaps.  An earlier version allocated a mip chain and
-    // encoded generateMipmaps + optimizeContentsForGPUAccess but never committed
-    // the blit, so the mips were never filled.  Committing it as-is would be a
-    // trap: some textures (e.g. _symbols / "assets.png") are CPU-mutated by the
-    // caller right after loading, and optimizeContentsForGPUAccess on an
-    // async-in-flight texture would race those getBytes/replaceRegion calls.
-    // If a future sampler wants mips (e.g. trilinear for a minified backdrop),
-    // add an opt-in mipmapped path that excludes CPU-mutated textures and that
-    // commits its own blit.
-    descriptor.mipmapLevelCount = 1;
+    descriptor.mipmapLevelCount = mipmapped
+        ? 1 + (NSUInteger)floor(log2((double)std::max(image.major(), image.minor())))
+        : 1;
     descriptor.storageMode = MTLStorageModeShared;
     descriptor.usage = MTLTextureUsageShaderRead;
 
@@ -263,37 +273,33 @@
                                            ofType:(NSString*)ext
                                   withPixelFormat:(MTLPixelFormat)pixelFormat
 {
-    // The opt-in mipmapped path anticipated by the comment in
-    // newTextureFromResource:.  Only for textures that are never
-    // CPU-mutated after load; the blit is committed and waited on here,
-    // so the returned texture is complete and immutable.
-    wry::matrix<wry::RGBA8Unorm_sRGB> image = wry::from_png(wry::path_for_resource([name UTF8String], [ext UTF8String]).c_str());
-    wry::multiply_alpha_inplace(image);
+    // Only for textures that are never CPU-mutated after load; the returned
+    // texture is complete and immutable.
+    id<MTLTexture> texture = [self newTextureFromResource:name
+                                                   ofType:ext
+                                          withPixelFormat:pixelFormat
+                                                mipmapped:YES];
+    [self generateMipmapsForTexture:texture];
+    return texture;
+}
 
-    MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
-    descriptor.textureType = MTLTextureType2D;
-    descriptor.pixelFormat = pixelFormat;
-    descriptor.width = image.major();
-    descriptor.height = image.minor();
-    descriptor.mipmapLevelCount = 1 + (NSUInteger)floor(log2((double)std::max(image.major(), image.minor())));
-    descriptor.storageMode = MTLStorageModeShared;
-    descriptor.usage = MTLTextureUsageShaderRead;
+- (id<MTLTexture>)newTextureWithMipStorageFromResource:(NSString*)name
+                                                ofType:(NSString*)ext
+{
+    return [self newTextureFromResource:name
+                                 ofType:ext
+                        withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
+                              mipmapped:YES];
+}
 
-    id<MTLTexture> texture = [_device newTextureWithDescriptor:descriptor];
-    [texture replaceRegion:MTLRegionMake2D(0, 0, image.major(), image.minor())
-               mipmapLevel:0
-                 withBytes:image.data()
-               bytesPerRow:image.stride_bytes()];
-    texture.label = name;
-
+- (void)generateMipmapsForTexture:(id<MTLTexture>)texture
+{
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
     id<MTLBlitCommandEncoder> encoder = [commandBuffer blitCommandEncoder];
     [encoder generateMipmapsForTexture:texture];
     [encoder endEncoding];
     [commandBuffer commit];
     [commandBuffer waitUntilCompleted];
-
-    return texture;
 }
 
 // ---- Scene backdrop helpers --------------------------------------------
