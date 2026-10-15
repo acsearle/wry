@@ -476,11 +476,22 @@ A structured argument is a JSON string literal of its type unless the
 parameter is a String; a string literal must be exactly one node, so it
 cannot smuggle in further arguments.
 
-Socket IO runs on a dedicated thread that moves bytes only and never
-runs GC code (the standing rule for foreign threads); complete lines
-are taken by the main thread once per frame and parsed there -- parsing
-can create Terms, so it must happen on a mutator -- and replies are
-queued back.  Invocations from the socket echo to the console as
+Socket IO runs on the kqueue reactor (core/kqueue_reactor.hpp) as
+coroutines on the worker pool: an accept loop owning a nursery of
+connections, each a reader and a writer under a nursery of their own,
+either of which ends the connection by stopping the other.  They move
+bytes only.  Complete lines go to an inbox the main thread takes once
+per frame and parses -- parsing can create Terms, so it must happen on
+a mutator -- and replies go to each connection's writer through a
+single-producer single-consumer queue.  There is no read deadline: an
+idle connection is legitimate (the MCP adapter holds one open).
+Descriptors are closed only by the frame that owns them, after its
+nursery has joined, so no descriptor is closed under an armed knote.
+The root runs under the ControlSocket's own stop source and is
+spawned into the process wait group; destroying the ControlSocket
+gives each connection a second to send what is queued for it, then
+requests that stop (on the calling, pinned, thread) and waits for the
+root to finish.  Invocations from the socket echo to the console as
 `[socket] ...`, so a person watching sees what a script or agent does.
 
 **`tools/wryctl`**: a command-line client.  `wryctl step 10` joins its

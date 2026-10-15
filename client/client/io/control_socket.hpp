@@ -8,24 +8,23 @@
 //  socket, created mode 0600, carrying newline-delimited requests in and
 //  newline-delimited replies out, for scripts, tests and the MCP adapter.
 //
-//  Transport only.  A dedicated thread owns every descriptor and moves
-//  bytes: it splits input into lines and writes queued output.  It is a
-//  foreign thread in the GC sense and never runs GC code.  The main thread
-//  takes complete lines from the inbox once per frame and queues replies;
-//  what the lines mean is GuiContext's business.
+//  Transport only, on the kqueue reactor: an accept loop and, per
+//  connection, a reader and a writer, all coroutines on the worker pool
+//  (core/kqueue_reactor.hpp).  They move bytes and never touch GC objects.
+//  The main thread takes complete lines from an inbox once per frame and
+//  queues replies, which a connection's writer sends; what the lines mean
+//  is GuiContext's business.
 //
 
 #ifndef control_socket_hpp
 #define control_socket_hpp
 
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
-#include <map>
 #include <memory>
-#include <mutex>
+#include <stop_token>
 #include <string>
-#include <thread>
+#include <string_view>
 #include <vector>
 
 namespace wry {
@@ -39,12 +38,15 @@ namespace wry {
         };
 
         // Bind and listen at `path` (replacing a stale socket file) and
-        // start the thread.  Null, with `error` set, on failure.
+        // spawn the accept loop.  Null, with `error` set, on failure.
         static std::unique_ptr<ControlSocket> open(std::string const& path,
                                                    std::string& error);
 
-        // Gives queued replies a moment to drain (the reply to `quit`), then
-        // stops the thread, closes every descriptor, unlinks the path.
+        // Gives each connection up to a second to send what is queued for
+        // it (the reply to `quit`), then cancels the rest, waits for every
+        // coroutine to finish (so no descriptor is closed under an armed
+        // knote) and unlinks the path.  Requests stop, so call it on a
+        // pinned thread: the cancelled frames unwind on the caller.
         ~ControlSocket();
 
         ControlSocket(ControlSocket const&) = delete;
@@ -71,31 +73,17 @@ namespace wry {
         static constexpr size_t max_line = 1 << 20;
         static constexpr size_t max_connections = 16;
 
+        // State shared by the main thread and the coroutines; defined in
+        // the .cpp.  The coroutines hold it by shared_ptr, so it outlives
+        // whichever side finishes last.
+        struct Shared;
+
     private:
         ControlSocket() = default;
-        void _run();
-        void _wake();
-
-        struct Connection {
-            int fd = -1;
-            std::string in;             // partial line
-            std::string out;            // queued, unwritten
-        };
 
         std::string _path;
-        int _listen_fd = -1;
-        int _wake_read = -1;
-        int _wake_write = -1;
-        std::thread _thread;
-
-        // Guards everything below, shared by the two threads.
-        std::mutex _mutex;
-        bool _stopping = false;
-        uint64_t _next_connection = 1;
-        std::map<uint64_t, Connection> _connections;
-        std::vector<Line> _inbox;
-        std::vector<uint64_t> _closed;
-        std::condition_variable _input;     // notified on _inbox / _closed
+        std::shared_ptr<Shared> _shared;
+        std::stop_source _stop;
     };
 
 } // namespace wry

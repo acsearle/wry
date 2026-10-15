@@ -7,7 +7,11 @@
 
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <map>
+#include <mutex>
+#include <thread>
 
 #include <fcntl.h>
 #include <poll.h>
@@ -18,11 +22,51 @@
 
 #include "assert.hpp"
 #include "control_socket.hpp"
+#include "coroutine.hpp"
+#include "kqueue_reactor.hpp"
 #include "test.hpp"
 
 namespace wry {
 
+    using Coroutine::Future;
+    using Coroutine::GetStopToken;
+    using Coroutine::Nursery;
+
+    // ----------------------------------------------------------------
+    // Shared state.
+    //
+    // Everything the main thread and the coroutines both touch, under one
+    // mutex.  Each connection's outbound queue is a single-producer (the
+    // main thread) single-consumer (its writer) queue whose pop is a
+    // cancelable await.
+
     namespace {
+
+        // One outbound item: bytes to send, or the end of the stream (the
+        // writer sends everything before it, then ends the connection).
+        struct Outgoing {
+            std::string bytes;
+            bool end = false;
+        };
+
+        using OutQueue = Coroutine::SingleProducerSingleConsumerQueue<Outgoing>;
+
+    } // namespace
+
+    struct ControlSocket::Shared {
+        std::mutex mutex;
+        std::condition_variable input;          // notified on inbox / closed
+        std::condition_variable changed;        // notified on connections / finished
+        uint64_t next_connection = 1;
+        std::map<uint64_t, std::shared_ptr<OutQueue>> connections;
+        std::vector<Line> inbox;
+        std::vector<uint64_t> closed;
+        bool finished = false;                  // the accept loop has ended
+    };
+
+    namespace {
+
+        using Shared = ControlSocket::Shared;
 
         bool set_nonblocking(int fd) {
             int flags = fcntl(fd, F_GETFL, 0);
@@ -34,6 +78,165 @@ namespace wry {
             message += ": ";
             message += std::strerror(errno);
             return message;
+        }
+
+        // Owns a descriptor for the life of a coroutine frame.  Frames are
+        // destroyed only after the waits on their descriptor have finished
+        // (the nursery joins them first), so closing here never strands an
+        // armed knote: close silently drops a registered knote, and the
+        // frame waiting on it would never be resumed.
+        struct Descriptor {
+            int fd;
+            explicit Descriptor(int f) : fd(f) {}
+            Descriptor(Descriptor const&) = delete;
+            ~Descriptor() { ::close(fd); }
+        };
+
+        // A connection's registration: reports the connection closed, on
+        // whatever path its frame ends, before its descriptor closes.
+        struct Registration {
+            std::shared_ptr<Shared> shared;
+            uint64_t id;
+            Registration(std::shared_ptr<Shared> s, uint64_t i) : shared(std::move(s)), id(i) {}
+            Registration(Registration const&) = delete;
+            ~Registration() {
+                {
+                    std::scoped_lock lock{shared->mutex};
+                    shared->connections.erase(id);
+                    shared->closed.push_back(id);
+                }
+                shared->input.notify_all();
+                shared->changed.notify_all();
+            }
+        };
+
+        // Split what has arrived into lines for the main thread; false if
+        // the partial line has grown too long.
+        bool deliver_lines(Shared& shared, uint64_t id, std::string& pending) {
+            size_t start = 0;
+            bool delivered = false;
+            {
+                std::scoped_lock lock{shared.mutex};
+                for (size_t nl; (nl = pending.find('\n', start)) != std::string::npos; start = nl + 1) {
+                    std::string line = pending.substr(start, nl - start);
+                    if (!line.empty() && line.back() == '\r')
+                        line.pop_back();
+                    shared.inbox.push_back(ControlSocket::Line{id, std::move(line)});
+                    delivered = true;
+                }
+            }
+            if (delivered)
+                shared.input.notify_all();
+            pending.erase(0, start);
+            return pending.size() <= ControlSocket::max_line;
+        }
+
+        // Reads requests until end of stream, an error, or an overlong
+        // line; then ends the connection by stopping its writer.
+        Future<> read_requests(std::shared_ptr<Shared> shared, uint64_t id, int fd, Nursery* halves) {
+            std::string pending;
+            char buffer[65536];
+            for (;;) {
+                ssize_t n = co_await recv_some(fd, buffer, sizeof(buffer), 0);
+                if (n == -EAGAIN || n == -EINTR)
+                    continue;               // readiness without data
+                if (n <= 0)
+                    break;                  // end of stream, or an error
+                pending.append(buffer, (size_t)n);
+                if (!deliver_lines(*shared, id, pending))
+                    break;
+            }
+            halves->request_stop();
+        }
+
+        // Sends replies as the main thread queues them, until the end of
+        // the stream or an error; then ends the connection by stopping its
+        // reader.
+        Future<> write_replies(std::shared_ptr<OutQueue> queue, int fd, Nursery* halves) {
+            for (;;) {
+                Outgoing out = co_await queue->pop();
+                if (out.end)
+                    break;
+                size_t sent = 0;
+                while (sent < out.bytes.size()) {
+                    ssize_t n = co_await send_some(fd, out.bytes.data() + sent,
+                                                   out.bytes.size() - sent, 0);
+                    if (n == -EAGAIN || n == -EINTR)
+                        continue;
+                    if (n < 0) {
+                        halves->request_stop();
+                        co_return;
+                    }
+                    sent += (size_t)n;
+                }
+            }
+            halves->request_stop();
+        }
+
+        // One connection: its reader and writer, until either ends it.
+        // Cancelled from outside, the nursery unwinds both before this
+        // frame (and its descriptor) goes.
+        Future<> serve_connection(std::shared_ptr<Shared> shared,
+                                  std::shared_ptr<OutQueue> queue,
+                                  uint64_t id, int fd) {
+            Descriptor descriptor{fd};
+            Registration registration{shared, id};
+            Nursery halves{co_await GetStopToken{}};
+            halves.soon(read_requests(shared, id, fd, &halves));
+            halves.soon(write_replies(std::move(queue), fd, &halves));
+            (void) co_await halves.join();
+        }
+
+        // Accepts connections until stopped, then joins them: the stop is
+        // absorbed at the accept (stopped_as_optional), so this frame lives
+        // on to join its nursery, which unwinds every connection first.
+        Future<> accept_connections(std::shared_ptr<Shared> shared, int listen_fd) {
+            Descriptor listener{listen_fd};
+            Nursery connections{co_await GetStopToken{}};
+            for (;;) {
+                std::optional<int> accepted =
+                    co_await Coroutine::stopped_as_optional(accept_one(listen_fd, nullptr, nullptr));
+                if (!accepted)
+                    break;                  // stopped
+                int fd = *accepted;
+                if (fd == -EAGAIN || fd == -EINTR || fd == -ECONNABORTED)
+                    continue;
+                if (fd < 0)
+                    break;                  // the listener is broken; give up
+                int one = 1;
+                (void) ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+                auto queue = std::make_shared<OutQueue>();
+                uint64_t id = 0;
+                {
+                    std::scoped_lock lock{shared->mutex};
+                    if (shared->connections.size() < ControlSocket::max_connections) {
+                        id = shared->next_connection++;
+                        shared->connections.emplace(id, queue);
+                    }
+                }
+                if (!id || !set_nonblocking(fd)) {
+                    if (id) {
+                        std::scoped_lock lock{shared->mutex};
+                        shared->connections.erase(id);
+                    }
+                    ::close(fd);            // nothing is waiting on it yet
+                    continue;
+                }
+                connections.soon(serve_connection(shared, std::move(queue), id, fd));
+            }
+            (void) co_await connections.join();
+        }
+
+        // The root: runs the accept loop under the ControlSocket's own stop
+        // source (shield absorbs the stop at this boundary), then reports
+        // that everything has finished.
+        Coroutine::Task serve(std::shared_ptr<Shared> shared, int listen_fd, std::stop_token stop) {
+            (void) co_await Coroutine::shield(accept_connections(shared, listen_fd), std::move(stop));
+            {
+                std::scoped_lock lock{shared->mutex};
+                shared->finished = true;
+            }
+            shared->changed.notify_all();
         }
 
     } // namespace
@@ -48,10 +251,8 @@ namespace wry {
         }
         std::memcpy(address.sun_path, path.data(), path.size());
 
-        std::unique_ptr<ControlSocket> s(new ControlSocket);
-        s->_path = path;
-        s->_listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (s->_listen_fd == -1) {
+        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd == -1) {
             error = errno_message("socket");
             return nullptr;
         }
@@ -60,195 +261,86 @@ namespace wry {
         // Owner-only from creation: bind makes the file under the umask.
         // The umask is process-wide, so this is done once, at startup.
         mode_t old_mask = ::umask(0177);
-        int bound = ::bind(s->_listen_fd, (sockaddr const*)&address, sizeof(address));
+        int bound = ::bind(fd, (sockaddr const*)&address, sizeof(address));
         ::umask(old_mask);
-        if (bound == -1) {
-            error = errno_message("bind");
+        if (bound == -1 || ::listen(fd, 4) == -1 || !set_nonblocking(fd)) {
+            error = errno_message(bound == -1 ? "bind" : "listen");
+            ::close(fd);
             return nullptr;
         }
-        if (::listen(s->_listen_fd, 4) == -1 || !set_nonblocking(s->_listen_fd)) {
-            error = errno_message("listen");
-            return nullptr;
-        }
-        int pipe_fds[2];
-        if (::pipe(pipe_fds) == -1) {
-            error = errno_message("pipe");
-            return nullptr;
-        }
-        s->_wake_read = pipe_fds[0];
-        s->_wake_write = pipe_fds[1];
-        (void) set_nonblocking(s->_wake_read);
-        (void) set_nonblocking(s->_wake_write);
-        s->_thread = std::thread([p = s.get()] { p->_run(); });
+
+        std::unique_ptr<ControlSocket> s(new ControlSocket);
+        s->_path = path;
+        s->_shared = std::make_shared<Shared>();
+        // From here the accept loop owns the listening descriptor.
+        wait_group_spawn(serve(s->_shared, fd, s->_stop.get_token()));
         return s;
     }
 
     ControlSocket::~ControlSocket() {
-        if (_thread.joinable()) {
-            // Up to a second for queued output to be written, so a reply
-            // queued just before shutdown (to `quit`) reaches its client.
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-            for (;;) {
-                {
-                    std::scoped_lock lock{_mutex};
-                    bool empty = true;
-                    for (auto& [id, c] : _connections)
-                        empty = empty && c.out.empty();
-                    if (empty)
-                        break;
-                }
-                if (std::chrono::steady_clock::now() >= deadline)
-                    break;
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-            {
-                std::scoped_lock lock{_mutex};
-                _stopping = true;
-            }
-            _wake();
-            _thread.join();
+        Shared& shared = *_shared;
+        // Ask every connection to finish what is queued for it and close,
+        // and give them a second to do so.
+        std::vector<std::shared_ptr<OutQueue>> queues;
+        {
+            std::scoped_lock lock{shared.mutex};
+            for (auto& [id, queue] : shared.connections)
+                queues.push_back(queue);
         }
-        for (auto& [id, c] : _connections)
-            ::close(c.fd);
-        for (int fd : {_listen_fd, _wake_read, _wake_write})
-            if (fd != -1)
-                ::close(fd);
-        if (_listen_fd != -1)
-            (void) ::unlink(_path.c_str());
-    }
-
-    void ControlSocket::_wake() {
-        char byte = 0;
-        // Full pipe: a wake is already pending, which is all we need.
-        (void) ::write(_wake_write, &byte, 1);
+        for (auto& queue : queues)
+            queue->emplace(Outgoing{{}, true});
+        {
+            std::unique_lock lock{shared.mutex};
+            shared.changed.wait_for(lock, std::chrono::seconds(1), [&] {
+                return shared.connections.empty();
+            });
+        }
+        // Cancel what remains, then wait for every frame to finish.  The
+        // cancellation unwinds frames parked on this thread, inside
+        // request_stop; frames running on workers finish there.
+        _stop.request_stop();
+        {
+            std::unique_lock lock{shared.mutex};
+            shared.changed.wait(lock, [&] { return shared.finished; });
+        }
+        (void) ::unlink(_path.c_str());
     }
 
     std::vector<ControlSocket::Line> ControlSocket::take_lines() {
-        std::scoped_lock lock{_mutex};
-        return std::exchange(_inbox, {});
+        std::scoped_lock lock{_shared->mutex};
+        return std::exchange(_shared->inbox, {});
     }
 
     std::vector<uint64_t> ControlSocket::take_closed() {
-        std::scoped_lock lock{_mutex};
-        return std::exchange(_closed, {});
+        std::scoped_lock lock{_shared->mutex};
+        return std::exchange(_shared->closed, {});
     }
 
     bool ControlSocket::has_input() {
-        std::scoped_lock lock{_mutex};
-        return !_inbox.empty() || !_closed.empty();
+        std::scoped_lock lock{_shared->mutex};
+        return !_shared->inbox.empty() || !_shared->closed.empty();
     }
 
     void ControlSocket::wait_for_input(std::chrono::milliseconds timeout) {
-        std::unique_lock lock{_mutex};
-        _input.wait_for(lock, timeout, [this] {
-            return !_inbox.empty() || !_closed.empty();
+        std::unique_lock lock{_shared->mutex};
+        _shared->input.wait_for(lock, timeout, [this] {
+            return !_shared->inbox.empty() || !_shared->closed.empty();
         });
     }
 
     void ControlSocket::send(uint64_t connection, std::string_view line) {
+        std::shared_ptr<OutQueue> queue;
         {
-            std::scoped_lock lock{_mutex};
-            auto it = _connections.find(connection);
-            if (it == _connections.end())
+            std::scoped_lock lock{_shared->mutex};
+            auto it = _shared->connections.find(connection);
+            if (it == _shared->connections.end())
                 return;
-            it->second.out.append(line);
-            it->second.out.push_back('\n');
+            queue = it->second;
         }
-        _wake();
-    }
-
-    // The thread.  Each pass builds the poll set under the lock, polls
-    // without it, then does the I/O the poll reported, taking the lock
-    // only to touch the shared buffers.  Descriptors are owned by this
-    // thread alone; the main thread only touches the buffers.
-    void ControlSocket::_run() {
-        std::vector<pollfd> fds;
-        std::vector<uint64_t> ids;      // parallel to fds[2...]
-        char buffer[65536];
-        for (;;) {
-            fds.clear();
-            ids.clear();
-            fds.push_back({_wake_read, POLLIN, 0});
-            {
-                std::scoped_lock lock{_mutex};
-                if (_stopping)
-                    return;
-                fds.push_back({_listen_fd,
-                               (short)(_connections.size() < max_connections ? POLLIN : 0), 0});
-                for (auto& [id, c] : _connections) {
-                    fds.push_back({c.fd, (short)(POLLIN | (c.out.empty() ? 0 : POLLOUT)), 0});
-                    ids.push_back(id);
-                }
-            }
-            if (::poll(fds.data(), (nfds_t)fds.size(), -1) == -1) {
-                if (errno == EINTR)
-                    continue;
-                return;
-            }
-            if (fds[0].revents & POLLIN)
-                while (::read(_wake_read, buffer, sizeof(buffer)) > 0) {}
-
-            if (fds[1].revents & POLLIN) {
-                int fd = ::accept(_listen_fd, nullptr, nullptr);
-                if (fd != -1) {
-                    int one = 1;
-                    (void) ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
-                    if (set_nonblocking(fd)) {
-                        std::scoped_lock lock{_mutex};
-                        _connections[_next_connection++].fd = fd;
-                    } else {
-                        ::close(fd);
-                    }
-                }
-            }
-
-            for (size_t k = 0; k != ids.size(); ++k) {
-                pollfd const& p = fds[k + 2];
-                const uint64_t id = ids[k];
-                bool dead = (p.revents & (POLLERR | POLLNVAL)) != 0;
-
-                if (!dead && (p.revents & (POLLIN | POLLHUP))) {
-                    ssize_t n = ::read(p.fd, buffer, sizeof(buffer));
-                    if (n > 0) {
-                        std::scoped_lock lock{_mutex};
-                        Connection& c = _connections[id];
-                        c.in.append(buffer, (size_t)n);
-                        size_t start = 0;
-                        for (size_t nl; (nl = c.in.find('\n', start)) != std::string::npos; start = nl + 1) {
-                            std::string line = c.in.substr(start, nl - start);
-                            if (!line.empty() && line.back() == '\r')
-                                line.pop_back();
-                            _inbox.push_back(Line{id, std::move(line)});
-                        }
-                        c.in.erase(0, start);
-                        if (c.in.size() > max_line)
-                            dead = true;
-                        if (start)
-                            _input.notify_all();
-                    } else if (n == 0 || (errno != EAGAIN && errno != EINTR)) {
-                        dead = true;
-                    }
-                }
-
-                if (!dead && (p.revents & POLLOUT)) {
-                    std::scoped_lock lock{_mutex};
-                    Connection& c = _connections[id];
-                    ssize_t n = ::write(p.fd, c.out.data(), c.out.size());
-                    if (n > 0)
-                        c.out.erase(0, (size_t)n);
-                    else if (n == -1 && errno != EAGAIN && errno != EINTR)
-                        dead = true;
-                }
-
-                if (dead) {
-                    std::scoped_lock lock{_mutex};
-                    ::close(p.fd);
-                    _connections.erase(id);
-                    _closed.push_back(id);
-                    _input.notify_all();
-                }
-            }
-        }
+        std::string bytes(line);
+        bytes.push_back('\n');
+        // Outside the lock: emplace schedules the writer if it is parked.
+        queue->emplace(Outgoing{std::move(bytes), false});
     }
 
     // ----------------------------------------------------------------
@@ -256,7 +348,7 @@ namespace wry {
 
     namespace {
 
-        int connect_to(std::string const& path) {
+        int connect_client(std::string const& path) {
             int fd = socket(AF_UNIX, SOCK_STREAM, 0);
             assert(fd != -1);
             sockaddr_un address = {};
@@ -291,6 +383,17 @@ namespace wry {
             return lines;
         }
 
+        template<typename F>
+        bool eventually(F&& f) {
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!f()) {
+                if (std::chrono::steady_clock::now() >= deadline)
+                    return false;
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            return true;
+        }
+
     } // namespace
 
     define_test("control_socket_transport") {
@@ -304,7 +407,7 @@ namespace wry {
         assert(stat_result == 0 && (st.st_mode & 0777) == 0600);
         (void) stat_result;
 
-        int client = connect_to(path);
+        int client = connect_client(path);
         const char request[] = "first\nsec";
         const ssize_t w1 = ::write(client, request, sizeof(request) - 1);
         const ssize_t w2 = ::write(client, "ond\r\n", 5);
@@ -314,34 +417,72 @@ namespace wry {
 
         // Lines arrive whole, split at newlines, CR stripped.
         std::vector<ControlSocket::Line> got;
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (got.size() < 2 && std::chrono::steady_clock::now() < deadline) {
+        bool arrived = eventually([&] {
             for (auto& line : server->take_lines())
                 got.push_back(std::move(line));
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-        assert(got.size() == 2);
+            return got.size() >= 2;
+        });
+        assert(arrived && got.size() == 2);
+        (void) arrived;
         assert(got[0].bytes == "first" && got[1].bytes == "second");
         assert(got[0].connection == got[1].connection);
 
-        // Replies go back to the connection they are addressed to.
+        // Replies go back to the connection they are addressed to, in order.
         server->send(got[0].connection, "reply one");
         server->send(got[0].connection, "reply two");
         auto lines = read_lines(client, 2);
         assert(lines.size() == 2 && lines[0] == "reply one" && lines[1] == "reply two");
 
+        // A reply bigger than the socket buffer arrives whole: the writer
+        // waits for writability while the client drains it.
+        {
+            std::string big(4 << 20, 'x');
+            server->send(got[0].connection, big);
+            auto big_lines = read_lines(client, 1);
+            assert(big_lines.size() == 1 && big_lines[0].size() == big.size());
+        }
+
         // Closing is reported; sends to the dead connection are dropped.
         ::close(client);
         std::vector<uint64_t> closed;
-        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (closed.empty() && std::chrono::steady_clock::now() < deadline) {
+        bool reported = eventually([&] {
             closed = server->take_closed();
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-        assert(closed.size() == 1 && closed[0] == got[0].connection);
+            return !closed.empty();
+        });
+        assert(reported && closed.size() == 1 && closed[0] == got[0].connection);
+        (void) reported;
         server->send(got[0].connection, "nobody hears this");
 
+        // Shutdown flushes what is queued, then closes: a second client's
+        // queued reply arrives before its end of stream, and a third, idle
+        // connection is closed too (cleanly if it was accepted, by reset if
+        // the accept loop had not reached it).
+        int second = connect_client(path);
+        int third = connect_client(path);
+        const ssize_t w3 = ::write(second, "hello\n", 6);
+        assert(w3 == 6);
+        (void) w3;
+        std::vector<ControlSocket::Line> hello;
+        bool greeted = eventually([&] {
+            for (auto& line : server->take_lines())
+                hello.push_back(std::move(line));
+            return !hello.empty();
+        });
+        assert(greeted && hello[0].bytes == "hello");
+        (void) greeted;
+        server->send(hello[0].connection, "goodbye");
         server.reset();
+        auto last = read_lines(second, 1);
+        assert(last.size() == 1 && last[0] == "goodbye");
+        char byte;
+        const ssize_t after_goodbye = ::read(second, &byte, 1);
+        const ssize_t idle = ::read(third, &byte, 1);
+        assert(after_goodbye == 0);                 // then end of stream
+        assert(idle <= 0);                          // closed, one way or the other
+        (void) after_goodbye;
+        (void) idle;
+        ::close(second);
+        ::close(third);
         assert(::access(path.c_str(), F_OK) != 0);   // unlinked
         co_return;
     };
