@@ -8,6 +8,8 @@
 #ifndef kqueue_reactor_hpp
 #define kqueue_reactor_hpp
 
+#include <sys/socket.h>
+
 #include <chrono>
 #include <functional>
 #include <expected>
@@ -48,20 +50,44 @@ namespace wry {
                           std::chrono::steady_clock::duration duration,
                           move_only_function<void()> f);
 
-    // Suspend until `socket` is readable, then perform one recv.  Returns the
-    // recv result in kernel convention: bytes received, 0 for end-of-stream
-    // (peer close arrives as EV_EOF readability), or -errno for a failed
-    // registration (e.g. -EBADF) or a failed recv.
+    // Socket operations.  Each suspends until the descriptor is ready for
+    // it (a readiness awaitable on EVFILT_READ or EVFILT_WRITE, see the
+    // .cpp) and then makes one syscall, whose result is returned in kernel
+    // convention: the syscall's value on success, or -errno -- for the
+    // syscall, or for a failed knote registration (-EBADF for a closed
+    // descriptor).  Readiness is not a guarantee: the syscall may still
+    // fail with -EAGAIN on a non-blocking descriptor if another waiter took
+    // the data, and will block the worker on a blocking one, so at most one
+    // waiter per (descriptor, direction) at a time.  Peer close arrives as
+    // readiness, and the syscall reports it (recv 0, send -EPIPE; set
+    // SO_NOSIGPIPE on the socket, or SIGPIPE comes first).
     //
-    // No deadline here: compose one with with_deadline (kqueue_reactor.cpp),
-    // which times out the wait by requesting an interior stop source.  A stop
-    // request on the awaiting chain's token destroys the parked frame
-    // (cancellation unwinding); the knote is withdrawn promptly.  At most one
-    // recv_some may wait on a given socket at a time: a second waiter's knote
-    // also fires on readability, and on a blocking socket the loser blocks
-    // its worker in recv.
+    // No deadlines here: compose one with with_deadline below, which times
+    // the wait out by requesting an interior stop source.  A stop request on
+    // the awaiting chain's token destroys the parked frame (cancellation
+    // unwinding) and withdraws the knote promptly.
+
+    // recv: bytes received, 0 for end of stream, or -errno
     [[nodiscard]] Coroutine::Future<ssize_t>
     recv_some(int socket, void* buffer, size_t length, int flags);
+
+    // send: bytes sent (possibly fewer than asked), or -errno
+    [[nodiscard]] Coroutine::Future<ssize_t>
+    send_some(int socket, void const* buffer, size_t length, int flags);
+
+    // accept on a listening socket: the new descriptor, or -errno.  The new
+    // descriptor inherits nothing from the reactor: set O_NONBLOCK and
+    // SO_NOSIGPIPE on it as the caller sees fit.  (Named accept_one, and
+    // connect_to below, because the C names would be ambiguous through
+    // argument-dependent lookup on sockaddr)
+    [[nodiscard]] Coroutine::Future<int>
+    accept_one(int socket, struct sockaddr* address, socklen_t* length);
+
+    // connect: 0, or -errno.  Suspends only when the socket is non-blocking
+    // and the connect is in progress (TCP); a blocking socket connects
+    // synchronously on the worker
+    [[nodiscard]] Coroutine::Future<int>
+    connect_to(int socket, struct sockaddr const* address, socklen_t length);
 
     [[nodiscard]] Coroutine::Future<>
     cancelable_sleep(double seconds);

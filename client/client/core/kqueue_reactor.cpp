@@ -5,8 +5,10 @@
 //  Created by Antony Searle on 22/11/2025.
 //
 
+#include <fcntl.h>
 #include <sys/event.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -16,6 +18,7 @@
 #include <mutex>
 #include <optional>
 #include <stop_token>
+#include <string>
 #include <thread>
 
 #include "kqueue_reactor.hpp"
@@ -393,80 +396,136 @@ namespace wry {
         spawn_after(std::move(stop_token), duration, std::move(f));
     }
 
-    // TODO: send, accept, etc. also follow this pattern
-    struct CancelableRecvAwaitable {
-        int _socket;
-        void* _buffer;
-        size_t _length;
-        int _flags;
-        int64_t _result = 0;
+    // ---- Continuations as callables ---------------------------------------
+    //
+    // The callable a CancelableKEventFrame runs when its knote fires, when the
+    // awaiting coroutine's continuation is what should run: scheduled onto
+    // the pool on the fire, destroyed (cancellation unwinding) if dropped
+    // unrun.  release() takes the handle back when the frame was never
+    // armed and the awaitable must continue the coroutine itself.
+    struct ContinuationThunk {
+        std::coroutine_handle<> _handle;
+        explicit ContinuationThunk(std::coroutine_handle<> handle) : _handle(handle) {}
+        ContinuationThunk(ContinuationThunk&& other) : _handle(take(other._handle)) {}
+        ContinuationThunk& operator=(ContinuationThunk&& other) {
+            assert(!_handle);
+            _handle = take(other._handle);
+            return *this;
+        }
+        void operator()() {
+            assert(_handle);
+            global_work_queue_schedule(take(_handle));
+        };
+        ~ContinuationThunk() {
+            if (_handle)
+                _handle.destroy();
+        }
+        std::coroutine_handle<> release() {
+            return take(_handle);
+        }
+    };
+
+    // ---- Readiness ----------------------------------------------------------
+    //
+    // Suspend until `fd` is ready on `filter` (EVFILT_READ or EVFILT_WRITE),
+    // then resume with 0.  If the knote cannot be registered (a bad
+    // descriptor, say) resume at once with the positive errno; the operation
+    // built on top negates it into kernel convention.  A stop request on the
+    // awaiting chain's token destroys the parked frame and withdraws the
+    // knote.  The knote fires on EV_EOF too (peer close is readability, and
+    // writability), so the syscall that follows sees the kernel's answer.
+    //
+    // At most one waiter per (fd, filter): two waiters' knotes both fire on
+    // readiness, and the loser's syscall either blocks the worker (on a
+    // blocking descriptor) or fails with EAGAIN.  A reader and a writer may
+    // wait on one socket at the same time: those are different knotes.
+    struct CancelableReadinessAwaitable {
+        int _fd;
+        int16_t _filter;
+        int _error = 0;
         constexpr bool await_ready() const noexcept {
             return false;
         }
         template<typename OuterPromise>
         std::coroutine_handle<> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
             std::stop_token stop_token = get_stop_token(continuation);
-
             struct kevent change = {
-                .ident = (uint64_t) _socket,
-                .filter = EVFILT_READ,
+                .ident = (uint64_t) _fd,
+                .filter = _filter,
                 .flags = 0,
                 .fflags = 0,
                 .data = 0,
             };
-            struct F {
-                std::coroutine_handle<> _handle;
-                explicit F(std::coroutine_handle<> handle) : _handle(handle) {}
-                F(F&& other) : _handle(take(other._handle)) {}
-                F& operator=(F&& other) {
-                    assert(!_handle);
-                    _handle = take(other._handle);
-                    return *this;
-                }
-                void operator()() {
-                    assert(_handle);
-                    global_work_queue_schedule(take(_handle));
-                };
-                ~F() {
-                    if (_handle)
-                        _handle.destroy();
-                }
-                std::coroutine_handle<> release() {
-                    return take(_handle);
-                }
-            };
-            auto e = CancelableKEventFrame<F>::spawn(stop_token, change, F{take(continuation)});
+            auto e = CancelableKEventFrame<ContinuationThunk>::spawn(stop_token, change,
+                                                                     ContinuationThunk{take(continuation)});
             if (e.has_value()) {
                 // the frame may be running or gone: no *this past here
                 return std::noop_coroutine();
             }
-            // Registration failed: spawn gave f back, so the frame is still
-            // ours; take the handle back from f before its destructor destroys the handle
-            _result = e.error().error;
+            // Registration failed: spawn gave the thunk back, so the frame is
+            // still ours; take the handle back before the thunk's destructor
+            // destroys it
+            _error = e.error().error;
             return e.error().callable.release();
         }
-        [[nodiscard]] ssize_t await_resume() {
-            switch (_result) {
-                case 0: // _socket is readable
-                    _result = ::recv(_socket, _buffer, _length, _flags);
-                    break;
-                default: // kevent add returned an error
-                    // negate it to match ::recv convention
-                    _result = -_result;
-                    break;
-            }
-            return (ssize_t)_result;
+        [[nodiscard]] int await_resume() const noexcept {
+            return _error;
         }
     };
 
-    // NOTE: The reactor will not prevent or detect multiple readers waiting
-    // on a socket, so don't do that
+    struct CancelableReadableAwaitable : CancelableReadinessAwaitable {
+        explicit CancelableReadableAwaitable(int fd)
+        : CancelableReadinessAwaitable{fd, EVFILT_READ} {}
+    };
+
+    struct CancelableWritableAwaitable : CancelableReadinessAwaitable {
+        explicit CancelableWritableAwaitable(int fd)
+        : CancelableReadinessAwaitable{fd, EVFILT_WRITE} {}
+    };
+
+    // ---- Socket operations: wait for readiness, then one syscall -----------
+
     [[nodiscard]] Coroutine::Future<ssize_t> recv_some(int socket, void* buffer, size_t length, int flags) {
-        co_return co_await CancelableRecvAwaitable{socket, buffer, length, flags};
+        if (int error = co_await CancelableReadableAwaitable{socket})
+            co_return -error;
+        ssize_t n = ::recv(socket, buffer, length, flags);
+        co_return (n == -1) ? -errno : n;
     }
 
+    [[nodiscard]] Coroutine::Future<ssize_t> send_some(int socket, void const* buffer, size_t length, int flags) {
+        if (int error = co_await CancelableWritableAwaitable{socket})
+            co_return -error;
+        ssize_t n = ::send(socket, buffer, length, flags);
+        co_return (n == -1) ? -errno : n;
+    }
 
-    // TODO: send, accept, etc. also follow this pattern
+    [[nodiscard]] Coroutine::Future<int> accept_one(int socket, struct sockaddr* address, socklen_t* length) {
+        if (int error = co_await CancelableReadableAwaitable{socket})
+            co_return -error;
+        int fd = ::accept(socket, address, length);
+        co_return (fd == -1) ? -errno : fd;
+    }
+
+    [[nodiscard]] Coroutine::Future<int> connect_to(int socket, struct sockaddr const* address, socklen_t length) {
+        // A non-blocking connect that cannot complete at once reports
+        // EINPROGRESS; completion is writability, and the result is then
+        // read back with SO_ERROR.  A connect that completes (or fails) at
+        // once -- a Unix domain socket, a bad address -- never suspends
+        if (::connect(socket, address, length) == 0)
+            co_return 0;
+        if (errno != EINPROGRESS)
+            co_return -errno;
+        if (int error = co_await CancelableWritableAwaitable{socket})
+            co_return -error;
+        int so_error = 0;
+        socklen_t so_length = sizeof so_error;
+        if (::getsockopt(socket, SOL_SOCKET, SO_ERROR, &so_error, &so_length) == -1)
+            co_return -errno;
+        co_return -so_error;
+    }
+
+    // ---- Timers ---------------------------------------------------------------
+
     struct CancelableSleepAwaitable {
         intptr_t _nanoseconds;
         constexpr bool await_ready() const noexcept {
@@ -475,7 +534,6 @@ namespace wry {
         template<typename OuterPromise>
         std::coroutine_handle<> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
             std::stop_token stop_token = get_stop_token(continuation);
-
             struct kevent change = {
                 .ident = 0,
                 .filter = EVFILT_TIMER,
@@ -483,50 +541,18 @@ namespace wry {
                 .fflags = NOTE_NSECONDS,
                 .data = _nanoseconds,
             };
-            struct F {
-                std::coroutine_handle<> _handle;
-                explicit F(std::coroutine_handle<> handle) : _handle(handle) {}
-                F(F&& other) : _handle(take(other._handle)) {}
-                F& operator=(F&& other) {
-                    assert(!_handle);
-                    _handle = take(other._handle);
-                    return *this;
-                }
-                void operator()() {
-                    assert(_handle);
-                    global_work_queue_schedule(take(_handle));
-                };
-                ~F() {
-                    if (_handle)
-                        _handle.destroy();
-                }
-            };
-            F f{continuation};
-            auto e = CancelableKEventFrame<F>::spawn(stop_token, change, std::move(f));
+            auto e = CancelableKEventFrame<ContinuationThunk>::spawn(stop_token, change,
+                                                                     ContinuationThunk{take(continuation)});
             if (!e.has_value())
-                abort();
+                abort();  // resource-exhaustion grade, as cancelable_after
             return std::noop_coroutine();
         }
         void await_resume() const {}
     };
 
-    // NOTE: The reactor will not prevent or detect multiple readers waiting
-    // on a socket, so don't do that
     [[nodiscard]] Coroutine::Future<> cancelable_sleep(double seconds) {
         co_return co_await CancelableSleepAwaitable{(intptr_t)(seconds * NSEC_PER_SEC)};
     }
-
-
-
-
-
-
-
-
-
-
-
-
 
     // ---- Tests -------------------------------------------------------------
 
@@ -913,6 +939,288 @@ namespace wry {
             assert(resumed_past.load(std::memory_order_relaxed) == 0);
             // The nursery retires inside the child's destroy, which spawn
             // runs before it releases the Frame: spin rather than assert
+            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
+                co_await Coroutine::TransferToPoolExecutor{};
+        }
+
+        co_return;
+    };
+
+    // ---- send_some, accept, connect ------------------------------------------
+
+    namespace {
+
+        void make_nonblocking(int fd) {
+            int flags = ::fcntl(fd, F_GETFL, 0);
+            assert(flags != -1);
+            int rc = ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+            assert(rc != -1);
+            (void) rc;
+        }
+
+        void set_nosigpipe(int fd) {
+            int one = 1;
+            int rc = ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+            assert(rc == 0);
+            (void) rc;
+        }
+
+        // Fill a non-blocking socket's send buffer; returns the byte count
+        size_t fill_send_buffer(int fd) {
+            std::byte junk[4096] = {};
+            size_t total = 0;
+            for (;;) {
+                ssize_t n = ::send(fd, junk, sizeof junk, 0);
+                if (n == -1) {
+                    assert(errno == EAGAIN);
+                    return total;
+                }
+                total += (size_t)n;
+            }
+        }
+
+        // Drains a non-blocking socket after a delay until `expected` bytes
+        // have been seen, polling across the gaps (it is the other end of a
+        // parked send_some, so it must never block a worker)
+        Coroutine::Task reactor_late_drain(int fd, size_t expected) {
+            co_await cancelable_sleep(0.010);
+            std::byte sink[65536];
+            size_t total = 0;
+            while (total < expected) {
+                ssize_t n = ::recv(fd, sink, sizeof sink, 0);
+                if (n > 0) {
+                    total += (size_t)n;
+                } else {
+                    assert((n == -1) && (errno == EAGAIN));
+                    co_await cancelable_sleep(0.001);
+                }
+            }
+        }
+
+        // A child parked in send_some on a full socket
+        Coroutine::Task send_child(int fd,
+                                   std::atomic<int>* started,
+                                   std::atomic<int>* destroyed,
+                                   std::atomic<int>* resumed_past) {
+            ReactorProbe probe{destroyed};
+            started->fetch_add(1, std::memory_order_release);
+            std::byte buffer[16] = {};
+            (void) co_await send_some(fd, buffer, sizeof buffer, 0);
+            resumed_past->fetch_add(1, std::memory_order_relaxed);
+        }
+
+        struct ListeningSocket {
+            std::string _path;
+            sockaddr_un _address = {};
+            int _fd = -1;
+            ListeningSocket() {
+                _path = "/tmp/wry-kqueue-accept-" + std::to_string(::getpid()) + ".sock";
+                _address.sun_family = AF_UNIX;
+                std::memcpy(_address.sun_path, _path.data(), _path.size());
+                (void) ::unlink(_path.c_str());
+                _fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+                assert(_fd != -1);
+                int rc = ::bind(_fd, (sockaddr const*)&_address, sizeof _address);
+                assert(rc == 0);
+                rc = ::listen(_fd, 4);
+                assert(rc == 0);
+                (void) rc;
+                make_nonblocking(_fd);
+            }
+            ~ListeningSocket() {
+                ::close(_fd);
+                (void) ::unlink(_path.c_str());
+            }
+        };
+
+        // A child parked in accept on a listening socket nobody connects to
+        Coroutine::Task accept_child(int fd,
+                                     std::atomic<int>* started,
+                                     std::atomic<int>* destroyed,
+                                     std::atomic<int>* resumed_past) {
+            ReactorProbe probe{destroyed};
+            started->fetch_add(1, std::memory_order_release);
+            (void) co_await accept_one(fd, nullptr, nullptr);
+            resumed_past->fetch_add(1, std::memory_order_relaxed);
+        }
+
+        // Connects to the listener after a delay; the connect itself is the
+        // reactor's, on a non-blocking socket
+        Coroutine::Task late_connector(sockaddr_un const* address, std::atomic<int>* result, int* fd_out) {
+            co_await cancelable_sleep(0.010);
+            int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+            assert(fd != -1);
+            make_nonblocking(fd);
+            int r = co_await connect_to(fd, (sockaddr const*)address, sizeof *address);
+            *fd_out = fd;
+            result->store(r, std::memory_order_release);
+        }
+
+    }
+
+    define_test("kqueue_send_some") {
+
+        // Ready path: an empty socket is writable at once
+        {
+            SocketPair sockets;
+            char message[] = "hello";
+            auto r = co_await with_deadline(steady_clock::now() + seconds(10),
+                                            send_some(sockets.writer(), message, 5, 0));
+            assert(r.has_value() && (*r == 5));
+            std::byte buffer[16];
+            ssize_t n = ::recv(sockets.reader(), buffer, sizeof buffer, 0);
+            assert((n == 5) && (std::memcmp(buffer, "hello", 5) == 0));
+            (void) n;
+        }
+
+        // Parked path: the send buffer is full, so the send parks until a
+        // reader drains the other end
+        {
+            SocketPair sockets;
+            make_nonblocking(sockets.writer());
+            make_nonblocking(sockets.reader());
+            size_t filled = fill_send_buffer(sockets.writer());
+            assert(filled > 0);
+            Coroutine::Nursery nursery;
+            nursery.soon(reactor_late_drain(sockets.reader(), filled + 5));
+            char message[] = "later";
+            auto t0 = steady_clock::now();
+            auto r = co_await with_deadline(steady_clock::now() + seconds(10),
+                                            send_some(sockets.writer(), message, 5, 0));
+            assert(r.has_value() && (*r == 5));
+            assert(steady_clock::now() - t0 < seconds(5));
+            assert((co_await nursery.join()) == 0);
+        }
+
+        // Peer close: writability with EV_EOF, and send reports EPIPE in
+        // kernel convention (SO_NOSIGPIPE keeps the signal away)
+        {
+            SocketPair sockets;
+            set_nosigpipe(sockets.writer());
+            ::close(sockets._fds[0]);
+            sockets._fds[0] = -1;
+            char message[] = "x";
+            auto r = co_await with_deadline(steady_clock::now() + seconds(10),
+                                            send_some(sockets.writer(), message, 1, 0));
+            assert(r.has_value() && (*r == -EPIPE));
+        }
+
+        // Bad descriptor: the registration fails synchronously, -EBADF
+        {
+            char message[] = "x";
+            auto r = co_await with_deadline(steady_clock::now() + seconds(10),
+                                            send_some(-1, message, 1, 0));
+            assert(r.has_value() && (*r == -EBADF));
+        }
+
+        // Parked cancel: a child blocked on a full socket unwinds promptly
+        // and the EVFILT_WRITE knote is withdrawn
+        {
+            SocketPair sockets;
+            make_nonblocking(sockets.writer());
+            (void) fill_send_buffer(sockets.writer());
+            std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
+            Coroutine::Nursery nursery;
+            nursery.soon(send_child(sockets.writer(), &started, &destroyed, &resumed_past));
+            while (started.load(std::memory_order_acquire) != 1)
+                co_await Coroutine::TransferToPoolExecutor{};
+            co_await cancelable_sleep(0.010);
+            auto t0 = steady_clock::now();
+            nursery.request_stop();
+            std::ptrdiff_t cancelled = co_await nursery.join();
+            assert(cancelled == 1);
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert(resumed_past.load(std::memory_order_relaxed) == 0);
+            assert(steady_clock::now() - t0 < seconds(2));
+            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
+                co_await Coroutine::TransferToPoolExecutor{};
+        }
+
+        co_return;
+    };
+
+    define_test("kqueue_accept_connect") {
+
+        // A parked accept completes when a connector arrives; the connect is
+        // itself asynchronous; the pair then talks through send_some and
+        // recv_some in both directions
+        {
+            ListeningSocket listener;
+            std::atomic<int> connect_result{-1};
+            int client = -1;
+            Coroutine::Nursery nursery;
+            nursery.soon(late_connector(&listener._address, &connect_result, &client));
+            auto t0 = steady_clock::now();
+            auto r = co_await with_deadline(steady_clock::now() + seconds(10),
+                                            accept_one(listener._fd, nullptr, nullptr));
+            assert(r.has_value() && (*r >= 0));
+            assert(steady_clock::now() - t0 < seconds(5));
+            int server = *r;
+            assert((co_await nursery.join()) == 0);
+            assert(connect_result.load(std::memory_order_acquire) == 0);
+            assert(client != -1);
+
+            char ping[] = "ping";
+            auto s = co_await with_deadline(steady_clock::now() + seconds(10),
+                                            send_some(client, ping, 4, 0));
+            assert(s.has_value() && (*s == 4));
+            std::byte buffer[16];
+            auto v = co_await with_deadline(steady_clock::now() + seconds(10),
+                                            recv_some(server, buffer, sizeof buffer, 0));
+            assert(v.has_value() && (*v == 4) && (std::memcmp(buffer, "ping", 4) == 0));
+            char pong[] = "pong";
+            s = co_await with_deadline(steady_clock::now() + seconds(10),
+                                       send_some(server, pong, 4, 0));
+            assert(s.has_value() && (*s == 4));
+            v = co_await with_deadline(steady_clock::now() + seconds(10),
+                                       recv_some(client, buffer, sizeof buffer, 0));
+            assert(v.has_value() && (*v == 4) && (std::memcmp(buffer, "pong", 4) == 0));
+            ::close(client);
+            ::close(server);
+        }
+
+        // Connect to nothing: a Unix domain connect fails synchronously, in
+        // kernel convention, without suspending
+        {
+            sockaddr_un address = {};
+            address.sun_family = AF_UNIX;
+            std::string path = "/tmp/wry-kqueue-nobody-" + std::to_string(::getpid()) + ".sock";
+            std::memcpy(address.sun_path, path.data(), path.size());
+            int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+            assert(fd != -1);
+            make_nonblocking(fd);
+            int r = co_await connect_to(fd, (sockaddr const*)&address, sizeof address);
+            assert(r == -ENOENT);
+            ::close(fd);
+        }
+
+        // Accept with a deadline and nobody connecting: the timeout
+        {
+            ListeningSocket listener;
+            auto t0 = steady_clock::now();
+            auto r = co_await with_deadline(t0 + milliseconds(50),
+                                            accept_one(listener._fd, nullptr, nullptr));
+            assert(!r.has_value());
+            auto elapsed = steady_clock::now() - t0;
+            assert((elapsed >= milliseconds(45)) && (elapsed < seconds(5)));
+        }
+
+        // Parked cancel: a child blocked in accept unwinds promptly
+        {
+            ListeningSocket listener;
+            std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
+            Coroutine::Nursery nursery;
+            nursery.soon(accept_child(listener._fd, &started, &destroyed, &resumed_past));
+            while (started.load(std::memory_order_acquire) != 1)
+                co_await Coroutine::TransferToPoolExecutor{};
+            co_await cancelable_sleep(0.010);
+            auto t0 = steady_clock::now();
+            nursery.request_stop();
+            std::ptrdiff_t cancelled = co_await nursery.join();
+            assert(cancelled == 1);
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert(resumed_past.load(std::memory_order_relaxed) == 0);
+            assert(steady_clock::now() - t0 < seconds(2));
             while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
                 co_await Coroutine::TransferToPoolExecutor{};
         }

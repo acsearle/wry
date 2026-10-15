@@ -30,18 +30,25 @@ namespace wry::network {
         int file_descriptor;
     };
 
-    Coroutine::Future<Socket> accept();
-    Coroutine::Task connect();
-
     // See kqueue_reactor.hpp for the semantics (kernel-convention result,
-    // cancellation unwinding, single waiter per socket).  Deadlines compose
-    // from outside: co_await with_deadline(t, recv_some(socket, buffer)).
+    // cancellation unwinding, single waiter per socket and direction).
+    // Deadlines compose from outside:
+    //   co_await with_deadline(t, recv_some(socket, buffer)).
     [[nodiscard]] inline Coroutine::Future<ssize_t>
     recv_some(Socket const& socket, std::span<std::byte> buffer) {
         return wry::recv_some(socket.file_descriptor, buffer.data(), buffer.size(), 0);
     }
 
-    // TODO: send_some symmetrically (EVFILT_WRITE) when a caller exists
+    [[nodiscard]] inline Coroutine::Future<ssize_t>
+    send_some(Socket const& socket, std::span<std::byte const> buffer) {
+        return wry::send_some(socket.file_descriptor, buffer.data(), buffer.size(), 0);
+    }
+
+    // The accepted descriptor, or -errno, in the int
+    [[nodiscard]] inline Coroutine::Future<int>
+    accept_one(Socket const& listener) {
+        return wry::accept_one(listener.file_descriptor, nullptr, nullptr);
+    }
 
     Coroutine::Task client() {
         co_return;
