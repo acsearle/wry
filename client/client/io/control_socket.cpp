@@ -12,6 +12,7 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <variant>
 
 #include <fcntl.h>
 #include <poll.h>
@@ -55,13 +56,16 @@ namespace wry {
 
     struct ControlSocket::Shared {
         std::mutex mutex;
-        std::condition_variable input;          // notified on inbox / closed
         std::condition_variable changed;        // notified on connections / finished
         uint64_t next_connection = 1;
         std::map<uint64_t, std::shared_ptr<OutQueue>> connections;
-        std::vector<Line> inbox;
-        std::vector<uint64_t> closed;
         bool finished = false;                  // the accept loop has ended
+        // Its own lock: the connections' readers produce, the main thread
+        // consumes
+        Coroutine::MultiProducerSingleConsumerQueue<Event> events;
+        // A signal per time the connection table empties; shutdown() is
+        // its consumer
+        Coroutine::MultiProducerSingleConsumerQueue<std::monostate> drained;
     };
 
     namespace {
@@ -100,13 +104,18 @@ namespace wry {
             Registration(std::shared_ptr<Shared> s, uint64_t i) : shared(std::move(s)), id(i) {}
             Registration(Registration const&) = delete;
             ~Registration() {
+                bool last;
                 {
                     std::scoped_lock lock{shared->mutex};
                     shared->connections.erase(id);
-                    shared->closed.push_back(id);
+                    last = shared->connections.empty();
                 }
-                shared->input.notify_all();
                 shared->changed.notify_all();
+                if (last)
+                    shared->drained.emplace();
+                // After every line the reader delivered: the reader is joined
+                // before this runs
+                shared->events.emplace(ControlSocket::Closed{id});
             }
         };
 
@@ -114,19 +123,12 @@ namespace wry {
         // the partial line has grown too long.
         bool deliver_lines(Shared& shared, uint64_t id, std::string& pending) {
             size_t start = 0;
-            bool delivered = false;
-            {
-                std::scoped_lock lock{shared.mutex};
-                for (size_t nl; (nl = pending.find('\n', start)) != std::string::npos; start = nl + 1) {
-                    std::string line = pending.substr(start, nl - start);
-                    if (!line.empty() && line.back() == '\r')
-                        line.pop_back();
-                    shared.inbox.push_back(ControlSocket::Line{id, std::move(line)});
-                    delivered = true;
-                }
+            for (size_t nl; (nl = pending.find('\n', start)) != std::string::npos; start = nl + 1) {
+                std::string line = pending.substr(start, nl - start);
+                if (!line.empty() && line.back() == '\r')
+                    line.pop_back();
+                shared.events.emplace(ControlSocket::Line{id, std::move(line)});
             }
-            if (delivered)
-                shared.input.notify_all();
             pending.erase(0, start);
             return pending.size() <= ControlSocket::max_line;
         }
@@ -187,15 +189,22 @@ namespace wry {
             (void) co_await halves.join();
         }
 
-        // Accepts connections until stopped, then joins them: the stop is
-        // absorbed at the accept (stopped_as_optional), so this frame lives
-        // on to join its nursery, which unwinds every connection first.
-        Future<> accept_connections(std::shared_ptr<Shared> shared, int listen_fd) {
+        // Accepts connections until stopped, then joins them.  The accept
+        // runs under the accepting token alone (shield), which a graceful
+        // shutdown requests by itself and which a full stop reaches through
+        // the bridge in serve_under; the connections run under this frame's
+        // token, so a graceful shutdown lets them finish while a full stop
+        // unwinds them.  Either way the stop is absorbed at the accept and
+        // this frame lives on to join its nursery.
+        Future<> accept_connections(std::shared_ptr<Shared> shared, int listen_fd,
+                                    std::stop_token accepting) {
             Descriptor listener{listen_fd};
             Nursery connections{co_await GetStopToken{}};
             for (;;) {
+                // shield: the accept runs under `accepting` and a stop there
+                // is absorbed as nullopt
                 std::optional<int> accepted =
-                    co_await Coroutine::stopped_as_optional(accept_one(listen_fd, nullptr, nullptr));
+                    co_await Coroutine::shield(accept_one(listen_fd, nullptr, nullptr), accepting);
                 if (!accepted)
                     break;                  // stopped
                 int fd = *accepted;
@@ -227,24 +236,28 @@ namespace wry {
             (void) co_await connections.join();
         }
 
-        // The root of the socket's work: the accept loop under two tokens,
-        // the one the spawner gave this frame (inherited through the
-        // delegate chain: the wait group's root token, a nursery's) and the
-        // object's own (close()).  The bridge requests the latter when the
-        // former fires, as a nursery bridges its outer token; the shield
-        // then runs the loop under the object's token alone and absorbs the
-        // stop at this boundary.  Reports finished last: the object may be
-        // destroyed the moment it is, so nothing of it is touched after
-        Coroutine::Task serve_under(std::shared_ptr<Shared> shared, int listen_fd, std::stop_source stop) {
-            struct Bridge {
-                std::stop_source _stop;
-                void operator()() {
-                    std::stop_source keepalive = _stop;     // see Nursery::Callback
-                    keepalive.request_stop();
-                }
-            };
-            std::stop_callback<Bridge> bridge{co_await GetStopToken{}, Bridge{stop}};
-            (void) co_await Coroutine::shield(accept_connections(shared, listen_fd), stop.get_token());
+        struct Bridge {
+            std::stop_source _stop;
+            void operator()() {
+                std::stop_source keepalive = _stop;     // see Nursery::Callback
+                keepalive.request_stop();
+            }
+        };
+
+        // The root of the socket's work: the accept loop under three
+        // tokens, bridged in a chain.  The spawner's (inherited through the
+        // delegate chain: the wait group's root token, a nursery's) requests
+        // the object's own (close()), which requests the accepting one
+        // (shutdown()); the shield runs the loop under the object's token
+        // alone and absorbs the stop at this boundary.  Reports finished
+        // last: the object may be destroyed the moment it is, so nothing of
+        // it is touched after
+        Coroutine::Task serve_under(std::shared_ptr<Shared> shared, int listen_fd,
+                                    std::stop_source stop, std::stop_source accepting) {
+            std::stop_callback<Bridge> outer_to_stop{co_await GetStopToken{}, Bridge{stop}};
+            std::stop_callback<Bridge> stop_to_accepting{stop.get_token(), Bridge{accepting}};
+            (void) co_await Coroutine::shield(accept_connections(shared, listen_fd, accepting.get_token()),
+                                              stop.get_token());
             {
                 std::scoped_lock lock{shared->mutex};
                 shared->finished = true;
@@ -293,7 +306,7 @@ namespace wry {
         assert(!_served && (_listen_fd != -1));
         _served = true;
         // From here the accept loop owns the listening descriptor
-        return serve_under(_shared, std::exchange(_listen_fd, -1), _stop);
+        return serve_under(_shared, std::exchange(_listen_fd, -1), _stop, _stop_accepting);
     }
 
     bool ControlSocket::finished() {
@@ -310,51 +323,40 @@ namespace wry {
         (void) ::unlink(_path.c_str());
     }
 
-    void ControlSocket::close() {
-        Shared& shared = *_shared;
-        // Ask every connection to finish what is queued for it and close,
-        // and give them a second to do so.
+    Coroutine::Task ControlSocket::shutdown(std::chrono::milliseconds grace) {
+        std::shared_ptr<Shared> shared = _shared;
+        // No new connections
+        _stop_accepting.request_stop();
+        // Ask every connection to finish what is queued for it and close.
+        // The drained signal is cleared under the same lock as the snapshot,
+        // so the one awaited below is for this snapshot emptying
         std::vector<std::shared_ptr<OutQueue>> queues;
         {
-            std::scoped_lock lock{shared.mutex};
-            for (auto& [id, queue] : shared.connections)
+            std::scoped_lock lock{shared->mutex};
+            for (auto& [id, queue] : shared->connections)
                 queues.push_back(queue);
+            (void) shared->drained.try_take();
         }
         for (auto& queue : queues)
             queue->emplace(Outgoing{{}, true});
-        {
-            std::unique_lock lock{shared.mutex};
-            shared.changed.wait_for(lock, std::chrono::seconds(1), [&] {
-                return shared.connections.empty();
-            });
-        }
-        // Cancel what remains.  The cancellation unwinds frames parked on
-        // this thread, inside request_stop; frames running on workers finish
-        // there, and the spawner's join waits for them
+        if (!queues.empty())
+            (void) co_await with_deadline(std::chrono::steady_clock::now() + grace,
+                                          shared->drained.pop());
+        // Then the rest, brutally
+        close();
+    }
+
+    void ControlSocket::close() {
+        // The cancellation unwinds frames parked on this thread, inside
+        // request_stop; frames running on workers finish there, and the
+        // spawner's join waits for them.  The accepting source follows
+        // through the bridge in serve_under
         _stop.request_stop();
         (void) ::unlink(_path.c_str());
     }
 
-    std::vector<ControlSocket::Line> ControlSocket::take_lines() {
-        std::scoped_lock lock{_shared->mutex};
-        return std::exchange(_shared->inbox, {});
-    }
-
-    std::vector<uint64_t> ControlSocket::take_closed() {
-        std::scoped_lock lock{_shared->mutex};
-        return std::exchange(_shared->closed, {});
-    }
-
-    bool ControlSocket::has_input() {
-        std::scoped_lock lock{_shared->mutex};
-        return !_shared->inbox.empty() || !_shared->closed.empty();
-    }
-
-    void ControlSocket::wait_for_input(std::chrono::milliseconds timeout) {
-        std::unique_lock lock{_shared->mutex};
-        _shared->input.wait_for(lock, timeout, [this] {
-            return !_shared->inbox.empty() || !_shared->closed.empty();
-        });
+    Coroutine::MultiProducerSingleConsumerQueue<ControlSocket::Event>& ControlSocket::events() {
+        return _shared->events;
     }
 
     void ControlSocket::send(uint64_t connection, std::string_view line) {
@@ -412,6 +414,18 @@ namespace wry {
             return lines;
         }
 
+        // Drains the event queue: lines into `lines`, closings into `closed`
+        void drain(ControlSocket& server,
+                   std::vector<ControlSocket::Line>& lines,
+                   std::vector<uint64_t>& closed) {
+            for (auto& event : server.events().try_take()) {
+                if (auto* line = std::get_if<ControlSocket::Line>(&event))
+                    lines.push_back(std::move(*line));
+                else
+                    closed.push_back(std::get<ControlSocket::Closed>(event).connection);
+            }
+        }
+
         template<typename F>
         bool eventually(F&& f) {
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -449,12 +463,12 @@ namespace wry {
 
         // Lines arrive whole, split at newlines, CR stripped.
         std::vector<ControlSocket::Line> got;
+        std::vector<uint64_t> closed;
         bool arrived = eventually([&] {
-            for (auto& line : server->take_lines())
-                got.push_back(std::move(line));
+            drain(*server, got, closed);
             return got.size() >= 2;
         });
-        assert(arrived && got.size() == 2);
+        assert(arrived && got.size() == 2 && closed.empty());
         (void) arrived;
         assert(got[0].bytes == "first" && got[1].bytes == "second");
         assert(got[0].connection == got[1].connection);
@@ -474,16 +488,44 @@ namespace wry {
             assert(big_lines.size() == 1 && big_lines[0].size() == big.size());
         }
 
-        // Closing is reported; sends to the dead connection are dropped.
+        // Closing is reported, after the connection's last line; sends to
+        // the dead connection are dropped.
+        const ssize_t w_last = ::write(client, "last\n", 5);
+        assert(w_last == 5);
+        (void) w_last;
         ::close(client);
-        std::vector<uint64_t> closed;
         bool reported = eventually([&] {
-            closed = server->take_closed();
+            drain(*server, got, closed);
             return !closed.empty();
         });
         assert(reported && closed.size() == 1 && closed[0] == got[0].connection);
+        assert(got.size() == 3 && got[2].bytes == "last");
         (void) reported;
         server->send(got[0].connection, "nobody hears this");
+
+        // Waiting for input: a take parks until a line arrives, and a take
+        // under a deadline with nothing arriving is the nullopt
+        {
+            auto nothing = co_await with_deadline(std::chrono::steady_clock::now() + std::chrono::milliseconds(20),
+                                                  server->events().take());
+            assert(!nothing.has_value());
+            int talker = connect_client(path);
+            const ssize_t w_talk = ::write(talker, "knock\n", 6);
+            assert(w_talk == 6);
+            (void) w_talk;
+            auto batch = co_await with_deadline(std::chrono::steady_clock::now() + std::chrono::seconds(5),
+                                                server->events().take());
+            assert(batch.has_value() && !batch->empty());
+            auto* knock = std::get_if<ControlSocket::Line>(&batch->front());
+            assert(knock && knock->bytes == "knock");
+            ::close(talker);
+            bool talker_closed = eventually([&] {
+                drain(*server, got, closed);
+                return closed.size() == 2;
+            });
+            assert(talker_closed && closed[1] == knock->connection);
+            (void) talker_closed;
+        }
 
         // Shutdown flushes what is queued, then closes: a second client's
         // queued reply arrives before its end of stream, and a third, idle
@@ -496,15 +538,14 @@ namespace wry {
         (void) w3;
         std::vector<ControlSocket::Line> hello;
         bool greeted = eventually([&] {
-            for (auto& line : server->take_lines())
-                hello.push_back(std::move(line));
+            drain(*server, hello, closed);
             return !hello.empty();
         });
         assert(greeted && hello[0].bytes == "hello");
         (void) greeted;
         server->send(hello[0].connection, "goodbye");
-        server->close();
-        // close() does not wait for the loop; the join does, and the
+        co_await server->shutdown(std::chrono::seconds(1));
+        // shutdown does not wait for the loop; the join does, and the
         // destructor requires it
         (void) co_await nursery.join();
         server.reset();
@@ -520,6 +561,37 @@ namespace wry {
         ::close(second);
         ::close(third);
         assert(::access(path.c_str(), F_OK) != 0);   // unlinked
+
+        // Brutal close: a connection with a reply queued behind a full
+        // socket is cut off, the loop ends promptly, and nothing was waited
+        // for
+        {
+            auto brutal = ControlSocket::open(path, error);
+            assert(brutal && error.empty());
+            Nursery scope;
+            scope.soon(brutal->serve());
+            int victim = connect_client(path);
+            const ssize_t w4 = ::write(victim, "hi\n", 3);
+            assert(w4 == 3);
+            (void) w4;
+            std::vector<ControlSocket::Line> hi;
+            std::vector<uint64_t> gone;
+            bool heard = eventually([&] {
+                drain(*brutal, hi, gone);
+                return !hi.empty();
+            });
+            assert(heard);
+            (void) heard;
+            brutal->send(hi[0].connection, std::string(4 << 20, 'y'));   // nobody reads it
+            auto t0 = std::chrono::steady_clock::now();
+            brutal->close();
+            (void) co_await scope.join();
+            assert(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(1));
+            assert(brutal->finished());
+            brutal.reset();
+            ::close(victim);
+            assert(::access(path.c_str(), F_OK) != 0);
+        }
         co_return;
     };
 

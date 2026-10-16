@@ -10,6 +10,7 @@
 #include <cassert>
 #include <condition_variable>
 #include <cstddef>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -1008,11 +1009,37 @@ namespace wry::Coroutine {
         co_return;
     };
 
-    // ---- SingleProducerSingleConsumerQueue -------------------------------------
+    // ---- MultiProducerSingleConsumerQueue --------------------------------------
 
     namespace {
 
-        using IntQueue = SingleProducerSingleConsumerQueue<int>;
+        using IntQueue = MultiProducerSingleConsumerQueue<int>;
+        static_assert(std::is_same_v<SingleProducerSingleConsumerQueue<int>, IntQueue>);
+
+        // Takes batches forever, summing and counting batches; only
+        // cancellation ends it
+        Task spsc_taker(IntQueue* queue,
+                        std::atomic<int>* batches,
+                        std::atomic<int>* sum,
+                        std::atomic<int>* destroyed) {
+            UnwindProbe probe{destroyed};
+            for (;;) {
+                std::deque<int> batch = co_await queue->take();
+                assert(!batch.empty());
+                for (int value : batch)
+                    sum->fetch_add(value, std::memory_order_relaxed);
+                batches->fetch_add(1, std::memory_order_release);
+            }
+        }
+
+        // Producers on their own frames: each emplaces its range
+        Task spsc_producer(IntQueue* queue, int first, int last) {
+            for (int i = first; i != last; ++i) {
+                queue->emplace(i);
+                if (i % 5 == 0)
+                    co_await TransferToPoolExecutor{};
+            }
+        }
 
         // Pops forever, summing; only cancellation ends it.  The probe
         // counts the frame's destruction; consumed counts deliveries
@@ -1080,6 +1107,48 @@ namespace wry::Coroutine {
             assert(!queue.try_pop(leftover));
         }
 
+        // take: everything queued in one go, in order; try_take likewise,
+        // and empty when nothing is queued
+        {
+            IntQueue queue;
+            assert(queue.try_take().empty());
+            queue.emplace(1);
+            queue.emplace(2);
+            queue.emplace(3);
+            std::deque<int> all = co_await queue.take();
+            assert((all.size() == 3) && (all[0] == 1) && (all[1] == 2) && (all[2] == 3));
+            assert(queue.try_take().empty());
+            queue.emplace(4);
+            std::deque<int> one = queue.try_take();
+            assert((one.size() == 1) && (one[0] == 4));
+        }
+
+        // Multiple producers, one taker: four producer frames interleave on
+        // the pool while the taker drains batches; every item arrives once.
+        // A take parks only on an empty queue, so the batch count is at
+        // most the item count and at least one
+        {
+            IntQueue queue;
+            std::atomic<int> batches{0}, sum{0}, destroyed{0};
+            Nursery takers;
+            takers.soon(spsc_taker(&queue, &batches, &sum, &destroyed));
+            const int n = 400;
+            {
+                Nursery producers;
+                for (int p = 0; p != 4; ++p)
+                    producers.soon(spsc_producer(&queue, p * 100 + 1, p * 100 + 101));
+                assert((co_await producers.join()) == 0);
+            }
+            while (sum.load(std::memory_order_relaxed) != n * (n + 1) / 2)
+                co_await TransferToPoolExecutor{};
+            int b = batches.load(std::memory_order_acquire);
+            assert((b >= 1) && (b <= n));
+            takers.request_stop();
+            assert((co_await takers.join()) == 1);
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert(queue.try_take().empty());
+        }
+
         co_return;
     };
 
@@ -1104,6 +1173,20 @@ namespace wry::Coroutine {
             queue.emplace(5);
             int value = 0;
             assert(queue.try_pop(value) && (value == 5));
+        }
+
+        // Parked cancel of a taker: the same callback path
+        {
+            IntQueue queue;
+            std::atomic<int> batches{0}, sum{0}, destroyed{0};
+            Nursery nursery;
+            nursery.soon(spsc_taker(&queue, &batches, &sum, &destroyed));
+            co_await cancelable_sleep(0.010);  // let it park
+            nursery.request_stop();
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert((co_await nursery.join()) == 1);
+            assert(batches.load(std::memory_order_relaxed) == 0);
+            assert(!queue._pop_continuation);
         }
 
         // Cancel before park: the token is already requested when the

@@ -19,6 +19,7 @@
 #include "gui_widget.hpp"
 #include "image.hpp"
 #include "json.hpp"
+#include "kqueue_reactor.hpp"
 #include "test.hpp"
 #include "world_state.hpp"
 
@@ -250,7 +251,7 @@ namespace wry {
         for (auto const& [id, source] : socket_sources)
             if (source->busy())
                 return false;
-        return !(control_socket && control_socket->has_input());
+        return socket_events.empty();
     }
 
     void GuiContext::cancel(CommandSource& source) {
@@ -515,17 +516,34 @@ namespace wry {
         return control_socket != nullptr;
     }
 
+    void GuiContext::wait_for_commands(std::chrono::milliseconds timeout) {
+        if (!control_socket)
+            return;
+        auto batch = Coroutine::sync_wait(with_deadline(std::chrono::steady_clock::now() + timeout,
+                                                        control_socket->events().take())).value();
+        if (batch)
+            for (auto& event : *batch)
+                socket_events.push_back(std::move(event));
+    }
+
     void GuiContext::_service_control_socket() {
         if (!control_socket)
             return;
-        for (uint64_t id : control_socket->take_closed()) {
-            auto it = socket_sources.find(id);
-            if (it == socket_sources.end())
+        for (auto& event : control_socket->events().try_take())
+            socket_events.push_back(std::move(event));
+        // In arrival order: a connection's lines, then its Closed
+        while (!socket_events.empty()) {
+            ControlSocket::Event event = std::move(socket_events.front());
+            socket_events.pop_front();
+            if (auto* closed = std::get_if<ControlSocket::Closed>(&event)) {
+                auto it = socket_sources.find(closed->connection);
+                if (it == socket_sources.end())
+                    continue;
+                cancel(*it->second);
+                socket_sources.erase(it);
                 continue;
-            cancel(*it->second);
-            socket_sources.erase(it);
-        }
-        for (auto& line : control_socket->take_lines()) {
+            }
+            ControlSocket::Line& line = std::get<ControlSocket::Line>(event);
             const uint64_t id = line.connection;
             Request request = decode_request(*this, line.bytes);
             if (!request.error.empty()) {
@@ -1404,7 +1422,7 @@ namespace wry {
 
         // The loop was spawned under the wait group, which this test cannot
         // join, so poll for its end before the destructor's assert
-        gc.control_socket->close();
+        co_await gc.control_socket->shutdown(std::chrono::milliseconds(100));
         while (!gc.control_socket->finished())
             co_await Coroutine::TransferToPoolExecutor{};
         gc.control_socket.reset();

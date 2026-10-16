@@ -11,9 +11,9 @@
 //  Transport only, on the kqueue reactor: an accept loop and, per
 //  connection, a reader and a writer, all coroutines on the worker pool
 //  (core/kqueue_reactor.hpp).  They move bytes and never touch GC objects.
-//  The main thread takes complete lines from an inbox once per frame and
-//  queues replies, which a connection's writer sends; what the lines mean
-//  is GuiContext's business.
+//  The main thread consumes an event queue -- complete lines, and
+//  connections closing, in arrival order -- and queues replies, which a
+//  connection's writer sends; what the lines mean is GuiContext's business.
 //
 
 #ifndef control_socket_hpp
@@ -25,6 +25,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "coroutine.hpp"
@@ -39,6 +40,14 @@ namespace wry {
             std::string bytes;          // unvalidated; not including '\n'
         };
 
+        struct Closed {
+            uint64_t connection;
+        };
+
+        // What the main thread consumes: a connection's lines in arrival
+        // order, then its Closed, after which nothing more from it
+        using Event = std::variant<Line, Closed>;
+
         // Bind and listen at `path` (replacing a stale socket file).  Null,
         // with `error` set, on failure.  Nothing is accepted until the task
         // from serve() runs; connections queue in the backlog meanwhile.
@@ -49,15 +58,21 @@ namespace wry {
         // socket should live: under the wait group for the process
         // singleton, under a nursery for a scoped one.  It runs under the
         // token its spawner gives it (process shutdown reaches it that way,
-        // through the delegate chain) and under this object's own source
-        // (close()).  Once only.
+        // through the delegate chain) and under this object's own sources
+        // (shutdown(), close()).  Once only.
         [[nodiscard]] Coroutine::Task serve();
 
-        // Gives each connection up to a second to send what is queued for
-        // it (the reply to `quit`), then cancels the rest and unlinks the
-        // path.  Does not wait for the coroutines: that is the spawner's
-        // join.  Requests stop, so call it on a pinned thread: the
-        // cancelled frames unwind on the caller.  Idempotent.
+        // Graceful: stops accepting, queues an end of stream behind what
+        // each connection has pending (the reply to `quit`), waits up to
+        // `grace` for the connections to finish, then close().  A task:
+        // await it, or spawn it, where the owner can (main: sync_wait)
+        [[nodiscard]] Coroutine::Task shutdown(std::chrono::milliseconds grace);
+
+        // Brutal and immediate: cancels the accept loop and every
+        // connection, and unlinks the path.  Does not wait for the
+        // coroutines: that is the spawner's join.  Requests stop, so call
+        // it on a pinned thread: the cancelled frames unwind on the caller.
+        // Idempotent
         void close();
 
         // The accept loop has ended, or was never started
@@ -73,16 +88,10 @@ namespace wry {
 
         std::string const& path() const { return _path; }
 
-        // Main thread: complete lines received since the last call, in
-        // arrival order per connection; and connections that have closed.
-        std::vector<Line> take_lines();
-        std::vector<uint64_t> take_closed();
-
-        // Main thread: whether lines or closings are waiting, and a wait
-        // for them (the headless host's idle).  Spurious and timed-out
-        // returns are allowed; callers re-check.
-        bool has_input();
-        void wait_for_input(std::chrono::milliseconds timeout);
+        // The event queue, for one consumer: try_take for a frame's worth,
+        // co_await take() to wait for input (the headless host idles on it,
+        // under a deadline, through sync_wait)
+        Coroutine::MultiProducerSingleConsumerQueue<Event>& events();
 
         // Main thread: queue `line` (a '\n' is appended) for `connection`.
         // Silently dropped if the connection has gone.
@@ -102,7 +111,8 @@ namespace wry {
 
         std::string _path;
         std::shared_ptr<Shared> _shared;
-        std::stop_source _stop;             // close(): this object's own
+        std::stop_source _stop;             // close(): everything
+        std::stop_source _stop_accepting;   // shutdown(): the accept loop only
         int _listen_fd = -1;                // until serve() hands it to the loop
         bool _served = false;
     };

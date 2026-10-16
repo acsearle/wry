@@ -201,6 +201,17 @@ namespace wry {
         return WithDeadlineSender<T>(std::move(deadline), std::move(future));
     };
 
+    // Anything else a coroutine could co_await (a queue's take, a nursery's
+    // join) is lifted into a Future first, awaited in place through a
+    // pointer: the argument must outlive the await, which a temporary in
+    // the awaiting expression does.  Senders other than Future are not yet
+    // accepted (WithDeadlineSender has no connect)
+    template<typename A>
+        requires (!Coroutine::Sender<A>)
+    auto with_deadline(std::chrono::steady_clock::time_point deadline, A&& awaitable) {
+        return with_deadline(deadline, Coroutine::lift_awaitable<A>(&awaitable));
+    }
+
     template<typename U, typename T>
     auto transform_await(Coroutine::Promise<U>* outer_promise, WithDeadlineSender<T>&& s) {
         return WithDeadlineAwaitable<Coroutine::Promise<U>, T>(outer_promise, std::move(s._deadline), std::move(s._future));

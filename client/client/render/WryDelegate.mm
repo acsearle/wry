@@ -371,8 +371,8 @@ namespace {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     self.done = YES;
     // -terminate: (e.g. an Apple Event quit) exit()s straight after this,
-    // past main's shutdown, so the control socket is closed here too.
-    [self closeControlSocket];
+    // past main's shutdown, so the control socket is shut down here too.
+    [self shutdownControlSocket];
 }
 
 // The headless host (core/docs/commands.md section 9): the same scenes,
@@ -410,15 +410,17 @@ namespace {
 // repinning so an idle main thread never holds the collector back.
 - (void)waitForCommands {
     if (_gui->control_socket)
-        _gui->control_socket->wait_for_input(std::chrono::milliseconds(100));
+        _gui->wait_for_commands(std::chrono::milliseconds(100));
     else
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     wry::mutator_repin();
 }
 
-- (void)closeControlSocket {
+- (void)shutdownControlSocket {
+    // Blocks main for up to the grace period (main is pinned, so the
+    // cancellation unwinds happen on a worker, under sync_wait)
     if (_gui->control_socket)
-        _gui->control_socket->close();
+        (void) wry::Coroutine::sync_wait(_gui->control_socket->shutdown(std::chrono::seconds(1)));
 }
 
 - (void)releaseControlSocket {

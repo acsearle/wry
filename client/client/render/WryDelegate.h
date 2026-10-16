@@ -26,8 +26,9 @@
 @property (nonatomic, nullable) NSCursor* cursor;
 @property (atomic) BOOL done;
 
-// Shutdown: stop the control socket (if open) and unlink its file.
-- (void)closeControlSocket;
+// Shutdown: let the control socket's connections finish (briefly), then
+// stop it and unlink its file.
+- (void)shutdownControlSocket;
 // After the wait group has drained: the accept loop has finished
 - (void)releaseControlSocket;
 

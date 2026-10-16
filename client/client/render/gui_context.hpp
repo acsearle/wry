@@ -182,8 +182,14 @@ namespace wry {
         // one (--control-socket), and a command source per connection.
         std::unique_ptr<ControlSocket> control_socket;
         std::map<uint64_t, std::unique_ptr<CommandSource>> socket_sources;
+        std::deque<ControlSocket::Event> socket_events;     // taken, not yet serviced
         bool open_control_socket(String const& path);
         void _service_control_socket();
+
+        // Block for up to `timeout` until the socket has input, taking it
+        // into socket_events (the headless host's idle).  Returns early
+        // and spuriously as it likes; the caller re-checks idle()
+        void wait_for_commands(std::chrono::milliseconds timeout);
 
         // Once per frame (the host, before input): poll pending replies,
         // complete those that finished, and issue lines that were waiting

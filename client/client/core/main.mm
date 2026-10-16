@@ -184,9 +184,9 @@ int main(int argc, const char** argv) {
             // collides with the drain pump below -- see the quit block in
             // WryDelegate for the full rationale.)
             printf("main is terminal\n");
-            // No more commands: close the control socket (its accept loop
-            // finishes in the drain below) and remove its file.
-            [delegate closeControlSocket];
+            // No more commands: shut the control socket down (its accept
+            // loop finishes in the drain below) and remove its file.
+            [delegate shutdownControlSocket];
             printf("main is joining background work\n");
             // Shutdown has begun: request the root token, so any task parked
             // in the reactor (a server's accept, a timed wait) unwinds now

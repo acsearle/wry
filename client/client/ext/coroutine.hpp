@@ -1188,6 +1188,24 @@ namespace wry::Coroutine {
         }
     };
 
+    // ---- Lifting an awaitable into a Future ----------------------------------
+    //
+    // What co_await x yields inside a Promise, with x in its own value
+    // category: through transform_await for the types that customize it,
+    // else x's own await_resume, else a SenderAwaitable's
+    template<typename A>
+    using AwaitResultType = decltype(await_transform_helper(static_cast<Promise<>*>(nullptr),
+                                                            std::declval<A>()).await_resume());
+
+    // A Future that awaits the caller's object in place, through a pointer:
+    // the object must outlive the await (a temporary in the awaiting
+    // expression does; so does a local the caller blocks on).  The value
+    // category A says how it is awaited
+    template<typename A>
+    Future<AwaitResultType<A>> lift_awaitable(std::remove_reference_t<A>* a) {
+        co_return co_await static_cast<A&&>(*a);
+    }
+
     // ---- sync_wait: block the calling thread on a sender ------------------
     //
     // The receiver records the outcome and releases a semaphore; the
@@ -1261,57 +1279,70 @@ namespace wry::Coroutine {
         return outcome;
     }
 
-    // An awaitable that is not a sender (a nursery's join) is lifted into a
-    // coroutine, which awaits the caller's object in place through a
-    // pointer: the argument outlives the call, which blocks until the lifted
-    // frame is gone, and a copy would be a second awaiter of a single-use
-    // awaitable (a join's copy asserts when it dies unawaited).  The value
-    // category the caller supplied is the one awaited
+    // Anything else a coroutine could co_await (a nursery's join, a queue's
+    // take, a with_deadline) is lifted into one, which awaits the caller's
+    // object in place through a pointer: the argument outlives the call,
+    // which blocks until the lifted frame is gone, and a copy would be a
+    // second awaiter of a single-use awaitable (a join's copy asserts when
+    // it dies unawaited).  The value category the caller supplied is the
+    // one awaited
     template<typename A>
-        requires (!Sender<A>) && Awaitable<A>
+        requires (!Sender<A>)
     auto sync_wait(A&& awaitable, std::stop_token stop_token = {}) {
-        using D = std::remove_cvref_t<A>;
-        using V = decltype(std::declval<D&>().await_resume());
-        auto lift = [](D* a) -> Future<V> {
-            co_return co_await std::forward<A>(*a);
-        };
-        return sync_wait(lift(&awaitable), std::move(stop_token));
+        return sync_wait(lift_awaitable<A>(&awaitable), std::move(stop_token));
     }
 
 
 
+    // ---- MultiProducerSingleConsumerQueue ----------------------------------
+    //
+    // Any thread may emplace; one consumer at a time pops (one item), takes
+    // (everything queued) or tries either without waiting.  The waiting
+    // forms park the consumer's frame on an empty queue, to be scheduled
+    // by the next emplace; a stop request on its token destroys the parked
+    // frame (cancellation unwinding), and a consumer that arrives with its
+    // token already requested is destroyed without parking, even if items
+    // are waiting.  An item is delivered once its emplace has scheduled the
+    // consumer, requested token or not.
+
     template<typename T>
-    struct SingleProducerSingleConsumerQueue {
+    struct MultiProducerSingleConsumerQueue {
 
         std::mutex _mutex;
-        std::queue<T> _queue;
+        std::deque<T> _queue;
         std::coroutine_handle<> _pop_continuation;
 
         void emplace(auto&&... args) {
             std::unique_lock guard{_mutex};
-            _queue.emplace(FORWARD(args)...);
-            auto continuation = take(_pop_continuation);
+            _queue.emplace_back(FORWARD(args)...);
+            auto continuation = wry::take(_pop_continuation);
             if (continuation)
                 global_work_queue_schedule(continuation);
         }
 
-        struct PopAwaitable {
+        // The parking common to pop and take; the derived await_resume says
+        // how much of the queue the consumer gets
+        struct BasicAwaitable {
 
             struct Callback {
-                SingleProducerSingleConsumerQueue* _context;
+                MultiProducerSingleConsumerQueue* _context;
                 void operator()() {
                     std::coroutine_handle<> continuation;
                     {
                         std::unique_lock guard{_context->_mutex};
-                        continuation = take(_context->_pop_continuation);
+                        continuation = wry::take(_context->_pop_continuation);
                     }
                     if (continuation)
                         continuation.destroy();
                 }
             };
 
-            SingleProducerSingleConsumerQueue* _context;
+            MultiProducerSingleConsumerQueue* _context;
             std::optional<std::stop_callback<Callback>> _stop_callback;
+
+            explicit BasicAwaitable(MultiProducerSingleConsumerQueue* context)
+            : _context(context) {
+            }
 
             constexpr bool await_ready() const noexcept {
                 return false;
@@ -1337,18 +1368,36 @@ namespace wry::Coroutine {
                 return std::noop_coroutine();
             }
 
+        };
+
+        struct PopAwaitable : BasicAwaitable {
+            using BasicAwaitable::BasicAwaitable;
             T await_resume() {
-                assert(_context);
-                std::unique_lock guard{_context->_mutex};
-                assert(!_context->_queue.empty());
-                T result{std::move(_context->_queue.front())};
-                _context->_queue.pop();
+                std::unique_lock guard{this->_context->_mutex};
+                assert(!this->_context->_queue.empty());
+                T result{std::move(this->_context->_queue.front())};
+                this->_context->_queue.pop_front();
                 return result;
             }
         };
 
-        [[nodiscard]] auto pop() {
+        struct TakeAwaitable : BasicAwaitable {
+            using BasicAwaitable::BasicAwaitable;
+            std::deque<T> await_resume() {
+                std::unique_lock guard{this->_context->_mutex};
+                assert(!this->_context->_queue.empty());
+                return std::exchange(this->_context->_queue, {});
+            }
+        };
+
+        // One item, waiting for it
+        [[nodiscard]] PopAwaitable pop() {
             return PopAwaitable{this};
+        };
+
+        // Everything queued, in order, waiting for at least one item
+        [[nodiscard]] TakeAwaitable take() {
+            return TakeAwaitable{this};
         };
 
         bool try_pop(T& victim) {
@@ -1357,14 +1406,24 @@ namespace wry::Coroutine {
             bool result = !_queue.empty();
             if (result) {
                 victim = std::move(_queue.front());
-                _queue.pop();
+                _queue.pop_front();
             }
             return result;
+        }
+
+        // Everything queued, in order; empty if nothing is
+        [[nodiscard]] std::deque<T> try_take() {
+            std::unique_lock guard{_mutex};
+            assert(!_pop_continuation); // single consumer violated
+            return std::exchange(_queue, {});
         }
 
         // TODO: Sender/receiver-level interface?
 
     };
+
+    template<typename T>
+    using SingleProducerSingleConsumerQueue = MultiProducerSingleConsumerQueue<T>;
 
 
 
