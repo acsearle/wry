@@ -74,7 +74,7 @@ namespace wry {
                                  stop_requested ? &immediate : nullptr);
                 // AFTER the harvest, before touching any udata: pairs with
                 // the publishers' release pokes before their kevent ADDs.
-                g_reactor_tsan_helper.load(std::memory_order_acquire);
+                (void) g_reactor_tsan_helper.load(std::memory_order_acquire);
 
                 assert((-1 <= n) && (n <= NEVENTS));
                 assert((n != 0) || stop_requested);
