@@ -417,6 +417,11 @@ namespace {
 }
 
 - (void)closeControlSocket {
+    if (_gui->control_socket)
+        _gui->control_socket->close();
+}
+
+- (void)releaseControlSocket {
     _gui->control_socket.reset();
 }
 

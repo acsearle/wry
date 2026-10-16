@@ -501,6 +501,9 @@ namespace wry {
         control_socket = ControlSocket::open(std::string(path.data(), path.chars.size()), error);
         String message;
         if (control_socket) {
+            // The process singleton: its accept loop lives for the process,
+            // under the wait group's root token
+            wait_group_spawn(control_socket->serve());
             message = String("Control socket: ");
             message.append(path);
         } else {
@@ -1399,6 +1402,11 @@ namespace wry {
         assert(gc.history.back().line == StringView("frame 1000"));
         assert(gc.history.back().status == Reply::CANCELLED);
 
+        // The loop was spawned under the wait group, which this test cannot
+        // join, so poll for its end before the destructor's assert
+        gc.control_socket->close();
+        while (!gc.control_socket->finished())
+            co_await Coroutine::TransferToPoolExecutor{};
         gc.control_socket.reset();
         co_return;
     };

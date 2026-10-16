@@ -1704,11 +1704,27 @@ namespace wry {
     // yielded mid-flight (e.g. a chunked background save) would be abandoned at
     // shutdown, leaking its frame and leaving a half-written file.
     //
+    // It is a nursery without an owner: spawns come from any thread, so the
+    // count is a sentinel-held atomic rather than a fold at join, and the
+    // join is a blocking wait or a callback rather than a coroutine.  Like a
+    // nursery it has a stop source, the ROOT token: every task spawned here
+    // runs under it (GetStopToken sees it; nurseries beneath bridge it), and
+    // main requests it when shutdown begins so that servers parked in the
+    // reactor unwind rather than hold the drain open.  Work that never
+    // reaches a cancellation point is unaffected and still drains.
+    //
     // It is inherently a single process-global instance (blocking; no other use
     // case), so it is expressed as static methods over hidden state
 
     // must call before wait is called
     void wait_group_spawn(Coroutine::Task task);
+
+    // the root token, for code outside any task (bridge it with a
+    // stop_callback or a Nursery)
+    std::stop_token wait_group_stop_token();
+
+    // shutdown has begun: request the root token.  Idempotent
+    bool wait_group_request_stop();
 
     // blocking; consumes main's sentinel, so call exactly once
     void wait_group_wait();

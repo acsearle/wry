@@ -27,6 +27,8 @@
 #include <string_view>
 #include <vector>
 
+#include "coroutine.hpp"
+
 namespace wry {
 
     class ControlSocket {
@@ -37,16 +39,33 @@ namespace wry {
             std::string bytes;          // unvalidated; not including '\n'
         };
 
-        // Bind and listen at `path` (replacing a stale socket file) and
-        // spawn the accept loop.  Null, with `error` set, on failure.
+        // Bind and listen at `path` (replacing a stale socket file).  Null,
+        // with `error` set, on failure.  Nothing is accepted until the task
+        // from serve() runs; connections queue in the backlog meanwhile.
         static std::unique_ptr<ControlSocket> open(std::string const& path,
                                                    std::string& error);
 
+        // The accept loop, as a task for the caller to spawn where this
+        // socket should live: under the wait group for the process
+        // singleton, under a nursery for a scoped one.  It runs under the
+        // token its spawner gives it (process shutdown reaches it that way,
+        // through the delegate chain) and under this object's own source
+        // (close()).  Once only.
+        [[nodiscard]] Coroutine::Task serve();
+
         // Gives each connection up to a second to send what is queued for
-        // it (the reply to `quit`), then cancels the rest, waits for every
-        // coroutine to finish (so no descriptor is closed under an armed
-        // knote) and unlinks the path.  Requests stop, so call it on a
-        // pinned thread: the cancelled frames unwind on the caller.
+        // it (the reply to `quit`), then cancels the rest and unlinks the
+        // path.  Does not wait for the coroutines: that is the spawner's
+        // join.  Requests stop, so call it on a pinned thread: the
+        // cancelled frames unwind on the caller.  Idempotent.
+        void close();
+
+        // The accept loop has ended, or was never started
+        bool finished();
+
+        // Asserts finished(): the owner joins its spawn (a nursery's join,
+        // the wait group's drain) before destroying this.  A never-served
+        // socket closes its listener here
         ~ControlSocket();
 
         ControlSocket(ControlSocket const&) = delete;
@@ -83,7 +102,9 @@ namespace wry {
 
         std::string _path;
         std::shared_ptr<Shared> _shared;
-        std::stop_source _stop;
+        std::stop_source _stop;             // close(): this object's own
+        int _listen_fd = -1;                // until serve() hands it to the loop
+        bool _served = false;
     };
 
 } // namespace wry

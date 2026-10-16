@@ -227,11 +227,24 @@ namespace wry {
             (void) co_await connections.join();
         }
 
-        // The root: runs the accept loop under the ControlSocket's own stop
-        // source (shield absorbs the stop at this boundary), then reports
-        // that everything has finished.
-        Coroutine::Task serve(std::shared_ptr<Shared> shared, int listen_fd, std::stop_token stop) {
-            (void) co_await Coroutine::shield(accept_connections(shared, listen_fd), std::move(stop));
+        // The root of the socket's work: the accept loop under two tokens,
+        // the one the spawner gave this frame (inherited through the
+        // delegate chain: the wait group's root token, a nursery's) and the
+        // object's own (close()).  The bridge requests the latter when the
+        // former fires, as a nursery bridges its outer token; the shield
+        // then runs the loop under the object's token alone and absorbs the
+        // stop at this boundary.  Reports finished last: the object may be
+        // destroyed the moment it is, so nothing of it is touched after
+        Coroutine::Task serve_under(std::shared_ptr<Shared> shared, int listen_fd, std::stop_source stop) {
+            struct Bridge {
+                std::stop_source _stop;
+                void operator()() {
+                    std::stop_source keepalive = _stop;     // see Nursery::Callback
+                    keepalive.request_stop();
+                }
+            };
+            std::stop_callback<Bridge> bridge{co_await GetStopToken{}, Bridge{stop}};
+            (void) co_await Coroutine::shield(accept_connections(shared, listen_fd), stop.get_token());
             {
                 std::scoped_lock lock{shared->mutex};
                 shared->finished = true;
@@ -272,12 +285,32 @@ namespace wry {
         std::unique_ptr<ControlSocket> s(new ControlSocket);
         s->_path = path;
         s->_shared = std::make_shared<Shared>();
-        // From here the accept loop owns the listening descriptor.
-        wait_group_spawn(serve(s->_shared, fd, s->_stop.get_token()));
+        s->_listen_fd = fd;
         return s;
     }
 
+    Coroutine::Task ControlSocket::serve() {
+        assert(!_served && (_listen_fd != -1));
+        _served = true;
+        // From here the accept loop owns the listening descriptor
+        return serve_under(_shared, std::exchange(_listen_fd, -1), _stop);
+    }
+
+    bool ControlSocket::finished() {
+        if (!_served)
+            return true;
+        std::scoped_lock lock{_shared->mutex};
+        return _shared->finished;
+    }
+
     ControlSocket::~ControlSocket() {
+        assert(finished());
+        if (_listen_fd != -1)
+            ::close(_listen_fd);
+        (void) ::unlink(_path.c_str());
+    }
+
+    void ControlSocket::close() {
         Shared& shared = *_shared;
         // Ask every connection to finish what is queued for it and close,
         // and give them a second to do so.
@@ -295,14 +328,10 @@ namespace wry {
                 return shared.connections.empty();
             });
         }
-        // Cancel what remains, then wait for every frame to finish.  The
-        // cancellation unwinds frames parked on this thread, inside
-        // request_stop; frames running on workers finish there.
+        // Cancel what remains.  The cancellation unwinds frames parked on
+        // this thread, inside request_stop; frames running on workers finish
+        // there, and the spawner's join waits for them
         _stop.request_stop();
-        {
-            std::unique_lock lock{shared.mutex};
-            shared.changed.wait(lock, [&] { return shared.finished; });
-        }
         (void) ::unlink(_path.c_str());
     }
 
@@ -401,6 +430,9 @@ namespace wry {
         std::string error;
         auto server = ControlSocket::open(path, error);
         assert(server && error.empty());
+        // A scoped socket: served under this test's nursery
+        Nursery nursery;
+        nursery.soon(server->serve());
 
         struct stat st = {};
         const int stat_result = ::stat(path.c_str(), &st);
@@ -471,6 +503,10 @@ namespace wry {
         assert(greeted && hello[0].bytes == "hello");
         (void) greeted;
         server->send(hello[0].connection, "goodbye");
+        server->close();
+        // close() does not wait for the loop; the join does, and the
+        // destructor requires it
+        (void) co_await nursery.join();
         server.reset();
         auto last = read_lines(second, 1);
         assert(last.size() == 1 && last[0] == "goodbye");

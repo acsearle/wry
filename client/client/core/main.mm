@@ -184,10 +184,14 @@ int main(int argc, const char** argv) {
             // collides with the drain pump below -- see the quit block in
             // WryDelegate for the full rationale.)
             printf("main is terminal\n");
-            // No more commands: stop the control socket's thread and remove
-            // its file (GuiContext itself is not torn down at exit).
+            // No more commands: close the control socket (its accept loop
+            // finishes in the drain below) and remove its file.
             [delegate closeControlSocket];
             printf("main is joining background work\n");
+            // Shutdown has begun: request the root token, so any task parked
+            // in the reactor (a server's accept, a timed wait) unwinds now
+            // rather than holding the drain below open.  Finite work drains.
+            wry::wait_group_request_stop();
             wry::mutator_unpin();
             // Hand the menu bar back / drop out of the foreground while we drain:
             // closing the last window does NOT deactivate a window-less app, so
@@ -249,12 +253,19 @@ int main(int argc, const char** argv) {
                 }
             } while (!c.done.load_acquire());
 
+            // Drained: the socket's loop has finished (GuiContext itself is
+            // not torn down at exit, so this is explicit)
+            [delegate releaseControlSocket];
+
         } // @autoreleasepool
     } else {
         printf("main is terminal\n");
         printf("main is joining background work\n");
         // No run loop to service in headless test mode, so just block on the
         // drain.  Stay unpinned afterwards for the same reason as the GUI branch.
+        // The root token is NOT requested here: the test runner is itself a
+        // wait-group task, and a requested root token would cancel the tests
+        // at their first reactor wait.
         wry::mutator_unpin();
         wry::wait_group_wait();
     }

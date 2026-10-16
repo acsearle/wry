@@ -6,6 +6,7 @@
 //
 
 #include <atomic>
+#include <memory>
 #include <cassert>
 #include <condition_variable>
 #include <cstddef>
@@ -59,6 +60,14 @@ namespace wry {
         // Not atomic; protected by sentinel
         void* g_wait_group_callback = nullptr;
 
+        // The root stop source: every task spawned into the group runs
+        // under its token (WaitGroupDelegate::get_stop_token), and nurseries
+        // beneath bridge it down.  main requests it when shutdown begins,
+        // before draining the group, so servers parked in the reactor unwind
+        // instead of holding the drain open; finite work that never reaches
+        // a cancellation point (a chunked save) finishes regardless
+        std::stop_source g_wait_group_stop_source;
+
         void wait_group_retire(void*) {
             std::ptrdiff_t n = g_wait_group_count.sub_fetch_release(1);
             assert(n >= 0);
@@ -81,6 +90,9 @@ namespace wry {
             // A cancelled top-level task still owes the group its retire
             virtual void unhandled_stopped() noexcept override {
                 wait_group_retire(nullptr);
+            }
+            virtual std::stop_token get_stop_token() noexcept override {
+                return g_wait_group_stop_source.get_token();
             }
         };
 
@@ -106,6 +118,14 @@ namespace wry {
         }
         std::atomic_thread_fence(std::memory_order::acquire);
         tsan_acquire(&g_wait_group_count);
+    }
+
+    std::stop_token wait_group_stop_token() {
+        return g_wait_group_stop_source.get_token();
+    }
+
+    bool wait_group_request_stop() {
+        return g_wait_group_stop_source.request_stop();
     }
 
     void wait_group_set_callback(void* callback) {
@@ -985,6 +1005,171 @@ namespace wry::Coroutine {
             assert(target.value() == 1);
         }
 
+        co_return;
+    };
+
+    // ---- SingleProducerSingleConsumerQueue -------------------------------------
+
+    namespace {
+
+        using IntQueue = SingleProducerSingleConsumerQueue<int>;
+
+        // Pops forever, summing; only cancellation ends it.  The probe
+        // counts the frame's destruction; consumed counts deliveries
+        Task spsc_consumer(IntQueue* queue,
+                           std::atomic<int>* consumed,
+                           std::atomic<int>* sum,
+                           std::atomic<int>* destroyed) {
+            UnwindProbe probe{destroyed};
+            for (;;) {
+                int value = co_await queue->pop();
+                sum->fetch_add(value, std::memory_order_relaxed);
+                consumed->fetch_add(1, std::memory_order_release);
+            }
+        }
+
+        // Pops exactly n items, then completes normally
+        Task spsc_consumer_n(IntQueue* queue, int n, std::atomic<int>* sum) {
+            for (int i = 0; i != n; ++i) {
+                int value = co_await queue->pop();
+                sum->fetch_add(value, std::memory_order_relaxed);
+            }
+        }
+
+    }
+
+    define_test("coroutine_spsc_queue") {
+
+        // Ready path: items already queued are popped in order without
+        // parking, and try_pop sees what pop sees.  Move-only elements pin
+        // the move through emplace and pop
+        {
+            SingleProducerSingleConsumerQueue<std::unique_ptr<int>> queue;
+            std::unique_ptr<int> victim;
+            assert(!queue.try_pop(victim));
+            queue.emplace(std::make_unique<int>(1));
+            queue.emplace(std::make_unique<int>(2));
+            queue.emplace(std::make_unique<int>(3));
+            std::unique_ptr<int> a = co_await queue.pop();
+            assert(a && (*a == 1));
+            assert(queue.try_pop(victim) && victim && (*victim == 2));
+            std::unique_ptr<int> c = co_await queue.pop();
+            assert(c && (*c == 3));
+            assert(!queue.try_pop(victim));
+        }
+
+        // Parked path: the consumer parks on an empty queue and a later
+        // emplace from this frame schedules it; repeated, with the producer
+        // yielding between items so some pops park and some find an item
+        {
+            IntQueue queue;
+            std::atomic<int> sum{0};
+            Nursery nursery;
+            const int n = 200;
+            nursery.soon(spsc_consumer_n(&queue, n, &sum));
+            for (int i = 1; i <= n; ++i) {
+                queue.emplace(i);
+                if (i % 3 == 0)
+                    co_await TransferToPoolExecutor{};
+                if (i % 7 == 0)
+                    co_await cancelable_sleep(0.0005);
+            }
+            assert((co_await nursery.join()) == 0);
+            assert(sum.load(std::memory_order_relaxed) == n * (n + 1) / 2);
+            int leftover;
+            assert(!queue.try_pop(leftover));
+        }
+
+        co_return;
+    };
+
+    define_test("coroutine_spsc_queue_cancel") {
+
+        // Parked cancel: the consumer is parked on an empty queue; the stop
+        // request destroys its frame synchronously, inside request_stop,
+        // through the callback that takes the parked continuation.  The
+        // queue is intact afterwards: no continuation left behind, items
+        // still flow
+        {
+            IntQueue queue;
+            std::atomic<int> consumed{0}, sum{0}, destroyed{0};
+            Nursery nursery;
+            nursery.soon(spsc_consumer(&queue, &consumed, &sum, &destroyed));
+            co_await cancelable_sleep(0.010);  // let it park
+            nursery.request_stop();
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert((co_await nursery.join()) == 1);
+            assert(consumed.load(std::memory_order_relaxed) == 0);
+            assert(!queue._pop_continuation);
+            queue.emplace(5);
+            int value = 0;
+            assert(queue.try_pop(value) && (value == 5));
+        }
+
+        // Cancel before park: the token is already requested when the
+        // consumer reaches its first pop, so the pop destroys the frame
+        // inline, from await_suspend, without ever parking
+        {
+            IntQueue queue;
+            std::atomic<int> consumed{0}, sum{0}, destroyed{0};
+            Nursery nursery;
+            nursery.request_stop();
+            nursery.soon(spsc_consumer(&queue, &consumed, &sum, &destroyed));
+            assert((co_await nursery.join()) == 1);
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert(consumed.load(std::memory_order_relaxed) == 0);
+            assert(!queue._pop_continuation);
+        }
+
+        // An item delivered before the stop stays delivered, and the
+        // consumer's NEXT pop is the cancellation point: whether it has
+        // parked there already (the callback destroys it) or reaches it
+        // after the request (await_suspend destroys it inline)
+        {
+            IntQueue queue;
+            std::atomic<int> consumed{0}, sum{0}, destroyed{0};
+            Nursery nursery;
+            nursery.soon(spsc_consumer(&queue, &consumed, &sum, &destroyed));
+            co_await cancelable_sleep(0.010);  // let it park
+            queue.emplace(7);
+            while (consumed.load(std::memory_order_acquire) != 1)
+                co_await TransferToPoolExecutor{};
+            nursery.request_stop();
+            assert((co_await nursery.join()) == 1);
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert(sum.load(std::memory_order_relaxed) == 7);
+        }
+
+        // A non-empty queue under a requested token: pop prefers
+        // cancellation, and the item stays queued for a later consumer
+        {
+            IntQueue queue;
+            std::atomic<int> consumed{0}, sum{0}, destroyed{0};
+            Nursery nursery;
+            nursery.request_stop();
+            queue.emplace(8);
+            nursery.soon(spsc_consumer(&queue, &consumed, &sum, &destroyed));
+            assert((co_await nursery.join()) == 1);
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            assert(consumed.load(std::memory_order_relaxed) == 0);
+            int value = 0;
+            assert(queue.try_pop(value) && (value == 8));
+        }
+
+        co_return;
+    };
+
+    define_test("coroutine_root_stop_token") {
+        // A test runs under run_tests, a wait-group task: its token is the
+        // root token, reached through the FutureAwaitable chain, and a
+        // nursery beneath it bridges that token into its own
+        std::stop_token token = co_await GetStopToken{};
+        assert(token.stop_possible());
+        assert(token == wait_group_stop_token());
+        assert(!token.stop_requested());
+        Nursery nursery{token};
+        assert(nursery._outer_stop_token == token);
+        assert(nursery._inner_stop_source.get_token() != token);
         co_return;
     };
 

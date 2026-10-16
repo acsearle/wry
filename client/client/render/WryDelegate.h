@@ -28,6 +28,8 @@
 
 // Shutdown: stop the control socket (if open) and unlink its file.
 - (void)closeControlSocket;
+// After the wait group has drained: the accept loop has finished
+- (void)releaseControlSocket;
 
 // Headless host (--headless): set up without a window; main then calls
 // -render while -hasCommandWork, and -waitForCommands otherwise.
