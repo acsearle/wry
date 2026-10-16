@@ -118,8 +118,14 @@ int main(int argc, const char** argv) {
 
     // Anchor the unit-test runner (and, later, any background saves) in the
     // process-lifetime WaitGroup, which we block on before tearing down the
-    // thread pool.
-    wry::wait_group_spawn(wry::run_tests(test_filter));
+    // thread pool.  Shielded from the root token: the suite is not written
+    // to be cancelled (a test that owns a nursery with live children sleeps
+    // before stopping them, and a root stop request landing in that sleep
+    // destroys the test's frame under its nursery, which asserts), so QUIT
+    // waits for the suite as it did before the root token existed.
+    wry::wait_group_spawn([](std::string_view filter) -> wry::Coroutine::Task {
+        (void) co_await wry::Coroutine::shield(wry::run_tests(filter));
+    }(test_filter));
 
 
     wry::mutator_pin();

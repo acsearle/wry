@@ -1242,17 +1242,36 @@ namespace wry::Coroutine {
         co_return;
     };
 
+    namespace {
+
+        // A wait-group task: what it sees through GetStopToken is the root
+        // token, reached through the delegate
+        Task root_token_probe(std::atomic<int>* result) {
+            std::stop_token token = co_await GetStopToken{};
+            // Identity only: at a GUI quit the root is requested while the
+            // suite still runs, and this probe must not mind
+            bool is_root = (token == wait_group_stop_token()) && token.stop_possible();
+            result->store(is_root ? 1 : 2, std::memory_order_release);
+        }
+
+    }
+
     define_test("coroutine_root_stop_token") {
-        // A test runs under run_tests, a wait-group task: its token is the
-        // root token, reached through the FutureAwaitable chain, and a
-        // nursery beneath it bridges that token into its own
-        std::stop_token token = co_await GetStopToken{};
-        assert(token.stop_possible());
-        assert(token == wait_group_stop_token());
-        assert(!token.stop_requested());
-        Nursery nursery{token};
-        assert(nursery._outer_stop_token == token);
-        assert(nursery._inner_stop_source.get_token() != token);
+        // The runner is shielded from the root token (main.mm), so this
+        // frame's own token is detached; a task spawned into the wait group
+        // sees the root token, and a nursery given it bridges rather than
+        // shares it
+        std::stop_token mine = co_await GetStopToken{};
+        assert(!mine.stop_possible());
+        std::atomic<int> result{0};
+        wait_group_spawn(root_token_probe(&result));
+        while (result.load(std::memory_order_acquire) == 0)
+            co_await TransferToPoolExecutor{};
+        assert(result.load(std::memory_order_relaxed) == 1);
+        std::stop_token root = wait_group_stop_token();
+        Nursery nursery{root};
+        assert(nursery._outer_stop_token == root);
+        assert(nursery._inner_stop_source.get_token() != root);
         co_return;
     };
 

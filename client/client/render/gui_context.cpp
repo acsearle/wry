@@ -1302,9 +1302,16 @@ namespace wry {
     define_test("gui_context_control_socket") {
         GuiContext gc;
         std::string path = "/tmp/wry-gui-context-socket-test-" + std::to_string(::getpid()) + ".sock";
-        const bool opened = gc.open_control_socket(String(path.c_str()));
-        assert(opened);
-        (void) opened;
+        // Opened by hand rather than through open_control_socket, whose
+        // spawn goes to the wait group: there the accept loop would be
+        // cancelled by the root token at quit (the test runner itself is
+        // shielded from it), and this test would lose its replies.  Under
+        // this frame's nursery it inherits the runner's shield
+        std::string error;
+        gc.control_socket = ControlSocket::open(path, error);
+        assert(gc.control_socket && error.empty());
+        Coroutine::Nursery serving;
+        serving.soon(gc.control_socket->serve());
 
         int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
         sockaddr_un address = {};
@@ -1423,8 +1430,7 @@ namespace wry {
         // The loop was spawned under the wait group, which this test cannot
         // join, so poll for its end before the destructor's assert
         co_await gc.control_socket->shutdown(std::chrono::milliseconds(100));
-        while (!gc.control_socket->finished())
-            co_await Coroutine::TransferToPoolExecutor{};
+        (void) co_await serving.join();
         gc.control_socket.reset();
         co_return;
     };

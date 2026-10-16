@@ -990,9 +990,16 @@ namespace wry::Coroutine {
         , _outer_stop_callback(_outer_stop_token, Callback{_inner_stop_source}) {
         }
 
+        // A nursery cannot be destroyed with children live: their delegates
+        // point here, and a destructor cannot wait for them.  Cancellation
+        // is destruction, so an owner with live children must not reach a
+        // cancellation point other than join: await anything else before
+        // the first spawn, after the join, or shielded.  (The unit tests are
+        // not written to this rule and run shielded from the root token;
+        // see main.mm)
         ~Nursery() {
-            // Detect destruction of a coroutine containing a running nursery
-            assert(!_children && !_counter.load_relaxed());
+            assert(!_children && !_counter.load_relaxed()
+                   && "a frame owning a nursery with live children was destroyed");
         }
 
         // co_await nursery.fork(foo(x)) immediately starts foo on the current
