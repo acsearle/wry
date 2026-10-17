@@ -76,7 +76,7 @@ namespace wry::coroutine {
     // context?
 
     template<typename T>
-    struct JustAwaitable {
+    struct just_awaitable_t {
         T _value;
         constexpr bool await_ready() const noexcept {
             return true;
@@ -323,13 +323,13 @@ namespace wry::coroutine {
 
     template<typename T>
     decltype(auto) transform_await(Promise<T>* promise, GetPromise) {
-        return JustAwaitable<Promise<T>*>{ promise };
+        return just_awaitable_t<Promise<T>*>{ promise };
     }
     struct GetStopToken {};
 
     template<typename T>
     decltype(auto) transform_await(Promise<T>* promise, GetStopToken) {
-        return JustAwaitable<std::stop_token>{ get_stop_token(*promise) };
+        return just_awaitable_t<std::stop_token>{ get_stop_token(*promise) };
     }
 
 

@@ -681,7 +681,7 @@ namespace wry::coroutine {
         }
 
         Future<int> sr_add(int x) {
-            int y = co_await execution::Just<int>{2};          // generic path, synchronous
+            int y = co_await execution::just(2);          // generic path, synchronous
             int z = co_await sr_one();              // direct path
             int w = co_await ViaSender{sr_one()};   // generic path, Future as sender
             co_return x + y + z + w;
@@ -881,7 +881,7 @@ namespace wry::coroutine {
                        std::atomic<int>* resumed_past) {
             UnwindProbe probe{destroyed};
             started->fetch_add(1, std::memory_order_release);
-            (void) co_await execution::race(race_slow(destroyed), race_slow(destroyed));
+            (void) co_await execution::when_any(race_slow(destroyed), race_slow(destroyed));
             resumed_past->fetch_add(1, std::memory_order_relaxed);
         }
 
@@ -893,7 +893,7 @@ namespace wry::coroutine {
         // which retires before the race delivers
         {
             std::atomic<int> destroyed{0};
-            execution::RaceWinner<int> w = co_await execution::race(race_slow(&destroyed), race_fast(3));
+            execution::RaceWinner<int> w = co_await execution::when_any(race_slow(&destroyed), race_fast(3));
             assert((w.index == 1) && (w.value == 3));
             assert(destroyed.load(std::memory_order_relaxed) == 1);
         }
@@ -901,7 +901,7 @@ namespace wry::coroutine {
         // Ties: both entrants complete inside start; the first claims and
         // the second's value is dropped
         {
-            execution::RaceWinner<int> w = co_await execution::race(execution::Just<int>{1}, execution::Just<int>{2});
+            execution::RaceWinner<int> w = co_await execution::when_any(execution::just(1), execution::just(2));
             assert((w.index == 0) && (w.value == 1));
         }
 
@@ -910,7 +910,7 @@ namespace wry::coroutine {
             std::atomic<int> destroyed{0};
             bool caught = false;
             try {
-                (void) co_await execution::race(race_slow(&destroyed), sr_thrower());
+                (void) co_await execution::when_any(race_slow(&destroyed), sr_thrower());
             } catch (std::runtime_error const&) {
                 caught = true;
             }
@@ -920,14 +920,14 @@ namespace wry::coroutine {
 
         // Every entrant stops: the race completes stopped, absorbed here
         {
-            auto r = co_await stopped_as_optional(execution::race(race_stopper(), race_stopper()));
+            auto r = co_await stopped_as_optional(execution::when_any(race_stopper(), race_stopper()));
             assert(!r.has_value());
         }
 
         // void entrants
         {
             std::atomic<int> destroyed{0};
-            execution::RaceWinner<void> w = co_await execution::race(race_void_slow(&destroyed), race_void_fast());
+            execution::RaceWinner<void> w = co_await execution::when_any(race_void_slow(&destroyed), race_void_fast());
             assert(w.index == 1);
             assert(destroyed.load(std::memory_order_relaxed) == 1);
         }

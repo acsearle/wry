@@ -8,8 +8,12 @@
 #ifndef execution_hpp
 #define execution_hpp
 
-#include <exception>
 #include <execution>
+
+// Wrap <execution> and provide extended, related and future standard
+// functionality
+
+#include <exception>
 #include <optional>
 #include <semaphore>
 #include <stop_token>
@@ -66,36 +70,41 @@ namespace wry::execution {
     // ---- Just: the synchronous sender -------------------------------------
 
     template<typename T>
-    struct Just {
+    struct just_t {
         T _value;
     };
 
     template<typename T>
-    struct SenderTraits<Just<T>> {
+    auto just(T&& x) {
+        return just_t<T>{std::forward<T>(x)};
+    }
+
+    template<typename T>
+    struct SenderTraits<just_t<T>> {
         using value_type = T;
     };
 
     template<typename T, typename R>
-    struct JustOperationState {
+    struct just_operation_state_t {
         T _value;
         R _receiver;
         template<typename R2>
-        JustOperationState(T&& value, R2&& receiver)
+        just_operation_state_t(T&& value, R2&& receiver)
         : _value(std::move(value))
         , _receiver(std::forward<R2>(receiver)) {
         }
-        JustOperationState(JustOperationState const&) = delete;
+        just_operation_state_t(just_operation_state_t const&) = delete;
     };
 
     template<typename T, typename R>
-    auto connect(Just<T>&& sender, R&& receiver) {
-        return JustOperationState<T, std::remove_cvref_t<R>>{
+    auto connect(just_t<T>&& sender, R&& receiver) {
+        return just_operation_state_t<T, std::remove_cvref_t<R>>{
             std::move(sender._value), std::forward<R>(receiver)
         };
     }
 
     template<typename T, typename R>
-    void start(JustOperationState<T, R>& op) {
+    void start(just_operation_state_t<T, R>& op) {
         // last touch of op
         set_value(std::move(op._receiver), std::move(op._value));
     }
@@ -190,7 +199,7 @@ namespace wry::execution {
     // Outcome must outlive completion to be read
 
     template<typename T, typename... Args>
-    void set_value( execution::Outcome<T>& outcome, Args&&... args) {
+    void set_value(execution::Outcome<T>& outcome, Args&&... args) {
         switch (outcome._variant.index()) {
             case 0:
                 outcome._variant.template emplace<1>(std::forward<Args>(args)...);
@@ -382,7 +391,7 @@ namespace wry::execution {
 
 
 
-    // ---- race: the first value or error wins ------------------------------
+    // ---- when_any: the first value or error wins ------------------------------
     //
     // Entrants are senders of one value type.  They run under an interior
     // stop source that the winner requests to hasten the losers, and that
@@ -409,12 +418,12 @@ namespace wry::execution {
     };
 
     template<execution::Sender... Ss>
-    struct Race {
+    struct when_any_t {
         std::tuple<Ss...> _senders;
     };
 
     template<Sender S, Sender... Ss>
-    struct SenderTraits<Race<S, Ss...>> {
+    struct SenderTraits<when_any_t<S, Ss...>> {
         static_assert((std::is_same_v<SenderValueType<S>, SenderValueType<Ss>> && ...),
                       "race entrants must have one value type");
         using value_type = RaceWinner<SenderValueType<S>>;
@@ -624,22 +633,22 @@ namespace wry::execution {
     }
 
     template<Sender... Ss, typename R>
-    auto connect(Race<Ss...>&& race, R&& receiver) {
+    auto connect(when_any_t<Ss...>&& race, R&& receiver) {
         using T = SenderValueType<std::tuple_element_t<0, std::tuple<Ss...>>>;
         return RaceOperationState<T, std::remove_cvref_t<R>, Ss...>(std::move(race._senders),
                                                                     std::forward<R>(receiver));
     }
 
     template<Sender... Ss>
-    auto race(Ss&&... senders) {
-        return Race<std::remove_cvref_t<Ss>...>{
+    auto when_any(Ss&&... senders) {
+        return when_any_t<std::remove_cvref_t<Ss>...>{
             std::tuple<std::remove_cvref_t<Ss>...>{std::forward<Ss>(senders)...}
         };
     }
 
 
 
-} // namspace wry::execution
+} // namespace wry::execution
 
 
 #endif /* execution_hpp */
