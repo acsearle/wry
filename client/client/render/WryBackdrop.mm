@@ -66,7 +66,7 @@ struct LoadSlot {
 // just lands in an orphaned slot and is dropped.  No drain, no cancellation.
 // wait_group_spawn'd, which both anchors it for process shutdown and supplies
 // the continuation a Task requires.
-wry::Coroutine::Task load_into_slot(std::shared_ptr<LoadSlot> slot,
+wry::coroutine::Task load_into_slot(std::shared_ptr<LoadSlot> slot,
                                     MTKTextureLoader* loader,
                                     NSURL* url,
                                     NSDictionary<MTKTextureLoaderOption, id>* options) {

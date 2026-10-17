@@ -30,8 +30,8 @@ namespace wry {
     template<typename Key, typename H>
     struct AwaitablePersistentSet {
         PersistentSet<Key, H> _inner;
-        Coroutine::Mutex _mutex;
-        Coroutine::Task set(Key key) {
+        coroutine::Mutex _mutex;
+        coroutine::Task set(Key key) {
             auto guard{co_await _mutex};
             _inner.set(key);
         }
@@ -126,11 +126,11 @@ namespace wry {
     using ReadyNode = ReadyMap::Node;
 
     template<typename Node, typename Weigh>
-    [[nodiscard]] Coroutine::Future<int64_t> rank_frame(Node const* _Nonnull self,
+    [[nodiscard]] coroutine::Future<int64_t> rank_frame(Node const* _Nonnull self,
                                                         std::type_identity_t<Node> const* _Nullable bound,
                                                         Weigh weigh,
                                                         bool is_head) {
-        Coroutine::Nursery nursery;
+        coroutine::Nursery nursery;
 
         // results[0] is our own weight; results[h] receives the height-h
         // child's subtree total (or stays zero for a height with no child).
@@ -159,7 +159,7 @@ namespace wry {
         co_return results[self->_height.nonatomic_load()];
     }
 
-    [[nodiscard]] Coroutine::Future<int64_t> notify_and_accumulate(ReadyMap const& ready,
+    [[nodiscard]] coroutine::Future<int64_t> notify_and_accumulate(ReadyMap const& ready,
                                                                    TransactionContext* _Nonnull context) {
         return rank_frame(ready._head, nullptr, [context](EntityID id) -> int64_t {
             Entity const* entity = nullptr;
@@ -189,7 +189,7 @@ namespace wry {
         return it->second.requested > 0;
     }
 
-    Coroutine::Future<Root<World*>> World::step() const {
+    coroutine::Future<Root<World*>> World::step() const {
 #ifndef NDEBUG
         {
             std::pair<Time, wry::EntityID> x;
@@ -225,7 +225,7 @@ namespace wry {
 
         int64_t entity_id_requests = 0;
         {
-            Coroutine::Nursery nursery;
+            coroutine::Nursery nursery;
 
             // For each EntityID ready now, look up the Entity and notify it.
             // On notification, entities will typically examine the World and
@@ -260,7 +260,7 @@ namespace wry {
         auto value_for_coordinate_action
         = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<std::pair<ParallelRebuildAction<Term>, ParallelRebuildAction<std::vector<EntityID>>>> {
+        -> coroutine::Future<std::pair<ParallelRebuildAction<Term>, ParallelRebuildAction<std::vector<EntityID>>>> {
             
             using A = std::pair<ParallelRebuildAction<Term>, ParallelRebuildAction<std::vector<EntityID>>>;
             
@@ -323,7 +323,7 @@ namespace wry {
         auto action_for_entity_id_for_coordinate
         = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<std::pair<ParallelRebuildAction<EntityID>, ParallelRebuildAction<std::vector<EntityID>>>> {
+        -> coroutine::Future<std::pair<ParallelRebuildAction<EntityID>, ParallelRebuildAction<std::vector<EntityID>>>> {
             
             using A = std::pair<ParallelRebuildAction<EntityID>, ParallelRebuildAction<std::vector<EntityID>>>;
             
@@ -378,7 +378,7 @@ namespace wry {
         auto action_for_located_for_coordinate
         = [this, &next_ready]
         (const std::pair<Coordinate, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<std::pair<ParallelRebuildAction<EntityIDSet>, ParallelRebuildAction<std::vector<EntityID>>>> {
+        -> coroutine::Future<std::pair<ParallelRebuildAction<EntityIDSet>, ParallelRebuildAction<std::vector<EntityID>>>> {
 
             using A = std::pair<ParallelRebuildAction<EntityIDSet>, ParallelRebuildAction<std::vector<EntityID>>>;
 
@@ -433,7 +433,7 @@ namespace wry {
         auto action_for_entity_for_entity_id
         = [this, &next_ready]
         (const std::pair<EntityID, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<std::pair<ParallelRebuildAction<Entity const*>, ParallelRebuildAction<std::vector<EntityID>>>> {
+        -> coroutine::Future<std::pair<ParallelRebuildAction<Entity const*>, ParallelRebuildAction<std::vector<EntityID>>>> {
             
             using A = std::pair<ParallelRebuildAction<Entity const*>, ParallelRebuildAction<std::vector<EntityID>>>;
             
@@ -500,7 +500,7 @@ namespace wry {
         auto action_for_waiting_on_time
         = [next_time, &next_ready]
         (const std::pair<Time, Atomic<const Transaction::Node*>>& kv)
-        -> Coroutine::Future<ParallelRebuildAction<Set>> {
+        -> coroutine::Future<ParallelRebuildAction<Set>> {
             ParallelRebuildAction<Set> result{};
             if (kv.first == next_time) {
                 result.tag = ParallelRebuildAction<Set>::NONE;
@@ -529,7 +529,7 @@ namespace wry {
             co_return result;
         };
         
-        Coroutine::Nursery nursery;
+        coroutine::Nursery nursery;
         
         co_await nursery.fork(new_value_for_coordinate,
                               coroutine_parallel_rebuild2_unified(_term_for_coordinate,

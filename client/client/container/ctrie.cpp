@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <cstdlib>
 
+#include "nursery.hpp"
+
 #include "ctrie.hpp"
 #include "test.hpp"
 
@@ -83,13 +85,13 @@ namespace wry {
         Root<Ctrie<KeyType, ValueType, Hasher>*> trie(new Ctrie<KeyType, ValueType, MaskedWryHasher<KeyType>>(hasher));
         using AlterChoice = Ctrie<KeyType, ValueType, Hasher>::AlterChoice;
 
-        Coroutine::Nursery nursery;
+        coroutine::Nursery nursery;
 
         printf("FORK\n");
         int m = 1 << 9;
         for (int i = 0; i != 1 << 17; i += m) {
             std::span s{data.data() + i, data.data() + i + m};
-            co_await nursery.fork([](auto trie, std::span<T> s) -> Coroutine::Future<> {
+            co_await nursery.fork([](auto trie, std::span<T> s) -> coroutine::Future<> {
                 for (auto& [k, f, v] : s) {
                     if (f) {
                         auto [w, x] = trie->alter(k, [&](std::optional<ValueType> const& in) -> AlterChoice {
@@ -109,12 +111,12 @@ namespace wry {
         co_await nursery.join();
         printf("JOIN\n");
 
-        co_await Coroutine::DebugWaitForCollectionCycles{1};
+        co_await coroutine::DebugWaitForCollectionCycles{1};
 
         printf("FORK2\n");
         for (int i = 0; i != 1 << 17; i += m) {
             std::span s{data.data() + i, data.data() + i + m};
-            co_await nursery.fork([](auto trie, std::span<T> s) -> Coroutine::Future<> {
+            co_await nursery.fork([](auto trie, std::span<T> s) -> coroutine::Future<> {
                 for (auto [k, f, v] : s) {
                     auto w = trie->find(k);
                     assert(w.has_value() == f);
@@ -133,7 +135,7 @@ namespace wry {
         printf("FORK3\n");
         for (int i = 0; i != 1 << 17; i += m) {
             std::span s{data.data() + i, data.data() + i + m};
-            co_await nursery.fork([](auto trie, std::span<T> s) -> Coroutine::Future<> {
+            co_await nursery.fork([](auto trie, std::span<T> s) -> coroutine::Future<> {
                 for (auto [k, f, v] : s) {
                     auto [w, x] = trie->alter(k, [](std::optional<ValueType> const& in) {
                         return AlterChoice::erase();
@@ -150,12 +152,12 @@ namespace wry {
         co_await nursery.join();
         printf("JOIN3\n");
 
-        co_await Coroutine::DebugWaitForCollectionCycles{1};
+        co_await coroutine::DebugWaitForCollectionCycles{1};
 
         printf("ERASED\n");
         trie = nullptr;
 
-        co_await Coroutine::DebugWaitForCollectionCycles{1};
+        co_await coroutine::DebugWaitForCollectionCycles{1};
 
 
         co_return;
@@ -254,7 +256,7 @@ namespace wry {
         // Run.
         Root<Ctrie<CommKey, CommVal, Hasher>*> trie(new Ctrie<CommKey, CommVal, Hasher>(hasher));
         using AlterChoice = Ctrie<CommKey, CommVal, Hasher>::AlterChoice;
-        Coroutine::Nursery nursery;
+        coroutine::Nursery nursery;
 
         constexpr size_t batch = 1 << 9; // 512 ops per fork
         printf("[ctrie_commutative] FORK\n");
@@ -263,7 +265,7 @@ namespace wry {
             std::span s{ops.data() + i, ops.data() + hi};
             co_await nursery.fork(
                 [](auto trie, std::span<std::pair<CommKey, int>> s)
-                -> Coroutine::Future<> {
+                -> coroutine::Future<> {
                     for (auto [k, delta] : s) {
                         // alter ignores the returned old value -- we only
                         // care about the final state, which we'll check
@@ -281,7 +283,7 @@ namespace wry {
         co_await nursery.join();
         printf("[ctrie_commutative] JOIN\n");
 
-        co_await Coroutine::DebugWaitForCollectionCycles{1};
+        co_await coroutine::DebugWaitForCollectionCycles{1};
 
         // Verify: for each key, the final state must match its target count
         // exactly, with the convention that count==0 means absent.
@@ -329,7 +331,7 @@ namespace wry {
         assert(mismatches == 0);
 
         trie = nullptr;
-        co_await Coroutine::DebugWaitForCollectionCycles{1};
+        co_await coroutine::DebugWaitForCollectionCycles{1};
 
         co_return;
     };

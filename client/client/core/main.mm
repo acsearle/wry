@@ -123,8 +123,8 @@ int main(int argc, const char** argv) {
     // before stopping them, and a root stop request landing in that sleep
     // destroys the test's frame under its nursery, which asserts), so QUIT
     // waits for the suite as it did before the root token existed.
-    wry::wait_group_spawn([](std::string_view filter) -> wry::Coroutine::Task {
-        (void) co_await wry::Coroutine::shield(wry::run_tests(filter));
+    wry::wait_group_spawn([](std::string_view filter) -> wry::coroutine::Task {
+        (void) co_await wry::execution::shield(wry::run_tests(filter));
     }(test_filter));
 
 

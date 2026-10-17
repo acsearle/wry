@@ -68,11 +68,11 @@ namespace wry {
     // unwinding) and withdraws the knote promptly.
 
     // recv: bytes received, 0 for end of stream, or -errno
-    [[nodiscard]] Coroutine::Future<ssize_t>
+    [[nodiscard]] coroutine::Future<ssize_t>
     recv_some(int socket, void* buffer, size_t length, int flags);
 
     // send: bytes sent (possibly fewer than asked), or -errno
-    [[nodiscard]] Coroutine::Future<ssize_t>
+    [[nodiscard]] coroutine::Future<ssize_t>
     send_some(int socket, void const* buffer, size_t length, int flags);
 
     // accept on a listening socket: the new descriptor, or -errno.  The new
@@ -80,21 +80,21 @@ namespace wry {
     // SO_NOSIGPIPE on it as the caller sees fit.  (Named accept_one, and
     // connect_to below, because the C names would be ambiguous through
     // argument-dependent lookup on sockaddr)
-    [[nodiscard]] Coroutine::Future<int>
+    [[nodiscard]] coroutine::Future<int>
     accept_one(int socket, struct sockaddr* address, socklen_t* length);
 
     // connect: 0, or -errno.  Suspends only when the socket is non-blocking
     // and the connect is in progress (TCP); a blocking socket connects
     // synchronously on the worker
-    [[nodiscard]] Coroutine::Future<int>
+    [[nodiscard]] coroutine::Future<int>
     connect_to(int socket, struct sockaddr const* address, socklen_t length);
 
-    [[nodiscard]] Coroutine::Future<>
+    [[nodiscard]] coroutine::Future<>
     cancelable_sleep(double seconds);
 
 
     template<typename OuterPromise, typename T>
-    struct WithDeadlineAwaitable : Coroutine::OutcomeDelegate<WithDeadlineAwaitable<OuterPromise, T>, T> {
+    struct WithDeadlineAwaitable : coroutine::OutcomeDelegate<WithDeadlineAwaitable<OuterPromise, T>, T> {
 
         struct Frame {
 
@@ -109,14 +109,14 @@ namespace wry {
 
             OuterPromise* _outer_promise;
             std::chrono::steady_clock::time_point _deadline;
-            Coroutine::Future<T> _future;
+            coroutine::Future<T> _future;
             std::stop_source _inner_stop_source;
             std::optional<std::stop_callback<Callback>> _stop_callback;
-            Coroutine::Outcome<T> _outcome;
+            execution::Outcome<T> _outcome;
 
             Frame(OuterPromise* outer_promise,
                   std::chrono::steady_clock::time_point deadline,
-                  Coroutine::Future<T> future)
+                  coroutine::Future<T> future)
             : _outer_promise(std::move(outer_promise))
             , _deadline(std::move(deadline))
             , _future(std::move(future)) {
@@ -128,11 +128,11 @@ namespace wry {
 
         WithDeadlineAwaitable(OuterPromise* outer_promise,
                               std::chrono::steady_clock::time_point deadline,
-                              Coroutine::Future<T> future)
+                              coroutine::Future<T> future)
         : _frame{outer_promise, std::move(deadline), std::move(future)} {
         }
 
-        Coroutine::Outcome<T>& outcome() noexcept {
+        execution::Outcome<T>& outcome() noexcept {
             return _frame._outcome;
         }
 
@@ -141,7 +141,7 @@ namespace wry {
         }
 
         std::coroutine_handle<> await_suspend(std::coroutine_handle<OuterPromise>) noexcept {
-            using Coroutine::get_stop_token;
+            using coroutine::get_stop_token;
             _frame._future._promise->set_delegate(this);
             _frame._stop_callback.emplace(get_stop_token(*_frame._outer_promise),
                                           typename Frame::Callback{_frame._inner_stop_source});
@@ -164,7 +164,7 @@ namespace wry {
             // Absorb: the inner stopped (usually by our own timer), so the
             // outer resumes with nullopt -- unless the outer's own token is
             // requested, in which case the unwinding continues through it
-            using Coroutine::get_stop_token;
+            using coroutine::get_stop_token;
             set_stopped(_frame._outcome);
             OuterPromise* outer = take(_frame._outer_promise);
             if (get_stop_token(*outer).stop_requested())
@@ -188,16 +188,16 @@ namespace wry {
     template<typename T>
     struct WithDeadlineSender {
         std::chrono::steady_clock::time_point _deadline;
-        Coroutine::Future<T> _future;
+        coroutine::Future<T> _future;
     };
 
 //    template<typename T>
-//    Coroutine::Future<std::optional<T>> with_deadline(std::chrono::steady_clock::time_point deadline, Coroutine::Future<T>&& future) {
+//    coroutine::Future<std::optional<T>> with_deadline(std::chrono::steady_clock::time_point deadline, coroutine::Future<T>&& future) {
 //        co_return co_await WithDeadlineAwaitable<T>(std::move(deadline), std::move(future));
 //    };
 
     template<typename T>
-    WithDeadlineSender<T> with_deadline(std::chrono::steady_clock::time_point deadline, Coroutine::Future<T>&& future) {
+    WithDeadlineSender<T> with_deadline(std::chrono::steady_clock::time_point deadline, coroutine::Future<T>&& future) {
         return WithDeadlineSender<T>(std::move(deadline), std::move(future));
     };
 
@@ -207,14 +207,14 @@ namespace wry {
     // the awaiting expression does.  Senders other than Future are not yet
     // accepted (WithDeadlineSender has no connect)
     template<typename A>
-        requires (!Coroutine::Sender<A>)
+        requires (!execution::Sender<A>)
     auto with_deadline(std::chrono::steady_clock::time_point deadline, A&& awaitable) {
-        return with_deadline(deadline, Coroutine::lift_awaitable<A>(&awaitable));
+        return with_deadline(deadline, coroutine::lift_awaitable<A>(&awaitable));
     }
 
     template<typename U, typename T>
-    auto transform_await(Coroutine::Promise<U>* outer_promise, WithDeadlineSender<T>&& s) {
-        return WithDeadlineAwaitable<Coroutine::Promise<U>, T>(outer_promise, std::move(s._deadline), std::move(s._future));
+    auto transform_await(coroutine::Promise<U>* outer_promise, WithDeadlineSender<T>&& s) {
+        return WithDeadlineAwaitable<coroutine::Promise<U>, T>(outer_promise, std::move(s._deadline), std::move(s._future));
     }
 
 

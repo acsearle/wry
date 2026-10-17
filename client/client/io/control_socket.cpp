@@ -25,13 +25,14 @@
 #include "control_socket.hpp"
 #include "coroutine.hpp"
 #include "kqueue_reactor.hpp"
+#include "nursery.hpp"
 #include "test.hpp"
 
 namespace wry {
 
-    using Coroutine::Future;
-    using Coroutine::GetStopToken;
-    using Coroutine::Nursery;
+    using coroutine::Future;
+    using coroutine::GetStopToken;
+    using coroutine::Nursery;
 
     // ----------------------------------------------------------------
     // Shared state.
@@ -50,7 +51,7 @@ namespace wry {
             bool end = false;
         };
 
-        using OutQueue = Coroutine::SingleProducerSingleConsumerQueue<Outgoing>;
+        using OutQueue = coroutine::SingleProducerSingleConsumerQueue<Outgoing>;
 
     } // namespace
 
@@ -62,10 +63,10 @@ namespace wry {
         bool finished = false;                  // the accept loop has ended
         // Its own lock: the connections' readers produce, the main thread
         // consumes
-        Coroutine::MultiProducerSingleConsumerQueue<Event> events;
+        coroutine::MultiProducerSingleConsumerQueue<Event> events;
         // A signal per time the connection table empties; shutdown() is
         // its consumer
-        Coroutine::MultiProducerSingleConsumerQueue<std::monostate> drained;
+        coroutine::MultiProducerSingleConsumerQueue<std::monostate> drained;
     };
 
     namespace {
@@ -204,7 +205,7 @@ namespace wry {
                 // shield: the accept runs under `accepting` and a stop there
                 // is absorbed as nullopt
                 std::optional<int> accepted =
-                    co_await Coroutine::shield(accept_one(listen_fd, nullptr, nullptr), accepting);
+                    co_await execution::shield(accept_one(listen_fd, nullptr, nullptr), accepting);
                 if (!accepted)
                     break;                  // stopped
                 int fd = *accepted;
@@ -252,11 +253,11 @@ namespace wry {
         // alone and absorbs the stop at this boundary.  Reports finished
         // last: the object may be destroyed the moment it is, so nothing of
         // it is touched after
-        Coroutine::Task serve_under(std::shared_ptr<Shared> shared, int listen_fd,
+        coroutine::Task serve_under(std::shared_ptr<Shared> shared, int listen_fd,
                                     std::stop_source stop, std::stop_source accepting) {
             std::stop_callback<Bridge> outer_to_stop{co_await GetStopToken{}, Bridge{stop}};
             std::stop_callback<Bridge> stop_to_accepting{stop.get_token(), Bridge{accepting}};
-            (void) co_await Coroutine::shield(accept_connections(shared, listen_fd, accepting.get_token()),
+            (void) co_await execution::shield(accept_connections(shared, listen_fd, accepting.get_token()),
                                               stop.get_token());
             {
                 std::scoped_lock lock{shared->mutex};
@@ -302,7 +303,7 @@ namespace wry {
         return s;
     }
 
-    Coroutine::Task ControlSocket::serve() {
+    coroutine::Task ControlSocket::serve() {
         assert(!_served && (_listen_fd != -1));
         _served = true;
         // From here the accept loop owns the listening descriptor
@@ -323,7 +324,7 @@ namespace wry {
         (void) ::unlink(_path.c_str());
     }
 
-    Coroutine::Task ControlSocket::shutdown(std::chrono::milliseconds grace) {
+    coroutine::Task ControlSocket::shutdown(std::chrono::milliseconds grace) {
         std::shared_ptr<Shared> shared = _shared;
         // No new connections
         _stop_accepting.request_stop();
@@ -355,7 +356,7 @@ namespace wry {
         (void) ::unlink(_path.c_str());
     }
 
-    Coroutine::MultiProducerSingleConsumerQueue<ControlSocket::Event>& ControlSocket::events() {
+    coroutine::MultiProducerSingleConsumerQueue<ControlSocket::Event>& ControlSocket::events() {
         return _shared->events;
     }
 

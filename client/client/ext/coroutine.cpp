@@ -22,7 +22,9 @@
 #include <dispatch/dispatch.h>
 
 #include "coroutine.hpp"
+#include "mpsc_queue.hpp"
 
+#include "nursery.hpp"
 #include "kqueue_reactor.hpp"
 #include "test.hpp"
 
@@ -35,6 +37,21 @@ namespace wry {
     void global_work_queue_schedule(std::coroutine_handle<> handle) {
         global_work_queue_schedule(handle.address());
     }
+
+    inline void global_work_queue_schedule_destroy_by_address(void* ptr) {
+        struct DestroyThunk {
+            coroutine::Header _header = { &_static_destroy, &_static_destroy };
+            void* continuation = nullptr;
+            static void _static_destroy(void* ptr) {
+                auto self = (DestroyThunk*)ptr;
+                void* continuation = self->continuation;
+                delete self;
+                [[clang::musttail]] return coroutine::destroy_by_address(continuation);
+            }
+        };
+        global_work_queue_schedule(new DestroyThunk{ .continuation = ptr });
+    }
+
 
     namespace {
 
@@ -73,9 +90,9 @@ namespace wry {
             std::ptrdiff_t n = g_wait_group_count.sub_fetch_release(1);
             assert(n >= 0);
             if (n == 0) { std::atomic_thread_fence(std::memory_order::acquire); tsan_acquire(&g_wait_group_count);
-                Coroutine::resume_by_address(g_wait_group_callback); }
+                coroutine::resume_by_address(g_wait_group_callback); }
         }
-        constinit Coroutine::Header g_wait_group_sentinel = {
+        constinit coroutine::Header g_wait_group_sentinel = {
             &wait_group_retire,
             &wait_group_retire
         };
@@ -84,7 +101,7 @@ namespace wry {
             g_wait_group_count.notify_all();
         };
 
-        struct WaitGroupDelegate : Coroutine::Delegate<> {
+        struct WaitGroupDelegate : coroutine::Delegate<> {
             virtual std::coroutine_handle<> final_await_suspend() noexcept override {
                 return std::coroutine_handle<>::from_address(&g_wait_group_sentinel);
             }
@@ -101,7 +118,7 @@ namespace wry {
 
     }
 
-    void wait_group_spawn(Coroutine::Task task) {
+    void wait_group_spawn(coroutine::Task task) {
         std::ptrdiff_t observed = g_wait_group_count.fetch_add_relaxed(1);
         assert(observed && "wait_group_spawn after wait_group_wait");
         task._promise->set_delegate(&g_wait_group_delegate);
@@ -137,32 +154,18 @@ namespace wry {
             // If all the tasks were finished, invoke immediately
             std::atomic_thread_fence(std::memory_order_acquire);
             tsan_acquire(&g_wait_group_count);
-            Coroutine::resume_by_address(g_wait_group_callback);
+            coroutine::resume_by_address(g_wait_group_callback);
         }
     }
 
 }
 
-namespace wry::Coroutine {
+namespace wry::coroutine {
 
     void TransferToBlockableExecutor::await_suspend(std::coroutine_handle<> handle) const noexcept {
         dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
                          handle.address(),
                          &resume_by_address);
-    }
-
-    // Policy: We use libdispatch to implement waiting, but on waking we send
-    // the actual work back to the global work queue
-
-    void global_work_queue_schedule_after(std::chrono::steady_clock::time_point when, void* address) {
-        auto now = std::chrono::steady_clock::now();
-        int64_t ns = (when > now)
-        ? std::chrono::duration_cast<std::chrono::nanoseconds>(when - now).count()
-        : 0;
-        dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, ns),
-                         dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
-                         address,
-                         &global_work_queue_schedule);
     }
 
 #pragma - Testing
@@ -299,8 +302,8 @@ namespace wry::Coroutine {
 
         std::atomic<int> reached{0};
         std::atomic<int> destroyed{0};
-        Outcome<std::optional<int>> target{};
-        Outcome<int> ok_result;
+        execution::Outcome<std::optional<int>> target{};
+        execution::Outcome<int> ok_result;
 
         // A child's self-cancellation is absorbed in any retire order: the
         // outer token is unrequested, so the policy always resumes the
@@ -513,13 +516,13 @@ namespace wry::Coroutine {
                        std::atomic<int>* shielded,
                        std::atomic<int>* budgeted) {
             // Value channel passes through
-            std::optional<int> a = co_await stopped_as_optional(osfs_value_child());
+            std::optional<int> a = co_await execution::stopped_as_optional(osfs_value_child());
             if (a && (*a == 17))
                 value->store(17, std::memory_order_relaxed);
 
             // Exception channel passes through
             try {
-                (void) co_await stopped_as_optional(osfs_throwing_child());
+                (void) co_await execution::stopped_as_optional(osfs_throwing_child());
             } catch (std::runtime_error const&) {
                 caught->fetch_add(1, std::memory_order_relaxed);
             }
@@ -528,13 +531,13 @@ namespace wry::Coroutine {
             // requested token through the adaptor, cancels itself, the
             // cascade is absorbed at the adaptor's destroy word, and THIS
             // frame is resumed rather than destroyed
-            std::optional<int> c = co_await stopped_as_optional(osfs_stoppable_child());
+            std::optional<int> c = co_await execution::stopped_as_optional(osfs_stoppable_child());
             if (!c)
                 stopped_ok->fetch_add(1, std::memory_order_relaxed);
 
             // shield: the outer's requested token is not the inner's, which
             // sees a detached token and completes with its value
-            std::optional<int> d = co_await shield(osfs_shielded_child());
+            std::optional<int> d = co_await execution::shield(osfs_shielded_child());
             if (d && (*d == 5))
                 shielded->fetch_add(1, std::memory_order_relaxed);
 
@@ -543,7 +546,7 @@ namespace wry::Coroutine {
             // adaptor absorbs that exactly as under the outer's token above
             std::stop_source budget;
             budget.request_stop();
-            std::optional<int> e = co_await shield(osfs_stoppable_child(), budget.get_token());
+            std::optional<int> e = co_await execution::shield(osfs_stoppable_child(), budget.get_token());
             if (!e)
                 budgeted->fetch_add(1, std::memory_order_relaxed);
         }
@@ -616,17 +619,19 @@ namespace wry::Coroutine {
 
     // Routes a sender through the generic path even when it is also
     // awaitable (a Future would otherwise take its direct path)
-    template<Sender S>
+    template<execution::Sender S>
     struct ViaSender {
         S _inner;
     };
 
-    template<Sender S>
-    struct SenderTraits<ViaSender<S>> {
+} namespace wry::execution {
+    template<execution::Sender S>
+    struct SenderTraits<coroutine::ViaSender<S>> {
         using value_type = SenderValueType<S>;
     };
+} namespace wry::coroutine {
 
-    template<Sender S, typename R>
+    template<execution::Sender S, typename R>
     auto connect(ViaSender<S>&& via, R&& receiver) {
         return connect(std::move(via._inner), std::forward<R>(receiver));
     }
@@ -638,7 +643,7 @@ namespace wry::Coroutine {
         // arrives on another worker
         template<typename T>
         struct OutcomeReceiver {
-            Outcome<T>* _outcome;
+            execution::Outcome<T>* _outcome;
             std::atomic<int>* _done;
             std::stop_token _stop_token;
         };
@@ -676,7 +681,7 @@ namespace wry::Coroutine {
         }
 
         Future<int> sr_add(int x) {
-            int y = co_await Just<int>{2};          // generic path, synchronous
+            int y = co_await execution::Just<int>{2};          // generic path, synchronous
             int z = co_await sr_one();              // direct path
             int w = co_await ViaSender{sr_one()};   // generic path, Future as sender
             co_return x + y + z + w;
@@ -725,7 +730,7 @@ namespace wry::Coroutine {
         // Future routed through the generic sender path; nothing suspends
         // for real, so the whole thing completes inside start
         {
-            Outcome<int> outcome;
+            execution::Outcome<int> outcome;
             std::atomic<int> done{0};
             auto op = connect(sr_add(10), OutcomeReceiver<int>{&outcome, &done, {}});
             start(op);
@@ -736,7 +741,7 @@ namespace wry::Coroutine {
 
         // error crossing two seams and caught in the middle
         {
-            Outcome<int> outcome;
+            execution::Outcome<int> outcome;
             std::atomic<int> done{0};
             auto op = connect(sr_catcher(), OutcomeReceiver<int>{&outcome, &done, {}});
             start(op);
@@ -747,7 +752,7 @@ namespace wry::Coroutine {
 
         // error reaching the terminal receiver
         {
-            Outcome<int> outcome;
+            execution::Outcome<int> outcome;
             std::atomic<int> done{0};
             auto op = connect(sr_thrower(), OutcomeReceiver<int>{&outcome, &done, {}});
             start(op);
@@ -764,7 +769,7 @@ namespace wry::Coroutine {
 
         // a Task (void) as a sender
         {
-            Outcome<void> outcome;
+            execution::Outcome<void> outcome;
             std::atomic<int> done{0};
             std::atomic<int> ran{0};
             auto op = connect(sr_void_child(&ran), OutcomeReceiver<void>{&outcome, &done, {}});
@@ -787,7 +792,7 @@ namespace wry::Coroutine {
         // destroy cascade comes back through both -- synchronously, inside
         // request_stop
         {
-            Outcome<int> outcome;
+            execution::Outcome<int> outcome;
             std::atomic<int> done{0}, started{0}, destroyed{0};
             std::stop_source source;
             auto op = connect(sr_trunk(10.0, &started, &destroyed),
@@ -808,7 +813,7 @@ namespace wry::Coroutine {
         // reaches its cancellation point, so the whole tower is torn down
         // inside start
         {
-            Outcome<int> outcome;
+            execution::Outcome<int> outcome;
             std::atomic<int> done{0}, started{0}, destroyed{0};
             std::stop_source source;
             source.request_stop();
@@ -824,7 +829,7 @@ namespace wry::Coroutine {
         // Not stopped: the same tower completes normally on a worker after
         // the leaf's timer fires
         {
-            Outcome<int> outcome;
+            execution::Outcome<int> outcome;
             std::atomic<int> done{0}, started{0}, destroyed{0};
             std::stop_source source;
             auto op = connect(sr_trunk(0.0, &started, &destroyed),
@@ -876,7 +881,7 @@ namespace wry::Coroutine {
                        std::atomic<int>* resumed_past) {
             UnwindProbe probe{destroyed};
             started->fetch_add(1, std::memory_order_release);
-            (void) co_await race(race_slow(destroyed), race_slow(destroyed));
+            (void) co_await execution::race(race_slow(destroyed), race_slow(destroyed));
             resumed_past->fetch_add(1, std::memory_order_relaxed);
         }
 
@@ -888,7 +893,7 @@ namespace wry::Coroutine {
         // which retires before the race delivers
         {
             std::atomic<int> destroyed{0};
-            RaceWinner<int> w = co_await race(race_slow(&destroyed), race_fast(3));
+            execution::RaceWinner<int> w = co_await execution::race(race_slow(&destroyed), race_fast(3));
             assert((w.index == 1) && (w.value == 3));
             assert(destroyed.load(std::memory_order_relaxed) == 1);
         }
@@ -896,7 +901,7 @@ namespace wry::Coroutine {
         // Ties: both entrants complete inside start; the first claims and
         // the second's value is dropped
         {
-            RaceWinner<int> w = co_await race(Just<int>{1}, Just<int>{2});
+            execution::RaceWinner<int> w = co_await execution::race(execution::Just<int>{1}, execution::Just<int>{2});
             assert((w.index == 0) && (w.value == 1));
         }
 
@@ -905,7 +910,7 @@ namespace wry::Coroutine {
             std::atomic<int> destroyed{0};
             bool caught = false;
             try {
-                (void) co_await race(race_slow(&destroyed), sr_thrower());
+                (void) co_await execution::race(race_slow(&destroyed), sr_thrower());
             } catch (std::runtime_error const&) {
                 caught = true;
             }
@@ -915,14 +920,14 @@ namespace wry::Coroutine {
 
         // Every entrant stops: the race completes stopped, absorbed here
         {
-            auto r = co_await stopped_as_optional(race(race_stopper(), race_stopper()));
+            auto r = co_await stopped_as_optional(execution::race(race_stopper(), race_stopper()));
             assert(!r.has_value());
         }
 
         // void entrants
         {
             std::atomic<int> destroyed{0};
-            RaceWinner<void> w = co_await race(race_void_slow(&destroyed), race_void_fast());
+            execution::RaceWinner<void> w = co_await execution::race(race_void_slow(&destroyed), race_void_fast());
             assert(w.index == 1);
             assert(destroyed.load(std::memory_order_relaxed) == 1);
         }
@@ -968,13 +973,13 @@ namespace wry::Coroutine {
         // error, a stop (the caller's token is the environment), and an
         // awaitable lifted through a coroutine
         {
-            Outcome<int> outcome = sync_wait(sr_add(10));
+            execution::Outcome<int> outcome = execution::sync_wait(sr_add(10));
             assert(outcome.value() == 14);
         }
         {
             bool caught = false;
             try {
-                (void) sync_wait(sr_thrower()).value();
+                (void) execution::sync_wait(sr_thrower()).value();
             } catch (std::runtime_error const&) {
                 caught = true;
             }
@@ -983,11 +988,11 @@ namespace wry::Coroutine {
         {
             std::stop_source source;
             source.request_stop();
-            Outcome<int> outcome = sync_wait(osfs_stoppable_child(), source.get_token());
+            execution::Outcome<int> outcome = execution::sync_wait(osfs_stoppable_child(), source.get_token());
             assert(outcome.is_stopped());
         }
         {
-            Outcome<void> outcome = sync_wait(TransferToPoolExecutor{});
+            execution::Outcome<void> outcome = coroutine::sync_wait(TransferToPoolExecutor{});
             assert(outcome.has_value());
         }
 
@@ -996,11 +1001,11 @@ namespace wry::Coroutine {
         // so the lift must await the caller's object in place
         {
             std::atomic<int> ran{0};
-            Outcome<int> target;
+            execution::Outcome<int> target;
             Nursery nursery;
             nursery.soon(sr_void_child(&ran));
             nursery.soon(target, sr_one());
-            Outcome<std::ptrdiff_t> outcome = sync_wait(nursery.join());
+            execution::Outcome<std::ptrdiff_t> outcome = sync_wait(nursery.join());
             assert(outcome.value() == 0);
             assert(ran.load(std::memory_order_relaxed) == 1);
             assert(target.value() == 1);

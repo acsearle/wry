@@ -420,7 +420,7 @@ namespace {
     // Blocks main for up to the grace period (main is pinned, so the
     // cancellation unwinds happen on a worker, under sync_wait)
     if (_gui->control_socket)
-        (void) wry::Coroutine::sync_wait(_gui->control_socket->shutdown(std::chrono::seconds(1)));
+        (void) wry::execution::sync_wait(_gui->control_socket->shutdown(std::chrono::seconds(1)));
 }
 
 - (void)releaseControlSocket {

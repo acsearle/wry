@@ -519,7 +519,7 @@ namespace wry {
     void GuiContext::wait_for_commands(std::chrono::milliseconds timeout) {
         if (!control_socket)
             return;
-        auto batch = Coroutine::sync_wait(with_deadline(std::chrono::steady_clock::now() + timeout,
+        auto batch = coroutine::sync_wait(with_deadline(std::chrono::steady_clock::now() + timeout,
                                                         control_socket->events().take())).value();
         if (batch)
             for (auto& event : *batch)
@@ -1310,7 +1310,7 @@ namespace wry {
         std::string error;
         gc.control_socket = ControlSocket::open(path, error);
         assert(gc.control_socket && error.empty());
-        Coroutine::Nursery serving;
+        coroutine::Nursery serving;
         serving.soon(gc.control_socket->serve());
 
         int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);

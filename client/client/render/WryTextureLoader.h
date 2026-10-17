@@ -24,7 +24,7 @@ namespace wry {
     //
     // This is the Metal backend of an "async file -> GPU texture" capability;
     // a DirectX/Vulkan backend would implement the same Future-returning shape.
-    Coroutine::Future<id<MTLTexture>>
+    coroutine::Future<id<MTLTexture>>
     load_texture(MTKTextureLoader* loader,
                  NSURL* url,
                  NSDictionary<MTKTextureLoaderOption, id>* options);

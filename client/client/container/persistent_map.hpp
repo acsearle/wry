@@ -122,7 +122,7 @@ namespace wry {
     // actions).  `mods` must be sorted by code (the rebuild precondition; see
     // container/docs/parallel_rebuild.md).
     template<typename Key, typename T, typename H, typename D, typename Action, typename Combine>
-    [[nodiscard]] Coroutine::Future<PersistentMap<Key, T, H, D>>
+    [[nodiscard]] coroutine::Future<PersistentMap<Key, T, H, D>>
     coroutine_parallel_rebuild_from_mods(
             const PersistentMap<Key, T, H, D>& source,
             const std::vector<std::pair<typename H::code_type, Action>>& mods,
@@ -141,7 +141,7 @@ namespace wry {
     // comparator agrees with H (the rebuild precondition).
     template<typename Key, typename T, typename H, typename D,
              typename U, typename F, typename S2, typename D2>
-    [[nodiscard]] Coroutine::Future<PersistentMap<Key, T, H, D>>
+    [[nodiscard]] coroutine::Future<PersistentMap<Key, T, H, D>>
     coroutine_parallel_rebuild(const PersistentMap<Key, T, H, D>& source,
                                const FrozenMap<Key, U, S2, D2>& modifier,
                                F&& action_for_key) {

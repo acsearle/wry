@@ -904,7 +904,7 @@ namespace wry {
             return true;
         }
 
-        Coroutine::Task test_step_until(Root<World*>& world, Time t_end) {
+        coroutine::Task test_step_until(Root<World*>& world, Time t_end) {
             while (world._ptr->_time < t_end) {
                 // Extra pin, living in this coroutine's frame: it holds
                 // the epoch floor for step's epoch-allocated structures

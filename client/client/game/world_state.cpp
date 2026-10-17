@@ -386,7 +386,7 @@ namespace wry {
             Root<World const*> old_world;
             (void) _worlds.try_pop_front(old_world);
             assert(old_world);
-            Coroutine::Nursery nursery;
+            coroutine::Nursery nursery;
             nursery.soon(_world_to_render, old_world->step());
             sync_wait(nursery.join());
             _worlds.emplace_back(_world_to_render);

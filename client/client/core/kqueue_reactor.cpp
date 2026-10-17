@@ -22,6 +22,8 @@
 #include <thread>
 
 #include "kqueue_reactor.hpp"
+#include "nursery.hpp"
+
 #include "test.hpp"
 
 namespace wry {
@@ -43,7 +45,7 @@ namespace wry {
         //
         // The reactor is protocol-free.  Every knote it delivers, other than
         // the doorbell, carries as udata a heap frame whose first two words
-        // are a Coroutine::Header {resume, destroy}; the reactor schedules
+        // are a coroutine::Header {resume, destroy}; the reactor schedules
         // the frame on the thread pool.  Filters, idents, and completion
         // semantics are the frame's business.  Nothing resumes on the reactor
         // thread.
@@ -199,7 +201,7 @@ namespace wry {
             }
         };
 
-        Coroutine::Header _header = { &static_resume, nullptr };
+        coroutine::Header _header = { &static_resume, nullptr };
         std::stop_token _stop_token;
         std::atomic<uintptr_t> _state{0};
         std::atomic<ptrdiff_t> _reference_count_minus_one{2}; // initial condition: 3 owners
@@ -485,28 +487,28 @@ namespace wry {
 
     // ---- Socket operations: wait for readiness, then one syscall -----------
 
-    [[nodiscard]] Coroutine::Future<ssize_t> recv_some(int socket, void* buffer, size_t length, int flags) {
+    [[nodiscard]] coroutine::Future<ssize_t> recv_some(int socket, void* buffer, size_t length, int flags) {
         if (int error = co_await CancelableReadableAwaitable{socket})
             co_return -error;
         ssize_t n = ::recv(socket, buffer, length, flags);
         co_return (n == -1) ? -errno : n;
     }
 
-    [[nodiscard]] Coroutine::Future<ssize_t> send_some(int socket, void const* buffer, size_t length, int flags) {
+    [[nodiscard]] coroutine::Future<ssize_t> send_some(int socket, void const* buffer, size_t length, int flags) {
         if (int error = co_await CancelableWritableAwaitable{socket})
             co_return -error;
         ssize_t n = ::send(socket, buffer, length, flags);
         co_return (n == -1) ? -errno : n;
     }
 
-    [[nodiscard]] Coroutine::Future<int> accept_one(int socket, struct sockaddr* address, socklen_t* length) {
+    [[nodiscard]] coroutine::Future<int> accept_one(int socket, struct sockaddr* address, socklen_t* length) {
         if (int error = co_await CancelableReadableAwaitable{socket})
             co_return -error;
         int fd = ::accept(socket, address, length);
         co_return (fd == -1) ? -errno : fd;
     }
 
-    [[nodiscard]] Coroutine::Future<int> connect_to(int socket, struct sockaddr const* address, socklen_t length) {
+    [[nodiscard]] coroutine::Future<int> connect_to(int socket, struct sockaddr const* address, socklen_t length) {
         // A non-blocking connect that cannot complete at once reports
         // EINPROGRESS; completion is writability, and the result is then
         // read back with SO_ERROR.  A connect that completes (or fails) at
@@ -550,7 +552,7 @@ namespace wry {
         void await_resume() const {}
     };
 
-    [[nodiscard]] Coroutine::Future<> cancelable_sleep(double seconds) {
+    [[nodiscard]] coroutine::Future<> cancelable_sleep(double seconds) {
         co_return co_await CancelableSleepAwaitable{(intptr_t)(seconds * NSEC_PER_SEC)};
     }
 
@@ -584,7 +586,7 @@ namespace wry {
             ~ReactorProbe() { _counter->fetch_add(1, std::memory_order_relaxed); }
         };
 
-        Coroutine::Task reactor_late_writer(int fd) {
+        coroutine::Task reactor_late_writer(int fd) {
             co_await cancelable_sleep(0.010);
             char message[] = "later";
             ssize_t n = ::send(fd, message, 5, 0);
@@ -634,15 +636,15 @@ namespace wry {
             cancelable_after(source.get_token(), milliseconds(20),
                              cancelable_task(CancelableProbe{&destroyed}, &ran));
             while (ran.load(std::memory_order_relaxed) == 0)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
             assert(steady_clock::now() - t0 >= milliseconds(15));
             while (destroyed.load(std::memory_order_relaxed) == 0)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
             // The load-bearing property: the Frame dies promptly after the
             // fire, with the token never requested -- static_resume disarms
             // the callback and inherits its reference
             while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
         }
 
         // Cancel path: cancellation is a synchronous join -- when
@@ -693,13 +695,13 @@ namespace wry {
                 cancelable_after(source.get_token(), std::chrono::nanoseconds(0),
                                  cancelable_task(CancelableProbe{&destroyed}, &ran));
             while (ran.load(std::memory_order_relaxed) != N)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
             while (destroyed.load(std::memory_order_relaxed) != N)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
             // All N frames retire without a stop request, in every
             // interleaving the race produced
             while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
         }
 
         co_return;
@@ -716,7 +718,7 @@ namespace wry {
 
     namespace {
 
-        Coroutine::Task wd_recv_child(int fd,
+        coroutine::Task wd_recv_child(int fd,
                                       std::chrono::steady_clock::time_point deadline,
                                       std::atomic<int>* started,
                                       std::atomic<int>* destroyed,
@@ -750,7 +752,7 @@ namespace wry {
 
     define_test("kqueue_recv_late_data") {
         SocketPair sockets;
-        Coroutine::Nursery nursery;
+        coroutine::Nursery nursery;
         nursery.soon(reactor_late_writer(sockets.writer()));
 
         std::byte buffer[16];
@@ -795,11 +797,11 @@ namespace wry {
         SocketPair sockets;
         std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
 
-        Coroutine::Nursery nursery;
+        coroutine::Nursery nursery;
         nursery.soon(wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
                                    &started, &destroyed, &resumed_past));
         while (started.load(std::memory_order_acquire) != 1)
-            co_await Coroutine::TransferToPoolExecutor{};
+            co_await coroutine::TransferToPoolExecutor{};
         co_await cancelable_sleep(0.010);
 
         auto t0 = steady_clock::now();
@@ -813,7 +815,7 @@ namespace wry {
         assert(elapsed < seconds(2));
         // Both CancelableKEventFrames (recv leaf + deadline timer) retired
         while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-            co_await Coroutine::TransferToPoolExecutor{};
+            co_await coroutine::TransferToPoolExecutor{};
         co_return;
     };
 
@@ -833,7 +835,7 @@ namespace wry {
         auto t0 = steady_clock::now();
         while ((g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
                && (steady_clock::now() - t0 < seconds(1)))
-            co_await Coroutine::TransferToPoolExecutor{};
+            co_await coroutine::TransferToPoolExecutor{};
         // If the timer is only reaped when it fires, this is still 1 here
         assert(g_cancelable_kevent_frame_count.load(std::memory_order_acquire) == 0);
         co_return;
@@ -843,7 +845,7 @@ namespace wry {
 
         // A child parked in cancelable_sleep.  The probe counts its frame's
         // destruction; resumed_past counts a resume past the sleep.
-        Coroutine::Task sleep_child(double seconds,
+        coroutine::Task sleep_child(double seconds,
                                     std::atomic<int>* started,
                                     std::atomic<int>* destroyed,
                                     std::atomic<int>* resumed_past) {
@@ -854,7 +856,7 @@ namespace wry {
         }
 
         // A child parked in a bare recv_some (no deadline)
-        Coroutine::Task recv_child(int fd,
+        coroutine::Task recv_child(int fd,
                                    std::atomic<int>* started,
                                    std::atomic<int>* destroyed,
                                    std::atomic<int>* resumed_past) {
@@ -883,7 +885,7 @@ namespace wry {
             assert(elapsed >= milliseconds(15));
             assert(elapsed < seconds(5));
             while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
         }
 
         // Zero-duration burst: the fire races spawn's own installation of
@@ -893,7 +895,7 @@ namespace wry {
             for (int i = 0; i != 100; ++i)
                 co_await cancelable_sleep(0.0);
             while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
         }
 
         // Parked cancel: a stop request against a child asleep for 10s
@@ -901,10 +903,10 @@ namespace wry {
         // is withdrawn and its frame retired
         {
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
-            Coroutine::Nursery nursery;
+            coroutine::Nursery nursery;
             nursery.soon(sleep_child(10.0, &started, &destroyed, &resumed_past));
             while (started.load(std::memory_order_acquire) != 1)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
             // Settle past the arming window so this exercises the parked
             // cancel, not the install race
             co_await cancelable_sleep(0.010);
@@ -919,7 +921,7 @@ namespace wry {
             assert(resumed_past.load(std::memory_order_relaxed) == 0);
             assert(elapsed < seconds(2));
             while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
         }
 
         // Cancel before park: the child's token is already requested when it
@@ -929,7 +931,7 @@ namespace wry {
         // frame after spawn returns.
         {
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
-            Coroutine::Nursery nursery;
+            coroutine::Nursery nursery;
             nursery.request_stop();  // interior source requested before the fork
             nursery.soon(sleep_child(10.0, &started, &destroyed, &resumed_past));
             std::ptrdiff_t cancelled = co_await nursery.join();
@@ -940,7 +942,7 @@ namespace wry {
             // The nursery retires inside the child's destroy, which spawn
             // runs before it releases the Frame: spin rather than assert
             while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
         }
 
         co_return;
@@ -982,7 +984,7 @@ namespace wry {
         // Drains a non-blocking socket after a delay until `expected` bytes
         // have been seen, polling across the gaps (it is the other end of a
         // parked send_some, so it must never block a worker)
-        Coroutine::Task reactor_late_drain(int fd, size_t expected) {
+        coroutine::Task reactor_late_drain(int fd, size_t expected) {
             co_await cancelable_sleep(0.010);
             std::byte sink[65536];
             size_t total = 0;
@@ -998,7 +1000,7 @@ namespace wry {
         }
 
         // A child parked in send_some on a full socket
-        Coroutine::Task send_child(int fd,
+        coroutine::Task send_child(int fd,
                                    std::atomic<int>* started,
                                    std::atomic<int>* destroyed,
                                    std::atomic<int>* resumed_past) {
@@ -1034,7 +1036,7 @@ namespace wry {
         };
 
         // A child parked in accept on a listening socket nobody connects to
-        Coroutine::Task accept_child(int fd,
+        coroutine::Task accept_child(int fd,
                                      std::atomic<int>* started,
                                      std::atomic<int>* destroyed,
                                      std::atomic<int>* resumed_past) {
@@ -1046,7 +1048,7 @@ namespace wry {
 
         // Connects to the listener after a delay; the connect itself is the
         // reactor's, on a non-blocking socket
-        Coroutine::Task late_connector(sockaddr_un const* address, std::atomic<int>* result, int* fd_out) {
+        coroutine::Task late_connector(sockaddr_un const* address, std::atomic<int>* result, int* fd_out) {
             co_await cancelable_sleep(0.010);
             int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
             assert(fd != -1);
@@ -1081,7 +1083,7 @@ namespace wry {
             make_nonblocking(sockets.reader());
             size_t filled = fill_send_buffer(sockets.writer());
             assert(filled > 0);
-            Coroutine::Nursery nursery;
+            coroutine::Nursery nursery;
             nursery.soon(reactor_late_drain(sockets.reader(), filled + 5));
             char message[] = "later";
             auto t0 = steady_clock::now();
@@ -1120,10 +1122,10 @@ namespace wry {
             make_nonblocking(sockets.writer());
             (void) fill_send_buffer(sockets.writer());
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
-            Coroutine::Nursery nursery;
+            coroutine::Nursery nursery;
             nursery.soon(send_child(sockets.writer(), &started, &destroyed, &resumed_past));
             while (started.load(std::memory_order_acquire) != 1)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
             co_await cancelable_sleep(0.010);
             auto t0 = steady_clock::now();
             nursery.request_stop();
@@ -1133,7 +1135,7 @@ namespace wry {
             assert(resumed_past.load(std::memory_order_relaxed) == 0);
             assert(steady_clock::now() - t0 < seconds(2));
             while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
         }
 
         co_return;
@@ -1148,7 +1150,7 @@ namespace wry {
             ListeningSocket listener;
             std::atomic<int> connect_result{-1};
             int client = -1;
-            Coroutine::Nursery nursery;
+            coroutine::Nursery nursery;
             nursery.soon(late_connector(&listener._address, &connect_result, &client));
             auto t0 = steady_clock::now();
             auto r = co_await with_deadline(steady_clock::now() + seconds(10),
@@ -1209,10 +1211,10 @@ namespace wry {
         {
             ListeningSocket listener;
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
-            Coroutine::Nursery nursery;
+            coroutine::Nursery nursery;
             nursery.soon(accept_child(listener._fd, &started, &destroyed, &resumed_past));
             while (started.load(std::memory_order_acquire) != 1)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
             co_await cancelable_sleep(0.010);
             auto t0 = steady_clock::now();
             nursery.request_stop();
@@ -1222,7 +1224,7 @@ namespace wry {
             assert(resumed_past.load(std::memory_order_relaxed) == 0);
             assert(steady_clock::now() - t0 < seconds(2));
             while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
         }
 
         co_return;
@@ -1236,7 +1238,7 @@ namespace wry {
         {
             SocketPair sockets;
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
-            Coroutine::Nursery nursery;
+            coroutine::Nursery nursery;
             nursery.request_stop();
             nursery.soon(recv_child(sockets.reader(), &started, &destroyed, &resumed_past));
             std::ptrdiff_t cancelled = co_await nursery.join();
@@ -1245,13 +1247,13 @@ namespace wry {
             assert(destroyed.load(std::memory_order_relaxed) == 1);
             assert(resumed_past.load(std::memory_order_relaxed) == 0);
             while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
         }
 
         {
             SocketPair sockets;
             std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
-            Coroutine::Nursery nursery;
+            coroutine::Nursery nursery;
             nursery.request_stop();
             nursery.soon(wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
                                        &started, &destroyed, &resumed_past));
@@ -1261,7 +1263,7 @@ namespace wry {
             assert(destroyed.load(std::memory_order_relaxed) == 1);
             assert(resumed_past.load(std::memory_order_relaxed) == 0);
             while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await Coroutine::TransferToPoolExecutor{};
+                co_await coroutine::TransferToPoolExecutor{};
         }
 
         co_return;

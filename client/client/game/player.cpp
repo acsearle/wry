@@ -67,7 +67,7 @@ namespace wry {
 
     namespace {
 
-        Coroutine::Task player_test_step(Root<World*>& world) {
+        coroutine::Task player_test_step(Root<World*>& world) {
             // A pin in this frame holds the epoch floor for step's
             // epoch-allocated transaction structures across the await
             // (see machine.cpp's test_step_until).

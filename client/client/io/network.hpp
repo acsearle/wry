@@ -11,6 +11,7 @@
 #include <span>
 
 #include "coroutine.hpp"
+#include "nursery.hpp"
 #include "kqueue_reactor.hpp"
 
 namespace wry::network {
@@ -34,28 +35,28 @@ namespace wry::network {
     // cancellation unwinding, single waiter per socket and direction).
     // Deadlines compose from outside:
     //   co_await with_deadline(t, recv_some(socket, buffer)).
-    [[nodiscard]] inline Coroutine::Future<ssize_t>
+    [[nodiscard]] inline coroutine::Future<ssize_t>
     recv_some(Socket const& socket, std::span<std::byte> buffer) {
         return wry::recv_some(socket.file_descriptor, buffer.data(), buffer.size(), 0);
     }
 
-    [[nodiscard]] inline Coroutine::Future<ssize_t>
+    [[nodiscard]] inline coroutine::Future<ssize_t>
     send_some(Socket const& socket, std::span<std::byte const> buffer) {
         return wry::send_some(socket.file_descriptor, buffer.data(), buffer.size(), 0);
     }
 
     // The accepted descriptor, or -errno, in the int
-    [[nodiscard]] inline Coroutine::Future<int>
+    [[nodiscard]] inline coroutine::Future<int>
     accept_one(Socket const& listener) {
         return wry::accept_one(listener.file_descriptor, nullptr, nullptr);
     }
 
-    Coroutine::Task client() {
+    coroutine::Task client() {
         co_return;
     }
 
-    Coroutine::Task server() {
-        Coroutine::Nursery nursery;        
+    coroutine::Task server() {
+        coroutine::Nursery nursery;        
         co_await nursery.join();
         co_return;
     }

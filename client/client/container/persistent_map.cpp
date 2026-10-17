@@ -234,7 +234,7 @@ namespace wry {
                 // NONE: no change
             }
 
-            auto action_for_key = [](auto&& kv) -> Coroutine::Future<Action> {
+            auto action_for_key = [](auto&& kv) -> coroutine::Future<Action> {
                 co_return kv.second;
             };
 

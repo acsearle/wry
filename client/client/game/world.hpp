@@ -138,7 +138,7 @@ namespace wry {
         virtual uint64_t _save_type_tag() const override { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override;
 
-        Coroutine::Future<Root<World*>> step() const;
+        coroutine::Future<Root<World*>> step() const;
 
         EntityID generate_entity_id() { return _entity_id_source++; }
 

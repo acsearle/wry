@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "coroutine.hpp"
+#include "mpsc_queue.hpp"
 
 namespace wry {
 
@@ -60,13 +61,13 @@ namespace wry {
         // token its spawner gives it (process shutdown reaches it that way,
         // through the delegate chain) and under this object's own sources
         // (shutdown(), close()).  Once only.
-        [[nodiscard]] Coroutine::Task serve();
+        [[nodiscard]] coroutine::Task serve();
 
         // Graceful: stops accepting, queues an end of stream behind what
         // each connection has pending (the reply to `quit`), waits up to
         // `grace` for the connections to finish, then close().  A task:
         // await it, or spawn it, where the owner can (main: sync_wait)
-        [[nodiscard]] Coroutine::Task shutdown(std::chrono::milliseconds grace);
+        [[nodiscard]] coroutine::Task shutdown(std::chrono::milliseconds grace);
 
         // Brutal and immediate: cancels the accept loop and every
         // connection, and unlinks the path.  Does not wait for the
@@ -91,7 +92,7 @@ namespace wry {
         // The event queue, for one consumer: try_take for a frame's worth,
         // co_await take() to wait for input (the headless host idles on it,
         // under a deadline, through sync_wait)
-        Coroutine::MultiProducerSingleConsumerQueue<Event>& events();
+        coroutine::MultiProducerSingleConsumerQueue<Event>& events();
 
         // Main thread: queue `line` (a '\n' is appended) for `connection`.
         // Silently dropped if the connection has gone.

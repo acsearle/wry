@@ -19,6 +19,7 @@
 #include "coroutine.hpp"
 #include "bit.hpp"
 #include "stdint.hpp"
+#include "nursery.hpp"
 
 
 namespace wry {
@@ -840,10 +841,10 @@ namespace wry {
             }
         }
 
-        Coroutine::Task coroutine_parallel_for_each(auto&& action) const {
+        coroutine::Task coroutine_parallel_for_each(auto&& action) const {
             if (has_children()) {
                 int n = std::popcount(_bitmap);
-                Coroutine::Nursery nursery;
+                coroutine::Nursery nursery;
                 for (int i = 0; i != n; ++i)
                     co_await nursery.fork(_children[i]->coroutine_parallel_for_each(action));
                 co_await nursery.join();
@@ -857,8 +858,8 @@ namespace wry {
             }
         }
 
-        Coroutine::Task coroutine_parallel_for_each_coroutine(auto&& action) const {
-            Coroutine::Nursery nursery;
+        coroutine::Task coroutine_parallel_for_each_coroutine(auto&& action) const {
+            coroutine::Nursery nursery;
             if (has_children()) {
                 int n = popcount(_bitmap);
                 for (int i = 0; i != n; ++i)
@@ -947,7 +948,7 @@ namespace wry {
         }
 
         template<typename Action, typename Combine>
-        [[nodiscard]] static Coroutine::Future<const ArrayMappedTrie*>
+        [[nodiscard]] static coroutine::Future<const ArrayMappedTrie*>
         _rebuild_inrange(const ArrayMappedTrie* source, // internal; mods in range; a<b
                          const std::vector<std::pair<Word, Action>>& mods,
                          size_t a, size_t b,
@@ -985,7 +986,7 @@ namespace wry {
 
             std::vector<const ArrayMappedTrie*> outs(work.size(), nullptr);
             {
-                Coroutine::Nursery nursery;
+                coroutine::Nursery nursery;
                 for (size_t t = 0; t != work.size(); ++t)
                     co_await nursery.fork(outs[t],
                         coroutine_parallel_rebuild(work[t].child, mods,
@@ -1010,7 +1011,7 @@ namespace wry {
         }
 
         template<typename Action, typename Combine>
-        [[nodiscard]] static Coroutine::Future<const ArrayMappedTrie*>
+        [[nodiscard]] static coroutine::Future<const ArrayMappedTrie*>
         coroutine_parallel_rebuild(const ArrayMappedTrie* _Nullable source,
                                    const std::vector<std::pair<Word, Action>>& mods,
                                    size_t i, size_t j,

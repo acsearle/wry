@@ -19,7 +19,7 @@ namespace wry {
     
     namespace detail {
         
-        using Coroutine::Task;
+        using coroutine::Task;
         
         struct test_t {
             
@@ -77,7 +77,7 @@ namespace wry {
         
     }
     
-    using Coroutine::Task;
+    using coroutine::Task;
 
     // Runs every registered test whose metadata contains `filter` as a
     // substring (in any of its strings).  Empty filter runs all tests.

@@ -203,7 +203,7 @@ namespace wry {
     // Apply the modifier entries of one 32-key leaf range [lo, lo+32) to the kv
     // and ki leaves, walking the frozen skiplist at level 0 from `cursor`.
     template<typename Key, typename T, typename Cur, typename F>
-    Coroutine::Future<std::pair<const UnifiedKvAMT<Key, T>*, const UnifiedKiAMT<Key>*>>
+    coroutine::Future<std::pair<const UnifiedKvAMT<Key, T>*, const UnifiedKiAMT<Key>*>>
     unified_leaf(typename DefaultKeyService<Key>::code_type lo,
                  const UnifiedKvAMT<Key, T>* kv,
                  const UnifiedKiAMT<Key>* ki,
@@ -261,7 +261,7 @@ namespace wry {
     // partitioner hands each non-empty child a covering cursor (descend-just-
     // enough); empty children share.  No re-seek, no materialization.
     template<typename Key, typename T, typename Cur, typename F>
-    Coroutine::Future<std::pair<const UnifiedKvAMT<Key, T>*, const UnifiedKiAMT<Key>*>>
+    coroutine::Future<std::pair<const UnifiedKvAMT<Key, T>*, const UnifiedKiAMT<Key>*>>
     unified_frame(typename DefaultKeyService<Key>::code_type prefix, int shift,
                   const UnifiedKvAMT<Key, T>* kv,
                   const UnifiedKiAMT<Key>* ki,
@@ -286,7 +286,7 @@ namespace wry {
                                  [](const auto& key) -> uint64_t { return H{}.encode(key.first); });
 
         std::pair<const KvAMT*, const KiAMT*> results[SLOTS] = {};
-        Coroutine::Nursery nursery;
+        coroutine::Nursery nursery;
         for (int c = 0; c < n_slots; ++c) {
             Code child_prefix = prefix | ((Code)c << shift);
             const KvAMT* kv_c = unified_extract_child(kv, c, shift);
@@ -313,7 +313,7 @@ namespace wry {
     }
 
     template<typename Key, typename T, typename U, typename F, typename S2, typename D2>
-    Coroutine::Future<WaitableMap<Key, T>>
+    coroutine::Future<WaitableMap<Key, T>>
     coroutine_parallel_rebuild2_unified(const WaitableMap<Key, T>& source,
                                         const FrozenMap<Key, U, S2, D2>& modifier,
                                         F&& action_for_key) {

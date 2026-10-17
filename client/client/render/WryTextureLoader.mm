@@ -45,7 +45,7 @@ namespace wry {
 
     } // namespace
 
-    Coroutine::Future<id<MTLTexture>>
+    coroutine::Future<id<MTLTexture>>
     load_texture(MTKTextureLoader* loader,
                  NSURL* url,
                  NSDictionary<MTKTextureLoaderOption, id>* options) {

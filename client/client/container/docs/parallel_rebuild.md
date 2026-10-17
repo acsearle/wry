@@ -50,7 +50,7 @@ Keep the existing single-threaded rebuild as the correctness oracle. Stages 1 an
 
 ## Stage 1: parallel over the AMT
 
-Co-recurse over the AMT, forking subtrees into a `Coroutine::Nursery` exactly as
+Co-recurse over the AMT, forking subtrees into a `coroutine::Nursery` exactly as
 `ArrayMappedTrie::coroutine_parallel_for_each` already does:
 
 ```

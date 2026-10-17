@@ -126,7 +126,7 @@ namespace wry {
             }
 
             auto action_for_key = [&acts](auto&& kv)
-                -> Coroutine::Future<std::pair<ValAction, KiAction>> {
+                -> coroutine::Future<std::pair<ValAction, KiAction>> {
                 co_return acts[kv.first];
             };
 
@@ -313,7 +313,7 @@ void apply_ki_action(PersistentMap<Key, WaitSet, DefaultKeyService<Key>, ScanDis
 
 // Stage 0 (serial) -- kept as the oracle for the differential test.
 template<typename Key, typename T, typename U, typename F, typename S2, typename D2>
-Coroutine::Future<WaitableMap<Key, T>>
+coroutine::Future<WaitableMap<Key, T>>
 coroutine_parallel_rebuild2_serial(const WaitableMap<Key, T>& source,
                                    const ConcurrentMap<Key, U, S2, D2>& modifier,
                                    F&& action_for_key) {
@@ -349,7 +349,7 @@ coroutine_parallel_rebuild2_serial(const WaitableMap<Key, T>& source,
 // code-ordered because the modifier is.  World::step() calls this; the name
 // is unchanged, so its call sites are not.
 template<typename Key, typename T, typename U, typename F, typename S2, typename D2>
-Coroutine::Future<WaitableMap<Key, T>>
+coroutine::Future<WaitableMap<Key, T>>
 coroutine_parallel_rebuild2(const WaitableMap<Key, T>& source,
                             const ConcurrentMap<Key, U, S2, D2>& modifier,
                             F&& action_for_key) {
@@ -366,7 +366,7 @@ coroutine_parallel_rebuild2(const WaitableMap<Key, T>& source,
         if (p.second.tag != ParallelRebuildAction<std::vector<EntityID>>::NONE)
             ki_mods.emplace_back(code, std::move(p.second));
     }
-    Coroutine::Nursery nursery;
+    coroutine::Nursery nursery;
     co_await nursery.fork(result.kv,
                           coroutine_parallel_rebuild_from_mods(source.kv, kv_mods,
                                                                ParallelRebuildValueCombine<T>{}));

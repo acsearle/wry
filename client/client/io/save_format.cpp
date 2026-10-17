@@ -802,7 +802,7 @@ namespace wry {
         EntityID cursor0 = w->_entity_id_source;
         w->hack_repair_invariant();
 
-        auto step_once = [](Root<World*>& r) -> Coroutine::Task {
+        auto step_once = [](Root<World*>& r) -> coroutine::Task {
             epoch::Epoch pin = pin_global_epoch();
             Root<World*> next = co_await r._ptr->step();
             unpin_global_epoch(pin);
