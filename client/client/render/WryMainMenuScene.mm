@@ -48,7 +48,8 @@
         _viewportPx = simd_make_float2(0.0f, 0.0f);
         _frameCount = 0;
 
-        _backdrop = [[WryBackdrop alloc] initAlbumWithContext:context prefix:@"mainMenu"];
+        assert(gui->scope);
+        _backdrop = [[WryBackdrop alloc] initAlbumWithContext:context prefix:@"mainMenu" scope:gui->scope];
 
         using namespace wry::gui;
 

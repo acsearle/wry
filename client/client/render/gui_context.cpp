@@ -502,9 +502,10 @@ namespace wry {
         control_socket = ControlSocket::open(std::string(path.data(), path.chars.size()), error);
         String message;
         if (control_socket) {
-            // The process singleton: its accept loop lives for the process,
-            // under the wait group's root token
-            wait_group_spawn(control_socket->serve());
+            // The process singleton: its accept loop lives in the process
+            // scope, under the root token
+            assert(scope);
+            scope->soon(control_socket->serve());
             message = String("Control socket: ");
             message.append(path);
         } else {

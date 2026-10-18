@@ -53,110 +53,6 @@ namespace wry {
     }
 
 
-    namespace {
-
-        // g_wait_group_callback is published by the waiter (a plain write) and
-        // read by whichever worker drives g_wait_group_count to zero.  The
-        // synchronization is real and C++20-correct: the waiter's release on
-        // g_wait_group_count (after writing the callback) is picked up by the
-        // worker's acquire fence, via the release sequence that runs through
-        // the workers' sub_fetch RMWs.  ThreadSanitizer does not reconstruct
-        // happens-before from a standalone acquire fence over a release
-        // sequence, so it false-positives on the non-atomic callback word.
-        // tsan_release / tsan_acquire on the callback's address hand TSan the
-        // edge it cannot derive (cf. kqueue_reactor, where the kernel hides
-        // the same edge).  No-ops outside a TSan build.
-#if __has_feature(thread_sanitizer)
-        void tsan_acquire(void* addr) { __tsan_acquire(addr); }
-#else
-        void tsan_acquire(void*) {}
-#endif
-
-        // Initial count includes sentinel
-        constinit wry::Atomic<std::ptrdiff_t> g_wait_group_count{1};
-
-        // Not atomic; protected by sentinel
-        void* g_wait_group_callback = nullptr;
-
-        // The root stop source: every task spawned into the group runs
-        // under its token (WaitGroupDelegate::get_stop_token), and nurseries
-        // beneath bridge it down.  main requests it when shutdown begins,
-        // before draining the group, so servers parked in the reactor unwind
-        // instead of holding the drain open; finite work that never reaches
-        // a cancellation point (a chunked save) finishes regardless
-        std::stop_source g_wait_group_stop_source;
-
-        void wait_group_retire(void*) {
-            std::ptrdiff_t n = g_wait_group_count.sub_fetch_release(1);
-            assert(n >= 0);
-            if (n == 0) { std::atomic_thread_fence(std::memory_order::acquire); tsan_acquire(&g_wait_group_count);
-                coroutine::resume_by_address(g_wait_group_callback); }
-        }
-        constinit coroutine::Header g_wait_group_sentinel = {
-            &wait_group_retire,
-            &wait_group_retire
-        };
-
-        void (*g_wait_group_notify_all)(void*) = [](void*) {
-            g_wait_group_count.notify_all();
-        };
-
-        struct WaitGroupDelegate : coroutine::Delegate<> {
-            virtual std::coroutine_handle<> final_await_suspend() noexcept override {
-                return std::coroutine_handle<>::from_address(&g_wait_group_sentinel);
-            }
-            // A cancelled top-level task still owes the group its retire
-            virtual void unhandled_stopped() noexcept override {
-                wait_group_retire(nullptr);
-            }
-            virtual std::stop_token get_stop_token() noexcept override {
-                return g_wait_group_stop_source.get_token();
-            }
-        };
-
-        WaitGroupDelegate g_wait_group_delegate;
-
-    }
-
-    void wait_group_spawn(coroutine::Task task) {
-        std::ptrdiff_t observed = g_wait_group_count.fetch_add_relaxed(1);
-        assert(observed && "wait_group_spawn after wait_group_wait");
-        task._promise->set_delegate(&g_wait_group_delegate);
-        global_work_queue_schedule(handle_from_future(std::move(task)));
-        assert(task._promise == nullptr);
-    }
-
-    void wait_group_wait() {
-        g_wait_group_callback = &g_wait_group_notify_all;
-        std::ptrdiff_t expected = g_wait_group_count.sub_fetch_release(1);
-        assert(expected >= 0);
-        while (expected) {
-            g_wait_group_count.wait(expected, Ordering::RELAXED);
-            assert(expected >= 0);
-        }
-        std::atomic_thread_fence(std::memory_order::acquire);
-        tsan_acquire(&g_wait_group_count);
-    }
-
-    std::stop_token wait_group_stop_token() {
-        return g_wait_group_stop_source.get_token();
-    }
-
-    bool wait_group_request_stop() {
-        return g_wait_group_stop_source.request_stop();
-    }
-
-    void wait_group_set_callback(void* callback) {
-        g_wait_group_callback = callback;
-        std::ptrdiff_t expected = g_wait_group_count.sub_fetch_release(1);
-        assert(expected >= 0);
-        if (expected == 0) {
-            // If all the tasks were finished, invoke immediately
-            std::atomic_thread_fence(std::memory_order_acquire);
-            tsan_acquire(&g_wait_group_count);
-            coroutine::resume_by_address(g_wait_group_callback);
-        }
-    }
 
 }
 
@@ -1261,36 +1157,35 @@ namespace wry::coroutine {
 
     namespace {
 
-        // A wait-group task: what it sees through GetStopToken is the root
-        // token, reached through the delegate
-        Task root_token_probe(std::atomic<int>* result) {
+        // A child's token is its nursery's interior token, reached through
+        // the delegate
+        Task scope_token_probe(Nursery* scope, std::atomic<int>* result) {
             std::stop_token token = co_await GetStopToken{};
-            // Identity only: at a GUI quit the root is requested while the
-            // suite still runs, and this probe must not mind
-            bool is_root = (token == wait_group_stop_token()) && token.stop_possible();
-            result->store(is_root ? 1 : 2, std::memory_order_release);
+            bool is_inner = (token == scope->_inner_stop_source.get_token()) && token.stop_possible();
+            result->store(is_inner ? 1 : 2, std::memory_order_release);
         }
 
     }
 
-    define_test("coroutine_root_stop_token") {
-        // The runner is shielded from the root token (main.mm), so this
-        // frame's own token is detached; a task spawned into the wait group
-        // sees the root token, and a nursery given it bridges rather than
-        // shares it
+    define_test("coroutine_scope_stop_token") {
+        // The runner is shielded from the process scope's token (main.mm),
+        // so this frame's own token is detached; a child spawned into a
+        // nursery sees that nursery's interior token, and a nursery given a
+        // token bridges rather than shares it
         std::stop_token mine = co_await GetStopToken{};
         assert(!mine.stop_possible());
         std::atomic<int> result{0};
-        wait_group_spawn(root_token_probe(&result));
-        while (result.load(std::memory_order_acquire) == 0)
-            co_await TransferToPoolExecutor{};
-        assert(result.load(std::memory_order_relaxed) == 1);
-        std::stop_token root = wait_group_stop_token();
-        Nursery nursery{root};
-        assert(nursery._outer_stop_token == root);
-        assert(nursery._inner_stop_source.get_token() != root);
-        // Must join even unused nurserys
-        co_await nursery.join();
+        Nursery scope;
+        scope.soon(scope_token_probe(&scope, &result));
+        [[maybe_unused]] std::ptrdiff_t cancelled = co_await scope.join();
+        assert(cancelled == 0);
+        assert(result.load(std::memory_order_acquire) == 1);
+        std::stop_token outer = scope._inner_stop_source.get_token();
+        Nursery nursery{outer};
+        assert(nursery._outer_stop_token == outer);
+        assert(nursery._inner_stop_source.get_token() != outer);
+        cancelled = co_await nursery.join();
+        assert(cancelled == 0);
         co_return;
     };
 

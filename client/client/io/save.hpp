@@ -11,6 +11,7 @@
 #include <functional>
 
 #include "world.hpp"
+#include "coroutine.hpp"
 #include "functional.hpp"
 
 namespace wry {
@@ -21,13 +22,15 @@ World* load_game(int id);
 // Synchronous save; returns false on any I/O failure.  On failure the temp file
 // is discarded, so a failed save leaves no file rather than a corrupt one.
 bool save_game(const World* world);
-// Background save: serializes the rooted snapshot off the main thread (yielding
-// so it does not pin the epoch or monopolize a worker), writes a temp + atomic
-// rename, with the blocking flush offloaded to a throwaway thread.  The snapshot
-// World must be immutable; the Root keeps it alive for the duration.  When the
-// save finishes, `on_done(ok)` is invoked on a worker thread (ok == false on any
-// I/O failure).  Returns immediately.
-void save_game_async(Root<World const*> snapshot, move_only_function<void(bool)> on_done = {});
+// Background save, as a task for the caller to spawn into its scope (the
+// process scope, so a shutdown drains it rather than abandoning it
+// mid-yield): serializes the rooted snapshot off the main thread (yielding
+// so it does not pin the epoch or monopolize a worker), writes a temp +
+// atomic rename, with the blocking flush offloaded to a throwaway thread.
+// The snapshot World must be immutable; the Root keeps it alive for the
+// duration.  When the save finishes, `on_done(ok)` is invoked on a worker
+// thread (ok == false on any I/O failure).
+coroutine::Task save_game(Root<World const*> snapshot, move_only_function<void(bool)> on_done = {});
 void delete_game(int id);
 
 std::vector<std::pair<std::string, int>> enumerate_games();

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "atomic.hpp"
+#include "coroutine.hpp"
 #include "world.hpp"
 
 namespace wry {
@@ -39,7 +40,7 @@ namespace wry {
     // Producer -> consumer handoff between the background build coroutine
     // (thread-pool worker) and the renderer (main thread), shared_ptr-held
     // by both so an in-flight build never dangles across a WorldState
-    // teardown (the same lifetime idiom as save_game_async's result cell).
+    // teardown (the same lifetime idiom as save_game's result cell).
     //
     // Ordering: the builder publishes with finished.exchange_release, the
     // renderer consumes with take_finished's exchange_acquire; that
@@ -66,13 +67,13 @@ namespace wry {
 
     };
 
-    // Spawn the background build over a rooted snapshot (the same
-    // walk-a-frozen-snapshot contract as the async save: World::step never
+    // The background build over a rooted snapshot (the same
+    // walk-a-frozen-snapshot contract as the save: World::step never
     // mutates, it builds fresh worlds, so the walk reads stable structure
-    // while play continues).  Anchored in the process WaitGroup; yields to
-    // the pool between slices of work.
-    void world_map_build_async(Root<const World*> snapshot,
-                               std::shared_ptr<WorldMapHandoff> handoff);
+    // while play continues), as a task for the caller to spawn into its
+    // scope.  Yields to the pool between slices of work.
+    coroutine::Task world_map_build(Root<const World*> snapshot,
+                                    std::shared_ptr<WorldMapHandoff> handoff);
 
 } // namespace wry
 

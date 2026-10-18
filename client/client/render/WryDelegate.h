@@ -10,6 +10,8 @@
 
 #import <AppKit/AppKit.h>
 
+#include "nursery.hpp"
+
 #include "world_state.hpp"
 #include "WryMetalView.h"
 
@@ -21,7 +23,9 @@
 @interface WryDelegate : NSResponder < NSApplicationDelegate,
     NSWindowDelegate, WryMetalViewDelegate >
 
--(nonnull instancetype) init;
+// `scope` is the process scope (the nursery in main) that the GuiContext and
+// everything it hosts spawn background work into
+-(nonnull instancetype) initWithScope:(nonnull wry::coroutine::Nursery*)scope;
 
 @property (nonatomic, nullable) NSCursor* cursor;
 @property (atomic) BOOL done;

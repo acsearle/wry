@@ -63,9 +63,9 @@ struct LoadSlot {
 // Wrap the generic load_texture in a task that deposits into `slot`.  It takes
 // the slot by shared_ptr, so the slot (and its backing deque) stay alive until
 // the load completes -- even if the backdrop is torn down first, the result
-// just lands in an orphaned slot and is dropped.  No drain, no cancellation.
-// wait_group_spawn'd, which both anchors it for process shutdown and supplies
-// the continuation a Task requires.
+// just lands in an orphaned slot and is dropped.  No cancellation.  Spawned
+// into the process scope, which anchors it for shutdown and supplies the
+// continuation a Task requires.
 wry::coroutine::Task load_into_slot(std::shared_ptr<LoadSlot> slot,
                                     MTKTextureLoader* loader,
                                     NSURL* url,
@@ -88,6 +88,7 @@ wry::coroutine::Task load_into_slot(std::shared_ptr<LoadSlot> slot,
     std::shared_ptr<std::deque<LoadSlot>> _slots;   // one per stem; async-filled
     MTKTextureLoader* _loader;                      // reused across loads
     NSDictionary<MTKTextureLoaderOption, id>* _loaderOptions;
+    wry::coroutine::Nursery* _scope;                // the loads' spawn target
 
     // Single-image mode: one synchronously-supplied texture, cover + fade-in.
     id<MTLTexture> _single;
@@ -96,9 +97,11 @@ wry::coroutine::Task load_into_slot(std::shared_ptr<LoadSlot> slot,
 
 - (instancetype)initAlbumWithContext:(WryRenderContext*)context
                               prefix:(NSString*)prefix
+                               scope:(wry::coroutine::Nursery*)scope
 {
     if ((self = [super init])) {
         _ctx = context;
+        _scope = scope;
         _seconds = 0.0;
         _isAlbum = YES;
         // Enumerate stems now (no decode); each image loads on demand via
@@ -152,8 +155,7 @@ wry::coroutine::Task load_into_slot(std::shared_ptr<LoadSlot> slot,
         // pointing at slot i, so the load can complete safely even if this
         // backdrop is gone by then (the result lands in the orphaned slot).
         std::shared_ptr<LoadSlot> owned{_slots, &slot};
-        wry::wait_group_spawn(load_into_slot(std::move(owned), _loader, url,
-                                             _loaderOptions));
+        _scope->soon(load_into_slot(std::move(owned), _loader, url, _loaderOptions));
     }
     return nil;
 }

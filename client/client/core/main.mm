@@ -19,11 +19,41 @@
 #include "world_state.hpp"
 #include "test.hpp"
 #include "coroutine.hpp"
+#include "execution.hpp"
 #include "kqueue_reactor.hpp"
+#include "nursery.hpp"
 #include "thread_public.hpp"
 
 #import "WryDelegate.h"
 
+
+namespace {
+
+    // The receiver for the process scope's join on the GUI path: completion
+    // arrives on a worker; it wakes main's run loop with an event and sets
+    // `done`.  The join's value is its cancelled-child count, not needed
+    // here; the join runs under no token, so it is never cancelled
+    struct MainJoinReceiver {
+        wry::Atomic<bool>* _done;
+        friend void set_value(MainJoinReceiver&& receiver, std::ptrdiff_t&&) {
+            NSEvent* event = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                                location:NSMakePoint(0.0, 0.0)
+                                           modifierFlags:0
+                                               timestamp:0
+                                            windowNumber:0
+                                                 context:nil
+                                                 subtype:0
+                                                   data1:0
+                                                   data2:0];
+            [[NSApplication sharedApplication] postEvent:event atStart:NO];
+            receiver._done->store_release(true);
+        }
+        friend void set_error(MainJoinReceiver&&, std::exception_ptr&&) { abort(); }
+        friend void set_stopped(MainJoinReceiver&&) { abort(); }
+        friend std::stop_token get_stop_token(MainJoinReceiver const&) { return {}; }
+    };
+
+} // namespace
 
 int main(int argc, const char** argv) {
 
@@ -116,14 +146,20 @@ int main(int argc, const char** argv) {
     // tree of work.
 
 
-    // Anchor the unit-test runner (and, later, any background saves) in the
-    // process-lifetime WaitGroup, which we block on before tearing down the
-    // thread pool.  Shielded from the root token: the suite is not written
-    // to be cancelled (a test that owns a nursery with live children sleeps
-    // before stopping them, and a root stop request landing in that sleep
-    // destroys the test's frame under its nursery, which asserts), so QUIT
-    // waits for the suite as it did before the root token existed.
-    wry::wait_group_spawn([](std::string_view filter) -> wry::coroutine::Task {
+    // The process scope: every background task -- the test runner, saves,
+    // map builds, texture loads, the control socket's loop -- is spawned
+    // into this nursery, from main or from a live child of it, and shutdown
+    // is its join, before the pool is torn down.  Its interior token is the
+    // root token, which the GUI shutdown requests so that servers parked in
+    // the reactor unwind rather than hold the join open.
+    wry::coroutine::Nursery root;
+
+    // The unit-test runner, shielded from the root token: the suite is not
+    // written to be cancelled (a test that owns a nursery with live children
+    // sleeps before stopping them, and a root stop request landing in that
+    // sleep destroys the test's frame under its nursery, which asserts), so
+    // QUIT waits for the suite.
+    root.soon([](std::string_view filter) -> wry::coroutine::Task {
         (void) co_await wry::execution::shield(wry::run_tests(filter));
     }(test_filter));
 
@@ -137,7 +173,7 @@ int main(int argc, const char** argv) {
             // create AppKit application
 
             NSApplication* application = [NSApplication sharedApplication];
-            WryDelegate* delegate = [[WryDelegate alloc] init];
+            WryDelegate* delegate = [[WryDelegate alloc] initWithScope:&root];
             [application setDelegate:delegate];
 
             if (headless) {
@@ -196,8 +232,8 @@ int main(int argc, const char** argv) {
             printf("main is joining background work\n");
             // Shutdown has begun: request the root token, so any task parked
             // in the reactor (a server's accept, a timed wait) unwinds now
-            // rather than holding the drain below open.  Finite work drains.
-            wry::wait_group_request_stop();
+            // rather than holding the join below open.  Finite work drains.
+            root.request_stop();
             wry::mutator_unpin();
             // Hand the menu bar back / drop out of the foreground while we drain:
             // closing the last window does NOT deactivate a window-less app, so
@@ -217,7 +253,7 @@ int main(int argc, const char** argv) {
             // pending transaction); after that one pass the Window Server takes
             // the window down on its own timeline, independent of this thread.
             // do/while so we always make at least one such pass, even when the
-            // wait group is already drained -- otherwise a QUIT with no
+            // scope is already drained -- otherwise a QUIT with no
             // background work in flight would fall straight into the blocking
             // joins below with the window still on screen (the original bug).
             // When work *is* in flight the loop keeps pumping so a long save
@@ -225,28 +261,17 @@ int main(int argc, const char** argv) {
             // the poll.  (The terminating nil-returning nextEvent call is the
             // one that sleeps and so commits the removal.)
 
-            // coroutine layout-compatible, with resume as first member
-            struct callback_t {
-                void (*resume)(void*);
-                void (*destroy)(void*);
-                wry::Atomic<bool> done{false};
-            };
-            callback_t c;
-            c.resume = [](void* p) {
-                NSEvent* event = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
-                                                    location:NSMakePoint(0.0, 0.0)
-                                               modifierFlags:0
-                                                   timestamp:0
-                                                windowNumber:0
-                                                     context:nil
-                                                     subtype:0
-                                                       data1:0
-                                                       data2:0];
-                [[NSApplication sharedApplication] postEvent:event atStart:NO];
-                ((callback_t*)p)->done.store_release(true);
-            };
-            c.destroy = c.resume;
-            wry::wait_group_set_callback(&c);
+            // The join, delivered to this run loop: the root's join is
+            // lifted into a Future and connected to a receiver that posts
+            // an event and sets `done`, on whichever worker the last child
+            // retires on.  Started here, inline: if the scope is already
+            // drained the receiver fires before start returns
+            wry::Atomic<bool> done{false};
+            auto joining = root.join();
+            auto joined = wry::coroutine::connect(
+                wry::coroutine::lift_awaitable<decltype(joining)&>(&joining),
+                MainJoinReceiver{&done});
+            wry::coroutine::start(joined);
 
             do {
                 @autoreleasepool {
@@ -257,7 +282,7 @@ int main(int argc, const char** argv) {
                         [application sendEvent:event];
                     }
                 }
-            } while (!c.done.load_acquire());
+            } while (!done.load_acquire());
 
             // Drained: the socket's loop has finished (GuiContext itself is
             // not torn down at exit, so this is explicit)
@@ -268,12 +293,11 @@ int main(int argc, const char** argv) {
         printf("main is terminal\n");
         printf("main is joining background work\n");
         // No run loop to service in headless test mode, so just block on the
-        // drain.  Stay unpinned afterwards for the same reason as the GUI branch.
-        // The root token is NOT requested here: the test runner is itself a
-        // wait-group task, and a requested root token would cancel the tests
-        // at their first reactor wait.
+        // join.  Stay unpinned afterwards for the same reason as the GUI
+        // branch.  The root token is not requested here: nothing but the
+        // (shielded) test runner is in the scope.
         wry::mutator_unpin();
-        wry::wait_group_wait();
+        (void) wry::coroutine::sync_wait(root.join());
     }
 
     if (test_only) {
@@ -281,7 +305,7 @@ int main(int argc, const char** argv) {
         heartbeat_thread.join();
     }
 
-    // All tasks have drained (wait group), so no I/O waits are outstanding;
+    // The scope has drained, so no I/O waits are outstanding;
     // stop the reactor before cancelling the workers its wake-ups target.
     wry::global_reactor_stop();
 

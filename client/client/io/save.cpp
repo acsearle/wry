@@ -159,7 +159,7 @@ namespace wry {
 
     // Synchronous save: blocks on the flush -- fine, this is the synchronous API
     // (only the round-trip test uses it now); callers that must not stall a pool
-    // worker use save_game_async.  Returns false on any I/O failure.
+    // worker spawn save_game.  Returns false on any I/O failure.
     bool save_game(const World* world) {
         std::vector<uint8_t> buffer = serialize_world(world);
         std::filesystem::path temp;
@@ -212,20 +212,15 @@ namespace wry {
             ok = publish_or_discard(fd, temp, wrote && flushed);
         }
         // Fall off the end: final_suspend frees this frame (and the Root, on a
-        // mutator worker) and resumes the continuation, which releases the
-        // WaitGroup count.
+        // mutator worker) and resumes the continuation.
         co_return ok;
     }
 
-    void save_game_async(Root<World const*> snapshot, move_only_function<void(bool)> on_done) {
-        // Anchor the save in the process-lifetime WaitGroup so a shutdown can't
-        // abandon it mid-yield; the coroutine owns the Root snapshot in its frame.
-        wait_group_spawn([](Root<World const*> snapshot, move_only_function<void(bool)> on_done)
-                         -> coroutine::Future<>{
-            bool ok = co_await background_save_coroutine(std::move(snapshot));
-            if (on_done)
-                on_done(ok);
-        }(std::move(snapshot), std::move(on_done)));
+    coroutine::Task save_game(Root<World const*> snapshot, move_only_function<void(bool)> on_done) {
+        // The frame owns the Root snapshot; the spawner's scope owns the frame
+        bool ok = co_await background_save_coroutine(std::move(snapshot));
+        if (on_done)
+            on_done(ok);
     }
 
     World* load_game(int id) {

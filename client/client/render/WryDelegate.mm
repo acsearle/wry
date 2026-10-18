@@ -180,11 +180,12 @@ namespace {
     BOOL _haveLastFrameTime;
 }
 
--(nonnull instancetype) init
+-(nonnull instancetype) initWithScope:(wry::coroutine::Nursery*)scope
 {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     if ((self = [super init])) {
         _gui = std::make_unique<wry::GuiContext>();
+        _gui->scope = scope;
         // The control socket (core/docs/commands.md section 9) exists only
         // when asked for: --control-socket [PATH], PATH defaulting to
         // $TMPDIR/wry-control.sock (what tools/wryctl and tools/wry_mcp.py

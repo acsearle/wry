@@ -14,6 +14,8 @@
 
 #include <simd/simd.h>
 
+#include "nursery.hpp"
+
 // A full-screen photo backdrop, drawn into a render pass the caller owns (via
 // WryRenderContext -drawImage:).  The scene owns the offscreen target + render
 // pass; WryBackdrop just issues the drawImage calls into the encoder.  Two
@@ -29,8 +31,11 @@
 //     case -- the caller loads the image itself (splash stays synchronous).
 @interface WryBackdrop : NSObject
 
+// `scope` is the process scope the image loads are spawned into (they are
+// not cancelled: a load whose backdrop is gone lands in an orphaned slot)
 - (nonnull instancetype)initAlbumWithContext:(nonnull WryRenderContext*)context
-                                      prefix:(nonnull NSString*)prefix;
+                                      prefix:(nonnull NSString*)prefix
+                                       scope:(nonnull wry::coroutine::Nursery*)scope;
 
 - (nonnull instancetype)initSingleImageWithContext:(nonnull WryRenderContext*)context
                                              image:(nullable id<MTLTexture>)image

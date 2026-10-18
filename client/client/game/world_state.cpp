@@ -236,9 +236,10 @@ namespace wry {
             return;
         // The callback runs on a worker thread when the save finishes; post the
         // result for the main-thread pump to surface in the log.
-        save_game_async(w, [this](bool ok) {
+        assert(_gui.scope);
+        _gui.scope->soon(save_game(w, [this](bool ok) {
             _gui.post_notification(ok ? "Saved." : "Save failed.");
-        });
+        }));
         _worlds.push_front(std::move(w));
     }
 
@@ -406,8 +407,9 @@ namespace wry {
                 && (now - _map_last_start >= std::chrono::seconds(1))) {
                 _map_last_start = now;
                 _map_handoff->in_flight.store_relaxed(true);
-                world_map_build_async(Root<const World*>{_world_to_render._ptr},
-                                      _map_handoff);
+                assert(_gui.scope);
+                _gui.scope->soon(world_map_build(Root<const World*>{_world_to_render._ptr},
+                                                 _map_handoff));
             }
         }
 

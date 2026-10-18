@@ -17,6 +17,7 @@
 
 #include "atomic.hpp"
 #include "control_socket.hpp"
+#include "nursery.hpp"
 
 #include "command.hpp"
 #include "gui_event.hpp"
@@ -177,6 +178,12 @@ namespace wry {
 
         // Queue `line` on `source`, or issue it now if the source is idle.
         void submit(CommandSource& source, StringView line, StringView tag = {});
+
+        // The process scope, set by the host before anything spawns: the
+        // nursery in main that every background task (saves, map builds,
+        // texture loads, the control socket's loop) is spawned into, so
+        // shutdown is its join.  Null in tests, which spawn into their own
+        coroutine::Nursery* scope = nullptr;
 
         // The control socket (commands.md section 9), if the host opened
         // one (--control-socket), and a command source per connection.

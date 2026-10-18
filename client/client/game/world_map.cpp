@@ -7,6 +7,7 @@
 
 #include <cstring>
 
+#include "nursery.hpp"
 #include "world_map.hpp"
 
 #include "coroutine.hpp"
@@ -37,8 +38,8 @@ namespace wry {
     // periodically yields back to the pool (each slice is a fraction of a
     // millisecond of AMT descent).  It runs on pool workers, which are
     // pinned mutators, so reading the snapshot's GC structure is safe.
-    static coroutine::Task world_map_build(Root<const World*> snapshot,
-                                           std::shared_ptr<WorldMapHandoff> handoff) {
+    coroutine::Task world_map_build(Root<const World*> snapshot,
+                                    std::shared_ptr<WorldMapHandoff> handoff) {
 
         constexpr int32_t E = WorldMap::EXTENT;
         constexpr int32_t X0 = WorldMap::X0;
@@ -92,11 +93,6 @@ namespace wry {
         co_return;
     }
 
-    void world_map_build_async(Root<const World*> snapshot,
-                               std::shared_ptr<WorldMapHandoff> handoff) {
-        wait_group_spawn(world_map_build(std::move(snapshot), std::move(handoff)));
-    }
-
     // End-to-end build over a hand-made world: pins the pixel/world
     // orientation contract (row j = world y = Y0 + j), the layer order
     // (entity over term over terrain), rect clipping, the unmapped =
@@ -123,15 +119,12 @@ namespace wry {
 
         auto handoff = std::make_shared<WorldMapHandoff>();
         handoff->in_flight.store_relaxed(true);
-        world_map_build_async(Root<const World*>{w}, handoff);
-
-        // The builder yields between slices; polling with the same
-        // scheduler lets it interleave.  Wall-clock bound, as in the async
-        // save test.
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-        while (handoff->in_flight.load_acquire()
-               && (std::chrono::steady_clock::now() < deadline))
-            co_await coroutine::TransferToPoolExecutor{};
+        // Spawned into this test's own scope, as the host spawns it into the
+        // process scope; the join is the wait
+        coroutine::Nursery scope;
+        scope.soon(world_map_build(Root<const World*>{w}, handoff));
+        [[maybe_unused]] std::ptrdiff_t cancelled = co_await scope.join();
+        assert(cancelled == 0);
         assert(!handoff->in_flight.load_acquire());
 
         WorldMap* m = handoff->take_finished();
