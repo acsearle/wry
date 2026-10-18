@@ -472,6 +472,22 @@ connection (a request too malformed to queue is answered at once):
 invocation (empty if the request did not bind); `image` is added when
 the result is an image file (`screenshot`).  Each connection is its own
 command source: sequential, and cancelled when the connection closes.
+
+**Closing.**  The server ends a connection by sending every reply it has
+queued and then closing, so a client that reads until end of stream
+sees all of them.  The converse is not offered: a client that closes,
+or half-closes its sending side, before it has read its replies forfeits
+whatever is still in flight.  The server sees either as end of stream on
+its read, ends the connection at once (the writer is stopped, queued
+replies are dropped) and cancels the requests still queued or pending,
+which answer nothing.  Unix domain sockets support `shutdown(2)` as TCP
+does, so a half-close is possible; it just does not mean "answer
+everything, then close" here.  The tools do not rely on it: `wryctl`
+and the MCP adapter read each reply before they close.  If a piped mode
+ever wants half-close to mean "that is all", the server needs one more
+event (the reader's end of stream, ordered after its lines), on which
+the main thread queues the end-of-stream marker once the source's last
+reply is queued; until then the semantics are the simple ones above.
 A structured argument is a JSON string literal of its type unless the
 parameter is a String; a string literal must be exactly one node, so it
 cannot smuggle in further arguments.
@@ -480,19 +496,28 @@ Socket IO runs on the kqueue reactor (core/kqueue_reactor.hpp) as
 coroutines on the worker pool: an accept loop owning a nursery of
 connections, each a reader and a writer under a nursery of their own,
 either of which ends the connection by stopping the other.  They move
-bytes only.  Complete lines go to an inbox the main thread takes once
+bytes only.  Complete lines, and each connection's closing after its
+last line, go to one event queue (`ControlSocket::events()`, a
+multi-producer single-consumer queue) that the main thread takes once
 per frame and parses -- parsing can create Terms, so it must happen on
 a mutator -- and replies go to each connection's writer through a
 single-producer single-consumer queue.  There is no read deadline: an
 idle connection is legitimate (the MCP adapter holds one open).
 Descriptors are closed only by the frame that owns them, after its
 nursery has joined, so no descriptor is closed under an armed knote.
-The root runs under the ControlSocket's own stop source and is
-spawned into the process wait group; destroying the ControlSocket
-gives each connection a second to send what is queued for it, then
-requests that stop (on the calling, pinned, thread) and waits for the
-root to finish.  Invocations from the socket echo to the console as
-`[socket] ...`, so a person watching sees what a script or agent does.
+The accept loop is a task the host spawns into the process scope (the
+nursery in main), so it runs under the root token; it also runs under
+the ControlSocket's own two stop sources, one for the accept alone and
+one for everything, bridged from the inherited token.  `shutdown(grace)`
+is a task: it stops accepting, queues an end of stream behind what each
+connection has pending, waits up to `grace` for the connections to
+finish (the last one to close sets a single-consumer event the task
+awaits under a deadline), then `close()`, which cancels whatever is
+left and unlinks the path; `close()` alone is the brutal form.  main
+runs the graceful form through `sync_wait` at quit, before requesting
+the root token and draining the scope.  Invocations from the socket
+echo to the console as `[socket] ...`, so a person watching sees what a
+script or agent does.
 
 **`tools/wryctl`**: a command-line client.  `wryctl step 10` joins its
 arguments into one line, sends it, prints the reply text, and exits 1
@@ -526,10 +551,14 @@ Each frame waits for its command buffer to complete (there is no
 drawable to throttle it), which also completes screenshots before the
 next frame.  `quit` ends it, as QUIT TO DESKTOP does in a window.
 
-The headless host never releases its delegate: the scenes own the
-WorldState, whose Root destructors shade, and main unpins for shutdown;
-a shade from an unpinned thread during marking traps.  (Windowed, the
-metal view's strong delegate reference gives the same lifetime.)
+The delegate owns the scenes, which own the WorldState, whose Root
+destructors shade, and main unpins for the shutdown drain; a shade from
+an unpinned thread during marking traps.  So main releases the delegate
+pinned, and the pin straddles the end of main's autorelease pool: AppKit
+autoreleases a reference to the delegate into that pool, so the dealloc
+happens at the pool's pop, not at the release of main's own reference.
+A quit from the menu never exercises this; a quit with a live game does,
+which is why the smoke test starts one.
 
 **`tools/wry_smoke.py`** is the end-to-end test: it launches the newest
 Debug build headless on a private socket, plays a scripted session
