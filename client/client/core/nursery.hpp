@@ -22,7 +22,6 @@ namespace wry::coroutine {
         Header _header = { &_static_resume, &_static_destroy };
         Atomic<std::ptrdiff_t> _counter{0};
         Atomic<std::ptrdiff_t> _cancelled_count{0};
-        std::ptrdiff_t _children = 0;
         std::coroutine_handle<> _continuation;
         std::stop_token _outer_stop_token;
         std::stop_source _inner_stop_source;
@@ -63,7 +62,8 @@ namespace wry::coroutine {
 
         static void _static_resume(void* ptr) {
             auto self = (Nursery*)ptr;
-            auto count = self->_counter.sub_fetch_release(1);
+            auto count = self->_counter.fetch_sub_release(1);
+            assert(count >= 0);
             if (count == 0) {
                 (void) self->_counter.load_acquire();
                 ptr = take(self->_continuation).address();
@@ -92,16 +92,10 @@ namespace wry::coroutine {
         , _outer_stop_callback(_outer_stop_token, Callback{_inner_stop_source}) {
         }
 
-        // A nursery cannot be destroyed with children live: their delegates
-        // point here, and a destructor cannot wait for them.  Cancellation
-        // is destruction, so an owner with live children must not reach a
-        // cancellation point other than join: await anything else before
-        // the first spawn, after the join, or shielded.  (The unit tests are
-        // not written to this rule and run shielded from the root token;
-        // see main.mm)
+        // A nursery must be joined exactly once before destruction
         ~Nursery() {
-            assert(!_children && !_counter.load_relaxed()
-                   && "a frame owning a nursery with live children was destroyed");
+            assert((_counter.nonatomic_load() == -1)
+                   && "nursery was not joined");
         }
 
         // co_await nursery.fork(foo(x)) immediately starts foo on the current
@@ -113,7 +107,8 @@ namespace wry::coroutine {
                 Nursery* _nursery;
                 Future<>::promise_type* _promise;
                 std::coroutine_handle<Future<>::promise_type> await_suspend(std::coroutine_handle<> continuation) noexcept {
-                    ++(_nursery->_children);
+                    [[maybe_unused]] auto count = _nursery->_counter.fetch_add_relaxed(1);
+                    assert(count >= 0);
                     _promise->set_delegate(&_nursery->_inner);
                     auto handle = handle_from_promise(take(_promise));
                     global_work_queue_schedule(std::move(continuation));
@@ -137,7 +132,8 @@ namespace wry::coroutine {
                 execution::Outcome<T>* _target;
                 Future<T>::promise_type* _promise;
                 std::coroutine_handle<typename Future<T>::promise_type> await_suspend(std::coroutine_handle<> continuation) noexcept {
-                    ++(_nursery->_children);
+                    [[maybe_unused]] auto count = _nursery->_counter.fetch_add_relaxed(1);
+                    assert(count >= 0);
                     _promise->template emplace_delegate<NurseryChildDelegate<T>>(_nursery, _target);
                     auto handle = handle_from_promise(take(_promise));
                     global_work_queue_schedule(std::move(continuation));
@@ -161,7 +157,8 @@ namespace wry::coroutine {
                 T* _target;
                 Future<T>::promise_type* _promise;
                 std::coroutine_handle<typename Future<T>::promise_type> await_suspend(std::coroutine_handle<> continuation) noexcept {
-                    ++(_nursery->_children);
+                    [[maybe_unused]] auto count = _nursery->_counter.fetch_add_relaxed(1);
+                    assert(count >= 0);
                     _promise->template emplace_delegate<NurseryChildValueDelegate<T>>(_nursery, _target);
                     auto handle = handle_from_promise(take(_promise));
                     global_work_queue_schedule(std::move(continuation));
@@ -178,7 +175,8 @@ namespace wry::coroutine {
         // the calling context normally.  The calling context does not have to
         // be a coroutine.  No target: see fork(Future<>&&)
         void soon(Future<>&& future) {
-            ++_children;
+            [[maybe_unused]] auto count = _counter.fetch_add_relaxed(1);
+            assert(count >= 0);
             future._promise->set_delegate(&_inner);
             global_work_queue_schedule(handle_from_future(std::move(future)));
         }
@@ -189,7 +187,8 @@ namespace wry::coroutine {
         // it is racy to access y until the nursery has been joined
         template<typename T>
         void soon(execution::Outcome<T>& target, Future<T>&& future) {
-            ++_children;
+            [[maybe_unused]] auto count = _counter.fetch_add_relaxed(1);
+            assert(count >= 0);
             future._promise->template emplace_delegate<NurseryChildDelegate<T>>(this, &target);
             global_work_queue_schedule(handle_from_future(std::move(future)));
         }
@@ -197,41 +196,57 @@ namespace wry::coroutine {
         // nursery.soon(y, bar(x)) with a bald target: see fork(T&, Future<T>&&)
         template<typename T>
         void soon(T& target, Future<T>&& future) {
-            ++_children;
+            [[maybe_unused]] auto count = _counter.fetch_add_relaxed(1);
+            assert(count >= 0);
             future._promise->template emplace_delegate<NurseryChildValueDelegate<T>>(this, &target);
             global_work_queue_schedule(handle_from_future(std::move(future)));
         }
 
         // co await nursery.join() suspends the caller and resumes it after
-        // all forks are complete.  The nursery may then be resumed.
+        // all forks are complete.
         [[nodiscard]] auto join() {
             struct Awaitable {
                 Nursery* _nursery;
                 bool await_ready() noexcept {
                     auto count = _nursery->_counter.load_relaxed();
-                    bool result = (count == -_nursery->_children) && !_nursery->_outer_stop_token.stop_requested();
+                    assert(count >= 0);
+                    bool result = (count == 0) && !_nursery->_outer_stop_token.stop_requested();
                     if (result) {
-                        _nursery->_counter.exchange_acquire(0);
-                        _nursery->_children = 0;
+                        // All children had already completed and stop was not requested
+                        // Establish child completions happens-before
+                        count = _nursery->_counter.exchange_acquire(-1);
+                        assert(count == 0);
+                    } else {
+                        // Some children had not completed or stop was requested
                     }
                     return result;
                 }
                 std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) noexcept {
                     _nursery->_continuation = std::move(continuation);
-                    auto count = _nursery->_counter.add_fetch_release(take(_nursery->_children));
+                    // Arm the join and publish the continuation
+                    auto count = _nursery->_counter.fetch_sub_release(1);
+                    assert(count >= 0);
                     if (count == 0) {
+                        // All children had already completed
+                        // The continuation has not run.
+                        // *this is live
+                        // Establish child completions happens-before
                         (void) _nursery->_counter.load_acquire();
+                        // Cancellation point
                         if (_nursery->_outer_stop_token.stop_requested()) {
                             continuation.destroy();
                             return std::noop_coroutine();
                         }
                         return _nursery->_continuation;
                     } else {
+                        // Some children had not completed.
+                        // The continuation may have run.
+                        // *this may be destroyed.
                         return std::noop_coroutine();
                     }
                 }
                 std::ptrdiff_t await_resume() noexcept {
-                    return take(_nursery)->_cancelled_count.nonatomic_exchange(0);
+                    return take(_nursery)->_cancelled_count.nonatomic_load();
                 }
                 ~Awaitable() {
                     assert(!_nursery || _nursery->_outer_stop_token.stop_requested());

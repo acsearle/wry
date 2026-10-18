@@ -735,7 +735,8 @@ namespace wry {
     define_test("kqueue_recv_ready") {
         SocketPair sockets;
         char message[] = "hello";
-        assert(::send(sockets.writer(), message, 5, 0) == 5);
+        [[maybe_unused]] ssize_t sent = ::send(sockets.writer(), message, 5, 0);
+        assert(sent == 5);
 
         std::byte buffer[16];
         auto r = co_await with_deadline(steady_clock::now() + seconds(10),
@@ -762,7 +763,8 @@ namespace wry {
         assert(r.has_value() && (*r == 5) && (std::memcmp(buffer, "later", 5) == 0));
         assert(steady_clock::now() - t0 < seconds(5));
 
-        assert((co_await nursery.join()) == 0);
+        [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
+        assert(cancelled == 0);
         co_return;
     };
 
@@ -825,7 +827,8 @@ namespace wry {
         // the deadline.  With data already waiting, both frames should drain
         // in milliseconds despite a 10 second deadline.
         SocketPair sockets;
-        assert(::send(sockets.writer(), "x", 1, 0) == 1);
+        [[maybe_unused]] ssize_t sent = ::send(sockets.writer(), "x", 1, 0);
+        assert(sent == 1);
 
         std::byte buffer[16];
         auto r = co_await with_deadline(steady_clock::now() + seconds(10),
@@ -1091,7 +1094,8 @@ namespace wry {
                                             send_some(sockets.writer(), message, 5, 0));
             assert(r.has_value() && (*r == 5));
             assert(steady_clock::now() - t0 < seconds(5));
-            assert((co_await nursery.join()) == 0);
+            [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
+            assert(cancelled == 0);
         }
 
         // Peer close: writability with EV_EOF, and send reports EPIPE in
@@ -1158,7 +1162,8 @@ namespace wry {
             assert(r.has_value() && (*r >= 0));
             assert(steady_clock::now() - t0 < seconds(5));
             int server = *r;
-            assert((co_await nursery.join()) == 0);
+            [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
+            assert(cancelled == 0);
             assert(connect_result.load(std::memory_order_acquire) == 0);
             assert(client != -1);
 

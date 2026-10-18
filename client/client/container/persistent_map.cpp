@@ -455,8 +455,10 @@ namespace wry {
                 built->for_each([&walked](uint64_t k, int) { walked.push_back(k); });
             assert(walked.size() == oracle.size());
             size_t i = 0;
-            for (auto [k, v] : oracle)
-                assert(walked[i++] == k);
+            for (auto [k, v] : oracle) {
+                assert(walked[i] == k);
+                ++i;
+            }
 
             std::vector<std::pair<uint64_t, int>> sorted(oracle.begin(), oracle.end());
             assert(A::same_shape(A::build_from_sorted(sorted.begin(), sorted.end()), built));

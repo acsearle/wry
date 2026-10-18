@@ -317,15 +317,10 @@ namespace wry::coroutine {
         assert(reached.load(std::memory_order_relaxed) == 1);
         assert(destroyed.load(std::memory_order_relaxed) == 1);
         assert(target.is_stopped());
-        assert((co_await ok_result) == 7);
+        [[maybe_unused]] int ok = co_await ok_result;
+        assert(ok == 7);
 
-        // A nursery that absorbed a cancellation is reusable, and the tally
-        // was reset by the previous join
-        nursery.soon(ok_result, unwind_ok_child(42));
-        cancelled = co_await nursery.join();
-        assert(cancelled == 0);
-        assert((co_await ok_result) == 42);
-
+        // A nursery that absorbed a cancellation is not reusable
         co_return;
     };
 
@@ -1078,16 +1073,19 @@ namespace wry::coroutine {
         {
             SingleProducerSingleConsumerQueue<std::unique_ptr<int>> queue;
             std::unique_ptr<int> victim;
-            assert(!queue.try_pop(victim));
+            [[maybe_unused]] bool popped = queue.try_pop(victim);
+            assert(!popped);
             queue.emplace(std::make_unique<int>(1));
             queue.emplace(std::make_unique<int>(2));
             queue.emplace(std::make_unique<int>(3));
             std::unique_ptr<int> a = co_await queue.pop();
             assert(a && (*a == 1));
-            assert(queue.try_pop(victim) && victim && (*victim == 2));
+            popped = queue.try_pop(victim);
+            assert(popped && victim && (*victim == 2));
             std::unique_ptr<int> c = co_await queue.pop();
             assert(c && (*c == 3));
-            assert(!queue.try_pop(victim));
+            popped = queue.try_pop(victim);
+            assert(!popped);
         }
 
         // Parked path: the consumer parks on an empty queue and a later
@@ -1106,23 +1104,27 @@ namespace wry::coroutine {
                 if (i % 7 == 0)
                     co_await cancelable_sleep(0.0005);
             }
-            assert((co_await nursery.join()) == 0);
+            [[maybe_unused]] auto canceled_count = co_await nursery.join();
+            assert(canceled_count == 0);
             assert(sum.load(std::memory_order_relaxed) == n * (n + 1) / 2);
-            int leftover;
-            assert(!queue.try_pop(leftover));
+            int leftover = 0;
+            [[maybe_unused]] bool popped = queue.try_pop(leftover);
+            assert(!popped);
         }
 
         // take: everything queued in one go, in order; try_take likewise,
         // and empty when nothing is queued
         {
             IntQueue queue;
-            assert(queue.try_take().empty());
+            [[maybe_unused]] std::deque<int> none = queue.try_take();
+            assert(none.empty());
             queue.emplace(1);
             queue.emplace(2);
             queue.emplace(3);
             std::deque<int> all = co_await queue.take();
             assert((all.size() == 3) && (all[0] == 1) && (all[1] == 2) && (all[2] == 3));
-            assert(queue.try_take().empty());
+            none = queue.try_take();
+            assert(none.empty());
             queue.emplace(4);
             std::deque<int> one = queue.try_take();
             assert((one.size() == 1) && (one[0] == 4));
@@ -1142,16 +1144,19 @@ namespace wry::coroutine {
                 Nursery producers;
                 for (int p = 0; p != 4; ++p)
                     producers.soon(spsc_producer(&queue, p * 100 + 1, p * 100 + 101));
-                assert((co_await producers.join()) == 0);
+                [[maybe_unused]] std::ptrdiff_t cancelled = co_await producers.join();
+                assert(cancelled == 0);
             }
             while (sum.load(std::memory_order_relaxed) != n * (n + 1) / 2)
                 co_await TransferToPoolExecutor{};
             int b = batches.load(std::memory_order_acquire);
             assert((b >= 1) && (b <= n));
             takers.request_stop();
-            assert((co_await takers.join()) == 1);
+            [[maybe_unused]] std::ptrdiff_t cancelled = co_await takers.join();
+            assert(cancelled == 1);
             assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(queue.try_take().empty());
+            [[maybe_unused]] std::deque<int> none = queue.try_take();
+            assert(none.empty());
         }
 
         co_return;
@@ -1172,12 +1177,14 @@ namespace wry::coroutine {
             co_await cancelable_sleep(0.010);  // let it park
             nursery.request_stop();
             assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert((co_await nursery.join()) == 1);
+            [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
+            assert(cancelled == 1);
             assert(consumed.load(std::memory_order_relaxed) == 0);
             assert(!queue._pop_continuation);
             queue.emplace(5);
             int value = 0;
-            assert(queue.try_pop(value) && (value == 5));
+            [[maybe_unused]] bool popped = queue.try_pop(value);
+            assert(popped && (value == 5));
         }
 
         // Parked cancel of a taker: the same callback path
@@ -1189,7 +1196,8 @@ namespace wry::coroutine {
             co_await cancelable_sleep(0.010);  // let it park
             nursery.request_stop();
             assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert((co_await nursery.join()) == 1);
+            [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
+            assert(cancelled == 1);
             assert(batches.load(std::memory_order_relaxed) == 0);
             assert(!queue._pop_continuation);
         }
@@ -1203,7 +1211,8 @@ namespace wry::coroutine {
             Nursery nursery;
             nursery.request_stop();
             nursery.soon(spsc_consumer(&queue, &consumed, &sum, &destroyed));
-            assert((co_await nursery.join()) == 1);
+            [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
+            assert(cancelled == 1);
             assert(destroyed.load(std::memory_order_relaxed) == 1);
             assert(consumed.load(std::memory_order_relaxed) == 0);
             assert(!queue._pop_continuation);
@@ -1223,7 +1232,8 @@ namespace wry::coroutine {
             while (consumed.load(std::memory_order_acquire) != 1)
                 co_await TransferToPoolExecutor{};
             nursery.request_stop();
-            assert((co_await nursery.join()) == 1);
+            [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
+            assert(cancelled == 1);
             assert(destroyed.load(std::memory_order_relaxed) == 1);
             assert(sum.load(std::memory_order_relaxed) == 7);
         }
@@ -1237,11 +1247,13 @@ namespace wry::coroutine {
             nursery.request_stop();
             queue.emplace(8);
             nursery.soon(spsc_consumer(&queue, &consumed, &sum, &destroyed));
-            assert((co_await nursery.join()) == 1);
+            [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
+            assert(cancelled == 1);
             assert(destroyed.load(std::memory_order_relaxed) == 1);
             assert(consumed.load(std::memory_order_relaxed) == 0);
             int value = 0;
-            assert(queue.try_pop(value) && (value == 8));
+            [[maybe_unused]] bool popped = queue.try_pop(value);
+            assert(popped && (value == 8));
         }
 
         co_return;
@@ -1277,6 +1289,8 @@ namespace wry::coroutine {
         Nursery nursery{root};
         assert(nursery._outer_stop_token == root);
         assert(nursery._inner_stop_source.get_token() != root);
+        // Must join even unused nurserys
+        co_await nursery.join();
         co_return;
     };
 
