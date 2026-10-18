@@ -704,9 +704,22 @@ namespace wry::coroutine {
     // What co_await x yields inside a Promise, with x in its own value
     // category: through transform_await for the types that customize it,
     // else x's own await_resume, else a SenderAwaitable's
+    // The awaiter the language would use for an awaitable: the awaitable
+    // itself, or what its operator co_await returns
+    template<typename X>
+    decltype(auto) as_awaiter(X&& x) {
+        if constexpr (requires { std::forward<X>(x).operator co_await(); }) {
+            return std::forward<X>(x).operator co_await();
+        } else if constexpr (requires { operator co_await(std::forward<X>(x)); }) {
+            return operator co_await(std::forward<X>(x));
+        } else {
+            return std::forward<X>(x);
+        }
+    }
+
     template<typename A, typename T=void>
-    using AwaitResultType = decltype(await_transform_helper(static_cast<Promise<T>*>(nullptr),
-                                                            std::declval<A>()).await_resume());
+    using AwaitResultType = decltype(as_awaiter(await_transform_helper(static_cast<Promise<T>*>(nullptr),
+                                                                       std::declval<A>())).await_resume());
 
     // A Future that awaits the caller's object in place, through a pointer:
     // the object must outlive the await (a temporary in the awaiting

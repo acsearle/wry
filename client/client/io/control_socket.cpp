@@ -26,6 +26,7 @@
 #include "coroutine.hpp"
 #include "kqueue_reactor.hpp"
 #include "nursery.hpp"
+#include "single_consumer_event.hpp"
 #include "test.hpp"
 
 namespace wry {
@@ -64,9 +65,10 @@ namespace wry {
         // Its own lock: the connections' readers produce, the main thread
         // consumes
         coroutine::MultiProducerSingleConsumerQueue<Event> events;
-        // A signal per time the connection table empties; shutdown() is
-        // its consumer
-        coroutine::MultiProducerSingleConsumerQueue<std::monostate> drained;
+        // shutdown()'s event, published here under the mutex for as long as
+        // that frame is waiting on it and cleared by that frame on every
+        // exit; the registration that empties the table sets it
+        coroutine::SingleConsumerEvent* drained = nullptr;
     };
 
     namespace {
@@ -105,15 +107,13 @@ namespace wry {
             Registration(std::shared_ptr<Shared> s, uint64_t i) : shared(std::move(s)), id(i) {}
             Registration(Registration const&) = delete;
             ~Registration() {
-                bool last;
                 {
                     std::scoped_lock lock{shared->mutex};
                     shared->connections.erase(id);
-                    last = shared->connections.empty();
+                    if (shared->connections.empty() && shared->drained)
+                        shared->drained->set();     // last touch of the event
                 }
                 shared->changed.notify_all();
-                if (last)
-                    shared->drained.emplace();
                 // After every line the reader delivered: the reader is joined
                 // before this runs
                 shared->events.emplace(ControlSocket::Closed{id});
@@ -328,21 +328,31 @@ namespace wry {
         std::shared_ptr<Shared> shared = _shared;
         // No new connections
         _stop_accepting.request_stop();
-        // Ask every connection to finish what is queued for it and close.
-        // The drained signal is cleared under the same lock as the snapshot,
-        // so the one awaited below is for this snapshot emptying
+        // Ask every connection to finish what is queued for it and close,
+        // and wait for the table to empty.  The event lives in this frame
+        // and is published under the same lock as the snapshot, so only
+        // this snapshot's emptying sets it; the guard unpublishes it on
+        // every exit, the deadline unwind included
+        coroutine::SingleConsumerEvent drained;
+        struct Unpublish {
+            std::shared_ptr<Shared> shared;
+            ~Unpublish() {
+                std::scoped_lock lock{shared->mutex};
+                shared->drained = nullptr;
+            }
+        } unpublish{shared};
         std::vector<std::shared_ptr<OutQueue>> queues;
         {
             std::scoped_lock lock{shared->mutex};
             for (auto& [id, queue] : shared->connections)
                 queues.push_back(queue);
-            (void) shared->drained.try_take();
+            if (!queues.empty())
+                shared->drained = &drained;
         }
         for (auto& queue : queues)
             queue->emplace(Outgoing{{}, true});
         if (!queues.empty())
-            (void) co_await with_deadline(std::chrono::steady_clock::now() + grace,
-                                          shared->drained.pop());
+            (void) co_await with_deadline(std::chrono::steady_clock::now() + grace, drained);
         // Then the rest, brutally
         close();
     }

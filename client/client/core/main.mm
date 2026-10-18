@@ -256,12 +256,15 @@ int main(int argc, const char** argv) {
             [delegate releaseControlSocket];
 
             // The delegate owns the WorldState, whose Root destructors shade,
-            // so we must pin to release the delegate
+            // so it must die pinned.  Nulling our reference is not enough:
+            // AppKit autoreleased another into this pool (verified by a
+            // backtrace through objc_autoreleasePoolPop), so the dealloc
+            // happens at the pool's pop, the closing brace below.  The pin
+            // straddles it; a transient pin, as the rule above requires
             wry::mutator_pin();
             delegate = nil;
-            wry::mutator_unpin();
-            
-        } // @autoreleasepool
+        } // @autoreleasepool: the delegate's dealloc
+        wry::mutator_unpin();
     } else {
         printf("main is terminal\n");
         printf("main is joining background work\n");

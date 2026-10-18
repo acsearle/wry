@@ -155,7 +155,8 @@ namespace wry {
             return handle_from_future(std::move(_frame._future));
         }
 
-        std::optional<T> await_resume() {
+        // optional<monostate> for a void inner, as stopped_as_optional yields
+        std::optional<typename execution::Outcome<T>::stored_type> await_resume() {
             _frame._inner_stop_source.request_stop();
             return _frame._outcome.stopped_as_optional();
         }
