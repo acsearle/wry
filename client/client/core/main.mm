@@ -108,32 +108,6 @@ int main(int argc, const char** argv) {
 
     wry::global_reactor_start();
 
-    // In --test-only mode there is no NSApp event loop driving the epoch
-    // forward, so phase transitions that gate on `_finalized` (which only
-    // advances when the collector ingests fresh mutator reports) would
-    // stall once the test suspends.  A small heartbeat thread cycles
-    // pin/unpin to publish empty reports, keeping the collector advancing.
-    // The GUI flow doesn't need this — its renderer / event handling
-    // produces plenty of mutator activity.
-    std::atomic<bool> heartbeat_stop{false};
-    std::thread heartbeat_thread;
-    if (test_only) {
-        heartbeat_thread = std::thread([&heartbeat_stop] {
-            pthread_setname_np("test-heartbeat");
-            wry::mutator_pin();
-            wry::thread_public_register("test-heartbeat");
-            wry::mutator_unpin();
-            while (!heartbeat_stop.load(std::memory_order_relaxed)) {
-                wry::mutator_pin();
-                wry::mutator_unpin();
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
-            wry::mutator_pin();
-            wry::thread_public_deregister();
-            wry::mutator_unpin();
-        });
-    }
-
     // TODO: At this point, optionally run a stress test of the garbage
     // collector and epoch system itself.
 
@@ -298,11 +272,6 @@ int main(int argc, const char** argv) {
         // (shielded) test runner is in the scope.
         wry::mutator_unpin();
         (void) wry::coroutine::sync_wait(root.join());
-    }
-
-    if (test_only) {
-        heartbeat_stop.store(true, std::memory_order_relaxed);
-        heartbeat_thread.join();
     }
 
     // The scope has drained, so no I/O waits are outstanding;
