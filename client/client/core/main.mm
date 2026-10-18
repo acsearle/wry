@@ -155,13 +155,6 @@ int main(int argc, const char** argv) {
                 // commands have work, and otherwise main sleeps on the
                 // control socket (repinning, so the collector advances).
                 [application setActivationPolicy:NSApplicationActivationPolicyProhibited];
-                // Never release the delegate.  Its scenes own the WorldState,
-                // whose Root destructors shade; run after main unpins for
-                // shutdown (below), a shade during marking traps
-                // (WRY-GC-UNPINNED).  Windowed, the metal view's strong
-                // delegate reference already keeps it alive to exit; headless
-                // has no view, so the same lifetime is made explicit.
-                (void) CFBridgingRetain(delegate);
                 [delegate setUpHeadless];
                 while (![delegate done]) {
                     @autoreleasepool {
@@ -262,6 +255,12 @@ int main(int argc, const char** argv) {
             // not torn down at exit, so this is explicit)
             [delegate releaseControlSocket];
 
+            // The delegate owns the WorldState, whose Root destructors shade,
+            // so we must pin to release the delegate
+            wry::mutator_pin();
+            delegate = nil;
+            wry::mutator_unpin();
+            
         } // @autoreleasepool
     } else {
         printf("main is terminal\n");
