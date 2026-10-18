@@ -58,7 +58,6 @@ namespace wry {
 
     struct ControlSocket::Shared {
         std::mutex mutex;
-        std::condition_variable changed;        // notified on connections / finished
         uint64_t next_connection = 1;
         std::map<uint64_t, std::shared_ptr<OutQueue>> connections;
         bool finished = false;                  // the accept loop has ended
@@ -113,7 +112,6 @@ namespace wry {
                     if (shared->connections.empty() && shared->drained)
                         shared->drained->set();     // last touch of the event
                 }
-                shared->changed.notify_all();
                 // After every line the reader delivered: the reader is joined
                 // before this runs
                 shared->events.emplace(ControlSocket::Closed{id});
@@ -263,7 +261,6 @@ namespace wry {
                 std::scoped_lock lock{shared->mutex};
                 shared->finished = true;
             }
-            shared->changed.notify_all();
         }
 
     } // namespace
