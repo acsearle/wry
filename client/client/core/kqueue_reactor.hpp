@@ -96,44 +96,32 @@ namespace wry {
     template<typename OuterPromise, typename T>
     struct WithDeadlineAwaitable : coroutine::OutcomeDelegate<WithDeadlineAwaitable<OuterPromise, T>, T> {
 
-        struct Frame {
-
-            struct Callback {
-                std::stop_source _stop_source;
-                void operator()() {
-                    // Local copy to survive possible self-destruct
-                    std::stop_source stop_source{std::move(_stop_source)};
-                    stop_source.request_stop();
-                }
-            };
-
-            OuterPromise* _outer_promise;
-            std::chrono::steady_clock::time_point _deadline;
-            coroutine::Future<T> _future;
-            std::stop_source _inner_stop_source;
-            std::optional<std::stop_callback<Callback>> _stop_callback;
-            execution::Outcome<T> _outcome;
-
-            Frame(OuterPromise* outer_promise,
-                  std::chrono::steady_clock::time_point deadline,
-                  coroutine::Future<T> future)
-            : _outer_promise(std::move(outer_promise))
-            , _deadline(std::move(deadline))
-            , _future(std::move(future)) {
+        struct Callback {
+            std::stop_source _stop_source;
+            void operator()() {
+                // Local copy to survive possible self-destruct
+                std::stop_source stop_source{std::move(_stop_source)};
+                stop_source.request_stop();
             }
+        };
 
-
-        } _frame;
-
+        OuterPromise* _outer_promise;
+        std::chrono::steady_clock::time_point _deadline;
+        coroutine::Future<T> _future;
+        std::stop_source _inner_stop_source;
+        std::optional<std::stop_callback<Callback>> _stop_callback;
+        execution::Outcome<T> _outcome;
 
         WithDeadlineAwaitable(OuterPromise* outer_promise,
                               std::chrono::steady_clock::time_point deadline,
                               coroutine::Future<T> future)
-        : _frame{outer_promise, std::move(deadline), std::move(future)} {
+        : _outer_promise(outer_promise)
+        , _deadline(std::move(deadline))
+        , _future(std::move(future)) {
         }
 
         execution::Outcome<T>& outcome() noexcept {
-            return _frame._outcome;
+            return _outcome;
         }
 
         constexpr bool await_ready() const noexcept {
@@ -142,23 +130,23 @@ namespace wry {
 
         std::coroutine_handle<> await_suspend(std::coroutine_handle<OuterPromise>) noexcept {
             using coroutine::get_stop_token;
-            _frame._future._promise->set_delegate(this);
-            _frame._stop_callback.emplace(get_stop_token(*_frame._outer_promise),
-                                          typename Frame::Callback{_frame._inner_stop_source});
-            cancelable_after(_frame._inner_stop_source.get_token(),
-                             _frame._deadline - std::chrono::steady_clock::now(),
-                             [stop_source = _frame._inner_stop_source]() mutable {
+            _future._promise->set_delegate(this);
+            _stop_callback.emplace(get_stop_token(*_outer_promise),
+                                   Callback{_inner_stop_source});
+            cancelable_after(_inner_stop_source.get_token(),
+                             _deadline - std::chrono::steady_clock::now(),
+                             [stop_source = _inner_stop_source]() mutable {
                 // Local copy: the callbacks this fires may unwind the owner
                 std::stop_source keepalive = stop_source;
                 keepalive.request_stop();
             });
-            return handle_from_future(std::move(_frame._future));
+            return handle_from_future(std::move(_future));
         }
 
         // optional<monostate> for a void inner, as stopped_as_optional yields
         std::optional<typename execution::Outcome<T>::stored_type> await_resume() {
-            _frame._inner_stop_source.request_stop();
-            return _frame._outcome.stopped_as_optional();
+            _inner_stop_source.request_stop();
+            return _outcome.stopped_as_optional();
         }
 
         virtual void unhandled_stopped() noexcept override {
@@ -166,8 +154,8 @@ namespace wry {
             // outer resumes with nullopt -- unless the outer's own token is
             // requested, in which case the unwinding continues through it
             using coroutine::get_stop_token;
-            set_stopped(_frame._outcome);
-            OuterPromise* outer = take(_frame._outer_promise);
+            set_stopped(_outcome);
+            OuterPromise* outer = take(_outer_promise);
             if (get_stop_token(*outer).stop_requested())
                 handle_from_promise(outer).destroy();
             else
@@ -175,13 +163,13 @@ namespace wry {
         }
 
         virtual std::coroutine_handle<> final_await_suspend() noexcept override {
-            return handle_from_promise(take(_frame._outer_promise));
+            return handle_from_promise(take(_outer_promise));
         }
 
         virtual std::stop_token get_stop_token() noexcept override {
             // The inner runs under the interior source, which the timer
             // requests at the deadline and the outer's token is bridged to
-            return _frame._inner_stop_source.get_token();
+            return _inner_stop_source.get_token();
         }
 
     };
