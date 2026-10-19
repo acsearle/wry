@@ -158,6 +158,10 @@ namespace wry::coroutine {
             }
             while (sum.load(std::memory_order_relaxed) != n * (n + 1) / 2)
                 co_await TransferToPoolExecutor{};
+            // The sum completes inside the taker's last batch, before that
+            // batch is counted: wait for the count too
+            while (batches.load(std::memory_order_acquire) == 0)
+                co_await TransferToPoolExecutor{};
             int b = batches.load(std::memory_order_acquire);
             assert((b >= 1) && (b <= n));
             takers.request_stop();

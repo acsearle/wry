@@ -54,6 +54,7 @@ namespace wry {
         };
 
         command::Origin origin;
+        String peer;                    // a socket connection's label; else empty
         std::deque<Queued> queued;
         uint64_t pending_seq = 0;
         String pending_tag;
@@ -218,7 +219,7 @@ namespace wry {
 
         // Run a line now, record and echo it, but leave a pending reply
         // for the caller to own.
-        command::Outcome _issue_now(command::Origin origin, StringView line);
+        command::Outcome _issue_now(command::Origin origin, StringView line, StringView peer = {});
         void _echo_input(StringView line);
 
         // Record the final reply of invocation `seq` and echo it.

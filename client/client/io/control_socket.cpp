@@ -13,11 +13,14 @@
 #include <mutex>
 #include <thread>
 #include <variant>
+#include <vector>
 
 #include <fcntl.h>
+#include <libproc.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -77,6 +80,58 @@ namespace wry {
         bool set_nonblocking(int fd) {
             int flags = fcntl(fd, F_GETFL, 0);
             return flags != -1 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) != -1;
+        }
+
+        std::string_view basename_of(std::string_view path) {
+            size_t slash = path.rfind('/');
+            return (slash == std::string_view::npos) ? path : path.substr(slash + 1);
+        }
+
+        // Who is on the other end of an accepted Unix domain connection:
+        // the pid the kernel recorded at connect (LOCAL_PEERPID), and a
+        // name.  The tools are scripts, whose process name is only their
+        // interpreter, so the name is the first word or two of the peer's
+        // command line (KERN_PROCARGS2, basenames, a second word only if it
+        // is not an option), with the process name (proc_name) as the
+        // fallback
+        std::string peer_label(int fd) {
+            pid_t pid = 0;
+            socklen_t length = sizeof pid;
+            if ((::getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &length) != 0) || (pid <= 0))
+                return "unknown peer";
+            std::string name;
+            int mib[3] = {CTL_KERN, KERN_PROCARGS2, (int)pid};
+            size_t size = 0;
+            if ((::sysctl(mib, 3, nullptr, &size, nullptr, 0) == 0) && (size > sizeof(int))) {
+                std::vector<char> buffer(size);
+                if (::sysctl(mib, 3, buffer.data(), &size, nullptr, 0) == 0) {
+                    // Layout: int argc; the executable path; NUL padding;
+                    // then argv[0], argv[1], ... each NUL-terminated
+                    int argc = 0;
+                    std::memcpy(&argc, buffer.data(), sizeof argc);
+                    const char* p = buffer.data() + sizeof(int);
+                    const char* end = buffer.data() + size;
+                    while ((p < end) && *p) ++p;        // the executable path
+                    while ((p < end) && !*p) ++p;       // its padding
+                    for (int word = 0; (word < 2) && (word < argc) && (p < end); ++word) {
+                        std::string_view arg(p, ::strnlen(p, (size_t)(end - p)));
+                        if ((word == 1) && (arg.empty() || (arg[0] == '-')))
+                            break;
+                        if (!name.empty())
+                            name += ' ';
+                        name += basename_of(arg);
+                        p += arg.size() + 1;
+                    }
+                }
+            }
+            if (name.empty()) {
+                char comm[2 * MAXCOMLEN + 1] = {};
+                if (::proc_name(pid, comm, sizeof comm) > 0)
+                    name = comm;
+            }
+            if (name.empty())
+                name = "pid";
+            return name + ' ' + std::to_string(pid);
         }
 
         std::string errno_message(const char* what) {
@@ -230,6 +285,9 @@ namespace wry {
                     ::close(fd);            // nothing is waiting on it yet
                     continue;
                 }
+                // Before the reader can deliver a line, so Opened precedes
+                // them in the queue
+                shared->events.emplace(ControlSocket::Opened{id, peer_label(fd)});
                 connections.soon(serve_connection(shared, std::move(queue), id, fd));
             }
             (void) co_await connections.join();
@@ -422,14 +480,21 @@ namespace wry {
             return lines;
         }
 
-        // Drains the event queue: lines into `lines`, closings into `closed`
+        // Drains the event queue: lines into `lines`, closings into
+        // `closed`, and openings into `opened`, whose order against the
+        // lines is checked by the caller
         void drain(ControlSocket& server,
                    std::vector<ControlSocket::Line>& lines,
-                   std::vector<uint64_t>& closed) {
+                   std::vector<uint64_t>& closed,
+                   std::vector<ControlSocket::Opened>* opened = nullptr) {
             for (auto& event : server.events().try_take()) {
                 if (auto* line = std::get_if<ControlSocket::Line>(&event))
                     lines.push_back(std::move(*line));
-                else
+                else if (auto* open = std::get_if<ControlSocket::Opened>(&event)) {
+                    assert(lines.empty() || (lines.back().connection != open->connection));
+                    if (opened)
+                        opened->push_back(std::move(*open));
+                } else
                     closed.push_back(std::get<ControlSocket::Closed>(event).connection);
             }
         }
@@ -469,14 +534,18 @@ namespace wry {
         (void) w1;
         (void) w2;
 
-        // Lines arrive whole, split at newlines, CR stripped.
+        // Lines arrive whole, split at newlines, CR stripped; the
+        // connection's Opened came first, labelled with this process
         std::vector<ControlSocket::Line> got;
         std::vector<uint64_t> closed;
+        std::vector<ControlSocket::Opened> opened;
         bool arrived = eventually([&] {
-            drain(*server, got, closed);
+            drain(*server, got, closed, &opened);
             return got.size() >= 2;
         });
         assert(arrived && got.size() == 2 && closed.empty());
+        assert(opened.size() == 1 && opened[0].connection == got[0].connection);
+        assert(opened[0].peer == "client " + std::to_string(::getpid()));
         (void) arrived;
         assert(got[0].bytes == "first" && got[1].bytes == "second");
         assert(got[0].connection == got[1].connection);
@@ -524,8 +593,22 @@ namespace wry {
             auto batch = co_await with_deadline(std::chrono::steady_clock::now() + std::chrono::seconds(5),
                                                 server->events().take());
             assert(batch.has_value() && !batch->empty());
-            auto* knock = std::get_if<ControlSocket::Line>(&batch->front());
-            assert(knock && knock->bytes == "knock");
+            // The batch opens with the talker's Opened; its line follows,
+            // in this batch or a later one
+            ControlSocket::Line const* knock = nullptr;
+            std::deque<ControlSocket::Event> events = std::move(*batch);
+            bool knocked = eventually([&] {
+                for (auto& event : events)
+                    if (auto* line = std::get_if<ControlSocket::Line>(&event))
+                        knock = line;
+                if (knock)
+                    return true;
+                for (auto& event : server->events().try_take())
+                    events.push_back(std::move(event));
+                return false;
+            });
+            assert(knocked && knock && knock->bytes == "knock");
+            (void) knocked;
             ::close(talker);
             bool talker_closed = eventually([&] {
                 drain(*server, got, closed);

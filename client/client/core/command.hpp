@@ -300,6 +300,7 @@ namespace wry::command {
         uint64_t seq = 0;
         uint64_t frame = 0;             // when issued
         Origin origin = Origin::gui;
+        String peer;                    // a socket connection's label; else empty
         String line;                    // canonical, defaults resolved
         Reply::Status status = Reply::OK;   // PENDING until completed
         String reply;                   // the reply's text
@@ -308,7 +309,8 @@ namespace wry::command {
 
     // `#41 frame 1200 console  step 10`, then the outcome if it is not a
     // plain immediate success: `  -> frame 1210`, `  ! message`,
-    // `  (pending)`, `  (cancelled)`.
+    // `  (pending)`, `  (cancelled)`; then `  from python3 wryctl 1234`
+    // for a socket entry.
     String format_history_entry(HistoryEntry const& entry);
 
     // The result of running a line.  `line` is the canonical invocation

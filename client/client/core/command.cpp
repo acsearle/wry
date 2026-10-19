@@ -589,6 +589,10 @@ namespace wry::command {
                 out.append(StringView("  (cancelled)"));
                 break;
         }
+        if (!entry.peer.empty()) {
+            out.append(StringView("  from "));
+            out.append(entry.peer);
+        }
         return out;
     }
 

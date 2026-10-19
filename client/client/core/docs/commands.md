@@ -325,7 +325,16 @@ the same sequence number when it completes:
 #41 frame 1200 console  step 10  -> frame 1210
 #42 frame 1203 gui      write Coordinate(3, 4) OPCODE::SWAP
 #43 frame 1204 console  frame 100  (cancelled)
+#44 frame 1210 socket   step 2  from python3 wry_mcp.py 1234
 ```
+
+A socket entry ends with its connection's label, which is who was on
+the other end: the peer's pid, read from the kernel at connect
+(`LOCAL_PEERPID`), with the first word or two of its command line, or
+its process name.  The same label tags the console echo:
+`[socket python3 wryctl 1234] step 2`.  The connection's ordinal
+remains its identity (a pid can be reused once the peer exits); the
+label is for people.
 
 A pending entry is completed in place: it records its final status,
 reply text and completion frame, and is shown `(pending)` until then.
@@ -496,9 +505,10 @@ Socket IO runs on the kqueue reactor (core/kqueue_reactor.hpp) as
 coroutines on the worker pool: an accept loop owning a nursery of
 connections, each a reader and a writer under a nursery of their own,
 either of which ends the connection by stopping the other.  They move
-bytes only.  Complete lines, and each connection's closing after its
-last line, go to one event queue (`ControlSocket::events()`, a
-multi-producer single-consumer queue) that the main thread takes once
+bytes only.  Each connection's opening (with its peer label), its
+complete lines, and its closing after its last line, go in that order
+to one event queue (`ControlSocket::events()`, a multi-producer
+single-consumer queue) that the main thread takes once
 per frame and parses -- parsing can create Terms, so it must happen on
 a mutator -- and replies go to each connection's writer through a
 single-producer single-consumer queue.  There is no read deadline: an

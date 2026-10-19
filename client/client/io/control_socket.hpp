@@ -36,6 +36,16 @@ namespace wry {
     class ControlSocket {
     public:
 
+        // A connection accepted, with a label for who is on the other end:
+        // "<name> <pid>", the name being the peer's command line's first
+        // word or two (basenames: "python3 wry_mcp.py", "client") when
+        // readable, else its process name.  Read at accept time; a peer that
+        // forks after connecting keeps the original's label
+        struct Opened {
+            uint64_t connection;
+            std::string peer;
+        };
+
         struct Line {
             uint64_t connection;
             std::string bytes;          // unvalidated; not including '\n'
@@ -45,9 +55,10 @@ namespace wry {
             uint64_t connection;
         };
 
-        // What the main thread consumes: a connection's lines in arrival
-        // order, then its Closed, after which nothing more from it
-        using Event = std::variant<Line, Closed>;
+        // What the main thread consumes: a connection's Opened, its lines
+        // in arrival order, then its Closed, after which nothing more from
+        // it.  The ordinal is the identity; the label is for people
+        using Event = std::variant<Opened, Line, Closed>;
 
         // Bind and listen at `path` (replacing a stale socket file).  Null,
         // with `error` set, on failure.  Nothing is accepted until the task

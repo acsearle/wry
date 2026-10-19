@@ -117,7 +117,7 @@ namespace wry {
 
     } // namespace
 
-    Outcome GuiContext::_issue_now(Origin origin, StringView text) {
+    Outcome GuiContext::_issue_now(Origin origin, StringView text, StringView peer) {
         CommandContext context{*this, world};
         Outcome outcome = commands.run(context, text);
 
@@ -128,6 +128,7 @@ namespace wry {
             entry.seq = next_seq++;
             entry.frame = frame;
             entry.origin = origin;
+            entry.peer = String(peer);
             entry.line = outcome.line;
             entry.status = outcome.reply.status;
             if (outcome.reply.status != Reply::PENDING) {
@@ -144,6 +145,10 @@ namespace wry {
         if (origin != Origin::console && !outcome.line.empty()) {
             String echo("[");
             echo.append(StringView(command::name_from_origin(origin)));
+            if (!peer.empty()) {
+                echo.append(StringView(" "));
+                echo.append(peer);
+            }
             echo.append(StringView("] "));
             echo.append(outcome.line);
             console_overlay.print(echo);
@@ -173,7 +178,7 @@ namespace wry {
         while (!source.pending && !source.queued.empty()) {
             CommandSource::Queued next = std::move(source.queued.front());
             source.queued.pop_front();
-            Outcome outcome = _issue_now(source.origin, next.line);
+            Outcome outcome = _issue_now(source.origin, next.line, source.peer);
             if (outcome.reply.status == Reply::PENDING) {
                 source.pending = outcome.reply.pending;
                 source.pending_seq = history.back().seq;
@@ -532,10 +537,29 @@ namespace wry {
             return;
         for (auto& event : control_socket->events().try_take())
             socket_events.push_back(std::move(event));
-        // In arrival order: a connection's lines, then its Closed
+        // A connection's command source, made at its Opened (or, should a
+        // line arrive first, then, unlabelled)
+        auto source_for = [this](uint64_t id) -> CommandSource& {
+            auto& source = socket_sources[id];
+            if (!source) {
+                source = std::make_unique<CommandSource>(Origin::socket);
+                source->on_reply = [this, id](String const& tag, StringView canonical, Reply const& reply) {
+                    if (!control_socket)
+                        return;
+                    String json = reply_json(tag, canonical, reply);
+                    control_socket->send(id, std::string_view(json.data(), json.chars.size()));
+                };
+            }
+            return *source;
+        };
+        // In arrival order: a connection's Opened, its lines, then its Closed
         while (!socket_events.empty()) {
             ControlSocket::Event event = std::move(socket_events.front());
             socket_events.pop_front();
+            if (auto* opened = std::get_if<ControlSocket::Opened>(&event)) {
+                source_for(opened->connection).peer = String(StringView(opened->peer.c_str()));
+                continue;
+            }
             if (auto* closed = std::get_if<ControlSocket::Closed>(&event)) {
                 auto it = socket_sources.find(closed->connection);
                 if (it == socket_sources.end())
@@ -552,17 +576,7 @@ namespace wry {
                 control_socket->send(id, std::string_view(json.data(), json.chars.size()));
                 continue;
             }
-            auto& source = socket_sources[id];
-            if (!source) {
-                source = std::make_unique<CommandSource>(Origin::socket);
-                source->on_reply = [this, id](String const& tag, StringView canonical, Reply const& reply) {
-                    if (!control_socket)
-                        return;
-                    String json = reply_json(tag, canonical, reply);
-                    control_socket->send(id, std::string_view(json.data(), json.chars.size()));
-                };
-            }
-            submit(*source, request.line, request.tag);
+            submit(source_for(id), request.line, request.tag);
         }
     }
 
@@ -1403,11 +1417,14 @@ namespace wry {
         }
         assert(frame_at < four_at);
 
-        // Socket invocations are recorded with their origin.
+        // Socket invocations are recorded with their origin and the peer's
+        // label: this process, connected to itself
         bool from_socket = false;
+        std::string expected_peer = "client " + std::to_string(::getpid());
         for (auto const& e : gc.history)
             if (e.line == StringView("click 3 4 \"right\""))
-                from_socket = (e.origin == Origin::socket);
+                from_socket = (e.origin == Origin::socket)
+                           && (e.peer == StringView(expected_peer.c_str()));
         assert(from_socket);
 
         // Closing the connection with a command pending cancels it.
