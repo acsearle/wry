@@ -191,6 +191,9 @@ namespace wry {
         std::unique_ptr<ControlSocket> control_socket;
         std::map<uint64_t, std::unique_ptr<CommandSource>> socket_sources;
         std::deque<ControlSocket::Event> socket_events;     // taken, not yet serviced
+        // Requests a connection may have queued or pending at once; more
+        // are refused with an error reply (commands.md section 9)
+        static constexpr size_t max_pipelined_requests = 64;
         bool open_control_socket(String const& path);
         void _service_control_socket();
 

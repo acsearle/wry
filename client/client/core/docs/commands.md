@@ -502,32 +502,48 @@ parameter is a String; a string literal must be exactly one node, so it
 cannot smuggle in further arguments.
 
 Socket IO runs on the kqueue reactor (core/kqueue_reactor.hpp) as
-coroutines on the worker pool: an accept loop owning a nursery of
+coroutines on the worker pool, through the transport layer the game's
+connections share (io/transport.hpp, multiplayer.md section 8): a
+`Transport` with the line codec.  Its loop owns a nursery of
 connections, each a reader and a writer under a nursery of their own,
 either of which ends the connection by stopping the other.  They move
 bytes only.  Each connection's opening (with its peer label), its
 complete lines, and its closing after its last line, go in that order
 to one event queue (`ControlSocket::events()`, a multi-producer
-single-consumer queue) that the main thread takes once
-per frame and parses -- parsing can create Terms, so it must happen on
-a mutator -- and replies go to each connection's writer through a
-single-producer single-consumer queue.  There is no read deadline: an
-idle connection is legitimate (the MCP adapter holds one open).
-Descriptors are closed only by the frame that owns them, after its
-nursery has joined, so no descriptor is closed under an armed knote.
-The accept loop is a task the host spawns into the process scope (the
-nursery in main), so it runs under the root token; it also runs under
-the ControlSocket's own two stop sources, one for the accept alone and
-one for everything, bridged from the inherited token.  `shutdown(grace)`
-is a task: it stops accepting, queues an end of stream behind what each
-connection has pending, waits up to `grace` for the connections to
-finish (the last one to close sets a single-consumer event the task
-awaits under a deadline), then `close()`, which cancels whatever is
-left and unlinks the path; `close()` alone is the brutal form.  main
-runs the graceful form through `sync_wait` at quit, before requesting
-the root token and draining the scope.  Invocations from the socket
-echo to the console as `[socket] ...`, so a person watching sees what a
-script or agent does.
+single-consumer queue) that the main thread takes once per frame and
+parses -- parsing can create Terms, so it must happen on a mutator --
+and replies go to each connection's writer through a single-producer
+single-consumer queue.  There is no read deadline: an idle connection
+is legitimate (the MCP adapter holds one open).  Descriptors are closed
+only by the frame that owns them, after its nursery has joined, so no
+descriptor is closed under an armed knote.  The loop is a task the host
+spawns into the process scope (the nursery in main), so it runs under
+the root token; it also runs under the transport's own two stop
+sources, one for accepting alone and one for everything, bridged from
+the inherited token.  `shutdown(grace)` is a task: it stops accepting,
+queues an end of stream behind what each connection has pending, waits
+up to `grace` for the connections to finish (the last one to close sets
+a single-consumer event the task awaits under a deadline), then
+`close()`, which cancels whatever is left and unlinks the path;
+`close()` alone is the brutal form.  main runs the graceful form
+through `sync_wait` at quit, before requesting the root token and
+draining the scope.  Invocations from the socket echo to the console as
+`[socket] ...`, so a person watching sees what a script or agent does.
+
+**Bounds.**  The socket is local-user-only, but it is bounded as the
+game's connections are, by the transport: a line over 1 MiB, or more
+than 16 connections, is refused; a connection may have at most 256
+lines delivered and not yet taken by the main thread, beyond which its
+reader parks and the kernel buffers fill (the peer's writes block, no
+memory grows); replies queue up to 16 MiB for a connection that is not
+reading them, beyond which it is kicked as a slow consumer; and a
+connection may have at most 64 requests queued or pending at once
+(`GuiContext::max_pipelined_requests`), beyond which each further
+request is refused at once with an error reply, so a client that never
+reads its replies cannot make the main thread queue them without
+bound.  A kicked connection gets one last line, an error reply with no
+id (`{"status": "error", "text": "kicked: <reason>"}`), then the end of
+stream; nothing it sent after the kick is processed.
 
 **`tools/wryctl`**: a command-line client.  `wryctl step 10` joins its
 arguments into one line, sends it, prints the reply text, and exits 1

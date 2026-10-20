@@ -576,7 +576,18 @@ namespace wry {
                 control_socket->send(id, std::string_view(json.data(), json.chars.size()));
                 continue;
             }
-            submit(source_for(id), request.line, request.tag);
+            // The pipelining cap (commands.md section 9): a connection may
+            // have at most this many requests queued or pending; the rest
+            // are refused at once, with a reply, so a client that never
+            // reads its replies cannot grow the queue without bound
+            CommandSource& source = source_for(id);
+            if (source.queued.size() + (source.pending ? 1 : 0) >= max_pipelined_requests) {
+                String json = reply_json(request.tag, StringView(),
+                                         Reply::error(String("too many requests in flight: at most 64 per connection")));
+                control_socket->send(id, std::string_view(json.data(), json.chars.size()));
+                continue;
+            }
+            submit(source, request.line, request.tag);
         }
     }
 
