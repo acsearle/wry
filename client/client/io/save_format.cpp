@@ -29,8 +29,10 @@
 #include "save_format.hpp"
 
 #include "array_mapped_trie.hpp"
+#include "assert.hpp"
 #include "entity.hpp"
 #include "epoch.hpp"
+#include "fields.hpp"
 #include "HeapString.hpp"
 #include "machine.hpp"
 #include "persistent_set.hpp"
@@ -56,11 +58,6 @@ namespace wry {
     // -----------------------------------------------------------------------
 
     static uint64_t encode_value(const Term& v, Saver& s) {
-        if (s._hashing) {
-            // The hashing sink: the Term's content hash stands in for the
-            // encoded word (an inline Term's content hash IS its word).
-            return content_hash(v);
-        }
         if (_term_is_object(v)) {
             const HeapTerm* p = _term_as_object(v);
             SaveRef ref = s.visit_heap_value(p);
@@ -135,7 +132,6 @@ namespace wry {
     // -----------------------------------------------------------------------
 
     SaveRef Saver::visit_entity(const Entity* p) {
-        if (_hashing) return _hash_ref(content_hash(p));
         if (!p) return SAVE_REF_NULL;
         auto it = _seen.find((const void*)p);
         if (it != _seen.end()) {
@@ -160,7 +156,6 @@ namespace wry {
     }
 
     SaveRef Saver::visit_heap_value(const HeapTerm* p) {
-        if (_hashing) return _hash_ref(p ? p->content_hash() : 0);
         if (!p) return SAVE_REF_NULL;
         auto it = _seen.find((const void*)p);
         if (it != _seen.end()) {
@@ -185,7 +180,6 @@ namespace wry {
     // a corresponding emit_body() free function below.
     template<typename T>
     SaveRef Saver::visit(const T* p) {
-        if (_hashing) return _hash_ref(content_hash(p));
         if (!p) return SAVE_REF_NULL;
         auto it = _seen.find((const void*)p);
         if (it != _seen.end()) {
@@ -288,149 +282,80 @@ namespace wry {
     using NodeSet_U64         = ArrayMappedTrie<uint64_t, std::monostate, ScanDiscipline>;
 
     // -----------------------------------------------------------------------
-    // Content hashes.  The default runs the object's own save body through
-    // the hashing sink (see Saver); World's is the positional combine of
-    // its parts, kept beside _save_body below so the two field lists can
-    // be checked against each other.
+    // The save body of a record-like object: its _fields enumeration
+    // (core/fields.hpp) walked by this visitor.  State fields are
+    // written in enumeration order, each in its own encoding;
+    // a field that references another object visits it first, so the
+    // referent's record precedes this one (post-order, as before).  The
+    // loaders below read the same fields in the same order by hand.
     // -----------------------------------------------------------------------
 
-    uint64_t HeapTerm::_compute_content_hash() const {
-        Saver s = Saver::for_hashing();
-        s.begin_record(_save_type_tag());
-        _save_body(s);
-        return s.finish_hash();
+    struct SaveFieldVisitor : FieldVisitor<SaveFieldVisitor> {
+
+        Saver& s;
+
+        explicit SaveFieldVisitor(Saver& saver) : s(saver) {}
+
+        template<FieldRole R, typename T>
+        void visit(const char*, T const& x) {
+            if constexpr (R == FieldRole::state)
+                write(x);
+        }
+
+        // Scalars: enumerators as u32, every other integer as u64.
+        template<typename T> requires std::is_enum_v<T>
+        void write(T x) { s.write_u32((uint32_t)x); }
+        template<std::integral T>
+        void write(T x) { s.write_u64((uint64_t)x); }
+        void write(EntityID x) { s.write_u64(x.data); }
+        void write(Coordinate x) { s.write_pod(x); }
+        void write(std::string_view x) {
+            s.write_u64((uint64_t)x.size());
+            s.write_bytes(x.data(), x.size());
+        }
+
+        // References.
+        void write(const Term& x) { s.write_u64(encode_value(x, s)); }
+        void write(const Entity* x) { s.write_ref(s.visit_entity(x)); }
+        void write(const PersistentStack<Term>* x) { s.write_ref(s.visit<PersistentStack<Term>>(x)); }
+        template<typename Key, typename T, typename H, typename D>
+        void write(const PersistentMap<Key, T, H, D>& x) {
+            using AMT = typename PersistentMap<Key, T, H, D>::AMT;
+            s.write_ref(s.visit<AMT>(x._inner ? &*x._inner : nullptr));
+        }
+        template<typename Key, typename T>
+        void write(const WaitableMap<Key, T>& x) {
+            write(x.kv);
+            write(x.ki);
+        }
+
+        // The World's schedule: the time wheel with the ready set folded
+        // in as the current-time bucket (world.hpp).
+        void write(const World::TimeWheelFold& x) {
+            World::Set t{x.wheel};
+            for (auto [entity_id, _] : x.ready)
+                t.set({x.time, entity_id});
+            s.write_ref(s.visit<NodeSet_U128>(t._inner));
+        }
+
+    };
+
+    template<typename T>
+    static void save_fields(const T* p, Saver& s) {
+        SaveFieldVisitor v{s};
+        p->_fields(v);
     }
 
-    // -----------------------------------------------------------------------
-    // Polymorphic _save_body implementations.  These live here, not in the
-    // class .cpp, to keep all save-format coupling localized to one file.
-    // -----------------------------------------------------------------------
-
-    void World::_save_body(Saver& s) const {
-        SaveRef eid_for_coord_kv = s.visit<NodeEntityID_U64>(_entity_id_for_coordinate.kv._inner);
-        // The location multimap's kv side is Coordinate -> WaitSet: the
-        // same node type as the ki waiter indexes, so it reuses their
-        // emitters and registry entries.
-        SaveRef loc_for_coord_kv = s.visit<NodeWaitSet_U64>(_located_for_coordinate.kv._inner);
-        SaveRef ent_for_eid_kv   = s.visit<NodeEntityPtr_U64>(_entity_for_entity_id.kv._inner);
-        SaveRef val_for_coord_kv = s.visit<NodeValue_U64>(_term_for_coordinate.kv._inner);
-        SaveRef ter_for_coord_kv = s.visit<NodeTerrain_U64>(_terrain_for_coordinate.kv._inner);
-
-        // To save _ready and _waiting_on_time we merge them
-        Set t{_waiting_on_time};
-        for (auto [entity_id, _] : _ready)
-            t.set({_time, entity_id});
-        SaveRef waiting_on_time  = s.visit<NodeSet_U128>(t._inner);
-
-        // The ki waiter index is semantic state, not a regenerable cache: a
-        // waiter registered before the save must still be registered after a
-        // load, or its wake is silently lost.  Each entry's waitset travels
-        // inline in the map record.
-        SaveRef eid_for_coord_ki = s.visit<NodeWaitSet_U64>(_entity_id_for_coordinate.ki._inner);
-        SaveRef loc_for_coord_ki = s.visit<NodeWaitSet_U64>(_located_for_coordinate.ki._inner);
-        SaveRef ent_for_eid_ki   = s.visit<NodeWaitSet_U64>(_entity_for_entity_id.ki._inner);
-        SaveRef val_for_coord_ki = s.visit<NodeWaitSet_U64>(_term_for_coordinate.ki._inner);
-        SaveRef ter_for_coord_ki = s.visit<NodeWaitSet_U64>(_terrain_for_coordinate.ki._inner);
-
-        s.write_u64((uint64_t)_time);
-        s.write_u64(_entity_id_source.data);
-        s.write_ref(eid_for_coord_kv);
-        s.write_ref(eid_for_coord_ki);
-        s.write_ref(loc_for_coord_kv);
-        s.write_ref(loc_for_coord_ki);
-        s.write_ref(ent_for_eid_kv);
-        s.write_ref(ent_for_eid_ki);
-        s.write_ref(val_for_coord_kv);
-        s.write_ref(val_for_coord_ki);
-        s.write_ref(ter_for_coord_kv);
-        s.write_ref(ter_for_coord_ki);
-        s.write_ref(waiting_on_time);
-    }
-
-    // The World hash: a positional combine (core/hash.hpp hash_combine) of
-    // the type tag, _time, _entity_id_source, the ten map roots' cached
-    // hashes in the order _save_body writes them, and the time wheel with
-    // _ready folded in exactly as the save folds it -- as the (_time, id)
-    // bucket.  The wheel's hash is a sum over members, so the fold is a
-    // sum of per-member hashes rather than the merged set the save builds;
-    // step() asserts that nothing waits at or before _time outside _ready,
-    // which is what makes the two equal.  O(1) in the maps plus O(|_ready|).
-    // Maps carry no tag of their own, so the position in the combine is
-    // what distinguishes one map from another.
-    uint64_t World::_compute_content_hash() const {
-        CombineHasher h;
-        h.write_u64(SAVE_TYPE_TAG);
-        h.write_u64((uint64_t)_time);
-        h.write_u64(_entity_id_source.data);
-        h.write_u64(_entity_id_for_coordinate.kv.hash());
-        h.write_u64(_entity_id_for_coordinate.ki.hash());
-        h.write_u64(_located_for_coordinate.kv.hash());
-        h.write_u64(_located_for_coordinate.ki.hash());
-        h.write_u64(_entity_for_entity_id.kv.hash());
-        h.write_u64(_entity_for_entity_id.ki.hash());
-        h.write_u64(_term_for_coordinate.kv.hash());
-        h.write_u64(_term_for_coordinate.ki.hash());
-        h.write_u64(_terrain_for_coordinate.kv.hash());
-        h.write_u64(_terrain_for_coordinate.ki.hash());
-        uint64_t wheel = _waiting_on_time.hash();
-        for (auto [entity_id, _] : _ready)
-            wheel += Set::hash_of({_time, entity_id});
-        h.write_u64(wheel);
-        return h.finish();
-    }
-
-    void Machine::_save_body(Saver& s) const {
-        // Visit stack first (post-order).
-        SaveRef stack_head_ref = s.visit<PersistentStack<Term>>(_stack);
-
-        s.write_u64(_entity_id.data);
-        s.write_u64(_free_entity_id.data);
-        s.write_u32((uint32_t)_phase);
-        s.write_u64((uint64_t)_on_arrival);
-        s.write_ref(stack_head_ref);
-        s.write_u64((uint64_t)_old_heading);
-        s.write_u64((uint64_t)_new_heading);
-        s.write_pod(_old_location);
-        s.write_pod(_new_location);
-        s.write_u64((uint64_t)_old_time);
-        s.write_u64((uint64_t)_new_time);
-    }
-
-    // LocalizedEntity subclasses.  Spawner, Sink, Counter and Evenator carry
-    // no state beyond identity and location; Source adds the Term it emits.
-    static void save_localized_entity_fields(const LocalizedEntity* p, Saver& s) {
-        s.write_u64(p->_entity_id.data);
-        s.write_u64(p->_free_entity_id.data);
-        s.write_pod(p->_location);
-    }
-
-    void Spawner::_save_body(Saver& s) const { save_localized_entity_fields(this, s); }
-    void Sink::_save_body(Saver& s) const { save_localized_entity_fields(this, s); }
-    void Counter::_save_body(Saver& s) const { save_localized_entity_fields(this, s); }
-    void Evenator::_save_body(Saver& s) const { save_localized_entity_fields(this, s); }
-
-    void Source::_save_body(Saver& s) const {
-        // Visit first (post-order); _of_this may reference a HeapTerm.
-        uint64_t of_this = encode_value(_of_this, s);
-        save_localized_entity_fields(this, s);
-        s.write_u64(of_this);
-    }
-
-    void Player::_save_body(Saver& s) const {
-        // _queue is client-local pending input, consumed by notify(); it is
-        // not simulation state.  Only identity persists.
-        s.write_u64(_entity_id.data);
-        s.write_u64(_free_entity_id.data);
-    }
-
-    void HeapInt64::_save_body(Saver& s) const {
-        s.write_u64((uint64_t)_integer);
-    }
-
-    void HeapString::_save_body(Saver& s) const {
-        s.write_u64((uint64_t)_size);
-        s.write_bytes(_bytes, _size);
-    }
+    void World::_save_body(Saver& s) const      { save_fields(this, s); }
+    void Machine::_save_body(Saver& s) const    { save_fields(this, s); }
+    void Spawner::_save_body(Saver& s) const    { save_fields(this, s); }
+    void Sink::_save_body(Saver& s) const       { save_fields(this, s); }
+    void Counter::_save_body(Saver& s) const    { save_fields(this, s); }
+    void Evenator::_save_body(Saver& s) const   { save_fields(this, s); }
+    void Source::_save_body(Saver& s) const     { save_fields(this, s); }
+    void Player::_save_body(Saver& s) const     { save_fields(this, s); }
+    void HeapInt64::_save_body(Saver& s) const  { save_fields(this, s); }
+    void HeapString::_save_body(Saver& s) const { save_fields(this, s); }
 
     // -----------------------------------------------------------------------
     // Saver driver.
@@ -515,6 +440,7 @@ namespace wry {
         m->_old_time = (Time)L.read_u64();
         m->_new_time = (Time)L.read_u64();
         m->_stack = (PersistentStack<Term>*)L._ptrs[stack_ref];
+        m->seal();
     }
 
     template<typename T>
@@ -524,6 +450,7 @@ namespace wry {
         p->_entity_id = read_entity_id(L);
         p->_free_entity_id = read_entity_id(L);
         p->_location = L.read_pod<Coordinate>();
+        p->seal();
     }
 
     static void load_into_source(Loader& L, SaveRef id) {
@@ -533,6 +460,7 @@ namespace wry {
         p->_free_entity_id = read_entity_id(L);
         p->_location = L.read_pod<Coordinate>();
         p->_of_this = decode_value(L.read_u64(), L);
+        p->seal();
     }
 
     static void load_into_player(Loader& L, SaveRef id) {
@@ -540,12 +468,11 @@ namespace wry {
         L._ptrs[id] = p;
         p->_entity_id = read_entity_id(L);
         p->_free_entity_id = read_entity_id(L);
+        p->seal();
     }
 
     static void load_into_heap_int64(Loader& L, SaveRef id) {
-        HeapInt64* h = new HeapInt64;
-        L._ptrs[id] = h;
-        h->_integer = (int64_t)L.read_u64();
+        L._ptrs[id] = new HeapInt64((int64_t)L.read_u64());
     }
 
     static void load_into_heap_string(Loader& L, SaveRef id) {
@@ -738,7 +665,7 @@ namespace wry {
         uint64_t oracle_term_hash(Term t) {
             if (_term_is_object(t) && t._data) {
                 uint64_t h = _term_as_object(t)->_compute_content_hash();
-                assert(h == content_hash(t));
+                assert(h == content_hash(t)); // the sealed hash
                 return h;
             }
             return content_hash(t);
@@ -773,28 +700,23 @@ namespace wry {
     } // namespace
 
     uint64_t world_content_hash_oracle(const World* w) {
+        // Verify every cached part from a walk ...
         auto ki = [](const WaitSet& ws) { return oracle_waitset_hash(ws); };
-        CombineHasher h;
-        h.write_u64(World::SAVE_TYPE_TAG);
-        h.write_u64((uint64_t)w->_time);
-        h.write_u64(w->_entity_id_source.data);
-        h.write_u64(oracle_map_hash(w->_entity_id_for_coordinate.kv, [](EntityID e) { return content_hash(e); }));
-        h.write_u64(oracle_map_hash(w->_entity_id_for_coordinate.ki, ki));
-        h.write_u64(oracle_map_hash(w->_located_for_coordinate.kv, ki));
-        h.write_u64(oracle_map_hash(w->_located_for_coordinate.ki, ki));
-        h.write_u64(oracle_map_hash(w->_entity_for_entity_id.kv, oracle_entity_hash));
-        h.write_u64(oracle_map_hash(w->_entity_for_entity_id.ki, ki));
-        h.write_u64(oracle_map_hash(w->_term_for_coordinate.kv, oracle_term_hash));
-        h.write_u64(oracle_map_hash(w->_term_for_coordinate.ki, ki));
-        h.write_u64(oracle_map_hash(w->_terrain_for_coordinate.kv, [](Terrain t) { return content_hash(t); }));
-        h.write_u64(oracle_map_hash(w->_terrain_for_coordinate.ki, ki));
+        (void) oracle_map_hash(w->_entity_id_for_coordinate.kv, [](EntityID e) { return content_hash(e); });
+        (void) oracle_map_hash(w->_entity_id_for_coordinate.ki, ki);
+        (void) oracle_map_hash(w->_located_for_coordinate.kv, ki);
+        (void) oracle_map_hash(w->_located_for_coordinate.ki, ki);
+        (void) oracle_map_hash(w->_entity_for_entity_id.kv, oracle_entity_hash);
+        (void) oracle_map_hash(w->_entity_for_entity_id.ki, ki);
+        (void) oracle_map_hash(w->_term_for_coordinate.kv, oracle_term_hash);
+        (void) oracle_map_hash(w->_term_for_coordinate.ki, ki);
+        (void) oracle_map_hash(w->_terrain_for_coordinate.kv, [](Terrain t) { return content_hash(t); });
+        (void) oracle_map_hash(w->_terrain_for_coordinate.ki, ki);
         uint64_t wheel = oracle_trie_hash(w->_waiting_on_time._inner ? &*w->_waiting_on_time._inner : nullptr,
                                           [](std::monostate) { return (uint64_t)0; });
         assert(wheel == w->_waiting_on_time.hash());
-        for (auto [entity_id, _] : w->_ready)
-            wheel += World::Set::hash_of({w->_time, entity_id});
-        h.write_u64(wheel);
-        return h.finish();
+        // ... then the World from the verified parts, bypassing its seal.
+        return w->_compute_content_hash();
     }
 
     // -----------------------------------------------------------------------
@@ -866,6 +788,7 @@ namespace wry {
         World* w2 = test_load_from_buffer(buffer);
         assert(w2);
         assert(w2->_time == w->_time);
+        w2->hack_repair_invariant();
         assert(w2->content_hash() == w->content_hash());
         assert(world_content_hash_oracle(w2) == w->content_hash());
 
@@ -924,6 +847,7 @@ namespace wry {
         Counter* counter = new Counter;
         counter->_entity_id = w->generate_entity_id();
         counter->_location = Coordinate{0, 0};
+        counter->seal();
         w->_entity_for_entity_id.set(counter->_entity_id, counter);
         { EntityIDSet s; s.set(counter->_entity_id);
           w->_located_for_coordinate.set(counter->_location, s); }
@@ -934,6 +858,7 @@ namespace wry {
         for (int i = 0; i != 2; ++i) {
             spawners[i]->_entity_id = w->generate_entity_id();
             spawners[i]->_location = spawner_at[i];
+            spawners[i]->seal();
             w->_entity_for_entity_id.set(spawners[i]->_entity_id, spawners[i]);
             { EntityIDSet s; s.set(spawners[i]->_entity_id);
               w->_located_for_coordinate.set(spawner_at[i], s); }
@@ -967,7 +892,7 @@ namespace wry {
         assert(a._ptr->_entity_id_source.data >= cursor0.data + 2);
         EntityID spawned[2] = {};
         for (int i = 0; i != 2; ++i) {
-            assert(a._ptr->_entity_id_for_coordinate.try_get(spawner_at[i], spawned[i]));
+            CHECK(a._ptr->_entity_id_for_coordinate.try_get(spawner_at[i], spawned[i]));
             assert(spawned[i]);
             assert(spawned[i].data >= cursor0.data);
             assert(spawned[i].data < a._ptr->_entity_id_source.data);
@@ -984,13 +909,11 @@ namespace wry {
         assert(l->_entity_id_source == a._ptr->_entity_id_source);
         assert(l->_waiting_on_time.contains({Time{3}, counter->_entity_id}));
         // The content hash folds _ready into the time wheel as the save
-        // does, so it is the same before the bucket is unfolded (the
-        // loaded shape), after (the live shape), and as the stepped
-        // original computed it incrementally; and the from-scratch oracle
-        // agrees with all three.
+        // does, so the commissioned load (bucket unfolded into _ready)
+        // hashes as the stepped original did incrementally, and the
+        // oracle agrees with both.
         const uint64_t hash_at_save = a._ptr->content_hash();
         assert(hash_at_save == world_content_hash_oracle(a._ptr));
-        assert(l->content_hash() == hash_at_save);
         l->hack_repair_invariant();
         assert(!l->_ready.is_empty());
         assert(l->content_hash() == hash_at_save);
@@ -1005,8 +928,8 @@ namespace wry {
         }
 
         Term ta{}, tb{};
-        assert(a._ptr->_term_for_coordinate.try_get(Coordinate{0, 0}, ta));
-        assert(b._ptr->_term_for_coordinate.try_get(Coordinate{0, 0}, tb));
+        CHECK(a._ptr->_term_for_coordinate.try_get(Coordinate{0, 0}, ta));
+        CHECK(b._ptr->_term_for_coordinate.try_get(Coordinate{0, 0}, tb));
         assert(ta.as_int64_t() == 6);
         assert(tb.as_int64_t() == 6);
         assert(a._ptr->_entity_id_source == b._ptr->_entity_id_source);
@@ -1053,13 +976,16 @@ namespace wry {
         sink->_entity_id = EntityID{1000000};
 
         for (const Entity* e : { (const Entity*)player, (const Entity*)spawner,
-                                 (const Entity*)source, (const Entity*)sink })
+                                 (const Entity*)source, (const Entity*)sink }) {
+            e->seal();
             w->_entity_for_entity_id.set(e->_entity_id, e);
+        }
 
         w->hack_repair_invariant();
         std::vector<uint8_t> buffer = test_save_to_buffer(w);
         World* w2 = test_load_from_buffer(buffer);
         assert(w2);
+        w2->hack_repair_invariant();
         assert(w2->content_hash() == w->content_hash());
         assert(world_content_hash_oracle(w2) == w->content_hash());
 
@@ -1149,8 +1075,10 @@ namespace wry {
 
         const Entity* entities[] = { player, spawner, source, sink,
                                      counter, even, machine };
-        for (const Entity* e : entities)
+        for (const Entity* e : entities) {
+            e->seal();
             w->_entity_for_entity_id.set(e->_entity_id, e);
+        }
 
         w->_entity_id_for_coordinate.set(spawner->_location, spawner->_entity_id);
         w->_entity_id_for_coordinate.set(source->_location, source->_entity_id);
@@ -1202,6 +1130,7 @@ namespace wry {
         std::vector<uint8_t> b1 = test_save_to_buffer(w);
         World* w2 = test_load_from_buffer(b1);
         assert(w2);
+        w2->hack_repair_invariant();
 
         // Content hash: the loaded world hashes as the original, at
         // different addresses throughout; both agree with the oracle.
@@ -1212,13 +1141,13 @@ namespace wry {
         // and the machine's stack hash alike on both sides.
         {
             const Entity* me = nullptr;
-            assert(w2->_entity_for_entity_id.try_get(machine->_entity_id, me));
+            CHECK(w2->_entity_for_entity_id.try_get(machine->_entity_id, me));
             assert(me != machine);
             assert(me->content_hash() == machine->content_hash());
             assert(PersistentStack<Term>::hash_of(static_cast<const Machine*>(me)->_stack)
                    == PersistentStack<Term>::hash_of(machine->_stack));
             Term tv;
-            assert(w2->_term_for_coordinate.try_get(Coordinate{-2, -2}, tv));
+            CHECK(w2->_term_for_coordinate.try_get(Coordinate{-2, -2}, tv));
             assert(_term_as_object(tv) != shared);
             assert(content_hash(tv) == content_hash(shared_term));
         }
@@ -1227,19 +1156,19 @@ namespace wry {
         assert(w2->_time == w->_time);
 
         Term t;
-        assert(w2->_term_for_coordinate.try_get(Coordinate{0, 2}, t));
+        CHECK(w2->_term_for_coordinate.try_get(Coordinate{0, 2}, t));
         assert(t._data == term_make_integer_with(2)._data);
 
         EntityID eid;
-        assert(w2->_entity_id_for_coordinate.try_get(Coordinate{2, 2}, eid));
+        CHECK(w2->_entity_id_for_coordinate.try_get(Coordinate{2, 2}, eid));
         assert(eid == source->_entity_id);
 
         // The shared heap object survives and is STILL shared (one pointer)
         // across the coordinate term and the Source after reload.
         Term tv_coord;
-        assert(w2->_term_for_coordinate.try_get(Coordinate{-2, -2}, tv_coord));
+        CHECK(w2->_term_for_coordinate.try_get(Coordinate{-2, -2}, tv_coord));
         const Entity* se = nullptr;
-        assert(w2->_entity_for_entity_id.try_get(source->_entity_id, se));
+        CHECK(w2->_entity_for_entity_id.try_get(source->_entity_id, se));
         assert(se->_save_type_tag() == Source::SAVE_TYPE_TAG);
         Term tv_source = static_cast<const Source*>(se)->_of_this;
         assert(_term_is_object(tv_coord) && _term_is_object(tv_source));
@@ -1248,7 +1177,7 @@ namespace wry {
                    ->as_int64_t() == 9001);
 
         const Entity* me = nullptr;
-        assert(w2->_entity_for_entity_id.try_get(machine->_entity_id, me));
+        CHECK(w2->_entity_for_entity_id.try_get(machine->_entity_id, me));
         assert(me->_save_type_tag() == Machine::SAVE_TYPE_TAG);
         const Machine* m2 = static_cast<const Machine*>(me);
         assert(m2->_phase == Machine::PHASE_TRAVELLING);
@@ -1259,7 +1188,7 @@ namespace wry {
         assert(w2->_waiting_on_time.contains({Time{44}, machine->_entity_id}));
 
         WaitSet ws;
-        assert(w2->_entity_id_for_coordinate.ki.try_get(Coordinate{0, 0}, ws));
+        CHECK(w2->_entity_id_for_coordinate.ki.try_get(Coordinate{0, 0}, ws));
         std::set<uint64_t> got;
         ws.for_each([&got](EntityID e) { got.insert(e.data); });
         assert((got == std::set<uint64_t>{ sink->_entity_id.data,
@@ -1268,25 +1197,25 @@ namespace wry {
         // Location multimap round-trips, including the multi-member set.
         {
             EntityIDSet ls;
-            assert(w2->_located_for_coordinate.try_get(spawner->_location, ls));
+            CHECK(w2->_located_for_coordinate.try_get(spawner->_location, ls));
             std::set<uint64_t> located;
             ls.for_each([&located](EntityID e) { located.insert(e.data); });
             assert((located == std::set<uint64_t>{ spawner->_entity_id.data,
                                                    machine->_entity_id.data }));
             EntityIDSet ss;
-            assert(w2->_located_for_coordinate.try_get(sink->_location, ss));
+            CHECK(w2->_located_for_coordinate.try_get(sink->_location, ss));
             assert(ss.contains(sink->_entity_id));
         }
 
         Terrain terrain = -1;
-        assert(w2->_terrain_for_coordinate.try_get(Coordinate{1, 0}, terrain));
+        CHECK(w2->_terrain_for_coordinate.try_get(Coordinate{1, 0}, terrain));
         assert(terrain == TERRAIN_WATER);
-        assert(w2->_terrain_for_coordinate.try_get(Coordinate{-40, 25}, terrain));
+        CHECK(w2->_terrain_for_coordinate.try_get(Coordinate{-40, 25}, terrain));
         assert(terrain == TERRAIN_ROCK);
-        assert(!w2->_terrain_for_coordinate.try_get(Coordinate{9, 9}, terrain));
+        CHECK(!w2->_terrain_for_coordinate.try_get(Coordinate{9, 9}, terrain));
         {
             WaitSet tws;
-            assert(w2->_terrain_for_coordinate.ki.try_get(Coordinate{1, 0}, tws));
+            CHECK(w2->_terrain_for_coordinate.ki.try_get(Coordinate{1, 0}, tws));
             std::set<uint64_t> twaiters;
             tws.for_each([&twaiters](EntityID e) { twaiters.insert(e.data); });
             assert((twaiters == std::set<uint64_t>{ spawner->_entity_id.data }));

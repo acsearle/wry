@@ -19,13 +19,9 @@
 
 namespace wry {
 
-    struct Machine : Entity {
+    struct Machine : Fields<Machine, Entity> {
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Machine");
-
-        virtual void _garbage_collected_debug() const override {
-            printf("%s\n", __PRETTY_FUNCTION__);
-        }
 
         virtual uint64_t _save_type_tag() const override { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override;
@@ -50,6 +46,20 @@ namespace wry {
         Coordinate _new_location = { 0, 0 };
         Time _old_time = 0;
         Time _new_time = 0;
+
+        template<typename V>
+        void _fields(V& v) const {
+            Entity::_fields(v);
+            v.state("_phase", _phase);
+            v.state("_on_arrival", _on_arrival);
+            v.state("_stack", _stack);
+            v.state("_old_heading", _old_heading);
+            v.state("_new_heading", _new_heading);
+            v.state("_old_location", _old_location);
+            v.state("_new_location", _new_location);
+            v.state("_old_time", _old_time);
+            v.state("_new_time", _new_time);
+        }
         
         [[nodiscard]] virtual Machine* make_mutable_clone() const override {
             return new Machine(*this);
@@ -99,11 +109,7 @@ namespace wry {
         virtual int64_t notify(TransactionContext* context) const override;
 
         void _schedule_arrival(World* world);
-        
-        virtual void _garbage_collected_scan() const override {
-            garbage_collected_scan(_stack);
-        }
-                        
+
     };
     
 } // namespace wry::sim

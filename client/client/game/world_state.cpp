@@ -44,12 +44,14 @@ namespace wry {
             {
                 Player* p = new Player;
                 p->_entity_id = world->generate_entity_id();
+                p->seal();
                 world->_entity_for_entity_id.set(p->_entity_id, p);
                 world->_waiting_on_time.set({Time{0}, p->_entity_id});
             }
 
             auto insert_localized_entity = [&](LocalizedEntity const* entity_ptr) {
                 EntityID entity_id = entity_ptr->_entity_id;
+                entity_ptr->seal();
                 world->_entity_for_entity_id.set(entity_id, entity_ptr);
                 world->_waiting_on_time.set({Time{0}, entity_id});
                 // located, but not occupying: statics live only in the
@@ -118,6 +120,7 @@ namespace wry {
             {
                 Player* p = new Player;
                 p->_entity_id = world->generate_entity_id();
+                p->seal();
                 world->_entity_for_entity_id.set(p->_entity_id, p);
                 world->_waiting_on_time.set({Time{0}, p->_entity_id});
             }
@@ -174,6 +177,7 @@ namespace wry {
                 machine->_new_location = destination;
                 machine->_old_time = arrival - travel_ticks;
                 machine->_new_time = arrival;
+                machine->seal();
                 world->_entity_for_entity_id.set(machine->_entity_id, machine);
                 world->_entity_id_for_coordinate.set(xy, machine->_entity_id);
                 world->_entity_id_for_coordinate.set(destination, machine->_entity_id);
@@ -1211,27 +1215,37 @@ namespace wry {
     define_test("world_step_cost") {
         auto bench = [](World* w, int steps, const char* label) -> coroutine::Task {
             Root<World*> r{w};
+            const bool trace = std::getenv("WRY_BENCH_TRACE") != nullptr;
             auto t0 = std::chrono::steady_clock::now();
             for (int i = 0; i != steps; ++i) {
                 epoch::Epoch pin = pin_global_epoch();
                 Root<World*> next = co_await r._ptr->step();
                 unpin_global_epoch(pin);
                 r = std::move(next);
+                if (trace)
+                    printf("world_step_cost: %s: step %d hash %016llx\n",
+                           label, i + 1, (unsigned long long)r._ptr->content_hash());
             }
             auto t1 = std::chrono::steady_clock::now();
             double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / steps;
             const uint64_t live = r._ptr->content_hash();
             const int reps = 1000;
+            uint64_t recomputed = 0;
             auto t2 = std::chrono::steady_clock::now();
             for (int i = 0; i != reps; ++i)
-                assert(r._ptr->_compute_content_hash() == live);
+                recomputed += r._ptr->_compute_content_hash();
             auto t3 = std::chrono::steady_clock::now();
             double hash_us = std::chrono::duration<double, std::micro>(t3 - t2).count() / reps;
+            // The oracle, printed as well as asserted: a Release build has
+            // no asserts, and a mismatch there is what we want to see.
+            const uint64_t oracle = world_content_hash_oracle(r._ptr);
             printf("world_step_cost: %s: %d steps, %.1f us/step; World hash combine %.2f us; "
-                   "final time %lld, %zu entities, hash %016llx\n",
+                   "final time %lld, %zu entities, hash %016llx, oracle %016llx%s\n",
                    label, steps, us, hash_us, (long long)r._ptr->_time,
-                   r._ptr->_entity_for_entity_id.kv.size(), (unsigned long long)live);
-            assert(world_content_hash_oracle(r._ptr) == live);
+                   r._ptr->_entity_for_entity_id.kv.size(), (unsigned long long)live,
+                   (unsigned long long)oracle, oracle == live ? "" : " MISMATCH");
+            assert(recomputed == live * (uint64_t)reps);
+            assert(oracle == live);
         };
         co_await bench(make_starting_world(), 200, "starting world");
         if (std::getenv("WRY_BENCH"))
@@ -1256,7 +1270,12 @@ namespace wry {
         uint64_t h0 = 0;
         {
             Root<World const*> w;
-            assert(ws._worlds.try_pop_front(w));
+            // Side effects stay outside assert: the suite also runs in a
+            // Release build (the GUI's background test run).
+            const bool popped = ws._worlds.try_pop_front(w);
+            assert(popped);
+            if (!popped)
+                co_return;
             h0 = w._ptr->content_hash();
             ws._worlds.push_front(std::move(w));
         }
@@ -1265,7 +1284,10 @@ namespace wry {
         // Step the displayed world as update() does.
         {
             Root<World const*> old_world;
-            assert(ws._worlds.try_pop_front(old_world));
+            const bool popped = ws._worlds.try_pop_front(old_world);
+            assert(popped);
+            if (!popped)
+                co_return;
             epoch::Epoch pin = pin_global_epoch();
             Root<World*> next = co_await old_world._ptr->step();
             unpin_global_epoch(pin);

@@ -33,6 +33,12 @@ namespace wry {
         
     }; // struct Coordinate
     
+    // The content hash (core/hash.hpp) of a coordinate is its two
+    // components as one word.
+    inline uint64_t content_hash(const Coordinate& x) {
+        return x.data();
+    }
+
     inline u64 hash(const Coordinate& x) {
         return wry::hash(x.data());
     }

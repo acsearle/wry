@@ -24,16 +24,6 @@ namespace wry {
     }
 
 
-    void HeapString::_garbage_collected_scan() const {
-        // No GC-managed children.  The interesting reachability question
-        // for HeapString is handled in WEAK_DECISION (Phase 2+); see
-        // core/docs/ctrie.md.
-    }
-
-    void HeapString::_garbage_collected_debug() const {
-        printf("\"%.*s\"", (int)_size, (const char*)_bytes);
-    }
-
     Term HeapString::_term_eq(Term right) const {
         // term_eq has already confirmed right is OBJECT-tagged with a
         // different pointer.  Cross-subtype is ERROR; same subtype
@@ -87,6 +77,7 @@ namespace wry {
         a->_hash = hash;
         a->_size = n;
         std::memcpy(a->_bytes, view.data(), n);
+        a->seal();
         printf("%p:%s\n", a, __PRETTY_FUNCTION__);
         return a;
     }

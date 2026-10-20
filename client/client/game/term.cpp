@@ -316,6 +316,7 @@ namespace wry {
 
     HeapInt64::HeapInt64(std::int64_t z)
     : _integer(z) {
+        seal();
     }
 
     std::int64_t HeapInt64::as_int64_t() const {
@@ -528,10 +529,6 @@ namespace wry {
         }
     }
     
-    void HeapInt64::_garbage_collected_scan() const {
-        
-    }
-
     Term HeapInt64::_term_eq(Term right) const {
         // term_eq has already confirmed right is OBJECT-tagged with a
         // different pointer than this.  Cross-subtype is ERROR; same

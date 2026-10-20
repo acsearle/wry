@@ -53,6 +53,13 @@ namespace wry {
         garbage_collected_scan(x.ki);
     }
 
+    // The content hash of a waitable map: the kv and ki hashes combined
+    // positionally (core/hash.hpp).
+    template<typename Key, typename T>
+    uint64_t content_hash(const WaitableMap<Key, T>& x) {
+        return hash_combine(x.kv.hash(), x.ki.hash());
+    }
+
     // ---- Rectangular region query -----------------------------------------
     //
     // Visit every kv entry whose Coordinate key lies in the CLOSED rectangle

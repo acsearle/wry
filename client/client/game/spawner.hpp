@@ -13,25 +13,24 @@
 namespace wry {
 
     struct LocalizedEntity : Entity {
-        
-        virtual void _garbage_collected_debug() const override {
-            printf("%s\n", __PRETTY_FUNCTION__);
-        }
 
-        
         Coordinate _location = {};
-        virtual void _garbage_collected_scan() const override {
+
+        template<typename V>
+        void _fields(V& v) const {
+            Entity::_fields(v);
+            v.state("_location", _location);
         }
 
     };
     
-    struct Spawner : LocalizedEntity {
-        
-        virtual void _garbage_collected_debug() const override {
-            printf("%s\n", __PRETTY_FUNCTION__);
+    struct Spawner : Fields<Spawner, LocalizedEntity> {
+
+        template<typename V>
+        void _fields(V& v) const {
+            LocalizedEntity::_fields(v);
         }
 
-                
         virtual int64_t notify(TransactionContext*) const override;
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Spawner");
@@ -44,19 +43,17 @@ namespace wry {
 
     };
 
-    struct Source : LocalizedEntity {
-        
-        virtual void _garbage_collected_debug() const override {
-            printf("%s\n", __PRETTY_FUNCTION__);
+    struct Source : Fields<Source, LocalizedEntity> {
+
+        Term _of_this;
+
+        template<typename V>
+        void _fields(V& v) const {
+            LocalizedEntity::_fields(v);
+            v.state("_of_this", _of_this);
         }
 
-        
-        Term _of_this;
-        
         virtual int64_t notify(TransactionContext*) const override;
-        virtual void _garbage_collected_scan() const override {
-            garbage_collected_scan(_of_this);
-        }
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Source");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
@@ -68,16 +65,14 @@ namespace wry {
 
     };
 
-    struct Sink : LocalizedEntity {
-        
-        virtual void _garbage_collected_debug() const override {
-            printf("%s\n", __PRETTY_FUNCTION__);
+    struct Sink : Fields<Sink, LocalizedEntity> {
+
+        template<typename V>
+        void _fields(V& v) const {
+            LocalizedEntity::_fields(v);
         }
 
-                
         virtual int64_t notify(TransactionContext*) const override;
-        virtual void _garbage_collected_scan() const override {
-        }
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Sink");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
@@ -89,16 +84,14 @@ namespace wry {
 
     };
     
-    struct Counter : LocalizedEntity {
-        
-        virtual void _garbage_collected_debug() const override {
-            printf("%s\n", __PRETTY_FUNCTION__);
+    struct Counter : Fields<Counter, LocalizedEntity> {
+
+        template<typename V>
+        void _fields(V& v) const {
+            LocalizedEntity::_fields(v);
         }
 
-        
         virtual int64_t notify(TransactionContext*) const override;
-        virtual void _garbage_collected_scan() const override {
-        }
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Counter");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override final;
@@ -109,15 +102,14 @@ namespace wry {
 
     };
     
-    struct Evenator : LocalizedEntity {
-        
-        virtual void _garbage_collected_debug() const override {
-            printf("%s\n", __PRETTY_FUNCTION__);
+    struct Evenator : Fields<Evenator, LocalizedEntity> {
+
+        template<typename V>
+        void _fields(V& v) const {
+            LocalizedEntity::_fields(v);
         }
 
         virtual int64_t notify(TransactionContext*) const override;
-        virtual void _garbage_collected_scan() const override {
-        }
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Evenator");
         virtual uint64_t _save_type_tag() const override final { return SAVE_TYPE_TAG; }

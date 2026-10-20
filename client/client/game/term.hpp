@@ -14,6 +14,7 @@
 
 #include "atomic.hpp"
 #include "entity_id.hpp"
+#include "fields.hpp"
 #include "garbage_collected.hpp"
 #include "save_types.hpp"
 
@@ -341,50 +342,88 @@ namespace wry {
 
         // ---- Content hash ----
         //
-        // A 64-bit function of the object's saved content (core/hash.hpp):
-        // by default the hash of the record _save_body emits, with every
-        // reference replaced by the referent's content hash (the hashing
-        // sink in io/save_format.hpp), so a loaded copy hashes as the
-        // original and no per-class code is needed; World overrides it
-        // with the positional combine of its parts.
+        // A 64-bit function of the object's state fields (core/hash.hpp;
+        // HashFieldVisitor over _fields), stored once, by seal(), at the
+        // moment the object becomes immutable: a value in its constructor
+        // (HeapInt64, HeapString::make); an Entity when its transaction
+        // commits, in the single committer of the entity-map leaf action
+        // (World::step), after the ticket write that is its last field,
+        // or when a loader, worldgen or a test installs it directly; the
+        // World at the end of step() and of hack_repair_invariant.  Not
+        // at proposal: an entity handed to a transaction is still being
+        // built (Machine::notify writes its clone and then applies the
+        // action to it).  Everything after seal() is a read of an
+        // immutable object.
         //
-        // Cached in _content_hash, a documented late write on a published
-        // immutable object (cf. ReadyValue): zero means not yet computed,
-        // and the first content_hash() call after the object is complete
-        // computes and stores it.  The ordering is relaxed on both sides,
-        // and that suffices: the word is a pure function of content that
-        // the reader already sees (it reached the object through whatever
-        // publication made the object visible), so a nonzero word read by
-        // any thread is correct whether or not it synchronizes with the
-        // writer, a zero is recomputed to the same value, and concurrent
-        // writers store identical words.  Only indivisibility of the
-        // 64-bit store is needed, and the atomic provides it.  (A content
-        // hash that is genuinely zero is simply never cached; still
-        // correct.)
-        //
-        // Precondition for caching: the saved content is final.  Entities
-        // are hashed when a map leaf holding them is built, after their
-        // one late write (_free_entity_id); a hand-built or loaded World
-        // is commissioned by hack_repair_invariant, which resets the
-        // cache.
-        mutable Atomic<uint64_t> _content_hash;
+        // A plain field.  The sealer writes it before the object is
+        // published, and every reader reaches the object through that
+        // publication (a map insert, a transaction edge, the World root),
+        // so no atomic and no ordering argument of its own is needed.
+        // Debug builds track sealing: reading an unsealed object's hash
+        // asserts, and sealing twice asserts that the hash is unchanged,
+        // so hashing too early and mutating after sealing are both loud.
+        mutable uint64_t _content_hash = 0;
+#ifndef NDEBUG
+        mutable bool _debug_sealed = false;
+#endif
 
         HeapTerm() = default;
-        // A clone starts with no cached hash: it is about to be mutated
-        // into a different object (make_mutable_clone).
-        HeapTerm(const HeapTerm& other) : GarbageCollected(other), _content_hash() {}
+        // A clone is unsealed: it is about to be mutated into a different
+        // object (make_mutable_clone), and will be sealed when proposed.
+        HeapTerm(const HeapTerm& other) : GarbageCollected(other) {}
 
-        uint64_t content_hash() const {
-            uint64_t h = _content_hash.load_relaxed();
-            if (!h) {
-                h = _compute_content_hash();
-                _content_hash.store_relaxed(h);
+        void seal() const {
+#ifndef NDEBUG
+            if (_debug_sealed) {
+                assert(_content_hash == _compute_content_hash());
+                return;
             }
-            return h;
+            _debug_sealed = true;
+#endif
+            _content_hash = _compute_content_hash();
         }
 
-        // Uncached; defined in io/save_format.cpp.
-        virtual uint64_t _compute_content_hash() const;
+        uint64_t content_hash() const {
+            assert(_debug_sealed);
+            return _content_hash;
+        }
+
+        template<typename V>
+        void _fields(V&) const {}
+
+        virtual uint64_t _compute_content_hash() const = 0;
+
+    };
+
+    // The field-enumeration mixin for a concrete HeapTerm class
+    // (core/fields.hpp): instantiates Derived::_fields for the collector's
+    // scan, the debug printer and the content hash behind the three
+    // virtuals, so the class writes _fields once.  The save body is the
+    // fourth instantiation, written in io/save_format.cpp where the
+    // Saver is complete.  Abstract intermediates (Entity,
+    // LocalizedEntity) supply a _fields that the concrete class chains
+    // to; only the concrete class takes the mixin.
+    template<typename Derived, typename Base>
+    struct Fields : Base {
+
+        using Base::Base;
+
+        virtual void _garbage_collected_scan() const override {
+            ScanFieldVisitor v;
+            static_cast<const Derived*>(this)->_fields(v);
+        }
+
+        virtual void _garbage_collected_debug() const override {
+            printf("%s\n", __PRETTY_FUNCTION__);
+            DebugFieldVisitor v;
+            static_cast<const Derived*>(this)->_fields(v);
+        }
+
+        virtual uint64_t _compute_content_hash() const override {
+            HashFieldVisitor v{this->_save_type_tag()};
+            static_cast<const Derived*>(this)->_fields(v);
+            return v.finish();
+        }
 
     };
 
@@ -444,16 +483,16 @@ namespace wry {
     
     
     // TODO: upgrade to array of limbs of arbitrary precision integer
-    struct HeapInt64 final : HeapTerm {
+    struct HeapInt64 final : Fields<HeapInt64, HeapTerm> {
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::HeapInt64");
         std::int64_t _integer;
-        HeapInt64() = default;
+        // Immutable from construction, so sealed there.
         explicit HeapInt64(std::int64_t z);
         virtual ~HeapInt64() final = default;
         std::int64_t as_int64_t() const;
-        virtual void _garbage_collected_scan() const override;
-        virtual void _garbage_collected_debug() const override {
-            printf("%s\n", __PRETTY_FUNCTION__);
+        template<typename V>
+        void _fields(V& v) const {
+            v.state("_integer", _integer);
         }
         // Content equality / ordering / hash.  Two HeapInt64s with the
         // same _integer compare equal and hash equal even though they

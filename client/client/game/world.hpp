@@ -47,13 +47,9 @@ namespace wry {
     // Term-shaped reference if/when that's wanted.  Operator hooks
     // inherit ERROR defaults from HeapTerm; World is identity-only
     // (does not override _term_eq / _term_less / _term_hash).
-    struct World : HeapTerm {
+    struct World : Fields<World, HeapTerm> {
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::World");
-
-        virtual void _garbage_collected_debug() const override {
-            printf("%s\n", __PRETTY_FUNCTION__);
-        }
 
         Time _time;
 
@@ -131,7 +127,18 @@ namespace wry {
 
         void hack_repair_invariant();
 
-        virtual void _garbage_collected_scan() const override;
+        // The saved and hashed shape of the schedule: the time wheel with
+        // the ready set folded in as the (_time, id) bucket.  The save
+        // builds that set; the hash, a sum over members, adds the bucket's
+        // per-member hashes to the wheel's cached sum (step() asserts that
+        // nothing waits at or before _time outside _ready, which is what
+        // makes the two equal).  _ready itself is enumerated as transient:
+        // scanned, never saved or hashed on its own.
+        struct TimeWheelFold {
+            const Set& wheel;
+            const FrozenSkiplistMap<EntityID, ReadyValue, DefaultKeyService<EntityID>, ScanDiscipline>& ready;
+            Time time;
+        };
 
         // Save format dispatch.  Body implementation lives in
         // io/save_format.cpp alongside the other save bodies.
@@ -140,10 +147,22 @@ namespace wry {
 
         // The World content hash (multiplayer.md 9.1): what lockstep peers
         // compare each step, and what a loaded save must reproduce.  The
-        // positional combine of the parts' cached hashes, defined beside
-        // _save_body in io/save_format.cpp; step() computes it for the new
-        // World before returning, so content_hash() is a cached read.
-        virtual uint64_t _compute_content_hash() const override;
+        // positional combine over these fields (core/fields.hpp): the map
+        // roots' cached hashes, O(1) each, plus the ready fold.  step()
+        // seals the new World before returning; hack_repair_invariant
+        // seals a commissioned one.
+        template<typename V>
+        void _fields(V& v) const {
+            v.state("_time", _time);
+            v.state("_entity_id_source", _entity_id_source);
+            v.transient("_ready", _ready);
+            v.state("_entity_id_for_coordinate", _entity_id_for_coordinate);
+            v.state("_located_for_coordinate", _located_for_coordinate);
+            v.state("_entity_for_entity_id", _entity_for_entity_id);
+            v.state("_term_for_coordinate", _term_for_coordinate);
+            v.state("_terrain_for_coordinate", _terrain_for_coordinate);
+            v.state("_waiting_on_time", TimeWheelFold{_waiting_on_time, _ready, _time});
+        }
 
         coroutine::Future<Root<World*>> step() const;
 
@@ -158,6 +177,17 @@ namespace wry {
     
     inline void garbage_collected_shade(const World& self) {
         garbage_collected_shade(&self);
+    }
+
+    inline void garbage_collected_scan(const World::TimeWheelFold& x) {
+        garbage_collected_scan(x.wheel);
+    }
+
+    inline uint64_t content_hash(const World::TimeWheelFold& x) {
+        uint64_t sum = x.wheel.hash();
+        for (auto [entity_id, _] : x.ready)
+            sum += World::Set::hash_of({x.time, entity_id});
+        return sum;
     }
     
    

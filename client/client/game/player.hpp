@@ -14,13 +14,8 @@
 
 namespace wry {
         
-    struct Player : Entity {
-        
-        virtual void _garbage_collected_debug() const override {
-            printf("%s\n", __PRETTY_FUNCTION__);
-        }
+    struct Player : Fields<Player, Entity> {
 
-        
         struct Action {
             enum Tag {
                 NONE,
@@ -36,11 +31,17 @@ namespace wry {
             };
         };
         
+        // Client-local pending input, consumed by notify(); not
+        // simulation state, so neither saved nor hashed.
         mutable BlockingDeque<Action> _queue;
-                
-        virtual int64_t notify(TransactionContext*) const override;
 
-        virtual void _garbage_collected_scan() const override;
+        template<typename V>
+        void _fields(V& v) const {
+            Entity::_fields(v);
+            v.transient("_queue", _queue);
+        }
+
+        virtual int64_t notify(TransactionContext*) const override;
 
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::Player");
@@ -52,6 +53,11 @@ namespace wry {
         }
 
     };
+
+    // The queue's elements hold Terms; defined in player.cpp, declared
+    // here because the scan is instantiated wherever Player's field
+    // enumeration is (term.hpp Fields).
+    void garbage_collected_scan(const Player::Action& x);
     
 } // namespace wry
 

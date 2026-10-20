@@ -153,12 +153,14 @@ namespace wry {
         g_reactor_kqueue = -1;
     }
 
-#ifndef NDEBUG
     // Test observability: live CancelableKEventFrame count.  The tests pin
     // the load-bearing property -- the Frame dies promptly after the FIRST
     // of {timer fired, stop requested} -- which is invisible without this.
+    // Kept in every build: the tests' drain loops on it are what hold a
+    // test open until its frame has died, and in a Release build they are
+    // the only thing that does (the asserts around them compile out).
+    // One relaxed add and one release sub per frame.
     constinit std::atomic<std::ptrdiff_t> g_cancelable_kevent_frame_count{0};
-#endif // !NDEBUG
 
     template<typename F>
     struct CancelableKEventFrame {
@@ -217,9 +219,7 @@ namespace wry {
             if (!_reference_count_minus_one.fetch_sub(1, std::memory_order_release)) {
                 (void) _reference_count_minus_one.load(std::memory_order_acquire);
                 delete this;
-#ifndef NDEBUG
                 g_cancelable_kevent_frame_count.fetch_sub(1, std::memory_order_release);
-#endif
             }
         }
 
@@ -287,9 +287,7 @@ namespace wry {
 
         template<typename G>
         [[nodiscard]] static std::expected<void, Unarmed> spawn(std::stop_token stop_token, struct kevent change, G&& g) {
-#ifndef NDEBUG
             g_cancelable_kevent_frame_count.fetch_add(1, std::memory_order_relaxed);
-#endif
             auto frame = new CancelableKEventFrame<F>(std::move(stop_token),
                                                       std::move(change),
                                                       std::forward<G>(g));

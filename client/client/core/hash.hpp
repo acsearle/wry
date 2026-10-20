@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <concepts>
 #include <cstddef>
+#include <string_view>
+#include <type_traits>
 #include <cstring>
 #include <tuple>
 #include <utility>
@@ -247,6 +249,15 @@ namespace wry {
     template<std::integral T>
     constexpr uint64_t content_hash(T x) {
         return (uint64_t)x;
+    }
+
+    template<typename T> requires std::is_enum_v<T>
+    constexpr uint64_t content_hash(T x) {
+        return (uint64_t)x;
+    }
+
+    inline uint64_t content_hash(std::string_view x) {
+        return hash_bytes_Hasher{}.write(x.data(), x.size()).finish();
     }
 
     // ---- Map and set entry hashes ------------------------------------

@@ -28,10 +28,6 @@ namespace wry {
         }
     }
     
-    void Player::_garbage_collected_scan() const {
-        garbage_collected_scan(_queue);
-    }
-
     
     int64_t Player::notify(TransactionContext* context) const {
         
@@ -109,6 +105,7 @@ namespace wry {
 
         Player* p = new Player;
         p->_entity_id = w->generate_entity_id();
+        p->seal();
         w->_entity_for_entity_id.set(p->_entity_id, p);
         w->_waiting_on_time.set({Time{0}, p->_entity_id});
         const EntityID player_id = p->_entity_id;
@@ -116,6 +113,7 @@ namespace wry {
         Sink* sink = new Sink;
         sink->_entity_id = w->generate_entity_id();
         sink->_location = Coordinate{3, 3};
+        sink->seal();
         w->_entity_for_entity_id.set(sink->_entity_id, sink);
         { EntityIDSet s; s.set(sink->_entity_id);
           w->_located_for_coordinate.set(sink->_location, s); }
@@ -178,6 +176,7 @@ namespace wry {
 
         Player* p = new Player;
         p->_entity_id = w->generate_entity_id();
+        p->seal();
         w->_entity_for_entity_id.set(p->_entity_id, p);
         w->_waiting_on_time.set({Time{0}, p->_entity_id});
 

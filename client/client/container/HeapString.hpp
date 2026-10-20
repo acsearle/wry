@@ -17,7 +17,7 @@
 
 namespace wry {
     
-    struct HeapString final : HeapTerm {
+    struct HeapString final : Fields<HeapString, HeapTerm> {
 
         static constexpr uint64_t SAVE_TYPE_TAG = save_type_tag_fnv1a("wry::HeapString");
 
@@ -35,8 +35,13 @@ namespace wry {
         HeapString();
         virtual ~HeapString() override final;
 
-        virtual void _garbage_collected_scan() const override final;
-        virtual void _garbage_collected_debug() const override final;
+        // _hash is std::hash of the bytes, for the interning dictionary;
+        // the content hash is of the bytes themselves.
+        template<typename V>
+        void _fields(V& v) const {
+            v.derived("_hash", _hash);
+            v.state("_bytes", as_string_view());
+        }
 
         // Content equality / ordering / hash.  Two HeapStrings with the
         // same bytes compare equal and hash equal even though they may

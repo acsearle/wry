@@ -37,14 +37,23 @@ namespace wry {
         // _save_type_tag and _save_body are inherited as pure virtuals
         // from HeapTerm; concrete subclasses (Machine, ...) override.
 
+        // The ticket is the committer's late write, made just before it
+        // seals the entity (World::step's entity-map action), so it is in
+        // the hash like any other state.
+        template<typename V>
+        void _fields(V& v) const {
+            v.state("_entity_id", _entity_id);
+            v.state("_free_entity_id", _free_entity_id);
+        }
+
         [[nodiscard]] virtual int64_t notify(TransactionContext*) const { return 0; }
         [[nodiscard]] virtual Entity* make_mutable_clone() const = 0;
 
 
     }; // struct Entity
 
-    // The value hash of an entity map entry: the entity's content hash
-    // (HeapTerm::content_hash), zero for no entity.
+    // The value hash of an entity map entry: the entity's sealed content
+    // hash (HeapTerm::content_hash), zero for no entity.
     inline uint64_t content_hash(const Entity* _Nullable p) {
         return p ? p->content_hash() : 0;
     }

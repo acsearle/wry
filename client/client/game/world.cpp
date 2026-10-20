@@ -14,18 +14,6 @@
 
 namespace wry {
     
-    void World::_garbage_collected_scan() const {
-        // printf("%s\n", __PRETTY_FUNCTION__);
-        garbage_collected_scan(_ready);
-        garbage_collected_scan(_entity_id_for_coordinate);
-        garbage_collected_scan(_located_for_coordinate);
-        garbage_collected_scan(_entity_for_entity_id);
-        garbage_collected_scan(_term_for_coordinate);
-        garbage_collected_scan(_terrain_for_coordinate);
-        garbage_collected_scan(_waiting_on_time);
-
-    } // World::_garbage_collected_scan
-
     /*
     template<typename Key, typename H>
     struct AwaitablePersistentSet {
@@ -90,9 +78,11 @@ namespace wry {
             }
         }
 
-        // Commissioning is the one mutation of a World after construction;
-        // a hash taken before it (by a loader or test) is stale.
-        _content_hash.store_relaxed(0);
+        // Commissioning completes a hand-built or loaded World; it is
+        // immutable from here, so seal it (in Debug a second seal verifies
+        // the hash is unchanged, so commissioning an already sealed World
+        // that it then changes is caught).
+        seal();
     }
 
     // Fused dispatch-and-accumulate over the frozen ready set.
@@ -483,6 +473,12 @@ namespace wry {
                 if (try_lookup_cumulant(_ready, kv.first, cumulant)) {
                     result.first.value->_free_entity_id = _entity_id_source + cumulant;
                 }
+                // The successor is now final: this is the one writer of
+                // kv.first, the ticket above was its last field, and the
+                // leaf built next hashes it.  Seal its content hash here
+                // (term.hpp).  Not at proposal: Machine::notify hands its
+                // clone to the transaction and keeps building it.
+                result.first.value->seal();
                 {
                     WaitSet ws;
                     if (_entity_for_entity_id.ki.try_get(kv.first, ws))
@@ -534,30 +530,46 @@ namespace wry {
         };
         
         coroutine::Nursery nursery;
-        
+
+        // The frozen modifiers must outlive the forks that read them.  Each
+        // rebuild takes its modifier by reference, and fork runs the forked
+        // body on this thread while scheduling this frame's continuation on
+        // the pool: a freeze(...) temporary in the fork expression would be
+        // destroyed, and its slot reused by the next freeze, on another
+        // thread while the rebuild's prologue (make_cursor) still reads it.
+        // That was a real race (found 2026-10-20 by the World hash: a
+        // Release build fed one map's modifier to another's rebuild, losing
+        // entities and planting non-Terms in the term map).  Locals live
+        // until the join.
+        auto verb_value_for_coordinate = freeze(context._verb_value_for_coordinate);
+        auto verb_entity_id_for_coordinate = freeze(context._verb_entity_id_for_coordinate);
+        auto verb_located_for_coordinate = freeze(context._verb_located_for_coordinate);
+        auto verb_entity_for_entity_id = freeze(context._verb_entity_for_entity_id);
+        auto wait_on_time = freeze(context._wait_on_time);
+
         co_await nursery.fork(new_value_for_coordinate,
                               coroutine_parallel_rebuild2_unified(_term_for_coordinate,
-                                                         freeze(context._verb_value_for_coordinate),
+                                                         verb_value_for_coordinate,
                                                          value_for_coordinate_action));
         
         co_await nursery.fork(new_entity_id_for_coordinate,
                               coroutine_parallel_rebuild2_unified(_entity_id_for_coordinate,
-                                                         freeze(context._verb_entity_id_for_coordinate),
+                                                         verb_entity_id_for_coordinate,
                                                          action_for_entity_id_for_coordinate));
 
         co_await nursery.fork(new_located_for_coordinate,
                               coroutine_parallel_rebuild2_unified(_located_for_coordinate,
-                                                         freeze(context._verb_located_for_coordinate),
+                                                         verb_located_for_coordinate,
                                                          action_for_located_for_coordinate));
 
         co_await nursery.fork(new_entity_for_entity_id,
                               coroutine_parallel_rebuild2_unified(_entity_for_entity_id,
-                                                         freeze(context._verb_entity_for_entity_id),
+                                                         verb_entity_for_entity_id,
                                                          action_for_entity_for_entity_id));
         
         co_await nursery.fork(new_next_waiting_on_time,
                               coroutine_parallel_rebuild(next_waiting_on_time,
-                                                         freeze(context._wait_on_time),
+                                                         wait_on_time,
                                                          action_for_waiting_on_time));
 
         co_await nursery.join();
@@ -579,10 +591,10 @@ namespace wry {
             std::move(new_next_waiting_on_time)
         }};
 
-        // The step's content hash, computed here while the World is still
-        // this thread's alone: O(1) over the maps' cached node hashes plus
+        // Seal the step's World here, while it is still this thread's
+        // alone: the hash is O(1) over the maps' cached node hashes plus
         // the fold of the ready set into the time wheel.
-        (void) next_world._ptr->content_hash();
+        next_world._ptr->seal();
 
         co_return next_world;
 

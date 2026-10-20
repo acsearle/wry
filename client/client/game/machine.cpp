@@ -879,6 +879,7 @@ namespace wry {
             m->_new_location = Coordinate{x, y};
             m->_old_heading = heading;
             m->_new_heading = heading;
+            m->seal();
             w->_entity_for_entity_id.set(m->_entity_id, m);
             w->_entity_id_for_coordinate.set(Coordinate{x, y}, m->_entity_id);
             { EntityIDSet s; s.set(m->_entity_id);
@@ -1091,6 +1092,7 @@ namespace wry {
         test_put(w, 100, 5, term_make_opcode(OPCODE_HALT));
         Sink* sink = new Sink;
         sink->_location = Coordinate{100, 4};
+        sink->seal();
         w->_entity_for_entity_id.set(sink->_entity_id, sink);
         { EntityIDSet s; s.set(sink->_entity_id);
           w->_located_for_coordinate.set(sink->_location, s); }

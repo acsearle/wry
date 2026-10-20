@@ -434,7 +434,9 @@ namespace wry::command {
         spec.category = category;
         std::apply([&](auto const&... p) {
             (spec.params.push_back(detail::param_info(p)), ...);
-            (assert(is_valid_name(StringView(p.name))), ...);
+            // The pack must survive NDEBUG, which turns assert(...) into
+            // ((void)0) and leaves nothing to expand.
+            (((void)p, assert(is_valid_name(StringView(p.name)))), ...);
         }, params);
         spec.invoke = [name = spec.name, params = std::move(params), handler = std::move(handler)]
         (Context& context, LineSyntax const& line) -> Outcome {

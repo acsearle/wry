@@ -76,43 +76,18 @@ namespace wry {
     // Saver: emits records to a growing byte buffer.  Mutator never touches
     // this; the saver thread holds a frozen snapshot root and walks it.
     //
-    // Second sink: content hashing.  A Saver made by for_hashing() runs
-    // the very same _save_body / emit_body code, but mixes the record into
-    // a byte hasher instead of appending it: begin_record mixes the type
-    // tag, write_bytes mixes the bytes, and a reference is mixed as the
-    // referent's CONTENT HASH rather than its record number (visit_* hand
-    // back a ref that write_ref resolves through _ref_hashes).  So every
-    // saveable class gets a content hash (HeapTerm::content_hash) with no
-    // per-class code, the hash is a function of content alone, and a
-    // field added to a save body joins the hash by construction.  Tries
-    // and stacks cache their own hashes and are visited in O(1).
+    // A record-like object's body is its _fields enumeration
+    // (core/fields.hpp) walked by the SaveFieldVisitor in save_format.cpp,
+    // which writes each saved field in its own encoding and visits the
+    // objects it references; the content hash is another visitor over the
+    // same enumeration, so the two cannot disagree about which fields are
+    // state.  Loaders are still written by hand, field by field, in the
+    // same order.
     // ---------------------------------------------------------------------
 
     struct Saver {
 
         std::vector<uint8_t> _stream;
-
-        bool _hashing = false;
-        hash_bytes_Hasher _hasher;
-        std::vector<uint64_t> _ref_hashes;  // hash mode: SaveRef -> content hash
-
-        static Saver for_hashing() {
-            Saver s;
-            s._hashing = true;
-            s._ref_hashes.push_back(0);     // SAVE_REF_NULL hashes to zero
-            return s;
-        }
-
-        SaveRef _hash_ref(uint64_t h) {
-            assert(_hashing);
-            _ref_hashes.push_back(h);
-            return (SaveRef)(_ref_hashes.size() - 1);
-        }
-
-        uint64_t finish_hash() const {
-            assert(_hashing);
-            return _hasher.finish();
-        }
         std::unordered_map<const void*, SaveRef> _seen;
         SaveRef _next_ref = 1;  // 0 reserved for null
 
@@ -143,10 +118,6 @@ namespace wry {
         // Raw byte writers.
 
         void write_bytes(const void* data, size_t n) {
-            if (_hashing) {
-                _hasher.write(data, n);
-                return;
-            }
             std::vector<uint8_t>& out = _open.empty() ? _stream : _open.back().body;
             const uint8_t* p = (const uint8_t*)data;
             out.insert(out.end(), p, p + n);
@@ -177,24 +148,10 @@ namespace wry {
         // callers pass the in-progress target pointer to record_back_edge()
         // first, which writes a placeholder and registers it for patching.
         void write_ref(SaveRef r) {
-            if (_hashing) {
-                assert(r < _ref_hashes.size());
-                uint64_t h = _ref_hashes[r];
-                _hasher.write(&h, sizeof(h));
-                return;
-            }
             write_u32(r);
         }
 
         void record_back_edge(const void* target) {
-            if (_hashing) {
-                // A cycle: no content hash is available mid-computation,
-                // so a back edge hashes as a null reference (cycles are
-                // unsupported in the DAG sketch anyway).
-                uint64_t h = 0;
-                _hasher.write(&h, sizeof(h));
-                return;
-            }
             if (_open.empty()) {
                 _pending.push_back({ _stream.size(), target });
             } else {
@@ -218,10 +175,6 @@ namespace wry {
         // Begin a record: opens a fresh body buffer that subsequent writes
         // land in.  Internal use by visit_*().
         void begin_record(uint64_t type_tag) {
-            if (_hashing) {
-                _hasher.write(&type_tag, sizeof(type_tag));
-                return;
-            }
             _open.push_back({ type_tag, {}, {} });
         }
 
@@ -230,8 +183,6 @@ namespace wry {
         // to _stream, not to the (possibly still open) parent body, so that
         // children precede parents in the file.
         void end_record() {
-            if (_hashing)
-                return;
             OpenRecord r = std::move(_open.back());
             _open.pop_back();
             uint64_t x = r.tag;
@@ -349,11 +300,11 @@ namespace wry {
     // (using the length field) or abort.
     const SaveableTraits* _Nullable find_saveable_traits(uint64_t tag);
 
-    // Test oracle: the World content hash recomputed from the definition
-    // with every cache bypassed -- each map summed entry by entry from a
-    // walk, each entity's record re-hashed, each stack re-folded -- so a
-    // live, incrementally maintained hash (World::content_hash) can be
-    // checked against it.  O(|World|); asserts each cache it passes.
+    // Test oracle: the World content hash with every cache checked and
+    // bypassed -- each trie's sum recomputed entry by entry from a walk,
+    // each entity's and heap value's sealed hash recomputed from its
+    // fields, each stack re-folded -- then the World's own recomputed from
+    // the verified parts.  O(|World|).
     uint64_t world_content_hash_oracle(const World* _Nonnull w);
 
 }  // namespace wry
