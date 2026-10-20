@@ -33,21 +33,14 @@ namespace wry {
 
         // The starting scenario.  Extracted verbatim from the original model
         // constructor so NEW, restart, and the round-trip tests can all build
-        // the same world.  The player is just one of the entities; callers
-        // recover the local-player handle via find_local_player below.
+        // the same world.  No Player: a client's Player is spawned by the
+        // server's JOIN event in the first step (World::step), as for any
+        // client joining any game.
         //
         World* make_starting_world() {
             World* world = new World;
 
             generate_starting_terrain(world);
-
-            {
-                Player* p = new Player;
-                p->_entity_id = world->generate_entity_id();
-                p->seal();
-                world->_entity_for_entity_id.set(p->_entity_id, p);
-                world->_waiting_on_time.set({Time{0}, p->_entity_id});
-            }
 
             auto insert_localized_entity = [&](LocalizedEntity const* entity_ptr) {
                 EntityID entity_id = entity_ptr->_entity_id;
@@ -196,30 +189,19 @@ namespace wry {
             return world;
         }
 
-        // The displayed world owns a single Player; the model borrows a handle
-        // to it for input routing.  The entity map holds entities as const
-        // Entity*; the const here reflects that storage, not the Player (whose
-        // input _queue is a mutable member).
-        Player const* find_local_player(World const* world) {
-            Player const* found = nullptr;
-            world->_entity_for_entity_id.kv.for_each(
-                [&found](EntityID, Entity const* e) {
-                    if (Player const* p = dynamic_cast<Player const*>(e))
-                        found = p;
-                });
-            return found;
-        }
-
     } // anonymous namespace
 
-    // Swap in `world` as the only entry in _worlds, re-pointing the local
-    // player.  Single-threaded at the call sites (main thread, between pump
-    // and render), so the brief drain is unobservable to the renderer.
+    // Swap in `world` as the only entry in _worlds, and ask the server for
+    // the local client's Player: a JOIN rides the next step, spawning one
+    // if the world does not already map this client (a new game), and
+    // doing nothing if it does (a load of our own save).  Single-threaded
+    // at the call sites (main thread, between pump and render), so the
+    // brief drain is unobservable to the renderer.
     static void install_displayed_world(WorldState& m, World* world) {
-        m._local_player = find_local_player(world);
         Root<World const*> discard;
         while (m._worlds.try_pop_front(discard)) { }
         m._worlds.emplace_back(world);
+        m._server->request_join();
     }
 
     void WorldState::new_game() {
@@ -380,13 +362,13 @@ namespace wry {
         // once, so the renderer always has a world to draw.  Frames go on
         // regardless.
         if (!_world_to_render || _take_step_permission()) {
-            // Apply this step's authoritative commands (from the Server) to the
-            // players' queues before stepping.  World::step() drains the queues
-            // exactly as before -- the Server is just who fills them.  Single
-            // player: the local player's own actions, round-tripped through
-            // LocalServer (the one-frame submit->apply latency, as before).
-            for (auto&& cmd : _server->poll())
-                _local_player->_queue.push_back(std::move(cmd.action));
+            // This step's authoritative commands (from the Server) are the
+            // step's input: the server events and every client's actions,
+            // in the server's order.  Single player: the local client's own
+            // actions, round-tripped through LocalServer (the one-frame
+            // submit->apply latency, as before).  They live here until the
+            // step has consumed them.
+            std::vector<Command> commands = _server->poll();
 
             // Advance the displayed world one simulation step: pop it, step it,
             // push the result back, and stash it in _world_to_render for the
@@ -395,7 +377,7 @@ namespace wry {
             (void) _worlds.try_pop_front(old_world);
             assert(old_world);
             coroutine::Nursery nursery;
-            nursery.soon(_world_to_render, old_world->step());
+            nursery.soon(_world_to_render, old_world->step(commands));
             sync_wait(nursery.join());
             _worlds.emplace_back(_world_to_render);
             assert(_world_to_render);
@@ -592,11 +574,7 @@ namespace wry {
         }
 
         void submit_write(WorldState& ws, Coordinate at, Term term) {
-            Player::Action a;
-            a.tag = Player::Action::WRITE_VALUE_FOR_COORDINATE;
-            a.coordinate = at;
-            a.value = term;
-            ws._server->submit(std::move(a));
+            ws._server->submit(make_write_action(at, term));
         }
 
         // `step n`: done once the world has taken n more steps.  Holds the

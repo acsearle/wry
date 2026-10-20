@@ -13,6 +13,7 @@
 
 #include "command_types.hpp"
 #include "HeapString.hpp"
+#include "server.hpp"
 #include "test.hpp"
 
 namespace wry::command {
@@ -425,6 +426,158 @@ namespace wry::command {
                     mentions = true;
             assert(mentions);
         }
+
+        co_return;
+    };
+
+
+    // ----------------------------------------------------------------
+    // Player::Action
+    // ----------------------------------------------------------------
+
+    std::optional<String> format_action(Player::Action const& action) {
+        switch (action.tag) {
+            case Player::Action::NONE:
+                return String("nop");
+            case Player::Action::WRITE_VALUE_FOR_COORDINATE: {
+                Term value = action.value._value;
+                if (term_is_null(value))
+                    return format_invocation(StringView("erase"), action.coordinate);
+                return format_invocation(StringView("write"), action.coordinate, value);
+            }
+        }
+        return std::nullopt;
+    }
+
+    std::expected<Player::Action, Error> parse_action(StringView text) {
+        auto line = parse_line(text);
+        if (!line)
+            return std::unexpected(std::move(line.error()));
+        // The end of the line, for errors about absent arguments
+        size_t line_end = line->command_offset + line->command.chars.size();
+        for (ArgumentSyntax const& a : line->arguments)
+            line_end = std::max(line_end, a.node.offset);
+        if (line->command == StringView("nop")) {
+            if (!line->arguments.empty())
+                return std::unexpected(make_error(line->arguments[0].node.offset, "nop takes no arguments"));
+            return Player::Action{};
+        }
+        const bool write = line->command == StringView("write");
+        if (!write && !(line->command == StringView("erase"))) {
+            String message("not an action: ");
+            message.append(line->command);
+            return std::unexpected(Error{std::move(message), line->command_offset});
+        }
+        const char* names[2] = {"at", "term"};
+        auto bound = detail::bind_arguments(*line, std::span<const char* const>(names, write ? 2 : 1));
+        if (!bound)
+            return std::unexpected(std::move(bound.error()));
+        if (!(*bound)[0])
+            return std::unexpected(make_error(line_end, "missing argument at"));
+        auto at = Type<Coordinate>::read((*bound)[0]->node);
+        if (!at)
+            return std::unexpected(std::move(at.error()));
+        Term value = term_make_null();
+        if (write) {
+            if (!(*bound)[1])
+                return std::unexpected(make_error(line_end, "missing argument term"));
+            auto term = Type<Term>::read((*bound)[1]->node);
+            if (!term)
+                return std::unexpected(std::move(term.error()));
+            value = *term;
+        }
+        return make_write_action(*at, value);
+    }
+
+    std::expected<Player::Action, Error> Type<Player::Action>::read(Node const& node) {
+        if (node.kind != Node::STRING)
+            return std::unexpected(make_error(node.offset, "an Action is its command line, quoted"));
+        auto action = parse_action(node.text);
+        if (!action)
+            return std::unexpected(make_error(node.offset, action.error().message));
+        return action;
+    }
+
+    void Type<Player::Action>::print(String& out, Player::Action const& x) {
+        std::optional<String> line = format_action(x);
+        assert(line);
+        print_quoted(out, *line);
+    }
+
+    bool Type<Player::Action>::printable(Player::Action const& x) {
+        return format_action(x).has_value();
+    }
+
+    define_test("command_action_codec") {
+
+        std::mt19937_64 rng(20261021);
+
+        std::vector<Term> terms = {
+            term_make_null(), term_make_true(), term_make_false(),
+            term_make_integer_with(0), term_make_integer_with(-1),
+            term_make_integer_with(std::numeric_limits<int64_t>::max()),
+            term_make_string_with(""), term_make_string_with("short"),
+            term_make_string_with("a longer heap string"),
+            term_make_string_with("quote\" back\\ nl\n"),
+            term_make_opcode(OPCODE_SWAP),
+            term_make_matter(MATTER_SHIPPING_CONTAINER),
+            term_make_entity_id(EntityID{7}),
+        };
+        for (int i = 0; i != 200; ++i)
+            terms.push_back(term_make_integer_with((int64_t)rng()));
+
+        // Every printable action round-trips through its line, and through
+        // its quoted literal
+        for (Term t : terms) {
+            for (int i = 0; i != 20; ++i) {
+                Coordinate at{(i32)rng(), (i32)rng()};
+                Player::Action a = make_write_action(at, t);
+                assert(printable(a));
+                std::optional<String> line = format_action(a);
+                assert(line);
+                auto r = parse_action(*line);
+                assert(r);
+                assert(r->tag == Player::Action::WRITE_VALUE_FOR_COORDINATE);
+                assert(r->coordinate == at);
+                assert(same_term(r->value._value, t));
+                assert(format_action(*r) == line);
+                auto q = read_as<Player::Action>(to_string(a));
+                assert(q && q->coordinate == at && same_term(q->value._value, t));
+            }
+        }
+        {
+            Player::Action none;
+            assert(format_action(none) == String("nop"));
+            auto r = parse_action("nop");
+            assert(r && r->tag == Player::Action::NONE);
+            assert(format_action(make_write_action(Coordinate{1, 2}, term_make_null())) == String("erase Coordinate(1, 2)"));
+            assert(format_action(make_write_action(Coordinate{1, 2}, term_make_opcode(OPCODE_SWAP)))
+                   == String("write Coordinate(1, 2) OPCODE::SWAP"));
+        }
+
+        // Named arguments and contextual spellings read; the canonical
+        // form is what prints
+        {
+            auto r = parse_action("write term=OPCODE::SWAP at=Coordinate(3, 4)");
+            assert(r && r->coordinate == (Coordinate{3, 4}));
+            assert(format_action(*r) == String("write Coordinate(3, 4) OPCODE::SWAP"));
+            auto e = parse_action("erase Coordinate(3,4)");
+            assert(e && term_is_null(e->value._value));
+        }
+
+        // An unprintable Term makes an unprintable action
+        assert(!printable(make_write_action(Coordinate{0, 0}, term_make_error())));
+
+        // Anything else is an error, never a crash
+        for (const char* bad : {"", "   # only a comment", "step 10", "write", "write Coordinate(1, 2)",
+                                "write 1 2", "write Coordinate(1, 2) SWAP", "erase", "erase 1",
+                                "erase Coordinate(1, 2) 3", "nop 1", "write Coordinate(1, 2) OPCODE::SWAP extra",
+                                "write at=Coordinate(1, 2) at=Coordinate(3, 4) OPCODE::SWAP",
+                                "\"write Coordinate(1, 2) OPCODE::SWAP\"", "write Coordinate(1, 2) \"unterminated"})
+            assert(!parse_action(StringView(bad)));
+        assert(!Type<Player::Action>::read(parse_node("write").value()));           // unquoted: a word
+        assert(!Type<Player::Action>::read(parse_node("Action(write)").value()));   // not a string
+        assert(read_as<Player::Action>("\"write Coordinate(1, 2) OPCODE::SWAP\""));
 
         co_return;
     };

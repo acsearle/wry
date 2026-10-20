@@ -61,6 +61,7 @@ List of one-line reminders of things to think and do
 - ext/functional.hpp: wry::move_only_function<R(Args...)> (subset: plain signature only, no in_place_type, empty call asserts) -- retire in favor of std::move_only_function when libc++ ships it
 - Nits: soon(y, bar(x)) comment says "schedules foo"; test metadata prints interleave with collector logging (flaky counts in log greps, bit again 2026-09-11); co_await of an error Outcome (the rethrow path) has no direct test
 
+- DONE 2026-10-21 (multiplayer stage 2): the step's input is explicit.  World::step(commands) stages JOIN/LEAVE on a copy of the World and advances with the actions on the TransactionContext; Player has no queue (its _queue was never saved, so a donated snapshot could diverge); World::_player_for_client (save version 6) routes a client's actions; format_action/parse_action are the action's wire form.  Open: a JOIN's Player first acts in the step after, so an action in the JOIN's own step is dropped (the server never produces one; LocalServer makes the JOIN its own step)
 - Player drops a queued write when its transaction loses a same-cell conflict (popped before resolution, never re-proposed); liveness fixed 2026-09-18 with WAIT_ALWAYS, retry is a design choice: peek-then-pop on the next notify, or WAIT_ON_ABORT re-propose, vs. accept the drop as the exclusive-write contract
 
 ## Old below

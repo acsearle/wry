@@ -8,6 +8,8 @@
 #ifndef world_hpp
 #define world_hpp
 
+#include <span>
+
 #include "sim.hpp"
 #include "simd.hpp"
 #include "terrain.hpp"
@@ -19,6 +21,7 @@
 #include "persistent_set.hpp"
 #include "persistent_map.hpp"
 #include "save_types.hpp"
+#include "server.hpp"
 #include "waitable_map.hpp"
 
 
@@ -87,6 +90,14 @@ namespace wry {
         using Set = PersistentSet<std::pair<Time, EntityID>, DefaultKeyService<std::pair<Time, EntityID>>, ScanDiscipline>;
         Set _waiting_on_time;
 
+        // Which client acts through which Player (multiplayer.md section
+        // 2): written by the JOIN and LEAVE server events, read by each
+        // step to route a client's actions, and by a client to find its own
+        // Player.  World state, so every client computes it identically
+        // and a save carries it.  Appended to the record in save version 6.
+        using PlayerForClient = PersistentMap<ClientID, EntityID, DefaultKeyService<ClientID>, ScanDiscipline>;
+        PlayerForClient _player_for_client;
+
         World()
         : _time{0}
         , _entity_id_source{1}
@@ -97,6 +108,7 @@ namespace wry {
         , _term_for_coordinate{}
         , _terrain_for_coordinate{}
         , _waiting_on_time{}
+        , _player_for_client{}
         {
         }
 
@@ -108,7 +120,8 @@ namespace wry {
               WaitableMap<EntityID, const Entity*> entity_for_entity_id,
               WaitableMap<Coordinate, Term> value_for_coordinate,
               WaitableMap<Coordinate, Terrain> terrain_for_coordinate,
-              Set waiting_on_time)
+              Set waiting_on_time,
+              PlayerForClient player_for_client)
         : _time(time)
         , _entity_id_source(entity_id_source)
         , _ready(ready)
@@ -118,6 +131,7 @@ namespace wry {
         , _term_for_coordinate(value_for_coordinate)
         , _terrain_for_coordinate(terrain_for_coordinate)
         , _waiting_on_time(waiting_on_time)
+        , _player_for_client(player_for_client)
         {
         }
 
@@ -162,11 +176,30 @@ namespace wry {
             v.state("_term_for_coordinate", _term_for_coordinate);
             v.state("_terrain_for_coordinate", _terrain_for_coordinate);
             v.state("_waiting_on_time", TimeWheelFold{_waiting_on_time, _ready, _time});
+            v.state("_player_for_client", _player_for_client);
         }
 
-        coroutine::Future<Root<World*>> step() const;
+        // One step: apply the server events among `commands` (JOIN, LEAVE;
+        // the clock events are the server's business and are ignored here),
+        // then advance by one tick with the actions as the step's input.
+        // The commands must outlive the await.  A JOIN's Player first acts
+        // in the step after; a JOIN for a client already mapped is a no-op,
+        // and an action from an unmapped client is dropped.
+        coroutine::Future<Root<World*>> step(std::span<Command const> commands = {}) const;
 
         EntityID generate_entity_id() { return _entity_id_source++; }
+
+    private:
+
+        // A copy of this World with the server events applied: the
+        // intermediate `step` advances when there are any.  Built mutably
+        // while unpublished; never sealed (nothing hashes it)
+        World* _with_events(std::span<Command const> commands) const;
+
+        // The tick itself, over this World's state
+        coroutine::Future<Root<World*>> _advance(std::span<Command const> commands) const;
+
+    public:
 
     }; // World
         

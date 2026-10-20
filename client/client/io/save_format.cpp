@@ -408,8 +408,10 @@ namespace wry {
         SaveRef ter_kv  = L.read_u32();
         SaveRef ter_ki  = L.read_u32();
         SaveRef wait    = L.read_u32();
+        SaveRef players = L.read_u32();
 
         w->_entity_id_for_coordinate.kv._inner = (NodeEntityID_U64*)L._ptrs[eid_kv];
+        w->_player_for_client._inner           = (NodeEntityID_U64*)L._ptrs[players];
         w->_located_for_coordinate.kv._inner   = (NodeWaitSet_U64*)L._ptrs[loc_kv];
         w->_entity_for_entity_id.kv._inner     = (NodeEntityPtr_U64*)L._ptrs[ent_kv];
         w->_term_for_coordinate.kv._inner     = (NodeValue_U64*)L._ptrs[val_kv];
@@ -1258,6 +1260,40 @@ namespace wry {
         std::vector<uint8_t> b2 = test_save_to_buffer(w2);
         assert(b1 == b2);
 
+        co_return;
+    };
+
+
+    // The client map is World state: saved, loaded, and in the hash.
+    define_test("save_format_player_for_client_roundtrip") {
+        World* w = new World;
+        Player* p = new Player;
+        p->_entity_id = w->generate_entity_id();
+        p->seal();
+        w->_entity_for_entity_id.set(p->_entity_id, p);
+        w->_waiting_on_time.set({Time{0}, p->_entity_id});
+        w->_player_for_client.set(ClientID{3}, p->_entity_id);
+        w->hack_repair_invariant();
+
+        std::vector<uint8_t> buffer = test_save_to_buffer(w);
+        World* w2 = test_load_from_buffer(buffer);
+        assert(w2);
+        w2->hack_repair_invariant();
+        EntityID mapped{};
+        assert(w2->_player_for_client.try_get(ClientID{3}, mapped) && (mapped == p->_entity_id));
+        assert(w2->_player_for_client.size() == 1);
+        assert(w2->content_hash() == w->content_hash());
+
+        // A different mapping is a different World
+        World* w3 = new World;
+        Player* q = new Player;
+        q->_entity_id = w3->generate_entity_id();
+        q->seal();
+        w3->_entity_for_entity_id.set(q->_entity_id, q);
+        w3->_waiting_on_time.set({Time{0}, q->_entity_id});
+        w3->_player_for_client.set(ClientID{4}, q->_entity_id);
+        w3->hack_repair_invariant();
+        assert(w3->content_hash() != w->content_hash());
         co_return;
     };
 

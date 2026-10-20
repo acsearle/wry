@@ -16,6 +16,7 @@
 #include <map>
 #include <vector>
 
+#include "concurrent_queue.hpp"
 #include "contiguous_deque.hpp"
 #include "entity.hpp"
 #include "gui_context.hpp"
@@ -60,14 +61,6 @@ namespace wry {
         // BlockingDeque<World const*> _worlds;
         BlockingDeque<Root<World const*>> _worlds;
 
-
-
-        // Borrowed from the displayed world's entity map (which holds it as
-        // const Entity*); the model drives input through its mutable _queue.
-        // Re-pointed whenever the displayed world is replaced wholesale
-        // (new_game / load_from_save); across ordinary World::step() it stays
-        // valid because the Player entry is shared, not rebuilt.
-        Player const* _local_player = nullptr;
 
 
         // debug toggles ('j' / 'p' / 'w')
@@ -147,8 +140,10 @@ namespace wry {
         // Whether update() may step now, spending budget if paused.
         bool _take_step_permission();
 
-        // The command seam: input is submitted here; update() polls the ordered
-        // commands back and pushes them to the players' queues before stepping.
+        // The command seam: input is submitted here; update() polls the
+        // ordered commands back and hands them to the step as its input.
+        // The local client has no Player of its own until the server's JOIN
+        // rides a step (requested whenever a world is installed).
         std::unique_ptr<Server> _server;
 
         explicit WorldState(GuiContext& gui) : _gui(gui) {
@@ -163,14 +158,14 @@ namespace wry {
             _save_list_overlay.set_model(this);
             _stack.push(&_palette_overlay);
 
+            // Single-player command sink, before the first world: installing
+            // one asks it for a JOIN.
+            _server = std::make_unique<LocalServer>();
+
             // Install the starting world as the displayed world.  Same path
             // the NEW button uses; at construction _worlds is empty, so the
             // drain inside is a no-op.
             new_game();
-
-            // Single-player command sink, tagged with the local player's id
-            // (new_game just installed _local_player).
-            _server = std::make_unique<LocalServer>(_local_player->_entity_id);
 
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();

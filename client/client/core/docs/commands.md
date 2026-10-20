@@ -83,9 +83,14 @@ would have submitted it (section 6), so logs of the stream are
 readable, and desync diffs (multiplayer.md section 5) name actions in
 the same language the console speaks.
 
-Text never goes on the wire.  A world command is parsed from text into
-a typed `Player::Action`, then serialized into the opaque binary
-`ACTION` body as multiplayer.md section 7 specifies.
+A world command is parsed from text into a typed `Player::Action`,
+and the action's canonical command line is also its wire form: the
+body of `ACTION` is that line (multiplayer.md section 7; `format_action`
+and `parse_action` in game/command_types.hpp, one reader and one
+printer, `read(print(a)) == a`).  The server forwards the bytes
+without reading them; a receiver that cannot parse a body applies a
+no-op.  A log of the stream therefore reads in the console's own
+language with no decoder.
 
 ## 3. Origins
 

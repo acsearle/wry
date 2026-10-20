@@ -9,12 +9,14 @@
 #define transaction_hpp
 
 #include <cstring>
+#include <span>
 
 #include "concurrent_map.hpp"
 #include "atomic.hpp"
 #include "entity.hpp"
 #include "garbage_collected.hpp"
 #include "persistent_map.hpp"
+#include "server.hpp"
 #include "waitable_map.hpp"
 #include "world.hpp"
 
@@ -233,6 +235,11 @@ namespace wry {
     struct TransactionContext {
         
         const World* _world = nullptr;
+
+        // The step's input (server.hpp): read-only to every notify, which
+        // picks out its own.  Player::notify applies the actions whose
+        // origin the World maps to it (World::_player_for_client).
+        std::span<Command const> _commands;
 
         // Convenience functions
         Time now() const { return _world->_time; }

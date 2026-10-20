@@ -55,13 +55,16 @@ namespace wry {
     // Version 5: bumped 2026-09-25; maps and sets are flat code-ordered
     //            entry records rebuilt by ArrayMappedTrie::SortedBuilder,
     //            replacing one record per trie node; ki waitsets inline.
+    // Version 6: bumped 2026-10-21; the World's client id -> Player map
+    //            (_player_for_client, multiplayer.md section 9.3) is
+    //            appended to the World record.
     //
     // Additive vocabulary (new ENUMERATION metas / codes) does NOT bump
     // the version: layout is unchanged and older files remain loadable.
     //   2026-07-05: TERM_ENUM_META_MATTER = 4 (matter.hpp codes).
     // ---------------------------------------------------------------------
 
-    enum : uint32_t { TERM_SAVE_VERSION = 5 };
+    enum : uint32_t { TERM_SAVE_VERSION = 6 };
 
     // ---------------------------------------------------------------------
     // Load-order ID.  Dense uint32_t assigned in post-order DFS from World.

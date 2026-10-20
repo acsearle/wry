@@ -27,6 +27,7 @@
 #include "entity_id.hpp"
 #include "matter.hpp"
 #include "opcode.hpp"
+#include "player.hpp"
 #include "term.hpp"
 
 namespace wry {
@@ -96,6 +97,31 @@ namespace wry::command {
         static std::expected<Term, Error> read(Node const& node);
         static void print(String& out, Term const& x);
         static bool printable(Term const& x);
+    };
+
+    // The action codec (multiplayer.md section 7): an action's canonical
+    // text is the command line that would submit it, which is also what
+    // rides the wire as the body of ACTION, and what a log of the stream
+    // shows:
+    //
+    //     write Coordinate(3, 4) OPCODE::SWAP
+    //     erase Coordinate(3, 4)                  (a null write)
+    //     nop
+    //
+    // read(print(a)) == a for every printable action; an action whose Term
+    // has no literal cannot be printed, so cannot be sent.  parse_action
+    // is total over bytes: anything it rejects is an error, never a crash,
+    // and a receiver treats it as a no-op.
+    std::optional<String> format_action(Player::Action const& action);
+    std::expected<Player::Action, Error> parse_action(StringView line);
+
+    // As a command argument an action is its line, quoted.
+    template<> struct Type<Player::Action> {
+        static constexpr const char* name = "Action";
+        static constexpr const char* example = "\"write Coordinate(3, 4) OPCODE::SWAP\"";
+        static std::expected<Player::Action, Error> read(Node const& node);
+        static void print(String& out, Player::Action const& x);
+        static bool printable(Player::Action const& x);
     };
 
 } // namespace wry::command

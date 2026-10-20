@@ -7,9 +7,10 @@ lifecycle, the wire protocol, and the plan for building it.  First agreed
 async I/O stack, core/kqueue_reactor.hpp, core/nursery.hpp,
 container/mpsc_queue.hpp; the hashing groundwork in core/hash.hpp) and
 against the decisions in section 0.  Of the plan in
-section 13, the transport layer (stage 1) is landed; the rest grows
-from the seam in `game/server.hpp` (`Server`/`LocalServer`, with
-`Player::_queue` as the per-step command intake).
+section 13, the transport layer (stage 1) and the action codec and
+explicit step intake (stage 2) are landed; the rest grows from the
+seam in `game/server.hpp` (`Server`/`LocalServer`, `Command` as the
+step's input).
 
 Status: normative design, with a staged build plan (section 13).  The
 direction is agreed; specific numbers remain open (section 11).
@@ -583,19 +584,27 @@ Two properties of today's intake are wrong for lockstep:
 
 The fix is to make the step's input explicit: `World::step` takes the
 step's command list (origin client id, sequence, decoded action), the
-transaction context exposes each player's slice, `Player::notify`
-applies all of its slice in one transaction (or one transaction per
-action if the write capacity or conflict semantics prefer it -- a
-question for the implementation, with the WAIT_ALWAYS lesson of
-2026-09-18 in mind), and the queue disappears from the entity.  Nothing
-unsaved then influences a step, and the save/hash of a World at B is a
-complete description of it.
+transaction context exposes the list, `Player::notify` applies the
+actions whose origin maps to it in one transaction (a transaction
+writes a key at most once, so the last write to a cell within a step
+wins; the WAIT_ALWAYS lesson of 2026-09-18 stands), and the queue
+disappears from the entity.  Nothing unsaved then influences a step,
+and the save/hash of a World at B is a complete description of it.
+Landed 2026-10-21.  A JOIN's Player first acts in the step after the
+JOIN; an action in the JOIN's own step is dropped, which the server
+never produces (a client cannot submit before it sees its JOIN) and
+`LocalServer` avoids by making the JOIN a step of its own.
 
 ### 9.3 Client id to Player map, and the server events
 
-The World gains a persistent map from client id to Player EntityID,
-written by the `JOIN` server event and read by every client to find its
-own Player; `LEAVE` marks the entry (idle in place).  `PAUSED`/`RESUMED`
+The World gains a persistent map from client id to Player EntityID
+(`_player_for_client`, landed 2026-10-21), written by the `JOIN` server
+event and read by each step to route a client's actions; `LEAVE`
+erases the entry and the Player idles in place.  `JOIN` is idempotent
+for a client the World already maps, which is how a host's own client
+keeps its Player across a load of its own save; a fork hosted by a
+client that was not client 1 in the original game maps client 1 to the
+original host's Player (open item 11.11).  `PAUSED`/`RESUMED`
 are events the World records only for replay fidelity (they do not
 change state; they change the step clock, which replays reproduce by
 the log alone).  Save format bump for the new World member.
@@ -692,6 +701,11 @@ tier-2 data exists.
 10. Transport evolution: framing is stream-agnostic on purpose, so QUIC
     can replace TCP per connection without touching the vocabulary.
     Not planned.
+11. Identity across forks: client ids are per game, so a save hosted by
+    a client other than the original host maps client 1 to the
+    original host's Player.  A persistent player identity (a name or a
+    key) in the map would fix it; not needed while hosting is for
+    trusted groups.
 
 ## 12. Prior art
 
@@ -737,7 +751,15 @@ landing risky changes as brute-force-tested primitives first.
    and tags, cap enforcement), inbound parking under a stalled consumer,
    outbound overflow, kick-with-reason delivery, a TCP listener and
    `connect` over loopback.  No game code touched.
-2. **Action codec and step intake.**  `Type<Player::Action>` with
+2. **Action codec and step intake** (landed 2026-10-21: `Command` in
+   `game/server.hpp` with ACTION/JOIN/LEAVE/PAUSED/RESUMED;
+   `World::step(commands)` stages JOIN and LEAVE on a copy and advances
+   with the actions on the `TransactionContext`; `Player::notify`
+   applies its clients' actions, last write per cell winning;
+   `World::_player_for_client`, save version 6; `format_action` /
+   `parse_action` and `Type<Player::Action>`; `LocalServer` numbers
+   the local client's actions and answers `request_join` with a JOIN
+   step of its own).  `Type<Player::Action>` with
    round-trip tests; `World::step` takes the step's commands; `Player`
    loses its queue; the World gains the client-id map and the save
    version bumps.  `LocalServer` still feeds the step, now as a command

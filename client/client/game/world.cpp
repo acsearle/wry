@@ -183,7 +183,68 @@ namespace wry {
         return it->second.requested > 0;
     }
 
-    coroutine::Future<Root<World*>> World::step() const {
+    World* World::_with_events(std::span<Command const> commands) const {
+        World* w = new World{
+            _time,
+            _entity_id_source,
+            _ready,
+            _entity_id_for_coordinate,
+            _located_for_coordinate,
+            _entity_for_entity_id,
+            _term_for_coordinate,
+            _terrain_for_coordinate,
+            _waiting_on_time,
+            _player_for_client
+        };
+        for (Command const& c : commands) {
+            switch (c.kind) {
+                case Command::JOIN: {
+                    // Idempotent: a client the World already maps keeps its
+                    // Player (a host's own client after a load, a JOIN
+                    // replayed after a reconnect)
+                    if (w->_player_for_client.contains(c.client))
+                        break;
+                    // Deterministic: the id comes from the cursor, in the
+                    // order the events ride the stream, and the Player
+                    // waits on the next tick, so it first acts in the step
+                    // after this one
+                    Player* p = new Player;
+                    p->_entity_id = w->generate_entity_id();
+                    p->seal();
+                    w->_entity_for_entity_id.set(p->_entity_id, p);
+                    w->_waiting_on_time.set({_time + 1, p->_entity_id});
+                    w->_player_for_client.set(c.client, p->_entity_id);
+                    break;
+                }
+                case Command::LEAVE: {
+                    // The Player idles in place (multiplayer.md 11.2); only
+                    // the mapping goes, so nothing routes to it again
+                    EntityID dropped{};
+                    (void) w->_player_for_client.try_erase(c.client, dropped);
+                    break;
+                }
+                case Command::ACTION:
+                case Command::PAUSED:
+                case Command::RESUMED:
+                    break;
+            }
+        }
+        return w;
+    }
+
+    coroutine::Future<Root<World*>> World::step(std::span<Command const> commands) const {
+        bool events = false;
+        for (Command const& c : commands)
+            events = events || (c.kind == Command::JOIN) || (c.kind == Command::LEAVE);
+        if (!events)
+            co_return co_await _advance(commands);
+        // The staged World is this thread's until the advance publishes
+        // its successor; rooted across the await, never sealed
+        Root<World*> staged{_with_events(commands)};
+        co_return co_await staged._ptr->_advance(commands);
+    }
+
+    coroutine::Future<Root<World*>> World::_advance(std::span<Command const> commands) const {
 #ifndef NDEBUG
         {
             std::pair<Time, wry::EntityID> x;
@@ -193,7 +254,7 @@ namespace wry {
         }
 #endif // NDEBUG
 
-        TransactionContext context{._world = this};
+        TransactionContext context{._world = this, ._commands = commands};
         
         Time next_time = _time + 1;
 
@@ -588,7 +649,8 @@ namespace wry {
             std::move(new_entity_for_entity_id),
             std::move(new_value_for_coordinate),
             _terrain_for_coordinate,
-            std::move(new_next_waiting_on_time)
+            std::move(new_next_waiting_on_time),
+            _player_for_client
         }};
 
         // Seal the step's World here, while it is still this thread's
@@ -598,7 +660,7 @@ namespace wry {
 
         co_return next_world;
 
-    } // World::step
+    } // World::_advance
 
 
     // Rank oracle for the deterministic-EntityID machinery: random ready
