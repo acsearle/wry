@@ -27,6 +27,11 @@ namespace wry {
     inline u64 hash(const EntityID& x) {
         return wry::hash(x.data);
     }
+
+    // The content hash (core/hash.hpp) of an id is the id.
+    inline uint64_t content_hash(const EntityID& x) {
+        return x.data;
+    }
     
     template<typename> struct DefaultKeyService;
     

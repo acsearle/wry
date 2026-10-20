@@ -13,6 +13,7 @@
 //      MATTER::SHIPPING_CONTAINER
 //      Term: null, true, false, integers, "strings", OPCODE::..., MATTER::...,
 //            EntityID(...)
+//      Hash(0x9e3779b97f4a7c15)
 //
 //  A Term parameter has no expected type, so its literals must describe
 //  themselves: enumerators are always qualified there.
@@ -28,7 +29,26 @@
 #include "opcode.hpp"
 #include "term.hpp"
 
+namespace wry {
+
+    // A 64-bit content hash (core/hash.hpp): the reply of `state-hash`,
+    // the World hash lockstep peers compare.  Printed in full-width hex so
+    // two replies line up for the eye.
+    struct Hash {
+        uint64_t value;
+        constexpr bool operator==(const Hash&) const = default;
+    };
+
+} // namespace wry
+
 namespace wry::command {
+
+    template<> struct Type<Hash> {
+        static constexpr const char* name = "Hash";
+        static constexpr const char* example = "Hash(0x9e3779b97f4a7c15)";
+        static std::expected<Hash, Error> read(Node const& node);
+        static void print(String& out, Hash const& x);
+    };
 
     template<> struct Type<Coordinate> {
         static constexpr const char* name = "Coordinate";

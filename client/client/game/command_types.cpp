@@ -5,6 +5,8 @@
 //  Created by Antony Searle on 2026-10-12.
 //
 
+#include <charconv>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <random>
@@ -119,6 +121,33 @@ namespace wry::command {
         out.append(StringView("EntityID("));
         Type<int64_t>::print(out, (int64_t)x.data);
         out.push_back(')');
+    }
+
+    // ----------------------------------------------------------------
+    // Hash
+    // ----------------------------------------------------------------
+
+    std::expected<Hash, Error> Type<Hash>::read(Node const& node) {
+        if (auto e = expect_tagged(node, StringView(name), 1))
+            return std::unexpected(std::move(*e));
+        Node const& child = node.children[0];
+        // Exactly the printed form: 0x then 1..16 hex digits (read_int64
+        // would refuse the top bit).
+        const char* p = child.text.chars.begin();
+        const char* end = child.text.chars.end();
+        uint64_t value = 0;
+        if (child.kind == Node::WORD && end - p > 2 && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+            auto [ptr, ec] = std::from_chars(p + 2, end, value, 16);
+            if (ptr == end && ec == std::errc{})
+                return Hash{value};
+        }
+        return std::unexpected(make_error(child.offset, "expected a hash, 0x followed by up to 16 hex digits"));
+    }
+
+    void Type<Hash>::print(String& out, Hash const& x) {
+        char buffer[32];
+        std::snprintf(buffer, sizeof(buffer), "Hash(0x%016llx)", (unsigned long long)x.value);
+        out.append(StringView(buffer));
     }
 
     // ----------------------------------------------------------------
@@ -312,6 +341,19 @@ namespace wry::command {
         }
         for (const char* bad : {"EntityID(-1)", "EntityID(0x1000000000000000)", "EntityID()", "7"})
             assert(!read_as<EntityID>(StringView(bad)));
+
+        // Hash: full 64 bits, top bit included, round-trip in canonical form.
+        for (int i = 0; i != 10000; ++i) {
+            Hash h{rng()};
+            auto r = read_as<Hash>(to_string(h));
+            assert(r && *r == h);
+        }
+        assert(to_string(Hash{0x9e3779b97f4a7c15ull}) == StringView("Hash(0x9e3779b97f4a7c15)"));
+        assert(read_as<Hash>("Hash(0xFFFFFFFFFFFFFFFF)").value() == (Hash{~(uint64_t)0}));
+        assert(read_as<Hash>("Hash(0x0)").value() == (Hash{0}));
+        for (const char* bad : {"Hash(7)", "Hash(0x)", "Hash(0x10000000000000000)", "Hash(-0x1)",
+                                "Hash(0x1, 0x2)", "Hash()", "0x1", "Hash(\"0x1\")"})
+            assert(!read_as<Hash>(StringView(bad)));
 
         // Enums: every enumerator, qualified (canonical) and bare
         // (contextual); wrong qualifiers and unknown names rejected.

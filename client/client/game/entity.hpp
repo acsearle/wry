@@ -43,6 +43,12 @@ namespace wry {
 
     }; // struct Entity
 
+    // The value hash of an entity map entry: the entity's content hash
+    // (HeapTerm::content_hash), zero for no entity.
+    inline uint64_t content_hash(const Entity* _Nullable p) {
+        return p ? p->content_hash() : 0;
+    }
+
 };
 
 #endif /* entity_hpp */

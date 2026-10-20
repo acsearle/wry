@@ -65,6 +65,13 @@ namespace wry {
         size_t size() const {
             return _inner ? _inner->size() : 0;
         }
+
+        // The content hash of the mapping: the sum over entries of
+        // entry_hash(code, content_hash(value)), cached on the trie; see
+        // array_mapped_trie.hpp.  The empty map hashes to zero.
+        uint64_t hash() const {
+            return _inner ? _inner->hash() : 0;
+        }
                         
         [[nodiscard]] PersistentMap clone_and_set(Key key, T value) const {
             U j = H{}.encode(key);
@@ -116,6 +123,11 @@ namespace wry {
         garbage_collected_scan(x._inner);
     }
 
+    template<typename Key, typename T, typename H, typename D>
+    uint64_t content_hash(const PersistentMap<Key, T, H, D>& x) {
+        return x.hash();
+    }
+
     // Apply a code-ordered, NONE-free vector of actions to `source` via the AMT
     // co-recursion, using a caller-supplied combine.  Shared by the skiplist
     // wrapper below and by WaitableMap's rebuild (which materializes its own dual
@@ -131,7 +143,7 @@ namespace wry {
         using AMT = typename PM::AMT;
         const AMT* inner = source._inner ? &*source._inner : nullptr;
         const AMT* result = co_await AMT::coroutine_parallel_rebuild(
-            inner, mods, 0, mods.size(), combine);
+            inner, std::span(mods), 0, mods.size(), combine);
         co_return PM{ typename PM::Slot{ result } };
     }
 

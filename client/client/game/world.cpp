@@ -89,6 +89,10 @@ namespace wry {
 
             }
         }
+
+        // Commissioning is the one mutation of a World after construction;
+        // a hash taken before it (by a loader or test) is stale.
+        _content_hash.store_relaxed(0);
     }
 
     // Fused dispatch-and-accumulate over the frozen ready set.
@@ -563,7 +567,7 @@ namespace wry {
         // Terrain has no transaction channel yet; the persistent map is
         // carried over unchanged (an O(1) structural share, not a copy).
 
-        co_return Root<World*>{new World{
+        Root<World*> next_world{new World{
             next_time,
             _entity_id_source + entity_id_requests,
             freeze(next_ready),
@@ -574,6 +578,13 @@ namespace wry {
             _terrain_for_coordinate,
             std::move(new_next_waiting_on_time)
         }};
+
+        // The step's content hash, computed here while the World is still
+        // this thread's alone: O(1) over the maps' cached node hashes plus
+        // the fold of the ready set into the time wheel.
+        (void) next_world._ptr->content_hash();
+
+        co_return next_world;
 
     } // World::step
 

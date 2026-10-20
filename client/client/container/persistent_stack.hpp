@@ -10,6 +10,7 @@
 
 #include "assert.hpp"
 #include "garbage_collected.hpp"
+#include "hash.hpp"
 #include "utility.hpp"
 
 namespace wry {
@@ -34,17 +35,36 @@ namespace wry {
     // type rather than by convention.  Scanning is the ordinary
     // GarbageCollected base behaviour; shading, if any, belongs to whichever
     // slot the caller stores the top pointer in.
+    //
+    // Content hash: when T has a content_hash, each cell caches the hash
+    // of the stack it tops -- combine(combine(hash of the rest, hash of
+    // the payload)) -- computed at construction from the next cell's
+    // cached hash, so a push is O(1) and the hash of a stack is a function
+    // of its sequence of values alone (core/hash.hpp).  The empty stack
+    // hashes to zero.
 
     template<typename T>
     struct PersistentStack : GarbageCollected {
 
+        static constexpr bool _has_content_hash = requires(T const& x) { content_hash(x); };
+
         PersistentStack const* _Nullable _next;
         T _payload;
+        uint64_t _hash;
 
         explicit
         PersistentStack(PersistentStack const* _Nullable next, auto&&... args)
         : _next{next}
-        , _payload{FORWARD(args)...} {
+        , _payload{FORWARD(args)...}
+        , _hash{0} {
+            if constexpr (_has_content_hash)
+                _hash = hash_combine(hash_of(next), content_hash(_payload));
+        }
+
+        // The content hash of the stack topped by `top`.
+        [[nodiscard]] static auto
+        hash_of(PersistentStack const* _Nullable top) -> uint64_t {
+            return top ? top->_hash : 0;
         }
 
         virtual void _garbage_collected_debug() const override {
@@ -114,6 +134,11 @@ namespace wry {
         }
 
     };
+
+    template<typename T>
+    uint64_t content_hash(PersistentStack<T> const* _Nullable top) {
+        return PersistentStack<T>::hash_of(top);
+    }
 
 } // namespace wry
 

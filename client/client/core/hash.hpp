@@ -11,6 +11,7 @@
 #include <arm_neon.h>
 
 #include <algorithm>
+#include <concepts>
 #include <cstddef>
 #include <cstring>
 #include <tuple>
@@ -228,6 +229,57 @@ namespace wry {
             return _state;
         }
     };
+
+    // ---- Content hashes ----------------------------------------------
+    //
+    // content_hash(x) is a 64-bit word that is a function of x's content
+    // alone: never of an address, a trie shape, or a build's layout, so two
+    // processes holding the same state agree on it, and a loaded save
+    // hashes as the state it was saved from.  It is the value side of the
+    // per-entry hash below, and the word that stands in for a reference in
+    // a hashed record (io/save_format.hpp), so it need not itself be well
+    // mixed: every consumer mixes it with its position or code.  For an
+    // integer it is the integer; for a Term the save encoding of an inline
+    // word or the referent's content hash (term.hpp); for a garbage
+    // collected object a cached hash of its saved body.  Overloads are
+    // found by argument-dependent lookup, so each lives beside its type.
+
+    template<std::integral T>
+    constexpr uint64_t content_hash(T x) {
+        return (uint64_t)x;
+    }
+
+    // ---- Map and set entry hashes ------------------------------------
+    //
+    // A map or set hashes to the 64-bit wrapping SUM over its entries of
+    // entry_hash(code, content_hash(value)), with a set member's value
+    // hash zero.  The sum is commutative and associative, so a trie can
+    // cache it per node (a node's hash is the sum of its children's), an
+    // erase is a subtraction, and the result is a function of the entry
+    // set alone: independent of trie shape, insertion order and symbol
+    // width, and equal to the sum over the flat code-ordered entry record
+    // the save writes.  The per-entry mix must be strongly non-linear in
+    // both arguments, or moving one unit of value from cell a to cell b
+    // would leave the sum unchanged; two chained Boost-shaped combines
+    // give two splitmix64 rounds over each argument.  See
+    // container/array_mapped_trie.hpp for the node-level maintenance.
+    //
+    // Pinned like splitmix64: the World hash is compared across peers and
+    // across save/load, so the constants and the shape must not change
+    // without a protocol/save version bump.
+
+    inline constexpr uint64_t code_hash(uint64_t code) {
+        return hash_combine(0, code);
+    }
+
+    inline constexpr uint64_t code_hash(__uint128_t code) {
+        return hash_combine(hash_combine(0, (uint64_t)code), (uint64_t)(code >> 64));
+    }
+
+    template<typename Code>
+    inline constexpr uint64_t entry_hash(Code code, uint64_t value_hash) {
+        return hash_combine(code_hash(code), value_hash);
+    }
 
     struct hash_u64_Hasher {
         uint64_t _state = 0;

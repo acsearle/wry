@@ -11,10 +11,12 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "compressed_array.hpp"
 #include "garbage_collected.hpp"
+#include "hash.hpp"
 #include "variant.hpp"
 #include "coroutine.hpp"
 #include "bit.hpp"
@@ -100,6 +102,7 @@ namespace wry {
 #endif
         Bitmap _bitmap; // bitmap of which items are present
         size_t _size;   // entries in this subtree; popcount(_bitmap) at a leaf
+        uint64_t _hash; // content hash of this subtree; see hash() below
         union {
             // compressed flexible member array of children or values
             ArrayMappedTrie const* _Nonnull _children[];
@@ -182,6 +185,65 @@ namespace wry {
             }
         }
 
+        // ---- Content hash ----------------------------------------------
+        //
+        // The hash of a subtree is the 64-bit wrapping SUM over its entries
+        // of entry_hash(code, content_hash(value)) (core/hash.hpp), with a
+        // set member's value hash zero.  A leaf sums its entries; an
+        // internal node sums its children's cached hashes.  Because the
+        // sum is commutative and associative the hash is a function of the
+        // entry set alone -- the same for an insertion-built trie, a
+        // SortedBuilder-built trie, and the flat code-ordered entry record
+        // the save writes -- and every construction site maintains it the
+        // way it maintains _size, eagerly: an assembled node sums its
+        // parts, a clone-and-modify adjusts by the displaced part, an erase
+        // subtracts.  Values are hashed by content, never by address
+        // (content_hash's contract), so the hash of a World's maps is the
+        // hash of their saved content.  Checked against the parts by
+        // _assert_invariant_shallow.
+        //
+        // The entry mix is non-linear in both arguments (two splitmix64
+        // rounds over each), so moving one unit of value between two cells
+        // changes the sum; pinned by the amt_hash test.  Collision
+        // resistance is that of a 64-bit non-cryptographic hash, adequate
+        // for a desync tripwire between cooperating peers, not for an
+        // adversary.
+
+        uint64_t hash() const {
+            return _hash;
+        }
+
+        static uint64_t value_hash([[maybe_unused]] T const& value) {
+            if constexpr (_is_set)
+                return 0;
+            else
+                return content_hash(value);
+        }
+
+        // The contribution of one entry to its trie's hash.
+        static uint64_t entry_hash_of(Word code, T const& value) {
+            return entry_hash(code, value_hash(value));
+        }
+
+        void _recompute_hash() {
+            uint64_t sum = 0;
+            if (has_children()) {
+                int n = std::popcount(_bitmap);
+                for (int i = 0; i != n; ++i)
+                    sum += _children[i]->_hash;
+            } else {
+                Bitmap b = _bitmap;
+                for (int i = 0; b != 0; ++i, (b &= (b-1))) {
+                    Word code = _prefix | (Word)bit::ctz(b);
+                    if constexpr (_is_set)
+                        sum += entry_hash_of(code, T{});
+                    else
+                        sum += entry_hash_of(code, _values[i]);
+                }
+            }
+            _hash = sum;
+        }
+
         // Value form of the debug capacity, for feeding the bounds asserts
         // in the compressed_array functions.  An NDEBUG build has no field,
         // and the asserts that would consume the value are gone there too,
@@ -216,7 +278,10 @@ namespace wry {
         , _bitmap(bitmap)
         // A leaf's size is its membership.  An internal node starts empty
         // and grows by insert_child, or is recomputed after a bulk fill.
-        , _size(shift ? 0 : bit::popcount(bitmap)) {
+        // The hash starts at zero for both: a leaf's entries are filled in
+        // after construction and the site then recomputes or accumulates.
+        , _size(shift ? 0 : bit::popcount(bitmap))
+        , _hash(0) {
             using bit::popcount;
             assert(_debug_capacity >= popcount(_bitmap));
             assert(_debug_count >= popcount(_bitmap));
@@ -280,7 +345,8 @@ namespace wry {
                                                                        capacity,
                                                                        count,
                                                                        bitmap);
-            if constexpr (!_is_set) new_node->_values[0] = std::move(value);
+            if constexpr (!_is_set) new_node->_values[0] = value;
+            new_node->_hash = entry_hash_of(key, value);
             return new_node;
         }
 
@@ -427,6 +493,16 @@ namespace wry {
                                         resolver);
             }
             c->_recompute_size();
+            if (c_shift || (a_bitmap & b_bitmap)) {
+                // Children: sum the (possibly freshly merged) children.
+                // Overlapping leaves: the resolver chose per entry, so
+                // re-sum the merged leaf.
+                c->_recompute_hash();
+            } else {
+                // Disjoint leaves at one prefix (the insertion case): the
+                // union's sum is the sum of the sums.
+                c->_hash = a->_hash + b->_hash;
+            }
             return c;
         } // merge(a, b, f)
 
@@ -549,6 +625,7 @@ namespace wry {
                 if constexpr (!_is_set)
                     for (int i = 0; i != _leaf_count; ++i)
                         leaf->_values[i] = std::move(_leaf_values[i]);
+                leaf->_recompute_hash();
 #ifndef NDEBUG
                 leaf->_assert_invariant_shallow();
 #endif
@@ -567,6 +644,7 @@ namespace wry {
                 for (int i = 0; i != f.count; ++i)
                     node->_children[i] = f.children[i];
                 node->_recompute_size();
+                node->_recompute_hash();
 #ifndef NDEBUG
                 node->_assert_invariant_shallow();
 #endif
@@ -689,6 +767,7 @@ namespace wry {
                                               get_index_for_key(key),
                                               new_child);
             new_node->_size += new_child->_size;
+            new_node->_hash += new_child->_hash;
             return new_node;
         }
 
@@ -702,6 +781,7 @@ namespace wry {
                                                                                     get_index_for_key(key),
                                                                                     new_child);
             new_node->_size = new_node->_size - old_child->_size + new_child->_size;
+            new_node->_hash = new_node->_hash - old_child->_hash + new_child->_hash;
             return new_node;
         }
 
@@ -715,6 +795,7 @@ namespace wry {
                                              get_index_for_key(key),
                                              victim);
             new_node->_size -= victim->_size;
+            new_node->_hash -= victim->_hash;
 #ifndef NDEBUG
             --(new_node->_debug_count);
 #endif
@@ -742,6 +823,7 @@ namespace wry {
 #endif
             bool leaf_did_assign = false;
             if (has_values()) {
+                const uint64_t new_entry = entry_hash_of(key, value);
                 leaf_did_assign = compressed_array_insert_or_exchange_for_index(new_node->debug_capacity(),
                                                                                 new_node->_bitmap,
                                                                                 new_node->_values,
@@ -749,14 +831,19 @@ namespace wry {
                                                                                 value,
                                                                                 victim);
                 new_node->_recompute_size();
+                if (leaf_did_assign)
+                    new_node->_hash -= entry_hash_of(key, victim);
+                new_node->_hash += new_entry;
             } else {
                 assert(has_children());
                 ArrayMappedTrie* _Nullable new_child = nullptr;
                 size_t displaced_size = 0;
+                uint64_t displaced_hash = 0;
                 if (_bitmap & select) {
                     const ArrayMappedTrie* _Nonnull child = _children[compressed_index];
                     std::tie(new_child, leaf_did_assign) = child->clone_and_insert_or_assign_key_value(key, value, victim);
                     displaced_size = child->_size;
+                    displaced_hash = child->_hash;
                 } else {
                     new_child = make_singleton(key, value);
                 }
@@ -768,6 +855,7 @@ namespace wry {
                                                                      new_child,
                                                                      _);
                 new_node->_size = new_node->_size - displaced_size + new_child->_size;
+                new_node->_hash = new_node->_hash - displaced_hash + new_child->_hash;
             }
             return { new_node, leaf_did_assign };
         }
@@ -819,6 +907,7 @@ namespace wry {
                                                  index,
                                                  victim);
                 new_node->_recompute_size();
+                new_node->_hash -= entry_hash_of(key, victim);
 #ifndef NDEBUG
                 --(new_node->_debug_count);
 #endif
@@ -924,33 +1013,83 @@ namespace wry {
         template<typename Action, typename Combine>
         [[nodiscard]] static const ArrayMappedTrie* _Nullable
         rebuild_serial(const ArrayMappedTrie* _Nullable source,
-                       const std::vector<std::pair<Word, Action>>& mods,
+                       std::span<const std::pair<Word, Action>> mods,
                        size_t i, size_t j,
                        const Combine& combine) {
-            // Apply each modifier in turn.  Uses try_get + insert/erase, which
-            // are correct for arbitrary keys (insert/merge handle disjoint
-            // prefixes), so this is a valid base case for any node -- including
-            // a leaf that only covers part of the modifier range.
-            const ArrayMappedTrie* acc = source;
-            for (; i != j; ++i) {
-                Word key = mods[i].first;
-                T old;
-                bool has = acc && acc->try_get(key, old);
-                std::optional<T> next = combine(has ? &old : nullptr, mods[i].second);
-                if (next) {
-                    acc = insert(acc, key, std::move(*next));
-                } else if (has) {
-                    T victim;
-                    acc = acc->clone_and_erase_key(key, victim).first;
+            if (source && source->has_children()) {
+                // An internal node reaches here only with a slice too small
+                // to fork (one modifier): insert or erase path-copies
+                // O(depth) nodes, which beats re-emitting the subtree.
+                // try_get + insert/erase are correct for arbitrary keys
+                // (insert/merge handle disjoint prefixes).
+                const ArrayMappedTrie* acc = source;
+                for (; i != j; ++i) {
+                    Word key = mods[i].first;
+                    T old;
+                    bool has = acc && acc->try_get(key, old);
+                    std::optional<T> next = combine(has ? &old : nullptr, mods[i].second);
+                    if (next) {
+                        acc = insert(acc, key, std::move(*next));
+                    } else if (has) {
+                        T victim;
+                        acc = acc->clone_and_erase_key(key, victim).first;
+                    }
+                }
+                return acc;
+            }
+            // A leaf or nothing: a two-pointer merge of the leaf's entries
+            // (code order) against the modifier slice, emitted through
+            // SortedBuilder.  Every node of the result is allocated and
+            // hashed exactly once; applying the modifiers one at a time
+            // would build and discard a transient trie per modifier.  The
+            // slice need not lie within the leaf's block (a leaf is also the
+            // base case for a range only partly covered by it): the merge
+            // handles any sorted codes, and the builder any shape.
+            SortedBuilder builder;
+            Bitmap bits = source ? source->_bitmap : 0;
+            int k = 0; // compressed index of the next leaf entry
+            auto leaf_value = [source](int compressed_index) -> T {
+                if constexpr (_is_set) {
+                    (void) source; (void) compressed_index;
+                    return T{};
+                } else {
+                    return source->_values[compressed_index];
+                }
+            };
+            while (bits || i != j) {
+                const bool has_entry = bits != 0;
+                const bool has_mod = i != j;
+                const Word entry_code = has_entry ? (source->_prefix | (Word)bit::ctz(bits)) : Word{};
+                if (has_mod && (!has_entry || mods[i].first < entry_code)) {
+                    // Modifier at a code the leaf lacks
+                    std::optional<T> next = combine(nullptr, mods[i].second);
+                    if (next)
+                        builder.push(mods[i].first, std::move(*next));
+                    ++i;
+                } else if (has_entry && (!has_mod || entry_code < mods[i].first)) {
+                    // Entry the modifiers leave alone
+                    builder.push(entry_code, leaf_value(k));
+                    bits &= bits - 1;
+                    ++k;
+                } else {
+                    // Both at one code: read-modify-write
+                    assert(has_entry && has_mod && entry_code == mods[i].first);
+                    T old = leaf_value(k);
+                    std::optional<T> next = combine(&old, mods[i].second);
+                    if (next)
+                        builder.push(entry_code, std::move(*next));
+                    ++i;
+                    bits &= bits - 1;
+                    ++k;
                 }
             }
-            return acc;
+            return builder.finish();
         }
 
         template<typename Action, typename Combine>
         [[nodiscard]] static coroutine::Future<const ArrayMappedTrie*>
         _rebuild_inrange(const ArrayMappedTrie* source, // internal; mods in range; a<b
-                         const std::vector<std::pair<Word, Action>>& mods,
+                         std::span<const std::pair<Word, Action>> mods,
                          size_t a, size_t b,
                          const Combine& combine) {
             const int sh = source->_shift;
@@ -1013,7 +1152,7 @@ namespace wry {
         template<typename Action, typename Combine>
         [[nodiscard]] static coroutine::Future<const ArrayMappedTrie*>
         coroutine_parallel_rebuild(const ArrayMappedTrie* _Nullable source,
-                                   const std::vector<std::pair<Word, Action>>& mods,
+                                   std::span<const std::pair<Word, Action>> mods,
                                    size_t i, size_t j,
                                    const Combine& combine) {
             if (i == j)
@@ -1082,11 +1221,25 @@ namespace wry {
             assert(count == _debug_count);
             if (has_children()) {
                 size_t sum = 0;
-                for (int j = 0; j != count; ++j)
+                uint64_t hash_sum = 0;
+                for (int j = 0; j != count; ++j) {
                     sum += _children[j]->_size;
+                    hash_sum += _children[j]->_hash;
+                }
                 assert(_size == sum);
+                assert(_hash == hash_sum);
             } else {
                 assert(_size == (size_t)count);
+                uint64_t hash_sum = 0;
+                Bitmap b = _bitmap;
+                for (int i = 0; b != 0; ++i, (b &= (b-1))) {
+                    Word code = _prefix | (Word)bit::ctz(b);
+                    if constexpr (_is_set)
+                        hash_sum += entry_hash_of(code, T{});
+                    else
+                        hash_sum += entry_hash_of(code, _values[i]);
+                }
+                assert(_hash == hash_sum);
             }
             if (has_children()) {
                 Word get_prefix_mask = ~INDEX_MASK << _shift;
@@ -1174,6 +1327,7 @@ namespace wry {
             size_t item_size = has_children() ? sizeof(const ArrayMappedTrie*) : _leaf_item_bytes;
             memcpy(node->_children, _children, count * item_size);
             node->_size = _size;
+            node->_hash = _hash;
             return node;
         }
 
@@ -1196,6 +1350,7 @@ namespace wry {
                                               get_index_for_key(key),
                                               new_child);
             _size += new_child->_size;
+            _hash += new_child->_hash;
         }
 
         ArrayMappedTrie const* _Nonnull exchange_child(ArrayMappedTrie const* _Nonnull new_child) {
@@ -1207,12 +1362,19 @@ namespace wry {
                                                                                     get_index_for_key(key),
                                                                                     new_child);
             _size = _size - old_child->_size + new_child->_size;
+            _hash = _hash - old_child->_hash + new_child->_hash;
             return old_child;
         }
 
 
 
     }; // ArrayMappedTrie
+
+    // The content hash of a whole trie; the empty trie (nullptr) is zero.
+    template<typename Word, typename T, typename Discipline, int SYMBOL_WIDTH>
+    uint64_t content_hash(ArrayMappedTrie<Word, T, Discipline, SYMBOL_WIDTH> const* _Nullable s) {
+        return s ? s->hash() : 0;
+    }
 
     template<typename Word, typename T, typename Discipline, int SYMBOL_WIDTH>
     void print(ArrayMappedTrie<Word, T, Discipline, SYMBOL_WIDTH> const* _Nullable s) {

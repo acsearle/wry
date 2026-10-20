@@ -44,6 +44,20 @@ namespace wry {
             return _inner ? _inner->size() : 0;
         }
 
+        // The content hash of the set: the sum over members of
+        // entry_hash(code, 0), cached on the trie (array_mapped_trie.hpp).
+        // The empty set hashes to zero, and hash_of(key) is what adding
+        // `key` to a set that lacks it adds to its hash, so a caller can
+        // hash a set it has not built (the World folds its ready set into
+        // the time wheel this way).
+        [[nodiscard]] uint64_t hash() const {
+            return _inner ? _inner->hash() : 0;
+        }
+
+        [[nodiscard]] static uint64_t hash_of(Key key) {
+            return N::entry_hash_of(H{}.encode(key), T{});
+        }
+
         [[nodiscard]] bool try_front(Key& victim) const  {
             if (_inner)
                 victim = H{}.decode(_inner->front());
@@ -122,6 +136,11 @@ namespace wry {
     template<typename Key, typename H, typename D>
     void garbage_collected_scan(const PersistentSet<Key, H, D>& x) {
         garbage_collected_scan(x._inner);
+    }
+
+    template<typename Key, typename H, typename D>
+    uint64_t content_hash(const PersistentSet<Key, H, D>& x) {
+        return x.hash();
     }
     
     

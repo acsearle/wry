@@ -6,11 +6,183 @@
 //
 
 #include <cstdlib>
+#include <utility>
 
 #include "persistent_map.hpp"
+#include "persistent_set.hpp"
 #include "test.hpp"
 
 namespace wry {
+
+    // The hash oracle: the sum over a std::map's entries of the trie's
+    // own per-entry hash, which is the definition (array_mapped_trie.hpp)
+    // with every cache bypassed.
+    template<typename A, typename Key, typename V>
+    static uint64_t oracle_hash(const std::map<Key, V>& m) {
+        uint64_t sum = 0;
+        for (auto const& [k, v] : m)
+            sum += A::entry_hash_of(k, v);
+        return sum;
+    }
+
+    // The content hash of a trie: the sum form, maintained by every
+    // construction path.  Pinned constants first (any change to
+    // splitmix64, hash_combine or the entry mix moves them, and the hash
+    // is compared across peers and across save/load); then the empty trie;
+    // an oracle check at every step of a random set/erase history; shape
+    // independence across insertion order, the sorted builder and the
+    // parallel rebuild; the nested case (a map of sets); and the
+    // non-linearity the sum form depends on: moving a unit of value from
+    // one cell to another changes the hash.
+    define_test("amt_hash") {
+
+        using A = PersistentMap<uint64_t, int>::AMT;
+        using S = ArrayMappedTrie<__uint128_t, std::monostate, ScanDiscipline>;
+
+        // Pinned (computed independently in Python from the definitions
+        // in core/hash.hpp; regenerate the same way if they are ever
+        // deliberately changed).
+        {
+            assert(A::entry_hash_of(1, 2) == 0xbcd9dbb49673066bull);
+            std::map<uint64_t, int> m{{1, 2}, {3, 4}, {((uint64_t)1 << 40) | 5, 6}};
+            assert(oracle_hash<A>(m) == 0xc0f6fb6c039ed651ull);
+            const A* t = nullptr;
+            for (auto [k, v] : m)
+                t = A::insert(t, k, v);
+            assert(content_hash(t) == 0xc0f6fb6c039ed651ull);
+            __uint128_t codes[] = { (__uint128_t)7,
+                                    ((__uint128_t)5 << 64) | 9,
+                                    ((__uint128_t)1 << 70) | 3 };
+            const S* s = S::build_from_sorted(std::begin(codes), std::end(codes));
+            assert(content_hash(s) == 0x41e0cf37b76bd5fbull);
+        }
+
+        // Empty is zero; a singleton is its entry.
+        assert(content_hash((const A*)nullptr) == 0);
+        assert((PersistentMap<uint64_t, int>{}.hash() == 0));
+        assert(content_hash(A::make_singleton(5, 50)) == A::entry_hash_of(5, 50));
+
+        // Non-linearity: moving one unit from cell a to cell b changes the
+        // sum, in both directions and for the degenerate equal case; and a
+        // value change is seen in every cell, not only the low ones.
+        {
+            auto build = [](std::map<uint64_t, int> const& m) -> const A* {
+                const A* t = nullptr;
+                for (auto [k, v] : m)
+                    t = A::insert(t, k, v);
+                return t;
+            };
+            for (int iter = 0; iter != 200; ++iter) {
+                uint64_t a = std::rand() % 64, b = std::rand() % 64;
+                if (a == b) continue;
+                int v = std::rand() % 1000, w = std::rand() % 1000;
+                std::map<uint64_t, int> x{{a, v + 1}, {b, w}};
+                std::map<uint64_t, int> y{{a, v}, {b, w + 1}};
+                assert(content_hash(build(x)) != content_hash(build(y)));
+                // and against the key-swapped form
+                std::map<uint64_t, int> z{{a, w}, {b, v + 1}};
+                if (v + 1 != w)
+                    assert(content_hash(build(x)) != content_hash(build(z)));
+            }
+            // Two sets differing by one member differ.
+            const S* s1 = S::insert(nullptr, 1, std::monostate{});
+            const S* s2 = S::insert(s1, 2, std::monostate{});
+            const S* s3 = S::insert(s1, 3, std::monostate{});
+            assert(content_hash(s1) != content_hash(s2));
+            assert(content_hash(s2) != content_hash(s3));
+        }
+
+        // Random history against the oracle at every step: the map and
+        // every node of it (assert_canonical runs the shallow invariant,
+        // which recomputes each node's hash from its parts).
+        {
+            PersistentMap<uint64_t, int, DefaultKeyService<uint64_t>, RootDiscipline> p;
+            std::map<uint64_t, int> oracle;
+            for (int i = 0; i != 3000; ++i) {
+                uint64_t k = (i & 1) ? (std::rand() % 200) : ((uint64_t)std::rand() << 20);
+                if (std::rand() % 3) {
+                    int v = std::rand();
+                    p.set(k, v);
+                    oracle[k] = v;
+                } else {
+                    int victim = -1;
+                    bool did_erase = p.try_erase(k, victim);
+                    auto it = oracle.find(k);
+                    assert(did_erase == (it != oracle.end()));
+                    if (did_erase)
+                        oracle.erase(it);
+                }
+                assert(p.hash() == oracle_hash<A>(oracle));
+                if (!(i & 63))
+                    A::assert_canonical(p._inner ? &*p._inner : nullptr);
+                if (!(i & 255))
+                    mutator_repin();
+            }
+
+            // Shape independence: the same content built by insertion in
+            // another order, by the sorted builder, and by a parallel
+            // rebuild from empty, all hash alike.
+            std::vector<std::pair<uint64_t, int>> entries(oracle.begin(), oracle.end());
+            for (size_t i = entries.size(); i > 1; --i)
+                std::swap(entries[i - 1], entries[std::rand() % i]);
+            const A* shuffled = nullptr;
+            for (auto [k, v] : entries)
+                shuffled = A::insert(shuffled, k, v);
+            assert(content_hash(shuffled) == p.hash());
+            const A* sorted = A::build_from_sorted(oracle.begin(), oracle.end());
+            assert(content_hash(sorted) == p.hash());
+            {
+                auto guard = pin_global_epoch();
+                std::vector<std::pair<uint64_t, int>> mods(oracle.begin(), oracle.end());
+                auto combine = [](const int* old, const int& v) -> std::optional<int> {
+                    (void) old;
+                    return v;
+                };
+                const A* rebuilt = co_await A::coroutine_parallel_rebuild(
+                    nullptr, std::span(std::as_const(mods)), 0, mods.size(), combine);
+                assert(content_hash(rebuilt) == p.hash());
+                // and a rebuild that erases half of it, against the oracle
+                std::map<uint64_t, int> half = oracle;
+                std::vector<std::pair<uint64_t, bool>> erasures;
+                for (auto const& [k, v] : oracle)
+                    if (k & 1) {
+                        erasures.emplace_back(k, true);
+                        half.erase(k);
+                    }
+                auto erase = [](const int* old, const bool&) -> std::optional<int> {
+                    assert(old);
+                    return std::nullopt;
+                };
+                const A* halved = co_await A::coroutine_parallel_rebuild(
+                    sorted, std::span(std::as_const(erasures)), 0, erasures.size(), erase);
+                assert(content_hash(halved) == oracle_hash<A>(half));
+                A::assert_canonical(halved);
+                unpin_global_epoch(guard);
+            }
+        }
+
+        // Nested: a map whose values are sets hashes each value by the
+        // set's own content hash, so replacing a set by an equal set built
+        // another way is invisible, and changing a member is not.
+        {
+            using Inner = PersistentSet<uint64_t, DefaultKeyService<uint64_t>, ScanDiscipline>;
+            using Outer = PersistentMap<uint64_t, Inner, DefaultKeyService<uint64_t>, ScanDiscipline>;
+            Inner i1; i1.set(3); i1.set(1); i1.set(2);
+            Inner i2; i2.set(1); i2.set(2); i2.set(3);
+            Inner i3; i3.set(1); i3.set(2); i3.set(4);
+            assert(i1.hash() == i2.hash());
+            assert(i1.hash() != i3.hash());
+            assert(i1.hash() == Inner::hash_of(1) + Inner::hash_of(2) + Inner::hash_of(3));
+            Outer o1; o1.set(10, i1); o1.set(20, i3);
+            Outer o2; o2.set(20, i3); o2.set(10, i2);
+            Outer o3; o3.set(10, i3); o3.set(20, i1);
+            assert(o1.hash() == o2.hash());
+            assert(o1.hash() != o3.hash());
+            assert(o1.hash() == Outer::AMT::entry_hash_of(10, i1) + Outer::AMT::entry_hash_of(20, i3));
+        }
+
+        co_return;
+    };
     
     define_test("PersistentMap") {
                                
@@ -70,6 +242,8 @@ namespace wry {
                 A::assert_canonical(actual);
                 assert(A::same_shape(actual, ref));
                 assert(p.size() == m.size());
+                assert(p.hash() == oracle_hash<A>(m));
+                assert(p.hash() == content_hash(ref));
             }
             for (uint64_t k = 0; k != N; ++k) {
                 if (m.count(k)) {
@@ -148,7 +322,7 @@ namespace wry {
             }
 
             const A* result = co_await A::coroutine_parallel_rebuild(
-                src, mods, 0, mods.size(), combine);
+                src, std::span(std::as_const(mods)), 0, mods.size(), combine);
 
             for (uint64_t k = 0; k != key_domain; ++k) {
                 int v = 0;
@@ -175,8 +349,10 @@ namespace wry {
                 for (auto [k, v] : expect)
                     ref = A::insert(ref, k, v);
                 assert(A::same_shape(result, ref));
+                assert(content_hash(result) == content_hash(ref));
             }
             assert((result ? result->size() : 0) == expect.size());
+            assert(content_hash(result) == oracle_hash<A>(expect));
 
             if (!(iter & 7))
                 mutator_repin();
@@ -264,8 +440,10 @@ namespace wry {
                 const A* actual = result._inner ? &*result._inner : nullptr;
                 A::assert_canonical(actual);
                 assert(A::same_shape(actual, ref));
+                assert(result.hash() == content_hash(ref));
             }
             assert(result.size() == expect.size());
+            assert(result.hash() == oracle_hash<PM::AMT>(expect));
 
             if (!(iter & 7))
                 mutator_repin();
@@ -394,6 +572,7 @@ namespace wry {
                 A::assert_canonical(actual);
                 assert(A::same_shape(actual, ref));
                 assert(p.size() == oracle.size());
+                assert(p.hash() == oracle_hash<A>(oracle));
                 if (!(i & 255))
                     mutator_repin();
             }
@@ -444,6 +623,8 @@ namespace wry {
             for (auto [k, v] : entries)
                 ref = A::insert(ref, k, v);
             assert(A::same_shape(built, ref));
+            assert(content_hash(built) == oracle_hash<A>(oracle));
+            assert(content_hash(built) == content_hash(ref));
 
             for (auto [k, v] : oracle) {
                 int u = 0;
@@ -539,6 +720,13 @@ namespace wry {
             for (__uint128_t k : codes)
                 ref = S::insert(ref, k, std::monostate{});
             assert(S::same_shape(built, ref));
+            {
+                uint64_t sum = 0;
+                for (__uint128_t k : oracle)
+                    sum += S::entry_hash_of(k, std::monostate{});
+                assert(content_hash(built) == sum);
+                assert(content_hash(ref) == sum);
+            }
             for (__uint128_t k : oracle)
                 assert(built->contains(k));
             assert(!built || !built->contains(((__uint128_t)9 << 64) | 1));

@@ -138,6 +138,13 @@ namespace wry {
         virtual uint64_t _save_type_tag() const override { return SAVE_TYPE_TAG; }
         virtual void _save_body(Saver& saver) const override;
 
+        // The World content hash (multiplayer.md 9.1): what lockstep peers
+        // compare each step, and what a loaded save must reproduce.  The
+        // positional combine of the parts' cached hashes, defined beside
+        // _save_body in io/save_format.cpp; step() computes it for the new
+        // World before returning, so content_hash() is a cached read.
+        virtual uint64_t _compute_content_hash() const override;
+
         coroutine::Future<Root<World*>> step() const;
 
         EntityID generate_entity_id() { return _entity_id_source++; }

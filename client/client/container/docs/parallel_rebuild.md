@@ -272,3 +272,32 @@ and the Stage 0 serial loop on the same inputs and asserting equal maps.
     reference inner `Node<int,u64>` set roots), driven by a round-trip test
     (`save_format_ki_roundtrip`).  The ki index is semantic state -- waiters
     must survive a load, they are not regenerated.
+
+## 2026-10-20: content hash maintained by the rebuild; rebuild_serial via SortedBuilder
+
+- Every AMT node now carries `_hash`, the 64-bit wrapping sum over its
+  entries of `entry_hash(code, content_hash(value))` (core/hash.hpp; the
+  definition and its rationale are in array_mapped_trie.hpp beside
+  `hash()`).  The rebuild maintains it for free in the structural sense:
+  a shared subtree keeps its hash, an assembled node sums its children
+  (`insert_child`), a modified leaf is re-summed.  Cost is O(nodes
+  touched), as for `_size`.  The World hash (multiplayer.md 9.1) is the
+  positional combine of the ten map roots' cached hashes plus the time
+  wheel with `_ready` folded in, computed at the end of `World::step`.
+- `rebuild_serial` (the parallel rebuild's base case) used to apply the
+  slice one modifier at a time through `insert` / `clone_and_erase_key`,
+  building and discarding a transient trie per modifier -- each of which
+  would now be hashed.  Its leaf and null-source cases (the leaf base
+  case and the out-of-range slices to either side of a node) are now a
+  two-pointer merge of the leaf's code-ordered entries against the sorted
+  modifier slice, emitted through `SortedBuilder`, so every node of the
+  result is allocated and hashed once.  An internal node still reaches
+  `rebuild_serial` only with a single modifier (the small-slice cut-off
+  in `coroutine_parallel_rebuild`), where one O(depth) insert/erase path
+  copy beats re-emitting the subtree; that path is unchanged.  The
+  `rebuild_*` functions take the modifiers as `std::span` (callers pass
+  `std::span(mods)`; a non-const vector needs `std::as_const`).  The
+  existing differential tests (`amt_parallel_rebuild`,
+  `persistentmap_parallel_rebuild`, `waitablemap_parallel_rebuild`) cover
+  the swap, and now also assert the result's hash against a std::map
+  oracle.

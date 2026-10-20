@@ -9,8 +9,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 
@@ -21,6 +23,7 @@
 #include "garbage_collected.hpp"
 #include "matter.hpp"
 #include "save.hpp"
+#include "save_format.hpp"
 #include "terrain.hpp"
 #include "test.hpp"
 
@@ -108,7 +111,8 @@ namespace wry {
         // uniform_int_distribution (whose mapping is
         // implementation-defined), so every run and every peer builds the
         // identical world.
-        [[maybe_unused]] World* make_starting_world_big() {
+        [[maybe_unused]] World* make_starting_world_big(i32 region_extent = 3000,
+                                                        int machine_count = 100000) {
             World* world = new World;
 
             {
@@ -120,9 +124,8 @@ namespace wry {
 
             std::mt19937_64 gen{20260709};
 
-            constexpr i32 region_extent = 3000;     // [-1500, 1500) each axis
-            constexpr i32 half = region_extent / 2;
-            constexpr int machine_count = 100000;
+            // The defaults: [-1500, 1500) each axis, 100000 machines.
+            const i32 half = region_extent / 2;
 
             for (i32 y = -half; y != half; ++y) {
                 for (i32 x = -half; x != half; ++x) {
@@ -773,6 +776,20 @@ namespace wry {
                 return Reply::ok(command::to_string(t));
             })));
 
+        // The content hash of the displayed world (multiplayer.md 9.1): what
+        // lockstep peers compare per step, stable across save and load.
+        registry.add(make_command<Ctx>(
+            "state-hash", "Show the content hash of the displayed world", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                Root<World const*> w;
+                if (!ws._worlds.try_pop_front(w))
+                    return Reply::error(String("no displayed world"));
+                const uint64_t h = w._ptr->content_hash();
+                ws._worlds.push_front(std::move(w));
+                return Reply::ok(command::to_string(Hash{h}));
+            })));
+
         // World edits: built into a Player::Action and submitted; the
         // Server orders them and they apply when they come back in a step.
         registry.add(make_command<Ctx>(
@@ -1178,6 +1195,83 @@ namespace wry {
         gc.issue(command::Origin::console, "resume");
         assert(!ws._paused && ws._take_step_permission());
 
+        co_return;
+    };
+
+
+    // Per-step cost on the test worlds, as a number to compare across
+    // builds (the content hash must be cheap enough to run every step),
+    // and the stepped world's incrementally maintained hash checked
+    // against the from-scratch oracle.  The starting scenario always; a
+    // scaled-down stress scenario (900 machines over a 300 x 300 region)
+    // only when WRY_BENCH is set, since it takes long enough to be
+    // unwelcome in a routine suite run.  Prints microseconds per step and
+    // per World-hash recompute (the combine over the cached parts, as
+    // step() does it).
+    define_test("world_step_cost") {
+        auto bench = [](World* w, int steps, const char* label) -> coroutine::Task {
+            Root<World*> r{w};
+            auto t0 = std::chrono::steady_clock::now();
+            for (int i = 0; i != steps; ++i) {
+                epoch::Epoch pin = pin_global_epoch();
+                Root<World*> next = co_await r._ptr->step();
+                unpin_global_epoch(pin);
+                r = std::move(next);
+            }
+            auto t1 = std::chrono::steady_clock::now();
+            double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / steps;
+            const uint64_t live = r._ptr->content_hash();
+            const int reps = 1000;
+            auto t2 = std::chrono::steady_clock::now();
+            for (int i = 0; i != reps; ++i)
+                assert(r._ptr->_compute_content_hash() == live);
+            auto t3 = std::chrono::steady_clock::now();
+            double hash_us = std::chrono::duration<double, std::micro>(t3 - t2).count() / reps;
+            printf("world_step_cost: %s: %d steps, %.1f us/step; World hash combine %.2f us; "
+                   "final time %lld, %zu entities, hash %016llx\n",
+                   label, steps, us, hash_us, (long long)r._ptr->_time,
+                   r._ptr->_entity_for_entity_id.kv.size(), (unsigned long long)live);
+            assert(world_content_hash_oracle(r._ptr) == live);
+        };
+        co_await bench(make_starting_world(), 200, "starting world");
+        if (std::getenv("WRY_BENCH"))
+            co_await bench(make_starting_world_big(300, 900), 64, "stress world (300 x 300, 900 machines)");
+        co_return;
+    };
+
+    // `state-hash` replies with the displayed world's content hash, in the
+    // Hash literal form, stable across calls and changed by a step.
+    define_test("world_state_state_hash") {
+        GuiContext gc;
+        WorldState ws(gc);
+        auto reply_hash = [&gc]() -> Hash {
+            auto o = gc.issue(command::Origin::console, "state-hash");
+            assert(o.reply.status == command::Reply::OK);
+            auto node = command::parse_node(o.reply.text);
+            assert(node);
+            auto h = command::Type<Hash>::read(*node);
+            assert(h);
+            return *h;
+        };
+        uint64_t h0 = 0;
+        {
+            Root<World const*> w;
+            assert(ws._worlds.try_pop_front(w));
+            h0 = w._ptr->content_hash();
+            ws._worlds.push_front(std::move(w));
+        }
+        assert(reply_hash() == (Hash{h0}));
+        assert(reply_hash() == (Hash{h0}));
+        // Step the displayed world as update() does.
+        {
+            Root<World const*> old_world;
+            assert(ws._worlds.try_pop_front(old_world));
+            epoch::Epoch pin = pin_global_epoch();
+            Root<World*> next = co_await old_world._ptr->step();
+            unpin_global_epoch(pin);
+            ws._worlds.emplace_back(next);
+        }
+        assert(reply_hash() != (Hash{h0}));
         co_return;
     };
 

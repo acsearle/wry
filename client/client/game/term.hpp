@@ -339,7 +339,59 @@ namespace wry {
         virtual uint64_t _save_type_tag() const = 0;
         virtual void _save_body(Saver& saver) const = 0;
 
+        // ---- Content hash ----
+        //
+        // A 64-bit function of the object's saved content (core/hash.hpp):
+        // by default the hash of the record _save_body emits, with every
+        // reference replaced by the referent's content hash (the hashing
+        // sink in io/save_format.hpp), so a loaded copy hashes as the
+        // original and no per-class code is needed; World overrides it
+        // with the positional combine of its parts.
+        //
+        // Cached in _content_hash, a documented late write on a published
+        // immutable object (cf. ReadyValue): zero means not yet computed,
+        // and the first content_hash() call after the object is complete
+        // computes and stores it.  The ordering is relaxed on both sides,
+        // and that suffices: the word is a pure function of content that
+        // the reader already sees (it reached the object through whatever
+        // publication made the object visible), so a nonzero word read by
+        // any thread is correct whether or not it synchronizes with the
+        // writer, a zero is recomputed to the same value, and concurrent
+        // writers store identical words.  Only indivisibility of the
+        // 64-bit store is needed, and the atomic provides it.  (A content
+        // hash that is genuinely zero is simply never cached; still
+        // correct.)
+        //
+        // Precondition for caching: the saved content is final.  Entities
+        // are hashed when a map leaf holding them is built, after their
+        // one late write (_free_entity_id); a hand-built or loaded World
+        // is commissioned by hack_repair_invariant, which resets the
+        // cache.
+        mutable Atomic<uint64_t> _content_hash;
+
+        HeapTerm() = default;
+        // A clone starts with no cached hash: it is about to be mutated
+        // into a different object (make_mutable_clone).
+        HeapTerm(const HeapTerm& other) : GarbageCollected(other), _content_hash() {}
+
+        uint64_t content_hash() const {
+            uint64_t h = _content_hash.load_relaxed();
+            if (!h) {
+                h = _compute_content_hash();
+                _content_hash.store_relaxed(h);
+            }
+            return h;
+        }
+
+        // Uncached; defined in io/save_format.cpp.
+        virtual uint64_t _compute_content_hash() const;
+
     };
+
+    // The content hash of a Term: an inline word is its own save encoding;
+    // an OBJECT-tagged Term is its referent's content hash (zero for null,
+    // which is also the empty container, invariant (3)).
+    uint64_t content_hash(Term self);
     
     
     
@@ -374,6 +426,12 @@ namespace wry {
     inline void garbage_collected_scan(Term const& self) {
         if (_term_is_object(self))
             garbage_collected_scan(_term_as_object(self));
+    }
+
+    inline uint64_t content_hash(Term self) {
+        if (!_term_is_object(self))
+            return self._data;
+        return self._data ? _term_as_object(self)->content_hash() : 0;
     }
         
     // size_t hash(const Term& self);
