@@ -131,6 +131,13 @@ namespace wry::coroutine {
             return result;
         }
 
+        // How many items are queued: a hint for a consumer deciding
+        // whether to come and take them
+        size_t size() {
+            std::unique_lock guard{_mutex};
+            return _queue.size();
+        }
+
         // Everything queued, in order; empty if nothing is
         [[nodiscard]] std::deque<T> try_take() {
             std::unique_lock guard{_mutex};

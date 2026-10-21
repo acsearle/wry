@@ -37,6 +37,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <expected>
 #include <memory>
 #include <stop_token>
 #include <string>
@@ -162,7 +163,16 @@ namespace wry {
             std::string reason;
         };
 
-        using Event = std::variant<Opened, Message, Closed>;
+        // The owner's own event, posted with post(): ordered with the
+        // connections' events in the one inbox, so a consumer that is a
+        // state machine over its connections can take its timers and its
+        // controls through the same queue
+        struct Posted {
+            uint64_t code;
+            std::string bytes;
+        };
+
+        using Event = std::variant<Opened, Message, Closed, Posted>;
 
         // Bind and listen at a Unix path (replacing a stale socket file;
         // the file is created owner-only) or a TCP address and port (an
@@ -197,6 +207,20 @@ namespace wry {
         // or be about to be: the connection is served by its loop
         [[nodiscard]] coroutine::Future<int> connect_tcp(std::string address, uint16_t port);
 
+        // Serve an already connected descriptor (one end of a socket pair)
+        // as a connection: its id, or -errno with the descriptor closed.
+        // As for connect_tcp, serve() must be spawned or about to be
+        int adopt(int fd);
+
+        // Listen for TCP connections on a running transport (one that may
+        // already have been serving, listening or not): the bound port, or
+        // an error.  Port 0 for an ephemeral one.  serve() must be spawned
+        // or about to be, as above
+        std::expected<uint16_t, std::string> listen_tcp(std::string const& address, uint16_t port);
+
+        // Post an event of the owner's own into the inbox
+        void post(uint64_t code, std::string bytes = {});
+
         // Graceful: stops accepting and dialing, queues an end of stream
         // behind what each connection has pending, waits up to `grace` for
         // the connections to finish, then close().  A task: await it, or
@@ -211,6 +235,10 @@ namespace wry {
 
         // The loop has ended, or was never started
         bool finished();
+
+        // Resolves once the loop has ended (at once if it never started).
+        // At most one waiter: the owner, before destroying this
+        [[nodiscard]] coroutine::Future<> wait_finished();
 
         // Asserts finished(): the owner joins its spawn before destroying
         // this.  A never-served listener closes here

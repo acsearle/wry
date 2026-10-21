@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <deque>
+#include <optional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -195,6 +196,12 @@ namespace wry {
         // are refused with an error reply (commands.md section 9)
         static constexpr size_t max_pipelined_requests = 64;
         bool open_control_socket(String const& path);
+
+        // Multiplayer launch options (--host [PORT], --join ADDRESS:PORT),
+        // consumed by the first WorldState (game/world_state.cpp)
+        std::optional<uint16_t> host_port;
+        String join_address;
+        uint16_t join_port = 0;
         void _service_control_socket();
 
         // Block for up to `timeout` until the socket has input, taking it

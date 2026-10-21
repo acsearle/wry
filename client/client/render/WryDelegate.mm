@@ -203,6 +203,25 @@ namespace {
             }
             _gui->open_control_socket(wry::String(path.c_str()));
         }
+        // Multiplayer (game/docs/multiplayer.md): --host [PORT] listens for
+        // players once a game starts (port 7777 by default); --join
+        // ADDRESS:PORT joins another process's game instead of hosting
+        NSUInteger host_flag = [arguments indexOfObject:@"--host"];
+        if (host_flag != NSNotFound) {
+            uint16_t port = 7777;
+            if (host_flag + 1 < arguments.count && ![arguments[host_flag + 1] hasPrefix:@"-"])
+                port = (uint16_t)[arguments[host_flag + 1] intValue];
+            _gui->host_port = port;
+        }
+        NSUInteger join_flag = [arguments indexOfObject:@"--join"];
+        if (join_flag != NSNotFound && join_flag + 1 < arguments.count) {
+            std::string where = [arguments[join_flag + 1] UTF8String];
+            size_t colon = where.rfind(':');
+            if (colon != std::string::npos) {
+                _gui->join_address = wry::String(where.substr(0, colon).c_str());
+                _gui->join_port = (uint16_t)std::atoi(where.c_str() + colon + 1);
+            }
+        }
         // Load (or first-run install) settings.json.  The cwd is already
         // the assets directory (main.mm chdir), so the config/ paths in
         // settings_paths resolve next to saves/.  Any warnings (unknown

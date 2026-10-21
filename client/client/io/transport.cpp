@@ -163,13 +163,20 @@ namespace wry {
         // Its own lock: the connections' readers produce, the consumer
         // consumes
         coroutine::MultiProducerSingleConsumerQueue<Event> events;
-        // Admitted connections the loop has yet to serve.  Its own lock:
-        // the acceptor and dialers produce, the loop consumes
-        coroutine::MultiProducerSingleConsumerQueue<std::shared_ptr<Connection>> arrivals;
+        // What the loop serves: admitted connections, and listening
+        // descriptors to accept on.  Its own lock: the acceptors, dialers
+        // and the owner produce, the loop consumes
+        struct Arrival {
+            std::shared_ptr<Connection> connection;
+            int listen_fd = -1;
+        };
+        coroutine::MultiProducerSingleConsumerQueue<Arrival> arrivals;
         // shutdown()'s event, published here under the mutex for as long as
         // that frame is waiting on it and cleared by that frame on every
         // exit; the retirement that empties the table sets it
         coroutine::SingleConsumerEvent* drained = nullptr;
+        // Set when the loop has ended: the last touch of the loop's frame
+        coroutine::SingleConsumerEvent finished_event;
     };
 
     struct Transport::Connection {
@@ -452,8 +459,49 @@ namespace wry {
             // Before its reader can deliver, so its Opened comes first
             shared->events.emplace(Transport::Opened{connection->id, connection->peer});
             int id = (int)connection->id;
-            shared->arrivals.emplace(std::move(connection));
+            shared->arrivals.emplace(Shared::Arrival{std::move(connection), -1});
             return id;
+        }
+
+        // Make a listening descriptor from an address, bound and listening,
+        // non-blocking; the bound port is read back.  -1 with `error` set
+        // on failure
+        int make_tcp_listener(std::string const& address, uint16_t port,
+                              uint16_t& bound_port, std::string& error) {
+            sockaddr_storage storage;
+            socklen_t length = 0;
+            if (!parse_address(address, port, storage, length)) {
+                error = "not a numeric IPv4 or IPv6 address: " + address;
+                return -1;
+            }
+            int fd = ::socket(storage.ss_family, SOCK_STREAM, 0);
+            if (fd == -1) {
+                error = errno_message("socket", errno);
+                return -1;
+            }
+            int one = 1;
+            (void) ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+            if (::bind(fd, (sockaddr const*)&storage, length) == -1) {
+                error = errno_message("bind", errno);
+                ::close(fd);
+                return -1;
+            }
+            if (::listen(fd, 16) == -1 || !set_nonblocking(fd)) {
+                error = errno_message("listen", errno);
+                ::close(fd);
+                return -1;
+            }
+            // As bound: port 0 asked for an ephemeral one
+            sockaddr_storage bound = {};
+            socklen_t bound_length = sizeof bound;
+            bound_port = port;
+            if (::getsockname(fd, (sockaddr*)&bound, &bound_length) == 0) {
+                if (bound.ss_family == AF_INET)
+                    bound_port = ntohs(((sockaddr_in const*)&bound)->sin_port);
+                else if (bound.ss_family == AF_INET6)
+                    bound_port = ntohs(((sockaddr_in6 const*)&bound)->sin6_port);
+            }
+            return fd;
         }
 
         // Unpublishes a parked reader's credit event on every exit from
@@ -546,7 +594,13 @@ namespace wry {
         }
 
         // The writer half: sends what the consumer queues until the end
-        // of the stream or an error, then ends the connection
+        // of the stream, then ends the connection; or until an error,
+        // which ends only the writer.  A send fails because the peer's
+        // receive side is gone, and its last words to us (a kick's
+        // farewell) may still be in our receive buffer, so the reader
+        // runs on to the end of stream.  What the consumer queues from
+        // here on is never sent, and the outbound bound still kicks a
+        // connection that accumulates it
         Future<> write_side(std::shared_ptr<Connection> connection) {
             for (;;) {
                 Outgoing out = co_await connection->out.pop();
@@ -570,7 +624,9 @@ namespace wry {
                     connection->queued_bytes -= std::min(connection->queued_bytes, out.bytes.size());
                 }
                 if (error) {
-                    finish(connection, errno_message("send", error));
+                    std::scoped_lock lock{connection->mutex};
+                    if (connection->reason.empty())
+                        connection->reason = errno_message("send", error);
                     co_return;
                 }
             }
@@ -612,23 +668,25 @@ namespace wry {
             }
         }
 
-        // Serves every arrival until stopped, then joins them.  The take
-        // runs under the accepting token (shield), as the accept does, so
-        // a stop is absorbed here and this frame lives on to join its
-        // nursery: a graceful shutdown lets the connections finish, a full
-        // stop unwinds them through the token they inherit
-        Future<> serve_loop(std::shared_ptr<Shared> shared, int listen_fd, std::stop_token accepting) {
+        // Serves every arrival until stopped, then joins them: a connection
+        // gets its reader and writer, a listener gets an accept loop.  The
+        // take runs under the accepting token (shield), as the accept
+        // does, so a stop is absorbed here and this frame lives on to join
+        // its nursery: a graceful shutdown lets the connections finish, a
+        // full stop unwinds them through the token they inherit
+        Future<> serve_loop(std::shared_ptr<Shared> shared, std::stop_token accepting) {
             Nursery children{co_await GetStopToken{}};
-            if (listen_fd != -1)
-                children.soon(accept_loop(shared, listen_fd, accepting));
             for (;;) {
                 auto popping = shared->arrivals.pop();
-                std::optional<std::shared_ptr<Connection>> arrival =
+                std::optional<Shared::Arrival> arrival =
                     co_await execution::shield(coroutine::lift_awaitable<decltype(popping)>(&popping),
                                                accepting);
                 if (!arrival)
                     break;                  // stopped
-                children.soon(serve_connection(std::move(*arrival)));
+                if (arrival->listen_fd != -1)
+                    children.soon(accept_loop(shared, arrival->listen_fd, accepting));
+                else
+                    children.soon(serve_connection(std::move(arrival->connection)));
             }
             // No more admissions, and whatever arrived meanwhile is closed
             // unserved
@@ -636,9 +694,13 @@ namespace wry {
                 std::scoped_lock lock{shared->mutex};
                 shared->admitting = false;
             }
-            for (auto& connection : shared->arrivals.try_take()) {
-                ::close(connection->fd);
-                retire(connection);
+            for (auto& arrival : shared->arrivals.try_take()) {
+                if (arrival.listen_fd != -1) {
+                    ::close(arrival.listen_fd);
+                } else {
+                    ::close(arrival.connection->fd);
+                    retire(arrival.connection);
+                }
             }
             (void) co_await children.join();
         }
@@ -651,16 +713,17 @@ namespace wry {
         // alone and absorbs the stop at this boundary.  Reports finished
         // last: the object may be destroyed the moment it is, so nothing of
         // it is touched after
-        coroutine::Task serve_under(std::shared_ptr<Shared> shared, int listen_fd,
+        coroutine::Task serve_under(std::shared_ptr<Shared> shared,
                                     std::stop_source stop, std::stop_source accepting) {
             std::stop_callback<Bridge> outer_to_stop{co_await GetStopToken{}, Bridge{stop}};
             std::stop_callback<Bridge> stop_to_accepting{stop.get_token(), Bridge{accepting}};
-            (void) co_await execution::shield(serve_loop(shared, listen_fd, accepting.get_token()),
+            (void) co_await execution::shield(serve_loop(shared, accepting.get_token()),
                                               stop.get_token());
             {
                 std::scoped_lock lock{shared->mutex};
                 shared->finished = true;
             }
+            shared->finished_event.set();
         }
 
         std::shared_ptr<Connection> lookup(Shared& shared, uint64_t id) {
@@ -742,40 +805,10 @@ namespace wry {
     std::unique_ptr<Transport> Transport::listen_tcp(std::string const& address, uint16_t port,
                                                      Codec const& codec, Limits limits,
                                                      std::string& error) {
-        sockaddr_storage storage;
-        socklen_t length = 0;
-        if (!parse_address(address, port, storage, length)) {
-            error = "not a numeric IPv4 or IPv6 address: " + address;
+        uint16_t bound_port = 0;
+        int fd = make_tcp_listener(address, port, bound_port, error);
+        if (fd == -1)
             return nullptr;
-        }
-        int fd = ::socket(storage.ss_family, SOCK_STREAM, 0);
-        if (fd == -1) {
-            error = errno_message("socket", errno);
-            return nullptr;
-        }
-        int one = 1;
-        (void) ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-        if (::bind(fd, (sockaddr const*)&storage, length) == -1) {
-            error = errno_message("bind", errno);
-            ::close(fd);
-            return nullptr;
-        }
-        if (::listen(fd, 16) == -1 || !set_nonblocking(fd)) {
-            error = errno_message("listen", errno);
-            ::close(fd);
-            return nullptr;
-        }
-        // As bound: port 0 asked for an ephemeral one
-        sockaddr_storage bound = {};
-        socklen_t bound_length = sizeof bound;
-        uint16_t bound_port = port;
-        if (::getsockname(fd, (sockaddr*)&bound, &bound_length) == 0) {
-            if (bound.ss_family == AF_INET)
-                bound_port = ntohs(((sockaddr_in const*)&bound)->sin_port);
-            else if (bound.ss_family == AF_INET6)
-                bound_port = ntohs(((sockaddr_in6 const*)&bound)->sin6_port);
-        }
-
         std::unique_ptr<Transport> t = make(codec, limits);
         t->_port = bound_port;
         t->_listen_fd = fd;
@@ -786,7 +819,35 @@ namespace wry {
         assert(!_served);
         _served = true;
         // From here the loop owns the listening descriptor, if any
-        return serve_under(_shared, std::exchange(_listen_fd, -1), _stop, _stop_accepting);
+        if (_listen_fd != -1)
+            _shared->arrivals.emplace(Shared::Arrival{nullptr, std::exchange(_listen_fd, -1)});
+        return serve_under(_shared, _stop, _stop_accepting);
+    }
+
+    int Transport::adopt(int fd) {
+        return admit(_shared, fd);
+    }
+
+    std::expected<uint16_t, std::string> Transport::listen_tcp(std::string const& address, uint16_t port) {
+        std::string error;
+        uint16_t bound_port = 0;
+        int fd = make_tcp_listener(address, port, bound_port, error);
+        if (fd == -1)
+            return std::unexpected(std::move(error));
+        {
+            std::scoped_lock lock{_shared->mutex};
+            if (!_shared->admitting) {
+                ::close(fd);
+                return std::unexpected(std::string("the transport has stopped"));
+            }
+        }
+        _port = bound_port;
+        _shared->arrivals.emplace(Shared::Arrival{nullptr, fd});
+        return bound_port;
+    }
+
+    void Transport::post(uint64_t code, std::string bytes) {
+        _shared->events.emplace(Posted{code, std::move(bytes)});
     }
 
     coroutine::Future<int> Transport::connect_tcp(std::string address, uint16_t port) {
@@ -813,6 +874,12 @@ namespace wry {
             return true;
         std::scoped_lock lock{_shared->mutex};
         return _shared->finished;
+    }
+
+    coroutine::Future<> Transport::wait_finished() {
+        if (!_served)
+            co_return;
+        co_await _shared->finished_event;
     }
 
     Transport::~Transport() {
@@ -1020,8 +1087,8 @@ namespace wry {
                 else if (auto* open = std::get_if<Transport::Opened>(&event)) {
                     if (opened)
                         opened->push_back(std::move(*open));
-                } else
-                    closed.push_back(std::move(std::get<Transport::Closed>(event)));
+                } else if (auto* close = std::get_if<Transport::Closed>(&event))
+                    closed.push_back(std::move(*close));
             }
         }
 

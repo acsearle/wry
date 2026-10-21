@@ -15,10 +15,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <random>
+#include <thread>
 
 #include "base36.hpp"
 #include "command_types.hpp"
 #include "coroutine.hpp"
+#include "host.hpp"
+#include "kqueue_reactor.hpp"
 #include "ctype.hpp"
 #include "garbage_collected.hpp"
 #include "matter.hpp"
@@ -201,15 +204,178 @@ namespace wry {
         Root<World const*> discard;
         while (m._worlds.try_pop_front(discard)) { }
         m._worlds.emplace_back(world);
-        m._server->request_join();
+        m._world_to_render = world;
+        m._steps_taken = 0;
+        m._backlog.clear();
+        if (m._server)
+            m._server->request_join();
     }
 
+    // A new or loaded game is a new stream: a fresh relay whose steps
+    // continue the installed world's time, that world as its genesis
     void WorldState::new_game() {
-        install_displayed_world(*this, make_starting_world());
+        World* world = make_starting_world();
+        _start_hosting((uint64_t)world->_time);
+        install_displayed_world(*this, world);
     }
 
     void WorldState::load_from_save(int id) {
-        install_displayed_world(*this, load_game(id));
+        World* world = load_game(id);
+        _start_hosting((uint64_t)world->_time);
+        install_displayed_world(*this, world);
+    }
+
+    // ---- The session --------------------------------------------------
+
+    RemoteServer* WorldState::_client() {
+        if (_host)
+            return &_host->client();
+        return _remote.get();
+    }
+
+    void WorldState::_start_session() {
+        if (!_gui.join_address.empty()) {
+            _start_joining(_gui.join_address, _gui.join_port);
+            install_displayed_world(*this, make_starting_world());
+            return;
+        }
+        new_game();
+        if (_gui.host_port) {
+            auto bound = host_listen(*_gui.host_port);
+            String message;
+            if (bound) {
+                message = String("Hosting on port ");
+                message.append(StringView(std::to_string(*bound).c_str()));
+            } else {
+                message = String("Hosting failed: ");
+                message.append(bound.error());
+            }
+            _gui.append_log(message);
+        }
+    }
+
+    void WorldState::_start_hosting(uint64_t head) {
+        _end_session(std::chrono::milliseconds(500));
+        assert(_gui.scope);
+        std::string error;
+        _host = Host::make(*_gui.scope, Relay::Limits{}, error, head);
+        if (!_host) {
+            String message("Hosting failed: ");
+            message.append(StringView(error.c_str()));
+            _gui.append_log(message);
+            return;
+        }
+        _server = &_host->client();
+        _logged_state = RemoteServer::State::CONNECTING;
+    }
+
+    void WorldState::_start_joining(String const& address, uint16_t port) {
+        _end_session(std::chrono::milliseconds(500));
+        assert(_gui.scope);
+        _remote = RemoteServer::make(*_gui.scope);
+        _remote->dial(std::string(address.data(), address.chars.size()), port);
+        _server = _remote.get();
+        _logged_state = RemoteServer::State::CONNECTING;
+        String message("Joining ");
+        message.append(address);
+        message.append(StringView(":"));
+        message.append(StringView(std::to_string(port).c_str()));
+        _gui.append_log(message);
+    }
+
+    // Blocking: the main thread, between frames.  Nothing to wait for when
+    // the loops have already ended (the process scope drained)
+    void WorldState::_end_session(std::chrono::milliseconds grace) {
+        _server = nullptr;
+        if (_host) {
+            if (!_host->finished())
+                (void) execution::sync_wait(_host->shutdown(grace));
+            _host.reset();
+        }
+        if (_remote) {
+            if (!_remote->finished())
+                (void) execution::sync_wait(_remote->shutdown(grace));
+            _remote.reset();
+        }
+        _backlog.clear();
+    }
+
+    coroutine::Task WorldState::end_session(std::chrono::milliseconds grace) {
+        _server = nullptr;
+        if (_host) {
+            co_await _host->shutdown(grace);
+            _host.reset();
+        }
+        if (_remote) {
+            co_await _remote->shutdown(grace);
+            _remote.reset();
+        }
+        _backlog.clear();
+    }
+
+    WorldState::~WorldState() {
+        _end_session(std::chrono::milliseconds(500));
+        if (_gui.world == this)
+            _gui.world = nullptr;
+        fprintf(stderr, "%s\n", __PRETTY_FUNCTION__);
+    }
+
+    std::expected<uint16_t, String> WorldState::host_listen(uint16_t port) {
+        if (!_host)
+            return std::unexpected(String("not the host"));
+        auto bound = _host->relay().listen("0.0.0.0", port);
+        if (!bound)
+            return std::unexpected(String(StringView(bound.error().c_str())));
+        return *bound;
+    }
+
+    void WorldState::join(String const& address, uint16_t port) {
+        _start_joining(address, port);
+        // In this revision a joiner starts from the scenario's genesis and
+        // replays the stream (multiplayer.md 9.5 replaces this with the
+        // donated save)
+        install_displayed_world(*this, make_starting_world());
+    }
+
+    void WorldState::leave() {
+        if (!_remote)
+            return;
+        _remote->leave();
+        // Our world is ours now: a fork of the game, hosted by us from
+        // here.  Its client map still names the old game's clients (open
+        // item 11.11)
+        Root<World const*> current;
+        (void) _worlds.try_pop_front(current);
+        assert(current);
+        _start_hosting((uint64_t)current->_time);
+        _worlds.emplace_back(current);
+        _backlog.clear();
+        if (_server)
+            _server->request_join();
+    }
+
+    bool WorldState::has_server_input() {
+        return !_backlog.empty() || (_server && _server->has_input());
+    }
+
+    coroutine::Task WorldState::_apply_step_async(Step const& step) {
+        // A pin in this frame holds the epoch floor for step's
+        // epoch-allocated transaction structures across the await
+        epoch::Epoch pin = pin_global_epoch();
+        Root<World const*> old_world;
+        (void) _worlds.try_pop_front(old_world);
+        assert(old_world);
+        assert(old_world->_time + 1 == (Time)step.number);
+        Root<World*> next = co_await old_world->step(step.commands);
+        unpin_global_epoch(pin);
+        assert(next);
+        _world_to_render = next._ptr;
+        _worlds.emplace_back(std::move(next));
+        ++_steps_taken;
+    }
+
+    void WorldState::_apply_step(Step const& step) {
+        (void) execution::sync_wait(_apply_step_async(step));
     }
 
     void WorldState::save_current() {
@@ -357,32 +523,57 @@ namespace wry {
         // Service the garbage collector once per frame.
         mutator_repin();
 
-        // Paused (the `pause` command), the world steps only as `step`
-        // budgets allow -- except that a world never yet stepped steps
-        // once, so the renderer always has a world to draw.  Frames go on
-        // regardless.
-        if (!_world_to_render || _take_step_permission()) {
-            // This step's authoritative commands (from the Server) are the
-            // step's input: the server events and every client's actions,
-            // in the server's order.  Single player: the local client's own
-            // actions, round-tripped through LocalServer (the one-frame
-            // submit->apply latency, as before).  They live here until the
-            // step has consumed them.
-            std::vector<Command> commands = _server->poll();
+        // The connection's news, once
+        if (RemoteServer* client = _client()) {
+            RemoteServer::State state = client->state();
+            if (state != _logged_state) {
+                _logged_state = state;
+                String message;
+                switch (state) {
+                    case RemoteServer::State::CONNECTING: break;
+                    case RemoteServer::State::HANDSHAKE: break;
+                    case RemoteServer::State::SUBSCRIBED:
+                        message = String("Connected as client ");
+                        message.append(StringView(std::to_string(client->client_id()).c_str()));
+                        break;
+                    case RemoteServer::State::JOINED:
+                        message = String("Joined the game");
+                        break;
+                    case RemoteServer::State::DISCONNECTED:
+                        message = String("Disconnected: ");
+                        message.append(StringView(client->reason().c_str()));
+                        break;
+                }
+                if (!message.chars.empty())
+                    _gui.append_log(message);
+            }
+        }
 
-            // Advance the displayed world one simulation step: pop it, step it,
-            // push the result back, and stash it in _world_to_render for the
-            // renderer to draw this same frame.
-            Root<World const*> old_world;
-            (void) _worlds.try_pop_front(old_world);
-            assert(old_world);
-            coroutine::Nursery nursery;
-            nursery.soon(_world_to_render, old_world->step(commands));
-            sync_wait(nursery.join());
-            _worlds.emplace_back(_world_to_render);
-            assert(_world_to_render);
-
-            ++_steps_taken;
+        // The finalized steps that have arrived are the step's input: the
+        // server events and every client's actions, in the server's order.
+        // A frame applies its share and keeps the rest; when current, the
+        // share is everything.  (Single player: our own actions,
+        // round-tripped through the relay in this process.)
+        if (_server) {
+            for (Step& step : _server->take_steps())
+                _backlog.push_back(std::move(step));
+            for (size_t applied = 0; !_backlog.empty() && (applied != max_steps_per_frame); ++applied) {
+                Step step = std::move(_backlog.front());
+                _backlog.pop_front();
+                // Steps are numbered by the World time they produce; a
+                // stream that does not continue our World (a join into a
+                // game that started from a save) is no use to us
+                const uint64_t expected = (uint64_t)_world_to_render._ptr->_time + 1;
+                if (step.number != expected) {
+                    _backlog.clear();
+                    if (RemoteServer* client = _client())
+                        client->disconnect("the stream does not continue this world: step "
+                                           + std::to_string(step.number) + " for time "
+                                           + std::to_string(expected - 1));
+                    break;
+                }
+                _apply_step(step);
+            }
         }
 
         // ~1 Hz: hand a rooted snapshot of the freshly stepped world to the
@@ -405,15 +596,6 @@ namespace wry {
         // Project the cursor for the renderer.  (Input became commands
         // as it was pumped; see pump_legacy_event.)
         project_cursor();
-    }
-
-    bool WorldState::_take_step_permission() {
-        if (!_paused)
-            return true;
-        if (_step_budget == 0)
-            return false;
-        --_step_budget;
-        return true;
     }
 
     simd_float4 WorldState::cursor_on_ground() const {
@@ -596,43 +778,40 @@ namespace wry {
                 return Reply::ok();
             }
 
-            // Take back the budget this step has not yet spent, so a
-            // cancelled `step 1000` leaves the world paused, not running.
-            void cancel() override {
-                if (gui.world != ws || ws->_steps_taken >= target)
-                    return;
-                const uint64_t unspent = target - ws->_steps_taken;
-                ws->_step_budget -= std::min(ws->_step_budget, unspent);
-            }
+            // The relay has already finalized the steps; cancelling only
+            // stops the wait for them
+            void cancel() override {}
         };
 
     } // namespace
 
     void register_world_commands(CommandRegistry& registry) {
 
-        // The clock (commands.md section 8).  Today the world steps once
-        // per frame; these decouple the step clock from the frame clock as
-        // far as tests and scripts need.  Under a networked server they
-        // are the same verbs addressed to the local server instance.
+        // The clock (commands.md section 8, multiplayer.md section 4):
+        // the relay's, which only the host commands.  A joined client's
+        // `step n` waits for n steps of the server's clock
         registry.add(make_command<Ctx>(
-            "pause", "Stop stepping the world (frames continue)", Category::clock,
+            "pause", "Stop the step clock (frames continue)", Category::clock,
             std::tuple<>{},
             with_world([](WorldState& ws) {
-                ws._paused = true;
+                if (!ws._host)
+                    return Reply::error(String("not the host"));
+                ws._host->relay().pause();
                 return Reply::ok();
             })));
 
         registry.add(make_command<Ctx>(
-            "resume", "Step the world every frame again", Category::clock,
+            "resume", "Run the step clock again", Category::clock,
             std::tuple<>{},
             with_world([](WorldState& ws) {
-                ws._paused = false;
-                ws._step_budget = 0;
+                if (!ws._host)
+                    return Reply::error(String("not the host"));
+                ws._host->relay().resume();
                 return Reply::ok();
             })));
 
         registry.add(make_command<Ctx>(
-            "step", "Advance the world n steps (one per frame), then reply", Category::clock,
+            "step", "Advance the world n steps (at once if paused), then reply", Category::clock,
             std::tuple{
                 Param<Ctx, int64_t>{"n", "how many steps", int64_t{1}},
             },
@@ -642,11 +821,53 @@ namespace wry {
                 if (n < 0)
                     return Reply::error(String("n must be non-negative"));
                 WorldState& ws = *c.world;
-                if (ws._paused)
-                    ws._step_budget += (uint64_t)n;
+                if (ws._host && ws._host->relay().clock().paused)
+                    ws._host->relay().step((uint64_t)n);
                 return Reply::later(std::make_shared<StepPending>(
                     c.gui, &ws, ws._steps_taken + (uint64_t)n));
             }));
+
+        // The session (multiplayer.md sections 2 and 6)
+        registry.add(make_command<Ctx>(
+            "host", "Listen for players on a TCP port (0 picks one); replies with the port", Category::session,
+            std::tuple{
+                Param<Ctx, int64_t>{"port", "the TCP port", int64_t{0}},
+            },
+            with_world([](WorldState& ws, int64_t port) {
+                if (port < 0 || port > 65535)
+                    return Reply::error(String("port must be 0 to 65535"));
+                auto bound = ws.host_listen((uint16_t)port);
+                if (!bound)
+                    return Reply::error(bound.error());
+                return Reply::ok(String(StringView(std::to_string(*bound).c_str())));
+            })));
+
+        registry.add(make_command<Ctx>(
+            "join", "Join the game at address:port, starting its scenario afresh", Category::session,
+            std::tuple{
+                Param<Ctx, String>{"where", "the host's address:port"},
+            },
+            with_world([](WorldState& ws, String const& where) {
+                std::string text(where.data(), where.chars.size());
+                size_t colon = text.rfind(':');
+                if (colon == std::string::npos || colon == 0 || colon + 1 == text.size())
+                    return Reply::error(String("expected address:port"));
+                int port = std::atoi(text.c_str() + colon + 1);
+                if (port <= 0 || port > 65535)
+                    return Reply::error(String("port must be 1 to 65535"));
+                ws.join(String(StringView(text.substr(0, colon).c_str())), (uint16_t)port);
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "leave", "Leave the joined game and go on alone from here", Category::session,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                if (!ws._remote)
+                    return Reply::error(String("not in a joined game"));
+                ws.leave();
+                return Reply::ok();
+            })));
 
         registry.add(make_command<Ctx>(
             "rotate", "Rotate the held opcode clockwise", Category::local,
@@ -983,7 +1204,9 @@ namespace wry {
     // so the history records them.  The server round trip is covered
     // elsewhere (player_null_write_erases_key).
     define_test("world_state_hand_and_erase_input") {
+        coroutine::Nursery scope;
         GuiContext gc;
+        gc.scope = &scope;
 
         // With no viewport the cursor projection is degenerate: a click is
         // off the ground and edits nothing (and must not trap).
@@ -996,6 +1219,7 @@ namespace wry {
             e.kind = WryEventKindMouseUp;
             ws.pump_legacy_event(e);
             assert(gc.history.size() == issued);
+            co_await ws.end_session(std::chrono::milliseconds(200));
         }
 
         // A real viewport, cursor at its center: over the ground.
@@ -1074,6 +1298,8 @@ namespace wry {
         assert(ws._stack.size() == depth + 1);
         assert(ws._stack.contains(&ws._main_menu_overlay));
 
+        co_await ws.end_session(std::chrono::milliseconds(200));
+        (void) co_await scope.join();
         co_return;
     };
 
@@ -1082,7 +1308,9 @@ namespace wry {
     // reads the displayed world -- here the starting world laid out by
     // make_starting_world, before any step.
     define_test("world_state_pipette") {
+        coroutine::Nursery scope;
         GuiContext gc;
+        gc.scope = &scope;
         gc.viewport_size = float2{1280.0f, 800.0f};   // cursor over the ground
         WorldState ws(gc);
 
@@ -1125,58 +1353,108 @@ namespace wry {
         gc.issue(command::Origin::binding, "rotate");
         assert(gc.history.back().origin == command::Origin::binding);
 
+        co_await ws.end_session(std::chrono::milliseconds(200));
+        (void) co_await scope.join();
         co_return;
     };
 
-    // The clock commands: pause stops stepping; step n grants n steps of
-    // budget and replies once they are taken; the console's next line
-    // waits behind it; cancelling returns unspent budget.  update() itself
-    // is not driven here (it repins and forks the step); its gate is.
-    define_test("world_state_clock_commands") {
-        GuiContext gc;
-        WorldState ws(gc);
-        using command::Reply;
+    namespace {
 
-        assert(ws._take_step_permission());     // running: always
-        gc.issue(command::Origin::console, "pause");
-        assert(ws._paused && !ws._take_step_permission());
-
-        gc.submit(gc.console_source, "step 2");
-        gc.submit(gc.console_source, "help step");
-        assert(ws._step_budget == 2);
-        const uint64_t step_seq = gc.history.back().seq;
-        assert(gc.history.back().status == Reply::PENDING);
-        assert(gc.console_source.queued.size() == 1);   // help waits
-
-        // Take the steps update() would take.
-        int steps = 0;
-        while (ws._take_step_permission()) {
-            ++ws._steps_taken;
-            ++steps;
+        template<typename F>
+        bool eventually(F&& f, std::chrono::seconds timeout = std::chrono::seconds(5)) {
+            auto deadline = std::chrono::steady_clock::now() + timeout;
+            while (!f()) {
+                if (std::chrono::steady_clock::now() >= deadline)
+                    return false;
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            return true;
         }
-        assert(steps == 2 && ws._step_budget == 0);
 
-        ++gc.frame;
-        gc.service_commands();
-        assert(!gc.console_source.pending);
-        assert(gc.history.back().line == StringView("help \"step\""));
-        for (auto const& e : gc.history)
-            if (e.seq == step_seq)
-                assert(e.status == Reply::OK && e.completed_frame == gc.frame);
+    } // namespace
 
-        // Cancel: a step 5 that took one step gives back four.
-        gc.submit(gc.console_source, "step 5");
-        assert(ws._take_step_permission());
-        ++ws._steps_taken;
-        assert(ws._step_budget == 4);
-        gc.cancel(gc.console_source);
-        assert(ws._step_budget == 0);
-        assert(gc.history.back().status == Reply::CANCELLED);
+    // The clock commands address the relay: pause stops it (a PAUSED step
+    // closes the stream for now); step n has it finalize n steps at once,
+    // and the command replies once this client has applied them, the
+    // console's next line waiting behind it; cancelling stops the wait;
+    // resume starts the clock again.  update() itself is not driven here
+    // (it repins and forks the step); what it does with the steps is.
+    define_test("world_state_clock_commands") {
+        coroutine::Nursery scope;
+        GuiContext gc;
+        gc.scope = &scope;
+        {
+            WorldState ws(gc);
+            using command::Reply;
+            assert(ws._host);
+            Relay& relay = ws._host->relay();
 
-        // Resume: stepping every frame again, no stale budget.
-        gc.issue(command::Origin::console, "resume");
-        assert(!ws._paused && ws._take_step_permission());
+            // Apply every step that has arrived, as update() would
+            auto apply_available = [&]() -> coroutine::Task {
+                for (Step& s : ws._server->take_steps())
+                    ws._backlog.push_back(std::move(s));
+                while (!ws._backlog.empty()) {
+                    Step step = std::move(ws._backlog.front());
+                    ws._backlog.pop_front();
+                    co_await ws._apply_step_async(step);
+                }
+            };
+            // ... until this client has applied `target` steps and is level
+            // with the relay's head (a posted step is processed on the
+            // pool, so level alone could be early)
+            auto catch_up = [&](uint64_t target) -> coroutine::Task {
+                for (int i = 0; i != 2000; ++i) {
+                    co_await apply_available();
+                    if ((ws._steps_taken >= target) && (ws._steps_taken == relay.clock().head))
+                        co_return;
+                    co_await cancelable_sleep(0.005);
+                }
+                assert(!"did not catch up");
+            };
 
+            gc.issue(command::Origin::console, "pause");
+            bool paused = eventually([&] { return relay.clock().paused; });
+            assert(paused);
+            (void) paused;
+            co_await catch_up(relay.clock().head);
+            const uint64_t before = ws._steps_taken;
+            assert(before >= 1);                            // the PAUSED step at least
+
+            gc.submit(gc.console_source, "step 2");
+            gc.submit(gc.console_source, "help step");
+            const uint64_t step_seq = gc.history.back().seq;
+            assert(gc.history.back().status == Reply::PENDING);
+            assert(gc.console_source.queued.size() == 1);   // help waits
+
+            // The relay finalized two steps at once; applying them completes
+            // the command, and nothing else arrives while paused
+            co_await catch_up(before + 2);
+            assert(ws._steps_taken == before + 2);
+            ++gc.frame;
+            gc.service_commands();
+            assert(!gc.console_source.pending);
+            assert(gc.history.back().line == StringView("help \"step\""));
+            for (auto const& e : gc.history)
+                if (e.seq == step_seq)
+                    assert(e.status == Reply::OK && e.completed_frame == gc.frame);
+
+            // Cancel: the wait ends; the steps still come
+            gc.submit(gc.console_source, "step 5");
+            assert(gc.history.back().status == Reply::PENDING);
+            gc.cancel(gc.console_source);
+            assert(gc.history.back().status == Reply::CANCELLED);
+            co_await catch_up(before + 7);
+            assert(ws._steps_taken == before + 7);
+
+            // Resume: the clock runs again
+            gc.issue(command::Origin::console, "resume");
+            bool running = eventually([&] { return !relay.clock().paused && relay.clock().head > before + 7; });
+            assert(running);
+            (void) running;
+
+            co_await ws.end_session(std::chrono::milliseconds(200));
+        }
+        (void) co_await scope.join();
         co_return;
     };
 
@@ -1234,7 +1512,9 @@ namespace wry {
     // `state-hash` replies with the displayed world's content hash, in the
     // Hash literal form, stable across calls and changed by a step.
     define_test("world_state_state_hash") {
+        coroutine::Nursery scope;
         GuiContext gc;
+        gc.scope = &scope;
         WorldState ws(gc);
         auto reply_hash = [&gc]() -> Hash {
             auto o = gc.issue(command::Origin::console, "state-hash");
@@ -1272,6 +1552,8 @@ namespace wry {
             ws._worlds.emplace_back(next);
         }
         assert(reply_hash() != (Hash{h0}));
+        co_await ws.end_session(std::chrono::milliseconds(200));
+        (void) co_await scope.join();
         co_return;
     };
 

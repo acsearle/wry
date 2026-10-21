@@ -21,17 +21,15 @@ namespace wry {
     // The seam between local input and the deterministic simulation
     // (game/docs/multiplayer.md).
     //
-    // A client SUBMITs the local player's actions and POLLs back the
-    // authoritative, ordered commands of the next step, across all clients
-    // and the server; `World::step(commands)` applies exactly one step's
-    // worth.  The Server is who orders them: locally for single player, or
-    // the networked server's finalized STEP for multiplayer.  That keeps the
-    // multiplayer change off the simulation: only the Server implementation
-    // swaps.
-    //
-    // The deterministic-lockstep details a real server owns -- which step a
-    // command lands on, input delay, ordering across peers -- all hide behind
-    // this interface.
+    // A client SUBMITs the local player's actions and TAKEs back the
+    // finalized steps, each the authoritative, ordered commands of one
+    // step across all clients and the server; `World::step(commands)`
+    // applies exactly one.  The server is who orders them: the Relay
+    // (game/relay.hpp), in this process over a socket pair for single
+    // player and a host, or across the network for a joined game.  The
+    // implementation of this seam is the client side of that connection
+    // (RemoteServer, game/host.hpp) in every case: the multiplayer change
+    // is off the simulation.
 
     // The server's name for a connection.  0 is the server itself, the
     // origin of the server events; clients are numbered from 1.  The map
@@ -81,6 +79,13 @@ namespace wry {
         return c;
     }
 
+    // A finalized step: its number (the World's time after applying it)
+    // and its commands in the server's order
+    struct Step {
+        uint64_t number = 0;
+        std::vector<Command> commands;
+    };
+
     struct Server {
         virtual ~Server() = default;
 
@@ -93,42 +98,14 @@ namespace wry {
         // the World already maps keeps its Player.
         virtual void request_join() = 0;
 
-        // Server -> client: the ordered commands to apply for the next step.
-        //
-        // NOTE (future): once the Server is networked, commands trickle in
-        // non-deterministically and the next step's set may not be ready yet --
-        // poll() will need a "not ready" signal (e.g. optional, or a separate
-        // readiness query).  That is deliberately entangled with decoupling
-        // render from step-advancement and is out of scope here; LocalServer is
-        // always ready, so the plain vector suffices for now.
-        virtual std::vector<Command> poll() = 0;
-    };
+        // Server -> client: the finalized steps that have arrived since the
+        // last call, in order: zero or more.  Main thread.
+        virtual std::vector<Step> take_steps() = 0;
 
-    // Single-player: the local client is client 1; submit buffers its
-    // actions, numbered, and poll hands them straight back (trivially
-    // "ordered").  A requested JOIN is a step of its own, before any action
-    // that was pending: the Player it spawns first acts in the step after.
-    struct LocalServer final : Server {
-
-        static constexpr ClientID LOCAL_CLIENT_ID = 1;
-
-        void submit(Player::Action action) override {
-            _pending.push_back(make_action_command(LOCAL_CLIENT_ID, ++_seq, std::move(action)));
-        }
-
-        void request_join() override {
-            _join_requested = true;
-        }
-
-        std::vector<Command> poll() override {
-            if (std::exchange(_join_requested, false))
-                return { make_join_command(LOCAL_CLIENT_ID) };
-            return take(_pending);
-        }
-
-        uint64_t _seq = 0;
-        bool _join_requested = false;
-        std::vector<Command> _pending;
+        // Whether take_steps would find anything (steps, or the
+        // connection's own news): the headless host runs a frame when it
+        // would
+        virtual bool has_input() = 0;
     };
 
 } // namespace wry

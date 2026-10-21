@@ -161,8 +161,8 @@ namespace wry {
                     assert(lines.empty() || (lines.back().connection != open->connection));
                     if (opened)
                         opened->push_back(std::move(*open));
-                } else
-                    closed.push_back(std::move(std::get<ControlSocket::Closed>(event)));
+                } else if (auto* close = std::get_if<ControlSocket::Closed>(&event))
+                    closed.push_back(std::move(*close));
             }
         }
 

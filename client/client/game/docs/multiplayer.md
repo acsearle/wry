@@ -7,10 +7,10 @@ lifecycle, the wire protocol, and the plan for building it.  First agreed
 async I/O stack, core/kqueue_reactor.hpp, core/nursery.hpp,
 container/mpsc_queue.hpp; the hashing groundwork in core/hash.hpp) and
 against the decisions in section 0.  Of the plan in
-section 13, the transport layer (stage 1) and the action codec and
-explicit step intake (stage 2) are landed; the rest grows from the
-seam in `game/server.hpp` (`Server`/`LocalServer`, `Command` as the
-step's input).
+section 13, the transport layer (stage 1), the action codec and
+explicit step intake (stage 2), and the relay, client and host (stage
+3) are landed: single player runs through the relay over a socket
+pair, and a second process joins over TCP.
 
 Status: normative design, with a staged build plan (section 13).  The
 direction is agreed; specific numbers remain open (section 11).
@@ -296,6 +296,10 @@ A client needs a World consistent with some boundary B, plus the stream
 from B forward.  There is no ring of past steps: the joiner is
 subscribed to the live stream *before* the donor snapshots, so every
 step after B reaches it in order and the donation only has to carry B.
+(Until stage 5 lands, B is the scenario's genesis: the relay keeps the
+whole stream and a subscriber replays it from step 1, bounded only by
+the transport's outbound limit; `join` starts the scenario afresh
+first.)
 
 **Subscribe** (become an observer):
 
@@ -766,7 +770,17 @@ landing risky changes as brute-force-tested primitives first.
    list per step.  Tests: the existing player and world-state tests
    under the new intake; a save/load round trip with pending commands
    proves 9.2.
-3. **Server and client.**  The server task with its inbox, timer,
+3. **Server and client** (landed 2026-10-21: `game/wire.{hpp,cpp}`
+   is the protocol, `game/relay.{hpp,cpp}` the server as one task over
+   its transport's inbox with its timers and controls posted into the
+   same queue, `game/host.{hpp,cpp}` the `RemoteServer` that implements
+   the seam over a connection and the `Host` pairing it with a relay
+   over a socket pair; `WorldState` takes finalized steps each frame,
+   applying a bounded share when behind; the clock commands address the
+   relay; `--host`, `--join`, `host`, `join`, `leave`; `LocalServer` is
+   gone.  Until stage 5, a joiner starts from the scenario's genesis
+   and replays the relay's whole stream, which the relay keeps.)  The
+   server task with its inbox, timer,
    cursors, caps and state machine; the client's `Server` implementation
    over a `Connection`; the host as server plus client over a socket
    pair; the clock commands addressed to the server; `--host`, `--join`,

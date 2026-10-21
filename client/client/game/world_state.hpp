@@ -11,6 +11,8 @@
 #include "ShaderTypes.h"
 
 #include <chrono>
+#include <deque>
+#include <expected>
 #include <memory>
 #include <mutex>
 #include <map>
@@ -34,6 +36,7 @@
 #include "world_map.hpp"
 #include "player.hpp"
 #include "server.hpp"
+#include "host.hpp"
 
 namespace wry {
     
@@ -130,21 +133,50 @@ namespace wry {
         // same frame (the _worlds deque stays the source of truth).
         Root<World*> _world_to_render;
 
-        // The simulation clock, as the clock commands see it (commands.md
-        // section 8).  Paused, update() steps only while _step_budget lasts;
-        // _steps_taken counts every step this WorldState has taken.
-        bool _paused = false;
-        uint64_t _step_budget = 0;
+        // Steps this WorldState has applied: what `step n` waits on
         uint64_t _steps_taken = 0;
 
-        // Whether update() may step now, spending budget if paused.
-        bool _take_step_permission();
+        // Finalized steps taken from the server and not yet applied: a
+        // frame applies at most max_steps_per_frame, so catching up (a
+        // join replaying the stream) keeps the GUI live
+        std::deque<Step> _backlog;
+        static constexpr size_t max_steps_per_frame = 64;
 
-        // The command seam: input is submitted here; update() polls the
-        // ordered commands back and hands them to the step as its input.
-        // The local client has no Player of its own until the server's JOIN
-        // rides a step (requested whenever a world is installed).
-        std::unique_ptr<Server> _server;
+        // The session (multiplayer.md section 2): a Host -- the relay and
+        // this client over a socket pair -- when playing alone or hosting
+        // others, or a bare RemoteServer when joined into another's game.
+        // _server is the seam in either case: input is submitted there and
+        // update() takes the finalized steps back as the step's input.
+        // This client has no Player until the relay's JOIN rides a step
+        // (requested whenever a world is installed).
+        std::unique_ptr<Host> _host;
+        std::unique_ptr<RemoteServer> _remote;
+        Server* _server = nullptr;
+        RemoteServer::State _logged_state = RemoteServer::State::CONNECTING;
+
+        RemoteServer* _client();
+        void _start_session();
+        void _start_hosting(uint64_t head);
+        void _start_joining(String const& address, uint16_t port);
+        void _end_session(std::chrono::milliseconds grace);
+        void _apply_step(Step const& step);
+        [[nodiscard]] coroutine::Task _apply_step_async(Step const& step);
+
+        // The session commands (commands.md section 7): listen for players
+        // (the bound port), join another's game at address:port (the
+        // scenario afresh, its stream replayed), or leave it and go on
+        // alone from here
+        std::expected<uint16_t, String> host_listen(uint16_t port);
+        void join(String const& address, uint16_t port);
+        void leave();
+
+        // Whether finalized steps or the connection's news are waiting
+        bool has_server_input();
+
+        // Graceful end of the session, for an owner that can await it
+        // (tests); the destructor does the same, blocking, if it has not
+        // been done
+        [[nodiscard]] coroutine::Task end_session(std::chrono::milliseconds grace);
 
         explicit WorldState(GuiContext& gui) : _gui(gui) {
 
@@ -158,14 +190,11 @@ namespace wry {
             _save_list_overlay.set_model(this);
             _stack.push(&_palette_overlay);
 
-            // Single-player command sink, before the first world: installing
-            // one asks it for a JOIN.
-            _server = std::make_unique<LocalServer>();
-
-            // Install the starting world as the displayed world.  Same path
-            // the NEW button uses; at construction _worlds is empty, so the
-            // drain inside is a no-op.
-            new_game();
+            // The session and the first world: our own host and the
+            // starting scenario, or, on --join, a client of another's
+            // game.  At construction _worlds is empty, so the drain inside
+            // is a no-op.
+            _start_session();
 
             _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();
@@ -217,11 +246,7 @@ namespace wry {
         void hold(Term t);
         bool pipette_at(Coordinate xy);
 
-        ~WorldState() {
-            if (_gui.world == this)
-                _gui.world = nullptr;
-            fprintf(stderr, "%s\n", __PRETTY_FUNCTION__);
-        }
+        ~WorldState();
         
         // The log / console / notifications API moved to GuiContext (_gui):
         //   _gui.append_log(...)

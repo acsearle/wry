@@ -253,6 +253,9 @@ namespace wry {
         if (console_source.busy() || !detached.empty() || !events.empty()
             || !screenshot_requests.empty())
             return false;
+        // Finalized steps waiting to be applied are a frame's work too
+        if (world && world->has_server_input())
+            return false;
         for (auto const& [id, source] : socket_sources)
             if (source->busy())
                 return false;
@@ -568,7 +571,10 @@ namespace wry {
                 socket_sources.erase(it);
                 continue;
             }
-            ControlSocket::Line& line = std::get<ControlSocket::Line>(event);
+            ControlSocket::Line* line_event = std::get_if<ControlSocket::Line>(&event);
+            if (!line_event)
+                continue;               // nothing else is posted to this inbox
+            ControlSocket::Line& line = *line_event;
             const uint64_t id = line.connection;
             Request request = decode_request(*this, line.bytes);
             if (!request.error.empty()) {

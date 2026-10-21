@@ -412,26 +412,35 @@ drag as its result (`transform.translate(value=...)`), not its path.
   does), `erase Coordinate` (right click).
 - **clock**: `pause`, `resume`, `step [n]`, plus local `frame [n]`.
 - **session**: `new-game`, `save [name]`, `load name`, `list-saves`,
-  `quit`.
+  `quit`; and the multiplayer trio `host [port]` (listen for players;
+  replies with the bound port, 0 picking one), `join address:port`
+  (abandon the local game, start the scenario afresh and replay the
+  host's stream), `leave` (go on alone from the current state, a fork).
 
 ## 8. Time
 
 Two clocks, as in multiplayer.md section 4: the **step clock**
 (simulation steps, server-authored) and the **frame clock** (GUI and
-render frames).  Today they are one: `WorldState::update` steps the
-World once per frame.  The command system separates them only as far
-as it needs to:
+render frames).  The step clock is the relay's (game/relay.hpp): a
+timer at a fixed quantum, in this process for single player and a host,
+in the host's process for a joined client.  Each frame the world state
+takes the finalized steps that have arrived and applies them, all of
+them when current and a bounded share when catching up, so frames go on
+whatever the clock does.
 
-- `pause` stops stepping; frames continue, so the GUI stays live and
+- `pause` stops the relay's timer; the step that closes the stream
+  carries PAUSED.  Frames continue, so the GUI stays live and
   screenshots work.
-- `step n` advances exactly n simulation steps, one per frame, then
-  replies.
-- `frame n` waits n frames without stepping, for GUI animation and
-  overlay settling.
+- `step n`, while paused, has the relay finalize n steps at once; the
+  command replies once this client has applied them.  While running it
+  only waits for n more steps.
+- `resume` starts the timer again; the next step carries RESUMED.
+- `frame n` waits n frames without regard to the step clock, for GUI
+  animation and overlay settling.
 
-Under the networked server, `pause`/`resume`/`step` are the same verbs
-addressed to whichever server instance is local; that is the whole
-migration.
+Only the host commands the clock: a joined client's `pause`, `resume`
+and `step` while paused are refused, since the clock is another
+process's (multiplayer.md section 4).
 
 **Asynchronous commands.**  `step 10` or `frame 5` cannot block the
 main thread, and neither can `screenshot`: a frame already committed
