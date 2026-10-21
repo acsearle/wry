@@ -8,6 +8,7 @@
 #ifndef save_hpp
 #define save_hpp
 
+#include <filesystem>
 #include <functional>
 #include <span>
 #include <vector>
@@ -45,6 +46,10 @@ std::vector<uint8_t> serialize_world(const World* world);
 World* _Nullable load_world_from_bytes(std::span<const uint8_t> bytes);
 
 std::vector<std::pair<std::string, int>> enumerate_games();
+
+// Where the saves live (created if absent); the session logs live beside
+// them (game/session_log.hpp)
+std::filesystem::path saves_directory();
 
 } // namespace wry::sim
 

@@ -25,11 +25,11 @@
 
 #include <chrono>
 #include <cstdint>
+#include <expected>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
-
-#include <optional>
 
 #include "coroutine.hpp"
 #include "garbage_collected.hpp"
@@ -37,8 +37,21 @@
 #include "relay.hpp"
 #include "server.hpp"
 #include "transport.hpp"
+#include "wire.hpp"
 
 namespace wry {
+
+    // The seam's Step from a STEP frame, as every client reads it and
+    // the session log replays it (game/session_log.hpp): a server-origin
+    // entry is an event, any other a client's action parsed from its
+    // canonical line, and a body that does not parse is a no-op action,
+    // never an error.  The error names a malformed server event
+    std::expected<Step, std::string> step_from_wire(wire::Step const& frame);
+
+    // The STEP frame carrying `step`: the inverse, for the log.  An
+    // action travels as its canonical line, a server event as its
+    // encoding
+    std::string step_to_wire(Step const& step);
 
     class RemoteServer final : public Server {
     public:
@@ -93,6 +106,7 @@ namespace wry {
 
         State state() const { return _state; }
         ClientID client_id() const { return _client_id; }
+        uint64_t quantum_ns() const { return _quantum_ns; }   // the relay's step quantum, from WELCOME
         uint64_t head() const { return _next_step - 1; }   // the last step taken
         std::string const& reason() const { return _reason; }
 

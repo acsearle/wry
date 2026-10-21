@@ -30,3 +30,6 @@ xcuserdata/
 # Agents
 .claude/
 
+
+# Saves and session logs written by the game and its tests
+saves/

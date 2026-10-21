@@ -161,6 +161,56 @@ namespace wry {
         }
     }
 
+    std::expected<Step, std::string> step_from_wire(wire::Step const& frame) {
+        Step step;
+        step.number = frame.number;
+        for (wire::Entry const& e : frame.entries) {
+            if (e.origin == SERVER_CLIENT_ID) {
+                std::optional<wire::Event> event = wire::decode_event(e.bytes);
+                if (!event)
+                    return std::unexpected(std::string("malformed server event"));
+                Command c;
+                c.kind = event->kind;
+                c.client = event->client;
+                step.commands.push_back(std::move(c));
+            } else {
+                // Total: a body we cannot read is a no-op.  The bytes are
+                // untrusted: validated as UTF-8 at this boundary before
+                // the parser sees them
+                Player::Action action;
+                const char* first = e.bytes.data();
+                const char* last = first + e.bytes.size();
+                if (utf8::isvalid(first, last)) {
+                    auto parsed = command::parse_action(StringView(trusted, first, last));
+                    if (parsed)
+                        action = std::move(*parsed);
+                }
+                step.commands.push_back(make_action_command(e.origin, e.seq, std::move(action)));
+            }
+        }
+        return step;
+    }
+
+    std::string step_to_wire(Step const& step) {
+        std::vector<wire::Entry> entries;
+        entries.reserve(step.commands.size());
+        for (Command const& c : step.commands) {
+            wire::Entry e;
+            if (c.kind == Command::ACTION) {
+                e.origin = c.origin;
+                e.seq = c.seq;
+                std::optional<String> line = command::format_action(c.action);
+                e.bytes = line ? std::string(line->data(), line->chars.size()) : std::string("nop");
+            } else {
+                e.origin = SERVER_CLIENT_ID;
+                e.seq = 0;
+                e.bytes = wire::encode_event(c.kind, c.client);
+            }
+            entries.push_back(std::move(e));
+        }
+        return wire::encode_step(step.number, entries);
+    }
+
     void RemoteServer::_on_message(std::string const& bytes) {
         const uint16_t tag = wire::tag_of(bytes);
         switch (tag) {
@@ -192,41 +242,20 @@ namespace wry {
                     return _disconnect("the stream skipped: step " + std::to_string(frame->number)
                                        + " after " + std::to_string(_next_step - 1));
                 ++_next_step;
-                Step step;
-                step.number = frame->number;
-                for (wire::Entry& e : frame->entries) {
-                    if (e.origin == SERVER_CLIENT_ID) {
-                        std::optional<wire::Event> event = wire::decode_event(e.bytes);
-                        if (!event)
-                            return _disconnect("malformed server event");
-                        Command c;
-                        c.kind = event->kind;
-                        c.client = event->client;
-                        step.commands.push_back(std::move(c));
-                        if ((event->kind == Command::JOIN) && (event->client == _client_id)) {
-                            _state = State::JOINED;
-                            // What was submitted while we waited
-                            std::vector<Player::Action> queued = std::move(_queued);
-                            _queued.clear();
-                            for (Player::Action& a : queued)
-                                submit(std::move(a));
-                        }
-                    } else {
-                        // Total: a body we cannot read is a no-op.  The
-                        // bytes are untrusted: validated as UTF-8 at this
-                        // boundary before the parser sees them
-                        Player::Action action;
-                        const char* first = e.bytes.data();
-                        const char* last = first + e.bytes.size();
-                        if (utf8::isvalid(first, last)) {
-                            auto parsed = command::parse_action(StringView(trusted, first, last));
-                            if (parsed)
-                                action = std::move(*parsed);
-                        }
-                        step.commands.push_back(make_action_command(e.origin, e.seq, std::move(action)));
+                std::expected<Step, std::string> step = step_from_wire(*frame);
+                if (!step)
+                    return _disconnect(step.error());
+                for (Command const& c : step->commands) {
+                    if ((c.kind == Command::JOIN) && (c.client == _client_id) && (_state != State::JOINED)) {
+                        _state = State::JOINED;
+                        // What was submitted while we waited
+                        std::vector<Player::Action> queued = std::move(_queued);
+                        _queued.clear();
+                        for (Player::Action& a : queued)
+                            submit(std::move(a));
                     }
                 }
-                _steps.push_back(std::move(step));
+                _steps.push_back(std::move(*step));
                 return;
             }
             case wire::KICK: {

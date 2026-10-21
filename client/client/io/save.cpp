@@ -53,6 +53,10 @@ namespace wry {
         }
     }
 
+    std::filesystem::path saves_directory() {
+        return saves_dir();
+    }
+
     World* restart_game() {
         World* world = new World;
         return world;

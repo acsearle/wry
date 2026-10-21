@@ -7,10 +7,11 @@ lifecycle, the wire protocol, and the plan for building it.  First agreed
 async I/O stack, core/kqueue_reactor.hpp, core/nursery.hpp,
 container/mpsc_queue.hpp; the hashing groundwork in core/hash.hpp) and
 against the decisions in section 0.  Of the plan in
-section 13, stages 1 to 5 are landed: single player runs through the
+section 13, all six stages are landed: single player runs through the
 relay over a socket pair, a second process joins over TCP mid-game from
-the host's donated save, and a client whose World diverges from the
-host's is kicked.  Stage 6, the diagnosis harness, remains.
+the host's donated save, a client whose World diverges from the host's
+is kicked, and the divergence is diagnosed offline from the session
+logs.
 
 Status: normative design, with a staged build plan (section 13).  The
 direction is agreed; specific numbers remain open (section 11).
@@ -286,14 +287,49 @@ A relay with no reference client (a test fixture) keeps the reports and
 judges nothing.  Landed 2026-10-21 as stage 4; every client reports
 after every step (k = 1), since the hash is incremental.
 
-**The artifact.**  Checkpoint + finalized log = deterministic repro.  The
-host writes the finalized stream to a log file beside its saves; on
-mismatch the server names the offending step, and any client can be
-asked to dump state (`save`).  Diagnosis is then offline: two Worlds
-stepping the same log from the same checkpoint, bisect to the first
-divergent step, structurally diff the states (the save format round
-trips, so diffing is mechanical).  The harness is stage 6 of section 13;
-every published account of shipping this architecture (section 12)
+**The artifact.**  Checkpoint + finalized log = deterministic repro.
+Every session writes one (landed 2026-10-21 as stage 6;
+game/session_log.hpp): `saves/session-<time>.wrylog`, a transcript of
+the client's connection in the protocol's own frames -- HELLO and
+WELCOME; the World the session started from, as the SAVE frames a
+joiner receives (the installed World: the genesis, a loaded save, a
+fork's state, or the donated save); its HASH; then a STEP and a HASH
+per applied step.  The file appears at the first step, and the newest
+ten in a directory are kept.  Nothing new to parse: the stream's
+decoders read it, the action bodies in it are command lines, and a
+replay is a client taking its steps from a file.  On a mismatch the
+relay names the offending step in the kick, and `session` on the
+kicked client shows it.
+
+Diagnosis is then offline, and with a hash per step the bisect is a
+scan:
+
+- `compare A B` reads two logs of one game and reports the steps they
+  share, each checkpoint against the other's record of that step, and
+  the first step where the streams and where the hashes differ.
+- `replay LOG [STEP]` loads the log's checkpoint, applies its steps
+  through STEP checking every recorded hash, and leaves that World
+  displayed with no session: "consistent", or "diverged at step n: this
+  build X, the log recorded Y".  A log that replays consistently on the
+  build that wrote it but not on another localizes the divergence to
+  the builds; a client's own log that does not reproduce what the
+  client recorded says the divergence came from outside the stream (a
+  local mutation, a read of something unlogged).  `host` turns a
+  replayed World back into a game.
+- `dump [FILE]` is the displayed World as pointer-free text in a
+  content-determined order (game/world_dump.hpp): the records the save
+  walks, in first-reference order, maps as entries in code order.  Two
+  replays to the step before the divergence dump identically; a line
+  diff of the dumps at the divergent step names the records and
+  entries that differ.
+- `corrupt Coordinate Term` changes a tile of the displayed World off
+  the stream: the deliberate desync that exercises all of the above.
+  tools/wry_net_smoke.py ends with one: the dump diff names the cell,
+  the relay kicks at the next report, `compare` finds the step, the
+  host's log replays consistently through it and the joiner's does
+  not reproduce what it recorded.
+
+Every published account of shipping this architecture (section 12)
 says desync debugging is where the time goes.
 
 ## 6. Join, leave, and the hash gate
@@ -738,6 +774,11 @@ tier-2 data exists.
     still meets hack_repair_invariant's asserts.  A validating
     commission is the fix if donors are ever less trusted than the
     host's own client.
+14. The session log's checkpoint is serialized on the main thread when
+    the session's World is installed, and each step is one buffered
+    write and flush; a World large enough to notice wants the
+    checkpoint written off the main thread, as the donation is.  Logs
+    are kept ten to a directory and never otherwise managed.
 
 ## 12. Prior art
 
@@ -839,9 +880,15 @@ landing risky changes as brute-force-tested primitives first.
    B and at the head; the two-process script extended with a late
    joiner that issues actions after promotion; a deliberately corrupted
    transfer is rejected.
-6. **Diagnosis.**  The host writes the finalized log; a tool replays a
-   checkpoint plus log headlessly and bisects two logs' first divergent
-   step by structural diff of the saves.  Deliberately after the core,
-   and before anyone is invited to play.
+6. **Diagnosis** (landed 2026-10-21: `game/session_log.{hpp,cpp}`
+   writes every session's log as a transcript of the protocol's frames
+   and reads it back; `game/world_dump.{hpp,cpp}` is the structural
+   dump, a fourth visitor over the `_fields` enumeration; `replay`,
+   `compare`, `dump` and `corrupt` are the commands; the net smoke
+   ends with a deliberate desync diagnosed).  The host writes the
+   finalized log; a tool replays a checkpoint plus log headlessly and
+   bisects two logs' first divergent step by structural diff of the
+   saves.  Deliberately after the core, and before anyone is invited
+   to play.
 
 Then the open items, roughly in the order of section 11.

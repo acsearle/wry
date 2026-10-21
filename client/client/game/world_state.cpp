@@ -14,8 +14,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <random>
 #include <thread>
+
+#include <unistd.h>
 
 #include "base36.hpp"
 #include "command_types.hpp"
@@ -27,8 +31,10 @@
 #include "matter.hpp"
 #include "save.hpp"
 #include "save_format.hpp"
+#include "session_log.hpp"
 #include "terrain.hpp"
 #include "test.hpp"
+#include "world_dump.hpp"
 
 namespace wry {
 
@@ -211,6 +217,11 @@ namespace wry {
         // loaded game started a new session, which cleared it
         if (m._server)
             m._server->request_join();
+        // The session's log starts from this World (multiplayer.md
+        // section 5); a joiner's placeholder, drawn while its save is in
+        // flight, is not one the stream continues
+        if (m._server && !m._awaiting_save)
+            m._open_log(world);
     }
 
     // A new or loaded game is a new stream: a fresh relay whose steps
@@ -239,8 +250,8 @@ namespace wry {
         if (!_gui.join_address.empty()) {
             _start_joining(_gui.join_address, _gui.join_port);
             // A placeholder to draw until the host's save arrives
-            install_displayed_world(*this, make_starting_world());
             _awaiting_save = true;
+            install_displayed_world(*this, make_starting_world());
             return;
         }
         new_game();
@@ -302,6 +313,8 @@ namespace wry {
             _remote.reset();
         }
         _backlog.clear();
+        _log.reset();
+        _replay.reset();
     }
 
     coroutine::Task WorldState::end_session(std::chrono::milliseconds grace) {
@@ -315,6 +328,8 @@ namespace wry {
             _remote.reset();
         }
         _backlog.clear();
+        _log.reset();
+        _replay.reset();
     }
 
     WorldState::~WorldState() {
@@ -325,6 +340,9 @@ namespace wry {
     }
 
     std::expected<uint16_t, String> WorldState::host_listen(uint16_t port) {
+        // A replayed World, sessionless, becomes a game of our own first
+        if (!_host && !_remote)
+            _host_displayed_world();
         if (!_host)
             return std::unexpected(String("not the host"));
         auto bound = _host->relay().listen("0.0.0.0", port);
@@ -351,14 +369,133 @@ namespace wry {
         // Our world is ours now: a fork of the game, hosted by us from
         // here.  Its client map still names the old game's clients (open
         // item 11.11)
+        _host_displayed_world();
+    }
+
+    void WorldState::_host_displayed_world() {
         Root<World const*> current;
         (void) _worlds.try_pop_front(current);
         assert(current);
         _start_hosting((uint64_t)current->_time);
         _worlds.emplace_back(current);
         _backlog.clear();
-        if (_server)
+        if (_server) {
             _server->request_join();
+            _open_log(current._ptr);
+        }
+    }
+
+    // ---- The session log and its replay (multiplayer.md section 5) ----
+
+    namespace {
+
+        std::string narrow(String const& s) {
+            return std::string(s.data(), s.chars.size());
+        }
+
+        String widen(std::string const& s) {
+            return String(StringView(s.c_str()));
+        }
+
+    } // namespace
+
+    void WorldState::_open_log(World const* world) {
+        if (_log_directory.empty())
+            _log_directory = saves_directory();
+        _log = std::make_unique<SessionLog>(_log_directory, (uint64_t)world->_time,
+                                            world->content_hash(), serialize_world(world));
+    }
+
+    std::expected<void, String> WorldState::replay(String const& path_text, std::optional<uint64_t> through) {
+        const std::filesystem::path path(narrow(path_text));
+        std::expected<SessionLogContents, std::string> contents = read_session_log(path);
+        if (!contents)
+            return std::unexpected(widen(contents.error()));
+        const uint64_t head = contents->head;
+        const uint64_t last = contents->last();
+        const uint64_t target = through.value_or(last);
+        if ((target < head) || (target > last)) {
+            std::string why = contents->entries.empty()
+                ? "the log holds no steps: its checkpoint is at time " + std::to_string(head)
+                : "the log holds steps " + std::to_string(head + 1) + " to " + std::to_string(last);
+            return std::unexpected(widen(why));
+        }
+        World* world = load_world_from_bytes(contents->checkpoint);
+        if (!world)
+            return std::unexpected(String("the log's checkpoint is not a save this build reads"));
+        // Sessionless from here: the stream is the file's.  (Ending the
+        // session drops any earlier replay and clears the backlog)
+        _end_session(std::chrono::milliseconds(500));
+        install_displayed_world(*this, world);
+        Replay r;
+        r.path = path;
+        r.first = head + 1;
+        r.through = target;
+        r.same_build = contents->same_build();
+        for (SessionLogContents::Entry const& e : contents->entries)
+            r.hashes.push_back(e.hash);
+        const uint64_t loaded = world->content_hash();
+        if (loaded != contents->head_hash) {
+            std::string text = "the checkpoint at time " + std::to_string(head) + " hashes to "
+                             + hash_literal(loaded) + "; the log recorded " + hash_literal(contents->head_hash);
+            if (!r.same_build)
+                text += " (another build wrote the log)";
+            r.result = widen(text);
+        } else if (target == head) {
+            r.result = widen("replayed no steps: the checkpoint at time " + std::to_string(head)
+                             + ", " + hash_literal(loaded));
+        } else {
+            for (size_t i = 0; i != (size_t)(target - head); ++i)
+                _backlog.push_back(std::move(contents->entries[i].step));
+        }
+        _replay = std::move(r);
+        return {};
+    }
+
+    // After a step is applied: against the record.  The first
+    // disagreement ends the replay with the divergent World displayed
+    void WorldState::_replay_check(Step const& step) {
+        if (!_replay || _replay->result)
+            return;
+        assert(step.number >= _replay->first);
+        const uint64_t recorded = _replay->hashes[(size_t)(step.number - _replay->first)];
+        const uint64_t computed = _world_to_render._ptr->content_hash();
+        if (recorded != computed) {
+            std::string text = "diverged at step " + std::to_string(step.number) + ": this build "
+                             + hash_literal(computed) + ", the log recorded " + hash_literal(recorded);
+            if (!_replay->same_build)
+                text += " (another build wrote the log)";
+            _replay->result = widen(text);
+            _backlog.clear();
+        } else if (step.number == _replay->through) {
+            _replay->result = widen("replayed steps " + std::to_string(_replay->first) + " to "
+                                    + std::to_string(_replay->through) + ": consistent");
+        }
+    }
+
+    // A copy of the displayed World with one cell changed, in place of it:
+    // nothing rides the stream, so from the next step this client's hash
+    // disagrees with everyone's
+    void WorldState::corrupt(Coordinate at, Term term) {
+        Root<World const*> old;
+        if (!_worlds.try_pop_front(old))
+            return;
+        World const* w = old._ptr;
+        WaitableMap<Coordinate, Term> terms = w->_term_for_coordinate;
+        if (term_is_null(term)) {
+            Term dropped{};
+            (void) terms.kv.try_erase(at, dropped);
+        } else {
+            terms.set(at, term);
+        }
+        World* next = new World(w->_time, w->_entity_id_source, w->_ready,
+                                w->_entity_id_for_coordinate, w->_located_for_coordinate,
+                                w->_entity_for_entity_id, terms, w->_terrain_for_coordinate,
+                                w->_waiting_on_time, w->_player_for_client);
+        next->seal();
+        _world_to_render = next;
+        _worlds.emplace_back(next);
+        _gui.append_log("Corrupted the displayed world: a desync, if the game goes on");
     }
 
     bool WorldState::has_server_input() {
@@ -402,8 +539,16 @@ namespace wry {
         assert(next);
         // The tripwire (multiplayer.md section 5): what we computed, for
         // the relay to compare with the reference client's
+        const uint64_t hash = next._ptr->content_hash();
         if (_server)
-            _server->report_hash(step.number, next._ptr->content_hash());
+            _server->report_hash(step.number, hash);
+        // The log: the step as finalized and what it produced here
+        if (_log) {
+            RemoteServer* client = _client();
+            (void) _log->append(step, hash,
+                                client ? client->client_id() : SERVER_CLIENT_ID,
+                                client ? client->quantum_ns() : 0);
+        }
         _world_to_render = next._ptr;
         _worlds.emplace_back(std::move(next));
         ++_steps_taken;
@@ -604,8 +749,8 @@ namespace wry {
                         if (!world) {
                             client->disconnect("the donated save is unreadable");
                         } else {
-                            install_displayed_world(*this, world);
                             _awaiting_save = false;
+                            install_displayed_world(*this, world);
                             // Proof of receipt: our hash of what we loaded
                             client->report_hash(save->boundary, world->content_hash());
                             String message("Loaded the game at time ");
@@ -616,24 +761,31 @@ namespace wry {
                 }
             }
             _serve_donations();
-            for (size_t applied = 0; !_awaiting_save && !_backlog.empty() && (applied != max_steps_per_frame); ++applied) {
-                Step step = std::move(_backlog.front());
-                _backlog.pop_front();
-                // Steps are numbered by the World time they produce; a
-                // stream that does not continue our World (a join into a
-                // game that started from a save) is no use to us
-                const uint64_t expected = (uint64_t)_world_to_render._ptr->_time + 1;
-                if (step.number != expected) {
-                    _backlog.clear();
-                    if (RemoteServer* client = _client())
-                        client->disconnect("the stream does not continue this world: step "
-                                           + std::to_string(step.number) + " for time "
-                                           + std::to_string(expected - 1));
-                    break;
-                }
-                _apply_step(step);
-                _serve_donations();
+        }
+        // The backlog is the step's input whether it came from the session
+        // or from a log under replay (sessionless); a frame applies its
+        // share
+        for (size_t applied = 0; !_awaiting_save && !_backlog.empty() && (applied != max_steps_per_frame); ++applied) {
+            Step step = std::move(_backlog.front());
+            _backlog.pop_front();
+            // Steps are numbered by the World time they produce; a
+            // stream that does not continue our World (a join into a
+            // game that started from a save) is no use to us
+            const uint64_t expected = (uint64_t)_world_to_render._ptr->_time + 1;
+            if (step.number != expected) {
+                _backlog.clear();
+                std::string why = "the stream does not continue this world: step "
+                                  + std::to_string(step.number) + " for time "
+                                  + std::to_string(expected - 1);
+                if (RemoteServer* client = _client())
+                    client->disconnect(why);
+                if (_replay && !_replay->result)
+                    _replay->result = widen(why);
+                break;
             }
+            _apply_step(step);
+            _replay_check(step);
+            _serve_donations();
         }
 
         // ~1 Hz: hand a rooted snapshot of the freshly stepped world to the
@@ -815,8 +967,11 @@ namespace wry {
             return Reply::ok();
         }
 
-        void submit_write(WorldState& ws, Coordinate at, Term term) {
+        Reply submit_write(WorldState& ws, Coordinate at, Term term) {
+            if (!ws._server)
+                return Reply::error(String("no session"));
             ws._server->submit(make_write_action(at, term));
+            return Reply::ok();
         }
 
         // `step n`: done once the world has taken n more steps.  Holds the
@@ -841,6 +996,32 @@ namespace wry {
             // The relay has already finalized the steps; cancelling only
             // stops the wait for them
             void cancel() override {}
+        };
+
+        // `replay`: done once the log's steps have been applied, or the
+        // first of them disagreed with the record
+        struct ReplayPending final : command::Pending {
+            GuiContext& gui;
+            WorldState* ws;
+            ReplayPending(GuiContext& g, WorldState* w) : gui(g), ws(w) {}
+
+            std::optional<Reply> poll() override {
+                if (gui.world != ws)
+                    return Reply::error(String("the world was unloaded"));
+                if (!ws->_replay)
+                    return Reply::error(String("the replay was abandoned"));
+                if (!ws->_replay->result)
+                    return std::nullopt;
+                return Reply::ok(*ws->_replay->result);
+            }
+
+            // The World stays where the replay got to
+            void cancel() override {
+                if ((gui.world == ws) && ws->_replay && !ws->_replay->result) {
+                    ws->_backlog.clear();
+                    ws->_replay.reset();
+                }
+            }
         };
 
     } // namespace
@@ -925,8 +1106,18 @@ namespace wry {
             with_world([](WorldState& ws) {
                 std::string text;
                 RemoteServer* client = ws._client();
-                if (!client)
+                if (!client) {
+                    if (ws._replay) {
+                        text = "replay of " + ws._replay->path.string() + ": ";
+                        if (ws._replay->result)
+                            text += narrow(*ws._replay->result);
+                        else
+                            text += "step " + std::to_string((uint64_t)ws._world_to_render._ptr->_time)
+                                  + " of " + std::to_string(ws._replay->through);
+                        return Reply::ok(widen(text));
+                    }
                     return Reply::ok(String("no session"));
+                }
                 text = ws._host ? "host" : "joined";
                 switch (client->state()) {
                     case RemoteServer::State::CONNECTING: text += " connecting"; break;
@@ -946,7 +1137,9 @@ namespace wry {
                     Relay::Clock clock = ws._host->relay().clock();
                     text += clock.paused ? " paused" : " running";
                 }
-                return Reply::ok(String(StringView(text.c_str())));
+                if (ws._log && !ws._log->path().empty())
+                    text += " log " + ws._log->path().string();
+                return Reply::ok(widen(text));
             })));
 
         registry.add(make_command<Ctx>(
@@ -956,6 +1149,75 @@ namespace wry {
                 if (!ws._remote)
                     return Reply::error(String("not in a joined game"));
                 ws.leave();
+                return Reply::ok();
+            })));
+
+        // The diagnosis harness (multiplayer.md section 5): the session
+        // log replayed, two logs compared, the displayed World as text,
+        // and a deliberate desync to exercise it all
+        registry.add(make_command<Ctx>(
+            "replay", "Replay a session log from its checkpoint, checking every recorded hash; the world at the last step replayed is displayed, with no session", Category::session,
+            std::tuple{
+                Param<Ctx, String>{"log", "the log file"},
+                Param<Ctx, int64_t>{"through", "the last step to apply; the log's last if omitted", int64_t{-1}},
+            },
+            [](Ctx& c, String const& log, int64_t through) {
+                if (!c.world)
+                    return Reply::error(String("no world is loaded"));
+                if (through < -1)
+                    return Reply::error(String("through must be a step number"));
+                WorldState& ws = *c.world;
+                auto started = ws.replay(log, (through < 0) ? std::nullopt : std::optional<uint64_t>((uint64_t)through));
+                if (!started)
+                    return Reply::error(started.error());
+                return Reply::later(std::make_shared<ReplayPending>(c.gui, &ws));
+            }));
+
+        registry.add(make_command<Ctx>(
+            "compare", "Compare two session logs of one game: the steps they share, and the first where the streams and where the hashes differ", Category::local,
+            std::tuple{
+                Param<Ctx, String>{"a", "a log file"},
+                Param<Ctx, String>{"b", "another log file"},
+            },
+            [](Ctx&, String const& a, String const& b) {
+                auto ca = read_session_log(std::filesystem::path(narrow(a)));
+                if (!ca)
+                    return Reply::error(widen(ca.error()));
+                auto cb = read_session_log(std::filesystem::path(narrow(b)));
+                if (!cb)
+                    return Reply::error(widen(cb.error()));
+                return Reply::ok(widen(compare_session_logs(*ca, *cb)));
+            }));
+
+        registry.add(make_command<Ctx>(
+            "dump", "The displayed world's state as text, for diffing against another's; written to a file if one is named, else the reply", Category::local,
+            std::tuple{
+                Param<Ctx, String>{"path", "the file to write", String("")},
+            },
+            with_world([](WorldState& ws, String const& path) {
+                Root<World const*> w;
+                if (!ws._worlds.try_pop_front(w))
+                    return Reply::error(String("no displayed world"));
+                const std::string text = dump_world(w._ptr);
+                ws._worlds.push_front(std::move(w));
+                if (path.chars.empty())
+                    return Reply::ok(widen(text));
+                std::ofstream out(narrow(path), std::ios::binary);
+                out.write(text.data(), (std::streamsize)text.size());
+                if (!out)
+                    return Reply::error(widen("cannot write " + narrow(path)));
+                const size_t lines = (size_t)std::count(text.begin(), text.end(), '\n');
+                return Reply::ok(widen("wrote " + std::to_string(lines) + " lines to " + narrow(path)));
+            })));
+
+        registry.add(make_command<Ctx>(
+            "corrupt", "Write a Term on a tile of the displayed world only, bypassing the server: a deliberate desync, for exercising the tripwire and the diagnosis harness", Category::local,
+            std::tuple{
+                cursor_param("at", "the tile to write"),
+                Param<Ctx, Term>{"term", "what to write (null erases)"},
+            },
+            with_world([](WorldState& ws, Coordinate const& at, Term const& term) {
+                ws.corrupt(at, term);
                 return Reply::ok();
             })));
 
@@ -1092,8 +1354,7 @@ namespace wry {
                 Param<Ctx, Term>{"term", "what to write"},
             },
             with_world([](WorldState& ws, Coordinate const& at, Term const& term) {
-                submit_write(ws, at, term);
-                return Reply::ok();
+                return submit_write(ws, at, term);
             })));
 
         // A null write erases the cell's key (the value-plane combine in
@@ -1105,8 +1366,7 @@ namespace wry {
                 cursor_param("at", "the tile to erase"),
             },
             with_world([](WorldState& ws, Coordinate const& at) {
-                submit_write(ws, at, term_make_null());
-                return Reply::ok();
+                return submit_write(ws, at, term_make_null());
             })));
     }
 
@@ -1647,4 +1907,184 @@ namespace wry {
         co_return;
     };
 
+    // The session log and its replay (multiplayer.md section 5): a hosted
+    // game writes its log from the installed World; `replay` re-runs the
+    // log from its checkpoint, checking every recorded hash, and leaves
+    // the World at the last step replayed, sessionless; a tampered hash
+    // is a divergence at that step; `compare` names it; `dump` is the
+    // World as text; `host` makes a replayed World a game again; and
+    // `corrupt` changes the displayed World off the stream.  update() is
+    // not driven here (it repins and forks the step); the backlog is
+    // applied as it would.
+    define_test("world_state_replay") {
+        coroutine::Nursery scope;
+        GuiContext gc;
+        gc.scope = &scope;
+        const std::filesystem::path dir = std::filesystem::temp_directory_path()
+            / ("wry-replay-" + std::to_string(getpid()));
+        std::filesystem::remove_all(dir);
+        {
+            WorldState ws(gc);
+            using command::Reply;
+            assert(ws._host && ws._log && ws._log->path().empty());
+            // The session's log in `dir`: the one opened at construction
+            // has no file yet
+            ws._log_directory = dir;
+            ws._open_log(ws._world_to_render._ptr);
+            Relay& relay = ws._host->relay();
+
+            auto apply_available = [&]() -> coroutine::Task {
+                if (ws._server)
+                    for (Step& s : ws._server->take_steps())
+                        ws._backlog.push_back(std::move(s));
+                while (!ws._backlog.empty()) {
+                    Step step = std::move(ws._backlog.front());
+                    ws._backlog.pop_front();
+                    co_await ws._apply_step_async(step);
+                    ws._replay_check(step);
+                }
+            };
+            auto catch_up = [&](uint64_t target) -> coroutine::Task {
+                for (int i = 0; i != 2000; ++i) {
+                    co_await apply_available();
+                    if ((ws._steps_taken >= target) && (ws._steps_taken == relay.clock().head))
+                        co_return;
+                    co_await cancelable_sleep(0.005);
+                }
+                assert(!"did not catch up");
+            };
+            auto displayed = [&]() -> World const* { return ws._world_to_render._ptr; };
+            auto tile = [&](Coordinate at) -> Term {
+                Term t = term_make_null();
+                (void) displayed()->_term_for_coordinate.try_get(at, t);
+                return t;
+            };
+            auto issue = [&](std::string const& line) {
+                return gc.issue(command::Origin::console, StringView(line.c_str()));
+            };
+            auto contains = [](std::string const& s, std::string const& what) {
+                return s.find(what) != std::string::npos;
+            };
+            // A pending command driven to completion, the backlog applied
+            // between polls as frames would
+            auto run_to_completion = [&](std::string const& line) -> coroutine::Task {
+                gc.submit(gc.console_source, StringView(line.c_str()));
+                for (int i = 0; (i != 1000) && gc.console_source.pending; ++i) {
+                    co_await apply_available();
+                    ++gc.frame;
+                    gc.service_commands();
+                }
+                assert(!gc.console_source.pending);
+            };
+            auto last_reply = [&]() -> std::string {
+                return narrow(gc.history.back().reply);
+            };
+
+            issue("pause");
+            bool paused = eventually([&] { return relay.clock().paused; });
+            assert(paused);
+            (void) paused;
+            co_await catch_up(relay.clock().head);
+
+            // A write rides the stream once our JOIN has; step until it
+            // has landed, then a few more
+            issue("write Coordinate(4, 4) OPCODE::SWAP");
+            for (int i = 0; (i != 50) && !tile(Coordinate{4, 4}).is_opcode(); ++i) {
+                relay.step(1);
+                co_await catch_up(ws._steps_taken + 1);
+            }
+            assert(tile(Coordinate{4, 4}).is_opcode());
+            relay.step(3);
+            co_await catch_up(ws._steps_taken + 3);
+            const uint64_t end_time = (uint64_t)displayed()->_time;
+            const uint64_t end_hash = displayed()->content_hash();
+            assert(end_time >= 4);
+            const std::filesystem::path log = ws._log->path();
+            assert(!log.empty() && std::filesystem::exists(log));
+            {
+                auto o = issue("session");
+                assert(contains(narrow(o.reply.text), " log " + log.string()));
+            }
+            co_await ws.end_session(std::chrono::milliseconds(200));
+            assert(!ws._log && !ws._server);
+            assert(issue("write Coordinate(4, 4) OPCODE::SWAP").reply.status == Reply::ERROR);
+
+            // The whole log replays to the same World
+            co_await run_to_completion("replay \"" + log.string() + "\"");
+            assert(gc.history.back().status == Reply::OK);
+            assert(contains(last_reply(), "replayed steps 1 to " + std::to_string(end_time) + ": consistent"));
+            assert((uint64_t)displayed()->_time == end_time);
+            assert(displayed()->content_hash() == end_hash);
+            assert(tile(Coordinate{4, 4}).is_opcode());
+            assert(!ws._server && ws._replay && ws._replay->result);
+            assert(contains(narrow(issue("session").reply.text), "replay of " + log.string() + ": replayed"));
+
+            // ... or to an earlier step
+            co_await run_to_completion("replay \"" + log.string() + "\" " + std::to_string(end_time - 2));
+            assert(contains(last_reply(), "consistent"));
+            assert((uint64_t)displayed()->_time == end_time - 2);
+
+            // A log whose record of one step's hash was tampered with:
+            // the replay diverges there and stops, that World displayed
+            auto contents = read_session_log(log);
+            assert(contents && contents->head == 0 && contents->entries.size() == end_time);
+            const uint64_t tampered = end_time - 1;
+            contents->entries[(size_t)(tampered - 1)].hash ^= 1;
+            const std::filesystem::path forged = dir / "forged.wrylog";
+            {
+                const std::string bytes = encode_session_log(*contents);
+                std::ofstream out(forged, std::ios::binary);
+                out.write(bytes.data(), (std::streamsize)bytes.size());
+            }
+            co_await run_to_completion("replay \"" + forged.string() + "\"");
+            assert(gc.history.back().status == Reply::OK);
+            assert(contains(last_reply(), "diverged at step " + std::to_string(tampered) + ":"));
+            assert((uint64_t)displayed()->_time == tampered);
+
+            // compare: the original against the forgery names the step
+            {
+                auto o = issue("compare \"" + log.string() + "\" \"" + forged.string() + "\"");
+                assert(o.reply.status == Reply::OK);
+                assert(contains(narrow(o.reply.text), "streams identical"));
+                assert(contains(narrow(o.reply.text), "hashes differ at step " + std::to_string(tampered)));
+            }
+            // Not a log: an error at once; a step the log does not hold too
+            assert(issue("replay \"" + (dir / "absent.wrylog").string() + "\"").reply.status == Reply::ERROR);
+            assert(issue("replay \"" + log.string() + "\" " + std::to_string(end_time + 5)).reply.status == Reply::ERROR);
+
+            // dump: the displayed World as text, the same twice
+            {
+                auto a = issue("dump");
+                auto b = issue("dump");
+                assert(a.reply.status == Reply::OK);
+                assert(narrow(a.reply.text) == narrow(b.reply.text));
+                assert(contains(narrow(a.reply.text), "Coordinate(4, 4): OPCODE::SWAP"));
+                const std::filesystem::path file = dir / "dump.txt";
+                auto c = issue("dump \"" + file.string() + "\"");
+                assert(c.reply.status == Reply::OK && std::filesystem::exists(file));
+            }
+
+            // A replayed World becomes a game: host starts a session from
+            // it, with a new log
+            {
+                auto o = issue("host 0");
+                assert(o.reply.status == Reply::OK);
+                assert(ws._host && ws._log && !ws._replay);
+                assert((uint64_t)displayed()->_time == tampered);
+            }
+            // corrupt: the displayed World changes, off the stream
+            {
+                const uint64_t before = displayed()->content_hash();
+                assert(issue("corrupt Coordinate(9, 9) 1").reply.status == Reply::OK);
+                assert(displayed()->content_hash() != before);
+                assert(narrow(issue("get Coordinate(9, 9)").reply.text) == "1");
+            }
+            co_await ws.end_session(std::chrono::milliseconds(200));
+        }
+        (void) co_await scope.join();
+        std::filesystem::remove_all(dir);
+        co_return;
+    };
+
 } // namespace wry
+

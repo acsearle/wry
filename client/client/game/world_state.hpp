@@ -13,9 +13,11 @@
 #include <chrono>
 #include <deque>
 #include <expected>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <map>
+#include <optional>
 #include <vector>
 
 #include "concurrent_queue.hpp"
@@ -37,6 +39,7 @@
 #include "player.hpp"
 #include "server.hpp"
 #include "host.hpp"
+#include "session_log.hpp"
 
 namespace wry {
     
@@ -161,6 +164,40 @@ namespace wry {
         bool _awaiting_save = false;
         std::vector<RemoteServer::Donation> _donations;
         void _serve_donations();
+
+        // The session log (multiplayer.md section 5, game/session_log.hpp):
+        // the installed World as the checkpoint, then every applied step
+        // and the hash it produced here.  Opened when a session gets its
+        // World, closed with the session; the file appears at the first
+        // step.  The directory is the saves' unless set before the
+        // session's World is installed (tests)
+        std::filesystem::path _log_directory;
+        std::unique_ptr<SessionLog> _log;
+        void _open_log(World const* world);
+
+        // A replay (the `replay` command): the log's checkpoint installed,
+        // its steps the backlog, each applied step's hash checked against
+        // the recorded one.  Sessionless, since the stream comes from the
+        // file; `result` is the report once it is done, or stopped
+        struct Replay {
+            std::filesystem::path path;
+            uint64_t first = 0;             // the first step applied (head + 1)
+            uint64_t through = 0;           // the last to apply
+            std::vector<uint64_t> hashes;   // recorded, from `first`
+            bool same_build = true;         // this build wrote the log
+            std::optional<String> result;
+        };
+        std::optional<Replay> _replay;
+        std::expected<void, String> replay(String const& path, std::optional<uint64_t> through);
+        void _replay_check(Step const& step);
+
+        // The displayed World as a game of our own from here: a fork
+        // (leave), or a replayed World played on (host)
+        void _host_displayed_world();
+
+        // A deliberate desync (the `corrupt` command): `term` on `at` in
+        // the displayed World only, off the stream
+        void corrupt(Coordinate at, Term term);
 
         RemoteServer* _client();
         void _start_session();

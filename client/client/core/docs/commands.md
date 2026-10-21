@@ -419,6 +419,16 @@ drag as its result (`transform.translate(value=...)`), not its path.
   (abandon the local game; the host's client donates its world as of
   the step we arrive at, and the stream follows from there), `leave`
   (go on alone from the current state, a fork).
+- **diagnosis** (multiplayer.md section 5; every session writes
+  `saves/session-<time>.wrylog`, named by `session`): `replay log
+  [step]` (the log re-run from its checkpoint with every recorded hash
+  checked; the world at the last step replayed is displayed, with no
+  session, and `host` makes it a game again), `compare a b` (two logs
+  of one game: the steps they share, where the streams and where the
+  hashes first differ), `dump [file]` (the displayed world as text, for
+  diffing against another's), `corrupt Coordinate Term` (a tile
+  changed off the stream: a deliberate desync, kicked at the next hash
+  report).
 
 ## 8. Time
 

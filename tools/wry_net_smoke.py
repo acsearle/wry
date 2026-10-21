@@ -10,11 +10,17 @@ receives the host's save of the world as of the step it arrived at, and
 follows the stream from there.  Then each side issues an action and the
 host steps the clock, and the script requires both to report the same
 tile contents and the same state hash after every round
-(game/docs/multiplayer.md section 13, stages 3 to 5).  The binary
-defaults to the newest Debug build in DerivedData.  Exit status 0 on
-success.  Standard library only.
+(game/docs/multiplayer.md section 13, stages 3 to 5).  Last, the
+diagnosis harness (stage 6): the joiner's world is changed off the
+stream, the structural diff of the two dumps names the cell, the relay
+kicks the joiner at its next report, `compare` finds the step in the
+two session logs, the host's log replays consistently through it and
+the joiner's does not reproduce what it recorded.  The binary defaults
+to the newest Debug build in DerivedData.  Exit status 0 on success.
+Standard library only.
 """
 
+import difflib
 import glob
 import json
 import os
@@ -179,10 +185,61 @@ def main(argv):
         assert h.ok("session").startswith("host joined client 1 "), h.ok("session")
         assert j.ok("session").startswith("joined joined client 2 "), j.ok("session")
 
-        # A joined client cannot command the clock; the joiner leaves and
-        # plays on alone
+        # A joined client cannot command the clock
         assert j.run("pause")["status"] == "error"
+
+        # --- The diagnosis harness (multiplayer.md section 5) ---
+        # Each session has been writing its log beside the saves
+        def log_of(game):
+            session = game.ok("session", quiet=True)
+            assert " log " in session, session
+            return session.split(" log ", 1)[1]
+        host_log = log_of(h)
+        joiner_log = log_of(j)
+        assert host_log != joiner_log
+        print(f"  logs: {host_log} {joiner_log}")
+
+        # Level, the two worlds dump identically; the joiner's world
+        # changed off the stream, the structural diff names the cell
+        before = h.ok("dump", quiet=True).splitlines()
+        assert before == j.ok("dump", quiet=True).splitlines()
+        j.ok("corrupt Coordinate(3, 3) OPCODE::SWAP")
+        after = j.ok("dump", quiet=True).splitlines()
+        changed = [line for line in difflib.unified_diff(before, after, lineterm="", n=0)
+                   if line[:1] in "+-" and not line.startswith(("+++", "---"))]
+        assert "+    Coordinate(3, 3): OPCODE::SWAP" in changed, changed
+        assert all(("Coordinate(3, 3)" in line) or ("_term_for_coordinate:" in line)
+                   for line in changed), changed
+        print(f"  dump diff: {changed}")
+
+        # The joiner's next report disagrees with the reference's: kicked
+        until("the joiner to be kicked for the desync",
+              lambda: "desync at step" in j.ok("session", quiet=True), tick)
+        session = j.ok("session")
+        desync = int(session.split("desync at step ", 1)[1].split()[0])
+
+        # Offline: the two logs name the step
+        report = j.ok(f'compare "{host_log}" "{joiner_log}"')
+        assert "'s checkpoint matches " in report, report
+        assert "streams identical" in report, report
+        assert f"hashes differ at step {desync}" in report, report
+
+        # The kicked joiner plays on alone from where it is: a fork
         j.ok("leave")
+        assert j.ok("session").startswith("host "), j.ok("session")
+
+        # The host's log replays consistently on this build, through the
+        # divergent step; the joiner's own log does not reproduce what it
+        # recorded there, since the change came from outside the stream
+        reply = j.ok(f'replay "{host_log}" {desync}')
+        assert reply.endswith(": consistent"), reply
+        reply = j.ok(f'replay "{joiner_log}" {desync}')
+        assert reply.startswith(f"diverged at step {desync}:"), reply
+        assert j.ok("session").startswith("replay of "), j.ok("session")
+
+        # A replayed world is played on by hosting it
+        j.ok("host 0")
+        assert j.ok("session").startswith("host "), j.ok("session")
         j.ok("frame 10")
         j.ok("quit")
         h.ok("quit")
