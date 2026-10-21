@@ -26,6 +26,9 @@
 #include <map>
 #include <set>
 
+#include <limits>
+#include <random>
+
 #include "save_format.hpp"
 
 #include "array_mapped_trie.hpp"
@@ -70,9 +73,13 @@ namespace wry {
         Term v;
         if ((word & TERM_MASK_TAG) == TERM_TAG_OBJECT) {
             SaveRef ref = (SaveRef)(word >> TERM_SHIFT);
-            // Sketch: forward refs from Term would need fixup against the
-            // address of v._data.  Assume DAG for now.
-            HeapTerm* p = (HeapTerm*)L._ptrs[ref];
+            HeapTerm* p = L.ref<HeapTerm>(ref);
+            if (!p) {
+                // The null reference is the null Term; anything else
+                // failed the load, and this value does not matter
+                v._data = 0;
+                return v;
+            }
             v._data = (uint64_t)p | TERM_TAG_OBJECT;
         } else {
             v._data = word;
@@ -410,21 +417,21 @@ namespace wry {
         SaveRef wait    = L.read_u32();
         SaveRef players = L.read_u32();
 
-        w->_entity_id_for_coordinate.kv._inner = (NodeEntityID_U64*)L._ptrs[eid_kv];
-        w->_player_for_client._inner           = (NodeEntityID_U64*)L._ptrs[players];
-        w->_located_for_coordinate.kv._inner   = (NodeWaitSet_U64*)L._ptrs[loc_kv];
-        w->_entity_for_entity_id.kv._inner     = (NodeEntityPtr_U64*)L._ptrs[ent_kv];
-        w->_term_for_coordinate.kv._inner     = (NodeValue_U64*)L._ptrs[val_kv];
-        w->_terrain_for_coordinate.kv._inner   = (NodeTerrain_U64*)L._ptrs[ter_kv];
-        w->_waiting_on_time._inner             = (NodeSet_U128*)L._ptrs[wait];
+        w->_entity_id_for_coordinate.kv._inner = L.ref<NodeEntityID_U64>(eid_kv);
+        w->_player_for_client._inner           = L.ref<NodeEntityID_U64>(players);
+        w->_located_for_coordinate.kv._inner   = L.ref<NodeWaitSet_U64>(loc_kv);
+        w->_entity_for_entity_id.kv._inner     = L.ref<NodeEntityPtr_U64>(ent_kv);
+        w->_term_for_coordinate.kv._inner     = L.ref<NodeValue_U64>(val_kv);
+        w->_terrain_for_coordinate.kv._inner   = L.ref<NodeTerrain_U64>(ter_kv);
+        w->_waiting_on_time._inner             = L.ref<NodeSet_U128>(wait);
 
-        // Pre-ki saves wrote SAVE_REF_NULL for these three refs; _ptrs[0] is
-        // nullptr, so such files load with an empty waiter index.
-        w->_entity_id_for_coordinate.ki._inner = (NodeWaitSet_U64*)L._ptrs[eid_ki];
-        w->_located_for_coordinate.ki._inner   = (NodeWaitSet_U64*)L._ptrs[loc_ki];
-        w->_entity_for_entity_id.ki._inner     = (NodeWaitSet_U64*)L._ptrs[ent_ki];
-        w->_term_for_coordinate.ki._inner     = (NodeWaitSet_U64*)L._ptrs[val_ki];
-        w->_terrain_for_coordinate.ki._inner   = (NodeWaitSet_U64*)L._ptrs[ter_ki];
+        // Pre-ki saves wrote SAVE_REF_NULL for these three refs, so such
+        // files load with an empty waiter index.
+        w->_entity_id_for_coordinate.ki._inner = L.ref<NodeWaitSet_U64>(eid_ki);
+        w->_located_for_coordinate.ki._inner   = L.ref<NodeWaitSet_U64>(loc_ki);
+        w->_entity_for_entity_id.ki._inner     = L.ref<NodeWaitSet_U64>(ent_ki);
+        w->_term_for_coordinate.ki._inner     = L.ref<NodeWaitSet_U64>(val_ki);
+        w->_terrain_for_coordinate.ki._inner   = L.ref<NodeWaitSet_U64>(ter_ki);
     }
 
     static void load_into_machine(Loader& L, SaveRef id) {
@@ -441,7 +448,7 @@ namespace wry {
         m->_new_location = L.read_pod<Coordinate>();
         m->_old_time = (Time)L.read_u64();
         m->_new_time = (Time)L.read_u64();
-        m->_stack = (PersistentStack<Term>*)L._ptrs[stack_ref];
+        m->_stack = L.ref<PersistentStack<Term>>(stack_ref);
         m->seal();
     }
 
@@ -479,10 +486,14 @@ namespace wry {
 
     static void load_into_heap_string(Loader& L, SaveRef id) {
         uint64_t size = L.read_u64();
+        if (L._failed || (size > L.remaining())) {
+            L.fail("string longer than its record");
+            return;
+        }
         std::string_view view((const char*)L._cursor, (size_t)size);
         L._cursor += size;
         // Goes through interning factory; the result is what should be stored.
-        L._ptrs[id] = (void*)HeapString::make(view);
+        L._ptrs[id] = const_cast<HeapString*>(HeapString::make(view));
     }
 
     static void load_into_persistent_stack_node(Loader& L, SaveRef id) {
@@ -490,26 +501,45 @@ namespace wry {
         uint64_t payload = L.read_u64();
         // Post-order: the cell below is already loaded, so the constructor
         // can take it and compute this cell's cached hash from it.
-        auto* next = (const PersistentStack<Term>*)L._ptrs[next_ref];
+        const PersistentStack<Term>* next = L.ref<PersistentStack<Term>>(next_ref);
+        if (L._failed)
+            return;
         L._ptrs[id] = new PersistentStack<Term>(next, decode_value(payload, L));
     }
 
     // Entry loaders, generic over (T, U): read (code, value) entries up to
     // the end of the record body and rebuild the trie in one pass.  The
-    // saver wrote the entries in code order, which is SortedBuilder's
-    // precondition (asserted in Debug).
+    // saver wrote the entries in strictly increasing code order, which is
+    // SortedBuilder's precondition: checked here, since the bytes are not
+    // trusted, before the builder would assert on it.
     template<typename T, typename U, typename DecodeValue>
     static void load_entries(Loader& L, SaveRef id, DecodeValue&& decode_value) {
         using N = ArrayMappedTrie<U, T, ScanDiscipline>;
         typename N::SortedBuilder builder;
-        while (L._cursor < L._body_end) {
+        U last{};
+        bool first = true;
+        while (!L._failed && (L._cursor < L._body_end)) {
             U code = L.read_pod<U>();
-            if constexpr (std::is_empty_v<T>)
+            if (L._failed)
+                break;
+            if (!first && !(last < code)) {
+                L.fail("entries out of order");
+                break;
+            }
+            first = false;
+            last = code;
+            if constexpr (std::is_empty_v<T>) {
                 builder.push(code);
-            else
-                builder.push(code, decode_value());
+            } else {
+                T value = decode_value();
+                if (L._failed)
+                    break;
+                builder.push(code, std::move(value));
+            }
         }
-        L._ptrs[id] = (void*)builder.finish();
+        if (L._failed)
+            return;
+        L._ptrs[id] = const_cast<N*>(builder.finish());
     }
 
     static void load_into_entries_value_u64(Loader& L, SaveRef id) {
@@ -521,7 +551,12 @@ namespace wry {
     }
 
     static void load_into_entries_entity_ptr_u64(Loader& L, SaveRef id) {
-        load_entries<const Entity*, uint64_t>(L, id, [&L] { return (const Entity*)L._ptrs[L.read_u32()]; });
+        load_entries<const Entity*, uint64_t>(L, id, [&L] {
+            const Entity* e = L.ref<Entity>(L.read_u32());
+            if (!e && !L._failed)
+                L.fail("null entity in the entity map");
+            return e;
+        });
     }
 
     static void load_into_entries_set_u128(Loader& L, SaveRef id) {
@@ -531,9 +566,21 @@ namespace wry {
     static void load_into_entries_wait_set_u64(Loader& L, SaveRef id) {
         load_entries<WaitSet, uint64_t>(L, id, [&L] {
             uint32_t count = L.read_u32();
+            if ((size_t)count > L.remaining() / sizeof(uint64_t)) {
+                L.fail("waitset longer than its record");
+                return WaitSet{};
+            }
             NodeSet_U64::SortedBuilder inner;
-            for (uint32_t i = 0; i != count; ++i)
-                inner.push(L.read_u64());
+            uint64_t last = 0;
+            for (uint32_t i = 0; i != count; ++i) {
+                uint64_t member = L.read_u64();
+                if ((i != 0) && (member <= last)) {
+                    L.fail("waitset out of order");
+                    return WaitSet{};
+                }
+                last = member;
+                inner.push(member);
+            }
             return WaitSet{ inner.finish() };
         });
     }
@@ -597,6 +644,10 @@ namespace wry {
         uint32_t version = read_u32();
         uint32_t count   = read_u32();
         (void)magic;
+        if (_failed) {
+            fprintf(stderr, "save: %s; refusing to load\n", _why);
+            return nullptr;
+        }
         // Hard reject on version mismatch, per the TERM_SAVE_VERSION
         // contract: an older record layout would misparse, not degrade.
         if (version != TERM_SAVE_VERSION) {
@@ -604,41 +655,58 @@ namespace wry {
                     version, (unsigned)TERM_SAVE_VERSION);
             return nullptr;
         }
+        // A record is at least a one-byte tag and a four-byte length: a
+        // count the file cannot hold is refused before anything is sized
+        if ((size_t)count > (size_t)(_end - _cursor) / 5) {
+            fprintf(stderr, "save: record count %u exceeds the file; refusing to load\n", count);
+            return nullptr;
+        }
 
         _ptrs.assign(count + 1, nullptr);  // +1 because IDs are 1-based
 
-        for (uint32_t id = 1; id <= count; ++id) {
+        for (uint32_t id = 1; (id <= count) && !_failed; ++id) {
+            _body_end = nullptr;            // the record header is bounded by the file
             uint64_t tag = read_varint();
             uint32_t body_len = read_u32();
+            if (_failed)
+                break;
+            if (body_len > (size_t)(_end - _cursor)) {
+                fail("record longer than the file");
+                break;
+            }
             const uint8_t* body_start = _cursor;
             _body_end = body_start + body_len;
-            assert(_body_end <= _end);
             const SaveableTraits* tr = find_saveable_traits(tag);
             if (!tr) {
                 // Unknown type tag -- skip the record body and leave ptrs[id]
-                // null.  A real loader would record this for diagnostics.
+                // null; a reference to it fails the load there.
                 fprintf(stderr, "save: unknown type tag %llx; skipping record %u\n",
                         (unsigned long long)tag, id);
-                _cursor = body_start + body_len;
+                _cursor = _body_end;
                 continue;
             }
             tr->load_into(*this, id);
-            // Sanity: the load_into should have consumed exactly body_len bytes.
-            assert(_cursor == body_start + body_len);
+            // The loader must have consumed exactly the body: short is a
+            // record with bytes to spare, which this build did not write
+            if (!_failed && (_cursor != _body_end))
+                fail("record longer than its type");
+            _cursor = _body_end;
         }
+        _body_end = nullptr;
 
         SaveRef root_ref = read_u32();
-        resolve_fixups();
-        return (World*)_ptrs[root_ref];
+        World* root = ref<World>(root_ref);
+        if (!_failed && !root)
+            fail("no root");
+        if (!_failed && (_cursor != _end))
+            fail("bytes after the root");
+        if (_failed) {
+            fprintf(stderr, "save: %s; refusing to load\n", _why);
+            return nullptr;
+        }
+        return root;
     }
 
-    void Loader::resolve_fixups() {
-        for (auto& f : _fixups) {
-            assert(f.target < _ptrs.size());
-            *f.field = _ptrs[f.target];
-        }
-        _fixups.clear();
-    }
 
     // -----------------------------------------------------------------------
     // The content hash oracle (see save_format.hpp).
@@ -746,6 +814,56 @@ namespace wry {
         L._end    = buffer.data() + buffer.size();
         return L.load_world();
     }
+
+    // The loader faces untrusted bytes (a donated save): every truncation
+    // of a valid save, and random corruptions of it, load as null or as a
+    // World, never as a crash.  Under the sanitizers that is the whole
+    // claim; the corrupted Worlds are not stepped.
+    define_test("save_format_hostile_bytes") {
+        World* w = new World;
+        w->_time = Time{5};
+        Player* p = new Player;
+        p->_entity_id = w->generate_entity_id();
+        p->seal();
+        w->_entity_for_entity_id.set(p->_entity_id, p);
+        w->_waiting_on_time.set({Time{5}, p->_entity_id});     // due now: commissioning readies it
+        w->_player_for_client.set(ClientID{1}, p->_entity_id);
+        Machine* m = new Machine;
+        m->_entity_id = w->generate_entity_id();
+        m->_stack = new PersistentStack<Term>(nullptr, term_make_string_with("a longer heap string"));
+        m->seal();
+        w->_entity_for_entity_id.set(m->_entity_id, m);
+        w->_waiting_on_time.set({Time{7}, m->_entity_id});
+        w->_term_for_coordinate.set(Coordinate{1, 2}, term_make_string_with("hello"));
+        w->_term_for_coordinate.set(Coordinate{3, 4}, term_make_integer_with(std::numeric_limits<int64_t>::max()));
+        w->hack_repair_invariant();
+        std::vector<uint8_t> good = test_save_to_buffer(w);
+        World* back = test_load_from_buffer(good);
+        assert(back);
+        back->hack_repair_invariant();
+        assert(back->content_hash() == w->content_hash());
+
+        // Every truncation
+        for (size_t cut = 0; cut < good.size(); ++cut) {
+            std::vector<uint8_t> t(good.begin(), good.begin() + (std::ptrdiff_t)cut);
+            (void) test_load_from_buffer(t);
+        }
+        // Bytes after the root, and random corruptions
+        {
+            std::vector<uint8_t> longer = good;
+            longer.push_back(0);
+            assert(!test_load_from_buffer(longer));
+        }
+        std::mt19937_64 rng(2026);
+        for (int i = 0; i != 3000; ++i) {
+            std::vector<uint8_t> bad = good;
+            int flips = 1 + (int)(rng() % 4);
+            for (int f = 0; f != flips; ++f)
+                bad[rng() % bad.size()] = (uint8_t)rng();
+            (void) test_load_from_buffer(bad);
+        }
+        co_return;
+    };
 
     define_test("save_format_ki_roundtrip") {
 

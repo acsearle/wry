@@ -17,6 +17,7 @@
 #include "command_types.hpp"
 #include "execution.hpp"
 #include "host.hpp"
+#include "save.hpp"
 #include "test.hpp"
 #include "unicode.hpp"
 #include "wire.hpp"
@@ -30,6 +31,7 @@ namespace wry {
 
         enum Posted : uint64_t {
             DIAL_FAILED = 1,    // bytes: u64 errno
+            SAVE_READY = 2,     // bytes: u64 transfer, u64 boundary, the save
         };
 
         std::string u64_bytes(uint64_t x) {
@@ -57,6 +59,18 @@ namespace wry {
                 transport->post(DIAL_FAILED, u64_bytes((uint64_t)-*result));
             // Success: the transport admitted the connection, whose Opened
             // is in the inbox
+        }
+
+        // The donation, on the pool: the walk over the rooted snapshot,
+        // then the bytes handed to the main thread through the inbox,
+        // which sends them.  The Root dies with this frame, on a worker
+        coroutine::Task donate_task(std::shared_ptr<Transport> transport, RemoteServer::Donation donation,
+                                    Root<World const*> snapshot) {
+            std::vector<uint8_t> bytes = serialize_world(&*snapshot);
+            co_await coroutine::TransferToPoolExecutor{};   // yield after the walk
+            std::string posted = u64_bytes(donation.transfer) + u64_bytes(donation.boundary);
+            posted.append((const char*)bytes.data(), bytes.size());
+            transport->post(SAVE_READY, std::move(posted));
         }
 
     } // namespace
@@ -112,6 +126,26 @@ namespace wry {
         if (body.size() > wire::MAX_ACTION_BYTES)
             return;
         _send(wire::encode_action(++_seq, body));
+    }
+
+    std::vector<RemoteServer::Donation> RemoteServer::take_donations() {
+        return take(_donations);
+    }
+
+    void RemoteServer::donate(Donation const& donation, Root<World const*> snapshot, coroutine::Nursery& scope) {
+        scope.soon(donate_task(_transport, donation, std::move(snapshot)));
+    }
+
+    void RemoteServer::_send_save(uint64_t transfer, uint64_t boundary, std::string_view bytes) {
+        _send(wire::encode_save_begin(transfer, boundary, bytes.size()));
+        uint32_t index = 0;
+        for (size_t at = 0; at < bytes.size(); at += wire::MAX_SAVE_CHUNK)
+            _send(wire::encode_save_data(transfer, index++, bytes.substr(at, wire::MAX_SAVE_CHUNK)));
+        _send(wire::encode_save_end(transfer));
+    }
+
+    std::optional<RemoteServer::DonatedSave> RemoteServer::take_save() {
+        return std::exchange(_save, std::nullopt);
     }
 
     void RemoteServer::report_hash(uint64_t step, uint64_t hash) {
@@ -203,6 +237,51 @@ namespace wry {
                 return _disconnect("the server shut down");
             case wire::PING:
                 return;
+            case wire::REQUEST_SAVE: {
+                std::optional<wire::SaveRequest> request = wire::decode_save_request(bytes);
+                if (!request)
+                    return _disconnect("malformed REQUEST_SAVE");
+                _donations.push_back({request->transfer, request->boundary});
+                return;
+            }
+            case wire::SAVE_BEGIN: {
+                std::optional<wire::SaveBegin> begin = wire::decode_save_begin(bytes);
+                if (!begin)
+                    return _disconnect("malformed SAVE_BEGIN");
+                if (_incoming)
+                    return _disconnect("a second save before the first was whole");
+                if (begin->total > wire::MAX_SAVE_BYTES)
+                    return _disconnect("the donated save is too large");
+                _incoming = Incoming{begin->transfer, begin->boundary, begin->total, 0, {}};
+                _incoming->bytes.reserve((size_t)begin->total);
+                return;
+            }
+            case wire::SAVE_DATA: {
+                std::optional<wire::SaveData> data = wire::decode_save_data(bytes);
+                if (!data)
+                    return _disconnect("malformed SAVE_DATA");
+                if (!_incoming || (data->transfer != _incoming->transfer))
+                    return _disconnect("save data for no transfer");
+                if (data->index != _incoming->next_index)
+                    return _disconnect("save data out of order");
+                if (_incoming->bytes.size() + data->bytes.size() > _incoming->total)
+                    return _disconnect("save data beyond its total");
+                ++_incoming->next_index;
+                _incoming->bytes.insert(_incoming->bytes.end(), data->bytes.begin(), data->bytes.end());
+                return;
+            }
+            case wire::SAVE_END: {
+                std::optional<uint64_t> transfer = wire::decode_save_end(bytes);
+                if (!transfer)
+                    return _disconnect("malformed SAVE_END");
+                if (!_incoming || (*transfer != _incoming->transfer))
+                    return _disconnect("save end for no transfer");
+                if (_incoming->bytes.size() != _incoming->total)
+                    return _disconnect("save ended short");
+                _save = DonatedSave{_incoming->boundary, std::move(_incoming->bytes)};
+                _incoming.reset();
+                return;
+            }
             default:
                 return _disconnect("unexpected message from the server");
         }
@@ -226,8 +305,15 @@ namespace wry {
                                                                    : closed->reason);
                 _connection = 0;
             } else if (auto* posted = std::get_if<Transport::Posted>(&event)) {
-                if (posted->code == DIAL_FAILED)
+                if (posted->code == DIAL_FAILED) {
                     _disconnect(std::string("connect: ") + std::strerror((int)u64_of(posted->bytes)));
+                } else if ((posted->code == SAVE_READY) && (posted->bytes.size() >= 16)) {
+                    if (_state != State::DISCONNECTED) {
+                        uint64_t transfer = u64_of(posted->bytes.substr(0, 8));
+                        uint64_t boundary = u64_of(posted->bytes.substr(8, 8));
+                        _send_save(transfer, boundary, std::string_view(posted->bytes).substr(16));
+                    }
+                }
             }
         }
         return take(_steps);
@@ -430,34 +516,104 @@ namespace wry {
         auto port = host->relay().listen("127.0.0.1", 0);
         assert(port && *port != 0);
 
+        host->relay().step(2);
+        bool stepped = eventually([&] { return host->relay().clock().head >= 3; });
+        assert(stepped);
+        (void) stepped;
         auto joiner = RemoteServer::make(scope);
         joiner->dial("127.0.0.1", *port);
         joiner->request_join();
-        host->relay().step(2);
+
+        // The joiner's HELLO has the relay ask the host's client for a
+        // save at the head; the test plays the host's World
+        std::vector<RemoteServer::Donation> donations;
+        bool asked = eventually([&] {
+            (void) joiner->take_steps();
+            (void) host->client().take_steps();
+            for (auto& d : host->client().take_donations())
+                donations.push_back(d);
+            return !donations.empty();
+        });
+        assert(asked && donations.size() == 1);
+        (void) asked;
+        const uint64_t boundary = donations[0].boundary;
+        assert(boundary == host->relay().clock().head);
+        World* w = new World;
+        w->_time = (Time)boundary;
+        Player* p = new Player;
+        p->_entity_id = w->generate_entity_id();
+        p->seal();
+        w->_entity_for_entity_id.set(p->_entity_id, p);
+        w->_waiting_on_time.set({(Time)boundary, p->_entity_id});
+        w->_player_for_client.set(ClientID{1}, p->_entity_id);
+        w->_term_for_coordinate.set(Coordinate{2, 3}, term_make_string_with("donated"));
+        w->hack_repair_invariant();
+        Root<World const*> snapshot{w};
+        host->client().donate(donations[0], snapshot, scope);
+
+        // The joiner assembles the save, loads it, and proves receipt with
+        // its hash; the JOIN waits for that proof, then rides a step
+        std::optional<RemoteServer::DonatedSave> save;
+        bool received = eventually([&] {
+            (void) host->client().take_steps();     // sends the serialized save
+            (void) joiner->take_steps();
+            save = joiner->take_save();
+            return save.has_value();
+        });
+        assert(received && save->boundary == boundary);
+        (void) received;
+        World* loaded = load_world_from_bytes(save->bytes);
+        assert(loaded && loaded->_time == (Time)boundary);
+        assert(loaded->content_hash() == w->content_hash());
+        {
+            Term t{};
+            assert(loaded->_term_for_coordinate.try_get(Coordinate{2, 3}, t));
+            assert(term_eq(t, term_make_string_with("donated")));
+        }
+        // The JOIN is not yet admitted: no report
+        host->relay().step(1);
+        bool pending = eventually([&] {
+            (void) joiner->take_steps();
+            return joiner->head() >= boundary + 1;
+        });
+        assert(pending && joiner->state() == RemoteServer::State::SUBSCRIBED);
+        (void) pending;
+        host->client().report_hash(boundary, w->content_hash());
+        joiner->report_hash(boundary, loaded->content_hash());
         bool joined = eventually([&] {
+            host->relay().step(1);
             (void) host->client().take_steps();
             (void) joiner->take_steps();
-            host->relay().step(1);
             return joiner->state() == RemoteServer::State::JOINED;
         });
         assert(joined);
         (void) joined;
         assert(joiner->client_id() == 2);
-        assert(joiner->head() >= 2);
 
         // Hash reports: agreement with the host's client is silent, and a
         // disagreement at any step the reference has reported is a kick
-        host->client().report_hash(1, 0x1111);
-        joiner->report_hash(1, 0x1111);
-        joiner->report_hash(2, 0x2222);
-        host->client().report_hash(2, 0x2222);
-        host->client().report_hash(3, 0x3333);
-        joiner->report_hash(3, 0xbad);
+        const uint64_t later = joiner->head();
+        host->client().report_hash(later - 1, 0x1111);
+        joiner->report_hash(later - 1, 0x1111);
+        joiner->report_hash(later, 0x2222);
+        host->client().report_hash(later, 0x2222);
+        bool agreed = eventually([&] {
+            (void) joiner->take_steps();
+            return joiner->state() == RemoteServer::State::JOINED;
+        }, std::chrono::seconds(1));
+        assert(agreed);
+        (void) agreed;
+        host->relay().step(1);
+        bool one_more = eventually([&] { return host->relay().clock().head > later; });
+        assert(one_more);
+        (void) one_more;
+        host->client().report_hash(later + 1, 0x3333);
+        joiner->report_hash(later + 1, 0xbad);
         bool desynced = eventually([&] {
             (void) joiner->take_steps();
             return joiner->state() == RemoteServer::State::DISCONNECTED;
         });
-        assert(desynced && joiner->reason() == "kicked: desync at step 3");
+        assert(desynced && joiner->reason() == "kicked: desync at step " + std::to_string(later + 1));
         (void) desynced;
 
         // A dial that is refused reports its error
@@ -484,7 +640,7 @@ namespace wry {
         });
         assert(subscribed);
         (void) subscribed;
-        second->report_hash(3, 0x3333);
+        second->report_hash(later + 1, 0x3333);
         co_await host->shutdown(std::chrono::milliseconds(200));
         bool told = eventually([&] {
             (void) second->take_steps();

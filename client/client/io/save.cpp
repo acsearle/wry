@@ -61,7 +61,7 @@ namespace wry {
     // Serialize the (immutable) world into a byte buffer.  Pure read of the
     // world plus local Saver state, so it is lock-free and safe to run
     // concurrently -- background saves may overlap.
-    static std::vector<uint8_t> serialize_world(const World* world) {
+    std::vector<uint8_t> serialize_world(const World* world) {
         Saver s;
         // Reserve space for the file header.  We write the real values once
         // we know the record count.
@@ -241,6 +241,16 @@ namespace wry {
         // Version-rejected (or otherwise unreadable) file: empty world, the
         // same fallback as an absent file.
         return w ? w : new World;
+    }
+
+    World* load_world_from_bytes(std::span<const uint8_t> bytes) {
+        Loader L;
+        L._cursor = bytes.data();
+        L._end    = bytes.data() + bytes.size();
+        World* w = L.load_world();
+        if (w)
+            w->hack_repair_invariant();
+        return w;
     }
 
     World* continue_game() {

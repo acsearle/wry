@@ -154,6 +154,14 @@ namespace wry {
         Server* _server = nullptr;
         RemoteServer::State _logged_state = RemoteServer::State::CONNECTING;
 
+        // A joiner holds its stream until the donated save has landed
+        // (multiplayer.md section 6): the displayed world is a placeholder
+        // meanwhile.  A host's client serves the relay's donation requests
+        // once its World is at the requested boundary
+        bool _awaiting_save = false;
+        std::vector<RemoteServer::Donation> _donations;
+        void _serve_donations();
+
         RemoteServer* _client();
         void _start_session();
         void _start_hosting(uint64_t head);

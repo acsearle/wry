@@ -215,30 +215,60 @@ namespace wry {
 
     // ---------------------------------------------------------------------
     // Loader: single-pass reader.  ptrs[id] is filled as records arrive.
+    //
+    // The input is untrusted (a donated save arrives over the network,
+    // multiplayer.md section 7): every read is bounded by the record body
+    // it is in, every reference is checked to name an earlier record of
+    // the type the field expects, and the first problem fails the whole
+    // load, which returns null.  Nothing here asserts on the bytes.  What
+    // a well-formed file MEANS (the World's invariants) is not checked
+    // here: hack_repair_invariant commissions a loaded World and holds the
+    // simulation's own asserts.
     // ---------------------------------------------------------------------
 
     struct Loader {
 
         const uint8_t* _cursor = nullptr;
         const uint8_t* _end = nullptr;
-        // End of the record body being loaded; entry records read up to it.
+        // End of the record body being loaded; reads inside a record stop
+        // there, and entry records read up to it
         const uint8_t* _body_end = nullptr;
 
-        // Indexed by SaveRef.  Sized once from the file header.
-        std::vector<void*> _ptrs;
+        // Indexed by SaveRef.  Sized once from the file header.  Every
+        // record is a garbage collected object, so a reference is checked
+        // dynamically against the type its field expects
+        std::vector<GarbageCollected*> _ptrs;
 
-        // Forward refs (ref_id >= current_record_id when read).  Patched
-        // after the whole file is consumed.
-        struct Fixup { void** field; SaveRef target; };
-        std::vector<Fixup> _fixups;
+        // The first problem, if any; the load fails as a whole
+        bool _failed = false;
+        const char* _why = nullptr;
 
-        // Raw byte readers.
+        void fail(const char* why) {
+            if (!_failed) {
+                _failed = true;
+                _why = why;
+            }
+        }
+
+        const uint8_t* _limit() const {
+            return _body_end ? _body_end : _end;
+        }
+
+        size_t remaining() const {
+            return (size_t)(_limit() - _cursor);
+        }
+
+        // Raw byte readers: zero, and the load failed, when the bytes are
+        // not there.
 
         template<typename T>
         T read_pod() {
             static_assert(std::is_trivially_copyable_v<T>);
-            assert(_cursor + sizeof(T) <= _end);
-            T x;
+            T x{};
+            if (_failed || (remaining() < sizeof(T))) {
+                fail("truncated record");
+                return x;
+            }
             std::memcpy(&x, _cursor, sizeof(T));
             _cursor += sizeof(T);
             return x;
@@ -251,35 +281,44 @@ namespace wry {
             uint64_t x = 0;
             int shift = 0;
             for (;;) {
-                assert(_cursor < _end);
+                if (_failed || (remaining() == 0)) {
+                    fail("truncated varint");
+                    return 0;
+                }
                 uint8_t b = *_cursor++;
                 x |= (uint64_t)(b & 0x7f) << shift;
                 if (!(b & 0x80)) return x;
                 shift += 7;
-                assert(shift < 64);
+                if (shift >= 64) {
+                    fail("varint too long");
+                    return 0;
+                }
             }
         }
 
-        // Resolve a SaveRef to a pointer, registering a fixup if the target
-        // has not been materialized yet.  In the DAG case, all refs resolve
-        // immediately and _fixups stays empty.
+        // A reference to an earlier record, as a T: null for the null
+        // reference; else the record's object if it is one (dynamically),
+        // which a well-formed file guarantees.  Records are post-order, so
+        // a reference to a later record is a malformed file, not a cycle
+        // to patch (Saver::record_back_edge is kept for the day Terms can
+        // form one)
         template<typename T>
-        T* _Nullable resolve(SaveRef r, T** field_for_fixup = nullptr) {
+        T* _Nullable ref(SaveRef r) {
             if (r == SAVE_REF_NULL) return nullptr;
-            assert(r < _ptrs.size());
-            if (_ptrs[r]) return (T*)_ptrs[r];
-            // forward reference; record for later patching.  field_for_fixup
-            // must point to the pointer field we want patched.
-            assert(field_for_fixup);
-            _fixups.push_back({ (void**)field_for_fixup, r });
-            return nullptr;
+            if (_failed) return nullptr;
+            if ((r >= _ptrs.size()) || !_ptrs[r]) {
+                fail("reference to a missing record");
+                return nullptr;
+            }
+            T* p = dynamic_cast<T*>(_ptrs[r]);
+            if (!p)
+                fail("reference to a record of the wrong type");
+            return p;
         }
 
-        // Drive the load.  Returns the World root.
-        World* load_world();
-
-        // After the main pass, patch any forward refs (empty in DAG case).
-        void resolve_fixups();
+        // Drive the load.  Returns the World root, or null if the bytes
+        // were not a save this build reads, with _why saying what failed.
+        World* _Nullable load_world();
 
     }; // struct Loader
 

@@ -69,6 +69,7 @@ namespace wry {
             uint64_t next_seq = 1;
             size_t pending = 0;             // actions waiting for a step
             size_t taken = 0;               // actions taken into the step being built
+            bool join_requested = false;    // asked; waiting for the gate
             bool join_pending = false;      // a JOIN rides the next step
             bool kicked = false;            // nothing further from it is processed
             std::map<uint64_t, uint64_t> hashes;    // step -> reported hash, the last HASH_WINDOW
@@ -97,6 +98,14 @@ namespace wry {
         // The consumer's state: one thread at a time touches it
         std::map<uint64_t, Client> clients;
         ClientID reference = SERVER_CLIENT_ID;  // whose hashes are the truth; 0 for none
+        // Donations in flight: the reference is serializing its World at
+        // `boundary` for `joiner`, and its SAVE frames are routed there
+        struct Transfer {
+            ClientID joiner;
+            uint64_t boundary;
+        };
+        std::map<uint64_t, Transfer> transfers;
+        uint64_t next_transfer = 1;
         std::vector<PendingAction> actions;
         std::vector<PendingEvent> events;
         std::vector<std::string> log;       // STEP messages; log[i] is step first + i
@@ -184,6 +193,31 @@ namespace wry {
             s->events.clear();
         }
 
+        // The join gate (section 6): a client may join once it has shown
+        // it holds the World, by a hash report within join_window of the
+        // head.  The reference needs no proof, and a relay without one
+        // has no save to have received
+        bool gate_open(Shared const& s, uint64_t id, Client const& c, uint64_t head) {
+            if ((s.reference == SERVER_CLIENT_ID) || (id == s.reference))
+                return true;
+            return !c.hashes.empty() && (c.reported + s.limits.join_window >= head);
+        }
+
+        void try_join(std::shared_ptr<Shared> const& s, uint64_t id, Client& c) {
+            if (!c.join_requested || c.join_pending || (c.state == Client::JOINED) || c.kicked)
+                return;
+            uint64_t head = 0;
+            {
+                std::scoped_lock lock{s->mutex};
+                head = s->head;
+            }
+            if (!gate_open(*s, id, c, head))
+                return;
+            c.join_requested = false;
+            c.join_pending = true;
+            s->events.push_back({Command::JOIN, id});
+        }
+
         // A client's report against the reference's for the same step, or
         // the reference's against everyone's: a disagreement is a kick
         void on_hash(std::shared_ptr<Shared> const& s, uint64_t id, Client& c, uint64_t step, uint64_t hash) {
@@ -198,25 +232,59 @@ namespace wry {
             c.reported = std::max(c.reported, step);
             while (c.hashes.size() > HASH_WINDOW)
                 c.hashes.erase(c.hashes.begin());
-            if (s->reference == SERVER_CLIENT_ID)
-                return;
-            std::string desync = "desync at step " + std::to_string(step);
-            if (id == s->reference) {
-                for (auto& [other_id, other] : s->clients) {
-                    if ((other_id == id) || other.kicked)
-                        continue;
-                    auto it = other.hashes.find(step);
-                    if ((it != other.hashes.end()) && (it->second != hash))
-                        kick(*s, other_id, other, desync);
+            if (s->reference != SERVER_CLIENT_ID) {
+                std::string desync = "desync at step " + std::to_string(step);
+                if (id == s->reference) {
+                    for (auto& [other_id, other] : s->clients) {
+                        if ((other_id == id) || other.kicked)
+                            continue;
+                        auto it = other.hashes.find(step);
+                        if ((it != other.hashes.end()) && (it->second != hash))
+                            kick(*s, other_id, other, desync);
+                    }
+                } else {
+                    auto r = s->clients.find(s->reference);
+                    if (r != s->clients.end()) {
+                        auto it = r->second.hashes.find(step);
+                        if ((it != r->second.hashes.end()) && (it->second != hash))
+                            kick(*s, id, c, desync);
+                    }
                 }
-            } else {
-                auto r = s->clients.find(s->reference);
-                if (r == s->clients.end())
-                    return;
-                auto it = r->second.hashes.find(step);
-                if ((it != r->second.hashes.end()) && (it->second != hash))
-                    kick(*s, id, c, desync);
             }
+            // A report may be the proof a waiting JOIN needed
+            try_join(s, id, c);
+        }
+
+        // SAVE frames from the donor go to the transfer's joiner, unread
+        void on_save_frame(std::shared_ptr<Shared> const& s, uint64_t id, Client& c, uint16_t tag,
+                           std::string const& bytes) {
+            if (id != s->reference)
+                return kick(*s, id, c, "unexpected message");
+            uint64_t transfer = 0;
+            if (tag == wire::SAVE_BEGIN) {
+                auto b = wire::decode_save_begin(bytes);
+                if (!b)
+                    return kick(*s, id, c, "malformed SAVE_BEGIN");
+                transfer = b->transfer;
+            } else if (tag == wire::SAVE_DATA) {
+                auto d = wire::decode_save_data(bytes);
+                if (!d)
+                    return kick(*s, id, c, "malformed SAVE_DATA");
+                transfer = d->transfer;
+            } else {
+                auto e = wire::decode_save_end(bytes);
+                if (!e)
+                    return kick(*s, id, c, "malformed SAVE_END");
+                transfer = *e;
+            }
+            auto it = s->transfers.find(transfer);
+            if (it == s->transfers.end())
+                return;                     // its joiner has gone: dropped
+            auto j = s->clients.find(it->second.joiner);
+            if ((j != s->clients.end()) && !j->second.kicked)
+                s->transport->send(it->second.joiner, bytes);
+            if (tag == wire::SAVE_END)
+                s->transfers.erase(it);
         }
 
         void on_message(std::shared_ptr<Shared> const& s, uint64_t id, std::string const& bytes) {
@@ -243,10 +311,25 @@ namespace wry {
                     std::scoped_lock lock{s->mutex};
                     head = s->head;
                 }
-                s->transport->send(id, wire::encode_welcome({id, (uint64_t)s->limits.quantum.count(), head, s->first}));
-                // The stream so far: a subscriber replays from genesis
-                for (std::string const& step : s->log)
-                    s->transport->send(id, step);
+                // A joiner gets the stream from here on and the World as of
+                // here from the reference.  The reference itself holds the
+                // World the stream started from, so it gets the stream from
+                // its start (the clock may have ticked before its HELLO
+                // arrived); so does every client of a relay without a
+                // reference, a test fixture
+                const bool donated = (s->reference != SERVER_CLIENT_ID) && (id != s->reference);
+                const uint64_t first = donated ? head + 1 : s->first;
+                s->transport->send(id, wire::encode_welcome({id, (uint64_t)s->limits.quantum.count(), head, first}));
+                if (donated) {
+                    uint64_t transfer = s->next_transfer++;
+                    s->transfers.emplace(transfer, Shared::Transfer{id, head});
+                    // Queued to the reference after STEP head, before STEP
+                    // head + 1: it snapshots the World STEP head produces
+                    s->transport->send(s->reference, wire::encode_save_request(transfer, head));
+                } else {
+                    for (std::string const& step : s->log)
+                        s->transport->send(id, step);
+                }
                 return;
             }
             switch (tag) {
@@ -270,10 +353,14 @@ namespace wry {
                         return kick(*s, id, c, "malformed JOIN_REQUEST");
                     if ((c.state == Client::JOINED) || c.join_pending)
                         return;             // idempotent
-                    c.join_pending = true;
-                    s->events.push_back({Command::JOIN, id});
+                    c.join_requested = true;
+                    try_join(s, id, c);     // now, or at the report that opens the gate
                     return;
                 }
+                case wire::SAVE_BEGIN:
+                case wire::SAVE_DATA:
+                case wire::SAVE_END:
+                    return on_save_frame(s, id, c, tag, bytes);
                 case wire::QUIT:
                     s->transport->end(id);  // its Closed follows, and the LEAVE
                     return;
@@ -296,6 +383,14 @@ namespace wry {
             if ((c.state == Client::JOINED) || c.join_pending)
                 s->events.push_back({Command::LEAVE, id});
             std::erase_if(s->actions, [id](PendingAction const& a) { return a.client == id; });
+            // Its donation, if one was in flight, has nowhere to go; and
+            // without the reference there is nothing to compare with or
+            // to donate
+            std::erase_if(s->transfers, [id](auto const& t) { return t.second.joiner == id; });
+            if (id == s->reference) {
+                s->reference = SERVER_CLIENT_ID;
+                s->transfers.clear();
+            }
             s->clients.erase(it);
         }
 
@@ -1040,6 +1135,132 @@ namespace wry {
             co_await y.transport->shutdown(std::chrono::milliseconds(100));
             (void) co_await lone_scope.join();
         }
+        co_return;
+    };
+
+    define_test("relay_donation_and_gate") {
+        auto relay = Relay::make(paused_limits());
+        Nursery scope;
+        scope.soon(relay->serve());
+        relay->pause();
+
+        RawClient r{*relay, scope, true};   // the reference, and so the donor
+        r.hello();
+        bool r_welcomed = eventually([&] {
+            r.drain();
+            return !r.of(wire::WELCOME).empty();
+        });
+        assert(r_welcomed);
+        (void) r_welcomed;
+        relay->step(2);
+        bool stepped = eventually([&] { return relay->clock().head >= 3; });
+        assert(stepped);
+        (void) stepped;
+
+        // A joiner's HELLO: its WELCOME starts the stream after the head,
+        // nothing is replayed, and the reference is asked for a save at
+        // the head
+        RawClient j{*relay, scope};
+        j.hello();
+        bool asked = eventually([&] {
+            r.drain();
+            j.drain();
+            return !r.of(wire::REQUEST_SAVE).empty() && !j.of(wire::WELCOME).empty();
+        });
+        assert(asked);
+        (void) asked;
+        auto request = wire::decode_save_request(r.of(wire::REQUEST_SAVE)[0]);
+        auto welcome = wire::decode_welcome(j.of(wire::WELCOME)[0]);
+        assert(request && welcome);
+        assert(request->boundary == welcome->head && welcome->first == welcome->head + 1);
+        assert(j.of(wire::STEP).empty());
+        // The reference got no request for itself
+        assert(r.of(wire::REQUEST_SAVE).size() == 1);
+
+        // The donor's frames reach the joiner, in order, by transfer id
+        std::string blob(150000, 'z');
+        for (size_t i = 0; i != blob.size(); ++i)
+            blob[i] = (char)(i * 7);
+        r.send(wire::encode_save_begin(request->transfer, request->boundary, blob.size()));
+        r.send(wire::encode_save_data(request->transfer, 0, std::string_view(blob).substr(0, 100000)));
+        r.send(wire::encode_save_data(request->transfer, 1, std::string_view(blob).substr(100000)));
+        r.send(wire::encode_save_end(request->transfer));
+        bool delivered = eventually([&] {
+            j.drain();
+            return !j.of(wire::SAVE_END).empty();
+        });
+        assert(delivered);
+        (void) delivered;
+        {
+            auto begin = wire::decode_save_begin(j.of(wire::SAVE_BEGIN).at(0));
+            assert(begin && begin->transfer == request->transfer && begin->total == blob.size());
+            std::vector<std::string> data = j.of(wire::SAVE_DATA);
+            assert(data.size() == 2);
+            std::string joined;
+            for (size_t i = 0; i != 2; ++i) {
+                auto d = wire::decode_save_data(data[i]);
+                assert(d && d->index == i && d->transfer == request->transfer);
+                joined.append(d->bytes);
+            }
+            assert(joined == blob);
+            assert(wire::decode_save_end(j.of(wire::SAVE_END)[0]).value() == request->transfer);
+        }
+        // A finished transfer takes no more frames
+        r.send(wire::encode_save_data(request->transfer, 2, "late"));
+
+        // The gate: a JOIN_REQUEST before any hash report waits; a report
+        // within the window of the head opens it
+        j.send(wire::encode_join_request("j"));
+        auto joins_for = [&](RawClient& c, ClientID who) {
+            size_t n = 0;
+            for (std::string const& m : c.of(wire::STEP))
+                for (auto& e : wire::decode_step(m)->entries)
+                    if (e.origin == SERVER_CLIENT_ID) {
+                        auto ev = wire::decode_event(e.bytes);
+                        if (ev && ev->kind == Command::JOIN && ev->client == who)
+                            ++n;
+                    }
+            return n;
+        };
+        relay->step(2);
+        bool waited = eventually([&] {
+            j.drain();
+            return j.of(wire::STEP).size() >= 2;
+        });
+        assert(waited && joins_for(j, j.server_id) == 0);
+        (void) waited;
+        j.send(wire::encode_hash(welcome->head, 0xabc));
+        bool admitted = eventually([&] {
+            relay->step(1);
+            j.drain();
+            return joins_for(j, j.server_id) == 1;
+        }, std::chrono::seconds(2));
+        assert(admitted);
+        (void) admitted;
+        assert(j.of(wire::SAVE_DATA).size() == 2);   // the late chunk never came
+
+        // Only the reference may send save frames, and nobody may ask for
+        // one
+        RawClient x{*relay, scope};
+        x.hello();
+        x.send(wire::encode_save_data(request->transfer, 0, "junk"));
+        RawClient y{*relay, scope};
+        y.hello();
+        y.send(wire::encode_save_request(1, 1));
+        bool refused = eventually([&] {
+            x.drain();
+            y.drain();
+            return !x.closed.empty() && !y.closed.empty();
+        });
+        assert(refused);
+        (void) refused;
+        assert(kick_reason(x, "x save frame") == "unexpected message");
+        assert(kick_reason(y, "y request") == "unexpected message");
+
+        co_await relay->shutdown(std::chrono::milliseconds(100));
+        for (RawClient* c : {&r, &j, &x, &y})
+            co_await c->transport->shutdown(std::chrono::milliseconds(100));
+        (void) co_await scope.join();
         co_return;
     };
 

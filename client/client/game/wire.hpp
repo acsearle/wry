@@ -52,13 +52,19 @@ namespace wry::wire {
         PING = 7,           // server -> client: liveness while paused
         KICK = 8,           // server -> client: the farewell, a reason
         SHUTDOWN = 9,       // server -> client
-        HASH = 10,          // client -> server: step, hash (stage 4)
+        HASH = 10,          // client -> server: step, hash
+        REQUEST_SAVE = 11,  // server -> donor: transfer, boundary
+        SAVE_BEGIN = 12,    // donor -> server -> joiner: transfer, boundary, total
+        SAVE_DATA = 13,     // donor -> server -> joiner: transfer, index, bytes
+        SAVE_END = 14,      // donor -> server -> joiner: transfer
     };
 
     inline constexpr size_t MAX_ACTION_BYTES = 1024;    // an ACTION's body
     inline constexpr size_t MAX_NAME_BYTES = 64;        // a JOIN_REQUEST's name
     inline constexpr size_t MAX_REASON_BYTES = 1024;    // a KICK's reason
     inline constexpr size_t MAX_STEP_BYTES = 2 << 20;   // a STEP frame
+    inline constexpr size_t MAX_SAVE_CHUNK = 1 << 20;   // a SAVE_DATA payload
+    inline constexpr size_t MAX_SAVE_BYTES = 256 << 20; // a whole donated save
 
     // The cap on a frame's length (tag and payload) by tag; 0 for a tag
     // the protocol does not have
@@ -106,6 +112,23 @@ namespace wry::wire {
         ClientID client;
     };
 
+    struct SaveRequest {
+        uint64_t transfer;
+        uint64_t boundary;
+    };
+
+    struct SaveBegin {
+        uint64_t transfer;
+        uint64_t boundary;
+        uint64_t total;
+    };
+
+    struct SaveData {
+        uint64_t transfer;
+        uint32_t index;
+        std::string_view bytes;
+    };
+
     // Encoders produce the message: tag then payload.  The transport
     // frames it
     std::string encode_hello(Hello const& hello);
@@ -118,6 +141,10 @@ namespace wry::wire {
     std::string encode_ping();
     std::string encode_shutdown();
     std::string encode_hash(uint64_t step, uint64_t hash);
+    std::string encode_save_request(uint64_t transfer, uint64_t boundary);
+    std::string encode_save_begin(uint64_t transfer, uint64_t boundary, uint64_t total);
+    std::string encode_save_data(uint64_t transfer, uint32_t index, std::string_view bytes);
+    std::string encode_save_end(uint64_t transfer);
 
     // Decoders take the whole message and check its tag
     std::optional<Hello> decode_hello(std::string_view message);
@@ -128,6 +155,10 @@ namespace wry::wire {
     std::optional<std::string_view> decode_join_request(std::string_view message);
     std::optional<std::string_view> decode_kick(std::string_view message);
     std::optional<std::pair<uint64_t, uint64_t>> decode_hash(std::string_view message);
+    std::optional<SaveRequest> decode_save_request(std::string_view message);
+    std::optional<SaveBegin> decode_save_begin(std::string_view message);
+    std::optional<SaveData> decode_save_data(std::string_view message);
+    std::optional<uint64_t> decode_save_end(std::string_view message);
 
 } // namespace wry::wire
 

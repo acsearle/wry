@@ -7,11 +7,10 @@ lifecycle, the wire protocol, and the plan for building it.  First agreed
 async I/O stack, core/kqueue_reactor.hpp, core/nursery.hpp,
 container/mpsc_queue.hpp; the hashing groundwork in core/hash.hpp) and
 against the decisions in section 0.  Of the plan in
-section 13, the transport layer (stage 1), the action codec and
-explicit step intake (stage 2), the relay, client and host (stage 3)
-and the hash tripwire (stage 4) are landed: single player runs through
-the relay over a socket pair, a second process joins over TCP, and a
-client whose World diverges from the host's is kicked.
+section 13, stages 1 to 5 are landed: single player runs through the
+relay over a socket pair, a second process joins over TCP mid-game from
+the host's donated save, and a client whose World diverges from the
+host's is kicked.  Stage 6, the diagnosis harness, remains.
 
 Status: normative design, with a staged build plan (section 13).  The
 direction is agreed; specific numbers remain open (section 11).
@@ -303,10 +302,9 @@ A client needs a World consistent with some boundary B, plus the stream
 from B forward.  There is no ring of past steps: the joiner is
 subscribed to the live stream *before* the donor snapshots, so every
 step after B reaches it in order and the donation only has to carry B.
-(Until stage 5 lands, B is the scenario's genesis: the relay keeps the
-whole stream and a subscriber replays it from step 1, bounded only by
-the transport's outbound limit; `join` starts the scenario afresh
-first.)
+(Landed 2026-10-21 as stage 5.  A relay with no reference client, a
+test fixture, keeps the whole stream and replays it from its first
+step instead.)
 
 **Subscribe** (become an observer):
 
@@ -337,6 +335,19 @@ first.)
 5. An observer is a full client: it hashes and can be asked to donate
    (a host's client is always preferred as donor, so in this revision
    observers are never asked; the capability costs nothing).
+
+How it is built: the relay's `REQUEST_SAVE{transfer, boundary}` goes
+to the reference over its ordinary connection, so it is ordered after
+`STEP boundary` and before the next; the host's `WorldState` fulfils
+it once the displayed World is at the boundary, serializing a rooted
+snapshot on the pool and sending `SAVE_BEGIN`/`SAVE_DATA`/`SAVE_END`
+through the relay, which routes them to the joiner by transfer id
+without reading them.  The joiner's `WorldState` holds its stream and
+keeps drawing whatever it had until the save is whole, loads it with a
+loader that rejects malformed bytes instead of asserting on them,
+installs it, reports its hash, and applies the held steps.  A save
+transfer is bounded by the transport's outbound limit on the relay
+(open item 11.12).
 
 **Join** (observer to player) is gated: the client sends `JOIN_REQUEST{
 name}` and the server honors it only once that client's most recent hash
@@ -717,6 +728,16 @@ tier-2 data exists.
     original host's Player.  A persistent player identity (a name or a
     key) in the map would fix it; not needed while hosting is for
     trusted groups.
+12. Save transfer flow control: the donor sends the whole save as fast
+    as it can and the relay forwards it, so a save larger than the
+    relay's outbound bound for the joiner (16 MiB) kicks the joiner as
+    a slow consumer.  Acknowledged chunks, or a raised bound for
+    transfers, when worlds get that big.
+13. The loader checks the bytes' structure, not the World's meaning: a
+    save that is well-formed but violates the simulation's invariants
+    still meets hack_repair_invariant's asserts.  A validating
+    commission is the fix if donors are ever less trusted than the
+    host's own client.
 
 ## 12. Prior art
 
@@ -808,7 +829,11 @@ landing risky changes as brute-force-tested primitives first.
    a snapshot, every k steps, on a worker), `HASH` reports, kick the
    minority, `state-hash`.  Then the incremental form of 9.1, with the
    save-stream hash as its differential oracle, and k drops to 1.
-5. **Join.**  Donation through the host's client, `SAVE_*` frames, load
+5. **Join** (landed 2026-10-21: `REQUEST_SAVE` and the `SAVE_*`
+   frames, the relay's transfer table and join gate, `RemoteServer`'s
+   donor and joiner sides, `WorldState` awaiting the save and serving
+   donations, `load_world_from_bytes` over a loader that fails instead
+   of asserting, and the hostile-bytes test).  Donation through the host's client, `SAVE_*` frames, load
    from bytes with a hardened loader, catch-up, the hash gate on
    `JOIN_REQUEST`.  Tests: in-process join mid-game with a hash check at
    B and at the head; the two-process script extended with a late

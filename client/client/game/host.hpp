@@ -29,7 +29,10 @@
 #include <string>
 #include <vector>
 
+#include <optional>
+
 #include "coroutine.hpp"
+#include "garbage_collected.hpp"
 #include "nursery.hpp"
 #include "relay.hpp"
 #include "server.hpp"
@@ -64,6 +67,29 @@ namespace wry {
         void report_hash(uint64_t step, uint64_t hash) override;
         std::vector<Step> take_steps() override;
         bool has_input() override;
+
+        // The donor's side (the host's client, multiplayer.md section 6):
+        // a save the relay asked for, to be fulfilled with donate() once
+        // the owner's World is at the boundary -- the request was queued
+        // after STEP boundary and before the next, so that is the World
+        // the owner has just produced
+        struct Donation {
+            uint64_t transfer;
+            uint64_t boundary;
+        };
+        std::vector<Donation> take_donations();
+
+        // Serialize `snapshot` on the pool (a task in `scope`) and send it
+        // to the relay as the transfer's SAVE frames
+        void donate(Donation const& donation, Root<World const*> snapshot, coroutine::Nursery& scope);
+
+        // The joiner's side: the donated save, once whole -- the World as
+        // of `boundary`, as the save format's bytes
+        struct DonatedSave {
+            uint64_t boundary;
+            std::vector<uint8_t> bytes;
+        };
+        std::optional<DonatedSave> take_save();
 
         State state() const { return _state; }
         ClientID client_id() const { return _client_id; }
@@ -110,6 +136,17 @@ namespace wry {
         std::vector<Player::Action> _queued;    // submitted before JOINED
         std::vector<Step> _steps;
         std::string _reason;
+        std::vector<Donation> _donations;
+        struct Incoming {
+            uint64_t transfer;
+            uint64_t boundary;
+            uint64_t total;
+            uint32_t next_index;
+            std::vector<uint8_t> bytes;
+        };
+        std::optional<Incoming> _incoming;
+        std::optional<DonatedSave> _save;
+        void _send_save(uint64_t transfer, uint64_t boundary, std::string_view bytes);
     };
 
     class Host {

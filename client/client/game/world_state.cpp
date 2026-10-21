@@ -206,7 +206,9 @@ namespace wry {
         m._worlds.emplace_back(world);
         m._world_to_render = world;
         m._steps_taken = 0;
-        m._backlog.clear();
+        // The backlog is left alone: a joiner installing its donated save
+        // has the steps after the boundary waiting in it, and a new or
+        // loaded game started a new session, which cleared it
         if (m._server)
             m._server->request_join();
     }
@@ -236,7 +238,9 @@ namespace wry {
     void WorldState::_start_session() {
         if (!_gui.join_address.empty()) {
             _start_joining(_gui.join_address, _gui.join_port);
+            // A placeholder to draw until the host's save arrives
             install_displayed_world(*this, make_starting_world());
+            _awaiting_save = true;
             return;
         }
         new_game();
@@ -331,10 +335,13 @@ namespace wry {
 
     void WorldState::join(String const& address, uint16_t port) {
         _start_joining(address, port);
-        // In this revision a joiner starts from the scenario's genesis and
-        // replays the stream (multiplayer.md 9.5 replaces this with the
-        // donated save)
-        install_displayed_world(*this, make_starting_world());
+        // The host's client donates its World as of the head we arrive at,
+        // and the stream from there follows; until the save has landed the
+        // steps wait and whatever is displayed stays as a placeholder
+        _awaiting_save = true;
+        _backlog.clear();
+        _steps_taken = 0;
+        _server->request_join();
     }
 
     void WorldState::leave() {
@@ -355,7 +362,31 @@ namespace wry {
     }
 
     bool WorldState::has_server_input() {
-        return !_backlog.empty() || (_server && _server->has_input());
+        return (!_awaiting_save && !_backlog.empty()) || (_server && _server->has_input());
+    }
+
+    // The host's client as donor: a request the relay queued after STEP
+    // boundary names the World that step produced, which is the displayed
+    // one once it has been applied; the walk runs on the pool over a rooted
+    // snapshot (io/save.cpp's serialize_world)
+    void WorldState::_serve_donations() {
+        RemoteServer* client = _client();
+        if (!client || !_world_to_render || _awaiting_save)
+            return;
+        const uint64_t time = (uint64_t)_world_to_render._ptr->_time;
+        std::erase_if(_donations, [&](RemoteServer::Donation const& d) {
+            if (d.boundary > time)
+                return false;               // not there yet
+            if (d.boundary == time) {
+                client->donate(d, Root<World const*>{_world_to_render._ptr}, *_gui.scope);
+            } else {
+                String message("Cannot donate the world at time ");
+                message.append(StringView(std::to_string(d.boundary).c_str()));
+                message.append(StringView(": already past it"));
+                _gui.append_log(message);
+            }
+            return true;
+        });
     }
 
     coroutine::Task WorldState::_apply_step_async(Step const& step) {
@@ -557,11 +588,35 @@ namespace wry {
         // server events and every client's actions, in the server's order.
         // A frame applies its share and keeps the rest; when current, the
         // share is everything.  (Single player: our own actions,
-        // round-tripped through the relay in this process.)
+        // round-tripped through the relay in this process.)  A joiner
+        // holds them until the donated save has given it the World they
+        // continue; a host's client serves the donation requests the
+        // relay sent it
         if (_server) {
             for (Step& step : _server->take_steps())
                 _backlog.push_back(std::move(step));
-            for (size_t applied = 0; !_backlog.empty() && (applied != max_steps_per_frame); ++applied) {
+            if (RemoteServer* client = _client()) {
+                for (RemoteServer::Donation const& d : client->take_donations())
+                    _donations.push_back(d);
+                if (_awaiting_save) {
+                    if (std::optional<RemoteServer::DonatedSave> save = client->take_save()) {
+                        World* world = load_world_from_bytes(save->bytes);
+                        if (!world) {
+                            client->disconnect("the donated save is unreadable");
+                        } else {
+                            install_displayed_world(*this, world);
+                            _awaiting_save = false;
+                            // Proof of receipt: our hash of what we loaded
+                            client->report_hash(save->boundary, world->content_hash());
+                            String message("Loaded the game at time ");
+                            message.append(StringView(std::to_string(save->boundary).c_str()));
+                            _gui.append_log(message);
+                        }
+                    }
+                }
+            }
+            _serve_donations();
+            for (size_t applied = 0; !_awaiting_save && !_backlog.empty() && (applied != max_steps_per_frame); ++applied) {
                 Step step = std::move(_backlog.front());
                 _backlog.pop_front();
                 // Steps are numbered by the World time they produce; a
@@ -577,6 +632,7 @@ namespace wry {
                     break;
                 }
                 _apply_step(step);
+                _serve_donations();
             }
         }
 
@@ -847,7 +903,7 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
-            "join", "Join the game at address:port, starting its scenario afresh", Category::session,
+            "join", "Join the game at address:port, starting from the host's save", Category::session,
             std::tuple{
                 Param<Ctx, String>{"where", "the host's address:port"},
             },
@@ -884,6 +940,8 @@ namespace wry {
                 text += " client " + std::to_string(client->client_id());
                 text += " head " + std::to_string(client->head());
                 text += " applied " + std::to_string(ws._steps_taken);
+                if (ws._awaiting_save)
+                    text += " awaiting save";
                 if (ws._host) {
                     Relay::Clock clock = ws._host->relay().clock();
                     text += clock.paused ? " paused" : " running";

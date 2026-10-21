@@ -4,13 +4,15 @@
     python3 tools/wry_net_smoke.py [PATH_TO_CLIENT_BINARY]
 
 Launches a host and a joiner, each headless on its own control socket.
-The host starts a game, pauses its clock and listens; the joiner starts
-the same scenario and joins the host, replaying its stream.  Then each
-side issues an action and the host steps the clock, and the script
-requires both to report the same tile contents and the same state hash
-after every round (game/docs/multiplayer.md section 13, stage 3).  The
-binary defaults to the newest Debug build in DerivedData.  Exit status 0
-on success.  Standard library only.
+The host starts a game, pauses its clock, plays on for a while and
+listens; the joiner starts its own game, abandons it to join the host,
+receives the host's save of the world as of the step it arrived at, and
+follows the stream from there.  Then each side issues an action and the
+host steps the clock, and the script requires both to report the same
+tile contents and the same state hash after every round
+(game/docs/multiplayer.md section 13, stages 3 to 5).  The binary
+defaults to the newest Debug build in DerivedData.  Exit status 0 on
+success.  Standard library only.
 """
 
 import glob
@@ -121,6 +123,8 @@ def main(argv):
         h.ok('press "New Game"')
         h.ok("frame 30")
         h.ok("pause")
+        h.ok("write Coordinate(5, 5) OPCODE::SWAP")       # something a joiner must inherit
+        h.ok("step 40")                                   # well past genesis
         port = int(h.ok("host 0"))
         assert port != 0
 
@@ -137,11 +141,19 @@ def main(argv):
         def tick():
             h.ok("step 1", quiet=True)
 
-        # The joiner replays the host's stream so far and its JOIN rides
-        # a step
+        # The joiner receives the host's save as of the head, catches up on
+        # the stream from there, and its JOIN rides a step once its hash
+        # report has proved it
         h.ok("step 3")
         until("the joiner to catch up", level, tick)
         print(f"  level at {h.ok('state-hash')}")
+        # Its JOIN rides the step after the report that opened the gate
+        until("the joiner to be admitted",
+              lambda: j.ok("session", quiet=True).startswith("joined joined"), tick)
+        session = j.ok("session")
+        assert session.startswith("joined joined client 2 head "), session
+        assert int(session.split()[5]) >= 40, session
+        assert j.ok("get Coordinate(5, 5)") == "OPCODE::SWAP"
 
         # The joiner acts; the host's clock carries it to both
         j.ok("write Coordinate(1, 1) OPCODE::SWAP")
@@ -177,6 +189,13 @@ def main(argv):
         joiner.finish()
         host.finish()
     except BaseException:
+        # What each side thought was going on, while it can still say
+        for p in (host, joiner):
+            if p is not None and p.process.poll() is None:
+                try:
+                    print(f"  {p.name} session: {p.game.run('session', quiet=True)['text']}", file=sys.stderr)
+                except Exception as e:
+                    print(f"  {p.name}: no answer ({e})", file=sys.stderr)
         for p in (host, joiner):
             if p is not None:
                 p.kill()

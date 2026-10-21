@@ -32,6 +32,10 @@ namespace wry::wire {
             case KICK:         return 2 + MAX_REASON_BYTES;
             case SHUTDOWN:     return 2;
             case HASH:         return 2 + 8 + 8;
+            case REQUEST_SAVE: return 2 + 8 + 8;
+            case SAVE_BEGIN:   return 2 + 8 + 8 + 8;
+            case SAVE_DATA:    return 2 + 8 + 4 + MAX_SAVE_CHUNK;
+            case SAVE_END:     return 2 + 8;
             default:           return 0;
         }
     }
@@ -191,6 +195,36 @@ namespace wry::wire {
         return std::move(w.bytes);
     }
 
+    std::string encode_save_request(uint64_t transfer, uint64_t boundary) {
+        Writer w{REQUEST_SAVE};
+        w.u64(transfer);
+        w.u64(boundary);
+        return std::move(w.bytes);
+    }
+
+    std::string encode_save_begin(uint64_t transfer, uint64_t boundary, uint64_t total) {
+        Writer w{SAVE_BEGIN};
+        w.u64(transfer);
+        w.u64(boundary);
+        w.u64(total);
+        return std::move(w.bytes);
+    }
+
+    std::string encode_save_data(uint64_t transfer, uint32_t index, std::string_view bytes) {
+        assert(bytes.size() <= MAX_SAVE_CHUNK);
+        Writer w{SAVE_DATA};
+        w.u64(transfer);
+        w.u32(index);
+        w.raw(bytes);
+        return std::move(w.bytes);
+    }
+
+    std::string encode_save_end(uint64_t transfer) {
+        Writer w{SAVE_END};
+        w.u64(transfer);
+        return std::move(w.bytes);
+    }
+
     // ----------------------------------------------------------------
     // Decoders.
 
@@ -314,6 +348,54 @@ namespace wry::wire {
         return std::pair{step, hash};
     }
 
+    std::optional<SaveRequest> decode_save_request(std::string_view message) {
+        Reader r{message};
+        if (!expect_tag(r, REQUEST_SAVE))
+            return std::nullopt;
+        SaveRequest q;
+        q.transfer = r.u64();
+        q.boundary = r.u64();
+        if (!r.done())
+            return std::nullopt;
+        return q;
+    }
+
+    std::optional<SaveBegin> decode_save_begin(std::string_view message) {
+        Reader r{message};
+        if (!expect_tag(r, SAVE_BEGIN))
+            return std::nullopt;
+        SaveBegin b;
+        b.transfer = r.u64();
+        b.boundary = r.u64();
+        b.total = r.u64();
+        if (!r.done())
+            return std::nullopt;
+        return b;
+    }
+
+    std::optional<SaveData> decode_save_data(std::string_view message) {
+        Reader r{message};
+        if (!expect_tag(r, SAVE_DATA))
+            return std::nullopt;
+        SaveData d;
+        d.transfer = r.u64();
+        d.index = r.u32();
+        d.bytes = r.rest();
+        if (!r.done() || (d.bytes.size() > MAX_SAVE_CHUNK))
+            return std::nullopt;
+        return d;
+    }
+
+    std::optional<uint64_t> decode_save_end(std::string_view message) {
+        Reader r{message};
+        if (!expect_tag(r, SAVE_END))
+            return std::nullopt;
+        uint64_t transfer = r.u64();
+        if (!r.done())
+            return std::nullopt;
+        return transfer;
+    }
+
     // ----------------------------------------------------------------
     // Tests.
 
@@ -376,6 +458,23 @@ namespace wry::wire {
             assert(tag_of(encode_quit()) == QUIT && encode_quit().size() == 2);
             assert(tag_of(encode_ping()) == PING && tag_of(encode_shutdown()) == SHUTDOWN);
         }
+        {
+            auto q = decode_save_request(encode_save_request(5, 77));
+            assert(q && q->transfer == 5 && q->boundary == 77);
+            auto b = decode_save_begin(encode_save_begin(5, 77, 123456));
+            assert(b && b->transfer == 5 && b->boundary == 77 && b->total == 123456);
+            std::string payload(MAX_SAVE_CHUNK, 'p');
+            std::string data = encode_save_data(5, 3, payload);
+            assert(data.size() <= cap_for_tag(SAVE_DATA));
+            auto d = decode_save_data(data);
+            assert(d && d->transfer == 5 && d->index == 3 && d->bytes == payload);
+            std::string over = encode_save_data(5, 0, "");
+            over.append(MAX_SAVE_CHUNK + 1, 'p');
+            assert(!decode_save_data(over));
+            auto e = decode_save_end(encode_save_end(5));
+            assert(e && *e == 5);
+            assert(!decode_save_end(encode_save_request(5, 77)));
+        }
 
         // The wrong tag, a truncation, or trailing bytes is nullopt, never
         // a crash
@@ -384,6 +483,8 @@ namespace wry::wire {
                 encode_hello({1, 2, 3}), encode_welcome({1, 2, 3, 4}), encode_action(1, "abc"),
                 encode_step(1, std::vector<Entry>{{1, 1, "abc"}, {0, 0, encode_event(Command::LEAVE, 2)}}),
                 encode_join_request("n"), encode_hash(1, 2),
+                encode_save_request(1, 2), encode_save_begin(1, 2, 3), encode_save_data(1, 2, "abc"),
+                encode_save_end(1),
             };
             for (std::string const& m : messages) {
                 assert(!decode_hello(encode_quit()) && !decode_welcome(encode_quit()));
@@ -395,6 +496,10 @@ namespace wry::wire {
                     (void) decode_step(t);
                     (void) decode_join_request(t);
                     (void) decode_hash(t);
+                    (void) decode_save_request(t);
+                    (void) decode_save_begin(t);
+                    (void) decode_save_data(t);
+                    (void) decode_save_end(t);
                 }
                 std::string longer = m + "!";
                 assert(!decode_hello(longer) && !decode_welcome(longer) && !decode_step(longer)

@@ -416,8 +416,9 @@ drag as its result (`transform.translate(value=...)`), not its path.
 - **session**: `new-game`, `save [name]`, `load name`, `list-saves`,
   `quit`; and the multiplayer trio `host [port]` (listen for players;
   replies with the bound port, 0 picking one), `join address:port`
-  (abandon the local game, start the scenario afresh and replay the
-  host's stream), `leave` (go on alone from the current state, a fork).
+  (abandon the local game; the host's client donates its world as of
+  the step we arrive at, and the stream follows from there), `leave`
+  (go on alone from the current state, a fork).
 
 ## 8. Time
 

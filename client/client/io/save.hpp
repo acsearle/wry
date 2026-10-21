@@ -9,6 +9,8 @@
 #define save_hpp
 
 #include <functional>
+#include <span>
+#include <vector>
 
 #include "world.hpp"
 #include "coroutine.hpp"
@@ -32,6 +34,15 @@ bool save_game(const World* world);
 // thread (ok == false on any I/O failure).
 coroutine::Task save_game(Root<World const*> snapshot, move_only_function<void(bool)> on_done = {});
 void delete_game(int id);
+
+// The save format's bytes (a file's whole contents) for a frozen World,
+// and a World from them: what a donated save is on the wire
+// (multiplayer.md section 6).  The loader rejects bytes it cannot read
+// instead of asserting on them, and the World it returns is commissioned
+// (hack_repair_invariant); null if the bytes are not a save this build
+// reads.
+std::vector<uint8_t> serialize_world(const World* world);
+World* _Nullable load_world_from_bytes(std::span<const uint8_t> bytes);
 
 std::vector<std::pair<std::string, int>> enumerate_games();
 

@@ -34,10 +34,15 @@
 //  a window of recent steps; a client whose hash differs is kicked with
 //  "desync at step n".  The reference is the host's own client.
 //
-//  The stream since the game began is kept, and a late subscriber gets
-//  it from step 1: in this revision every client starts from the
-//  scenario's genesis and replays (multiplayer.md 9.5 replaces this with
-//  a donated save and the stream from its boundary).
+//  A subscriber gets the stream from the head it arrived at, and the
+//  World as of that head from the reference client (section 6): the
+//  relay asks it for a save (REQUEST_SAVE) and routes the SAVE frames it
+//  returns to the joiner by transfer id, reading none of them.  The
+//  joiner's JOIN_REQUEST waits until its last hash report is within
+//  `join_window` of the head -- proof it received the save and is
+//  keeping up -- and a report that disagrees kicks it like any other.
+//  A relay with no reference client (a test fixture) keeps the whole
+//  stream and replays it to subscribers from its first step instead.
 //
 
 #ifndef relay_hpp
@@ -63,6 +68,9 @@ namespace wry {
             size_t actions_per_step = 64;                       // per client per step
             size_t max_pending_actions = 1024;                  // per client; beyond is a flood
             std::chrono::milliseconds handshake_deadline{5000};
+            // How close to the head a client's last hash report must be
+            // for its JOIN to ride the stream (section 6)
+            uint64_t join_window = 16;
             Transport::Limits transport{};
         };
 
