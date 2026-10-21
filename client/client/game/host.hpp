@@ -61,6 +61,7 @@ namespace wry {
         // The seam
         void submit(Player::Action action) override;
         void request_join() override;
+        void report_hash(uint64_t step, uint64_t hash) override;
         std::vector<Step> take_steps() override;
         bool has_input() override;
 

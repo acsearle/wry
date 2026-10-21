@@ -98,6 +98,12 @@ namespace wry {
         // the World already maps keeps its Player.
         virtual void request_join() = 0;
 
+        // Local client -> server: the World's content hash after applying
+        // `step` (multiplayer.md section 5).  The relay compares it with
+        // the reference client's report for the same step and kicks a
+        // client that disagrees; it is also the client's liveness and lag.
+        virtual void report_hash(uint64_t step, uint64_t hash) = 0;
+
         // Server -> client: the finalized steps that have arrived since the
         // last call, in order: zero or more.  Main thread.
         virtual std::vector<Step> take_steps() = 0;

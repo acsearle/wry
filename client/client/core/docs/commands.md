@@ -379,7 +379,9 @@ client ids, which is what the desync tooling should show.
 Illustrative, not exhaustive; arguments in `[]` have defaults.
 
 - **introspection** (local): `help [command]`, `widgets`, `log [lines]`,
-  `get Coordinate`, `state-hash`, `history [lines]`.
+  `get Coordinate`, `state-hash`, `history [lines]`, `session` (this
+  process's place in the game: hosting or joined, its client id, the
+  steps applied, the clock).
 - **view** (local): today's keymap actions -- `rotate`,
   `reverse-rotate`, `flip-horizontal`, `flip-vertical`, `toggle-map`,
   `toggle-console`, `toggle-jacobians`, `toggle-points`,

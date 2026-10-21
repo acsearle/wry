@@ -369,6 +369,10 @@ namespace wry {
         Root<World*> next = co_await old_world->step(step.commands);
         unpin_global_epoch(pin);
         assert(next);
+        // The tripwire (multiplayer.md section 5): what we computed, for
+        // the relay to compare with the reference client's
+        if (_server)
+            _server->report_hash(step.number, next._ptr->content_hash());
         _world_to_render = next._ptr;
         _worlds.emplace_back(std::move(next));
         ++_steps_taken;
@@ -857,6 +861,34 @@ namespace wry {
                     return Reply::error(String("port must be 1 to 65535"));
                 ws.join(String(StringView(text.substr(0, colon).c_str())), (uint16_t)port);
                 return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "session", "This process's place in the game: hosting or joined, client id, steps applied", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                std::string text;
+                RemoteServer* client = ws._client();
+                if (!client)
+                    return Reply::ok(String("no session"));
+                text = ws._host ? "host" : "joined";
+                switch (client->state()) {
+                    case RemoteServer::State::CONNECTING: text += " connecting"; break;
+                    case RemoteServer::State::HANDSHAKE: text += " handshake"; break;
+                    case RemoteServer::State::SUBSCRIBED: text += " subscribed"; break;
+                    case RemoteServer::State::JOINED: text += " joined"; break;
+                    case RemoteServer::State::DISCONNECTED:
+                        text += " disconnected: " + client->reason();
+                        return Reply::ok(String(StringView(text.c_str())));
+                }
+                text += " client " + std::to_string(client->client_id());
+                text += " head " + std::to_string(client->head());
+                text += " applied " + std::to_string(ws._steps_taken);
+                if (ws._host) {
+                    Relay::Clock clock = ws._host->relay().clock();
+                    text += clock.paused ? " paused" : " running";
+                }
+                return Reply::ok(String(StringView(text.c_str())));
             })));
 
         registry.add(make_command<Ctx>(

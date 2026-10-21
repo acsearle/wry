@@ -162,6 +162,11 @@ def main(argv):
         until("level after the host's write", level, tick)
         print(f"  level at {h.ok('state-hash')}")
 
+        # Both sides have been reporting hashes after every step; a
+        # disagreement would have had the joiner kicked by now
+        assert h.ok("session").startswith("host joined client 1 "), h.ok("session")
+        assert j.ok("session").startswith("joined joined client 2 "), j.ok("session")
+
         # A joined client cannot command the clock; the joiner leaves and
         # plays on alone
         assert j.run("pause")["status"] == "error"

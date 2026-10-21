@@ -114,6 +114,11 @@ namespace wry {
         _send(wire::encode_action(++_seq, body));
     }
 
+    void RemoteServer::report_hash(uint64_t step, uint64_t hash) {
+        if ((_state == State::SUBSCRIBED) || (_state == State::JOINED))
+            _send(wire::encode_hash(step, hash));
+    }
+
     void RemoteServer::request_join() {
         _join_requested = true;
         if ((_state == State::SUBSCRIBED) && !_join_sent) {
@@ -276,7 +281,9 @@ namespace wry {
         h->_relay = Relay::make(limits, head);
         scope.soon(h->_relay->serve());
         h->_client = RemoteServer::make(scope);
-        int server_side = h->_relay->adopt(fds[0]);
+        // The host's own client is the reference every other client's
+        // hash is compared with
+        int server_side = h->_relay->adopt(fds[0], true);
         int client_side = h->_client->adopt(fds[1]);
         if ((server_side < 0) || (client_side < 0)) {
             error = std::string("adopt: ") + std::strerror(-std::min(server_side, client_side));
@@ -438,6 +445,21 @@ namespace wry {
         assert(joiner->client_id() == 2);
         assert(joiner->head() >= 2);
 
+        // Hash reports: agreement with the host's client is silent, and a
+        // disagreement at any step the reference has reported is a kick
+        host->client().report_hash(1, 0x1111);
+        joiner->report_hash(1, 0x1111);
+        joiner->report_hash(2, 0x2222);
+        host->client().report_hash(2, 0x2222);
+        host->client().report_hash(3, 0x3333);
+        joiner->report_hash(3, 0xbad);
+        bool desynced = eventually([&] {
+            (void) joiner->take_steps();
+            return joiner->state() == RemoteServer::State::DISCONNECTED;
+        });
+        assert(desynced && joiner->reason() == "kicked: desync at step 3");
+        (void) desynced;
+
         // A dial that is refused reports its error
         auto refused = RemoteServer::make(scope);
         {
@@ -453,14 +475,25 @@ namespace wry {
         assert(failed && refused->reason().starts_with("connect: "));
         (void) failed;
 
+        // A second joiner, agreeing, is told of the shutdown
+        auto second = RemoteServer::make(scope);
+        second->dial("127.0.0.1", *port);
+        bool subscribed = eventually([&] {
+            (void) second->take_steps();
+            return second->state() == RemoteServer::State::SUBSCRIBED;
+        });
+        assert(subscribed);
+        (void) subscribed;
+        second->report_hash(3, 0x3333);
         co_await host->shutdown(std::chrono::milliseconds(200));
         bool told = eventually([&] {
-            (void) joiner->take_steps();
-            return joiner->state() == RemoteServer::State::DISCONNECTED;
+            (void) second->take_steps();
+            return second->state() == RemoteServer::State::DISCONNECTED;
         });
-        assert(told && joiner->reason() == "the server shut down");
+        assert(told && second->reason() == "the server shut down");
         (void) told;
         co_await joiner->shutdown(std::chrono::milliseconds(100));
+        co_await second->shutdown(std::chrono::milliseconds(100));
         co_await refused->shutdown(std::chrono::milliseconds(100));
         (void) co_await scope.join();
         co_return;

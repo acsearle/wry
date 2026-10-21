@@ -41,6 +41,7 @@ namespace wry {
             STEP = 4,       // bytes: u64 n
             SHUTDOWN = 5,   // bytes: u64 grace in milliseconds
             DEADLINE = 6,   // bytes: u64 connection: the handshake deadline
+            REFERENCE = 7,  // bytes: u64 client: whose hashes are the truth
         };
 
         std::string u64_bytes(uint64_t x) {
@@ -56,6 +57,12 @@ namespace wry {
             return x;
         }
 
+        // How many recent steps a client's hash reports are kept for.  A
+        // report older than this is not compared: a client that far
+        // behind the reference, or ahead of it, is a lag problem, not a
+        // desync one
+        constexpr size_t HASH_WINDOW = 256;
+
         struct Client {
             enum State : uint8_t { HELLO_PENDING, SUBSCRIBED, JOINED };
             State state = HELLO_PENDING;
@@ -64,6 +71,8 @@ namespace wry {
             size_t taken = 0;               // actions taken into the step being built
             bool join_pending = false;      // a JOIN rides the next step
             bool kicked = false;            // nothing further from it is processed
+            std::map<uint64_t, uint64_t> hashes;    // step -> reported hash, the last HASH_WINDOW
+            uint64_t reported = 0;          // the last step it reported: its lag
         };
 
         struct PendingAction {
@@ -87,6 +96,7 @@ namespace wry {
 
         // The consumer's state: one thread at a time touches it
         std::map<uint64_t, Client> clients;
+        ClientID reference = SERVER_CLIENT_ID;  // whose hashes are the truth; 0 for none
         std::vector<PendingAction> actions;
         std::vector<PendingEvent> events;
         std::vector<std::string> log;       // STEP messages; log[i] is step first + i
@@ -174,6 +184,41 @@ namespace wry {
             s->events.clear();
         }
 
+        // A client's report against the reference's for the same step, or
+        // the reference's against everyone's: a disagreement is a kick
+        void on_hash(std::shared_ptr<Shared> const& s, uint64_t id, Client& c, uint64_t step, uint64_t hash) {
+            uint64_t head = 0;
+            {
+                std::scoped_lock lock{s->mutex};
+                head = s->head;
+            }
+            if (step > head)
+                return kick(*s, id, c, "hash for a step not yet finalized");
+            c.hashes[step] = hash;
+            c.reported = std::max(c.reported, step);
+            while (c.hashes.size() > HASH_WINDOW)
+                c.hashes.erase(c.hashes.begin());
+            if (s->reference == SERVER_CLIENT_ID)
+                return;
+            std::string desync = "desync at step " + std::to_string(step);
+            if (id == s->reference) {
+                for (auto& [other_id, other] : s->clients) {
+                    if ((other_id == id) || other.kicked)
+                        continue;
+                    auto it = other.hashes.find(step);
+                    if ((it != other.hashes.end()) && (it->second != hash))
+                        kick(*s, other_id, other, desync);
+                }
+            } else {
+                auto r = s->clients.find(s->reference);
+                if (r == s->clients.end())
+                    return;
+                auto it = r->second.hashes.find(step);
+                if ((it != r->second.hashes.end()) && (it->second != hash))
+                    kick(*s, id, c, desync);
+            }
+        }
+
         void on_message(std::shared_ptr<Shared> const& s, uint64_t id, std::string const& bytes) {
             auto it = s->clients.find(id);
             if (it == s->clients.end())
@@ -232,8 +277,12 @@ namespace wry {
                 case wire::QUIT:
                     s->transport->end(id);  // its Closed follows, and the LEAVE
                     return;
-                case wire::HASH:
-                    return;                 // stage 4
+                case wire::HASH: {
+                    std::optional<std::pair<uint64_t, uint64_t>> report = wire::decode_hash(bytes);
+                    if (!report)
+                        return kick(*s, id, c, "malformed HASH");
+                    return on_hash(s, id, c, report->first, report->second);
+                }
                 default:
                     return kick(*s, id, c, "unexpected message");
             }
@@ -309,6 +358,9 @@ namespace wry {
                         kick(*s, id, it->second, "handshake timeout");
                     return true;
                 }
+                case REFERENCE:
+                    s->reference = (ClientID)u64_of(posted.bytes);
+                    return true;
                 case SHUTDOWN: {
                     std::string farewell = wire::encode_shutdown();
                     for (auto& [id, c] : s->clients)
@@ -400,8 +452,14 @@ namespace wry {
         return serve_under(_shared);
     }
 
-    int Relay::adopt(int fd) {
-        return _shared->transport->adopt(fd);
+    int Relay::adopt(int fd, bool reference) {
+        int id = _shared->transport->adopt(fd);
+        // The designation rides the inbox like every other control, after
+        // the connection's Opened, which adopt queued first; the consumer
+        // alone touches the reference
+        if ((id > 0) && reference)
+            _shared->transport->post(REFERENCE, u64_bytes((uint64_t)id));
+        return id;
     }
 
     std::expected<uint16_t, std::string> Relay::listen(std::string const& address, uint16_t port) {
@@ -461,14 +519,14 @@ namespace wry {
             std::vector<std::string> messages;
             std::vector<Transport::Closed> closed;
 
-            explicit RawClient(Relay& relay, Nursery& scope) {
+            explicit RawClient(Relay& relay, Nursery& scope, bool reference = false) {
                 transport = Transport::make(wire::codec(), Transport::Limits{});
                 scope.soon(transport->serve());
                 int fds[2] = {-1, -1};
                 const int paired = ::socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
                 assert(paired == 0);
                 (void) paired;
-                server_id = (uint64_t)relay.adopt(fds[0]);
+                server_id = (uint64_t)relay.adopt(fds[0], reference);
                 id = (uint64_t)transport->adopt(fds[1]);
                 assert(server_id > 0 && id > 0);
             }
@@ -835,6 +893,153 @@ namespace wry {
         co_await b.transport->shutdown(std::chrono::milliseconds(100));
         co_await c.transport->shutdown(std::chrono::milliseconds(100));
         (void) co_await scope.join();
+        co_return;
+    };
+
+    define_test("relay_hash_tripwire") {
+        auto relay = Relay::make(paused_limits());
+        Nursery scope;
+        scope.soon(relay->serve());
+        relay->pause();
+
+        RawClient r{*relay, scope, true};   // the reference
+        RawClient a{*relay, scope};
+        r.hello();
+        a.hello();
+        bool welcomed = eventually([&] {
+            r.drain();
+            a.drain();
+            return !r.of(wire::WELCOME).empty() && !a.of(wire::WELCOME).empty();
+        });
+        assert(welcomed);
+        (void) welcomed;
+        relay->step(3);
+        bool stepped = eventually([&] { return relay->clock().head >= 4; });
+        assert(stepped);
+        (void) stepped;
+
+        // Agreement in either order is silent; the client is still served
+        // afterwards (its JOIN rides a step)
+        a.send(wire::encode_hash(1, 0x11));
+        r.send(wire::encode_hash(1, 0x11));
+        r.send(wire::encode_hash(2, 0x22));
+        a.send(wire::encode_hash(2, 0x22));
+        a.send(wire::encode_join_request("a"));
+        bool joined = eventually([&] {
+            relay->step(1);
+            a.drain();
+            for (std::string const& m : a.of(wire::STEP))
+                for (auto& e : wire::decode_step(m)->entries)
+                    if (e.origin == SERVER_CLIENT_ID) {
+                        auto ev = wire::decode_event(e.bytes);
+                        if (ev && ev->kind == Command::JOIN && ev->client == a.server_id)
+                            return true;
+                    }
+            return false;
+        }, std::chrono::seconds(2));
+        assert(joined && a.closed.empty());
+        (void) joined;
+
+        // A disagreement at a step the reference has reported is a kick,
+        // whichever report came second
+        r.send(wire::encode_hash(3, 0x33));
+        a.send(wire::encode_hash(3, 0x99));
+        bool desynced = eventually([&] {
+            a.drain();
+            return !a.closed.empty();
+        });
+        assert(desynced);
+        (void) desynced;
+        assert(kick_reason(a, "a desync") == "desync at step 3");
+
+        RawClient b{*relay, scope};
+        b.hello();
+        b.send(wire::encode_hash(4, 0x44));        // before the reference's
+        bool b_welcomed = eventually([&] {
+            b.drain();
+            return !b.of(wire::WELCOME).empty();
+        });
+        assert(b_welcomed);
+        (void) b_welcomed;
+        r.send(wire::encode_hash(4, 0x4444));
+        bool b_desynced = eventually([&] {
+            b.drain();
+            return !b.closed.empty();
+        });
+        assert(b_desynced);
+        (void) b_desynced;
+        assert(kick_reason(b, "b desync") == "desync at step 4");
+
+        // A report for a step not yet finalized is a violation
+        RawClient c{*relay, scope};
+        c.hello();
+        c.send(wire::encode_hash(1000, 0x1));
+        bool c_kicked = eventually([&] {
+            c.drain();
+            return !c.closed.empty();
+        });
+        assert(c_kicked);
+        (void) c_kicked;
+        assert(kick_reason(c, "c future") == "hash for a step not yet finalized");
+
+        // The reference itself is never kicked for a hash
+        r.send(wire::encode_hash(2, 0x2222));      // changes its mind; nobody to disagree with it
+        r.send(wire::encode_join_request("r"));
+        bool r_alive = eventually([&] {
+            relay->step(1);
+            r.drain();
+            for (std::string const& m : r.of(wire::STEP))
+                for (auto& e : wire::decode_step(m)->entries)
+                    if (e.origin == SERVER_CLIENT_ID) {
+                        auto ev = wire::decode_event(e.bytes);
+                        if (ev && ev->kind == Command::JOIN && ev->client == r.server_id)
+                            return true;
+                    }
+            return false;
+        }, std::chrono::seconds(2));
+        assert(r_alive && r.closed.empty());
+        (void) r_alive;
+
+        co_await relay->shutdown(std::chrono::milliseconds(100));
+        co_await r.transport->shutdown(std::chrono::milliseconds(100));
+        co_await a.transport->shutdown(std::chrono::milliseconds(100));
+        co_await b.transport->shutdown(std::chrono::milliseconds(100));
+        co_await c.transport->shutdown(std::chrono::milliseconds(100));
+        (void) co_await scope.join();
+
+        // Without a reference, disagreement is kept, not judged
+        {
+            auto lone = Relay::make(paused_limits());
+            Nursery lone_scope;
+            lone_scope.soon(lone->serve());
+            lone->pause();
+            RawClient x{*lone, lone_scope};
+            RawClient y{*lone, lone_scope};
+            x.hello();
+            y.hello();
+            x.send(wire::encode_hash(1, 0x1));
+            y.send(wire::encode_hash(1, 0x2));
+            x.send(wire::encode_join_request("x"));
+            bool x_alive = eventually([&] {
+                lone->step(1);
+                x.drain();
+                y.drain();
+                for (std::string const& m : x.of(wire::STEP))
+                    for (auto& e : wire::decode_step(m)->entries)
+                        if (e.origin == SERVER_CLIENT_ID) {
+                            auto ev = wire::decode_event(e.bytes);
+                            if (ev && ev->kind == Command::JOIN && ev->client == x.server_id)
+                                return true;
+                        }
+                return false;
+            }, std::chrono::seconds(2));
+            assert(x_alive && x.closed.empty() && y.closed.empty());
+            (void) x_alive;
+            co_await lone->shutdown(std::chrono::milliseconds(100));
+            co_await x.transport->shutdown(std::chrono::milliseconds(100));
+            co_await y.transport->shutdown(std::chrono::milliseconds(100));
+            (void) co_await lone_scope.join();
+        }
         co_return;
     };
 

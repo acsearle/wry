@@ -8,9 +8,10 @@ async I/O stack, core/kqueue_reactor.hpp, core/nursery.hpp,
 container/mpsc_queue.hpp; the hashing groundwork in core/hash.hpp) and
 against the decisions in section 0.  Of the plan in
 section 13, the transport layer (stage 1), the action codec and
-explicit step intake (stage 2), and the relay, client and host (stage
-3) are landed: single player runs through the relay over a socket
-pair, and a second process joins over TCP.
+explicit step intake (stage 2), the relay, client and host (stage 3)
+and the hash tripwire (stage 4) are landed: single player runs through
+the relay over a socket pair, a second process joins over TCP, and a
+client whose World diverges from the host's is kicked.
 
 Status: normative design, with a staged build plan (section 13).  The
 direction is agreed; specific numbers remain open (section 11).
@@ -264,21 +265,27 @@ that only pretends to play (a relay bot, a spectator claiming to be a
 player) is caught by the same mechanism.  Section 6 uses this to gate
 the observer-to-player transition.
 
-**The response.**  The server compares reports for the same step and
-kicks the minority immediately -- no negotiation, no resync protocol.  A
-kicked client may rejoin through the normal join path, which is the only
-resync mechanism that exists.  Rationale, against the alternatives:
+**The response.**  The reference is the host's own client: it is always
+connected while the game exists (decision 0.5), and if it is wrong the
+game cannot recover anyway, so there is no vote.  The relay keeps each
+client's reports over a window of recent steps and compares every
+report with the reference's for the same step, whichever arrived
+first; a client whose hash differs is kicked at once with "desync at
+step n" -- no negotiation, no resync protocol.  A report for a step not
+yet finalized is a violation.  A kicked client may rejoin through the
+normal join path, which is the only resync mechanism that exists.
+Rationale, against the alternatives:
 
 - pause-and-investigate lets any client stall the game by sending a
   deliberately poisoned hash;
 - resync-the-minority builds recovery machinery whose main long-term
   effect is to hide the bugs we most need to fix;
-- kick-the-minority makes a poisoned hash a self-kick and nothing more.
+- kick-the-disagreeing makes a poisoned hash a self-kick and nothing
+  more.
 
-With no majority (two clients, or a tie), the reference is the host's
-client.  (The host's client is always connected while the game exists,
-so the reference always exists; this is the simplification bought by
-decision 0.5.)
+A relay with no reference client (a test fixture) keeps the reports and
+judges nothing.  Landed 2026-10-21 as stage 4; every client reports
+after every step (k = 1), since the hash is incremental.
 
 **The artifact.**  Checkpoint + finalized log = deterministic repro.  The
 host writes the finalized stream to a log file beside its saves; on
@@ -793,7 +800,11 @@ landing risky changes as brute-force-tested primitives first.
    over TCP, both driven by the control socket (a sibling of
    wry_smoke.py), and both report the same `state-hash` after the same
    steps.
-4. **Hash.**  The coarse form first (hash of the canonical save stream of
+4. **Hash** (landed 2026-10-21: the incremental hash came first, as its
+   own landing, so there was no coarse form; `Server::report_hash` after
+   every applied step, `HASH` frames, the relay's reference client and
+   comparison window, the "desync at step n" kick, and a `session`
+   query command).  The coarse form first (hash of the canonical save stream of
    a snapshot, every k steps, on a worker), `HASH` reports, kick the
    minority, `state-hash`.  Then the incremental form of 9.1, with the
    save-stream hash as its differential oracle, and k drops to 1.

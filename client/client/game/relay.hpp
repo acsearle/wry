@@ -23,9 +23,16 @@
 //
 //  Every violation kicks: a message out of place for the state, a bad
 //  sequence number, more pending actions than `max_pending_actions`
-//  (a flood), a malformed payload, a handshake that does not arrive.
-//  The transport bounds and the codec caps cover the rest.  The relay
-//  never reads an action's body.
+//  (a flood), a malformed payload, a handshake that does not arrive, a
+//  hash report for a step not yet finalized.  The transport bounds and
+//  the codec caps cover the rest.  The relay never reads an action's
+//  body.
+//
+//  The tripwire (section 5): every client reports its World's content
+//  hash after each step, and the relay compares each report with the
+//  reference client's for the same step, whichever arrives first, over
+//  a window of recent steps; a client whose hash differs is kicked with
+//  "desync at step n".  The reference is the host's own client.
 //
 //  The stream since the game began is kept, and a late subscriber gets
 //  it from step 1: in this revision every client starts from the
@@ -72,8 +79,12 @@ namespace wry {
 
         // Serve an already connected descriptor as a client (the host's
         // own client's end of a socket pair): its connection id, which is
-        // its client id, or -errno
-        int adopt(int fd);
+        // its client id, or -errno.  The reference client is the one every
+        // other client's hash reports are compared with (section 5): the
+        // host's own client, which cannot be wrong in any way the game
+        // could recover from.  Without one, reports are kept and nothing
+        // is compared
+        int adopt(int fd, bool reference = false);
 
         // Listen for remote clients: the bound port, or an error
         std::expected<uint16_t, std::string> listen(std::string const& address, uint16_t port);
