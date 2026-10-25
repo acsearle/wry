@@ -90,7 +90,10 @@ namespace wry {
         virtual ~Server() = default;
 
         // Local client -> server: the local player wants to do this.
-        virtual void submit(Player::Action action) = 0;
+        // False if it cannot travel: a Term with no literal form, or a
+        // line over the wire's cap (an action held until our JOIN has
+        // ridden the stream counts as submitted)
+        virtual bool submit(Player::Action action) = 0;
 
         // Local client -> server: this client wants a Player (it has
         // subscribed, or has just installed a World).  Answered by a JOIN

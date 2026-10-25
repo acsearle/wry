@@ -253,9 +253,14 @@ namespace wry::command {
     }
 
     bool Type<Term>::printable(Term const& x) {
+        // An enumeration code this build does not name (a save from
+        // elsewhere) has no spelling to print
+        if (term_is_opcode(x))
+            return name_from_OPCODE((OPCODE)term_as_opcode(x)) != nullptr;
+        if (term_is_matter(x))
+            return name_from_MATTER((MATTER)term_as_matter(x)) != nullptr;
         if (term_is_null(x) || term_is_boolean(x) || x.is_int64_t()
-            || term_is_opcode(x) || term_is_matter(x) || term_is_entity_id(x)
-            || is_heap(x, HeapInt64::SAVE_TYPE_TAG))
+            || term_is_entity_id(x) || is_heap(x, HeapInt64::SAVE_TYPE_TAG))
             return true;
         if (is_string(x)) {
             std::string_view v = term_as_string_view(x);
@@ -404,9 +409,11 @@ namespace wry::command {
             }
         }
 
-        // Term: unprintable kinds are refused.
+        // Term: unprintable kinds are refused, as are enumeration codes
+        // this build does not name
         for (Term t : {term_make_error(), term_make_character_with('x'), term_make_OK(),
-                       term_make_string_with(std::string_view("\xff", 1))})
+                       term_make_string_with(std::string_view("\xff", 1)),
+                       term_make_opcode(123456), term_make_matter(123456)})
             assert(!Type<Term>::printable(t));
 
         // Term: self-describing only.  Bare enumerators and bare words are

@@ -80,6 +80,14 @@ namespace wry {
                 v._data = 0;
                 return v;
             }
+            if (dynamic_cast<World*>(p)) {
+                // A value or an entity, never the World itself (which is
+                // unsealed until commissioned, so hashing it here would
+                // assert)
+                L.fail("a Term refers to the World");
+                v._data = 0;
+                return v;
+            }
             v._data = (uint64_t)p | TERM_TAG_OBJECT;
         } else {
             v._data = word;
@@ -432,6 +440,25 @@ namespace wry {
         w->_entity_for_entity_id.ki._inner     = L.ref<NodeWaitSet_U64>(ent_ki);
         w->_term_for_coordinate.ki._inner     = L.ref<NodeWaitSet_U64>(val_ki);
         w->_terrain_for_coordinate.ki._inner   = L.ref<NodeWaitSet_U64>(ter_ki);
+
+        // The World's meaning, as far as the simulation would crash on it
+        // (multiplayer.md 11.13): a scheduled entity must exist, since a
+        // step dereferences it, and an entity sits under its own id and
+        // below the cursor, or a JOIN would reuse its id.  The rest of
+        // commissioning is hack_repair_invariant's
+        if (!L._failed) {
+            w->_waiting_on_time.for_each([&](std::pair<Time, EntityID> e) {
+                const Entity* entity = nullptr;
+                if (!w->_entity_for_entity_id.try_get(e.second, entity) || !entity)
+                    L.fail("a scheduled entity is not in the world");
+            });
+            w->_entity_for_entity_id.kv.for_each([&](EntityID id, const Entity* entity) {
+                if (!entity || (entity->_entity_id != id))
+                    L.fail("an entity is not under its own id");
+                else if (id.data >= w->_entity_id_source.data)
+                    L.fail("an entity at or beyond the id cursor");
+            });
+        }
     }
 
     static void load_into_machine(Loader& L, SaveRef id) {
@@ -439,7 +466,12 @@ namespace wry {
         L._ptrs[id] = m;
         m->_entity_id = read_entity_id(L);
         m->_free_entity_id = read_entity_id(L);
-        m->_phase = (decltype(m->_phase))L.read_u32();
+        {
+            const uint32_t phase = L.read_u32();
+            if (phase > (uint32_t)Machine::PHASE_WAITING_FOR_NEW)
+                L.fail("machine phase out of range");
+            m->_phase = (decltype(m->_phase))phase;
+        }
         m->_on_arrival = (int64_t)L.read_u64();
         SaveRef stack_ref = L.read_u32();
         m->_old_heading = (int64_t)L.read_u64();
@@ -643,9 +675,12 @@ namespace wry {
         uint32_t magic   = read_u32();
         uint32_t version = read_u32();
         uint32_t count   = read_u32();
-        (void)magic;
         if (_failed) {
             fprintf(stderr, "save: %s; refusing to load\n", _why);
+            return nullptr;
+        }
+        if (magic != SAVE_MAGIC) {
+            fprintf(stderr, "save: not a save file; refusing to load\n");
             return nullptr;
         }
         // Hard reject on version mismatch, per the TERM_SAVE_VERSION
@@ -796,7 +831,7 @@ namespace wry {
 
     static std::vector<uint8_t> test_save_to_buffer(const World* w) {
         Saver s;
-        s.write_u32(0x57525953);  // 'WRYS', as save_game writes
+        s.write_u32(SAVE_MAGIC);
         s.write_u32(TERM_SAVE_VERSION);
         size_t record_count_offset = s._stream.size();
         s.write_u32(0);  // placeholder
@@ -862,6 +897,38 @@ namespace wry {
                 bad[rng() % bad.size()] = (uint8_t)rng();
             (void) test_load_from_buffer(bad);
         }
+        // Well-formed bytes whose World the simulation would crash on are
+        // refused too (multiplayer.md 11.13): a scheduled entity that is
+        // not in the world, an entity at or beyond the id cursor, a
+        // machine phase outside the enumeration; and a header that is not
+        // a save's
+        {
+            World* bad = test_load_from_buffer(good);
+            assert(bad);
+            bad->_waiting_on_time.set({Time{9}, EntityID{777}});
+            assert(!test_load_from_buffer(test_save_to_buffer(bad)));
+        }
+        {
+            World* bad = test_load_from_buffer(good);
+            assert(bad);
+            bad->_entity_id_source = EntityID{1};
+            assert(!test_load_from_buffer(test_save_to_buffer(bad)));
+        }
+        {
+            World* bad = test_load_from_buffer(good);
+            assert(bad);
+            Machine* odd = new Machine;
+            odd->_entity_id = m->_entity_id;
+            odd->_phase = (decltype(odd->_phase))7;
+            odd->seal();
+            bad->_entity_for_entity_id.set(odd->_entity_id, odd);
+            assert(!test_load_from_buffer(test_save_to_buffer(bad)));
+        }
+        {
+            std::vector<uint8_t> not_a_save = good;
+            not_a_save[0] ^= 0xff;
+            assert(!test_load_from_buffer(not_a_save));
+        }
         co_return;
     };
 
@@ -900,7 +967,16 @@ namespace wry {
         w->_term_for_coordinate.set(Coordinate{1, -2}, term_make_integer_with(7));
         // Strictly future relative to _time == 77: the world invariant
         // (nothing waiting on the past or present outside _ready) now
-        // holds at construction, so hack_repair_invariant is a no-op.
+        // holds at construction, so hack_repair_invariant is a no-op.  The
+        // scheduled entity exists and the cursor is past it, as the loader
+        // requires of a World the simulation can step
+        {
+            Player* scheduled = new Player;
+            scheduled->_entity_id = EntityID{101};
+            scheduled->seal();
+            w->_entity_for_entity_id.set(scheduled->_entity_id, scheduled);
+            w->_entity_id_source = EntityID{102};
+        }
         w->_waiting_on_time.set({Time{78}, EntityID{101}});
         w->hack_repair_invariant();
 
@@ -1092,8 +1168,11 @@ namespace wry {
         sink->_location = Coordinate{4, 2};
 
         // Simulate a long-lived game: a saved ID far past this process's
-        // oracle, to check the loader advances it (no post-load collisions).
+        // oracle, with the cursor past it as a game that issued it would
+        // have (the loader refuses an entity at or beyond the cursor: a
+        // JOIN would reuse its id).
         sink->_entity_id = EntityID{1000000};
+        w->_entity_id_source = EntityID{1000001};
 
         for (const Entity* e : { (const Entity*)player, (const Entity*)spawner,
                                  (const Entity*)source, (const Entity*)sink }) {
@@ -1138,9 +1217,9 @@ namespace wry {
         assert(sk2->_save_type_tag() == Sink::SAVE_TYPE_TAG);
         assert((static_cast<const Sink*>(sk2)->_location == Coordinate{4, 2}));
 
-        // TODO: assert that the world's entity_id source is greater than
-        // any entity observed in the save
-        
+        // The cursor comes back past every entity in the save
+        assert(w2->_entity_id_source.data > sink->_entity_id.data);
+
         co_return;
     };
 

@@ -53,20 +53,30 @@ namespace wry {
     // ----------------------------------------------------------------
     // Codecs.
 
-    std::string_view Transport::LineCodec::split(std::string& pending,
+    // Bytes onto the back of a deque buffer: one growth at most, then a
+    // copy into place
+    void append_bytes(ContiguousDeque<char>& pending, const char* bytes, size_t n) {
+        const size_t size = pending.size();
+        pending.resize(size + n);
+        std::memcpy(pending.data() + size, bytes, n);
+    }
+
+    std::string_view Transport::LineCodec::split(ContiguousDeque<char>& pending,
                                                  std::vector<std::string>& out) const {
-        size_t start = 0;
-        for (size_t nl; (nl = pending.find('\n', start)) != std::string::npos; start = nl + 1) {
-            if (nl - start > max_line) {
-                pending.erase(0, start);
+        const char* begin = pending.data();
+        const char* end = begin + pending.size();
+        const char* start = begin;
+        for (const char* nl; (nl = std::find(start, end, '\n')) != end; start = nl + 1) {
+            if ((size_t)(nl - start) > max_line) {
+                pending.erase(pending.begin(), pending.begin() + (start - begin));
                 return "line too long";
             }
-            std::string line = pending.substr(start, nl - start);
+            std::string line(start, nl);
             if (!line.empty() && line.back() == '\r')
                 line.pop_back();
             out.push_back(std::move(line));
         }
-        pending.erase(0, start);
+        pending.erase(pending.begin(), pending.begin() + (start - begin));
         return (pending.size() > max_line) ? "line too long" : "";
     }
 
@@ -80,7 +90,7 @@ namespace wry {
         return std::string(reason);
     }
 
-    std::string_view Transport::FrameCodec::split(std::string& pending,
+    std::string_view Transport::FrameCodec::split(ContiguousDeque<char>& pending,
                                                   std::vector<std::string>& out) const {
         for (;;) {
             if (pending.size() < 4)
@@ -100,8 +110,9 @@ namespace wry {
                 return "frame too long";
             if (pending.size() < 4 + (size_t)length)
                 break;
-            out.push_back(pending.substr(4, length));
-            pending.erase(0, 4 + (size_t)length);
+            out.emplace_back(pending.data() + 4, (size_t)length);
+            // Consumed from the front in constant time
+            pending.erase(pending.begin(), pending.begin() + 4 + (std::ptrdiff_t)length);
         }
         return {};
     }
@@ -432,6 +443,9 @@ namespace wry {
         int admit(std::shared_ptr<Shared> const& shared, int fd) {
             int one = 1;
             (void) ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+            // A half-open peer (power loss, no FIN) holds its connection
+            // until the kernel's probes give up, rather than forever
+            (void) ::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof one);
             (void) ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);    // fails harmlessly on a Unix socket
             if (!set_nonblocking(fd)) {
                 int error = errno;
@@ -454,13 +468,16 @@ namespace wry {
                 }
                 connection->id = shared->next_connection++;
                 shared->connections.emplace(connection->id, connection);
+                // Under the same lock as the table and the admitting flag:
+                // the loop stops admitting and drains the arrivals under
+                // it, so an arrival is served or drained, never stranded in
+                // the table.  The Opened goes before anything the reader
+                // can deliver
+                shared->events.emplace(Transport::Opened{connection->id, connection->peer});
+                shared->arrivals.emplace(Shared::Arrival{connection, -1});
             }
             assert(connection->id <= (uint64_t)INT_MAX);
-            // Before its reader can deliver, so its Opened comes first
-            shared->events.emplace(Transport::Opened{connection->id, connection->peer});
-            int id = (int)connection->id;
-            shared->arrivals.emplace(Shared::Arrival{std::move(connection), -1});
-            return id;
+            return (int)connection->id;
         }
 
         // Make a listening descriptor from an address, bound and listening,
@@ -535,7 +552,7 @@ namespace wry {
             Shared& shared = *connection->shared;
             Transport::Codec const& codec = *shared.codec;
             const size_t cap = shared.limits.max_unconsumed;
-            std::string pending;
+            ContiguousDeque<char> pending;
             std::vector<std::string> ready;
             std::string_view violation;
             char buffer[65536];
@@ -566,7 +583,7 @@ namespace wry {
                     co_return ReadResult{ReadEnd::end_of_stream};
                 if (n < 0)
                     co_return ReadResult{ReadEnd::error, (int)-n};
-                pending.append(buffer, (size_t)n);
+                append_bytes(pending, buffer, (size_t)n);
                 violation = codec.split(pending, ready);
             }
         }
@@ -624,9 +641,22 @@ namespace wry {
                     connection->queued_bytes -= std::min(connection->queued_bytes, out.bytes.size());
                 }
                 if (error) {
-                    std::scoped_lock lock{connection->mutex};
-                    if (connection->reason.empty())
-                        connection->reason = errno_message("send", error);
+                    {
+                        std::scoped_lock lock{connection->mutex};
+                        if (connection->reason.empty())
+                            connection->reason = errno_message("send", error);
+                    }
+                    // The reader runs to the end of stream so a farewell in
+                    // flight is read; a peer that keeps its side open after
+                    // ours failed gets the kick grace, then the connection
+                    // ends regardless (end() can no longer end it: nothing
+                    // pops its marker).  The arm is withdrawn by the
+                    // connection's own stop, as a kick's is
+                    cancelable_after(connection->stop.get_token(), connection->shared->limits.kick_grace,
+                                     [connection]() mutable {
+                        std::stop_source keepalive = connection->stop;
+                        keepalive.request_stop();
+                    });
                     co_return;
                 }
             }
@@ -689,12 +719,16 @@ namespace wry {
                     children.soon(serve_connection(std::move(arrival->connection)));
             }
             // No more admissions, and whatever arrived meanwhile is closed
-            // unserved
+            // unserved.  The flip and the drain under the table's lock, so
+            // admit's check and its arrival are atomic against them; the
+            // drain itself retires, which takes the lock, so outside it
+            std::deque<Shared::Arrival> late;
             {
                 std::scoped_lock lock{shared->mutex};
                 shared->admitting = false;
+                late = shared->arrivals.try_take();
             }
-            for (auto& arrival : shared->arrivals.try_take()) {
+            for (auto& arrival : late) {
                 if (arrival.listen_fd != -1) {
                     ::close(arrival.listen_fd);
                 } else {
@@ -840,9 +874,9 @@ namespace wry {
                 ::close(fd);
                 return std::unexpected(std::string("the transport has stopped"));
             }
+            _shared->arrivals.emplace(Shared::Arrival{nullptr, fd});
         }
         _port = bound_port;
-        _shared->arrivals.emplace(Shared::Arrival{nullptr, fd});
         return bound_port;
     }
 
@@ -1124,12 +1158,12 @@ namespace wry {
             messages.push_back(std::move(message));
         }
         for (int trial = 0; trial != 20; ++trial) {
-            std::string pending;
+            ContiguousDeque<char> pending;
             std::vector<std::string> out;
             size_t at = 0;
             while (at < stream.size()) {
                 size_t n = std::min(stream.size() - at, (size_t)(1 + random() % 97));
-                pending.append(stream, at, n);
+                append_bytes(pending, stream.data() + at, n);
                 at += n;
                 std::string_view violation = codec.split(pending, out);
                 assert(violation.empty());
@@ -1142,7 +1176,9 @@ namespace wry {
         // Violations, each reported once the six-byte prefix is in, with
         // the messages before it delivered
         auto violation_of = [&](std::string bytes) {
-            std::string pending = codec.frame(tagged(1, "first")) + bytes;
+            std::string whole = codec.frame(tagged(1, "first")) + bytes;
+            ContiguousDeque<char> pending;
+            append_bytes(pending, whole.data(), whole.size());
             std::vector<std::string> out;
             std::string_view violation = codec.split(pending, out);
             assert(out.size() == 1 && out[0] == tagged(1, "first"));
@@ -1172,18 +1208,24 @@ namespace wry {
 
     define_test("transport_line_codec") {
         Transport::LineCodec codec{8};
-        std::string pending = "one\r\ntwo\nthr";
+        ContiguousDeque<char> pending;
+        auto set = [&](std::string_view text) {
+            pending.clear();
+            append_bytes(pending, text.data(), text.size());
+        };
+        auto held = [&]() { return std::string(pending.data(), pending.size()); };
+        set("one\r\ntwo\nthr");
         std::vector<std::string> out;
         assert(codec.split(pending, out).empty());
         assert(out.size() == 2 && out[0] == "one" && out[1] == "two");
-        assert(pending == "thr");
-        pending += "ee\n";
+        assert(held() == "thr");
+        append_bytes(pending, "ee\n", 3);
         assert(codec.split(pending, out).empty());
         assert(out.size() == 3 && out[2] == "three" && pending.empty());
         // A partial line over the cap, and a complete one
-        pending = "123456789";
+        set("123456789");
         assert(codec.split(pending, out) == "line too long");
-        pending = "ok\n123456789\n";
+        set("ok\n123456789\n");
         assert(codec.split(pending, out) == "line too long");
         assert(out.size() == 4 && out[3] == "ok");
         assert(codec.frame("x") == "x\n");

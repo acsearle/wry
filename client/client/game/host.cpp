@@ -25,9 +25,19 @@
 
 namespace wry {
 
+    using coroutine::GetStopToken;
     using coroutine::Nursery;
 
     namespace {
+
+        // Requests a stop source from a stop callback (a token bridge)
+        struct Bridge {
+            std::stop_source _stop;
+            void operator()() {
+                std::stop_source keepalive = _stop;
+                keepalive.request_stop();
+            }
+        };
 
         enum Posted : uint64_t {
             DIAL_FAILED = 1,    // bytes: u64 errno
@@ -48,11 +58,15 @@ namespace wry {
         }
 
         // The dial, on the pool, under its own stop source so a shutdown
-        // withdraws it; the transport outlives it either way
-        coroutine::Task dial_task(std::shared_ptr<Transport> transport, std::stop_token stop,
+        // withdraws it; the spawner's stop (the process scope's, at quit)
+        // reaches it through the bridge, so a connect to an address that
+        // never answers does not hold the quit for the kernel's timeout.
+        // The transport outlives it either way
+        coroutine::Task dial_task(std::shared_ptr<Transport> transport, std::stop_source stop,
                                   std::string address, uint16_t port) {
+            std::stop_callback<Bridge> outer_to_stop{co_await GetStopToken{}, Bridge{stop}};
             std::optional<int> result =
-                co_await execution::shield(transport->connect_tcp(std::move(address), port), stop);
+                co_await execution::shield(transport->connect_tcp(std::move(address), port), stop.get_token());
             if (!result)
                 co_return;                  // withdrawn
             if (*result < 0)
@@ -92,7 +106,7 @@ namespace wry {
     }
 
     void RemoteServer::dial(std::string address, uint16_t port) {
-        _scope->soon(dial_task(_transport, _dial_stop.get_token(), std::move(address), port));
+        _scope->soon(dial_task(_transport, _dial_stop, std::move(address), port));
     }
 
     void RemoteServer::_send(std::string message) {
@@ -109,23 +123,26 @@ namespace wry {
             _transport->end(_connection);
     }
 
-    void RemoteServer::submit(Player::Action action) {
+    bool RemoteServer::submit(Player::Action action) {
         if (_state == State::DISCONNECTED)
-            return;
+            return false;
+        // What can travel is decided before the queue, so a held action is
+        // one that will go
+        std::optional<String> line = command::format_action(action);
+        if (!line)
+            return false;                   // no literal: cannot be sent
+        std::string_view body(line->data(), line->chars.size());
+        if (body.size() > wire::MAX_ACTION_BYTES)
+            return false;
         if (_state != State::JOINED) {
             // Until our JOIN has ridden the stream the relay would refuse
             // it; it goes once we are in
             if (_queued.size() < 1024)
                 _queued.push_back(std::move(action));
-            return;
+            return true;
         }
-        std::optional<String> line = command::format_action(action);
-        if (!line)
-            return;                         // no literal: cannot be sent
-        std::string_view body(line->data(), line->chars.size());
-        if (body.size() > wire::MAX_ACTION_BYTES)
-            return;
         _send(wire::encode_action(++_seq, body));
+        return true;
     }
 
     std::vector<RemoteServer::Donation> RemoteServer::take_donations() {
@@ -174,6 +191,11 @@ namespace wry {
                 c.client = event->client;
                 step.commands.push_back(std::move(c));
             } else {
+                // The relay refuses a body over the cap at its intake, so
+                // one here is a hostile relay or a crafted log; the parser
+                // recurses per nesting level and gets nothing that long
+                if (e.bytes.size() > wire::MAX_ACTION_BYTES)
+                    return std::unexpected(std::string("action body over the cap"));
                 // Total: a body we cannot read is a no-op.  The bytes are
                 // untrusted: validated as UTF-8 at this boundary before
                 // the parser sees them
@@ -252,7 +274,7 @@ namespace wry {
                         std::vector<Player::Action> queued = std::move(_queued);
                         _queued.clear();
                         for (Player::Action& a : queued)
-                            submit(std::move(a));
+                            (void) submit(std::move(a));
                     }
                 }
                 _steps.push_back(std::move(*step));
@@ -402,10 +424,10 @@ namespace wry {
         int client_side = h->_client->adopt(fds[1]);
         if ((server_side < 0) || (client_side < 0)) {
             error = std::string("adopt: ") + std::strerror(-std::min(server_side, client_side));
-            // The loops are spawned: the owner's scope joins them once
-            // they are closed
-            h->_relay->close();
-            h->_client->close();
+            // The loops are spawned; they must have ended before the
+            // facades go (their destructors assert so)
+            (void) execution::sync_wait(h->_relay->shutdown(std::chrono::milliseconds(0)));
+            (void) execution::sync_wait(h->_client->shutdown(std::chrono::milliseconds(0)));
             return nullptr;
         }
         return h;
@@ -530,6 +552,23 @@ namespace wry {
         co_await host->shutdown(std::chrono::milliseconds(200));
         assert(host->finished());
         (void) co_await scope.join();
+        co_return;
+    };
+
+    // A STEP entry's body is bounded as the relay bounds an ACTION's: a
+    // longer one is a malformation, not a parse
+    define_test("host_step_body_cap") {
+        wire::Step frame;
+        frame.number = 1;
+        frame.entries.push_back({1, 1, std::string("write Coordinate(1, 1) 7")});
+        frame.entries.push_back({1, 2, std::string(wire::MAX_ACTION_BYTES, 'x')});
+        auto ok = step_from_wire(frame);
+        assert(ok && ok->commands.size() == 2);
+        assert(ok->commands[0].action.tag == Player::Action::WRITE_VALUE_FOR_COORDINATE);
+        assert(ok->commands[1].action.tag == Player::Action::NONE);     // unparseable: a no-op
+        frame.entries.push_back({1, 3, std::string(wire::MAX_ACTION_BYTES + 1, '(')});
+        auto over = step_from_wire(frame);
+        assert(!over);
         co_return;
     };
 

@@ -75,7 +75,7 @@ namespace wry {
         void dial(std::string address, uint16_t port);
 
         // The seam
-        void submit(Player::Action action) override;
+        bool submit(Player::Action action) override;
         void request_join() override;
         void report_hash(uint64_t step, uint64_t hash) override;
         std::vector<Step> take_steps() override;

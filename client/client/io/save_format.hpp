@@ -66,6 +66,9 @@ namespace wry {
 
     enum : uint32_t { TERM_SAVE_VERSION = 6 };
 
+    // The first word of a save file: 'WRYS'
+    inline constexpr uint32_t SAVE_MAGIC = 0x57525953;
+
     // ---------------------------------------------------------------------
     // Load-order ID.  Dense uint32_t assigned in post-order DFS from World.
     // ID 0 is reserved for null references.  IDs are valid only within one

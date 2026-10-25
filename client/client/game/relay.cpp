@@ -74,6 +74,11 @@ namespace wry {
             bool kicked = false;            // nothing further from it is processed
             std::map<uint64_t, uint64_t> hashes;    // step -> reported hash, the last HASH_WINDOW
             uint64_t reported = 0;          // the last step it reported: its lag
+            // The last step whose report the relay compared with the
+            // reference's and found equal: the proof the join gate wants.
+            // A report the reference has not yet made proves nothing
+            uint64_t verified = 0;
+            bool has_verified = false;
         };
 
         struct PendingAction {
@@ -131,6 +136,18 @@ namespace wry {
             s.transport->kick(id, reason);
         }
 
+        // Whether finalized steps are kept for a replay at a HELLO: every
+        // client's, for a relay without a reference; the reference's own,
+        // until its HELLO has been answered.  After that joiners get the
+        // World by donation and the stream from the head, and a kept log
+        // would only grow
+        bool keeps_log(Shared const& s) {
+            if (s.reference == SERVER_CLIENT_ID)
+                return true;
+            auto it = s.clients.find(s.reference);
+            return (it != s.clients.end()) && (it->second.state == Client::HELLO_PENDING);
+        }
+
         void arm_timer(std::shared_ptr<Shared> const& s) {
             if (s->timer_armed)
                 return;
@@ -174,7 +191,8 @@ namespace wry {
                 number = ++s->head;
             }
             std::string message = wire::encode_step(number, entries);
-            s->log.push_back(message);
+            if (keeps_log(*s))
+                s->log.push_back(message);
             for (auto& [id, c] : s->clients) {
                 c.taken = 0;
                 if ((c.state != Client::HELLO_PENDING) && !c.kicked)
@@ -194,13 +212,17 @@ namespace wry {
         }
 
         // The join gate (section 6): a client may join once it has shown
-        // it holds the World, by a hash report within join_window of the
-        // head.  The reference needs no proof, and a relay without one
-        // has no save to have received
+        // it holds the World, by a hash report that the relay compared
+        // with the reference's and found equal, for a step within
+        // join_window of the head.  A report alone is not proof: it may
+        // precede the reference's, and a client that never held the
+        // World could otherwise ride a JOIN into every World before its
+        // desync kick.  The reference needs no proof, and a relay without
+        // one has no save to have received
         bool gate_open(Shared const& s, uint64_t id, Client const& c, uint64_t head) {
             if ((s.reference == SERVER_CLIENT_ID) || (id == s.reference))
                 return true;
-            return !c.hashes.empty() && (c.reported + s.limits.join_window >= head);
+            return c.has_verified && (c.verified + s.limits.join_window >= head);
         }
 
         void try_join(std::shared_ptr<Shared> const& s, uint64_t id, Client& c) {
@@ -239,15 +261,30 @@ namespace wry {
                         if ((other_id == id) || other.kicked)
                             continue;
                         auto it = other.hashes.find(step);
-                        if ((it != other.hashes.end()) && (it->second != hash))
+                        if (it == other.hashes.end())
+                            continue;
+                        if (it->second != hash) {
                             kick(*s, other_id, other, desync);
+                        } else {
+                            other.verified = std::max(other.verified, step);
+                            other.has_verified = true;
+                            // The reference's report may be the proof a
+                            // waiting JOIN needed
+                            try_join(s, other_id, other);
+                        }
                     }
                 } else {
                     auto r = s->clients.find(s->reference);
                     if (r != s->clients.end()) {
                         auto it = r->second.hashes.find(step);
-                        if ((it != r->second.hashes.end()) && (it->second != hash))
-                            kick(*s, id, c, desync);
+                        if (it != r->second.hashes.end()) {
+                            if (it->second != hash) {
+                                kick(*s, id, c, desync);
+                            } else {
+                                c.verified = std::max(c.verified, step);
+                                c.has_verified = true;
+                            }
+                        }
                     }
                 }
             }
@@ -329,6 +366,12 @@ namespace wry {
                 } else {
                     for (std::string const& step : s->log)
                         s->transport->send(id, step);
+                    if (id == s->reference) {
+                        // Nobody else will ever need it (keeps_log)
+                        s->log.clear();
+                        s->log.shrink_to_fit();
+                        s->first = head + 1;
+                    }
                 }
                 return;
             }
@@ -390,6 +433,13 @@ namespace wry {
             if (id == s->reference) {
                 s->reference = SERVER_CLIENT_ID;
                 s->transfers.clear();
+                // Steps are kept again from here; an empty log (dropped at
+                // the reference's HELLO) starts at the next step, a log the
+                // reference never had replayed is complete as it stands
+                if (s->log.empty()) {
+                    std::scoped_lock lock{s->mutex};
+                    s->first = s->head + 1;
+                }
             }
             s->clients.erase(it);
         }
@@ -531,6 +581,11 @@ namespace wry {
     } // namespace
 
     std::unique_ptr<Relay> Relay::make(Limits limits, uint64_t head) {
+        // The caps are coupled: a STEP must hold a full quota from every
+        // connection, each entry its body plus a small header, with room
+        // for the server's events (wire.hpp)
+        assert(limits.transport.max_connections * (limits.actions_per_step * (wire::MAX_ACTION_BYTES + 32) + 64) + 64
+               <= wire::MAX_STEP_BYTES);
         std::unique_ptr<Relay> r(new Relay);
         r->_shared = std::make_shared<Shared>();
         r->_shared->limits = limits;
@@ -1208,8 +1263,9 @@ namespace wry {
         // A finished transfer takes no more frames
         r.send(wire::encode_save_data(request->transfer, 2, "late"));
 
-        // The gate: a JOIN_REQUEST before any hash report waits; a report
-        // within the window of the head opens it
+        // The gate: a JOIN_REQUEST before any hash report waits; so does
+        // a report the reference has not yet matched; the reference's
+        // equal report for that step opens it
         j.send(wire::encode_join_request("j"));
         auto joins_for = [&](RawClient& c, ClientID who) {
             size_t n = 0;
@@ -1230,6 +1286,14 @@ namespace wry {
         assert(waited && joins_for(j, j.server_id) == 0);
         (void) waited;
         j.send(wire::encode_hash(welcome->head, 0xabc));
+        relay->step(2);
+        bool unverified = eventually([&] {
+            j.drain();
+            return j.of(wire::STEP).size() >= 4;
+        });
+        assert(unverified && joins_for(j, j.server_id) == 0);
+        (void) unverified;
+        r.send(wire::encode_hash(welcome->head, 0xabc));
         bool admitted = eventually([&] {
             relay->step(1);
             j.drain();

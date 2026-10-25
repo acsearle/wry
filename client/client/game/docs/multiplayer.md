@@ -176,7 +176,13 @@ anything else is a protocol violation (TCP makes gaps impossible while a
 connection lives, and without reconnection there are no resends).
 Actions beyond a per-step cap are deferred to the next step, never
 dropped from the middle; a backlog beyond a cap of steps is a flood and
-kills the connection.  The resulting contract: **a client's finalized
+kills the connection.  The cap is **one action per client per step**
+(2026-10-25): a client's successive actions are then sequenced by step
+boundaries, each seeing the committed results of the last, which is
+what a read-modify-write action needs and what a burst of writes loses
+nothing by at 60 steps a second; an action with many effects (a
+blueprint) is one action, atomic by its own definition, not many
+actions in a step.  The resulting contract: **a client's finalized
 actions are exactly a prefix of its submitted sequence, up to the death
 of its connection.**  Seeing your own action in a STEP is its
 acknowledgment.
@@ -284,7 +290,10 @@ Rationale, against the alternatives:
   more.
 
 A relay with no reference client (a test fixture) keeps the reports and
-judges nothing.  Landed 2026-10-21 as stage 4; every client reports
+judges nothing.  A relay with one keeps the finalized stream only until
+the reference's HELLO has been answered with it; after that joiners get
+the World by donation and the stream from the head, and the kept log
+would only grow.  Landed 2026-10-21 as stage 4; every client reports
 after every step (k = 1), since the hash is incremental.
 
 **The artifact.**  Checkpoint + finalized log = deterministic repro.
@@ -386,9 +395,12 @@ transfer is bounded by the transport's outbound limit on the relay
 (open item 11.12).
 
 **Join** (observer to player) is gated: the client sends `JOIN_REQUEST{
-name}` and the server honors it only once that client's most recent hash
-report is for a step within a small window of the head and matches the
-reference -- **proof of readiness**.  Then a `JOIN{client id, name}`
+name}` and the server honors it only once a hash report of that client's
+for a step within a small window of the head has been compared with the
+reference's and found equal -- **proof of readiness**.  A report the
+reference has not yet made proves nothing, whichever arrived first;
+without this a client that never held the World could ride a JOIN into
+every World before its desync kick (found in the 2026-10-25 review).  Then a `JOIN{client id, name}`
 server event rides the stream; every World spawns the Player entity
 deterministically and records client id -> EntityID; the client finds
 its Player in its own World (section 2).  Only after JOIN does the client

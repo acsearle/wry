@@ -210,6 +210,7 @@ namespace wry {
                     // after this one
                     Player* p = new Player;
                     p->_entity_id = w->generate_entity_id();
+                    p->_free_entity_id = EntityID{};    // hashed state: explicit, not the allocator's zero
                     p->seal();
                     w->_entity_for_entity_id.set(p->_entity_id, p);
                     w->_waiting_on_time.set({_time + 1, p->_entity_id});

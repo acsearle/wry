@@ -65,7 +65,11 @@ namespace wry {
 
         struct Limits {
             std::chrono::nanoseconds quantum{1000000000 / 60};
-            size_t actions_per_step = 64;                       // per client per step
+            // Per client per step.  One: a client's successive actions are
+            // then sequenced by step boundaries, each seeing the committed
+            // results of the last (multiplayer.md section 3); the rest wait
+            // their turn in order
+            size_t actions_per_step = 1;
             size_t max_pending_actions = 1024;                  // per client; beyond is a flood
             std::chrono::milliseconds handshake_deadline{5000};
             // How close to the head a client's last hash report must be

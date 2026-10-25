@@ -45,6 +45,7 @@
 #include <variant>
 #include <vector>
 
+#include "contiguous_deque.hpp"
 #include "coroutine.hpp"
 #include "mpsc_queue.hpp"
 
@@ -65,8 +66,11 @@ namespace wry {
             // empty, or the reason the stream is malformed (a partial
             // message over its cap, a frame too long for its tag), after
             // which nothing more is read from the connection.  The messages
-            // moved before the violation are still delivered.
-            virtual std::string_view split(std::string& pending,
+            // moved before the violation are still delivered.  The buffer
+            // is a deque so that consuming from its front is constant
+            // time: a receive full of small frames must not cost a move of
+            // the remainder per frame.
+            virtual std::string_view split(ContiguousDeque<char>& pending,
                                            std::vector<std::string>& out) const = 0;
 
             // The bytes that carry `message` on the wire
@@ -83,7 +87,7 @@ namespace wry {
         struct LineCodec : Codec {
             size_t max_line;
             explicit LineCodec(size_t max = 1 << 20) : max_line(max) {}
-            std::string_view split(std::string& pending,
+            std::string_view split(ContiguousDeque<char>& pending,
                                    std::vector<std::string>& out) const override;
             std::string frame(std::string_view message) const override;
             std::string farewell(std::string_view reason) const override;
@@ -101,7 +105,7 @@ namespace wry {
             uint16_t kick_tag;
             FrameCodec(size_t (*cap)(uint16_t), uint16_t kick)
             : cap_for_tag(cap), kick_tag(kick) {}
-            std::string_view split(std::string& pending,
+            std::string_view split(ContiguousDeque<char>& pending,
                                    std::vector<std::string>& out) const override;
             std::string frame(std::string_view message) const override;
             std::string farewell(std::string_view reason) const override;

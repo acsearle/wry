@@ -315,6 +315,10 @@ namespace wry {
         _backlog.clear();
         _log.reset();
         _replay.reset();
+        // A join that never got its save, a donation never served: the
+        // next session starts clean, or it would never apply a step
+        _awaiting_save = false;
+        _donations.clear();
     }
 
     coroutine::Task WorldState::end_session(std::chrono::milliseconds grace) {
@@ -330,6 +334,8 @@ namespace wry {
         _backlog.clear();
         _log.reset();
         _replay.reset();
+        _awaiting_save = false;
+        _donations.clear();
     }
 
     WorldState::~WorldState() {
@@ -838,15 +844,21 @@ namespace wry {
 
     // Empty the hand: the palette forgets its selection and the renderer's
     // cursor refresh puts the platform arrow back.
+    // The spelling of an opcode for the log, without its "OPCODE_" prefix.
+    // A code this build does not name (a save from elsewhere) is not a
+    // null pointer to print from
+    static const char* opcode_label(OPCODE code) {
+        const char* name = name_from_OPCODE(code);
+        return name ? name + 7 : "an opcode";
+    }
+
     void WorldState::drop_hand() {
         if (!is_holding())
             return;
         char buffer[100];
         const Term held = _holding_value._value;
         std::snprintf(buffer, sizeof(buffer), "Dropped %s",
-                      held.is_opcode()
-                          ? name_from_OPCODE((OPCODE) held.as_opcode()) + 7
-                          : "value");
+                      held.is_opcode() ? opcode_label((OPCODE) held.as_opcode()) : "value");
         _holding_value = term_make_null();
         _palette_overlay.clear_selection();
         _palette_overlay.request_cursor_refresh();
@@ -884,8 +896,7 @@ namespace wry {
         hold(t);
         char buffer[100];
         if (t.is_opcode())
-            std::snprintf(buffer, sizeof(buffer), "Picked up %s",
-                          name_from_OPCODE((OPCODE) t.as_opcode()) + 7);
+            std::snprintf(buffer, sizeof(buffer), "Picked up %s", opcode_label((OPCODE) t.as_opcode()));
         else if (t.is_inty())
             std::snprintf(buffer, sizeof(buffer), "Picked up %lld",
                           (long long) t.as_int());
@@ -952,8 +963,7 @@ namespace wry {
                 ws._palette_overlay.request_cursor_refresh();
             }
             char buffer[100];
-            std::snprintf(buffer, sizeof(buffer), "Holding %s",
-                          name_from_OPCODE(reoriented) + 7);
+            std::snprintf(buffer, sizeof(buffer), "Holding %s", opcode_label(reoriented));
             ws._gui.append_log(buffer);
             return Reply::ok();
         }
@@ -970,7 +980,8 @@ namespace wry {
         Reply submit_write(WorldState& ws, Coordinate at, Term term) {
             if (!ws._server)
                 return Reply::error(String("no session"));
-            ws._server->submit(make_write_action(at, term));
+            if (!ws._server->submit(make_write_action(at, term)))
+                return Reply::error(String("the action cannot travel: no literal form, or over the wire's cap"));
             return Reply::ok();
         }
 
@@ -2086,5 +2097,57 @@ namespace wry {
         co_return;
     };
 
+    // A join that never gets its save (a dead address) must not leave the
+    // next session unable to apply a step: ending the session clears the
+    // awaiting-save hold and any donation outstanding.
+    define_test("world_state_abandoned_join") {
+        coroutine::Nursery scope;
+        GuiContext gc;
+        gc.scope = &scope;
+        {
+            WorldState ws(gc);
+            assert(ws._host);
+            ws.join(String("127.0.0.1"), 1);            // nothing listens on port 1
+            assert(ws._remote && ws._awaiting_save);
+            bool refused = eventually([&] {
+                (void) ws._server->take_steps();
+                return ws._remote->state() == RemoteServer::State::DISCONNECTED;
+            });
+            assert(refused);
+            (void) refused;
+            assert(ws._awaiting_save);                  // the save never came
+            ws._donations.push_back({7, 7});            // and suppose one was pending
+            co_await ws.end_session(std::chrono::milliseconds(200));
+            assert(!ws._awaiting_save && ws._donations.empty());
+
+            // A new game after it runs: its steps are applied
+            ws.new_game();
+            assert(ws._host && !ws._awaiting_save);
+            Relay& relay = ws._host->relay();
+            relay.pause();
+            bool paused = eventually([&] { return relay.clock().paused; });
+            assert(paused);
+            (void) paused;
+            relay.step(2);
+            bool applied = eventually([&] {
+                for (Step& s : ws._server->take_steps())
+                    ws._backlog.push_back(std::move(s));
+                return ws._backlog.size() + ws._steps_taken >= 3 && relay.clock().head >= 3;
+            });
+            assert(applied);
+            (void) applied;
+            while (!ws._backlog.empty()) {
+                Step step = std::move(ws._backlog.front());
+                ws._backlog.pop_front();
+                co_await ws._apply_step_async(step);
+            }
+            assert(ws._steps_taken >= 3);
+            co_await ws.end_session(std::chrono::milliseconds(200));
+        }
+        (void) co_await scope.join();
+        co_return;
+    };
+
 } // namespace wry
+
 

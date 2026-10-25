@@ -35,7 +35,6 @@
 namespace wry {
 
     namespace {
-        constexpr uint32_t SAVE_MAGIC   = 0x57525953;  // 'WRYS'
         constexpr uint32_t SAVE_VERSION = TERM_SAVE_VERSION;
 
         std::filesystem::path saves_dir() {

@@ -451,9 +451,10 @@ whatever the clock does.
 - `frame n` waits n frames without regard to the step clock, for GUI
   animation and overlay settling.
 
-Only the host commands the clock: a joined client's `pause`, `resume`
-and `step` while paused are refused, since the clock is another
-process's (multiplayer.md section 4).
+Only the host commands the clock: a joined client's `pause` and
+`resume` are refused, since the clock is another process's
+(multiplayer.md section 4), and its `step n` only waits for n steps of
+that clock, however long they take.
 
 **Asynchronous commands.**  `step 10` or `frame 5` cannot block the
 main thread, and neither can `screenshot`: a frame already committed
