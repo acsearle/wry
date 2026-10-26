@@ -1,0 +1,109 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "mac-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "environment": {
+        "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"
+      },
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "/opt/homebrew",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "26.0",
+        "CMAKE_OSX_SYSROOT": "macosx",
+        "CMAKE_CXX_COMPILER": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+        "CMAKE_OBJCXX_COMPILER": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "mac-debug",
+      "displayName": "macOS Debug (Address + Undefined), as the Xcode scheme",
+      "inherits": "mac-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "WRY_SANITIZER": "address"
+      }
+    },
+    {
+      "name": "mac-tsan",
+      "displayName": "macOS Debug (Thread + Undefined)",
+      "inherits": "mac-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "WRY_SANITIZER": "thread"
+      }
+    },
+    {
+      "name": "mac-release",
+      "displayName": "macOS Release, no sanitizers",
+      "inherits": "mac-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "WRY_SANITIZER": "none"
+      }
+    },
+    {
+      "name": "mac-xcode",
+      "displayName": "macOS, generated Xcode project (for debugging and profiling)",
+      "inherits": "mac-base",
+      "generator": "Xcode",
+      "cacheVariables": {
+        "WRY_SANITIZER": "address"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "mac-debug",
+      "configurePreset": "mac-debug"
+    },
+    {
+      "name": "mac-tsan",
+      "configurePreset": "mac-tsan"
+    },
+    {
+      "name": "mac-release",
+      "configurePreset": "mac-release"
+    },
+    {
+      "name": "mac-xcode",
+      "configurePreset": "mac-xcode",
+      "configuration": "Debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "mac-debug",
+      "configurePreset": "mac-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "mac-tsan",
+      "configurePreset": "mac-tsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "mac-release",
+      "configurePreset": "mac-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

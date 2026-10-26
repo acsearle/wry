@@ -77,3 +77,18 @@ A game inspired by
 
 
 
+
+## Building
+
+macOS, from the repository root, with Xcode installed and `cmake` and
+`ninja` from Homebrew (`libpng` and `freetype` too):
+
+    cmake --preset mac-debug && cmake --build --preset mac-debug
+    ctest --preset mac-debug
+
+The first line builds `build/mac-debug/client.app` under the Address and
+Undefined sanitizers, as the Xcode scheme does; the second runs the unit
+suite (`client --test-only [FILTER]`).  Other presets: `mac-tsan`,
+`mac-release`, and `mac-xcode` for a generated Xcode project.  The
+hand-made project at `client/client.xcodeproj` still builds the same
+sources.  See `docs/platforms.md` for the plan this is the first step of.

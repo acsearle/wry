@@ -1,8 +1,10 @@
 # Platforms, build system, and where to exercise multiplayer
 
 Status: an assessment, written 2026-10-26 from a survey of the tree as of
-commit c5239a2.  Nothing here is decided or started.  The measurements
-were taken by grep and will drift; re-verify before acting on them.
+commit c5239a2.  The measurements were taken by grep and will drift;
+re-verify before acting on them.  Of the order of work in section 3.5,
+step 1 (CMake with Ninja on the Mac) landed 2026-10-26; see section 2.5.
+Nothing else is decided or started.
 
 Three questions, asked together because they share an answer:
 
@@ -210,6 +212,40 @@ worktree builds, and a generated Xcode project in an out-of-tree
 directory for debugging and profiling.  Keep the hand-made project until
 the generated one has earned trust, then delete it.
 
+### 2.5 What landed (2026-10-26)
+
+CMakeLists.txt at the repository root, CMakePresets.json beside it, and
+cmake/Info.plist.in.  Membership is folder-based (CONFIGURE_DEPENDS
+globs over the six module folders, matching the Xcode project's
+synchronized groups), and the flags reproduce what the scheme passes,
+captured from an xcodebuild log: C++23 without extensions, the scheme's
+warning set, -O0 with DEBUG=1 and libc++'s debug hardening in Debug,
+-Os with NDEBUG=1 in Release, Address + Undefined sanitizers with the
+scheme's exclusions, the Metal compiler's fast-math flags with line
+tables and recorded sources in Debug.  libpng, FreeType and SQLite come
+from find_package instead of hard-wired paths.  The Xcode toolchain and
+SDK are pinned in the presets, so DEVELOPER_DIR need not be set.
+
+    cmake --preset mac-debug && cmake --build --preset mac-debug
+    ctest --preset mac-debug                 # client --test-only
+    build/mac-debug/client.app/Contents/MacOS/client --test-only FILTER
+
+Presets: mac-debug (Address + Undefined, the scheme's default), mac-tsan
+(Thread + Undefined), mac-release (no sanitizers), mac-xcode (the
+generated project under build/mac-xcode, configured but not yet lived
+in).  A clean Debug build takes about twenty seconds of wall clock on
+the M1 Max.  Verified: the suite passes from the Ninja binary and from
+the xcodebuild binary with the identical test list, and both compilers
+emit the same warning kinds.
+
+Known differences from the Xcode product: the bundle is ad-hoc signed
+(Xcode signs with the development identity), it carries no copy of the
+docs (the synchronized groups copy every .md into Resources, which
+nothing reads), the sanitizer runtime is referenced from the toolchain
+rather than copied into Contents/Frameworks, and Release's libc++
+hardening mode is left at the library default where Xcode's choice has
+not been checked.
+
 ## 3. The path to Windows and Linux
 
 ### 3.1 The measured surface, by layer
@@ -319,6 +355,7 @@ not.
 Each step is useful on its own.
 
 1. CMake + Ninja on the Mac: same binary, suite green both ways.
+   LANDED 2026-10-26 (section 2.5).
 2. Carve the render-free host: GuiContext, WorldState, Host/Relay and
    the control socket with no device or scene chain.  The one design
    change everything else leans on.
