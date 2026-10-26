@@ -204,10 +204,19 @@ namespace wry {
         uint16_t join_port = 0;
         void _service_control_socket();
 
-        // Block for up to `timeout` until the socket has input, taking it
-        // into socket_events (the headless host's idle).  Returns early
-        // and spuriously as it likes; the caller re-checks idle()
-        void wait_for_commands(std::chrono::milliseconds timeout);
+        // The launch options every host reads (core/main.mm passes argv):
+        // --control-socket [PATH], --host [PORT], --join ADDRESS:PORT, and
+        // settings.json loaded (or first-run installed) from the
+        // settings paths, warnings to the log.  After `scope` is set and
+        // the cwd is the assets directory
+        void configure_from_arguments(int argc, const char* const* argv);
+        // Block for up to `timeout` until there is input to frame on: a
+        // line on the control socket, or news on the world's connection
+        // (finalized steps, donation requests, a save transfer), taking
+        // nothing.  Returns early and spuriously as it likes; the caller
+        // re-checks idle().  The idle of a host that renders only on
+        // demand (multiplayer.md section 8, "Waiting")
+        void wait_for_input(std::chrono::milliseconds timeout);
 
         // Once per frame (the host, before input): poll pending replies,
         // complete those that finished, and issue lines that were waiting

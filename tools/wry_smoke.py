@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""wry_smoke: an end-to-end test of the game, run headless.
+"""wry_smoke: an end-to-end test of the game, run offscreen.
 
     python3 tools/wry_smoke.py [PATH_TO_CLIENT_BINARY]
 
-Launches the client with --headless on a private control socket, plays a
+Launches the client with --offscreen (the Metal scenes rendering with no
+window, so screenshots work; --headless is the render-free host, which
+tools/wry_net_smoke.py drives) on a private control socket, plays a
 short scripted session through the command interface (main menu, NEW
 GAME, a write, steps, a screenshot), checks each reply, then quits and
 requires a clean exit.  The binary defaults to the newest Debug build in
@@ -68,7 +70,7 @@ def main(argv):
     log_path = os.path.join(workdir, "client.log")
     print(f"wry_smoke: {binary}\n  log: {log_path}")
     with open(log_path, "wb") as log:
-        process = subprocess.Popen([binary, "--headless", "--control-socket", socket_path],
+        process = subprocess.Popen([binary, "--offscreen", "--control-socket", socket_path],
                                    stdout=log, stderr=subprocess.STDOUT)
     try:
         deadline = time.monotonic() + 60

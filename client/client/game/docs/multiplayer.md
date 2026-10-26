@@ -575,14 +575,14 @@ consumes exactly one, with that step's commands as its input (section
 9.2).  There is one implementation, the networked one; single player is
 the same code over a socket pair.
 
-**Waiting.**  The headless host idles on the control socket today; with
-a server in the process it must also wake for finalized steps, donation
-requests and save completions.  Individual waits do not compose, so the
-idle becomes one `when_any` over the inboxes' `take()`s (ext/execution.hpp
-has the race), or, simpler, every producer posts to one main-thread
-inbox and the idle is one `take()`.  The second is the control socket's
-own design (one event queue, a sum type) applied one level up, and is
-the recommendation.
+**Waiting.**  The headless and offscreen hosts idle on the control
+socket and on the connection's inbox at once, for finalized steps,
+donation requests and save completions (landed 2026-10-26 as
+`GuiContext::wait_for_input`): one `when_any` (ext/execution.hpp) over
+the two queues' non-consuming `wait()`s, added to the queue for this,
+so that a tie's loser drops nothing; the frame that follows takes from
+both.  The alternative considered, every producer posting to one
+main-thread inbox, was not needed.
 
 **The host's client** is a client like any other, plus the private
 donation channel: a queue from the server task to the main thread

@@ -110,9 +110,24 @@ namespace wry::coroutine {
             }
         };
 
+        // Nothing: resumes once at least one item is queued and leaves it
+        // there, for a consumer that wants to be woken and then try_take
+        // from several queues.  Non-consuming, so it can be an entrant of
+        // a when_any race (ext/execution.hpp) without a tie-loser's items
+        // being dropped with its value
+        struct WaitAwaitable : BasicAwaitable {
+            using BasicAwaitable::BasicAwaitable;
+            void await_resume() const noexcept {}
+        };
+
         // One item, waiting for it
         [[nodiscard]] PopAwaitable pop() {
             return PopAwaitable{this};
+        };
+
+        // Wait for at least one item, taking nothing
+        [[nodiscard]] WaitAwaitable wait() {
+            return WaitAwaitable{this};
         };
 
         // Everything queued, in order, waiting for at least one item

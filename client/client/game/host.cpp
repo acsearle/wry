@@ -374,6 +374,10 @@ namespace wry {
         return _transport->events().size() != 0;
     }
 
+    coroutine::MultiProducerSingleConsumerQueue<Transport::Event>& RemoteServer::inbox() {
+        return _transport->events();
+    }
+
     void RemoteServer::disconnect(std::string reason) {
         _disconnect(std::move(reason));
     }

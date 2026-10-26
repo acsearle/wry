@@ -23,9 +23,12 @@
 @interface WryDelegate : NSResponder < NSApplicationDelegate,
     NSWindowDelegate, WryMetalViewDelegate >
 
-// `scope` is the process scope (the nursery in main) that the GuiContext and
-// everything it hosts spawn background work into
--(nonnull instancetype) initWithScope:(nonnull wry::coroutine::Nursery*)scope;
+// `scope` is the process scope (the nursery in main) that everything the
+// GuiContext hosts spawns background work into; `gui` is main's app tier
+// (the registry, the control socket, the launch options already applied),
+// borrowed for the delegate's life
+-(nonnull instancetype) initWithScope:(nonnull wry::coroutine::Nursery*)scope
+                                  gui:(nonnull wry::GuiContext*)gui;
 
 @property (nonatomic, nullable) NSCursor* cursor;
 @property (atomic) BOOL done;
@@ -36,11 +39,13 @@
 // After the wait group has drained: the accept loop has finished
 - (void)releaseControlSocket;
 
-// Headless host (--headless): set up without a window; main then calls
-// -render while -hasCommandWork, and -waitForCommands otherwise.
-- (void)setUpHeadless;
-- (BOOL)hasCommandWork;
-- (void)waitForCommands;
+// Offscreen host (--offscreen): set up without a window, rendering to an
+// offscreen drawable; main then calls -render while -hasWork, and
+// -waitForInput otherwise.  (The render-free host, --headless, is
+// render/headless_host.hpp and never creates a delegate.)
+- (void)setUpOffscreen;
+- (BOOL)hasWork;
+- (void)waitForInput;
 
 -(void) render;
 

@@ -508,6 +508,11 @@ namespace wry {
         return (!_awaiting_save && !_backlog.empty()) || (_server && _server->has_input());
     }
 
+    coroutine::MultiProducerSingleConsumerQueue<Transport::Event>* WorldState::server_inbox() {
+        RemoteServer* client = _client();
+        return client ? &client->inbox() : nullptr;
+    }
+
     // The host's client as donor: a request the relay queued after STEP
     // boundary names the World that step produced, which is the displayed
     // one once it has been applied; the walk runs on the pool over a rooted

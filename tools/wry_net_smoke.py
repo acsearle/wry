@@ -3,7 +3,8 @@
 
     python3 tools/wry_net_smoke.py [PATH_TO_CLIENT_BINARY]
 
-Launches a host and a joiner, each headless on its own control socket.
+Launches a host and a joiner, each headless (the render-free host: no
+window, device or AppKit) on its own control socket.
 The host starts a game, pauses its clock, plays on for a while and
 listens; the joiner starts its own game, abandons it to join the host,
 receives the host's save of the world as of the step it arrived at, and

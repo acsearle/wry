@@ -15,7 +15,7 @@
 
 #include "gui_event.hpp"
 #include "gui_widget.hpp"
-#include "save.hpp"
+#include "main_menu.hpp"
 
 @implementation WryMainMenuScene
 {
@@ -24,7 +24,7 @@
     id<MTLTexture> _target;
     simd_float2 _viewportPx;       // drawable pixels; widgets lay out in this
     uint64_t _frameCount;
-    std::unique_ptr<wry::gui::Widget> _root;   // the button panel
+    std::unique_ptr<wry::gui::ButtonPanel> _root;   // the button panel (render/main_menu.hpp)
     id<WryScene> _pendingNext;     // set by NEW / LOAD; -nextScene returns it
     // Wraps a freshly-built WorldState in the world scene.
     id<WryScene> (^_nextFactory)(std::shared_ptr<wry::WorldState>);
@@ -51,53 +51,21 @@
         assert(gui->scope);
         _backdrop = [[WryBackdrop alloc] initAlbumWithContext:context prefix:@"mainMenu" scope:gui->scope];
 
-        using namespace wry::gui;
-
-        // Unretained: the widget tree is owned by this scene and is only
-        // dispatched to while the scene is alive, so the click lambdas never
-        // outlive self.  An unretained capture avoids a retain cycle
+        // The buttons and what they do are shared with the render-free
+        // host (render/main_menu.hpp); this scene paints and dispatches to
+        // them.  Unretained: the panel is owned by this scene and is only
+        // dispatched to while the scene is alive, so the action lambdas
+        // never outlive self.  An unretained capture avoids a retain cycle
         // (self -> _root -> button -> lambda -> self).
         __unsafe_unretained WryMainMenuScene* uself = self;
-
-        auto panel = std::make_unique<ButtonPanel>();
-        auto add = [&](wry::StringView label, auto on_click) {
-            panel->add(std::make_unique<Button>(label, std::move(on_click)));
-        };
-
-        // NEW GAME: fresh starting world, then drop into it.
-        add("New Game", [uself] {
-            // Fresh WorldState (its constructor installs the starting world).
-            auto world = std::make_shared<wry::WorldState>(*uself->_gui);
-            uself->_pendingNext = uself->_nextFactory ? uself->_nextFactory(world) : nil;
+        _root = wry::make_main_menu(*gui, wry::MainMenuActions{
+            .on_world = [uself](std::shared_ptr<wry::WorldState> world) {
+                uself->_pendingNext = uself->_nextFactory ? uself->_nextFactory(std::move(world)) : nil;
+            },
+            .on_quit = [uself] {
+                if (uself->_quit) uself->_quit();
+            },
         });
-
-        // LOAD GAME: for now load the most recent save (enumerate_games returns
-        // (filename, id) newest first); a real save picker is the eventual UX.
-        add("Load Game", [uself] {
-            auto games = wry::enumerate_games();
-            if (!games.empty()) {
-                auto world = std::make_shared<wry::WorldState>(*uself->_gui);
-                world->load_from_save(games.front().second);
-                uself->_pendingNext = uself->_nextFactory ? uself->_nextFactory(world) : nil;
-            }
-        });
-
-        // JOIN GAME: multiplayer is a future feature (deterministic lockstep);
-        // placeholder no-op for now.
-        add("Join Game", [] { /* TODO: multiplayer */ });
-
-        // SETTINGS: the app-tier settings UI (GuiContext::overlays), the
-        // same overlays the in-game menu opens.
-        add("Settings", [uself] {
-            uself->_gui->open_settings();
-        });
-
-        // QUIT TO DESKTOP: ask the host to end the run loop (graceful shutdown).
-        add("Quit to Desktop", [uself] {
-            if (uself->_quit) uself->_quit();
-        });
-
-        _root = std::move(panel);
     }
     return self;
 }

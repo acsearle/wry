@@ -217,6 +217,9 @@ namespace wry {
 
         // Whether finalized steps or the connection's news are waiting
         bool has_server_input();
+        // The connection's inbox, for a host that idles on it; null
+        // without a session
+        coroutine::MultiProducerSingleConsumerQueue<Transport::Event>* server_inbox();
 
         // Graceful end of the session, for an owner that can await it
         // (tests); the destructor does the same, blocking, if it has not

@@ -104,6 +104,9 @@ namespace wry {
         };
         std::optional<DonatedSave> take_save();
 
+        // The connection's inbox, for a host that idles on it (with
+        // wait(), taking nothing: take_steps is the consumer)
+        coroutine::MultiProducerSingleConsumerQueue<Transport::Event>& inbox();
         State state() const { return _state; }
         ClientID client_id() const { return _client_id; }
         uint64_t quantum_ns() const { return _quantum_ns; }   // the relay's step quantum, from WELCOME

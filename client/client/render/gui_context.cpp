@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <thread>
 
 #include <poll.h>
 #include <sys/socket.h>
@@ -19,6 +20,7 @@
 #include "gui_widget.hpp"
 #include "image.hpp"
 #include "json.hpp"
+#include "execution.hpp"
 #include "kqueue_reactor.hpp"
 #include "test.hpp"
 #include "world_state.hpp"
@@ -259,6 +261,10 @@ namespace wry {
         for (auto const& [id, source] : socket_sources)
             if (source->busy())
                 return false;
+        // Lines on the socket not yet taken (wait_for_input takes nothing;
+        // the frame's service_commands does), or taken and not serviced
+        if (control_socket && control_socket->events().size() != 0)
+            return false;
         return socket_events.empty();
     }
 
@@ -525,14 +531,92 @@ namespace wry {
         return control_socket != nullptr;
     }
 
-    void GuiContext::wait_for_commands(std::chrono::milliseconds timeout) {
-        if (!control_socket)
-            return;
-        auto batch = coroutine::sync_wait(with_deadline(std::chrono::steady_clock::now() + timeout,
-                                                        control_socket->events().take())).value();
-        if (batch)
-            for (auto& event : *batch)
-                socket_events.push_back(std::move(event));
+    namespace {
+
+        using Inbox = coroutine::MultiProducerSingleConsumerQueue<Transport::Event>;
+
+        // Woken by either inbox, taking nothing from it: the entrants are
+        // the queues' non-consuming waits, so a tie's loser drops no
+        // items with its (empty) value; the frame that follows takes
+        // from both
+        coroutine::Future<> wait_either(Inbox& a, Inbox& b) {
+            auto wait_a = a.wait();
+            auto wait_b = b.wait();
+            (void) co_await execution::when_any(coroutine::lift_awaitable<decltype(wait_a)&>(&wait_a),
+                                                coroutine::lift_awaitable<decltype(wait_b)&>(&wait_b));
+        }
+
+    } // namespace
+
+    void GuiContext::wait_for_input(std::chrono::milliseconds timeout) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        Inbox* commands = control_socket ? &control_socket->events() : nullptr;
+        Inbox* server = world ? world->server_inbox() : nullptr;
+        if (commands && server) {
+            (void) coroutine::sync_wait(with_deadline(deadline, wait_either(*commands, *server)));
+        } else if (commands || server) {
+            auto wait = (commands ? commands : server)->wait();
+            (void) coroutine::sync_wait(with_deadline(deadline, wait));
+        } else {
+            std::this_thread::sleep_for(timeout);
+        }
+    }
+
+    void GuiContext::configure_from_arguments(int argc, const char* const* argv) {
+        auto find = [&](std::string_view flag) -> int {
+            for (int i = 1; i < argc; ++i)
+                if (std::string_view(argv[i]) == flag)
+                    return i;
+            return -1;
+        };
+        auto value_after = [&](int i) -> const char* {
+            return (i >= 0 && i + 1 < argc && argv[i + 1][0] != '-') ? argv[i + 1] : nullptr;
+        };
+        // The control socket (core/docs/commands.md section 9) exists only
+        // when asked for: --control-socket [PATH], PATH defaulting to
+        // $TMPDIR/wry-control.sock (what tools/wryctl and tools/wry_mcp.py
+        // look for).  Launch the bundle with
+        //     open client.app --args --control-socket
+        if (int i = find("--control-socket"); i >= 0) {
+            std::string path;
+            if (const char* given = value_after(i)) {
+                path = given;
+            } else {
+                std::error_code ec;
+                path = (std::filesystem::temp_directory_path(ec) / "wry-control.sock").string();
+            }
+            open_control_socket(String(path.c_str()));
+        }
+        // Multiplayer (game/docs/multiplayer.md): --host [PORT] listens for
+        // players once a game starts (port 7777 by default); --join
+        // ADDRESS:PORT joins another process's game instead of hosting
+        if (int i = find("--host"); i >= 0) {
+            uint16_t port = 7777;
+            if (const char* given = value_after(i))
+                port = (uint16_t)std::atoi(given);
+            host_port = port;
+        }
+        if (int i = find("--join"); i >= 0) {
+            if (const char* given = (i + 1 < argc) ? argv[i + 1] : nullptr) {
+                std::string where = given;
+                size_t colon = where.rfind(':');
+                if (colon != std::string::npos) {
+                    join_address = String(where.substr(0, colon).c_str());
+                    join_port = (uint16_t)std::atoi(where.c_str() + colon + 1);
+                }
+            }
+        }
+        // Load (or first-run install) settings.json.  The cwd is already
+        // the assets directory (main.mm chdir), so the config/ paths in
+        // settings_paths resolve next to saves/.  Any warnings (unknown
+        // ids, malformed combos, unparseable file) surface in the
+        // floating log once a scene is up.
+        std::vector<String> warnings;
+        settings = load_settings(settings_paths, &warnings);
+        for (String const& w : warnings) {
+            fprintf(stderr, "%.*s\n", (int)w.chars.size(), w.chars.data());
+            append_log(w, std::chrono::seconds(15));
+        }
     }
 
     void GuiContext::_service_control_socket() {

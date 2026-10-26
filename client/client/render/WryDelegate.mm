@@ -153,16 +153,17 @@ namespace {
 
 @implementation WryDelegate
 {
-    // Host-owned generic GUI state (events, viewport, log / console,
-    // notifications), borrowed by every scene's WorldState.  Declared before
-    // _scene so it outlives the WorldStates that reference it.
-    std::unique_ptr<wry::GuiContext> _gui;
+    // main's generic GUI state (events, viewport, log / console,
+    // notifications, the control socket), borrowed by this host and by
+    // every scene's WorldState; main destroys it after the delegate.
+    wry::GuiContext* _gui;
     NSWindow* _window;
     WryMetalView* _metalView;
     CAMetalLayer* _metalLayer;
-    // Headless (--headless): no window, view or layer; frames run when
-    // commands have work to do, at a fixed dt, and are never presented.
-    BOOL _headless;
+    // Offscreen (--offscreen): no window, view or layer; frames run when
+    // commands or the session have work to do, at a fixed dt, and are
+    // never presented.
+    BOOL _offscreen;
     // The shared render context (device + 2D services), owned by this host and
     // borrowed by whatever scene is showing.
     WryRenderContext* _ctx;
@@ -181,63 +182,18 @@ namespace {
 }
 
 -(nonnull instancetype) initWithScope:(wry::coroutine::Nursery*)scope
+                                  gui:(wry::GuiContext*)gui
 {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
     if ((self = [super init])) {
-        _gui = std::make_unique<wry::GuiContext>();
-        _gui->scope = scope;
-        // The control socket (core/docs/commands.md section 9) exists only
-        // when asked for: --control-socket [PATH], PATH defaulting to
-        // $TMPDIR/wry-control.sock (what tools/wryctl and tools/wry_mcp.py
-        // look for).  Launch the bundle with
-        //     open client.app --args --control-socket
-        NSArray<NSString*>* arguments = [[NSProcessInfo processInfo] arguments];
-        NSUInteger flag = [arguments indexOfObject:@"--control-socket"];
-        if (flag != NSNotFound) {
-            std::string path;
-            if (flag + 1 < arguments.count && ![arguments[flag + 1] hasPrefix:@"-"]) {
-                path = [arguments[flag + 1] UTF8String];
-            } else {
-                std::error_code ec;
-                path = (std::filesystem::temp_directory_path(ec) / "wry-control.sock").string();
-            }
-            _gui->open_control_socket(wry::String(path.c_str()));
-        }
-        // Multiplayer (game/docs/multiplayer.md): --host [PORT] listens for
-        // players once a game starts (port 7777 by default); --join
-        // ADDRESS:PORT joins another process's game instead of hosting
-        NSUInteger host_flag = [arguments indexOfObject:@"--host"];
-        if (host_flag != NSNotFound) {
-            uint16_t port = 7777;
-            if (host_flag + 1 < arguments.count && ![arguments[host_flag + 1] hasPrefix:@"-"])
-                port = (uint16_t)[arguments[host_flag + 1] intValue];
-            _gui->host_port = port;
-        }
-        NSUInteger join_flag = [arguments indexOfObject:@"--join"];
-        if (join_flag != NSNotFound && join_flag + 1 < arguments.count) {
-            std::string where = [arguments[join_flag + 1] UTF8String];
-            size_t colon = where.rfind(':');
-            if (colon != std::string::npos) {
-                _gui->join_address = wry::String(where.substr(0, colon).c_str());
-                _gui->join_port = (uint16_t)std::atoi(where.c_str() + colon + 1);
-            }
-        }
-        // Load (or first-run install) settings.json.  The cwd is already
-        // the assets directory (main.mm chdir), so the config/ paths in
-        // settings_paths resolve next to saves/.  Any warnings (unknown
-        // ids, malformed combos, unparseable file) surface in the
-        // floating log once a scene is up.
-        std::vector<wry::String> warnings;
-        _gui->settings = wry::load_settings(_gui->settings_paths, &warnings);
-        for (wry::String const& w : warnings) {
-            NSLog(@"%.*s\n", (int)w.chars.size(), w.chars.data());
-            _gui->append_log(w, std::chrono::seconds(15));
-        }
+        _gui = gui;
+        assert(_gui->scope == scope);
+        (void) scope;
     }
     return self;
 }
 
-// The shared render context and the boot scene chain, windowed or headless.
+// The shared render context and the boot scene chain, windowed or offscreen.
 - (void)buildScenesWithDevice:(id<MTLDevice>)device
                   pixelFormat:(MTLPixelFormat)pixelFormat {
     // Build the shared render context, then the boot scene chain against it.
@@ -280,7 +236,7 @@ namespace {
     };
     WryMainMenuScene* menu =
         [[WryMainMenuScene alloc] initWithContext:_ctx
-                                              gui:_gui.get()
+                                              gui:_gui
                                              next:makeWorld
                                              quit:quit];
     _scene = [[WrySplashScene alloc] initWithContext:_ctx
@@ -395,15 +351,14 @@ namespace {
     [self shutdownControlSocket];
 }
 
-// The headless host (core/docs/commands.md section 9): the same scenes,
+// The offscreen host (core/docs/commands.md section 9): the same scenes,
 // registry and socket, but no window, view or layer.  The drawable is a
 // fixed 1920 x 1080 pixels viewed at two pixels per point (a Retina
 // window's default), so coordinates and screenshots match a windowed run.
-// main drives it: -render while commands have work, -waitForCommands
-// otherwise.
-- (void)setUpHeadless {
-    _headless = YES;
-    // Headless is only useful driven, so the socket is implied.
+// main drives it: -render while there is work, -waitForInput otherwise.
+- (void)setUpOffscreen {
+    _offscreen = YES;
+    // Offscreen is only useful driven, so the socket is implied.
     if (!_gui->control_socket) {
         std::error_code ec;
         auto path = (std::filesystem::temp_directory_path(ec) / "wry-control.sock").string();
@@ -415,24 +370,22 @@ namespace {
 }
 
 - (CGSize)drawableSizePixels {
-    return _headless ? CGSizeMake(1920.0, 1080.0) : _metalLayer.drawableSize;
+    return _offscreen ? CGSizeMake(1920.0, 1080.0) : _metalLayer.drawableSize;
 }
 
 - (CGSize)viewSizePoints {
-    return _headless ? CGSizeMake(960.0, 540.0) : _metalView.bounds.size;
+    return _offscreen ? CGSizeMake(960.0, 540.0) : _metalView.bounds.size;
 }
 
-- (BOOL)hasCommandWork {
+- (BOOL)hasWork {
     return !_gui->idle();
 }
 
-// Block until a request arrives on the control socket, for at most 100 ms,
-// repinning so an idle main thread never holds the collector back.
-- (void)waitForCommands {
-    if (_gui->control_socket)
-        _gui->wait_for_commands(std::chrono::milliseconds(100));
-    else
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+// Block until there is input to frame on (a control-socket line, the
+// session's news), for at most 100 ms, repinning so an idle main thread
+// never holds the collector back.
+- (void)waitForInput {
+    _gui->wait_for_input(std::chrono::milliseconds(100));
     wry::mutator_repin();
 }
 
@@ -851,11 +804,11 @@ namespace {
     // is the seam scenes use: a splash / menu scene has no world to step, so
     // the step must not live inside the draw call.  Pass real elapsed seconds
     // (clamped, so a stall or the first frame doesn't jump scene timers).
-    // Headless frames run only on demand, so they keep a fixed dt: the same
+    // Offscreen frames run only on demand, so they keep a fixed dt: the same
     // commands then see the same scene timers on every run.
     const auto now = std::chrono::steady_clock::now();
     double dt = 0.0;
-    if (_headless)
+    if (_offscreen)
         dt = 1.0 / 60.0;
     else if (_haveLastFrameTime)
         dt = std::clamp(std::chrono::duration<double>(now - _lastFrameTime).count(),
@@ -873,7 +826,7 @@ namespace {
     id<MTLTexture> presentable = [_scene encodeIntoCommandBuffer:command_buffer];
     if (presentable && !_gui->screenshot_requests.empty())
         [self encodeScreenshotsOf:presentable into:command_buffer];
-    if (!_headless) @autoreleasepool {
+    if (!_offscreen) @autoreleasepool {
         id<CAMetalDrawable> drawable = [_metalLayer nextDrawable];
         if (drawable && presentable) {
             id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
@@ -886,9 +839,9 @@ namespace {
     // passes this point.
     [_ctx.arena endFrameOnCommandBuffer:command_buffer];
     [command_buffer commit];
-    // With no drawable to throttle it, a headless host waits out each
+    // With no drawable to throttle it, an offscreen host waits out each
     // frame; this also completes screenshots before the next frame.
-    if (_headless)
+    if (_offscreen)
         [command_buffer waitUntilCompleted];
 
     // Scene transition: a scene requests its successor via -nextScene (mouse /

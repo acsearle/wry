@@ -16,6 +16,7 @@
 #include "atomic.hpp"
 #include "vector.hpp"
 
+#include "headless_host.hpp"
 #include "world_state.hpp"
 #include "test.hpp"
 #include "coroutine.hpp"
@@ -65,15 +66,22 @@ int main(int argc, const char** argv) {
     //       it (as a substring) are run.
     //
     //   --headless
-    //       No window: run the game driven through its control socket,
-    //       rendering frames only while commands have work (see
-    //       core/docs/commands.md section 9).  Implies --control-socket.
+    //       No window, device or AppKit (render/headless_host.hpp): the
+    //       game driven through its control socket, framing only while
+    //       commands or the session have work (core/docs/commands.md
+    //       section 9).  Implies --control-socket.
     //
-    //   --control-socket [PATH]   (read by WryDelegate)
+    //   --offscreen
+    //       No window, but the Metal scenes rendering to an offscreen
+    //       drawable, so screenshots work; otherwise as --headless.
+    //
+    //   --control-socket [PATH], --host [PORT], --join ADDRESS:PORT
+    //       (read by GuiContext::configure_from_arguments)
     //
     // TODO: paths, immediate load savegame, etc.
     bool test_only = false;
     bool headless = false;
+    bool offscreen = false;
     std::string_view test_filter;
     for (int i = 1; i < argc; ++i) {
         std::string_view a = argv[i];
@@ -85,6 +93,8 @@ int main(int argc, const char** argv) {
                 test_filter = argv[++i];
         } else if (a == "--headless") {
             headless = true;
+        } else if (a == "--offscreen") {
+            offscreen = true;
         }
     }
 
@@ -141,33 +151,74 @@ int main(int argc, const char** argv) {
     wry::mutator_pin();
     wry::thread_public_register("main");
 
-    if (!test_only) {
+    // The app tier every host shares (render/gui_context.hpp): the
+    // registry, the control socket, the launch options.  Owned here, so it
+    // outlives whichever host borrows it
+    auto gui = std::make_unique<wry::GuiContext>();
+    gui->scope = &root;
+    if (!test_only)
+        gui->configure_from_arguments(argc, argv);
+
+    if (headless) {
+        // The render-free host: no NSApplication, window, device or scene
+        // chain.  Frames run while commands or the session have work;
+        // otherwise main waits on the control socket and the connection,
+        // repinning so the collector advances.  Headless is only useful
+        // driven, so the socket is implied
+        if (!gui->control_socket) {
+            std::error_code ec;
+            auto path = (std::filesystem::temp_directory_path(ec) / "wry-control.sock").string();
+            gui->open_control_socket(wry::String(path.c_str()));
+        }
+        {
+            wry::HeadlessHost host(*gui);
+            host.run();
+            printf("main is terminal\n");
+            // No more commands: shut the control socket down (its accept
+            // loop finishes in the drain below) and remove its file
+            if (gui->control_socket)
+                (void) wry::execution::sync_wait(gui->control_socket->shutdown(std::chrono::seconds(1)));
+            // The host's WorldState dies here, pinned: its Root destructors
+            // shade, and its session ends gracefully under sync_wait, as a
+            // `leave` does
+        }
+        printf("main is joining background work\n");
+        // Shutdown has begun: request the root token, so any task parked in
+        // the reactor unwinds now rather than holding the join open, and
+        // stay unpinned for the join, as the GUI path does
+        root.request_stop();
+        wry::mutator_unpin();
+        (void) wry::coroutine::sync_wait(root.join());
+        // Drained: the socket's loop has finished
+        gui->control_socket.reset();
+    } else if (!test_only) {
         @autoreleasepool {
 
             // create AppKit application
 
             NSApplication* application = [NSApplication sharedApplication];
-            WryDelegate* delegate = [[WryDelegate alloc] initWithScope:&root];
+            WryDelegate* delegate = [[WryDelegate alloc] initWithScope:&root gui:gui.get()];
             [application setDelegate:delegate];
 
-            if (headless) {
+            if (offscreen) {
                 // No window, no Dock icon, no event loop: frames run while
-                // commands have work, and otherwise main sleeps on the
-                // control socket (repinning, so the collector advances).
+                // commands or the session have work, and otherwise main
+                // waits on the control socket and the connection
+                // (repinning, so the collector advances).
                 [application setActivationPolicy:NSApplicationActivationPolicyProhibited];
-                [delegate setUpHeadless];
+                [delegate setUpOffscreen];
                 while (![delegate done]) {
                     @autoreleasepool {
-                        if ([delegate hasCommandWork])
+                        if ([delegate hasWork])
                             [delegate render];
                         else
-                            [delegate waitForCommands];
+                            [delegate waitForInput];
                     }
                 }
             }
 
             // return NSApplicationMain(argc, argv); // noreturn
-            if (!headless)
+            if (!offscreen)
                 [application finishLaunching];
             while (![delegate done]) {
                 @autoreleasepool {

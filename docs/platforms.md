@@ -3,8 +3,9 @@
 Status: an assessment, written 2026-10-26 from a survey of the tree as of
 commit c5239a2.  The measurements were taken by grep and will drift;
 re-verify before acting on them.  Of the order of work in section 3.5,
-step 1 (CMake with Ninja on the Mac) landed 2026-10-26; see section 2.5.
-Nothing else is decided or started.
+steps 1 (CMake with Ninja on the Mac) and 2 (the render-free host)
+landed 2026-10-26; see sections 2.5 and 3.6.  Nothing else is decided or
+started.
 
 Three questions, asked together because they share an answer:
 
@@ -359,6 +360,7 @@ Each step is useful on its own.
 2. Carve the render-free host: GuiContext, WorldState, Host/Relay and
    the control socket with no device or scene chain.  The one design
    change everything else leans on.
+   LANDED 2026-10-26 (section 3.6).
 3. Linux headless on the PC: epoll reactor; wait-on-address, lock,
    Dispatch and thread-name shims; the simd header; a configurable
    assets path.  libpng is already portable.  Payoff before any
@@ -370,6 +372,28 @@ Each step is useful on its own.
 5. Windows: the same backend plus the Winsock reactor, clang-cl, a
    replacement for socketpair (Windows has AF_UNIX stream sockets but
    no socketpair), and path handling.
+
+### 3.6 What landed (2026-10-26): the render-free host
+
+`--headless` is now render/headless_host.{hpp,cpp}: no NSApplication,
+window, device or scene chain.  It drives GuiContext and WorldState
+directly, performing the host's per-frame duties as WryDelegate does
+minus the drawing; the main menu's buttons moved into
+render/main_menu.{hpp,cpp} so the Metal scene and the headless host
+share them; `GuiContext::wait_for_input` idles on the control socket
+and the session's inbox at once (a when_any over non-consuming queue
+waits); the launch options moved from the delegate into
+`GuiContext::configure_from_arguments`.  The former headless mode, the
+Metal scenes rendering to an offscreen drawable, is `--offscreen`, which
+the screenshot smoke uses; the network smoke runs two headless
+processes.  core/docs/commands.md section 9 describes both.
+
+What is still Apple in the headless path, for step 3: main.mm itself
+(the entry point is Objective-C++ only because the GUI branch is), the
+reactor, the ext shims, the simd header, libpng's build wiring, and the
+hardcoded assets path.  WorldState still carries GUI state (the palette,
+the camera uniforms, the map pipeline) and builds the world map in the
+background; harmless headless, and a later split if it ever matters.
 
 Rough sizes: the shims are days each, the SDL3 layer about a week,
 Windows a few days on top of Linux, the Vulkan backend the one

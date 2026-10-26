@@ -7,9 +7,10 @@ MCP) -- and the literal syntax in which commands and their arguments
 are written.  Agreed 2026-10-12.  All five stages of section 10 are
 implemented (core/command.{hpp,cpp}, game/command_types.{hpp,cpp},
 render/gui_context.cpp, the world commands in game/world_state.cpp,
-io/control_socket.{hpp,cpp}, the --headless host in core/main.mm and
-render/WryDelegate.mm, tools/wryctl, tools/wry_mcp.py,
-tools/wry_smoke.py).  Of the section 7 vocabulary, the session commands
+io/control_socket.{hpp,cpp}, the --headless host in
+render/headless_host.{hpp,cpp} and the --offscreen host in
+render/WryDelegate.mm, both driven from core/main.mm, tools/wryctl,
+tools/wry_mcp.py, tools/wry_smoke.py).  Of the section 7 vocabulary, the session commands
 other than `quit` (new-game, save, load, list-saves) are not yet
 written; the main menu's buttons reach them through `press`.
 
@@ -590,20 +591,39 @@ with `notifications/tools/list_changed` once a call reaches the game.
 The adapter knows no command by name; it is never edited when commands
 are added.
 
-**Headless host.**  `client --headless` (the binary itself; no `open`,
-no window, no Dock icon) runs the same scenes, registry and socket with
-no window, view or layer.  It implies `--control-socket`.  The drawable
-is a fixed 1920 x 1080 pixels viewed at two pixels per point, so
-coordinates and screenshots match a windowed run on a Retina display.
+**Headless host.**  `client --headless` (the binary itself; no `open`)
+is the render-free host, render/headless_host.{hpp,cpp}: no window,
+device, scene chain or AppKit.  What remains is the app tier
+(GuiContext: this registry, the control socket, the overlays), the main
+menu's button panel (render/main_menu.hpp, the same buttons and actions
+the Metal menu scene paints), and the WorldState a game is, with its
+session.  It implies `--control-socket`.  The viewport is the fixed
+1920 x 1080 pixels at two pixels per point of a windowed run, so
+injected coordinates and widget rects match one; the menu is laid out
+without a font, by the widgets' fallback sizes, so its rects differ
+from a rendered layout, which only `widgets` can tell.  `screenshot`
+is answered with an error: nothing is rendered.
 
-Frames run only while commands have work -- something pending, queued,
-injected and undispatched, or waiting on the socket -- at a fixed dt of
-1/60 s; otherwise main sleeps on the socket, repinning every 100 ms so
-the collector advances.  `step 10` therefore takes ten frames as fast as
-they render, and a script sees the same scene timers on every run.
-Each frame waits for its command buffer to complete (there is no
-drawable to throttle it), which also completes screenshots before the
-next frame.  `quit` ends it, as QUIT TO DESKTOP does in a window.
+Frames run only while there is work -- a command pending, queued,
+injected and undispatched, or waiting on the socket, or finalized
+steps, donation requests or a save transfer waiting on the session's
+connection -- at a fixed dt of 1/60 s; otherwise main waits on both
+inboxes at once (`GuiContext::wait_for_input`: a `when_any` over the
+queues' non-consuming `wait()`s, under a 100 ms deadline so main
+repins and the collector advances).  So a running step clock frames the
+host at the relay's quantum, and `step 10` with the clock paused takes
+as many frames as the steps take to arrive and apply.  `quit` ends it,
+as QUIT TO DESKTOP does in a window.  The host's WorldState dies with
+the host, pinned, before main requests the root token and drains the
+scope.
+
+**Offscreen host.**  `client --offscreen` runs the same scenes,
+registry and socket as a window would, but rendering to an offscreen
+drawable of the same fixed size: no window, view, layer or Dock icon.
+Screenshots work and match a windowed run on a Retina display.  Frames
+run and main waits exactly as the headless host does, and each frame
+waits for its command buffer to complete (there is no drawable to
+throttle it), which also completes screenshots before the next frame.
 
 The delegate owns the scenes, which own the WorldState, whose Root
 destructors shade, and main unpins for the shutdown drain; a shade from
@@ -615,10 +635,12 @@ A quit from the menu never exercises this; a quit with a live game does,
 which is why the smoke test starts one.
 
 **`tools/wry_smoke.py`** is the end-to-end test: it launches the newest
-Debug build headless on a private socket, plays a scripted session
+Debug build offscreen on a private socket, plays a scripted session
 (menu, NEW GAME, write, step, screenshot), checks every reply, quits,
 and requires exit status 0 -- the whole game under the scheme's
 sanitizers, driven only through the command interface.
+`tools/wry_net_smoke.py` does the same for two headless processes over
+TCP (game/docs/multiplayer.md section 13).
 
 ## 10. Staging
 
