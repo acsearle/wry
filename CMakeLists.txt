@@ -195,6 +195,10 @@ endif()
 # The suite: the binary's own headless test runner
 enable_testing()
 add_test(NAME suite COMMAND client --test-only)
+# A sanitizer finding exits after its report rather than aborting (the
+# macOS default), so a failure reports on stderr with no Problem Report
+# dialog; the binary's own handler does the same for asserts in its
+# driven modes.  The Swift backtracer's prompt is off
 set_tests_properties(suite PROPERTIES
     TIMEOUT 900
-    ENVIRONMENT "SWIFT_BACKTRACE=enable=no")
+    ENVIRONMENT "SWIFT_BACKTRACE=enable=no;ASAN_OPTIONS=abort_on_error=0;UBSAN_OPTIONS=abort_on_error=0;TSAN_OPTIONS=abort_on_error=0")

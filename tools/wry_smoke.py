@@ -33,6 +33,19 @@ def find_binary():
     return max(candidates, key=os.path.getmtime)
 
 
+def game_environment():
+    """The game's environment: a sanitizer finding exits after its report
+    instead of aborting (macOS's default), so a failing run reports on
+    stderr with no Problem Report dialog, as the game's own fatal-signal
+    handler arranges for asserts in its driven modes; and the Swift
+    backtracer's prompt is off."""
+    env = dict(os.environ)
+    for name in ("ASAN_OPTIONS", "UBSAN_OPTIONS", "TSAN_OPTIONS"):
+        env[name] = ":".join(x for x in (env.get(name, ""), "abort_on_error=0") if x)
+    env["SWIFT_BACKTRACE"] = "enable=no"
+    return env
+
+
 class Game:
 
     def __init__(self, path):
@@ -71,7 +84,7 @@ def main(argv):
     print(f"wry_smoke: {binary}\n  log: {log_path}")
     with open(log_path, "wb") as log:
         process = subprocess.Popen([binary, "--offscreen", "--control-socket", socket_path],
-                                   stdout=log, stderr=subprocess.STDOUT)
+                                   stdout=log, stderr=subprocess.STDOUT, env=game_environment())
     try:
         deadline = time.monotonic() + 60
         while not os.path.exists(socket_path):

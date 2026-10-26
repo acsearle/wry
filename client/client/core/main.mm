@@ -6,9 +6,14 @@
 //
 
 #include <cinttypes>
+#include <cstring>
 #include <random>
 #include <thread>
 #include <filesystem>
+
+#include <execinfo.h>
+#include <signal.h>
+#include <unistd.h>
 
 #import <AppKit/AppKit.h>
 #include <sqlite3.h>
@@ -29,6 +34,44 @@
 
 
 namespace {
+
+    // The driven modes (--test-only, --headless, --offscreen) die quietly.
+    // A failed assert or CHECK aborts, and macOS answers a process killed
+    // by a signal with the Problem Report dialog (and the Swift backtracer
+    // with its 30 s prompt); a script's run, or a test pass, should report
+    // on stderr and exit instead.  So the fatal signals abort, trap and
+    // illegal instruction raise get a handler that writes the signal and a
+    // backtrace (async-signal-safe: backtrace_symbols_fd and write only)
+    // and exits with the shell's status for that signal.  Segmentation
+    // faults and bus errors are left to the sanitizer runtime, which owns
+    // their handlers (ASAN_OPTIONS=abort_on_error=0, which the scripts and
+    // ctest set, makes it exit after its report rather than abort into
+    // this handler's dialog-free path anyway).  The windowed app keeps the
+    // defaults: a real crash report is worth having there
+    void driven_mode_fatal_signal(int signo) {
+        const char* name = (signo == SIGABRT) ? "SIGABRT"
+                         : (signo == SIGTRAP) ? "SIGTRAP"
+                         : (signo == SIGILL)  ? "SIGILL"
+                         : "signal";
+        const char* prefix = "\nwry: fatal ";
+        const char* suffix = " in a driven mode; backtrace, then exit:\n";
+        (void) write(STDERR_FILENO, prefix, strlen(prefix));
+        (void) write(STDERR_FILENO, name, strlen(name));
+        (void) write(STDERR_FILENO, suffix, strlen(suffix));
+        void* frames[64];
+        int n = backtrace(frames, 64);
+        backtrace_symbols_fd(frames, n, STDERR_FILENO);
+        _exit(128 + signo);
+    }
+
+    void install_driven_mode_signal_handlers() {
+        struct sigaction action = {};
+        action.sa_handler = driven_mode_fatal_signal;
+        sigemptyset(&action.sa_mask);
+        action.sa_flags = SA_RESETHAND;
+        for (int signo : {SIGABRT, SIGTRAP, SIGILL})
+            (void) sigaction(signo, &action, nullptr);
+    }
 
     // The receiver for the process scope's join on the GUI path: completion
     // arrives on a worker; it wakes main's run loop with an event and sets
@@ -97,6 +140,9 @@ int main(int argc, const char** argv) {
             offscreen = true;
         }
     }
+
+    if (test_only || headless || offscreen)
+        install_driven_mode_signal_handlers();
 
     std::filesystem::current_path("/Users/antony/Desktop/assets/");
 

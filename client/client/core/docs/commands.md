@@ -617,6 +617,18 @@ as QUIT TO DESKTOP does in a window.  The host's WorldState dies with
 the host, pinned, before main requests the root token and drains the
 scope.
 
+**Dying quietly.**  In the driven modes (`--test-only`, `--headless`,
+`--offscreen`) a failed assert or CHECK, a trap, or an illegal
+instruction reports the signal and a backtrace on stderr and exits with
+the shell's status for that signal (134 for an abort), through a handler
+core/main.mm installs; macOS would otherwise answer the signal with the
+Problem Report dialog.  The sanitizers abort after their reports by
+default on macOS, so the smoke scripts and ctest run the game with
+`ASAN_OPTIONS=abort_on_error=0` (and the UBSan and TSan equivalents),
+under which a finding exits instead; set the same when running a
+driven binary by hand.  The windowed app keeps the defaults, since a
+real crash report is worth having there.
+
 **Offscreen host.**  `client --offscreen` runs the same scenes,
 registry and socket as a window would, but rendering to an offscreen
 drawable of the same fixed size: no window, view, layer or Dock icon.
