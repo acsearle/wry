@@ -1327,7 +1327,9 @@ namespace wry {
         nursery.soon(server->serve());
 
         int client = connect_unix(path);
-        assert(set_nonblocking(client));
+        bool nonblocking = set_nonblocking(client);
+        assert(nonblocking);
+        (void) nonblocking;
         const std::string line = std::string(65536, 'l') + '\n';
         size_t written = 0;
         // A non-blocking send of the line from wherever the last partial
@@ -1430,7 +1432,9 @@ namespace wry {
         nursery.soon(server->serve());
 
         int client = connect_unix(path);
-        assert(write_all(client, "hi\n"));
+        bool sent = write_all(client, "hi\n");
+        assert(sent);
+        (void) sent;
         std::vector<Transport::Message> messages;
         std::vector<Transport::Closed> closed;
         bool heard = eventually([&] {
@@ -1473,7 +1477,9 @@ namespace wry {
         nursery.soon(server->serve());
 
         int client = connect_unix(path);
-        assert(write_all(client, "one\n"));
+        bool sent = write_all(client, "one\n");
+        assert(sent);
+        (void) sent;
         std::vector<Transport::Message> messages;
         std::vector<Transport::Closed> closed;
         std::vector<Transport::Opened> opened;
@@ -1516,7 +1522,8 @@ namespace wry {
         Nursery scope;
         scope.soon(picky->serve());
         int bad = connect_unix(path);
-        assert(write_all(bad, "fine\n123456789\n"));
+        sent = write_all(bad, "fine\n123456789\n");
+        assert(sent);
         bool violated = eventually([&] {
             drain(*picky, messages, closed);
             return closed.size() == 2;

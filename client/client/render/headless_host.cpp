@@ -146,7 +146,8 @@ namespace wry {
             // pressed in the second; the world shows from the one after
             host.frame();
             assert(host.world() == nullptr);
-            assert(gc.issue(Origin::gui, "press \"New Game\"").reply.status == Reply::OK);
+            [[maybe_unused]] auto pressed = gc.issue(Origin::gui, "press \"New Game\"");
+            assert(pressed.reply.status == Reply::OK);
             host.frame();
             assert(host.world() != nullptr);
             assert(gc.world == host.world());
@@ -168,15 +169,21 @@ namespace wry {
 
             // A write, stepped in: `step` is pending until the relay's
             // steps have arrived and been applied
-            assert(gc.issue(Origin::gui, "pause").reply.status == Reply::OK);
-            assert(gc.issue(Origin::gui, "write Coordinate(1, 1) OPCODE::SWAP").reply.status == Reply::OK);
-            assert(gc.issue(Origin::gui, "get Coordinate(1, 1)").reply.text == StringView("null"));
-            assert(gc.issue(Origin::gui, "step 2").reply.status == Reply::PENDING);
+            [[maybe_unused]] auto paused = gc.issue(Origin::gui, "pause");
+            assert(paused.reply.status == Reply::OK);
+            [[maybe_unused]] auto written = gc.issue(Origin::gui, "write Coordinate(1, 1) OPCODE::SWAP");
+            assert(written.reply.status == Reply::OK);
+            [[maybe_unused]] auto before = gc.issue(Origin::gui, "get Coordinate(1, 1)");
+            assert(before.reply.text == StringView("null"));
+            [[maybe_unused]] auto stepped = gc.issue(Origin::gui, "step 2");
+            assert(stepped.reply.status == Reply::PENDING);
             settle();
-            assert(gc.issue(Origin::gui, "get Coordinate(1, 1)").reply.text == StringView("OPCODE::SWAP"));
+            [[maybe_unused]] auto after = gc.issue(Origin::gui, "get Coordinate(1, 1)");
+            assert(after.reply.text == StringView("OPCODE::SWAP"));
 
             // A screenshot is refused by the next frame
-            assert(gc.issue(Origin::gui, "screenshot \"/dev/null\"").reply.status == Reply::PENDING);
+            [[maybe_unused]] auto shot = gc.issue(Origin::gui, "screenshot \"/dev/null\"");
+            assert(shot.reply.status == Reply::PENDING);
             host.frame();
             host.frame();
             assert(gc.detached.empty());
@@ -184,7 +191,8 @@ namespace wry {
 
             // quit ends the loop
             assert(!host.done());
-            assert(gc.issue(Origin::gui, "quit").reply.status == Reply::OK);
+            [[maybe_unused]] auto quit_issued = gc.issue(Origin::gui, "quit");
+            assert(quit_issued.reply.status == Reply::OK);
             assert(host.done());
 
             co_await host.world()->end_session(std::chrono::milliseconds(200));
