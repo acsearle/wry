@@ -43,15 +43,20 @@ namespace {
     // illegal instruction raise get a handler that writes the signal and a
     // backtrace (async-signal-safe: backtrace_symbols_fd and write only)
     // and exits with the shell's status for that signal.  Segmentation
-    // faults and bus errors are left to the sanitizer runtime, which owns
-    // their handlers (ASAN_OPTIONS=abort_on_error=0, which the scripts and
-    // ctest set, makes it exit after its report rather than abort into
-    // this handler's dialog-free path anyway).  The windowed app keeps the
-    // defaults: a real crash report is worth having there
+    // faults and bus errors join them only where nothing else owns them: a
+    // sanitizer runtime installs its own handlers for those before main
+    // (ASAN_OPTIONS=abort_on_error=0, which the scripts and ctest set,
+    // makes it exit after its report), and those are kept; in a plain
+    // build their default disposition is the dialog again, so this handler
+    // takes them (a stack overflow still escapes it: no alternate signal
+    // stack, and one per thread would be needed).  The windowed app keeps
+    // the defaults: a real crash report is worth having there
     void driven_mode_fatal_signal(int signo) {
         const char* name = (signo == SIGABRT) ? "SIGABRT"
                          : (signo == SIGTRAP) ? "SIGTRAP"
                          : (signo == SIGILL)  ? "SIGILL"
+                         : (signo == SIGSEGV) ? "SIGSEGV"
+                         : (signo == SIGBUS)  ? "SIGBUS"
                          : "signal";
         const char* prefix = "\nwry: fatal ";
         const char* suffix = " in a driven mode; backtrace, then exit:\n";
@@ -71,6 +76,11 @@ namespace {
         action.sa_flags = SA_RESETHAND;
         for (int signo : {SIGABRT, SIGTRAP, SIGILL})
             (void) sigaction(signo, &action, nullptr);
+        for (int signo : {SIGSEGV, SIGBUS}) {
+            struct sigaction current = {};
+            if (sigaction(signo, nullptr, &current) == 0 && current.sa_handler == SIG_DFL)
+                (void) sigaction(signo, &action, nullptr);
+        }
     }
 
     // The receiver for the process scope's join on the GUI path: completion
