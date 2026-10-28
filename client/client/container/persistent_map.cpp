@@ -253,7 +253,9 @@ namespace wry {
                     assert(v == m[k]);
                 } else {
                     int v = {};
-                    assert(!p.try_get(k, v));
+                    bool present = p.try_get(k, v);
+                    assert(!present);
+                    (void) present;
                 }
                 if (!(k & 255))
                     mutator_repin();
@@ -482,7 +484,9 @@ namespace wry {
         // Sole member of the only leaf: the trie becomes empty.
         {
             const A* t = build({7});
-            assert(erase(t, 7) == nullptr);
+            const A* u = erase(t, 7);
+            assert(u == nullptr);
+            (void) u;
         }
 
         // Two sibling leaves.  Emptying one collapses the parent to the
@@ -497,8 +501,12 @@ namespace wry {
             assert(!A::same_shape(u, t));
             assert(t->size() == 2 && u->size() == 1);
             int v = 0;
-            assert(t->try_get(32, v) && v == 32);
-            assert(!u->try_get(32, v));
+            bool in_t = t->try_get(32, v);
+            assert(in_t && v == 32);
+            (void) in_t;
+            bool in_u = u->try_get(32, v);
+            assert(!in_u);
+            (void) in_u;
         }
 
         // Three sibling leaves: emptying one leaves a two-child parent.
@@ -628,7 +636,9 @@ namespace wry {
 
             for (auto [k, v] : oracle) {
                 int u = 0;
-                assert(built->try_get(k, u) && u == v);
+                bool present = built->try_get(k, u);
+                assert(present && u == v);
+                (void) present;
             }
 
             std::vector<uint64_t> walked;

@@ -1295,8 +1295,12 @@ namespace wry {
             assert(a.kind == WryEventKindMouseMove && a.location.x == 3);
             gui::Event b = q.pop_front();
             assert(b.kind == WryEventKindScroll && b.scroll_delta.y == 3 && b.location.x == 4);
-            assert(q.pop_front().kind == WryEventKindMouseDown);
-            assert(q.pop_front().location.x == 7);
+            gui::Event c = q.pop_front();
+            assert(c.kind == WryEventKindMouseDown);
+            (void) c;
+            gui::Event d = q.pop_front();
+            assert(d.location.x == 7);
+            (void) d;
         }
 
         // Injection: keys, typing, clicks land on the event queue in
@@ -1311,7 +1315,9 @@ namespace wry {
             assert(down.kind == WryEventKindKeyDown && down.key == 'r');
             assert(down.mods.has(gui::Modifiers::Shift));
             assert(std::strcmp(down.text, "R") == 0);
-            assert(gc.events.pop_front().kind == WryEventKindKeyUp);
+            gui::Event up = gc.events.pop_front();
+            assert(up.kind == WryEventKindKeyUp);
+            (void) up;
 
             gc.issue(Origin::console, "type \"aB\\n\"");
             assert(gc.events.size() == 6);
@@ -1321,7 +1327,9 @@ namespace wry {
             gui::Event b = gc.events.pop_front();
             assert(b.key == 'b' && b.mods.has(gui::Modifiers::Shift) && std::strcmp(b.text, "B") == 0);
             (void) gc.events.pop_front();
-            assert(gc.events.pop_front().key == gui::key::Enter);
+            gui::Event enter = gc.events.pop_front();
+            assert(enter.key == gui::key::Enter);
+            (void) enter;
             gc.events.clear();
 
             gc.issue(Origin::console, "click 10 20 right");
@@ -1330,10 +1338,16 @@ namespace wry {
             assert(m.kind == WryEventKindMouseMove && m.location.x == 10 && m.location.y == 20);
             gui::Event d = gc.events.pop_front();
             assert(d.kind == WryEventKindMouseDown && d.button == gui::MouseButton::Right);
-            assert(gc.events.pop_front().kind == WryEventKindMouseUp);
+            gui::Event released = gc.events.pop_front();
+            assert(released.kind == WryEventKindMouseUp);
+            (void) released;
 
-            assert(gc.issue(Origin::console, "click 1 2 sideways").reply.status == Reply::ERROR);
-            assert(gc.issue(Origin::console, "key Nonsense+Q").reply.status == Reply::ERROR);
+            auto sideways = gc.issue(Origin::console, "click 1 2 sideways");
+            assert(sideways.reply.status == Reply::ERROR);
+            (void) sideways;
+            auto nonsense = gc.issue(Origin::console, "key Nonsense+Q");
+            assert(nonsense.reply.status == Reply::ERROR);
+            (void) nonsense;
         }
 
         // Widgets: a scene tree laid out in pixels at twice the point
@@ -1363,7 +1377,9 @@ namespace wry {
             }
 
             gc.events.clear();
-            assert(gc.issue(Origin::console, "press OK").reply.status == Reply::OK);
+            auto pressed = gc.issue(Origin::console, "press OK");
+            assert(pressed.reply.status == Reply::OK);
+            (void) pressed;
             assert(gc.events.size() == 3);
             // Deliver as the pump would: points promoted to pixels.
             while (!gc.events.empty()) {
@@ -1372,7 +1388,9 @@ namespace wry {
                 column.on_event(e);
             }
             assert(clicked);
-            assert(gc.issue(Origin::console, "press Cancel").reply.status == Reply::ERROR);
+            auto cancel = gc.issue(Origin::console, "press Cancel");
+            assert(cancel.reply.status == Reply::ERROR);
+            (void) cancel;
             gc.scene_widgets = nullptr;
         }
 

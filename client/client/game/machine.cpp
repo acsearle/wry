@@ -1212,7 +1212,9 @@ namespace wry {
             // A committed null write erases the key: the emptied cell is
             // absent, not present-with-null
             Term taken{};
-            assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{40, 2}, taken));
+            bool present_40_2 = world._ptr->_term_for_coordinate.try_get(Coordinate{40, 2}, taken);
+            assert(!present_40_2);
+            (void) present_40_2;
 
             Term placed{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{42, 5}, placed);
@@ -1282,7 +1284,9 @@ namespace wry {
             assert((m->_new_location == Coordinate{80, 7}));
             assert((test_stack_is(m, {Term(true)})));
             Term moved{};
-            assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{80, 2}, moved));
+            bool present_80_2 = world._ptr->_term_for_coordinate.try_get(Coordinate{80, 2}, moved);
+            assert(!present_80_2);
+            (void) present_80_2;
         }
 
         {
@@ -1317,9 +1321,13 @@ namespace wry {
             assert((test_stack_is(m, {})));
             assert(m->_new_time >= Time{360});
             Term taken{};
-            assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{100, 2}, taken));
+            bool present_100_2 = world._ptr->_term_for_coordinate.try_get(Coordinate{100, 2}, taken);
+            assert(!present_100_2);
+            (void) present_100_2;
             Term sunk{};
-            assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{100, 4}, sunk));
+            bool present_100_4 = world._ptr->_term_for_coordinate.try_get(Coordinate{100, 4}, sunk);
+            assert(!present_100_4);
+            (void) present_100_4;
             EntityIDSet at_sink{};
             (void) world._ptr->_located_for_coordinate.try_get(Coordinate{100, 4}, at_sink);
             assert(at_sink.contains(sink_id));

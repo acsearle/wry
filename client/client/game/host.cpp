@@ -543,9 +543,13 @@ namespace wry {
                 assert(world._ptr->_time == (Time)s.number);
             }
             EntityID player{};
-            assert(world._ptr->_player_for_client.try_get(1, player));
+            bool mapped = world._ptr->_player_for_client.try_get(1, player);
+            assert(mapped);
+            (void) mapped;
             Term t{};
-            assert(world._ptr->_term_for_coordinate.try_get(Coordinate{1, 1}, t));
+            bool has_term = world._ptr->_term_for_coordinate.try_get(Coordinate{1, 1}, t);
+            assert(has_term);
+            (void) has_term;
             assert(t._data == term_make_integer_with(7)._data);
         }
 
@@ -639,7 +643,9 @@ namespace wry {
         assert(loaded->content_hash() == w->content_hash());
         {
             Term t{};
-            assert(loaded->_term_for_coordinate.try_get(Coordinate{2, 3}, t));
+            bool has_term = loaded->_term_for_coordinate.try_get(Coordinate{2, 3}, t);
+            assert(has_term);
+            (void) has_term;
             assert(term_eq(t, term_make_string_with("donated")));
         }
         // The JOIN is not yet admitted: no report

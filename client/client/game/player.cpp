@@ -215,13 +215,19 @@ namespace wry {
         co_await player_test_step(a, {make_join_command(5)});
         co_await player_test_step(b, {make_join_command(5)});
         EntityID pa{}, pb{};
-        assert(a._ptr->_player_for_client.try_get(5, pa) && (pa == cursor));
-        assert(b._ptr->_player_for_client.try_get(5, pb) && (pb == pa));
+        bool mapped_a = a._ptr->_player_for_client.try_get(5, pa);
+        assert(mapped_a && (pa == cursor));
+        (void) mapped_a;
+        bool mapped_b = b._ptr->_player_for_client.try_get(5, pb);
+        assert(mapped_b && (pb == pa));
+        (void) mapped_b;
         assert(a._ptr->content_hash() == b._ptr->content_hash());
         assert(a._ptr->_entity_id_source.data == cursor.data + 1);
         {
             Entity const* e = nullptr;
-            assert(a._ptr->_entity_for_entity_id.try_get(pa, e));
+            bool found = a._ptr->_entity_for_entity_id.try_get(pa, e);
+            assert(found);
+            (void) found;
             assert(dynamic_cast<Player const*>(e));
         }
         // Scheduled from the step after the JOIN
@@ -240,7 +246,9 @@ namespace wry {
             const EntityID before = a._ptr->_entity_id_source;
             co_await player_test_step(a, {make_join_command(5)});
             EntityID again{};
-            assert(a._ptr->_player_for_client.try_get(5, again) && (again == pa));
+            bool mapped_again = a._ptr->_player_for_client.try_get(5, again);
+            assert(mapped_again && (again == pa));
+            (void) mapped_again;
             assert(a._ptr->_entity_id_source == before);
         }
 
@@ -266,7 +274,9 @@ namespace wry {
         assert(!a._ptr->_player_for_client.contains(5));
         {
             Entity const* e = nullptr;
-            assert(a._ptr->_entity_for_entity_id.try_get(pa, e) && e);
+            bool found = a._ptr->_entity_for_entity_id.try_get(pa, e);
+            assert(found && e);
+            (void) found;
         }
         co_await player_test_step(a, {player_test_write(stray, term_make_integer_with(1), 5)});
         assert(cell_empty(a._ptr, stray));

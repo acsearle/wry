@@ -334,7 +334,9 @@ namespace wry {
         assert(w2);
         assert(w2->_time == w->_time);
         Term t;
-        assert(w2->_term_for_coordinate.try_get(Coordinate{3, -7}, t));
+        bool has_term = w2->_term_for_coordinate.try_get(Coordinate{3, -7}, t);
+        assert(has_term);
+        (void) has_term;
         assert(t._data == term_make_integer_with(99)._data);
 
         delete_game(new_id);

@@ -975,9 +975,13 @@ namespace wry::command {
 
         // A computed default that cannot be computed is an error...
         context.user.clear();
-        assert(run("greet").reply.status == Reply::ERROR);
+        auto missing = run("greet");
+        assert(missing.reply.status == Reply::ERROR);
+        (void) missing;
         // ...unless the argument is supplied.
-        assert(run("greet carol").reply.status == Reply::OK);
+        auto supplied = run("greet carol");
+        assert(supplied.reply.status == Reply::OK);
+        (void) supplied;
 
         // Help.
         {

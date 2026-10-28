@@ -791,7 +791,9 @@ namespace wry {
         });
         assert(b_kicked);
         (void) b_kicked;
-        assert(kick_reason(b, "b before join") == "action before join");
+        std::string b_reason = kick_reason(b, "b before join");
+        assert(b_reason == "action before join");
+        (void) b_reason;
 
         // JOIN_REQUEST rides a step as a JOIN, after which actions are
         // accepted; a second request is idempotent.  (The request travels
@@ -876,7 +878,9 @@ namespace wry {
         });
         assert(a_kicked);
         (void) a_kicked;
-        assert(kick_reason(a, "a bad sequence") == "bad sequence number");
+        std::string a_reason = kick_reason(a, "a bad sequence");
+        assert(a_reason == "bad sequence number");
+        (void) a_reason;
 
         co_await relay->shutdown(std::chrono::milliseconds(100));
         co_await a.transport->shutdown(std::chrono::milliseconds(100));
@@ -989,7 +993,9 @@ namespace wry {
         });
         assert(flooded);
         (void) flooded;
-        assert(kick_reason(b, "b flood") == "flood");
+        std::string b_reason = kick_reason(b, "b flood");
+        assert(b_reason == "flood");
+        (void) b_reason;
 
         // a quits; both exits ride the next step as LEAVEs, in order
         a.send(wire::encode_quit());
@@ -1100,7 +1106,9 @@ namespace wry {
         });
         assert(desynced);
         (void) desynced;
-        assert(kick_reason(a, "a desync") == "desync at step 3");
+        std::string a_reason = kick_reason(a, "a desync");
+        assert(a_reason == "desync at step 3");
+        (void) a_reason;
 
         RawClient b{*relay, scope};
         b.hello();
@@ -1118,7 +1126,9 @@ namespace wry {
         });
         assert(b_desynced);
         (void) b_desynced;
-        assert(kick_reason(b, "b desync") == "desync at step 4");
+        std::string b_reason = kick_reason(b, "b desync");
+        assert(b_reason == "desync at step 4");
+        (void) b_reason;
 
         // A report for a step not yet finalized is a violation
         RawClient c{*relay, scope};
@@ -1130,7 +1140,9 @@ namespace wry {
         });
         assert(c_kicked);
         (void) c_kicked;
-        assert(kick_reason(c, "c future") == "hash for a step not yet finalized");
+        std::string c_reason = kick_reason(c, "c future");
+        assert(c_reason == "hash for a step not yet finalized");
+        (void) c_reason;
 
         // The reference itself is never kicked for a hash
         r.send(wire::encode_hash(2, 0x2222));      // changes its mind; nobody to disagree with it
@@ -1318,8 +1330,12 @@ namespace wry {
         });
         assert(refused);
         (void) refused;
-        assert(kick_reason(x, "x save frame") == "unexpected message");
-        assert(kick_reason(y, "y request") == "unexpected message");
+        std::string x_reason = kick_reason(x, "x save frame");
+        assert(x_reason == "unexpected message");
+        (void) x_reason;
+        std::string y_reason = kick_reason(y, "y request");
+        assert(y_reason == "unexpected message");
+        (void) y_reason;
 
         co_await relay->shutdown(std::chrono::milliseconds(100));
         for (RawClient* c : {&r, &j, &x, &y})
@@ -1391,7 +1407,9 @@ namespace wry {
         });
         assert(seen);
         (void) seen;
-        assert(kick_reason(silent, "silent") == "handshake timeout");
+        std::string silent_reason = kick_reason(silent, "silent");
+        assert(silent_reason == "handshake timeout");
+        (void) silent_reason;
         bool paused_seen = false, resumed_seen = false;
         for (std::string const& m : a.of(wire::STEP)) {
             auto step = wire::decode_step(m);

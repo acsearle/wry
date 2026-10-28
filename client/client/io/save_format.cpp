@@ -1477,7 +1477,9 @@ namespace wry {
         assert(w2);
         w2->hack_repair_invariant();
         EntityID mapped{};
-        assert(w2->_player_for_client.try_get(ClientID{3}, mapped) && (mapped == p->_entity_id));
+        bool has_mapping = w2->_player_for_client.try_get(ClientID{3}, mapped);
+        assert(has_mapping && (mapped == p->_entity_id));
+        (void) has_mapping;
         assert(w2->_player_for_client.size() == 1);
         assert(w2->content_hash() == w->content_hash());
 
