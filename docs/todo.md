@@ -1,6 +1,8 @@
 # Todo
 
 List of one-line reminders of things to think and do
+- LANDED 2026-10-29: symbols are filleted slabs ray-marched from a 2D SDF (render/symbol_sdf.{hpp,cpp}, deferred::symbol_* in Shaders.metal, WrySymbolInstance); field cached as assets/assets_field_v1.png (generated, never hand-edit; rebuilt when assets.png is newer).  Follow-ups: slab edges are aliased (one march per pixel, no coverage); thickness = stroke width capped at 32 texels (solid tiles) -- revisit the cap and whether fillet radii should be global rather than per symbol; the field build is 14 s in Debug (single thread, ASan) -- parallelize per cell or move to a worker if the cache ever has to miss at startup; symbols sample the atlas at the march hit, so the stamped opcode labels (outside the silhouette) never show on slabs
+- BUG (2026-10-29): the reactor unit test at kqueue_reactor.cpp:664 asserts the GLOBAL g_cancelable_kevent_frame_count is 0, so the windowed app aborts if a game session (its own deadline frames) is live when the background suite reaches it; the test should count its own frames only, or the suite should not share the live reactor
 - HOLD (2026-10-29, Antony): the opcode palette is old, retrofitted as a widget; invisible to `widgets`/`press` (coordinates or `hold` reach it); make it a proper widget later
 - HOLD (2026-10-29): the session commands (new-game, save, load, list-saves) are still absent from the registry; substantive, a later turn
 - IDEA (2026-10-29): the in-game menu has no quit-to-main-menu (only to desktop); screenshot could grow crop / per-widget / off-resolution options (today cropping is the consumer's job on the PNG it writes)

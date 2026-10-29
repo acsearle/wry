@@ -920,6 +920,279 @@ namespace deferred {
     
     
     
+    // ---- Thickened symbols.
+    //
+    // The field is render/symbol_sdf.hpp's: per cell, the planar signed
+    // distance d2 to the symbol's silhouette and its unit gradient, in
+    // source texels.  The slab (WrySymbolInstance) is that silhouette
+    // extruded over |z| <= h with its top and bottom edges filleted by
+    // circular arcs of radii rt and rb:
+    //
+    //     top    = extrude(d2 + rt, h - rt) rounded by rt, for z >= 0
+    //     bottom = the same with rb, z mirrored
+    //     slab   = top intersect bottom  =>  max(top, bottom)
+    //
+    // Each half's distance is exact for the slab on its own side of z = 0
+    // and a lower bound on the other (the half-slab contains the slab), so
+    // the max is safe to march.  The normal is the analytic gradient: the
+    // field's gradient on the wall, +-z on the faces, and on the fillet
+    // their blend by the position around the quarter circle -- no finite
+    // differences of the sampled field, so bilinear facets never reach the
+    // shading.
+    //
+    // The vertex function expands the instance to a cuboid; the fragment
+    // function clips the ray to it and marches.  Distances are in texels
+    // throughout; the field's clamp to +-WRY_SYMBOL_SDF_RANGE is a lower
+    // bound, which is all a march needs, and the bilinear reconstruction
+    // can steepen to sqrt(2), so steps are scaled by 0.7.
+
+    constant float3 symbol_cube_corner[8] = {
+        float3(-1.0f, -1.0f, -1.0f), float3( 1.0f, -1.0f, -1.0f),
+        float3(-1.0f,  1.0f, -1.0f), float3( 1.0f,  1.0f, -1.0f),
+        float3(-1.0f, -1.0f,  1.0f), float3( 1.0f, -1.0f,  1.0f),
+        float3(-1.0f,  1.0f,  1.0f), float3( 1.0f,  1.0f,  1.0f),
+    };
+
+    // Outward counter-clockwise, as the OBJ meshes are wound
+    constant ushort symbol_cube_index[36] = {
+        4, 5, 7,  4, 7, 6,   // +z
+        0, 2, 3,  0, 3, 1,   // -z
+        1, 3, 7,  1, 7, 5,   // +x
+        0, 4, 6,  0, 6, 2,   // -x
+        2, 6, 7,  2, 7, 3,   // +y
+        0, 1, 5,  0, 5, 4,   // -y
+    };
+
+    struct SymbolVertexFunctionOutput {
+        float4 position_clip [[position]];
+        float3 position_slab;
+        uint instance_id [[flat]];
+    };
+
+    [[vertex]] SymbolVertexFunctionOutput
+    symbol_vertex_function(uint vertex_id [[vertex_id]],
+                           uint instance_id [[instance_id]],
+                           constant MeshUniforms& uniforms [[buffer(AAPLBufferIndexUniforms)]],
+                           const device WrySymbolInstance* instances [[buffer(AAPLBufferIndexInstanced)]])
+    {
+        SymbolVertexFunctionOutput out;
+        WrySymbolInstance instance = instances[instance_id];
+        out.position_slab = symbol_cube_corner[symbol_cube_index[vertex_id]] * instance.half_extent.xyz;
+        float4 position_world = instance.model_transform * float4(out.position_slab, 1.0f);
+        out.position_clip = uniforms.viewprojection_transform * position_world;
+        out.instance_id = instance_id;
+        return out;
+    }
+
+    [[vertex]] SymbolVertexFunctionOutput
+    symbol_shadow_vertex_function(uint vertex_id [[vertex_id]],
+                                  uint instance_id [[instance_id]],
+                                  constant MeshUniforms& uniforms [[buffer(AAPLBufferIndexUniforms)]],
+                                  const device WrySymbolInstance* instances [[buffer(AAPLBufferIndexInstanced)]])
+    {
+        SymbolVertexFunctionOutput out;
+        WrySymbolInstance instance = instances[instance_id];
+        out.position_slab = symbol_cube_corner[symbol_cube_index[vertex_id]] * instance.half_extent.xyz;
+        float4 position_world = instance.model_transform * float4(out.position_slab, 1.0f);
+        out.position_clip = uniforms.light_viewprojection_transform * position_world;
+        out.instance_id = instance_id;
+        return out;
+    }
+
+    // The atlas uv of a slab-space point
+    static float2 symbol_uv(WrySymbolInstance instance, float2 p) {
+        float2 half_extent = instance.half_extent.xy;
+        // slab y is up, image y is down
+        float2 unit = float2(p.x + half_extent.x, half_extent.y - p.y) / (2.0f * half_extent);
+        return instance.cell.xy + unit * instance.cell.z;
+    }
+
+    // The field at a slab-space point: planar distance (texels) and the
+    // outward unit gradient in slab axes
+    static float3 symbol_field(texture2d<float> field, WrySymbolInstance instance, float2 p) {
+        constexpr sampler bilinear(mag_filter::linear,
+                                   min_filter::linear,
+                                   s_address::clamp_to_edge,
+                                   t_address::clamp_to_edge);
+        float4 s = field.sample(bilinear, symbol_uv(instance, p));
+        float d = (s.r - 0.5f) * (2.0f * WRY_SYMBOL_SDF_RANGE);
+        float2 g = (s.gb - 0.5f) * 2.0f;
+        return float3(d, g.x, -g.y);
+    }
+
+    // Rounded extrusion of a planar distance: w = (d2 + r, |z'| - (h - r))
+    static float symbol_rounded_distance(float2 w, float r) {
+        return min(max(w.x, w.y), 0.0f) + length(max(w, 0.0f)) - r;
+    }
+
+    static float symbol_slab_distance(WrySymbolInstance instance, float d2, float z) {
+        float h = instance.half_extent.z;
+        float rt = instance.top_radius;
+        float rb = instance.bottom_radius;
+        float top = symbol_rounded_distance(float2(d2 + rt, z - (h - rt)), rt);
+        float bottom = symbol_rounded_distance(float2(d2 + rb, -z - (h - rb)), rb);
+        return max(top, bottom);
+    }
+
+    struct SymbolHit {
+        float3 position;   // slab space
+        float3 normal;     // slab space, unit
+        float2 uv;         // atlas, pulled inside the silhouette for colour
+    };
+
+    // March the ray origin + t * direction (direction unit, origin outside
+    // the cuboid or anywhere on the view side of the slab) through the
+    // cuboid; false if it leaves without touching the slab
+    static bool symbol_march(texture2d<float> field, WrySymbolInstance instance,
+                             float3 origin, float3 direction, thread SymbolHit& hit)
+    {
+        float3 half_extent = instance.half_extent.xyz;
+        // Clip to the cuboid: slab test per axis, axes the ray runs along
+        // unbounded (the ray passes through the cuboid, so it is inside
+        // them)
+        bool3 parallel = abs(direction) < 1e-6f;
+        float3 safe = select(direction, float3(1.0f), parallel);
+        float3 t_lo = (-half_extent - origin) / safe;
+        float3 t_hi = ( half_extent - origin) / safe;
+        float3 t_near = select(min(t_lo, t_hi), float3(-INFINITY), parallel);
+        float3 t_far  = select(max(t_lo, t_hi), float3( INFINITY), parallel);
+        float t = max(max(max(t_near.x, t_near.y), t_near.z), 0.0f);
+        float t_exit = min(min(t_far.x, t_far.y), t_far.z);
+        if (t_exit < t)
+            return false;
+
+        float3 p = origin + direction * t;
+        float3 f = symbol_field(field, instance, p.xy);
+        float d = symbol_slab_distance(instance, f.x, p.z);
+        for (int i = 0; i != 160 && d >= 0.02f; ++i) {
+            t += d * 0.7f;
+            if (t > t_exit)
+                return false;
+            p = origin + direction * t;
+            f = symbol_field(field, instance, p.xy);
+            d = symbol_slab_distance(instance, f.x, p.z);
+        }
+        if (d >= 0.02f)
+            return false;
+
+        // The gradient of whichever half owns the surface here
+        float h = instance.half_extent.z;
+        float rt = instance.top_radius;
+        float rb = instance.bottom_radius;
+        float2 wt = float2(f.x + rt, p.z - (h - rt));
+        float2 wb = float2(f.x + rb, -p.z - (h - rb));
+        bool top = symbol_rounded_distance(wt, rt) >= symbol_rounded_distance(wb, rb);
+        float2 w = top ? wt : wb;
+        float r = top ? rt : rb;
+        float zs = top ? 1.0f : -1.0f;
+        float2 g = f.yz;
+        float3 n;
+        if (w.x > 0.0f && w.y > 0.0f)
+            n = float3(g * w.x, zs * w.y);          // fillet
+        else if (w.y > w.x)
+            n = float3(0.0f, 0.0f, zs);             // face
+        else
+            n = float3(g, 0.0f);                    // wall
+        if (dot(n, n) < 1e-8f)
+            n = float3(0.0f, 0.0f, zs);
+        hit.position = p;
+        hit.normal = normalize(n);
+        // Colour from inside the silhouette: the wall sits on the 0.5
+        // contour, where the atlas texel is half background
+        hit.uv = symbol_uv(instance, p.xy - g * max(f.x + r + 0.5f, 0.0f));
+        return true;
+    }
+
+    struct SymbolFragmentFunctionOutput {
+        half4 light    [[color(AAPLColorIndexColor),    raster_order_group(AAPLRasterOrderGroupLighting)]];
+        half4 albedo   [[color(AAPLColorIndexAlbedo),   raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        half4 normal   [[color(AAPLColorIndexNormal),   raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        half4 material [[color(AAPLColorIndexMaterial), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        float depth    [[color(AAPLColorIndexDepth),    raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        // The hit's depth, for the depth test against the meshes; the
+        // cuboid's own rasterized depth is meaningless
+        float depth_test [[depth(any)]];
+    };
+
+    [[fragment]] SymbolFragmentFunctionOutput
+    symbol_fragment_function(SymbolVertexFunctionOutput in [[stage_in]],
+                             constant MeshUniforms& uniforms [[buffer(AAPLBufferIndexUniforms)]],
+                             const device WrySymbolInstance* instances [[buffer(AAPLBufferIndexInstanced)]],
+                             texture2d<float> field [[texture(AAPLTextureIndexNormal)]],
+                             texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo)]])
+    {
+        constexpr sampler trilinearSampler(mag_filter::linear,
+                                           min_filter::linear,
+                                           mip_filter::linear,
+                                           s_address::clamp_to_edge,
+                                           t_address::clamp_to_edge);
+
+        WrySymbolInstance instance = instances[in.instance_id];
+        // The eye in slab space; the rasterized cuboid point fixes the ray
+        float4 eye = instance.inverse_model_transform * uniforms.camera_position_world;
+        float3 origin = eye.xyz / eye.w;
+        float3 direction = normalize(in.position_slab - origin);
+        SymbolHit hit;
+        if (!symbol_march(field, instance, origin, direction, hit))
+            discard_fragment();
+
+        float4 position_world = instance.model_transform * float4(hit.position, 1.0f);
+        float4 position_clip = uniforms.viewprojection_transform * position_world;
+        float depth = position_clip.z / position_clip.w;
+        float3 normal_world = normalize((instance.model_transform * float4(hit.normal, 0.0f)).xyz);
+
+        // Texels per pixel across the cuboid face, for the atlas mip level
+        float2 footprint = fwidth(in.position_slab.xy);
+        float lod = max(log2(max(footprint.x, footprint.y)), 0.0f);
+        half4 albedoSample = albedoTexture.sample(trilinearSampler, hit.uv, level(lod));
+        // The atlas is premultiplied; the surface is opaque
+        half3 albedo = albedoSample.rgb / max(albedoSample.a, 0.05h);
+
+        SymbolFragmentFunctionOutput out;
+        out.light = half4(0.0h, 0.0h, 0.0h, 0.0h);
+        out.albedo = half4(albedo, 1.0h);
+        out.normal = half4(half3(normal_world), 0.0h);
+        out.material = half4(1.0h, 0.5h, 0.0h, 0.0h);   // occlusion, roughness, metallic
+        out.depth = depth;
+        out.depth_test = depth;
+        return out;
+    }
+
+    struct SymbolShadowFragmentFunctionOutput {
+        float depth [[depth(any)]];
+    };
+
+    [[fragment]] SymbolShadowFragmentFunctionOutput
+    symbol_shadow_fragment_function(SymbolVertexFunctionOutput in [[stage_in]],
+                                    constant MeshUniforms& uniforms [[buffer(AAPLBufferIndexUniforms)]],
+                                    const device WrySymbolInstance* instances [[buffer(AAPLBufferIndexInstanced)]],
+                                    texture2d<float> field [[texture(AAPLTextureIndexNormal)]])
+    {
+        WrySymbolInstance instance = instances[in.instance_id];
+        // The directional light's rays run along -light_direction; start
+        // from well outside the cuboid, whichever of its faces this is
+        float3 direction = normalize((instance.inverse_model_transform * float4(-uniforms.light_direction, 0.0f)).xyz);
+        float3 half_extent = instance.half_extent.xyz;
+        float3 origin = in.position_slab - direction * (4.0f * (half_extent.x + half_extent.y + half_extent.z));
+        SymbolHit hit;
+        if (!symbol_march(field, instance, origin, direction, hit))
+            discard_fragment();
+        // The encoder's depth bias applies to rasterized depth, not to
+        // depth written here, so bias the caster ourselves against
+        // self-shadowing, as the quads' slope-scaled bias did: push the
+        // hit down the light's ray (away from the light; never along the
+        // normal, which would raise the caster above its own lit faces),
+        // a texel plus a texel per unit of slope, so grazing walls, whose
+        // depth sweeps through a shadow-map texel, get the most
+        float slope = 1.0f / max(dot(hit.normal, -direction), 0.05f);
+        float3 biased = hit.position + direction * (1.0f + slope);
+        float4 position_world = instance.model_transform * float4(biased, 1.0f);
+        float4 position_clip = uniforms.light_viewprojection_transform * position_world;
+        SymbolShadowFragmentFunctionOutput out;
+        out.depth = position_clip.z / position_clip.w;
+        return out;
+    }
+
     // we also need a shader that draws the shadows of smoke, dust, clouds onto an
     // illumination map from the light's perspective; these don't write the z-buffer
     // but they are masked by it, and are just absorption

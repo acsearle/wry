@@ -128,7 +128,7 @@ namespace wry::gui {
         // scrolls down.
         // TODO: scroll_delta is currently multiplied by backingScaleFactor
         // in the delegate to preserve the pre-event-queue arithmetic in the
-        // legacy _looking_at handler.  Normalize to logical points when the
+        // legacy world-pan handler.  Normalize to logical points when the
         // world-pan code becomes a proper world-overlay handler.
         float2 scroll_delta = {0.0f, 0.0f};
 

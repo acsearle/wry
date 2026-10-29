@@ -93,8 +93,42 @@ namespace wry {
         // Local player's session view / input state.
         Root<Term> _holding_value = {};   // the opcode in hand (palette writes it)
         float2 _mouse = {};               // NDC cursor (palette reads it)
-        float2 _looking_at = {};          // scroll-pan accumulator
-        simd_float4 _mouse4 = {};         // cursor projected onto the ground plane
+        // The camera focus: the world point at the centre of the view, as
+        // an integer tile plus a sub-tile fraction, each component in
+        // [-0.5, 0.5].  The renderer works in RENDER SPACE, world space
+        // translated to put _focus_tile at the origin, so everything it
+        // transforms is a small float however far out the focus is and
+        // large coordinates suffer no catastrophic cancellation.  The tile
+        // is added back only where world content is looked up (world_tile)
+        // and taken off where entity locations are read (render_position).
+        // The fraction is the camera's own offset from the origin and rides
+        // in the view transform (_regenerate_uniforms): no model transform
+        // carries the pan.
+        Coordinate _focus_tile = {};
+        float2 _focus_fraction = {};
+        simd_float4 _mouse4 = {};         // cursor on the ground plane, render space
+
+        // The camera's position relative to the focus, in world units
+        float3 _camera_offset = make<float3>(0.0f, -8.0f, 16.0f);
+
+        // Render-space position of a world tile: its offset from the focus
+        // tile, exact within 2^24 tiles of it (and modular across the i32
+        // range, like the coordinates themselves)
+        float2 render_position(Coordinate xy) const;
+
+        // The world tile at a render-space point, or none if it is nowhere
+        // (not finite, or beyond the i32 range of offsets)
+        std::optional<Coordinate> world_tile(float2 render) const;
+
+        // Move the focus by a render-space delta, carrying whole tiles into
+        // _focus_tile so the fraction stays sub-tile, and regenerate the
+        // camera for the new fraction
+        void pan_focus(float2 delta);
+
+        // Map mode's model transform: render space scaled by 1/zoom about
+        // the focus (the renderer draws the map quad through it, and the
+        // pinch handler anchors its zoom with it)
+        simd_float4x4 map_model_transform(float zoom) const;
 
         // Map mode (TAB): the renderer draws the world-map quad instead of
         // the world, the palette hides, scroll pans at the map scale, and
@@ -244,7 +278,6 @@ namespace wry {
             // is a no-op.
             _start_session();
 
-            _uniforms.camera_position_world = make<float4>(0.0f, -8.0f, 16.0f, 1.0f);
             _regenerate_uniforms();
 
             // Command handlers reach the world through the app tier.

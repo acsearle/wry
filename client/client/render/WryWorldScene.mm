@@ -9,6 +9,7 @@
 #include "ShaderTypes.h"
 
 #include <algorithm>
+#include <chrono>
 #include <bit>
 #include <random>
 
@@ -31,6 +32,7 @@
 #include "palette.hpp"
 #include "platform.hpp"
 #include "sdf.hpp"
+#include "symbol_sdf.hpp"
 #include "term.hpp"
 #include "text.hpp"
 #include "Wavefront.hpp"
@@ -112,6 +114,14 @@
     
     id<MTLTexture> _symbols;
     WryMesh* _hackmesh;
+
+    // The symbol field beside the atlas (symbol_sdf.hpp), its per-cell
+    // stroke widths, and the slab pipelines that march it in the G-buffer
+    // and shadow passes
+    id<MTLTexture> _symbolField;
+    std::vector<float> _symbolStrokeWidth;
+    id<MTLRenderPipelineState> _symbolGBufferRenderPipelineState;
+    id<MTLRenderPipelineState> _symbolShadowRenderPipelineState;
     
     id<MTLTexture> _black;
     id<MTLTexture> _white;
@@ -397,6 +407,11 @@
             descriptor.vertexBuffers[AAPLBufferIndexUniforms].mutability = MTLMutabilityImmutable;
             descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
             _shadowMapRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
+
+            descriptor.label = @"Symbol slab shadow pipeline";
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::symbol_shadow_vertex_function"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::symbol_shadow_fragment_function"];
+            _symbolShadowRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
         }
         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
@@ -423,7 +438,12 @@
             descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::fragment_function"];
             descriptor.label = @"Deferred G-buffer";
             _deferredGBufferRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
-            
+
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::symbol_vertex_function"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::symbol_fragment_function"];
+            descriptor.label = @"Symbol slab G-buffer";
+            _symbolGBufferRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
+
             descriptor.vertexFunction = [_ctx newFunctionWithName:@"whiskerVertexShader"];
             descriptor.fragmentFunction = [_ctx newFunctionWithName:@"whiskerFragmentShader"];
             descriptor.label = @"Deferred lines (DEBUG)";
@@ -528,6 +548,39 @@
             // Mip levels allocated now, generated below once the opcode
             // labels have been stamped into level 0.
             _symbols = [_ctx newTextureWithMipStorageFromResource:@"assets" ofType:@"png"];
+            {
+                // The field beside the atlas (symbol_sdf.hpp): from its
+                // cache, or built from the atlas's silhouette at half the
+                // atlas resolution and cached
+                auto t0 = std::chrono::steady_clock::now();
+                wry::SymbolSDF sdf = wry::symbol_sdf_for_atlas(wry::path_for_resource("assets", "png"));
+                const int cell = sdf.cell;
+                MTLTextureDescriptor* descriptor =
+                    [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                       width:sdf.image.major()
+                                                                      height:sdf.image.minor()
+                                                                   mipmapped:NO];
+                descriptor.storageMode = MTLStorageModeShared;
+                descriptor.usage = MTLTextureUsageShaderRead;
+                _symbolField = [_ctx.device newTextureWithDescriptor:descriptor];
+                [_symbolField replaceRegion:MTLRegionMake2D(0, 0, sdf.image.major(), sdf.image.minor())
+                                mipmapLevel:0
+                                  withBytes:sdf.image.data()
+                                bytesPerRow:sdf.image.stride_bytes()];
+                _symbolField.label = @"Symbol field";
+                _symbolStrokeWidth = std::move(sdf.stroke_width);
+                auto t1 = std::chrono::steady_clock::now();
+                std::vector<float> widths;
+                for (float w : _symbolStrokeWidth)
+                    if (w > 0.0f)
+                        widths.push_back(w);
+                std::sort(widths.begin(), widths.end());
+                NSLog(@"symbol field: %d px cells, ready in %.0f ms; %zu symbols, stroke widths %.1f / %.1f / %.1f texels (min / median / max)",
+                      cell, std::chrono::duration<double, std::milli>(t1 - t0).count(),
+                      widths.size(), widths.empty() ? 0.0f : widths.front(),
+                      widths.empty() ? 0.0f : widths[widths.size() / 2],
+                      widths.empty() ? 0.0f : widths.back());
+            }
             _hackmesh = [[WryMesh alloc] init];
             _black = [_ctx newTextureFromResource:@"black" ofType:@"png"];
             _white = [_ctx newTextureFromResource:@"white" ofType:@"png"];
@@ -836,7 +889,7 @@
     //++oof; if (oof >= gi.size()) oof = 0;
     auto str = "Sphinx of black quartz, judge my rasterizer.";
     simd_float2 pos = {-4.0, -1.0};
-    // pos += _model->_looking_at / 1024.0f * float2{1.0f, -1.0f};
+    // pos += _model->_focus_fraction * float2{-1.0f, -1.0f};
     for (auto a = str; *a; ++a) {
         // auto q = _ctx.font->charmap.find(*a);
         auto q = _ctx.font2.charmap.find(*a);
@@ -1154,16 +1207,17 @@
         const float bx0 = vp.x - MARGIN - SIZE;   // box, screen px, y-down
         const float by0 = MARGIN;
 
-        // World-space window (tile units), centered on the camera focus.
-        const float cx = -_model->_looking_at.x / 1024.0f;
-        const float cy = +_model->_looking_at.y / 1024.0f;
+        // Window (tile units, render space), centered on the camera focus.
+        const float cx = _model->_focus_fraction.x;
+        const float cy = _model->_focus_fraction.y;
         const float W = (float)WorldMap::EXTENT;
         const float wx0 = cx - W * 0.5f;
         const float wy0 = cy - W * 0.5f;
 
-        // Mapped world rect (tile (x, y) spans x +/- 0.5).
-        const float mx0 = WorldMap::X0 - 0.5f;
-        const float my0 = WorldMap::Y0 - 0.5f;
+        // Mapped world rect (tile (x, y) spans x +/- 0.5), render space.
+        const float2 map_origin = _model->render_position(wry::Coordinate{WorldMap::X0, WorldMap::Y0});
+        const float mx0 = map_origin.x - 0.5f;
+        const float my0 = map_origin.y - 0.5f;
         const float mx1 = mx0 + W;
         const float my1 = my0 + W;
 
@@ -1292,13 +1346,18 @@
 
     const bool show_map = _model->_show_map;
 
-    // Construct camera transforms
+    // Camera transforms.  Everything below is positioned in RENDER SPACE:
+    // world space with the camera's focus tile at the origin, so positions
+    // stay small floats at any world coordinate; the focus tile is added
+    // back only to look up world content (WorldState::world_tile /
+    // render_position), and the sub-tile pan is in the view transform.
     MeshUniforms uniforms = _model->_uniforms;
-    
-    // Construct ground plane transforms
-    auto lookat_transform =  matrix_identity_float4x4;
-    lookat_transform.columns[3].x += _model->_looking_at.x / 1024.0f;
-    lookat_transform.columns[3].y -= _model->_looking_at.y / 1024.0f;
+    const wry::Coordinate focus_tile = _model->_focus_tile;
+    // A world tile from its render-space offset (the coordinates wrap)
+    auto tile_at = [focus_tile](int i, int j) {
+        return wry::Coordinate{(wry::i32)((wry::u32)focus_tile.x + (wry::u32)i),
+                               (wry::i32)((wry::u32)focus_tile.y + (wry::u32)j)};
+    };
 
     // The container proxy is authored at real scale (6.058 x 2.438 x 2.591
     // meters, Z-up, base at z = 0, long axis along x); this scale seats it
@@ -1310,7 +1369,7 @@
     // CPU overwrite races any frame still in flight; setVertexBytes copies
     // into the command buffer at encode time.
     MeshInstanced mesh_instanced_things = {};
-    mesh_instanced_things.model_transform = lookat_transform;
+    mesh_instanced_things.model_transform = matrix_identity_float4x4;
     mesh_instanced_things.inverse_transpose_model_transform = simd_inverse(simd_transpose(mesh_instanced_things.model_transform));
     mesh_instanced_things.albedo = make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
     
@@ -1323,10 +1382,10 @@
     // - transform to frustum planes
     // - ray-intersect mesh
 
+    // The ground cells in view, as render-space offsets from the focus tile
     rect<i32> grid_bounds;
     {
-        simd_float4x4 A = simd_mul(uniforms.viewprojection_transform,
-                                   mesh_instanced_things.model_transform);
+        simd_float4x4 A = uniforms.viewprojection_transform;
         
         // (_model->_mouse4 -- the cursor's ground-plane projection -- is now
         // computed in -submitLocalCommands during -update, not here.)
@@ -1352,10 +1411,11 @@
     
     
     
-    // Per-frame geometry, in transient arena slices.
-    WryBufferSlice vertices = {};
-    WryBufferSlice indices = {};
-    NSUInteger index_count = 0;
+    // Per-frame geometry, in transient arena slices.  The symbols are slab
+    // instances (WrySymbolInstance), expanded to cuboids by their vertex
+    // function.
+    WryBufferSlice symbol_instances = {};
+    NSUInteger symbol_count = 0;
     // Terrain tiles get their own buffers: same quad pipeline, but drawn
     // with the terrain palette (not the sprite atlas) bound as albedo.
     WryBufferSlice terrain_vertices = {};
@@ -1382,16 +1442,16 @@
         // lands texel centers on tile centers.
         //
         // The zoom (x64 canonically; pinch varies _map_zoom) is a model
-        // transform: scale the quad by 1/zoom about the camera focus (the
-        // lookat pan), leaving the camera itself alone, so the view
-        // direction and lighting are the world's own.
-        map_instanced.model_transform = simd_mul(simd_matrix_scale(1.0f / _model->_map_zoom),
-                                                 lookat_transform);
+        // transform: scale the quad by 1/zoom about the camera focus,
+        // leaving the camera itself alone, so the view direction and
+        // lighting are the world's own.
+        map_instanced.model_transform = _model->map_model_transform(_model->_map_zoom);
         map_instanced.inverse_transpose_model_transform
             = simd_inverse(simd_transpose(map_instanced.model_transform));
 
-        const float mx0 = wry::WorldMap::X0 - 0.5f;
-        const float my0 = wry::WorldMap::Y0 - 0.5f;
+        const float2 map_origin = _model->render_position(wry::Coordinate{wry::WorldMap::X0, wry::WorldMap::Y0});
+        const float mx0 = map_origin.x - 0.5f;
+        const float my0 = map_origin.y - 0.5f;
         const float mx1 = mx0 + (float)wry::WorldMap::EXTENT;
         const float my1 = my0 + (float)wry::WorldMap::EXTENT;
 
@@ -1436,8 +1496,8 @@
         // location and is not drawn by this loop.
         std::vector<EntityID> visible_ids;
         visit_in_region(new_world->_located_for_coordinate,
-                        Coordinate{grid_bounds.a.x, grid_bounds.a.y},
-                        Coordinate{grid_bounds.b.x - 1, grid_bounds.b.y - 1},
+                        tile_at(grid_bounds.a.x, grid_bounds.a.y),
+                        tile_at(grid_bounds.b.x - 1, grid_bounds.b.y - 1),
                         [&visible_ids](Coordinate, const EntityIDSet& located) {
                             located.for_each([&visible_ids](EntityID id) {
                                 if (id) visible_ids.push_back(id);
@@ -1454,26 +1514,49 @@
                 ptrs.push_back(e);
         }
 
-        // Accumulate the textured quads into growable buffers and upload them
-        // once below.  The buffers grow to fit whatever the loops emit, so no
-        // number of entities can overflow them the way the old fixed-size
-        // allocation did.
-        std::vector<MeshVertex> vbuf;
-        std::vector<uint> ibuf;
-        // Reserve a rough lower bound (one quad per grid cell and per entity,
-        // plus the cursor) to avoid most reallocations; this is only a hint
-        // -- the vectors still grow past it as needed.
-        size_t quad_hint = 2
+        // Accumulate the symbol slabs into a growable buffer and upload it
+        // once below.  Reserve a rough lower bound (one per grid cell and
+        // per entity, plus the cursor); this is only a hint.
+        std::vector<WrySymbolInstance> symbols;
+        size_t symbol_hint = 2
             + (size_t)(grid_bounds.b.x - grid_bounds.a.x) * (size_t)(grid_bounds.b.y - grid_bounds.a.y)
             + ptrs.size();
-        vbuf.reserve(quad_hint * 4);
-        ibuf.reserve(quad_hint * 6);
+        symbols.reserve(symbol_hint);
+
+        // A symbol slab centred at `location`, showing the atlas cell at
+        // `coordinate` (its top-left uv), its face spanned by the world
+        // unit vectors `across` (image right) and `up` (image up), one
+        // world unit square; as thick as the cell's stroke width, with
+        // top and bottom fillets of a quarter of it (symbol_sdf.hpp)
+        const float texels_per_cell = (float)(_symbols.width / wry::SymbolSDF::kCells);
+        auto emit_symbol = [&](simd_float4 location, simd_float4 coordinate,
+                               simd_float3 across, simd_float3 up) {
+            const int cx = std::clamp((int)std::lround(coordinate.x * wry::SymbolSDF::kCells), 0, wry::SymbolSDF::kCells - 1);
+            const int cy = std::clamp((int)std::lround(coordinate.y * wry::SymbolSDF::kCells), 0, wry::SymbolSDF::kCells - 1);
+            // Capped: a solid tile's stroke is the whole cell, and a
+            // slab a quarter cell thick is plenty
+            const float stroke = std::clamp(_symbolStrokeWidth[(size_t)cy * wry::SymbolSDF::kCells + (size_t)cx], 2.0f, 32.0f);
+            // Slab space is source texels; the cell is one world unit
+            const float texel = 1.0f / texels_per_cell;
+            simd_float3 normal = simd_cross(across, up);
+            simd_float4x4 model = simd_matrix(simd_make_float4(across * texel, 0.0f),
+                                              simd_make_float4(up * texel, 0.0f),
+                                              simd_make_float4(normal * texel, 0.0f),
+                                              simd_make_float4(location.xyz, 1.0f));
+            WrySymbolInstance s = {};
+            s.model_transform = model;
+            s.inverse_model_transform = simd_inverse(model);
+            s.cell = make<float4>(coordinate.x, coordinate.y, 1.0f / wry::SymbolSDF::kCells, 0.0f);
+            s.half_extent = make<float4>(texels_per_cell * 0.5f, texels_per_cell * 0.5f, stroke * 0.5f, 0.0f);
+            s.top_radius = stroke * 0.25f;
+            s.bottom_radius = stroke * 0.25f;
+            symbols.push_back(s);
+        };
 
         MeshVertex v;
         v.tangent = make<float4>(1.0f, 0.0f, 0.0f, 0.0f);
         v.bitangent = make<float4>(0.0f, 1.0f, 0.0f, 0.0f);
         v.normal = make<float4>(0.0f, 0.0f, 1.0f, 0.0f);
-        uint k = 0;
 
 #if 1
         // TODO:
@@ -1489,8 +1572,8 @@
 
                 auto h0 = (p->_old_heading & 3) * M_PI_2;
                 auto h1 = (p->_new_heading & 3) * M_PI_2;
-                auto x0 = make<float2>(p->_old_location.x, p->_old_location.y);
-                auto x1 = make<float2>(p->_new_location.x, p->_new_location.y);
+                auto x0 = _model->render_position(p->_old_location);
+                auto x1 = _model->render_position(p->_new_location);
                 auto dx0 = make<float2>(sin(h0), cos(h0));
                 auto dx1 = make<float2>(sin(h1), cos(h1));
                                 
@@ -1541,7 +1624,7 @@
                 location.xy = x1;
                 
                 
-                auto A = simd_matrix_translate(location) * lookat_transform;
+                auto A = simd_matrix_translate(location);
                 
                 A = A * simd_matrix_rotate(atan2(dx1.x, dx1.y), make<float3>(0.0, 0.0, -1.0));
                 
@@ -1562,7 +1645,7 @@
                     if (value.is_matter()) {
                         // held matter rides as a mesh at this stack slot,
                         // heading-aligned with the machine
-                        auto A = simd_matrix_translate(location) * lookat_transform;
+                        auto A = simd_matrix_translate(location);
                         A = A * simd_matrix_rotate(atan2(dx1.x, dx1.y), make<float3>(0.0, 0.0, -1.0));
                         A = A * simd_matrix_scale(container_mesh_scale);
                         MeshInstanced m;
@@ -1588,31 +1671,14 @@
                         // a garbage hex digit cut from the bit pattern
                         coordinate = _cdot_coordinate;
                     }
-                    v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-                    v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                    vbuf.push_back(v);
-                    v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-                    v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                    vbuf.push_back(v);
-                    v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-                    v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                    vbuf.push_back(v);
-                    v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-                    v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                    vbuf.push_back(v);
-                    ibuf.push_back(k);
-                    ibuf.push_back(k);
-                    ibuf.push_back(k + 1);
-                    ibuf.push_back(k + 3);
-                    ibuf.push_back(k + 2);
-                    ibuf.push_back(k + 2);
-                    k += 4;
+                    emit_symbol(location, coordinate,
+                                make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f));
                 }
                 
             } else if (auto p = dynamic_cast<const LocalizedEntity*>(q)){
 
-                simd_float4 location = make<float4>(p->_location.x, p->_location.y + 1.0, 0.0, 1.0f);
-                auto A = simd_matrix_translate(location) * lookat_transform * simd_matrix_scale(0.5f);
+                simd_float4 location = make<float4>(_model->render_position(p->_location) + make<float2>(0.0f, 1.0f), 0.0f, 1.0f);
+                auto A = simd_matrix_translate(location) * simd_matrix_scale(0.5f);
 
                 WryMesh* s = nil;
                 
@@ -1643,27 +1709,11 @@
                             + make<float4>(((r->_of_this.is_inty() ? r->_of_this.as_int() : 0) & 15) / 32.0f, 0.0f, 0.0f, 0.0f);
                     }
                     
-                    v.position = make<float4>(-0.5f, -0.1f, -0.5f, 0.0f) + location;
-                    v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f) + coordinate;
-                    vbuf.push_back(v);
-                    v.position = make<float4>(+0.5f, -0.1f, -0.5f, 0.0f) + location;
-                    v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 1.0f) + coordinate;
-                    vbuf.push_back(v);
-                    v.position = make<float4>(+0.5f, -0.1f, +0.5f, 0.0f) + location;
-                    v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f) + coordinate;
-                    vbuf.push_back(v);
-                    v.position = make<float4>(-0.5f, -0.1f, +0.5f, 0.0f) + location;
-                    v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 1.0f) + coordinate;
-                    vbuf.push_back(v);
-                    
-                    ibuf.push_back(k);
-                    ibuf.push_back(k);
-                    ibuf.push_back(k + 1);
-                    ibuf.push_back(k + 3);
-                    ibuf.push_back(k + 2);
-                    ibuf.push_back(k + 2);
-                    k += 4;
-                    
+                    // Upright on the source's front face: image right is
+                    // world x, image up is world z
+                    emit_symbol(location + make<float4>(0.0f, -0.1f, 0.0f, 0.0f), coordinate,
+                                make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 0.0f, 1.0f));
+
                 }
 
                 
@@ -1680,9 +1730,8 @@
                 bool not_empty = true;
 
                 {
-                    //wry::Term q = new_world->_term_for_coordinate.read(wry::Coordinate{i, j});
                     wry::Term q = {};
-                    not_empty = new_world->_term_for_coordinate.try_get(wry::Coordinate{i, j}, q);
+                    not_empty = new_world->_term_for_coordinate.try_get(tile_at(i, j), q);
                     // printf("(%d, %d)=%llx -> (%d) %llx\n", i, j, wry::Coordinate{i, j}.data(), q._data);
                     if (!not_empty)
                         continue;
@@ -1710,7 +1759,7 @@
                         // matter renders as a mesh sitting on an ordinary
                         // empty tile
                         coordinate = _cdot_coordinate;
-                        auto A = simd_matrix_translate(location) * lookat_transform;
+                        auto A = simd_matrix_translate(location);
                         A = A * simd_matrix_scale(container_mesh_scale);
                         MeshInstanced m;
                         m.model_transform = A;
@@ -1723,27 +1772,8 @@
                     }
                 }
                 
-                v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                vbuf.push_back(v);
-                v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                vbuf.push_back(v);
-                v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                vbuf.push_back(v);
-                v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-                vbuf.push_back(v);
-                
-                ibuf.push_back(k);
-                ibuf.push_back(k);
-                ibuf.push_back(k + 1);
-                ibuf.push_back(k + 3);
-                ibuf.push_back(k + 2);
-                ibuf.push_back(k + 2);
-                
-                k += 4;
+                emit_symbol(location, coordinate,
+                            make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f));
             }
         }
 
@@ -1758,8 +1788,8 @@
             std::vector<uint> terrain_ibuf;
             uint terrain_k = 0;
             visit_in_region(new_world->_terrain_for_coordinate,
-                            Coordinate{grid_bounds.a.x, grid_bounds.a.y},
-                            Coordinate{grid_bounds.b.x - 1, grid_bounds.b.y - 1},
+                            tile_at(grid_bounds.a.x, grid_bounds.a.y),
+                            tile_at(grid_bounds.b.x - 1, grid_bounds.b.y - 1),
                             [&](Coordinate xy, wry::Terrain t) {
                 if ((t < 0) || (t >= wry::TERRAIN_KIND_COUNT))
                     t = wry::TERRAIN_KIND_COUNT - 1;
@@ -1771,7 +1801,7 @@
                 // bleed gutter.
                 float u0 = (float)wry::terrain_variant(xy) * 0.25f;
                 float v0 = (float)t * 0.25f;
-                simd_float4 location = make<float4>(xy.x, xy.y, 0.0f, 1.0f);
+                simd_float4 location = make<float4>(_model->render_position(xy), 0.0f, 1.0f);
                 v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
                 v.coordinate = make<float4>(u0, v0 + 0.25f, 0.0f, 1.0f);
                 terrain_vbuf.push_back(v);
@@ -1803,50 +1833,21 @@
         }
 
         {
-            // mouse cursor thing
+            // The cursor's tile (render space, like _mouse4)
             simd_float4 location = _model->_mouse4;
             location.x = round(location.x);
             location.y = round(location.y);
             location.z = 0.1f;
             simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
-            
-            v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = make<float4>(0.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-            vbuf.push_back(v);
-            v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = make<float4>(1.0f / 32.0f, 1.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-            vbuf.push_back(v);
-            v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = make<float4>(1.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-            vbuf.push_back(v);
-            v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-            v.coordinate = make<float4>(0.0f / 32.0f, 0.0f / 32.0f, 0.0f, 0.0f) + coordinate;
-            vbuf.push_back(v);
-            
-            ibuf.push_back(k);
-            ibuf.push_back(k);
-            ibuf.push_back(k + 1);
-            ibuf.push_back(k + 3);
-            ibuf.push_back(k + 2);
-            ibuf.push_back(k + 2);
-            
-            k += 4;
-            
-            int2 xy;
-            xy.x = round(_model->_mouse4.x);
-            xy.y = round(_model->_mouse4.z);
-            ulong z = 0;
-            memcpy(&z, &xy, 8);
-            //ulong value = new_world->get(z);
-            //++value;
-            //new_world->set(z, value);
-
+            emit_symbol(location, coordinate,
+                        make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f));
         }
 
         // Upload exactly what we accumulated.
-        index_count = ibuf.size();
-        vertices = [_ctx.arena copyBytes:vbuf.data() length:vbuf.size() * sizeof(MeshVertex)];
-        indices = [_ctx.arena copyBytes:ibuf.data() length:ibuf.size() * sizeof(uint)];
+        symbol_count = symbols.size();
+        if (symbol_count)
+            symbol_instances = [_ctx.arena copyBytes:symbols.data()
+                                              length:symbols.size() * sizeof(WrySymbolInstance)];
 
     }
 
@@ -1887,29 +1888,33 @@
         // Are 2D entities mostly just above the ground plane and thus behind
         // any 3D geometry?
 
-        // Draw the 2D entities (none in map mode: the map quad lies in the
-        // ground plane and cannot cast)
+        [render_command_encoder setVertexBytes:&uniforms
+                                        length:sizeof(MeshUniforms)
+                                       atIndex:AAPLBufferIndexUniforms];
+        [render_command_encoder setFragmentBytes:&uniforms
+                                          length:sizeof(MeshUniforms)
+                                         atIndex:AAPLBufferIndexUniforms];
 
-        if (!show_map) {
-            [render_command_encoder setVertexBytes:&uniforms
-                                            length:sizeof(MeshUniforms)
-                                           atIndex:AAPLBufferIndexUniforms];
+        // The symbol slabs (none in map mode: the map quad lies in the
+        // ground plane and cannot cast); their fragments march the slab
+        // along the light's rays and write the hit's depth
 
-            [render_command_encoder setVertexBuffer:vertices.buffer offset:vertices.offset atIndex:AAPLBufferIndexVertices];
-            [render_command_encoder setVertexBytes:&mesh_instanced_things
-                                            length:sizeof(MeshInstanced)
-                                           atIndex:AAPLBufferIndexInstanced];
-
-            [render_command_encoder setFragmentBytes:&uniforms
-                                              length:sizeof(MeshUniforms)
-                                             atIndex:AAPLBufferIndexUniforms];
-            [render_command_encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
-
-            [render_command_encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
-                                               indexCount:index_count
-                                                indexType:MTLIndexTypeUInt32
-                                              indexBuffer:indices.buffer
-                                        indexBufferOffset:indices.offset];
+        if (!show_map && symbol_count) {
+            [render_command_encoder setRenderPipelineState:_symbolShadowRenderPipelineState];
+            [render_command_encoder setCullMode:MTLCullModeBack];
+            [render_command_encoder setVertexBuffer:symbol_instances.buffer
+                                             offset:symbol_instances.offset
+                                            atIndex:AAPLBufferIndexInstanced];
+            [render_command_encoder setFragmentBuffer:symbol_instances.buffer
+                                               offset:symbol_instances.offset
+                                              atIndex:AAPLBufferIndexInstanced];
+            [render_command_encoder setFragmentTexture:_symbolField atIndex:AAPLTextureIndexNormal];
+            [render_command_encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                       vertexStart:0
+                                       vertexCount:36
+                                     instanceCount:symbol_count];
+            [render_command_encoder setCullMode:MTLCullModeNone];
+            [render_command_encoder setRenderPipelineState:_shadowMapRenderPipelineState];
         }
 
         // Draw the 3D entities (each no-ops on zero instances)
@@ -2071,17 +2076,30 @@
                                      length:sizeof(MeshInstanced)
                                     atIndex:AAPLBufferIndexInstanced];
 
-                    // Sprite quads first, under the pre-branch bindings --
-                    // in particular the occlusion slot stays unbound for
-                    // them, as it always has been; the depth test makes
-                    // the draw order irrelevant to the result.
-                    [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
-                    [encoder setVertexBuffer:vertices.buffer offset:vertices.offset atIndex:AAPLBufferIndexVertices];
-                    [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
-                                        indexCount:index_count
-                                         indexType:MTLIndexTypeUInt32
-                                       indexBuffer:indices.buffer
-                                 indexBufferOffset:indices.offset];
+                    // The symbol slabs first: their own pipeline marches
+                    // the field and writes the hit's depth, so the depth
+                    // test orders them against the meshes and terrain as
+                    // it did the quads.  Restore the mesh bindings after.
+                    if (symbol_count) {
+                        [encoder setRenderPipelineState:_symbolGBufferRenderPipelineState];
+                        [encoder setVertexBuffer:symbol_instances.buffer
+                                          offset:symbol_instances.offset
+                                         atIndex:AAPLBufferIndexInstanced];
+                        [encoder setFragmentBuffer:symbol_instances.buffer
+                                            offset:symbol_instances.offset
+                                           atIndex:AAPLBufferIndexInstanced];
+                        [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
+                        [encoder setFragmentTexture:_symbolField atIndex:AAPLTextureIndexNormal];
+                        [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                    vertexStart:0
+                                    vertexCount:36
+                                  instanceCount:symbol_count];
+                        [encoder setRenderPipelineState:_deferredGBufferRenderPipelineState];
+                        [encoder setVertexBytes:&mesh_instanced_things
+                                         length:sizeof(MeshInstanced)
+                                        atIndex:AAPLBufferIndexInstanced];
+                        [encoder setFragmentTexture:_blue atIndex:AAPLTextureIndexNormal];
+                    }
 
                     // Terrain tiles (a shadow receiver only, so they skip
                     // the shadow pass entirely): the full PBR material

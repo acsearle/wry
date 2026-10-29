@@ -594,12 +594,17 @@ namespace wry {
         
         // camera setup
         
-        // rotate eye location to Z axis
-        assert(_uniforms.camera_position_world.w == 1);
-        float3 p = _uniforms.camera_position_world.xyz;
+        // The camera sits at _camera_offset from the focus and looks at
+        // it.  In render space the focus is at the sub-tile fraction, so
+        // the view first brings that to the origin, then rotates the eye
+        // onto the Z axis.
+        float3 p = _camera_offset;
+        float2 f = _focus_fraction;
+        _uniforms.camera_position_world = make<float4>(p.x + f.x, p.y + f.y, p.z, 1.0f);
         quatf q(simd_normalize(p), simd_make_float3(0, 0, 1));
         float4x4 V = simd_matrix_translate(0, 0, -simd_length(p)) *
-                              float4x4(q);
+                              float4x4(q) *
+                              simd_matrix_translate(-f.x, -f.y, 0.0f);
         
         simd_float4x4 F = simd_mul(matrix_perspective_right_hand(M_PI_2, 1, 5, 50),
                                    simd_matrix_scale(1, 1, -1, 1));
@@ -821,14 +826,64 @@ namespace wry {
         project_cursor();
     }
 
+    // Coordinates are i32 and wrap: the arithmetic is modular, which
+    // C++20 defines for the conversion back to signed
+    static i32 wrap_add(i32 a, i32 b) {
+        return (i32)((u32)a + (u32)b);
+    }
+    static i32 wrap_sub(i32 a, i32 b) {
+        return (i32)((u32)a - (u32)b);
+    }
+
+    float2 WorldState::render_position(Coordinate xy) const {
+        return make<float2>((float)wrap_sub(xy.x, _focus_tile.x),
+                            (float)wrap_sub(xy.y, _focus_tile.y));
+    }
+
+    std::optional<Coordinate> WorldState::world_tile(float2 render) const {
+        const float x = std::round(render.x);
+        const float y = std::round(render.y);
+        // The comparisons are false for NaN.  2^31 is exactly
+        // representable; anything at or beyond it would overflow i32.
+        constexpr float limit = 2147483648.0f;
+        if (!(x >= -limit && x < limit && y >= -limit && y < limit))
+            return std::nullopt;
+        return Coordinate{wrap_add(_focus_tile.x, (i32)x),
+                          wrap_add(_focus_tile.y, (i32)y)};
+    }
+
+    void WorldState::pan_focus(float2 delta) {
+        if (!(std::isfinite(delta.x) && std::isfinite(delta.y)))
+            return;
+        // Whole tiles carry into the tile; a carry beyond the i32 range
+        // wraps with it (the focus is then anywhere, but defined)
+        constexpr float limit = 2147483648.0f;
+        auto carry = [](float fraction, i32& tile) {
+            float whole = std::clamp(std::round(fraction), -limit, limit - 1.0f);
+            tile = wrap_add(tile, (i32)whole);
+            return fraction - whole;
+        };
+        _focus_fraction += delta;
+        _focus_fraction.x = carry(_focus_fraction.x, _focus_tile.x);
+        _focus_fraction.y = carry(_focus_fraction.y, _focus_tile.y);
+        _regenerate_uniforms();
+    }
+
+    simd_float4x4 WorldState::map_model_transform(float zoom) const {
+        // Scale render space about the focus, so the camera's view
+        // direction and lighting stay the world's own
+        float2 f = _focus_fraction;
+        return simd_mul(simd_matrix_translate(f.x, f.y, 0.0f),
+                        simd_mul(simd_matrix_scale(1.0f / zoom),
+                                 simd_matrix_translate(-f.x, -f.y, 0.0f)));
+    }
+
+    // The cursor's ray meets the ground plane here, in render space
     simd_float4 WorldState::cursor_on_ground() const {
         using namespace ::simd;
-        auto lookat = matrix_identity_float4x4;
-        lookat.columns[3].x += _looking_at.x / 1024.0f;
-        lookat.columns[3].y -= _looking_at.y / 1024.0f;
-        simd_float4x4 A = simd_mul(_uniforms.viewprojection_transform, lookat);
         simd_float4 b = make<float4>(_mouse, 0.0f, 1.0f);
-        return make<float4>(project_screen_ray(A, b), 0.0f, 1.0f);
+        return make<float4>(project_screen_ray(_uniforms.viewprojection_transform, b),
+                            0.0f, 1.0f);
     }
 
     void WorldState::project_cursor() {
@@ -836,15 +891,7 @@ namespace wry {
     }
 
     std::optional<Coordinate> WorldState::cursor_tile() const {
-        simd_float4 g = cursor_on_ground();
-        const float x = std::round(g.x);
-        const float y = std::round(g.y);
-        // The comparisons are false for NaN.  2^31 is exactly
-        // representable; anything at or beyond it would overflow i32.
-        constexpr float limit = 2147483648.0f;
-        if (!(x >= -limit && x < limit && y >= -limit && y < limit))
-            return std::nullopt;
-        return Coordinate{(i32)x, (i32)y};
+        return world_tile(cursor_on_ground().xy);
     }
 
     // Empty the hand: the palette forgets its selection and the renderer's
@@ -1412,14 +1459,16 @@ namespace wry {
                 break;
 
             case WryEventKindScroll: {
-                // The map is drawn at 1/_map_zoom scale, so a map-mode
-                // swipe traverses _map_zoom times the world distance for
-                // the same on-screen travel.  _looking_at is the one shared
-                // focus: leaving map mode keeps you looking at the spot you
-                // panned to.
-                float shuttle = _show_map ? _map_zoom : 1.0f;
-                _looking_at.x += e.scroll_delta.x * shuttle;
-                _looking_at.y += e.scroll_delta.y * shuttle;
+                // Scroll deltas are drawable pixels, 1024 of them to the
+                // tile; the content follows the fingers, so the focus moves
+                // against the delta (image y is down, world y is up).  The
+                // map is drawn at 1/_map_zoom scale, so a map-mode swipe
+                // traverses _map_zoom times the world distance for the
+                // same on-screen travel.  The focus is shared: leaving map
+                // mode keeps you looking at the spot you panned to.
+                float shuttle = (_show_map ? _map_zoom : 1.0f) / 1024.0f;
+                pan_focus(make<float2>(-e.scroll_delta.x * shuttle,
+                                       +e.scroll_delta.y * shuttle));
                 break;
             }
 
@@ -1428,12 +1477,12 @@ namespace wry {
                 // view has no zoom).  Anchored at the cursor: the map point
                 // under the fingers stays put, like every maps app.
                 //
-                // The map quad is drawn with model transform
-                //     p_view = (p_world + t) / Z,
-                // t = (+_looking_at.x, -_looking_at.y) / 1024.  Holding the
-                // cursor's world point q fixed on screen across Z -> Z'
-                // needs (q + t) / Z == (q + t') / Z', so
-                //     t' = (q + t) * (Z' / Z) - q.
+                // The map is scaled by 1/Z about the focus f (render
+                // space; the renderer's map model transform), so a map
+                // point q lands at (q - f) / Z.  Holding the cursor's
+                // point q fixed on screen across Z -> Z' needs
+                // (q - f) / Z == (q - f') / Z', so
+                //     f' = q - (q - f) * (Z' / Z).
                 if (!_show_map)
                     break;
                 constexpr float MAP_ZOOM_MIN = 8.0f;    // texels get blocky
@@ -1450,21 +1499,14 @@ namespace wry {
                 // q: the cursor's ground-plane point under the CURRENT map
                 // transform (same projection cursor_on_ground does for
                 // the world, with the map's model matrix).
-                auto lookat = matrix_identity_float4x4;
-                lookat.columns[3].x += _looking_at.x / 1024.0f;
-                lookat.columns[3].y -= _looking_at.y / 1024.0f;
-                simd_float4x4 model = simd_mul(simd_matrix_scale(1.0f / old_zoom),
-                                               lookat);
+                simd_float4x4 model = map_model_transform(old_zoom);
                 simd_float4x4 A = simd_mul(_uniforms.viewprojection_transform,
                                            model);
                 simd_float4 b = simd_make_float4(_mouse.x, _mouse.y, 0.0f, 1.0f);
                 float2 q = project_screen_ray(A, b);
 
                 float s = _map_zoom / old_zoom;
-                float tx = +_looking_at.x / 1024.0f;
-                float ty = -_looking_at.y / 1024.0f;
-                _looking_at.x = +((q.x + tx) * s - q.x) * 1024.0f;
-                _looking_at.y = -((q.y + ty) * s - q.y) * 1024.0f;
+                pan_focus((q - _focus_fraction) * (1.0f - s));
                 break;
             }
 
@@ -1561,6 +1603,64 @@ namespace wry {
 
     // ----------------------------------------------------------------
     // Tests.
+
+    // The camera focus: panning carries whole tiles into the focus tile
+    // and keeps the fraction sub-tile; render-space positions are offsets
+    // from that tile, wrapping with the i32 coordinates; and the cursor at
+    // the centre of the viewport lands on the focus tile however far it
+    // has been panned, through the view transform the fraction rides in.
+    define_test("world_state_focus") {
+        coroutine::Nursery scope;
+        GuiContext gc;
+        gc.scope = &scope;
+        gc.viewport_size = float2{1280.0f, 800.0f};
+        WorldState ws(gc);
+
+        auto near = [](float a, float b) { return std::abs(a - b) < 1e-4f; };
+
+        assert((ws._focus_tile == Coordinate{0, 0}));
+        assert(ws.cursor_tile() && (*ws.cursor_tile() == Coordinate{0, 0}));
+
+        ws.pan_focus(float2{3.25f, -1.75f});
+        assert((ws._focus_tile == Coordinate{3, -2}));
+        assert(near(ws._focus_fraction.x, 0.25f) && near(ws._focus_fraction.y, 0.25f));
+        assert(near(ws.render_position(Coordinate{5, 1}).x, 2.0f));
+        assert(near(ws.render_position(Coordinate{5, 1}).y, 3.0f));
+        assert((ws.world_tile(float2{2.0f, 3.0f}) == Coordinate{5, 1}));
+        assert(!ws.world_tile(float2{NAN, 0.0f}));
+        assert(!ws.world_tile(float2{0.0f, 3e9f}));
+        // The screen centre looks at the focus: with the fraction at
+        // (0.25, 0.25), that rounds to the focus tile
+        assert(ws.cursor_tile() && (*ws.cursor_tile() == Coordinate{3, -2}));
+        ws.pan_focus(float2{0.5f, 0.5f});
+        assert(ws.cursor_tile() && (*ws.cursor_tile() == Coordinate{4, -1}));
+
+        // Far out: positions near the focus are exact, and the coordinates
+        // wrap around the i32 range
+        ws._focus_tile = Coordinate{INT32_MAX, INT32_MIN};
+        ws._focus_fraction = float2{0.0f, 0.0f};
+        ws._regenerate_uniforms();
+        assert(near(ws.render_position(Coordinate{INT32_MIN, INT32_MAX}).x, 1.0f));
+        assert(near(ws.render_position(Coordinate{INT32_MIN, INT32_MAX}).y, -1.0f));
+        assert((ws.world_tile(float2{1.0f, -1.0f}) == Coordinate{INT32_MIN, INT32_MAX}));
+        assert(ws.cursor_tile() && (*ws.cursor_tile() == Coordinate{INT32_MAX, INT32_MIN}));
+        ws.pan_focus(float2{1.0f, -1.0f});
+        assert((ws._focus_tile == Coordinate{INT32_MIN, INT32_MAX}));
+
+        // A scroll event pans against its delta, 1024 pixels to the tile
+        ws._focus_tile = Coordinate{0, 0};
+        ws._focus_fraction = float2{0.0f, 0.0f};
+        gui::Event e{};
+        e.kind = WryEventKindScroll;
+        e.scroll_delta = float2{1024.0f, -2048.0f};
+        ws.pump_legacy_event(e);
+        assert((ws._focus_tile == Coordinate{-1, -2}));
+        assert(near(ws._focus_fraction.x, 0.0f) && near(ws._focus_fraction.y, 0.0f));
+
+        co_await ws.end_session(std::chrono::milliseconds(200));
+        (void) co_await scope.join();
+        co_return;
+    };
 
     // The pump's contract for the hand and the erase gesture: an
     // empty-hand left click places nothing, a right click issues an erase

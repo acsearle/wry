@@ -242,6 +242,31 @@ typedef struct
     matrix_float4x4 position_transform;
 } MyUniforms;
 
+#pragma mark - Symbol slabs
+
+// The thickened symbols (render/symbol_sdf.hpp): one instance per symbol,
+// drawn as a 12-triangle cuboid whose fragments ray-march the filleted
+// slab inside it (Shaders.metal, deferred::symbol_fragment_function).
+// Slab space is the cell's source texels: x right and y up across the
+// symbol, z out of its face, origin at the cell's centre; the model
+// transform carries that to the world, with a uniform scale, so normals
+// go through it too.
+
+// Source texels spanned by the field's distance channel; must agree with
+// SymbolSDF::kRange
+#define WRY_SYMBOL_SDF_RANGE 16.0f
+
+typedef struct
+{
+    matrix_float4x4 model_transform;
+    matrix_float4x4 inverse_model_transform;
+    simd_float4 cell;           // xy: the cell's top-left atlas uv; z: the cell's uv extent; w unused
+    simd_float4 half_extent;    // texels: x, y across the cell, z the half thickness; w unused
+    float top_radius;           // fillet radii, texels; each below half the
+    float bottom_radius;        // stroke width, their sum below the thickness
+    float _pad[2];
+} WrySymbolInstance;
+
 
 
 //static constexpr constant uint32_t AAPLMaxTotalThreadsPerObjectThreadgroup = 1;

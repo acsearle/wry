@@ -690,8 +690,9 @@ namespace {
     ev.kind = WryEventKindScroll;
     ev.mods = modifiers_from_ns_flags([event modifierFlags]);
     ev.location = location_in_view_pt(_metalView, event);
-    // The backingScaleFactor multiply preserves the units the legacy
-    // `_looking_at` accumulator used; flagged for cleanup in gui_event.hpp.
+    // The backingScaleFactor multiply preserves the drawable-pixel units
+    // the world pan expects (1024 to the tile; WorldState's scroll
+    // handler); flagged for cleanup in gui_event.hpp.
     CGFloat scale = _window.screen.backingScaleFactor;
     ev.scroll_delta.x = (float)(event.scrollingDeltaX * scale);
     ev.scroll_delta.y = (float)(event.scrollingDeltaY * scale);
