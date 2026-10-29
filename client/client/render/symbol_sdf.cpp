@@ -207,7 +207,6 @@ namespace wry {
         result.source_cell = source_cell;
         result.cell = cell;
         result.image = matrix<SymbolSDFTexel>((std::size_t)(kCells * cell), (std::size_t)(kCells * cell));
-        result.stroke_width.assign((std::size_t)kCells * kCells, 0.0f);
 
         matrix<float> coverage((std::size_t)source_cell, (std::size_t)source_cell);
         for (int cy = 0; cy != kCells; ++cy) {
@@ -225,20 +224,10 @@ namespace wry {
                 if (!any) {
                     for (int y = 0; y != cell; ++y)
                         for (int x = 0; x != cell; ++x)
-                            result.image[cy * cell + y, cx * cell + x] = SymbolSDFTexel{255, 128, 128, 0};
+                            result.image[cy * cell + y, cx * cell + x] = SymbolSDFTexel{255, 128, 128, 255};
                     continue;
                 }
                 matrix<float> d = signed_distance(coverage);
-                float deepest = 0.0f;
-                for (int y = 0; y != source_cell; ++y)
-                    for (int x = 0; x != source_cell; ++x)
-                        deepest = std::max(deepest, -d[y, x]);
-                // Quantized as the texel channel carries it, so a cached
-                // field agrees with a fresh one
-                const std::uint8_t stroke_channel = (std::uint8_t)std::lround(
-                    std::clamp(2.0f * deepest / SymbolSDF::kStrokeWidthScale, 0.0f, 1.0f) * 255.0f);
-                result.stroke_width[(std::size_t)cy * kCells + (std::size_t)cx] =
-                    stroke_channel / 255.0f * SymbolSDF::kStrokeWidthScale;
 
                 // Box-filter distance and the central-difference gradient
                 // down to the field's resolution
@@ -276,9 +265,34 @@ namespace wry {
                         t.distance = unorm(mean / (2.0f * SymbolSDF::kRange) + 0.5f);
                         t.gradient_x = unorm(ux * 0.5f + 0.5f);
                         t.gradient_y = unorm(uy * 0.5f + 0.5f);
-                        t.stroke_width = stroke_channel;
+                        t.far_distance = unorm(mean / (2.0f * SymbolSDF::kFarRange) + 0.5f);
                     }
                 }
+            }
+        }
+        result.stroke_width = stroke_widths(result.image);
+        return result;
+    }
+
+    std::vector<float> stroke_widths(matrix_view<const SymbolSDFTexel> image) {
+        constexpr int kCells = SymbolSDF::kCells;
+        const int cell = (int)(image.minor() / (std::size_t)kCells);
+        std::vector<float> result((std::size_t)kCells * kCells, 0.0f);
+        for (int cy = 0; cy != kCells; ++cy) {
+            for (int cx = 0; cx != kCells; ++cx) {
+                // The fine channel's deepest point, or the coarse channel's
+                // where the fine one is clamped (a stroke wider than twice
+                // its range)
+                float fine = 0.0f, coarse = 0.0f;
+                for (int y = 0; y != cell; ++y) {
+                    for (int x = 0; x != cell; ++x) {
+                        SymbolSDFTexel t = image[cy * cell + y, cx * cell + x];
+                        fine = std::max(fine, (0.5f - t.distance / 255.0f) * 2.0f * SymbolSDF::kRange);
+                        coarse = std::max(coarse, (0.5f - t.far_distance / 255.0f) * 2.0f * SymbolSDF::kFarRange);
+                    }
+                }
+                const float deepest = fine < SymbolSDF::kRange - 0.5f ? fine : std::max(fine, coarse);
+                result[(std::size_t)cy * kCells + (std::size_t)cx] = 2.0f * deepest;
             }
         }
         return result;
@@ -291,7 +305,7 @@ namespace wry {
     SymbolSDF symbol_sdf_for_atlas(std::filesystem::path const& atlas_path) {
         constexpr int kCells = SymbolSDF::kCells;
         std::filesystem::path cache_path = atlas_path;
-        cache_path.replace_filename(atlas_path.stem().string() + "_field_v1.png");
+        cache_path.replace_filename(atlas_path.stem().string() + "_field_v2.png");
         std::error_code ec;
         const bool fresh = std::filesystem::exists(cache_path, ec)
             && std::filesystem::last_write_time(cache_path, ec) >= std::filesystem::last_write_time(atlas_path, ec)
@@ -305,12 +319,7 @@ namespace wry {
                 result.image = matrix<SymbolSDFTexel>(png.minor(), png.major());
                 for (std::size_t y = 0; y != png.minor(); ++y)
                     std::memcpy(&result.image[(ptrdiff_t)y, 0], &png[(ptrdiff_t)y, 0], png.major() * sizeof(SymbolSDFTexel));
-                result.stroke_width.resize((std::size_t)kCells * kCells);
-                for (int cy = 0; cy != kCells; ++cy)
-                    for (int cx = 0; cx != kCells; ++cx)
-                        result.stroke_width[(std::size_t)cy * kCells + (std::size_t)cx] =
-                            result.image[cy * result.cell, cx * result.cell].stroke_width / 255.0f
-                            * SymbolSDF::kStrokeWidthScale;
+                result.stroke_width = stroke_widths(result.image);
                 return result;
             }
         }
@@ -382,23 +391,30 @@ namespace wry {
                 atlas[3 * n + y, 5 * n + x] = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, coverage[y, x]);
         SymbolSDF sdf = build_symbol_sdf(atlas, n / 2);
         assert(sdf.cell == n / 2 && sdf.source_cell == n);
-        assert((std::abs(sdf.stroke_width_at(5, 3) - 2.0f * radius) < 0.75f));   // texel centres miss the disc centre, and 1/4 texel quantization
+        // The stroke width is the field's deepest point doubled: the box
+        // filter averages the four source texels around the centre, each
+        // up to a texel and a half from it, so it reads short, and this
+        // disc is deeper than the fine channel's range, so it comes from
+        // the coarse channel at a texel's precision (measured 38.9)
+        assert((sdf.stroke_width_at(5, 3) < 2.0f * radius + 1.0f));
+        assert((sdf.stroke_width_at(5, 3) > 2.0f * radius - 3.0f));
         assert((sdf.stroke_width_at(0, 0) == 0.0f));
-        // An empty cell decodes as far outside, gradient zero, no stroke;
-        // the disc's texels carry its diameter
+        // An empty cell decodes as far outside in both channels, gradient
+        // zero
         {
             SymbolSDFTexel t = sdf.image[0, 0];
-            assert(t.distance == 255 && t.gradient_x == 128 && t.gradient_y == 128 && t.stroke_width == 0);
-            SymbolSDFTexel u = sdf.image[3 * (n / 2), 5 * (n / 2)];
-            assert(std::abs(u.stroke_width / 255.0f * SymbolSDF::kStrokeWidthScale - 2.0f * radius) < 0.75f);
+            assert(t.distance == 255 && t.gradient_x == 128 && t.gradient_y == 128 && t.far_distance == 255);
         }
-        float worst_distance = 0.0f, worst_gradient = 0.0f;
+        float worst_distance = 0.0f, worst_gradient = 0.0f, worst_far = 0.0f;
         for (int y = 0; y != n / 2; ++y) {
             for (int x = 0; x != n / 2; ++x) {
                 SymbolSDFTexel t = sdf.image[3 * (n / 2) + y, 5 * (n / 2) + x];
                 // The field texel's centre in source texels
                 const float sx = 2.0f * x + 1.0f, sy = 2.0f * y + 1.0f;
                 const float truth = std::hypot(sx - cx, sy - cy) - radius;
+                // The coarse channel covers the whole cell at a texel
+                const float far = (t.far_distance / 255.0f - 0.5f) * 2.0f * SymbolSDF::kFarRange;
+                worst_far = std::max(worst_far, std::abs(far - truth));
                 if (std::abs(truth) >= SymbolSDF::kRange - 1.0f)
                     continue;
                 const float decoded = (t.distance / 255.0f - 0.5f) * 2.0f * SymbolSDF::kRange;
@@ -417,6 +433,7 @@ namespace wry {
         // 1/128 of a unit vector; measured 0.11 and 0.05
         assert(worst_distance < 0.2f);
         assert(worst_gradient < 0.06f);
+        assert(worst_far < 0.7f);
         co_return;
     };
 

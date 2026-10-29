@@ -91,6 +91,7 @@
     id<MTLTexture> _deferredDepthAttachmentTexture;
     
     id<MTLTexture> _deferredLightImageBasedTexture;
+    id<MTLTexture> _deferredLightIrradianceTexture;
     id<MTLTexture> _deferredLightImageBasedFresnelTexture;
         
     // conventional compositing for overlay
@@ -122,6 +123,7 @@
     std::vector<float> _symbolStrokeWidth;
     id<MTLRenderPipelineState> _symbolGBufferRenderPipelineState;
     id<MTLRenderPipelineState> _symbolShadowRenderPipelineState;
+    id<MTLRenderPipelineState> _symbolDecalRenderPipelineState;
     
     id<MTLTexture> _black;
     id<MTLTexture> _white;
@@ -319,6 +321,89 @@
 
 }
 
+// The sky's irradiance map (CubeFilterIrradiance): a small cube, one
+// cosine-weighted hemisphere mean per texel, for the diffuse term of the
+// image-based light.  The GGX-prefiltered map above serves specular only;
+// its roughest level is a whole-sphere average, not a hemisphere's.
+-(id<MTLTexture>)irradianceMapFromResource:(NSString*)name ofType:ext {
+
+    using namespace simd;
+
+    id<MTLTexture> input = [_ctx newTextureFromResource:name ofType:ext];
+
+    id<MTLTexture> output = nil;
+    {
+        MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
+        descriptor.textureType = MTLTextureTypeCube;
+        descriptor.width = 32;
+        descriptor.height = descriptor.width;
+        descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+        descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        descriptor.resourceOptions = MTLResourceStorageModePrivate;
+        output = [_ctx.device newTextureWithDescriptor:descriptor];
+        output.label = [NSString stringWithFormat:@"%@ irradiance", name];
+    }
+
+    id<MTLRenderPipelineState> pipeline = nil;
+    {
+        MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
+        descriptor.label = @"CubeFilterIrradiance";
+        descriptor.vertexFunction = [_ctx newFunctionWithName:@"CubeFilterVertex"];
+        descriptor.fragmentFunction = [_ctx newFunctionWithName:@"CubeFilterIrradiance"];
+        descriptor.colorAttachments[0].pixelFormat = output.pixelFormat;
+        descriptor.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
+        pipeline = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
+    }
+
+    // The same six face projections as the prefilter
+    CubeFilterUniforms uniforms;
+    {
+        simd_float4x4 Z
+        = simd_matrix(make<float4>(1.0f, 0.0f, 0.0f, 0.0f),
+                      make<float4>(0.0f, 1.0f, 0.0f, 0.0f),
+                      make<float4>(0.0f, 0.0f, 1.0f, 0.0f),
+                      make<float4>(0.0f, 0.0f, 1.0f, 1.0f));
+        uniforms.transforms[0]
+        = simd_mul(simd_matrix_rotate(M_PI_2, simd_make_float3(0.0f, 1.0f, 0.0f)), Z);
+        uniforms.transforms[1]
+        = simd_mul(simd_matrix_rotate(-M_PI_2, simd_make_float3(0.0f, 1.0f, 0.0f)), Z);
+        uniforms.transforms[2]
+        = simd_mul(simd_matrix_rotate(M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f)), Z);
+        uniforms.transforms[3]
+        = simd_mul(simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f)), Z);
+        uniforms.transforms[4] = Z;
+        uniforms.transforms[5]
+        = simd_mul(simd_matrix_rotate(M_PI, simd_make_float3(0.0f, 1.0f, 0.0f)), Z);
+        uniforms.alpha2 = 0.0f;
+    }
+
+    MTLRenderPassDescriptor* renderPass = [MTLRenderPassDescriptor new];
+    renderPass.colorAttachments[0].texture = output;
+    renderPass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    renderPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    renderPass.renderTargetArrayLength = 6;
+
+    id<MTLCommandBuffer> commandBuffer = [_ctx.commandQueue commandBuffer];
+    id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPass];
+    [encoder setRenderPipelineState:pipeline];
+    [encoder setVertexBuffer:_ctx.screenTriangleStripVertexBuffer
+                      offset:0
+                     atIndex:AAPLBufferIndexVertices];
+    [encoder setVertexBytes:&uniforms
+                     length:sizeof(CubeFilterUniforms)
+                    atIndex:AAPLBufferIndexUniforms];
+    [encoder setFragmentTexture:input
+                        atIndex:AAPLTextureIndexColor];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                vertexStart:0
+                vertexCount:4
+              instanceCount:6];
+    [encoder endEncoding];
+    [commandBuffer commit];
+
+    return output;
+}
+
 -(void) computeFresnelLUT
 {
     MTLTextureDescriptor* texture_descriptor = [MTLTextureDescriptor new];
@@ -418,6 +503,7 @@
 
         // Prefilter the environment map to approximate spectral lobes
         _deferredLightImageBasedTexture = [self prefilteredEnvironmentMapFromResource:@"day" ofType:@"png"];
+        _deferredLightIrradianceTexture = [self irradianceMapFromResource:@"day" ofType:@"png"];
 
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
         
@@ -443,6 +529,23 @@
             descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::symbol_fragment_function"];
             descriptor.label = @"Symbol slab G-buffer";
             _symbolGBufferRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
+
+            // The decal multiplies the material's occlusion channel in
+            // place and touches nothing else
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::symbol_decal_vertex_function"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::symbol_decal_fragment_function"];
+            descriptor.label = @"Symbol decal (ambient occlusion)";
+            descriptor.colorAttachments[AAPLColorIndexColor].writeMask = MTLColorWriteMaskNone;
+            descriptor.colorAttachments[AAPLColorIndexAlbedo].writeMask = MTLColorWriteMaskNone;
+            descriptor.colorAttachments[AAPLColorIndexNormal].writeMask = MTLColorWriteMaskNone;
+            descriptor.colorAttachments[AAPLColorIndexMaterial].writeMask = MTLColorWriteMaskRed;
+            descriptor.colorAttachments[AAPLColorIndexDepth].writeMask = MTLColorWriteMaskNone;
+            _symbolDecalRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
+            descriptor.colorAttachments[AAPLColorIndexColor].writeMask = MTLColorWriteMaskAll;
+            descriptor.colorAttachments[AAPLColorIndexAlbedo].writeMask = MTLColorWriteMaskAll;
+            descriptor.colorAttachments[AAPLColorIndexNormal].writeMask = MTLColorWriteMaskAll;
+            descriptor.colorAttachments[AAPLColorIndexMaterial].writeMask = MTLColorWriteMaskAll;
+            descriptor.colorAttachments[AAPLColorIndexDepth].writeMask = MTLColorWriteMaskAll;
 
             descriptor.vertexFunction = [_ctx newFunctionWithName:@"whiskerVertexShader"];
             descriptor.fragmentFunction = [_ctx newFunctionWithName:@"whiskerFragmentShader"];
@@ -599,15 +702,18 @@
             // mipmapped path; the trilinear sampler puts the mips to use.
             // Albedo is color (sRGB); the normal and ORM maps are data,
             // loaded linear.
-            _terrainAlbedo = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_Albedo"
+//            _terrainAlbedo = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_Albedo"
+            _terrainAlbedo = [_ctx newMipmappedTextureFromResource:@"white"
                                                             ofType:@"png"
                                                    withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
-            _terrainNormal = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_NormalGL"
+//            _terrainNormal = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_NormalGL"
+            _terrainNormal = [_ctx newMipmappedTextureFromResource:@"blue"
                                                             ofType:@"png"
                                                    withPixelFormat:MTLPixelFormatRGBA8Unorm];
-            _terrainORM = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_ORM"
-                                                         ofType:@"png"
-                                                withPixelFormat:MTLPixelFormatRGBA8Unorm];
+//            _terrainORM = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_ORM"
+            _terrainORM = [_ctx newMipmappedTextureFromResource:@"orange"
+                                                            ofType:@"png"
+                                                   withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
         }
 
         {
@@ -1416,6 +1522,10 @@
     // function.
     WryBufferSlice symbol_instances = {};
     NSUInteger symbol_count = 0;
+    // The slabs that shade what lies under them (WrySymbolInstance again,
+    // with a decal reach)
+    WryBufferSlice decal_instances = {};
+    NSUInteger decal_count = 0;
     // Terrain tiles get their own buffers: same quad pipeline, but drawn
     // with the terrain palette (not the sprite atlas) bound as albedo.
     WryBufferSlice terrain_vertices = {};
@@ -1518,24 +1628,34 @@
         // once below.  Reserve a rough lower bound (one per grid cell and
         // per entity, plus the cursor); this is only a hint.
         std::vector<WrySymbolInstance> symbols;
+        std::vector<WrySymbolInstance> decals;
         size_t symbol_hint = 2
             + (size_t)(grid_bounds.b.x - grid_bounds.a.x) * (size_t)(grid_bounds.b.y - grid_bounds.a.y)
             + ptrs.size();
         symbols.reserve(symbol_hint);
+        decals.reserve(symbol_hint);
 
         // A symbol slab centred at `location`, showing the atlas cell at
         // `coordinate` (its top-left uv), its face spanned by the world
         // unit vectors `across` (image right) and `up` (image up), one
         // world unit square; as thick as the cell's stroke width, with
-        // top and bottom fillets of a quarter of it (symbol_sdf.hpp)
+        // top and bottom fillets of a quarter of it (symbol_sdf.hpp).
+        // A slab lying flat near the ground also casts its ambient
+        // occlusion on what is under it, as a decal (Shaders.metal,
+        // symbol_decal_fragment_function): its reach is where the
+        // section's far-field tail (h + t/2) t / (2 d^2) falls below
+        // two percent.  Higher slabs (the stacks) are skipped: their
+        // occlusion is a faint blur the stroke model no longer describes.
         const float texels_per_cell = (float)(_symbols.width / wry::SymbolSDF::kCells);
         auto emit_symbol = [&](simd_float4 location, simd_float4 coordinate,
                                simd_float3 across, simd_float3 up) {
             const int cx = std::clamp((int)std::lround(coordinate.x * wry::SymbolSDF::kCells), 0, wry::SymbolSDF::kCells - 1);
             const int cy = std::clamp((int)std::lround(coordinate.y * wry::SymbolSDF::kCells), 0, wry::SymbolSDF::kCells - 1);
-            // Capped: a solid tile's stroke is the whole cell, and a
-            // slab a quarter cell thick is plenty
-            const float stroke = std::clamp(_symbolStrokeWidth[(size_t)cy * wry::SymbolSDF::kCells + (size_t)cx], 2.0f, 32.0f);
+            // Capped: a solid tile's stroke is the whole cell; 20 texels
+            // keeps a ground symbol's underside (centred at z = 0.1, 12.8
+            // texels up) above the ground, where its decal can land
+            const float width = std::max(_symbolStrokeWidth[(size_t)cy * wry::SymbolSDF::kCells + (size_t)cx], 2.0f);
+            const float stroke = std::min(width, 20.0f);
             // Slab space is source texels; the cell is one world unit
             const float texel = 1.0f / texels_per_cell;
             simd_float3 normal = simd_cross(across, up);
@@ -1550,6 +1670,17 @@
             s.half_extent = make<float4>(texels_per_cell * 0.5f, texels_per_cell * 0.5f, stroke * 0.5f, 0.0f);
             s.top_radius = stroke * 0.25f;
             s.bottom_radius = stroke * 0.25f;
+            s.stroke_width = width;
+            s.decal_reach = 0.0f;
+            if (normal.z > 0.99f) {
+                // Flat: the underside's height above the ground, in texels
+                const float h = (location.z - stroke * 0.5f * texel) * texels_per_cell;
+                if (h <= 2.0f * width) {
+                    const float tail = (std::max(h, 0.25f) + stroke * 0.5f) * stroke;
+                    s.decal_reach = std::min(std::sqrt(tail / (2.0f * 0.02f)), wry::SymbolSDF::kFarRange);
+                    decals.push_back(s);
+                }
+            }
             symbols.push_back(s);
         };
 
@@ -1848,6 +1979,10 @@
         if (symbol_count)
             symbol_instances = [_ctx.arena copyBytes:symbols.data()
                                               length:symbols.size() * sizeof(WrySymbolInstance)];
+        decal_count = decals.size();
+        if (decal_count)
+            decal_instances = [_ctx.arena copyBytes:decals.data()
+                                             length:decals.size() * sizeof(WrySymbolInstance)];
 
     }
 
@@ -1994,6 +2129,11 @@
             {
                 // image-based lighting propeties can be used to rotate and
                 // blend environment maps, such as dawn-day-dusk-night
+                //
+                // The sky at its own radiance: with the sun at irradiance
+                // 1 the two give a sunlit surface about equal shares
+                // (day.png's cosine-weighted mean radiance is about 0.2,
+                // the sun's share albedo * 0.8 / pi is 0.25)
                 uniforms.ibl_scale = 1.0f;
                 uniforms.ibl_transform = matrix_identity_float3x3;
                 // TODO: resurrect blending
@@ -2088,7 +2228,8 @@
                         [encoder setFragmentBuffer:symbol_instances.buffer
                                             offset:symbol_instances.offset
                                            atIndex:AAPLBufferIndexInstanced];
-                        [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
+                        //[encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
+                        [encoder setFragmentTexture:_white atIndex:AAPLTextureIndexAlbedo];
                         [encoder setFragmentTexture:_symbolField atIndex:AAPLTextureIndexNormal];
                         [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                                     vertexStart:0
@@ -2126,6 +2267,28 @@
                 [_truck_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
                 [_container_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
 
+                // Symbol decals: now that everything that can lie under a
+                // slab is in the G-buffer, multiply the slabs' ambient
+                // occlusion into its occlusion channel.  No depth test:
+                // the box's fragments find their surface from the
+                // G-buffer's depth.
+                if (decal_count && _model->_show_symbol_decals) {
+                    [encoder setRenderPipelineState:_symbolDecalRenderPipelineState];
+                    [encoder setDepthStencilState:_ctx.disabledDepthStencilState];
+                    [encoder setVertexBuffer:decal_instances.buffer
+                                      offset:decal_instances.offset
+                                     atIndex:AAPLBufferIndexInstanced];
+                    [encoder setFragmentBuffer:decal_instances.buffer
+                                        offset:decal_instances.offset
+                                       atIndex:AAPLBufferIndexInstanced];
+                    [encoder setFragmentTexture:_symbolField atIndex:AAPLTextureIndexNormal];
+                    [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                vertexStart:0
+                                vertexCount:36
+                              instanceCount:decal_count];
+                    [encoder setDepthStencilState:_ctx.enabledDepthStencilState];
+                }
+
                 /*
                 if (show_points) {
                     [encoder setRenderPipelineState:_pointsPipelineState];
@@ -2159,6 +2322,7 @@
 
                 [encoder setRenderPipelineState:_deferredLightImageBasedRenderPipelineState];
                 [encoder setFragmentTexture:_deferredLightImageBasedTexture atIndex:AAPLTextureIndexEnvironment];
+                [encoder setFragmentTexture:_deferredLightIrradianceTexture atIndex:AAPLTextureIndexIrradiance];
                 [encoder setFragmentTexture:_deferredLightImageBasedFresnelTexture atIndex:AAPLTextureIndexFresnel];
                 [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                             vertexStart:0
@@ -2173,7 +2337,9 @@
                 // on an earlier render pass.  But, does this matter?  On which
                 // architectures?
                 
-                uniforms.radiance = simd_make_float3(1.0, 1.0, 1.0);
+                // The sun's irradiance at normal incidence (the Lambert
+                // term divides by pi); see ibl_scale above for the balance
+                uniforms.radiance = simd_make_float3(1.0f, 1.0f, 1.0f);
                 [encoder setFragmentBytes:&uniforms
                                    length:sizeof(MeshUniforms)
                                   atIndex:AAPLBufferIndexUniforms];

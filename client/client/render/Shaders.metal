@@ -1193,6 +1193,144 @@ namespace deferred {
         return out;
     }
 
+    // ---- Symbol decals: the slab's ambient occlusion on what lies under it.
+    //
+    // Treating the nearest silhouette edge as a straight stroke of the
+    // cell's width w, thickness t and fillets r, extruded without end,
+    // the fraction of the cosine-weighted sky it hides from a point h
+    // below its underside and d outside its edge is the two-dimensional
+    // configuration factor
+    //
+    //     blocked = (sin(phi2) - sin(phi1)) / 2
+    //
+    // phi1, phi2 the angles from the vertical of the tangent rays to the
+    // section.  The section is the convex hull of its corner discs, so
+    // each tangent touches a disc: the far bottom disc gives phi1
+    // everywhere on the ground, the near bottom disc gives phi2 under the
+    // stroke and the near top disc outside it (they swap directly under
+    // the wall, which is the one crease in the result), and a tangent's
+    // sine is algebraic in the disc's offset (cx, cz) and radius r:
+    //
+    //     sin(phi) = (cx * sqrt(cx^2 + cz^2 - r^2) -+ cz * r) / (cx^2 + cz^2)
+    //
+    // Exact along a stroke; at its ends, corners and junctions it is off
+    // by the order of the far-edge term.  The tail is (h + t/2) t / (2 d^2),
+    // so the instance's reach is where that drops below a threshold, and
+    // the last stroke width before the reach fades out.  Only the ambient
+    // light reads the occlusion channel it writes
+    // (image_based_lighting_fragment_function), so direct light and the
+    // shadow map are untouched.
+    //
+    // The decal is a box under the slab, from its underside to the ground,
+    // its footprint the cell plus the reach; each fragment reads the
+    // G-buffer's depth, finds the surface point in slab space, and
+    // multiplies the occlusion channel in place under the G-buffer raster
+    // order group.  No depth test: the box's own depth means nothing.
+
+    struct SymbolDecalVertexFunctionOutput {
+        float4 position_clip [[position]];
+        // The near-plane point of the pixel's ray, affine in the pixel, so
+        // interpolated without perspective
+        float4 near_world [[center_no_perspective]];
+        uint instance_id [[flat]];
+    };
+
+    // The ground plane in slab space: the point under the slab's origin
+    static float symbol_ground_z(WrySymbolInstance instance) {
+        float4 origin = instance.model_transform.columns[3];
+        float4 ground = instance.inverse_model_transform * float4(origin.xy, 0.0f, origin.w);
+        return ground.z / ground.w;
+    }
+
+    [[vertex]] SymbolDecalVertexFunctionOutput
+    symbol_decal_vertex_function(uint vertex_id [[vertex_id]],
+                                 uint instance_id [[instance_id]],
+                                 constant MeshUniforms& uniforms [[buffer(AAPLBufferIndexUniforms)]],
+                                 const device WrySymbolInstance* instances [[buffer(AAPLBufferIndexInstanced)]])
+    {
+        SymbolDecalVertexFunctionOutput out;
+        WrySymbolInstance instance = instances[instance_id];
+        float3 corner = symbol_cube_corner[symbol_cube_index[vertex_id]];
+        float z_under = -instance.half_extent.z;
+        float3 p;
+        p.xy = corner.xy * (instance.half_extent.xy + instance.decal_reach);
+        p.z = corner.z > 0.0f ? z_under : min(symbol_ground_z(instance), z_under) - 1.0f;
+        float4 position_world = instance.model_transform * float4(p, 1.0f);
+        out.position_clip = uniforms.viewprojection_transform * position_world;
+        float2 ndc = out.position_clip.xy / out.position_clip.w;
+        out.near_world = uniforms.inverse_viewprojection_transform * float4(ndc, 0.0f, 1.0f);
+        out.instance_id = instance_id;
+        return out;
+    }
+
+    // The sines of the lower (x) and upper (y) tangent angles from the
+    // origin to a disc of radius r at (cx, cz), angles from the vertical
+    static float2 symbol_tangent_sines(float cx, float cz, float r) {
+        float rho2 = cx * cx + cz * cz;
+        float s = sqrt(max(rho2 - r * r, 0.0f));
+        return float2(cx * s - cz * r, cx * s + cz * r) / rho2;
+    }
+
+    // The blocked fraction of the sky at a point h below the underside of
+    // a stroke occupying x in [-w, 0], thickness t, bottom and top fillets
+    // rb and rt, the point d outside its edge (d negative under it)
+    static float symbol_stroke_occlusion(float d, float h, float w, float t, float rb, float rt) {
+        float2 near_bottom = symbol_tangent_sines(-rb - d, h + rb, rb);
+        float2 near_top = symbol_tangent_sines(-rt - d, h + t - rt, rt);
+        float2 far_bottom = symbol_tangent_sines(-w + rb - d, h + rb, rb);
+        return 0.5f * (max(near_bottom.y, near_top.y) - far_bottom.x);
+    }
+
+    struct SymbolDecalFragmentFunctionOutput {
+        half4 material [[color(AAPLColorIndexMaterial), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+    };
+
+    [[fragment]] SymbolDecalFragmentFunctionOutput
+    symbol_decal_fragment_function(SymbolDecalVertexFunctionOutput in [[stage_in]],
+                                   FragmentFunctionOutput gbuffer,
+                                   constant MeshUniforms& uniforms [[buffer(AAPLBufferIndexUniforms)]],
+                                   const device WrySymbolInstance* instances [[buffer(AAPLBufferIndexInstanced)]],
+                                   texture2d<float> field [[texture(AAPLTextureIndexNormal)]])
+    {
+        constexpr sampler bilinear(mag_filter::linear,
+                                   min_filter::linear,
+                                   s_address::clamp_to_edge,
+                                   t_address::clamp_to_edge);
+
+        WrySymbolInstance instance = instances[in.instance_id];
+        // The surface under this pixel, from the G-buffer's depth, in slab space
+        float4 position_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2] * gbuffer.depth;
+        float4 q = instance.inverse_model_transform * position_world;
+        float3 p = q.xyz / q.w;
+        float3 half_extent = instance.half_extent.xyz;
+        float reach = instance.decal_reach;
+        float2 outside = max(abs(p.xy) - half_extent.xy, 0.0f);
+        float h = -half_extent.z - p.z;      // below the underside, texels
+        if (h <= 0.0f || p.z < symbol_ground_z(instance) - 1.0f || any(outside > reach))
+            discard_fragment();
+
+        // The planar distance to the silhouette: the fine channel within
+        // its range, the coarse one beyond, plus the way to the cell from
+        // outside it, where the sampler clamps (exact for an edge along
+        // the cell's border, an overestimate otherwise, which only fades
+        // the decal sooner)
+        float4 s = field.sample(bilinear, symbol_uv(instance, clamp(p.xy, -half_extent.xy, half_extent.xy)));
+        float fine = (s.r - 0.5f) * (2.0f * WRY_SYMBOL_SDF_RANGE);
+        float coarse = (s.a - 0.5f) * (2.0f * WRY_SYMBOL_SDF_FAR_RANGE);
+        float d = (abs(fine) < WRY_SYMBOL_SDF_RANGE - 0.5f ? fine : coarse) + length(outside);
+
+        float w = instance.stroke_width;
+        float t = 2.0f * half_extent.z;
+        float blocked = symbol_stroke_occlusion(d, max(h, 0.25f), w, t,
+                                                instance.bottom_radius, instance.top_radius);
+        float window = 1.0f - smoothstep(reach - w, reach, d);
+        float occlusion = float(gbuffer.material.r) * (1.0f - saturate(blocked) * window);
+
+        SymbolDecalFragmentFunctionOutput out;
+        out.material = half4(half(occlusion), gbuffer.material.gba);
+        return out;
+    }
+
     // we also need a shader that draws the shadows of smoke, dust, clouds onto an
     // illumination map from the light's perspective; these don't write the z-buffer
     // but they are masked by it, and are just absorption
@@ -1235,6 +1373,7 @@ namespace deferred {
                                            FragmentFunctionOutput gbuffer,
                                            constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
                                            texturecube<float> environmentTexture [[texture(AAPLTextureIndexEnvironment)]],
+                                           texturecube<float> irradianceTexture [[texture(AAPLTextureIndexIrradiance)]],
                                            texture2d<float> fresnelTexture [[texture(AAPLTextureIndexFresnel)]])
     {
         constexpr sampler bilinearSampler(mag_filter::linear,
@@ -1268,9 +1407,9 @@ namespace deferred {
         float NdotV = saturate(dot(N, V));
         float lod = log2(roughness) + 4;
         
-        float3 diffuseSample = environmentTexture.sample(trilinearSampler,
-                                                         uniforms.ibl_transform * N,
-                                                         level(4)).rgb;
+        // The sky's cosine-weighted mean radiance about N (CubeFilterIrradiance)
+        float3 diffuseSample = irradianceTexture.sample(bilinearSampler,
+                                                        uniforms.ibl_transform * N).rgb;
         
         float3 reflectedSample = environmentTexture.sample(trilinearSampler,
                                                            uniforms.ibl_transform * R,
@@ -1285,9 +1424,14 @@ namespace deferred {
         float3 F = Fresnel_Schlick_roughness(NdotV, F0, roughness);
         
         float3 kS = F;
-        float3 kD = 1.0 - kS;
+        float3 kD = (1.0 - kS) * (1.0 - metallic);
         
-        float3 diffuse = albedo * diffuseSample.rgb * M_1_PI_F;
+        // The irradiance map holds the cosine-weighted mean sky radiance
+        // L about N; a Lambertian surface under a sky of irradiance
+        // E = pi L reflects albedo / pi * E = albedo * L.  No further
+        // 1 / pi: a white ground under a uniform sky is exactly as bright
+        // as the sky.
+        float3 diffuse = albedo * diffuseSample.rgb;
         
         float3 specular = (F * fresnelSample.r + fresnelSample.g) * reflectedSample.rgb;
         
@@ -1611,6 +1755,42 @@ CubeFilterVertex(ushort i [[vertex_id]],
     
 }
 
+// The irradiance map: for each direction N, the cosine-weighted mean of
+// the environment's radiance over N's hemisphere, E(N) / pi, so that a
+// Lambertian surface reflects albedo times the texel (no further
+// normalization).  Sampled directly in the hemisphere with a cosine
+// density (Malley's method), so every sample carries equal weight.
+[[fragment]] float4
+CubeFilterIrradiance(CubeFilterVertexOut in [[stage_in]],
+                     texture2d<float> environmentMap [[ texture(AAPLTextureIndexColor) ]])
+{
+    constexpr sampler bilinearSampler(mag_filter::linear,
+                                      min_filter::linear,
+                                      s_address::repeat,
+                                      t_address::clamp_to_edge);
+
+    float3 N = normalize(in.normal.xyz);
+    float3 U = (abs(N.z) < 0.5) ? float3(0, 0, 1) : float3(0, 1, 0);
+    float3x3 T;
+    T.columns[0] = normalize(cross(N, U));
+    T.columns[1] = normalize(cross(N, T.columns[0]));
+    T.columns[2] = N;
+
+    float3 sum = 0;
+    ushort M = 4096;
+    for (ushort i = 0; i != M; ++i) {
+        float2 X = sequence_Hammersley(i, M);
+        float r = sqrt(X.x);
+        float phi = 2.0f * M_PI_F * X.y;
+        float3 D = T * float3(r * cos(phi), r * sin(phi), sqrt(1.0f - X.x));
+        float u = atan2(D.y, D.x) * 0.5 * M_1_PI_F;
+        float v = acos(D.z) * M_1_PI_F;
+        float4 environmentalSample = environmentMap.sample(bilinearSampler, float2(u, v));
+        sum += select(environmentalSample.rgb, float3(0), isinf(environmentalSample.rgb)) / M;
+    }
+    return float4(sum, 1.0f);
+}
+
 [[fragment]] float4
 CubeFilterAccumulate3(CubeFilterVertexOut in [[stage_in]],
                       constant CubeFilterUniforms& uniforms [[ buffer(AAPLBufferIndexUniforms)]],
@@ -1636,20 +1816,29 @@ CubeFilterAccumulate3(CubeFilterVertexOut in [[stage_in]],
     T.columns[2] = N;
     
     
+    // Karis's prefilter: with V = N, each sample's reflected direction is
+    // weighted by N.L and the sum normalized by the weights, which drops
+    // the directions below the surface that wide lobes would otherwise
+    // fold in and approximates the missing geometry and cosine terms of
+    // the split-sum's first factor
     float3 sum = 0;
+    float weight = 0;
     ushort M = 16384;
     for (ushort i = 0; i != M; ++i) {
         float2 X = sequence_Hammersley(i, M);
         float3 H = T * sample_Trowbridge_Reitz(X, alpha2);
         float3 R = reflect(-V, H);
+        float NdotL = dot(N, R);
+        if (NdotL <= 0.0f)
+            continue;
         float phi = atan2(R.y, R.x) * 0.5 * M_1_PI_F;
         float theta = acos(R.z) * M_1_PI_F;
-        // float4 environmentalSample = environmentMap.sample(bilinearSampler, R);
         float4 environmentalSample = environmentMap.sample(bilinearSampler, float2(phi, theta));
-        sum += select(environmentalSample.rgb, float3(0), isinf(environmentalSample.rgb)) / M;
+        sum += select(environmentalSample.rgb, float3(0), isinf(environmentalSample.rgb)) * NdotL;
+        weight += NdotL;
     }
     
-    return float4(sum, 1.0f);
+    return float4(sum / max(weight, 1e-6f), 1.0f);
 }
 
 

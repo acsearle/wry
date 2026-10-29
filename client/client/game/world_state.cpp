@@ -1321,6 +1321,13 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
+            "toggle-symbol-decals", "Show or hide the symbols' ambient-occlusion decals (debug)", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                return toggle(ws, ws._show_symbol_decals, "symbol decals");
+            })));
+
+        registry.add(make_command<Ctx>(
             "toggle-jacobians", "Show or hide Jacobians (debug)", Category::local,
             std::tuple<>{},
             with_world([](WorldState& ws) {

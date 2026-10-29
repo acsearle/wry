@@ -80,6 +80,7 @@ enum AAPLTextureIndex {
     AAPLTextureIndexOcclusion,
     AAPLTextureIndexRoughness,
     AAPLTextureIndexShadow,
+    AAPLTextureIndexIrradiance,
 };
 
 
@@ -254,7 +255,10 @@ typedef struct
 
 // Source texels spanned by the field's distance channel; must agree with
 // SymbolSDF::kRange
+// The field's distance channels, in source texels: the fine one (r) for
+// the slab's walls, the coarse one (a) for the decal's reach
 #define WRY_SYMBOL_SDF_RANGE 16.0f
+#define WRY_SYMBOL_SDF_FAR_RANGE 128.0f
 
 typedef struct
 {
@@ -264,7 +268,8 @@ typedef struct
     simd_float4 half_extent;    // texels: x, y across the cell, z the half thickness; w unused
     float top_radius;           // fillet radii, texels; each below half the
     float bottom_radius;        // stroke width, their sum below the thickness
-    float _pad[2];
+    float stroke_width;         // texels: the cell's, the decal's far edge
+    float decal_reach;          // texels beyond the silhouette the ambient-occlusion decal fades out by; 0 for none
 } WrySymbolInstance;
 
 

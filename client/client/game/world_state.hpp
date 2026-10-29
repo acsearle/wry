@@ -73,6 +73,8 @@ namespace wry {
         bool _show_jacobian = false;
         bool _show_points = false;
         bool _show_wireframe = false;
+        // The symbol slabs' ambient-occlusion decals (toggle-symbol-decals)
+        bool _show_symbol_decals = true;
 
 
         // user interface state
