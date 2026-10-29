@@ -268,7 +268,7 @@ namespace wry::gui {
         return s;
     }
 
-    std::optional<KeyCombo> combo_from_string(StringView v) {
+    std::optional<KeyCombo> parse_combo(StringView v) {
         KeyCombo c;
         StringView u{v};
         bool progressed = true;
@@ -286,7 +286,12 @@ namespace wry::gui {
         if (!k)
             return std::nullopt;
         c.key = *k;
-        if (!combo_is_bindable(c))
+        return c;
+    }
+
+    std::optional<KeyCombo> combo_from_string(StringView v) {
+        std::optional<KeyCombo> c = parse_combo(v);
+        if (c && !combo_is_bindable(*c))
             return std::nullopt;
         return c;
     }
@@ -439,6 +444,18 @@ namespace wry::gui {
         assert(!combo_from_string(StringView("Escape")));
         assert(!combo_from_string(StringView("Shift+Escape")));
         assert(!combo_from_string(StringView("Bogus")));
+
+        // As a keystroke, the reserved key parses; the unnameable still
+        // don't.
+        {
+            std::optional<KeyCombo> c = parse_combo(StringView("Escape"));
+            assert(c && c->key == key::Escape && c->mods == 0);
+            assert(string_from_combo(*c) == StringView("Escape"));
+            assert(!combo_is_bindable(*c));
+        }
+        assert(parse_combo(StringView("Shift+R")) == combo_from_string(StringView("Shift+R")));
+        assert(!parse_combo(StringView("Bogus")));
+        assert(!parse_combo(StringView("Hyper+R")));
 
         // combo_from_event masks Caps / Fn out.
         {

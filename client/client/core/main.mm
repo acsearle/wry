@@ -6,6 +6,7 @@
 //
 
 #include <cinttypes>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 #include <thread>
@@ -83,6 +84,21 @@ namespace {
         }
     }
 
+    // `quit fast` (core/docs/commands.md section 7): the host's loop has
+    // ended and the control socket has flushed its replies and removed its
+    // file, so nothing remains that a client can observe.  Skip the drain
+    // and the joins -- tens of seconds under the sanitizers -- and die now.
+    // std::_Exit runs no destructors and no atexit handlers; the GUI
+    // window, already hidden, goes with the process
+    void exit_fast_if_asked(wry::GuiContext const& gui) {
+        if (!gui.quit_fast)
+            return;
+        printf("main is exiting fast\n");
+        fflush(stdout);
+        fflush(stderr);
+        std::_Exit(EXIT_SUCCESS);
+    }
+
     // The receiver for the process scope's join on the GUI path: completion
     // arrives on a worker; it wakes main's run loop with an event and sets
     // `done`.  The join's value is its cancelled-child count, not needed
@@ -128,7 +144,8 @@ int main(int argc, const char** argv) {
     //       No window, but the Metal scenes rendering to an offscreen
     //       drawable, so screenshots work; otherwise as --headless.
     //
-    //   --control-socket [PATH], --host [PORT], --join ADDRESS:PORT
+    //   --control-socket [PATH], --host [PORT], --join ADDRESS:PORT,
+    //   --skip-splash
     //       (read by GuiContext::configure_from_arguments)
     //
     // TODO: paths, immediate load savegame, etc.
@@ -234,6 +251,7 @@ int main(int argc, const char** argv) {
             // loop finishes in the drain below) and remove its file
             if (gui->control_socket)
                 (void) wry::execution::sync_wait(gui->control_socket->shutdown(std::chrono::seconds(1)));
+            exit_fast_if_asked(*gui);
             // The host's WorldState dies here, pinned: its Root destructors
             // shade, and its session ends gracefully under sync_wait, as a
             // `leave` does
@@ -303,6 +321,7 @@ int main(int argc, const char** argv) {
             // No more commands: shut the control socket down (its accept
             // loop finishes in the drain below) and remove its file.
             [delegate shutdownControlSocket];
+            exit_fast_if_asked(*gui);
             printf("main is joining background work\n");
             // Shutdown has begun: request the root token, so any task parked
             // in the reactor (a server's accept, a timed wait) unwinds now

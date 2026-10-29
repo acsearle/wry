@@ -1,6 +1,12 @@
 # Todo
 
 List of one-line reminders of things to think and do
+- HOLD (2026-10-29, Antony): the opcode palette is old, retrofitted as a widget; invisible to `widgets`/`press` (coordinates or `hold` reach it); make it a proper widget later
+- HOLD (2026-10-29): the session commands (new-game, save, load, list-saves) are still absent from the registry; substantive, a later turn
+- IDEA (2026-10-29): the in-game menu has no quit-to-main-menu (only to desktop); screenshot could grow crop / per-widget / off-resolution options (today cropping is the consumer's job on the PNG it writes)
+- DONE 2026-10-28 (915ef0e): mutation-in-assert hygiene, vacuous in Release (no crash, coverage silently lost), grep-clean now: gui_context.cpp pop_front/issue inside assert (lines 1298-1375), relay.cpp kick_reason x9, try_get out-params in player/host/save/persistent_map, persistent_map erase, command.cpp run("greet"); hoist as in 67904b6
+- DONE 2026-10-28 (97457b6): the driven-mode fatal-signal handler took SIGSEGV/SIGBUS as well, only where their disposition is still the default (a sanitizer's handler is kept); a stack overflow still escapes it
+- NUISANCE (2026-10-27): every headless_host test run leaves a session-*.wrylog in Desktop/assets/saves (ten from one afternoon of suite runs); point test sessions at a temp dir, or sweep them
 - LATER (2026-10-11): _symbols atlas cells abut; box-filtered mips don't bleed (power-of-two cells), but a wider mip kernel or bilinear taps at deep levels would -- pad/gutter the atlas cells (tools/make_assets.py) before adopting a custom Gaussian mip kernel
 - CHECK (2026-10-10): SpriteAtlas::commit rotates a ring of 4 shared MTLBuffers with no fence/semaphore, and the menu scene commits twice per frame; with up to 3 drawables in flight the CPU may overwrite a buffer the GPU is still reading.  Pre-existing, unobserved; fix with a frame-in-flight semaphore or a per-commit offset into a per-frame buffer
   - DESIGN (from the 2026-07-22 "Big world stress test" session, transcript 4d922ba7): prefer an MTLSharedEvent-stamped pool polled at acquire over addCompletedHandler -- stamp each buffer with the frame's event value, signal once per command buffer, reuse anything stamped <= signaledValue (wait or grow otherwise).  Maps 1:1 to Vulkan timeline semaphores / D3D12 fences; no Metal-owned callback thread.  Same arena serves metal4_migration.md stage 2 (set*Bytes replacement)

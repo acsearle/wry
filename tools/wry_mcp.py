@@ -35,7 +35,7 @@ GENERIC_TOOL = {
     "name": "wry_command",
     "description": (
         "Run one wry command line, e.g. `step 10`, `write Coordinate(3, 4) "
-        "OPCODE::SWAP`, `press \"NEW GAME\"`.  `help` lists commands; "
+        "OPCODE::SWAP`, `press \"New Game\"`.  `help` lists commands; "
         "`help NAME` describes one.  Arguments are literals: integers, "
         "\"quoted strings\", OPCODE::SWAP, Coordinate(12, -34), EntityID(7); "
         "a bare word is read as the parameter's type expects."),

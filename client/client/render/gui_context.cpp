@@ -29,7 +29,9 @@ namespace wry::command {
 
     // Key combos, as the keymap spells them: KeyCombo("Shift+R"); a bare
     // word or a string where a KeyCombo is expected (`key Shift+R`; a
-    // combo containing a delimiter must be quoted, `key "="`).
+    // combo containing a delimiter must be quoted, `key "="`).  Read as a
+    // keystroke, not a binding: any nameable key, the reserved Escape
+    // included, since what it does is for the GUI to decide.
     template<> struct Type<gui::KeyCombo> {
         static constexpr const char* name = "KeyCombo";
         static constexpr const char* example = "Shift+R";
@@ -45,7 +47,7 @@ namespace wry::command {
             } else {
                 text.reset(node.text);
             }
-            if (auto combo = gui::combo_from_string(text))
+            if (auto combo = gui::parse_combo(text))
                 return *combo;
             String message("unknown key combo ");
             message.append(text);
@@ -596,6 +598,7 @@ namespace wry {
                 port = (uint16_t)std::atoi(given);
             host_port = port;
         }
+        skip_splash = find("--skip-splash") >= 0;
         if (int i = find("--join"); i >= 0) {
             if (const char* given = (i + 1 < argc) ? argv[i + 1] : nullptr) {
                 std::string where = given;
@@ -955,11 +958,19 @@ namespace wry {
             }));
 
         registry.add(make_command<Ctx>(
-            "quit", "Quit the game, as QUIT TO DESKTOP does", Category::session,
-            std::tuple<>{},
-            [](Ctx& c) {
+            "quit", "Quit the game, as Quit To Desktop does; `quit fast` exits "
+            "the process as soon as this reply is sent, skipping the shutdown drain",
+            Category::session,
+            std::tuple{
+                Param<Ctx, String>{"how", "clean or fast", String("clean")},
+            },
+            [](Ctx& c, String const& how) {
+                const bool fast = how == StringView("fast");
+                if (!fast && how != StringView("clean"))
+                    return Reply::error(String("how must be clean or fast"));
                 if (!c.gui.on_quit)
                     return Reply::error(String("this host cannot quit"));
+                c.gui.quit_fast = fast;
                 c.gui.on_quit();
                 return Reply::ok();
             }));
@@ -1120,15 +1131,35 @@ namespace wry {
                         out.push_back(' ');
                         command::print_quoted(out, w.label());
                     }
+                    // The centre (where `press` clicks) and the rect, in
+                    // points; then the state words.
                     rect<float> r = w.bounds();
                     float2 centre = (r.a + r.b) * 0.5f;
-                    if (auto pt = pixels_to_points(c.gui, centre); pt && contains(clip, centre)) {
+                    auto a = pixels_to_points(c.gui, r.a);
+                    auto b = pixels_to_points(c.gui, r.b);
+                    const bool showing = contains(clip, centre);
+                    if (a && b && showing) {
                         out.append(StringView(" at "));
-                        append_number(out, std::round(pt->x));
+                        append_number(out, std::round((a->x + b->x) * 0.5f));
                         out.push_back(',');
-                        append_number(out, std::round(pt->y));
-                    } else if (!contains(clip, centre)) {
+                        append_number(out, std::round((a->y + b->y) * 0.5f));
+                    }
+                    if (a && b) {
+                        out.append(StringView(" rect "));
+                        append_number(out, a->x);
+                        out.push_back(',');
+                        append_number(out, a->y);
+                        out.push_back(' ');
+                        append_number(out, b->x);
+                        out.push_back(',');
+                        append_number(out, b->y);
+                    }
+                    if (!showing)
                         out.append(StringView(" (hidden)"));
+                    String state = w.state();
+                    if (!state.empty()) {
+                        out.push_back(' ');
+                        out.append(state);
                     }
                 });
                 if (out.empty())
@@ -1368,12 +1399,19 @@ namespace wry {
             auto listing = gc.issue(Origin::console, "widgets");
             assert(listing.reply.status == Reply::OK);
             {
-                StringView text = listing.reply.text;
-                bool mentions = false;
-                for (auto p = text.chars.begin(); p + 11 <= text.chars.end(); ++p)
-                    if (std::memcmp(p, "Button \"OK\"", 11) == 0)
-                        mentions = true;
-                assert(mentions);
+                // The label, then the rect in points (the pixel rect
+                // halved) and no state words on an untouched button.
+                auto mentions = [&](const char* needle) {
+                    StringView text = listing.reply.text;
+                    const size_t n = std::strlen(needle);
+                    for (auto p = text.chars.begin(); p + n <= text.chars.end(); ++p)
+                        if (std::memcmp(p, needle, n) == 0)
+                            return true;
+                    return false;
+                };
+                assert(mentions("Button \"OK\""));
+                assert(mentions(" rect 0,0 "));
+                assert(!mentions("hover"));
             }
 
             gc.events.clear();
@@ -1392,6 +1430,30 @@ namespace wry {
             assert(cancel.reply.status == Reply::ERROR);
             (void) cancel;
             gc.scene_widgets = nullptr;
+        }
+
+        // `key` reads a keystroke, so the reserved Escape injects (the GUI
+        // decides what it does); `quit fast` asks the host for the quick
+        // exit.
+        {
+            gc.events.clear();
+            auto esc = gc.issue(Origin::console, "key Escape");
+            assert(esc.reply.status == Reply::OK);
+            (void) esc;
+            assert(gc.events.size() == 2);
+            assert(gc.events.pop_front().key == gui::key::Escape);
+            gc.events.clear();
+
+            bool quit_called = false;
+            gc.on_quit = [&quit_called] { quit_called = true; };
+            auto bad = gc.issue(Origin::console, "quit sideways");
+            assert(bad.reply.status == Reply::ERROR && !quit_called);
+            (void) bad;
+            auto fast = gc.issue(Origin::console, "quit fast");
+            assert(fast.reply.status == Reply::OK && quit_called && gc.quit_fast);
+            (void) fast;
+            gc.quit_fast = false;
+            gc.on_quit = nullptr;
         }
 
         // Screenshot: the host fills the request; the pending reply writes

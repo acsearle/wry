@@ -205,8 +205,8 @@ namespace wry {
         void _service_control_socket();
 
         // The launch options every host reads (core/main.mm passes argv):
-        // --control-socket [PATH], --host [PORT], --join ADDRESS:PORT, and
-        // settings.json loaded (or first-run installed) from the
+        // --control-socket [PATH], --host [PORT], --join ADDRESS:PORT,
+        // --skip-splash, and settings.json loaded (or first-run installed) from the
         // settings paths, warnings to the log.  After `scope` is set and
         // the cwd is the assets directory
         void configure_from_arguments(int argc, const char* const* argv);
@@ -229,8 +229,18 @@ namespace wry {
         bool idle() const;
 
         // Set by the host: what the `quit` command does (end the app the way
-        // QUIT TO DESKTOP does).
+        // Quit To Desktop does).
         std::function<void()> on_quit;
+        // `quit fast`: the host, once its loop has ended and the socket has
+        // flushed its replies, exits the process at once (std::_Exit)
+        // instead of draining the scope and joining the threads, which
+        // under the sanitizers takes tens of seconds a test turnover need
+        // not pay.
+        bool quit_fast = false;
+
+        // --skip-splash: boot straight to the main menu.  The splash is
+        // notionally cover for asset loading, today a fixed delay.
+        bool skip_splash = false;
 
         // Abandon `source`'s pending invocation (completing it CANCELLED)
         // and drop the lines queued behind it.

@@ -138,9 +138,16 @@ namespace wry::gui {
     // then the key name.  Empty for unnameable keys.
     String string_from_combo(KeyCombo);
 
-    // Parses the serialized / displayed form.  Case-insensitive, any
-    // modifier order, aliases accepted (Control, Ctl; Option, Opt; Command,
-    // Super, Meta, Win).  nullopt on unknown modifier or key name.
+    // Parses the serialized / displayed form as a keystroke: any nameable
+    // key, Escape included.  Case-insensitive, any modifier order, aliases
+    // accepted (Control, Ctl; Option, Opt; Command, Super, Meta, Win).
+    // nullopt on unknown modifier or key name.  What the `key` command
+    // reads: it models a keystroke, which then meets the same reserved-key
+    // logic a physical one does.
+    std::optional<KeyCombo> parse_combo(StringView);
+
+    // parse_combo, additionally requiring combo_is_bindable: the form a
+    // binding is read from (settings.json, the default table).
     std::optional<KeyCombo> combo_from_string(StringView);
 
     // ----------------------------------------------------------------

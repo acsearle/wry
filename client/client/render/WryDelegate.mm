@@ -239,9 +239,12 @@ namespace {
                                               gui:_gui
                                              next:makeWorld
                                              quit:quit];
-    _scene = [[WrySplashScene alloc] initWithContext:_ctx
-                                     durationSeconds:2.5
-                                                next:menu];
+    if (_gui->skip_splash)
+        _scene = menu;
+    else
+        _scene = [[WrySplashScene alloc] initWithContext:_ctx
+                                         durationSeconds:2.5
+                                                    next:menu];
     // The `quit` command ends the app the same way.
     _gui->on_quit = [quit] { quit(); };
 }

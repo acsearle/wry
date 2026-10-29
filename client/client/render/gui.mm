@@ -514,6 +514,19 @@ namespace wry {
             return bg;
         }
 
+        String Button::state() const {
+            String s;
+            auto word = [&s](const char* w) {
+                if (!s.empty())
+                    s.push_back(' ');
+                s.append(StringView(w));
+            };
+            if (_selected) word("selected");
+            if (_hover)    word("hover");
+            if (_pressed)  word("pressed");
+            return s;
+        }
+
         void Button::paint(Painter& p) {
             if (!p.atlas) return;
 
@@ -861,6 +874,20 @@ namespace wry {
             _offset = o;
             clamp_offset();
             arrange_child();
+        }
+
+        // "scrolled OFFSET/MAX" in pixels, only when there is anything to
+        // scroll.
+        String ScrollView::state() const {
+            String s;
+            const float max_off = std::max(0.0f, _content_h - view_height());
+            if (max_off > 0.0f) {
+                char buffer[64];
+                std::snprintf(buffer, sizeof(buffer), "scrolled %g/%g",
+                              (double)_offset, (double)max_off);
+                s.append(StringView(buffer));
+            }
+            return s;
         }
 
         void ScrollView::scroll_into_view(rect<float> target) {

@@ -379,10 +379,13 @@ client ids, which is what the desync tooling should show.
 
 Illustrative, not exhaustive; arguments in `[]` have defaults.
 
-- **introspection** (local): `help [command]`, `widgets`, `log [lines]`,
-  `get Coordinate`, `state-hash`, `history [lines]`, `session` (this
-  process's place in the game: hosting or joined, its client id, the
-  steps applied, the clock).
+- **introspection** (local): `help [command]`, `widgets` (every widget
+  showing, topmost tree first: kind, label, centre and rect in points,
+  state words such as a button's `selected hover pressed` or a scroll
+  view's `scrolled 120/480`), `log [lines]`, `get Coordinate`,
+  `state-hash`, `history [lines]`, `session` (this process's place in
+  the game: hosting or joined, its client id, the steps applied, the
+  clock).
 - **view** (local): today's keymap actions -- `rotate`,
   `reverse-rotate`, `flip-horizontal`, `flip-vertical`, `toggle-map`,
   `toggle-console`, `toggle-jacobians`, `toggle-points`,
@@ -393,6 +396,11 @@ Illustrative, not exhaustive; arguments in `[]` have defaults.
   label).  Positions are in view points, top-left origin -- the
   `gui::Event` convention -- so injected events go through the same
   point-to-pixel conversion, and the same coalescing, as real ones.
+  `key` models a keystroke, not a binding: any nameable key is
+  accepted, the reserved Escape included, and what it does (open the
+  menu, cancel a capture, nothing) is decided where a physical
+  keystroke's would be.  A post-mapped keystroke is not a thing: combos
+  map to commands, so issue the command.
 
 **Continuous input is coalesced, and is never a command.**  Mouse
 moves, scrolls and trackpad gestures arrive at platform- (and even
@@ -410,12 +418,16 @@ only as a resolved argument (`pipette Coordinate(3, 4)`).  Blender
 draws the same line -- `MOUSEMOVE` and trackpad events feed keymaps
 and modal operators but never appear in the Info log, which records a
 drag as its result (`transform.translate(value=...)`), not its path.
-- **capture** (local): `screenshot [region]`.
+- **capture** (local): `screenshot [path]` (the next presented frame as
+  a PNG, replied with its path; cropping is the consumer's job).
 - **world**: `write Coordinate Term` (what a click with a full hand
   does), `erase Coordinate` (right click).
 - **clock**: `pause`, `resume`, `step [n]`, plus local `frame [n]`.
 - **session**: `new-game`, `save [name]`, `load name`, `list-saves`,
-  `quit`; and the multiplayer trio `host [port]` (listen for players;
+  `quit [clean|fast]` (`fast` exits the process the moment the reply
+  has been flushed, skipping the shutdown drain and joins -- tens of
+  seconds under the sanitizers -- for quick test turnover); and the
+  multiplayer trio `host [port]` (listen for players;
   replies with the bound port, 0 picking one), `join address:port`
   (abandon the local game; the host's client donates its world as of
   the step we arrive at, and the stream follows from there), `leave`
@@ -487,7 +499,8 @@ frame exactly like real ones.
 `--control-socket [PATH]` (`open client.app --args --control-socket`);
 PATH defaults to `$TMPDIR/wry-control.sock`, which is also where the
 tools look unless `$WRY_CONTROL_SOCKET` says otherwise.  The file is
-created mode 0600 and removed at exit.
+created mode 0600 and removed at exit.  `--skip-splash` boots straight
+to the main menu, so a driven run need not wait out the splash.
 
 Requests are lines: a JSON object holding a command line or a
 structured invocation, or a bare command line.  An `id` (number or
@@ -648,7 +661,7 @@ which is why the smoke test starts one.
 
 **`tools/wry_smoke.py`** is the end-to-end test: it launches the newest
 Debug build offscreen on a private socket, plays a scripted session
-(menu, NEW GAME, write, step, screenshot), checks every reply, quits,
+(menu, New Game, write, step, screenshot), checks every reply, quits,
 and requires exit status 0 -- the whole game under the scheme's
 sanitizers, driven only through the command interface.
 `tools/wry_net_smoke.py` does the same for two headless processes over

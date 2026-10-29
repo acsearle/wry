@@ -145,11 +145,14 @@ namespace wry::gui {
         // Introspection, for the `widgets` and `press` commands
         // (core/docs/commands.md section 7): what the widget is, its text
         // if it shows one, the rect it was last arranged into (drawable
-        // pixels), whether it clips its children to that rect, and its
-        // children.  The defaults describe an anonymous childless leaf.
+        // pixels), its transient state as space-separated words (a
+        // Button's "selected hover pressed", a ScrollView's offset), whether
+        // it clips its children to that rect, and its children.  The
+        // defaults describe an anonymous stateless childless leaf.
         virtual const char* kind() const { return "Widget"; }
         virtual StringView label() const { return {}; }
         virtual rect<float> bounds() const { return {}; }
+        virtual String state() const { return {}; }
         virtual bool clips_children() const { return false; }
         using ChildVisitor = std::function<void(Widget const&)>;
         virtual void for_each_child(ChildVisitor const&) const {}
@@ -209,6 +212,7 @@ namespace wry::gui {
         const char* kind() const override { return "Button"; }
         StringView label() const override { return _label; }
         rect<float> bounds() const override { return _rect; }
+        String state() const override;
 
         // Padding constants are public so containers that need to size a
         // ScrollView to "N + 0.5 rows" can ask for the row height without
@@ -490,6 +494,7 @@ namespace wry::gui {
 
         const char* kind() const override { return "ScrollView"; }
         rect<float> bounds() const override { return _rect; }
+        String state() const override;
         bool clips_children() const override { return true; }
         void for_each_child(ChildVisitor const& f) const override {
             if (_child)
