@@ -999,12 +999,10 @@ namespace deferred {
         return out;
     }
 
-    // The atlas uv of a slab-space point
+    // The atlas uv of a slab-space point (texels about the cell's centre;
+    // slab y is up, image y is down)
     static float2 symbol_uv(WrySymbolInstance instance, float2 p) {
-        float2 half_extent = instance.half_extent.xy;
-        // slab y is up, image y is down
-        float2 unit = float2(p.x + half_extent.x, half_extent.y - p.y) / (2.0f * half_extent);
-        return instance.cell.xy + unit * instance.cell.z;
+        return instance.cell.xy + 0.5f * instance.cell.z + float2(p.x, -p.y) * instance.cell.w;
     }
 
     // The field at a slab-space point: planar distance (texels) and the
@@ -1303,8 +1301,9 @@ namespace deferred {
         float4 q = instance.inverse_model_transform * position_world;
         float3 p = q.xyz / q.w;
         float3 half_extent = instance.half_extent.xyz;
+        float cell_half = instance.half_extent.w;
         float reach = instance.decal_reach;
-        float2 outside = max(abs(p.xy) - half_extent.xy, 0.0f);
+        float2 outside = max(abs(p.xy) - cell_half, 0.0f);
         float h = -half_extent.z - p.z;      // below the underside, texels
         if (h <= 0.0f || p.z < symbol_ground_z(instance) - 1.0f || any(outside > reach))
             discard_fragment();
@@ -1314,7 +1313,7 @@ namespace deferred {
         // outside it, where the sampler clamps (exact for an edge along
         // the cell's border, an overestimate otherwise, which only fades
         // the decal sooner)
-        float4 s = field.sample(bilinear, symbol_uv(instance, clamp(p.xy, -half_extent.xy, half_extent.xy)));
+        float4 s = field.sample(bilinear, symbol_uv(instance, clamp(p.xy, -cell_half, cell_half)));
         float fine = (s.r - 0.5f) * (2.0f * WRY_SYMBOL_SDF_RANGE);
         float coarse = (s.a - 0.5f) * (2.0f * WRY_SYMBOL_SDF_FAR_RANGE);
         float d = (abs(fine) < WRY_SYMBOL_SDF_RANGE - 0.5f ? fine : coarse) + length(outside);

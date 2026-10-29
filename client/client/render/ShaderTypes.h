@@ -264,8 +264,8 @@ typedef struct
 {
     matrix_float4x4 model_transform;
     matrix_float4x4 inverse_model_transform;
-    simd_float4 cell;           // xy: the cell's top-left atlas uv; z: the cell's uv extent; w unused
-    simd_float4 half_extent;    // texels: x, y across the cell, z the half thickness; w unused
+    simd_float4 cell;           // xy: the cell's top-left atlas uv; z: the cell's uv extent; w: uv per texel
+    simd_float4 half_extent;    // texels: xy the cuboid's half extents about the cell's centre, z the half thickness, w the cell's half extent
     float top_radius;           // fillet radii, texels; each below half the
     float bottom_radius;        // stroke width, their sum below the thickness
     float stroke_width;         // texels: the cell's, the decal's far edge

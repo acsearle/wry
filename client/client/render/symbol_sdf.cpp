@@ -305,7 +305,7 @@ namespace wry {
     SymbolSDF symbol_sdf_for_atlas(std::filesystem::path const& atlas_path) {
         constexpr int kCells = SymbolSDF::kCells;
         std::filesystem::path cache_path = atlas_path;
-        cache_path.replace_filename(atlas_path.stem().string() + "_field_v2.png");
+        cache_path.replace_filename(atlas_path.stem().string() + "_field_v3.png");
         std::error_code ec;
         const bool fresh = std::filesystem::exists(cache_path, ec)
             && std::filesystem::last_write_time(cache_path, ec) >= std::filesystem::last_write_time(atlas_path, ec)

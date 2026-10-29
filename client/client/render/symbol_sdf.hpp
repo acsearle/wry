@@ -5,7 +5,7 @@
 //  Created by Antony Searle on 2026-10-29.
 //
 //  The signed distance field beside the symbol atlas (assets.png): one
-//  texture of the same cell layout (32 x 32 cells), each texel holding the
+//  texture of the same cell layout (kCells x kCells cells), each texel holding the
 //  signed distance to the silhouette of the symbol in its cell and the
 //  unit gradient of that distance, so a shader can thicken the flat symbol
 //  into a filleted slab (Shaders.metal, deferred::symbol_fragment_function)
@@ -14,7 +14,10 @@
 //  The silhouette is the atlas's alpha channel at the 0.5 contour, for
 //  every cell alike; multi-colour symbols thicken by their outermost edge.
 //  Distances are measured in source (atlas) texels, so the cell is
-//  always 128 texels across whatever resolution the field is stored at;
+//  always 256 texels across whatever resolution the field is stored at;
+//  the glyph's own frame is the central half of its cell and the margin
+//  around it is empty by construction (tools/make_assets.py), so the
+//  distances stay valid for several stroke widths beyond every glyph;
 //  the field is built from an exact Euclidean distance transform of the
 //  full-resolution silhouette, then box-downsampled, so a half-resolution
 //  field carries sub-texel edge placement.
@@ -64,14 +67,15 @@ namespace wry {
     };
 
     struct SymbolSDF {
-        static constexpr int kCells = 32;
+        // The atlas is kCells x kCells cells (tools/make_assets.py GRID)
+        static constexpr int kCells = 16;
         // Source texels represented by the distance channels; must agree
         // with WRY_SYMBOL_SDF_RANGE / WRY_SYMBOL_SDF_FAR_RANGE in
         // ShaderTypes.h
         static constexpr float kRange = 16.0f;
         static constexpr float kFarRange = 128.0f;
 
-        int source_cell = 0;            // source texels per cell (128)
+        int source_cell = 0;            // source texels per cell (256)
         int cell = 0;                   // field texels per cell
         matrix<SymbolSDFTexel> image;   // kCells * cell square
         // Per cell, row-major (cell y, cell x): the stroke width in source

@@ -152,12 +152,14 @@
     wry::Table<ulong, simd_float4> _opcode_to_coordinate;
 
     // Non-opcode glyph coordinates captured from assets.json (whose grid
-    // is aligned 1:1 with the atlas art): the digit row origin ('0',
-    // with '1'..'F' contiguous to its right) and the boolean glyphs.
+    // is aligned 1:1 with the atlas art, SymbolSDF::kCells cells a side):
+    // the digit row origin ('0', with '1'..'F' contiguous to its right),
+    // the boolean glyphs, the empty-cell dot and the cursor's border.
     simd_float4 _digit_zero_coordinate;
     simd_float4 _true_coordinate;
     simd_float4 _false_coordinate;
     simd_float4 _cdot_coordinate;
+    simd_float4 _border_coordinate;
     
     WryMesh* _truck_mesh;
     WryMesh* _mine_mesh;
@@ -815,10 +817,12 @@
             // Defaults matching the shipped atlas layout, overwritten by
             // the by-name capture below; a json missing the names
             // degrades to these rather than rendering garbage
-            _digit_zero_coordinate = make<float4>(0.0f / 32.0f, 13.0f / 32.0f, 0.0f, 1.0f);
-            _true_coordinate       = make<float4>(0.0f / 32.0f, 14.0f / 32.0f, 0.0f, 1.0f);
-            _false_coordinate      = make<float4>(1.0f / 32.0f, 14.0f / 32.0f, 0.0f, 1.0f);
-            _cdot_coordinate       = make<float4>(0.0f / 32.0f,  1.0f / 32.0f, 0.0f, 1.0f);
+            constexpr float kCells = (float)wry::SymbolSDF::kCells;
+            _digit_zero_coordinate = make<float4>(0.0f / kCells, 10.0f / kCells, 0.0f, 1.0f);
+            _true_coordinate       = make<float4>(0.0f / kCells, 11.0f / kCells, 0.0f, 1.0f);
+            _false_coordinate      = make<float4>(1.0f / kCells, 11.0f / kCells, 0.0f, 1.0f);
+            _cdot_coordinate       = make<float4>(0.0f / kCells,  2.0f / kCells, 0.0f, 1.0f);
+            _border_coordinate     = make<float4>(0.0f / kCells,  3.0f / kCells, 0.0f, 1.0f);
 
             try {
                 auto x = json::from_file<ContiguousDeque<ContiguousDeque<String>>>("assets.json");
@@ -827,7 +831,7 @@
                     ulong j = 0;
                     for (const String& z : y) {
                         // printf("loading image for %.*s\n", (int) z.chars.size(), (const char*) z.chars.data());
-                        simd_float4 coordinate = make<float4>(j / 32.0f, i / 32.0f, 0.0f, 1.0f);
+                        simd_float4 coordinate = make<float4>(j / kCells, i / kCells, 0.0f, 1.0f);
                         // auto h = _name_to_opcode._inner._hasher.get_hash(z);
                         // printf("hash \"%.*s\" -> %llu\n", (int) z.chars.size(), (const char*) z.chars.data(), h);
                         auto p = _name_to_opcode.find(z);
@@ -845,6 +849,8 @@
                                 _false_coordinate = coordinate;
                             else if (sv == "cdot")
                                 _cdot_coordinate = coordinate;
+                            else if (sv == "border2")
+                                _border_coordinate = coordinate;
                             // Lowercase opcode-art names: wired into the
                             // opcode coordinate table like any glyph, but
                             // routed through this branch so the art is
@@ -860,12 +866,12 @@
                             _opcode_to_coordinate[p->second] = coordinate;
                             
                             
-                            // One atlas cell.  The atlas is a 32 x 32
-                            // grid at whatever resolution it ships in
-                            // (assets.png is 4096 px, so 128 px cells);
+                            // One atlas cell.  The atlas is a kCells x
+                            // kCells grid at whatever resolution it ships
+                            // in (assets.png is 4096 px, so 256 px cells);
                             // the label glyphs are stamped at their
                             // native pixel size regardless.
-                            const NSUInteger cell = _symbols.width / 32;
+                            const NSUInteger cell = _symbols.width / wry::SymbolSDF::kCells;
                             matrix<RGBA8Unorm_sRGB> tile(cell, cell);
                             MTLRegion region = MTLRegionMake2D(j*cell, i*cell, cell, cell);
                             [_symbols getBytes:tile.data()
@@ -1109,16 +1115,17 @@
             coordinate = wry::term_as_boolean(held) ? _true_coordinate : _false_coordinate;
         else if (held.is_inty())
             coordinate = _digit_zero_coordinate
-                + make<float4>((held.as_int() & 15) / 32.0f, 0.0f, 0.0f, 0.0f);
+                + make<float4>((held.as_int() & 15) / (float)wry::SymbolSDF::kCells, 0.0f, 0.0f, 0.0f);
         else
             coordinate = _cdot_coordinate;
-        // One atlas cell (32 x 32 grid), cut out at its native resolution;
-        // the NSImage below is still 32 points, so a higher-resolution
-        // atlas just makes a sharper cursor.
-        const NSUInteger cell = _symbols.width / 32;
+        // The glyph's frame, the central half of its atlas cell (the rest
+        // is the field's margin), cut out at its native resolution; the
+        // NSImage below is still 32 points, so a higher-resolution atlas
+        // just makes a sharper cursor.
+        const NSUInteger cell = _symbols.width / wry::SymbolSDF::kCells / 2;
         matrix<RGBA8Unorm_sRGB> tile(cell, cell);
-        MTLRegion region = MTLRegionMake2D(coordinate.x * _symbols.width,
-                                           coordinate.y * _symbols.height,
+        MTLRegion region = MTLRegionMake2D(coordinate.x * _symbols.width + cell / 2,
+                                           coordinate.y * _symbols.height + cell / 2,
                                            cell, cell);
         [_symbols getBytes:tile.data()
                bytesPerRow:tile.stride_bytes()
@@ -1243,13 +1250,15 @@
                     square, radii(cell_radius), Painter::kEdgeSigma,
                     Button::background_color(selected, hover, false)));
 
-                // The glyph, over the whole cell as before, minified
-                // through _symbols' mip chain.
+                // The glyph's frame (the central half of its atlas cell;
+                // the rest is the field's margin) over the whole button,
+                // minified through _symbols' mip chain.
                 const float2 uv = _opcode_to_coordinate[term_as_opcode(a)].xy;
+                const float cell_uv = 1.0f / (float)wry::SymbolSDF::kCells;
                 WryQuadInstance g = wry::SpriteAtlas::make_quad(
                     simd_make_float4(cell.a.x, cell.a.y, cell.b.x, cell.b.y),
                     RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f));
-                g.uv = simd_make_float4(uv, uv + 1.0f / 32.0f);
+                g.uv = simd_make_float4(uv + 0.25f * cell_uv, uv + 0.75f * cell_uv);
                 g.flags = WryQuadFlagTextured | WryQuadFlagFiltered;
                 quads.push_back(g);
             }
@@ -1637,9 +1646,12 @@
 
         // A symbol slab centred at `location`, showing the atlas cell at
         // `coordinate` (its top-left uv), its face spanned by the world
-        // unit vectors `across` (image right) and `up` (image up), one
-        // world unit square; as thick as the cell's stroke width, with
-        // top and bottom fillets of a quarter of it (symbol_sdf.hpp).
+        // unit vectors `across` (image right) and `up` (image up): the
+        // glyph's frame, the central half of its cell, is one world unit
+        // square, and the cuboid covers just that frame while the field
+        // (and the decal) reach out to the cell's edge; as thick as the
+        // cell's stroke width, with top and bottom fillets of a quarter
+        // of it (symbol_sdf.hpp).
         // A slab lying flat near the ground also casts its ambient
         // occlusion on what is under it, as a decal (Shaders.metal,
         // symbol_decal_fragment_function): its reach is where the
@@ -1647,6 +1659,7 @@
         // two percent.  Higher slabs (the stacks) are skipped: their
         // occlusion is a faint blur the stroke model no longer describes.
         const float texels_per_cell = (float)(_symbols.width / wry::SymbolSDF::kCells);
+        const float texels_per_unit = texels_per_cell * 0.5f;   // the glyph's frame
         auto emit_symbol = [&](simd_float4 location, simd_float4 coordinate,
                                simd_float3 across, simd_float3 up) {
             const int cx = std::clamp((int)std::lround(coordinate.x * wry::SymbolSDF::kCells), 0, wry::SymbolSDF::kCells - 1);
@@ -1656,8 +1669,8 @@
             // texels up) above the ground, where its decal can land
             const float width = std::max(_symbolStrokeWidth[(size_t)cy * wry::SymbolSDF::kCells + (size_t)cx], 2.0f);
             const float stroke = std::min(width, 20.0f);
-            // Slab space is source texels; the cell is one world unit
-            const float texel = 1.0f / texels_per_cell;
+            // Slab space is source texels; the frame is one world unit
+            const float texel = 1.0f / texels_per_unit;
             simd_float3 normal = simd_cross(across, up);
             simd_float4x4 model = simd_matrix(simd_make_float4(across * texel, 0.0f),
                                               simd_make_float4(up * texel, 0.0f),
@@ -1666,15 +1679,15 @@
             WrySymbolInstance s = {};
             s.model_transform = model;
             s.inverse_model_transform = simd_inverse(model);
-            s.cell = make<float4>(coordinate.x, coordinate.y, 1.0f / wry::SymbolSDF::kCells, 0.0f);
-            s.half_extent = make<float4>(texels_per_cell * 0.5f, texels_per_cell * 0.5f, stroke * 0.5f, 0.0f);
+            s.cell = make<float4>(coordinate.x, coordinate.y, 1.0f / wry::SymbolSDF::kCells, 1.0f / (float)_symbols.width);
+            s.half_extent = make<float4>(texels_per_unit * 0.5f, texels_per_unit * 0.5f, stroke * 0.5f, texels_per_cell * 0.5f);
             s.top_radius = stroke * 0.25f;
             s.bottom_radius = stroke * 0.25f;
             s.stroke_width = width;
             s.decal_reach = 0.0f;
             if (normal.z > 0.99f) {
                 // Flat: the underside's height above the ground, in texels
-                const float h = (location.z - stroke * 0.5f * texel) * texels_per_cell;
+                const float h = (location.z - stroke * 0.5f * texel) * texels_per_unit;
                 if (h <= 2.0f * width) {
                     const float tail = (std::max(h, 0.25f) + stroke * 0.5f) * stroke;
                     s.decal_reach = std::min(std::sqrt(tail / (2.0f * 0.02f)), wry::SymbolSDF::kFarRange);
@@ -1795,7 +1808,7 @@
                     } else if (value.is_inty()) {
                         // number, as hex
                         coordinate = _digit_zero_coordinate
-                            + make<float4>((value.as_int() & 15) / 32.0f, 0.0f, 0.0f, 0.0f);
+                            + make<float4>((value.as_int() & 15) / (float)wry::SymbolSDF::kCells, 0.0f, 0.0f, 0.0f);
                     } else {
                         // not renderable yet (heap integer, string, ...):
                         // the same neutral dot the ground uses, rather than
@@ -1837,7 +1850,7 @@
                             ? _true_coordinate : _false_coordinate;
                     } else {
                         coordinate = _digit_zero_coordinate
-                            + make<float4>(((r->_of_this.is_inty() ? r->_of_this.as_int() : 0) & 15) / 32.0f, 0.0f, 0.0f, 0.0f);
+                            + make<float4>(((r->_of_this.is_inty() ? r->_of_this.as_int() : 0) & 15) / (float)wry::SymbolSDF::kCells, 0.0f, 0.0f, 0.0f);
                     }
                     
                     // Upright on the source's front face: image right is
@@ -1857,7 +1870,7 @@
             for (int j = grid_bounds.a.y; j != grid_bounds.b.y; ++j) {
 
                 simd_float4 location = make<float4>(i, j, 0.1f, 1.0f);
-                simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
+                simd_float4 coordinate = _border_coordinate;
                 bool not_empty = true;
 
                 {
@@ -1877,7 +1890,7 @@
                     } else if (q.is_inty()) {
                         // number, as hex
                         coordinate = _digit_zero_coordinate
-                            + make<float4>((q.as_int() & 15) / 32.0f, 0.0f, 0.0f, 0.0f);
+                            + make<float4>((q.as_int() & 15) / (float)wry::SymbolSDF::kCells, 0.0f, 0.0f, 0.0f);
                     } else if (q.is_opcode()) {
                         //printf("q is opcode\n");
                         auto p = _opcode_to_coordinate.find(q.as_opcode());
@@ -1969,7 +1982,7 @@
             location.x = round(location.x);
             location.y = round(location.y);
             location.z = 0.1f;
-            simd_float4 coordinate = make<float4>(0.0f / 32.0f, 2.0f / 32.0f, 0.0f, 1.0f);
+            simd_float4 coordinate = _border_coordinate;
             emit_symbol(location, coordinate,
                         make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f));
         }
