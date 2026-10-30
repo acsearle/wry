@@ -86,6 +86,8 @@ namespace wry {
         int _ssao_slices = 3;           // GTAO tap budget: slices x 2 sides x steps
         int _ssao_steps = 4;
         bool _ssao_pyramid = true;      // GTAO taps read the depth pyramid
+        int _ssao_blur = WRY_SSAO_BLUR_SEPARABLE;   // which blur kernel
+        int _ssao_blur_radius = 2;      // blur taps per side (2: a 5 x 5 window)
         // Encode the occlusion this many times per frame (ssao-repeat): a
         // measuring aid, to make it dominate the frame and the GPU's clock
         int _ssao_repeat = 1;

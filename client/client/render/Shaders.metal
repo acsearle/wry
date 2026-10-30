@@ -1978,9 +1978,26 @@ namespace deferred {
         aoTexture.write(float4(ao, z, 0.0f, 0.0f), g);
     }
 
-    // A 5 x 5 blur over the (visibility, depth) blocks that stays on the
-    // surface: taps weighted down as their depth departs from the
-    // centre's.  The depth rides along for the composite's upsample.
+    // The blur over the (visibility, depth) blocks, a (2r + 1) square
+    // window with r = u.blur_radius, that stays on the surface: taps
+    // weighted down as their depth departs from the centre's (sigma a
+    // tenth of the radius), sky taps dropped.  The depth rides along for
+    // the composite's upsample.  Three kernels run the same filter
+    // (u.blur picks one, a measuring aid until the choice is made): the
+    // direct window, (2r + 1)^2 reads per block; separable, two
+    // dispatches of 2r + 1 reads each through the other occlusion
+    // texture, the second pass weighting by the first pass's unchanged
+    // centre depths (an approximation of the window: the depth weights
+    // do not factor); and the direct window over a threadgroup-memory
+    // tile, (16 + 2r)^2 / 256 reads per block
+
+    static float ssao_blur_weight(float2 s, float z, float sigma) {
+        if (s.g <= 0.0f)
+            return 0.0f;
+        float dz = (s.g - z) / sigma;
+        return exp(-dz * dz);
+    }
+
     [[kernel]] void
     ssao_blur_kernel(texture2d<float, access::read> aoTexture [[texture(0)]],
                      texture2d<float, access::write> outTexture [[texture(1)]],
@@ -1997,17 +2014,95 @@ namespace deferred {
             return;
         }
         float sigma = 0.1f * u.radius;
+        int r = u.blur_radius;
         float sum = 0.0f, weight = 0.0f;
-        for (int j = -2; j <= 2; ++j) {
-            for (int i = -2; i <= 2; ++i) {
+        for (int j = -r; j <= r; ++j) {
+            for (int i = -r; i <= r; ++i) {
                 int2 sp = int2(g) + int2(i, j);
                 if (any(sp < 0) || any(sp >= size))
                     continue;
                 float2 s = aoTexture.read(uint2(sp)).rg;
-                if (s.g <= 0.0f)
-                    continue;
-                float dz = (s.g - z) / sigma;
-                float w = exp(-dz * dz);
+                float w = ssao_blur_weight(s, z, sigma);
+                sum += s.r * w;
+                weight += w;
+            }
+        }
+        outTexture.write(float4(weight > 0.0f ? sum / weight : 1.0f, z, 0.0f, 0.0f), g);
+    }
+
+    // One axis of the separable blur: axis is (1, 0) then (0, 1)
+    [[kernel]] void
+    ssao_blur_axis_kernel(texture2d<float, access::read> aoTexture [[texture(0)]],
+                          texture2d<float, access::write> outTexture [[texture(1)]],
+                          constant WrySSAOUniforms& u [[buffer(0)]],
+                          constant int2& axis [[buffer(1)]],
+                          uint2 g [[thread_position_in_grid]])
+    {
+        int2 size = int2(outTexture.get_width(), outTexture.get_height());
+        if (g.x >= (uint)size.x || g.y >= (uint)size.y)
+            return;
+        float2 centre = aoTexture.read(g).rg;
+        float z = centre.g;
+        if (z <= 0.0f) {
+            outTexture.write(float4(1.0f, 0.0f, 0.0f, 0.0f), g);
+            return;
+        }
+        float sigma = 0.1f * u.radius;
+        int r = u.blur_radius;
+        float sum = 0.0f, weight = 0.0f;
+        for (int k = -r; k <= r; ++k) {
+            int2 sp = int2(g) + k * axis;
+            if (any(sp < 0) || any(sp >= size))
+                continue;
+            float2 s = aoTexture.read(uint2(sp)).rg;
+            float w = ssao_blur_weight(s, z, sigma);
+            sum += s.r * w;
+            weight += w;
+        }
+        outTexture.write(float4(weight > 0.0f ? sum / weight : 1.0f, z, 0.0f, 0.0f), g);
+    }
+
+    // The direct window over a tile of the texture staged in threadgroup
+    // memory: each 16 x 16 threadgroup loads its (16 + 2r)^2 texels once
+    // (out-of-range texels as sky, which the filter drops).  Dispatched as
+    // whole threadgroups so every thread loads and reaches the barrier;
+    // the threads past the edge then write nothing
+    #define WRY_SSAO_BLUR_TILE (16 + 2 * WRY_SSAO_BLUR_MAX_RADIUS)
+    [[kernel]] void
+    ssao_blur_tiled_kernel(texture2d<float, access::read> aoTexture [[texture(0)]],
+                           texture2d<float, access::write> outTexture [[texture(1)]],
+                           constant WrySSAOUniforms& u [[buffer(0)]],
+                           uint2 g [[thread_position_in_grid]],
+                           uint2 l [[thread_position_in_threadgroup]],
+                           uint2 tg [[threadgroup_position_in_grid]])
+    {
+        threadgroup float2 tile[WRY_SSAO_BLUR_TILE * WRY_SSAO_BLUR_TILE];
+        int2 size = int2(outTexture.get_width(), outTexture.get_height());
+        int r = u.blur_radius;
+        int t = 16 + 2 * r;
+        int2 origin = int2(tg) * 16 - r;
+        int lid = (int)l.y * 16 + (int)l.x;
+        for (int idx = lid; idx < t * t; idx += 256) {
+            int2 sp = origin + int2(idx % t, idx / t);
+            bool inside = all(sp >= 0) && all(sp < size);
+            tile[idx] = inside ? aoTexture.read(uint2(sp)).rg : float2(1.0f, 0.0f);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (g.x >= (uint)size.x || g.y >= (uint)size.y)
+            return;
+        int2 c = int2(l) + r;
+        float2 centre = tile[c.y * t + c.x];
+        float z = centre.g;
+        if (z <= 0.0f) {
+            outTexture.write(float4(1.0f, 0.0f, 0.0f, 0.0f), g);
+            return;
+        }
+        float sigma = 0.1f * u.radius;
+        float sum = 0.0f, weight = 0.0f;
+        for (int j = -r; j <= r; ++j) {
+            for (int i = -r; i <= r; ++i) {
+                float2 s = tile[(c.y + j) * t + (c.x + i)];
+                float w = ssao_blur_weight(s, z, sigma);
                 sum += s.r * w;
                 weight += w;
             }

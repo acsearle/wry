@@ -272,6 +272,14 @@ typedef struct
 // steps the taps read as horizons (banding)
 #define WRY_SSAO_DEPTH_PYRAMID_LEVELS 5
 
+// WrySSAOUniforms::blur: which kernel runs the depth-aware blur over the
+// half-resolution (visibility, depth) blocks.  The same filter three ways,
+// a measuring aid until the choice is made (see ssao_blur_kernel)
+#define WRY_SSAO_BLUR_DIRECT 0      // the (2r + 1)^2 window, read per block
+#define WRY_SSAO_BLUR_SEPARABLE 1   // two dispatches of 2r + 1 reads
+#define WRY_SSAO_BLUR_TILED 2       // the window over a threadgroup-memory tile
+#define WRY_SSAO_BLUR_MAX_RADIUS 4  // sizes the tile
+
 typedef struct {
     // The camera and its ray basis, as MeshUniforms has them
     simd_float4 camera_position_world;
@@ -287,7 +295,8 @@ typedef struct {
     int slices;                     // GTAO: slice directions per pixel
     int steps;                      // GTAO: taps per side per slice
     int pyramid;                    // GTAO: taps read the depth pyramid (else the Depth G-buffer)
-    int _pad[2];
+    int blur;                       // WRY_SSAO_BLUR_*
+    int blur_radius;                // blur taps per side, 1 to WRY_SSAO_BLUR_MAX_RADIUS
 } WrySSAOUniforms;
 
 #pragma mark - Symbol slabs

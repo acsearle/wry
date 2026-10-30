@@ -391,10 +391,13 @@ Illustrative, not exhaustive; arguments in `[]` have defaults.
   `toggle-console`, `toggle-jacobians`, `toggle-points`,
   `toggle-wireframe`, `toggle-symbol-decals`,
   `ssao off|gtao|luft|gtao-show|luft-show [radius texels] [strength %]
-  [slices] [steps] [pyramid]` (GTAO by default: 3 slices x 4 steps per
-  side, the taps reading the depth pyramid; `pyramid 0` reads the Depth
-  G-buffer flat), `ssao-repeat [n]` (encode the occlusion n times per
-  frame: a measuring aid, see `gpu-time`),
+  [slices] [steps] [pyramid] [blur] [blur-radius]` (GTAO by default: 3
+  slices x 4 steps per side, the taps reading the depth pyramid;
+  `pyramid 0` reads the Depth G-buffer flat; the blur is the same
+  depth-aware window run by one of three kernels, 0 direct, 1 separable
+  (default), 2 over a threadgroup-memory tile, with 1 to 4 taps per side,
+  default 2 for a 5 x 5 window), `ssao-repeat [n]` (encode the occlusion
+  n times per frame: a measuring aid, see `gpu-time`),
   `pipette [Coordinate]` -- plus `drop`, `hold Term`.
 - **event injection** (local): `key KeyCombo [up|down|press]`,
   `type String`, `mouse-move x y`, `click x y [button]`,

@@ -1358,7 +1358,7 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
-            "ssao", "Screen-space ambient occlusion: off, gtao or luft, with -show for the factor itself; then a radius in texels (128 per world unit), a strength in percent, and for GTAO the slices and steps per side and whether the taps read the depth pyramid", Category::local,
+            "ssao", "Screen-space ambient occlusion: off, gtao or luft, with -show for the factor itself; then a radius in texels (128 per world unit), a strength in percent, and for GTAO the slices and steps per side and whether the taps read the depth pyramid; then the blur kernel and its taps per side", Category::local,
             std::tuple{
                 Param<Ctx, String>{"mode", "off, gtao, luft, gtao-show or luft-show"},
                 Param<Ctx, int64_t>{"radius", "texels, 128 per world unit", 64},
@@ -1366,8 +1366,10 @@ namespace wry {
                 Param<Ctx, int64_t>{"slices", "GTAO slice directions per pixel, 1 to 16", 3},
                 Param<Ctx, int64_t>{"steps", "GTAO taps per side per slice, 1 to 32", 4},
                 Param<Ctx, int64_t>{"pyramid", "GTAO taps read the depth pyramid (1) or the Depth G-buffer (0)", 1},
+                Param<Ctx, int64_t>{"blur", "blur kernel: 0 direct window, 1 separable, 2 tiled window", WRY_SSAO_BLUR_SEPARABLE},
+                Param<Ctx, int64_t>{"blur-radius", "blur taps per side, 1 to 4 (2: a 5 x 5 window)", 2},
             },
-            with_world([](WorldState& ws, String const& mode, int64_t radius_texels, int64_t strength_percent, int64_t slices, int64_t steps, int64_t pyramid) {
+            with_world([](WorldState& ws, String const& mode, int64_t radius_texels, int64_t strength_percent, int64_t slices, int64_t steps, int64_t pyramid, int64_t blur, int64_t blur_radius) {
                 const double radius = radius_texels / 128.0;
                 const double strength = strength_percent / 100.0;
                 std::string_view m((const char*)mode.chars.data(), mode.chars.size());
@@ -1386,6 +1388,8 @@ namespace wry {
                 ws._ssao_slices = (int)std::clamp<int64_t>(slices, 1, 16);
                 ws._ssao_steps = (int)std::clamp<int64_t>(steps, 1, 32);
                 ws._ssao_pyramid = pyramid != 0;
+                ws._ssao_blur = (int)std::clamp<int64_t>(blur, WRY_SSAO_BLUR_DIRECT, WRY_SSAO_BLUR_TILED);
+                ws._ssao_blur_radius = (int)std::clamp<int64_t>(blur_radius, 1, WRY_SSAO_BLUR_MAX_RADIUS);
                 return Reply::ok();
             })));
 

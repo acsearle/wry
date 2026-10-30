@@ -140,6 +140,8 @@
     id<MTLComputePipelineState> _ssaoGTAOPipelineState;
     id<MTLComputePipelineState> _ssaoLuftPipelineState;
     id<MTLComputePipelineState> _ssaoBlurPipelineState;
+    id<MTLComputePipelineState> _ssaoBlurAxisPipelineState;
+    id<MTLComputePipelineState> _ssaoBlurTiledPipelineState;
     id<MTLRenderPipelineState> _compositeRenderPipelineState;
     
     id<MTLTexture> _black;
@@ -635,6 +637,10 @@
             assert(_ssaoLuftPipelineState);
             _ssaoBlurPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_blur_kernel"] error:&error];
             assert(_ssaoBlurPipelineState);
+            _ssaoBlurAxisPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_blur_axis_kernel"] error:&error];
+            assert(_ssaoBlurAxisPipelineState);
+            _ssaoBlurTiledPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_blur_tiled_kernel"] error:&error];
+            assert(_ssaoBlurTiledPipelineState);
             _ssaoDepthPyramidPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_depth_pyramid_kernel"] error:&error];
             assert(_ssaoDepthPyramidPipelineState);
         }
@@ -2475,6 +2481,11 @@
         ssao.slices = _model->_ssao_slices;
         ssao.steps = _model->_ssao_steps;
         ssao.pyramid = _model->_ssao_pyramid;
+        ssao.blur = _model->_ssao_blur;
+        ssao.blur_radius = _model->_ssao_blur_radius;
+        // The texture the composite reads: the blurred one, unless the
+        // separable blur's second pass wrote back into the first
+        id<MTLTexture> aoFinal = _ssaoBlurredTexture;
         for (int repeat = 0; ssao.mode != WRY_SSAO_OFF && repeat != _model->_ssao_repeat; ++repeat) {
             id<MTLComputeCommandEncoder> compute = [command_buffer computeCommandEncoder];
             compute.label = @"Screen-space occlusion";
@@ -2498,10 +2509,43 @@
             [compute setTexture:_ssaoTexture atIndex:2];
             [compute setBytes:&ssao length:sizeof(ssao) atIndex:0];
             [compute dispatchThreads:grid threadsPerThreadgroup:group];
-            [compute setComputePipelineState:_ssaoBlurPipelineState];
-            [compute setTexture:_ssaoTexture atIndex:0];
-            [compute setTexture:_ssaoBlurredTexture atIndex:1];
-            [compute dispatchThreads:grid threadsPerThreadgroup:group];
+            switch (ssao.blur) {
+                case WRY_SSAO_BLUR_SEPARABLE: {
+                    // Across into the blurred texture, then down back into
+                    // the occlusion texture
+                    [compute setComputePipelineState:_ssaoBlurAxisPipelineState];
+                    simd_int2 axis = simd_make_int2(1, 0);
+                    [compute setTexture:_ssaoTexture atIndex:0];
+                    [compute setTexture:_ssaoBlurredTexture atIndex:1];
+                    [compute setBytes:&axis length:sizeof(axis) atIndex:1];
+                    [compute dispatchThreads:grid threadsPerThreadgroup:group];
+                    axis = simd_make_int2(0, 1);
+                    [compute setTexture:_ssaoBlurredTexture atIndex:0];
+                    [compute setTexture:_ssaoTexture atIndex:1];
+                    [compute setBytes:&axis length:sizeof(axis) atIndex:1];
+                    [compute dispatchThreads:grid threadsPerThreadgroup:group];
+                    aoFinal = _ssaoTexture;
+                    break;
+                }
+                case WRY_SSAO_BLUR_TILED: {
+                    // Whole threadgroups: the kernel stages a tile per group
+                    [compute setComputePipelineState:_ssaoBlurTiledPipelineState];
+                    [compute setTexture:_ssaoTexture atIndex:0];
+                    [compute setTexture:_ssaoBlurredTexture atIndex:1];
+                    MTLSize groups = MTLSizeMake((grid.width + 15) / 16, (grid.height + 15) / 16, 1);
+                    [compute dispatchThreadgroups:groups threadsPerThreadgroup:group];
+                    aoFinal = _ssaoBlurredTexture;
+                    break;
+                }
+                default: {
+                    [compute setComputePipelineState:_ssaoBlurPipelineState];
+                    [compute setTexture:_ssaoTexture atIndex:0];
+                    [compute setTexture:_ssaoBlurredTexture atIndex:1];
+                    [compute dispatchThreads:grid threadsPerThreadgroup:group];
+                    aoFinal = _ssaoBlurredTexture;
+                    break;
+                }
+            }
             [compute endEncoding];
         }
 
@@ -2526,7 +2570,7 @@
                           offset:0
                          atIndex:AAPLBufferIndexVertices];
         [encoder setFragmentBytes:&ssao length:sizeof(ssao) atIndex:AAPLBufferIndexUniforms];
-        [encoder setFragmentTexture:_ssaoBlurredTexture atIndex:AAPLTextureIndexColor];
+        [encoder setFragmentTexture:aoFinal atIndex:AAPLTextureIndexColor];
         [encoder setFragmentTexture:_deferredDepthColorAttachmentTexture atIndex:AAPLTextureIndexNormal];
         [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                     vertexStart:0
