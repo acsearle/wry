@@ -389,8 +389,10 @@ Illustrative, not exhaustive; arguments in `[]` have defaults.
 - **view** (local): today's keymap actions -- `rotate`,
   `reverse-rotate`, `flip-horizontal`, `flip-vertical`, `toggle-map`,
   `toggle-console`, `toggle-jacobians`, `toggle-points`,
-  `toggle-wireframe`, `toggle-symbol-decals`, `pipette [Coordinate]` --
-  plus `drop`, `hold Term`.
+  `toggle-wireframe`, `toggle-symbol-decals`,
+  `ssao off|gtao|luft|gtao-show|luft-show [radius texels] [strength %]`
+  (GTAO by default),
+  `pipette [Coordinate]` -- plus `drop`, `hold Term`.
 - **event injection** (local): `key KeyCombo [up|down|press]`,
   `type String`, `mouse-move x y`, `click x y [button]`,
   `scroll dx dy`, `press label=String` (click the widget with that

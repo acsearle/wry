@@ -41,6 +41,10 @@ enum AAPLColorIndex {
     // g = roughness, b = metallic
     AAPLColorIndexMaterial,
     AAPLColorIndexDepth,
+    // The image-based light's contribution, kept apart from the direct
+    // light (Color) so the screen-space occlusion pass can scale it alone
+    // before the composite adds the two
+    AAPLColorIndexAmbient,
 };
 
 // [[function_constant(index)
@@ -242,6 +246,26 @@ typedef struct
     // vector_uint2 viewportSize;
     matrix_float4x4 position_transform;
 } MyUniforms;
+
+#pragma mark - Screen-space ambient occlusion
+
+// WrySSAOMode: which estimator the occlusion pass runs (WorldState::_ssao_mode)
+#define WRY_SSAO_OFF 0
+#define WRY_SSAO_GTAO 1
+#define WRY_SSAO_LUFT 2
+
+typedef struct {
+    matrix_float4x4 viewprojection_transform;
+    matrix_float4x4 inverse_viewprojection_transform;
+    matrix_float4x4 view_transform;
+    simd_float4 camera_position_world;
+    simd_float2 viewport;           // pixels
+    float radius;                   // world units
+    float strength;                 // 1 = as estimated
+    int mode;                       // WRY_SSAO_*
+    int show;                       // nonzero: composite the factor itself, as grey
+    float _pad[2];
+} WrySSAOUniforms;
 
 #pragma mark - Symbol slabs
 

@@ -1353,6 +1353,12 @@ namespace deferred {
     struct LightingFragmentFunctionOutput {
         half4 color [[color(AAPLColorIndexColor), raster_order_group(AAPLRasterOrderGroupLighting)]];
     };
+
+    // The image-based light accumulates apart from the direct light; the
+    // composite pass adds it back, scaled by the screen-space occlusion
+    struct AmbientFragmentFunctionOutput {
+        half4 color [[color(AAPLColorIndexAmbient), raster_order_group(AAPLRasterOrderGroupLighting)]];
+    };
         
     [[vertex]] LightingVertexFunctionOutput
     lighting_vertex_function(uint vertexID [[ vertex_id ]],
@@ -1367,7 +1373,7 @@ namespace deferred {
     
     
     
-    [[fragment]] LightingFragmentFunctionOutput
+    [[fragment]] AmbientFragmentFunctionOutput
     image_based_lighting_fragment_function(LightingVertexFunctionOutput in [[stage_in]],
                                            FragmentFunctionOutput gbuffer,
                                            constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
@@ -1386,7 +1392,7 @@ namespace deferred {
                                            s_address::repeat,
                                            t_address::repeat);
         
-        LightingFragmentFunctionOutput out;
+        AmbientFragmentFunctionOutput out;
         
         float3 albedo    = float3(gbuffer.albedo.rgb);
         float3 normal    = float3(gbuffer.normal.xyz);
@@ -1722,7 +1728,266 @@ namespace deferred {
     
     
     
+    // ---- Screen-space ambient occlusion: two estimators behind one switch
+    //
+    // Both read the stored depth (NDC z, the Depth colour attachment) and
+    // normal G-buffers after the geometry pass and write a visibility
+    // factor per pixel, which a depth-aware blur smooths and the composite
+    // pass multiplies into the image-based light alone (the direct light
+    // and its shadow map are untouched, as with the symbol decals).
+    //
+    // GTAO (Jimenez et al. 2016, as XeGTAO lays it out): for a few screen
+    // directions through the pixel, find the horizon angle on each side by
+    // walking the depth buffer out to the radius, project the normal into
+    // the slice, and integrate the cosine-weighted visible arc
+    // analytically -- the same (sin phi2 - sin phi1) / 2 integral the
+    // symbol decals evaluate for one shape, here for whatever the depth
+    // buffer holds.  Physical, so no strength knob is needed.
+    //
+    // Luft, Colditz and Deussen 2006 ("Image Enhancement by Unsharp
+    // Masking the Depth Buffer"): darken a pixel by how much farther it
+    // lies than the mean depth around it.  A perceptual cue rather than a
+    // light transport, with a strength to taste.
+    //
+    // The camera is fixed and elevated, so a world radius is nearly a
+    // constant pixel radius; it is projected exactly per pixel anyway.
+
+    constant int kSSAOSlices = 4;
+    constant int kSSAOSteps = 8;
+
+    // The render-space point under a pixel, from its NDC depth
+    static float3 ssao_position(constant WrySSAOUniforms& u, float2 pixel, float depth) {
+        float2 ndc = float2(2.0f * pixel.x / u.viewport.x - 1.0f, 1.0f - 2.0f * pixel.y / u.viewport.y);
+        float4 near = u.inverse_viewprojection_transform * float4(ndc, 0.0f, 1.0f);
+        float4 p = near + u.inverse_viewprojection_transform.columns[2] * depth;
+        return p.xyz / p.w;
+    }
+
+    // Pixels per world unit at a point: the radius, projected
+    static float ssao_radius_pixels(constant WrySSAOUniforms& u, float3 P) {
+        float4 c0 = u.viewprojection_transform * float4(P, 1.0f);
+        float4 c1 = u.viewprojection_transform * float4(P + float3(u.radius, 0.0f, 0.0f), 1.0f);
+        float r = abs(c1.x / c1.w - c0.x / c0.w) * 0.5f * u.viewport.x;
+        return clamp(r, 2.0f, 256.0f);
+    }
+
+    // Interleaved gradient noise (Jimenez), a per-pixel rotation of the
+    // sample pattern that the 4 x 4 blur below averages out
+    static float ssao_noise(uint2 g) {
+        return fract(52.9829189f * fract(0.06711056f * (float)g.x + 0.00583715f * (float)g.y));
+    }
+
+    [[kernel]] void
+    ssao_gtao_kernel(texture2d<float, access::read> depthTexture [[texture(0)]],
+                     texture2d<float, access::read> normalTexture [[texture(1)]],
+                     texture2d<float, access::write> aoTexture [[texture(2)]],
+                     constant WrySSAOUniforms& u [[buffer(0)]],
+                     uint2 g [[thread_position_in_grid]])
+    {
+        if (g.x >= aoTexture.get_width() || g.y >= aoTexture.get_height())
+            return;
+        float depth = depthTexture.read(g).r;
+        if (depth >= 1.0f) {
+            aoTexture.write(float4(1.0f), g);
+            return;
+        }
+        float2 pixel = float2(g) + 0.5f;
+        float3 P = ssao_position(u, pixel, depth);
+        float3 N = normalize(normalTexture.read(g).xyz);
+        float3 V = normalize(u.camera_position_world.xyz - P);
+        float radius_px = ssao_radius_pixels(u, P);
+        float noise = ssao_noise(g);
+        float step_noise = ssao_noise(g + uint2(37u, 91u));
+
+        float visibility = 0.0f;
+        for (int s = 0; s != kSSAOSlices; ++s) {
+            float phi = ((float)s + noise) * (M_PI_F / (float)kSSAOSlices);
+            float2 dir = float2(cos(phi), sin(phi));
+            // The slice's direction in the world: along the screen
+            // direction at this pixel's depth, flattened against V
+            float3 along = ssao_position(u, pixel + dir * radius_px, depth) - P;
+            float3 slice_dir = along - V * dot(along, V);
+            float slice_len = length(slice_dir);
+            if (slice_len < 1e-6f)
+                continue;
+            slice_dir /= slice_len;
+
+            float horizon_cos[2] = {-1.0f, -1.0f};
+            for (int side = 0; side != 2; ++side) {
+                float sgn = side == 0 ? 1.0f : -1.0f;
+                for (int i = 0; i != kSSAOSteps; ++i) {
+                    float t = ((float)i + 0.5f + step_noise * 0.5f) / (float)kSSAOSteps;
+                    t = t * t;                       // denser near the pixel
+                    float2 sp = pixel + sgn * dir * (t * radius_px);
+                    if (any(sp < 0.0f) || any(sp >= u.viewport))
+                        break;
+                    uint2 sg = uint2(sp);
+                    float sd = depthTexture.read(sg).r;
+                    if (sd >= 1.0f)
+                        continue;
+                    float3 S = ssao_position(u, float2(sg) + 0.5f, sd);
+                    float3 d = S - P;
+                    float dist = length(d);
+                    if (dist < 1e-4f)
+                        continue;
+                    float c = dot(d / dist, V);
+                    // Fade occluders out over the last quarter of the radius
+                    float falloff = saturate((u.radius - dist) / (0.25f * u.radius));
+                    c = mix(-1.0f, c, falloff);
+                    horizon_cos[side] = max(horizon_cos[side], c);
+                }
+            }
+
+            float3 axis = normalize(cross(slice_dir, V));
+            float3 projN = N - axis * dot(N, axis);
+            float projLen = length(projN);
+            if (projLen < 1e-4f)
+                continue;
+            float cosN = clamp(dot(projN / projLen, V), -1.0f, 1.0f);
+            float n = sign(dot(slice_dir, projN)) * acos(cosN);
+            float h0 = -acos(horizon_cos[1]);    // the negative side
+            float h1 = acos(horizon_cos[0]);     // the positive side
+            h0 = n + clamp(h0 - n, -M_PI_F * 0.5f, M_PI_F * 0.5f);
+            h1 = n + clamp(h1 - n, -M_PI_F * 0.5f, M_PI_F * 0.5f);
+            float arc0 = (cosN + 2.0f * h0 * sin(n) - cos(2.0f * h0 - n)) * 0.25f;
+            float arc1 = (cosN + 2.0f * h1 * sin(n) - cos(2.0f * h1 - n)) * 0.25f;
+            visibility += projLen * (arc0 + arc1);
+        }
+        float ao = saturate(visibility / (float)kSSAOSlices);
+        ao = 1.0f - u.strength * (1.0f - ao);
+        aoTexture.write(float4(ao), g);
+    }
+
+    // Depth along the view axis
+    static float ssao_view_depth(constant WrySSAOUniforms& u, float3 P) {
+        return -(u.view_transform * float4(P, 1.0f)).z;
+    }
+
+    [[kernel]] void
+    ssao_luft_kernel(texture2d<float, access::read> depthTexture [[texture(0)]],
+                     texture2d<float, access::read> normalTexture [[texture(1)]],
+                     texture2d<float, access::write> aoTexture [[texture(2)]],
+                     constant WrySSAOUniforms& u [[buffer(0)]],
+                     uint2 g [[thread_position_in_grid]])
+    {
+        if (g.x >= aoTexture.get_width() || g.y >= aoTexture.get_height())
+            return;
+        float depth = depthTexture.read(g).r;
+        if (depth >= 1.0f) {
+            aoTexture.write(float4(1.0f), g);
+            return;
+        }
+        float2 pixel = float2(g) + 0.5f;
+        float3 P = ssao_position(u, pixel, depth);
+        float z = ssao_view_depth(u, P);
+        float radius_px = ssao_radius_pixels(u, P);
+        // The Gaussian-weighted mean view depth around the pixel (sigma =
+        // half the radius): a 9 x 9 grid of taps rotated per pixel so the
+        // grid never shows, the blur pass after smoothing the rotation
+        float noise = ssao_noise(g) * (M_PI_F * 0.5f);
+        float2x2 rotate = float2x2(float2(cos(noise), sin(noise)), float2(-sin(noise), cos(noise)));
+        float sum = 0.0f, weight = 0.0f;
+        for (int j = -4; j <= 4; ++j) {
+            for (int i = -4; i <= 4; ++i) {
+                float2 o = float2(i, j) / 4.0f;
+                float r2 = dot(o, o);
+                if (r2 > 1.0f)
+                    continue;
+                float2 sp = pixel + (rotate * o) * radius_px;
+                if (any(sp < 0.0f) || any(sp >= u.viewport))
+                    continue;
+                uint2 sg = uint2(sp);
+                float sd = depthTexture.read(sg).r;
+                float sz = sd >= 1.0f ? z + u.radius : ssao_view_depth(u, ssao_position(u, float2(sg) + 0.5f, sd));
+                float w = exp(-4.0f * r2);
+                sum += sz * w;
+                weight += w;
+            }
+        }
+        float blurred = weight > 0.0f ? sum / weight : z;
+        // Farther than the surroundings: darken, over one radius
+        float ao = 1.0f - u.strength * saturate((z - blurred) / u.radius);
+        aoTexture.write(float4(ao), g);
+    }
+
+    // A 5 x 5 blur that stays on the surface: taps weighted down as their
+    // view depth departs from the centre's
+    [[kernel]] void
+    ssao_blur_kernel(texture2d<float, access::read> aoTexture [[texture(0)]],
+                     texture2d<float, access::read> depthTexture [[texture(1)]],
+                     texture2d<float, access::write> outTexture [[texture(2)]],
+                     constant WrySSAOUniforms& u [[buffer(0)]],
+                     uint2 g [[thread_position_in_grid]])
+    {
+        if (g.x >= outTexture.get_width() || g.y >= outTexture.get_height())
+            return;
+        float depth = depthTexture.read(g).r;
+        if (depth >= 1.0f) {
+            outTexture.write(float4(1.0f), g);
+            return;
+        }
+        float z = ssao_view_depth(u, ssao_position(u, float2(g) + 0.5f, depth));
+        float sigma = 0.1f * u.radius;
+        float sum = 0.0f, weight = 0.0f;
+        for (int j = -2; j <= 2; ++j) {
+            for (int i = -2; i <= 2; ++i) {
+                int2 sp = int2(g) + int2(i, j);
+                if (any(sp < 0) || sp.x >= (int)u.viewport.x || sp.y >= (int)u.viewport.y)
+                    continue;
+                uint2 sg = uint2(sp);
+                float sd = depthTexture.read(sg).r;
+                if (sd >= 1.0f)
+                    continue;
+                float sz = ssao_view_depth(u, ssao_position(u, float2(sg) + 0.5f, sd));
+                float dz = (sz - z) / sigma;
+                float w = exp(-dz * dz);
+                sum += aoTexture.read(sg).r * w;
+                weight += w;
+            }
+        }
+        outTexture.write(float4(weight > 0.0f ? sum / weight : 1.0f), g);
+    }
+
+    // ---- The composite: direct + occlusion * ambient, in a second pass
+    // over the same attachments once the occlusion texture exists
+
+    struct CompositeVertexFunctionOutput {
+        float4 position [[position]];
+    };
+
+    [[vertex]] CompositeVertexFunctionOutput
+    composite_vertex_function(uint vertex_id [[vertex_id]],
+                              const device float4* vertices [[buffer(AAPLBufferIndexVertices)]])
+    {
+        CompositeVertexFunctionOutput out;
+        out.position = vertices[vertex_id];
+        return out;
+    }
+
+    struct CompositeFragmentFunctionInput {
+        half4 color   [[color(AAPLColorIndexColor),   raster_order_group(AAPLRasterOrderGroupLighting)]];
+        half4 ambient [[color(AAPLColorIndexAmbient), raster_order_group(AAPLRasterOrderGroupLighting)]];
+    };
+
+    [[fragment]] LightingFragmentFunctionOutput
+    composite_fragment_function(CompositeVertexFunctionOutput in [[stage_in]],
+                                CompositeFragmentFunctionInput g,
+                                constant WrySSAOUniforms& u [[buffer(AAPLBufferIndexUniforms)]],
+                                texture2d<float, access::read> aoTexture [[texture(AAPLTextureIndexColor)]])
+    {
+        float ao = 1.0f;
+        if (u.mode != WRY_SSAO_OFF)
+            ao = aoTexture.read(uint2(in.position.xy)).r;
+        LightingFragmentFunctionOutput out;
+        if (u.show)
+            out.color = half4(half3(ao), 1.0h);
+        else
+            out.color = half4(g.color.rgb + g.ambient.rgb * (half)ao, 1.0h);
+        return out;
+    }
+
 } // namespace deferred
+
 
 
 

@@ -1328,6 +1328,32 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
+            "ssao", "Screen-space ambient occlusion: off, gtao or luft, with -show for the factor itself; then a radius in texels (128 per world unit) and a strength in percent", Category::local,
+            std::tuple{
+                Param<Ctx, String>{"mode", "off, gtao, luft, gtao-show or luft-show"},
+                Param<Ctx, int64_t>{"radius", "texels, 128 per world unit", 64},
+                Param<Ctx, int64_t>{"strength", "percent; 100 = as estimated", 100},
+            },
+            with_world([](WorldState& ws, String const& mode, int64_t radius_texels, int64_t strength_percent) {
+                const double radius = radius_texels / 128.0;
+                const double strength = strength_percent / 100.0;
+                std::string_view m((const char*)mode.chars.data(), mode.chars.size());
+                int which;
+                bool show = false;
+                if (m == "off") which = WRY_SSAO_OFF;
+                else if (m == "gtao") which = WRY_SSAO_GTAO;
+                else if (m == "luft") which = WRY_SSAO_LUFT;
+                else if (m == "gtao-show") { which = WRY_SSAO_GTAO; show = true; }
+                else if (m == "luft-show") { which = WRY_SSAO_LUFT; show = true; }
+                else return Reply::error(String("mode must be off, gtao, luft, gtao-show or luft-show"));
+                ws._ssao_mode = which;
+                ws._ssao_show = show;
+                ws._ssao_radius = (float)std::clamp(radius, 0.01, 8.0);
+                ws._ssao_strength = (float)std::clamp(strength, 0.0, 4.0);
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
             "toggle-jacobians", "Show or hide Jacobians (debug)", Category::local,
             std::tuple<>{},
             with_world([](WorldState& ws) {

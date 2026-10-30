@@ -75,6 +75,14 @@ namespace wry {
         bool _show_wireframe = false;
         // The symbol slabs' ambient-occlusion decals (toggle-symbol-decals)
         bool _show_symbol_decals = true;
+        // Screen-space ambient occlusion (the `ssao` command): WRY_SSAO_*
+        // mode (GTAO by default; see docs/todo.md on retiring the others),
+        // whether to show the factor itself, the world radius and the
+        // strength (1 = as estimated)
+        int _ssao_mode = WRY_SSAO_GTAO;
+        bool _ssao_show = false;
+        float _ssao_radius = 0.5f;
+        float _ssao_strength = 1.0f;
 
 
         // user interface state

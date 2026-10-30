@@ -124,6 +124,18 @@
     id<MTLRenderPipelineState> _symbolGBufferRenderPipelineState;
     id<MTLRenderPipelineState> _symbolShadowRenderPipelineState;
     id<MTLRenderPipelineState> _symbolDecalRenderPipelineState;
+
+    // Screen-space ambient occlusion: the image-based light accumulates
+    // in its own attachment, the estimators run over the stored depth
+    // and normal between the two passes, and the composite adds the
+    // ambient back scaled by the result
+    id<MTLTexture> _deferredAmbientColorAttachmentTexture;
+    id<MTLTexture> _ssaoTexture;
+    id<MTLTexture> _ssaoBlurredTexture;
+    id<MTLComputePipelineState> _ssaoGTAOPipelineState;
+    id<MTLComputePipelineState> _ssaoLuftPipelineState;
+    id<MTLComputePipelineState> _ssaoBlurPipelineState;
+    id<MTLRenderPipelineState> _compositeRenderPipelineState;
     
     id<MTLTexture> _black;
     id<MTLTexture> _white;
@@ -520,6 +532,8 @@
             descriptor.colorAttachments[AAPLColorIndexNormal].pixelFormat = MTLPixelFormatRGBA16Float;
             descriptor.colorAttachments[AAPLColorIndexMaterial].pixelFormat = MTLPixelFormatRGBA8Unorm;
             descriptor.colorAttachments[AAPLColorIndexDepth].pixelFormat = MTLPixelFormatR32Float;
+            descriptor.colorAttachments[AAPLColorIndexAmbient].pixelFormat = MTLPixelFormatRGBA16Float;
+            descriptor.colorAttachments[AAPLColorIndexAmbient].writeMask = MTLColorWriteMaskNone;
             descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
             descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::vertex_function"];
@@ -568,10 +582,15 @@
             descriptor.colorAttachments[AAPLColorIndexColor].destinationRGBBlendFactor = MTLBlendFactorOne;
             descriptor.colorAttachments[AAPLColorIndexColor].destinationAlphaBlendFactor = MTLBlendFactorOne;
         
+            // The image-based light alone writes the ambient attachment
+            descriptor.colorAttachments[AAPLColorIndexAmbient].writeMask = MTLColorWriteMaskAll;
+            descriptor.colorAttachments[AAPLColorIndexColor].writeMask = MTLColorWriteMaskNone;
             descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::lighting_vertex_function"];
             descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::image_based_lighting_fragment_function"];
             descriptor.label = @"Deferred image-based light";
             _deferredLightImageBasedRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
+            descriptor.colorAttachments[AAPLColorIndexAmbient].writeMask = MTLColorWriteMaskNone;
+            descriptor.colorAttachments[AAPLColorIndexColor].writeMask = MTLColorWriteMaskAll;
 
             descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::lighting_vertex_function"];
             descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::directional_lighting_fragment_function"];
@@ -583,6 +602,25 @@
             descriptor.label = @"Deferred point light";
             _deferredLightPointRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
 
+            // The composite reads both light attachments and writes the
+            // sum; no blending
+            descriptor.colorAttachments[AAPLColorIndexColor].blendingEnabled = NO;
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::composite_vertex_function"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::composite_fragment_function"];
+            descriptor.label = @"Composite direct + occluded ambient";
+            _compositeRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
+
+        }
+
+        {
+            // The occlusion estimators and their blur
+            NSError* error = nil;
+            _ssaoGTAOPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_gtao_kernel"] error:&error];
+            assert(_ssaoGTAOPipelineState);
+            _ssaoLuftPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_luft_kernel"] error:&error];
+            assert(_ssaoLuftPipelineState);
+            _ssaoBlurPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_blur_kernel"] error:&error];
+            assert(_ssaoBlurPipelineState);
         }
         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
@@ -2108,9 +2146,11 @@
             descriptor.colorAttachments[AAPLColorIndexAlbedo].storeAction = MTLStoreActionDontCare;
             descriptor.colorAttachments[AAPLColorIndexAlbedo].texture = _deferredAlbedoColorAttachmentTexture;
 
+            // Normal and depth are stored: the screen-space occlusion
+            // pass reads them between the two passes
             descriptor.colorAttachments[AAPLColorIndexNormal].clearColor = MTLClearColorMake(0, 0, 0, 0);
             descriptor.colorAttachments[AAPLColorIndexNormal].loadAction = MTLLoadActionClear;
-            descriptor.colorAttachments[AAPLColorIndexNormal].storeAction = MTLStoreActionDontCare;
+            descriptor.colorAttachments[AAPLColorIndexNormal].storeAction = MTLStoreActionStore;
             descriptor.colorAttachments[AAPLColorIndexNormal].texture = _deferredNormalColorAttachmentTexture;
 
             // clear to (occlusion 1, roughness 1, metallic 0), matching the
@@ -2122,8 +2162,13 @@
 
             descriptor.colorAttachments[AAPLColorIndexDepth].clearColor = MTLClearColorMake(1, 1, 1, 1);
             descriptor.colorAttachments[AAPLColorIndexDepth].loadAction = MTLLoadActionClear;
-            descriptor.colorAttachments[AAPLColorIndexDepth].storeAction = MTLStoreActionDontCare;
+            descriptor.colorAttachments[AAPLColorIndexDepth].storeAction = MTLStoreActionStore;
             descriptor.colorAttachments[AAPLColorIndexDepth].texture = _deferredDepthColorAttachmentTexture;
+
+            descriptor.colorAttachments[AAPLColorIndexAmbient].clearColor = MTLClearColorMake(0, 0, 0, 1);
+            descriptor.colorAttachments[AAPLColorIndexAmbient].loadAction = MTLLoadActionClear;
+            descriptor.colorAttachments[AAPLColorIndexAmbient].storeAction = MTLStoreActionStore;
+            descriptor.colorAttachments[AAPLColorIndexAmbient].texture = _deferredAmbientColorAttachmentTexture;
             
             descriptor.depthAttachment.clearDepth = 1.0;
             descriptor.depthAttachment.loadAction = MTLLoadActionClear;
@@ -2391,6 +2436,68 @@
         }
         
         
+        [encoder endEncoding];
+
+        // Screen-space ambient occlusion over the stored depth and
+        // normal, into _ssaoBlurredTexture
+        WrySSAOUniforms ssao = {};
+        ssao.viewprojection_transform = uniforms.viewprojection_transform;
+        ssao.inverse_viewprojection_transform = uniforms.inverse_viewprojection_transform;
+        ssao.view_transform = uniforms.view_transform;
+        ssao.camera_position_world = uniforms.camera_position_world;
+        ssao.viewport = simd_make_float2((float)_deferredDepthColorAttachmentTexture.width,
+                                         (float)_deferredDepthColorAttachmentTexture.height);
+        ssao.radius = _model->_ssao_radius;
+        ssao.strength = _model->_ssao_strength;
+        ssao.mode = _model->_ssao_mode;
+        ssao.show = _model->_ssao_show;
+        if (ssao.mode != WRY_SSAO_OFF) {
+            id<MTLComputeCommandEncoder> compute = [command_buffer computeCommandEncoder];
+            compute.label = @"Screen-space occlusion";
+            MTLSize grid = MTLSizeMake(_ssaoTexture.width, _ssaoTexture.height, 1);
+            MTLSize group = MTLSizeMake(16, 16, 1);
+            [compute setComputePipelineState:ssao.mode == WRY_SSAO_LUFT ? _ssaoLuftPipelineState : _ssaoGTAOPipelineState];
+            [compute setTexture:_deferredDepthColorAttachmentTexture atIndex:0];
+            [compute setTexture:_deferredNormalColorAttachmentTexture atIndex:1];
+            [compute setTexture:_ssaoTexture atIndex:2];
+            [compute setBytes:&ssao length:sizeof(ssao) atIndex:0];
+            [compute dispatchThreads:grid threadsPerThreadgroup:group];
+            [compute setComputePipelineState:_ssaoBlurPipelineState];
+            [compute setTexture:_ssaoTexture atIndex:0];
+            [compute setTexture:_deferredDepthColorAttachmentTexture atIndex:1];
+            [compute setTexture:_ssaoBlurredTexture atIndex:2];
+            [compute dispatchThreads:grid threadsPerThreadgroup:group];
+            [compute endEncoding];
+        }
+
+        // The second pass over the same attachments: the composite adds
+        // the occluded ambient to the direct light, then the GUI goes on
+        // top.  The memoryless attachments are bound for the pipelines'
+        // sake only.
+        descriptor.colorAttachments[AAPLColorIndexColor].loadAction = MTLLoadActionLoad;
+        descriptor.colorAttachments[AAPLColorIndexAmbient].loadAction = MTLLoadActionLoad;
+        descriptor.colorAttachments[AAPLColorIndexAmbient].storeAction = MTLStoreActionDontCare;
+        descriptor.colorAttachments[AAPLColorIndexAlbedo].loadAction = MTLLoadActionDontCare;
+        descriptor.colorAttachments[AAPLColorIndexNormal].loadAction = MTLLoadActionDontCare;
+        descriptor.colorAttachments[AAPLColorIndexNormal].storeAction = MTLStoreActionDontCare;
+        descriptor.colorAttachments[AAPLColorIndexMaterial].loadAction = MTLLoadActionDontCare;
+        descriptor.colorAttachments[AAPLColorIndexDepth].loadAction = MTLLoadActionDontCare;
+        descriptor.colorAttachments[AAPLColorIndexDepth].storeAction = MTLStoreActionDontCare;
+        descriptor.depthAttachment.loadAction = MTLLoadActionDontCare;
+        encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
+        encoder.label = @"Composite and GUI";
+        [encoder setRenderPipelineState:_compositeRenderPipelineState];
+        [encoder setDepthStencilState:_ctx.disabledDepthStencilState];
+        [encoder setCullMode:MTLCullModeNone];
+        [encoder setVertexBuffer:_ctx.screenTriangleStripVertexBuffer
+                          offset:0
+                         atIndex:AAPLBufferIndexVertices];
+        [encoder setFragmentBytes:&ssao length:sizeof(ssao) atIndex:AAPLBufferIndexUniforms];
+        [encoder setFragmentTexture:_ssaoBlurredTexture atIndex:AAPLTextureIndexColor];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                    vertexStart:0
+                    vertexCount:4];
+
         {
             [self drawOverlay:encoder];
             // [self drawBezier:encoder];
@@ -2537,17 +2644,34 @@
     _deferredAlbedoColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _deferredAlbedoColorAttachmentTexture.label = @"Albedo G-buffer";
 
+    // Normal and depth are stored for the screen-space occlusion pass
     descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+    descriptor.storageMode = MTLStorageModePrivate;
     _deferredNormalColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _deferredNormalColorAttachmentTexture.label = @"Normal G-buffer";
 
     descriptor.pixelFormat = MTLPixelFormatRGBA8Unorm;
+    descriptor.storageMode = MTLStorageModeMemoryless;
     _deferredMaterialColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _deferredMaterialColorAttachmentTexture.label = @"Material G-buffer";
     
     descriptor.pixelFormat = MTLPixelFormatR32Float;
+    descriptor.storageMode = MTLStorageModePrivate;
     _deferredDepthColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _deferredDepthColorAttachmentTexture.label = @"Depth G-buffer";
+
+    descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
+    _deferredAmbientColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
+    _deferredAmbientColorAttachmentTexture.label = @"Ambient light G-buffer";
+
+    descriptor.pixelFormat = MTLPixelFormatR16Float;
+    descriptor.usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
+    _ssaoTexture = [_ctx.device newTextureWithDescriptor:descriptor];
+    _ssaoTexture.label = @"Screen-space occlusion";
+    _ssaoBlurredTexture = [_ctx.device newTextureWithDescriptor:descriptor];
+    _ssaoBlurredTexture.label = @"Screen-space occlusion, blurred";
+    descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    descriptor.storageMode = MTLStorageModeMemoryless;
     
     // depthAttachment
     descriptor.usage = MTLTextureUsageRenderTarget;
