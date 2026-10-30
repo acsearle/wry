@@ -1013,6 +1013,36 @@ namespace wry {
                 return Reply::later(std::make_shared<ScreenshotPending>(c.gui, std::move(request)));
             }));
 
+        registry.add(make_command<Ctx>(
+            "window-size", "Resize the window's content to a size in drawable pixels (for measuring at a resolution)", Category::local,
+            std::tuple{
+                Param<Ctx, int64_t>{"width", "pixels"},
+                Param<Ctx, int64_t>{"height", "pixels"},
+            },
+            [](Ctx& c, int64_t width, int64_t height) {
+                if (width < 64 || height < 64 || width > 16384 || height > 16384)
+                    return Reply::error(String("size must be 64 to 16384 pixels each way"));
+                if (!c.gui.on_window_size)
+                    return Reply::error(String("no window"));
+                c.gui.on_window_size(float2{(float)width, (float)height});
+                return Reply::ok();
+            }));
+
+        registry.add(make_command<Ctx>(
+            "gpu-time", "Mean GPU time per frame since this command last ran (milliseconds, and the frame count)", Category::local,
+            std::tuple<>{},
+            [](Ctx& c) {
+                uint64_t ns = c.gui.gpu_time_ns.exchange_relaxed(0);
+                uint64_t frames = c.gui.gpu_time_frames.exchange_relaxed(0);
+                char buffer[64];
+                if (frames == 0)
+                    std::snprintf(buffer, sizeof(buffer), "no frames");
+                else
+                    std::snprintf(buffer, sizeof(buffer), "%.3f ms over %llu frames",
+                                  (double)ns * 1e-6 / (double)frames, (unsigned long long)frames);
+                return Reply::ok(String(buffer));
+            }));
+
         // ---- Input injection (commands.md section 7).  Below the command
         // layer: these exercise the GUI exactly as a user would.  Positions
         // are view points, top-left origin.

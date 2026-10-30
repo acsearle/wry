@@ -132,6 +132,11 @@
     id<MTLTexture> _deferredAmbientColorAttachmentTexture;
     id<MTLTexture> _ssaoTexture;
     id<MTLTexture> _ssaoBlurredTexture;
+    // The GTAO taps' depth pyramid (ShaderTypes.h), and a view per level
+    // for the kernel that builds it
+    id<MTLTexture> _depthPyramid;
+    id<MTLTexture> _depthPyramidLevels[WRY_SSAO_DEPTH_PYRAMID_LEVELS];
+    id<MTLComputePipelineState> _ssaoDepthPyramidPipelineState;
     id<MTLComputePipelineState> _ssaoGTAOPipelineState;
     id<MTLComputePipelineState> _ssaoLuftPipelineState;
     id<MTLComputePipelineState> _ssaoBlurPipelineState;
@@ -602,14 +607,23 @@
             descriptor.label = @"Deferred point light";
             _deferredLightPointRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
 
+        }
+
+        {
             // The composite reads both light attachments and writes the
-            // sum; no blending
+            // sum; no blending.  It runs in the second pass, which binds
+            // only the two light attachments (and the depth buffer), so
+            // the stored G-buffers can be read as textures there.
+            MTLRenderPipelineDescriptor *descriptor = [[MTLRenderPipelineDescriptor alloc] init];
+            descriptor.colorAttachments[AAPLColorIndexColor].pixelFormat = _ctx.drawablePixelFormat;
             descriptor.colorAttachments[AAPLColorIndexColor].blendingEnabled = NO;
+            descriptor.colorAttachments[AAPLColorIndexAmbient].pixelFormat = MTLPixelFormatRGBA16Float;
+            descriptor.colorAttachments[AAPLColorIndexAmbient].writeMask = MTLColorWriteMaskNone;
+            descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
             descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::composite_vertex_function"];
             descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::composite_fragment_function"];
             descriptor.label = @"Composite direct + occluded ambient";
             _compositeRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
-
         }
 
         {
@@ -621,6 +635,8 @@
             assert(_ssaoLuftPipelineState);
             _ssaoBlurPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_blur_kernel"] error:&error];
             assert(_ssaoBlurPipelineState);
+            _ssaoDepthPyramidPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_depth_pyramid_kernel"] error:&error];
+            assert(_ssaoDepthPyramidPipelineState);
         }
         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
@@ -2456,38 +2472,50 @@
         ssao.strength = _model->_ssao_strength;
         ssao.mode = _model->_ssao_mode;
         ssao.show = _model->_ssao_show;
-        if (ssao.mode != WRY_SSAO_OFF) {
+        ssao.slices = _model->_ssao_slices;
+        ssao.steps = _model->_ssao_steps;
+        ssao.pyramid = _model->_ssao_pyramid;
+        for (int repeat = 0; ssao.mode != WRY_SSAO_OFF && repeat != _model->_ssao_repeat; ++repeat) {
             id<MTLComputeCommandEncoder> compute = [command_buffer computeCommandEncoder];
             compute.label = @"Screen-space occlusion";
             MTLSize grid = MTLSizeMake(_ssaoTexture.width, _ssaoTexture.height, 1);
             MTLSize group = MTLSizeMake(16, 16, 1);
+            if (ssao.mode == WRY_SSAO_GTAO && ssao.pyramid) {
+                // The depth pyramid first: whole 32 x 32 tiles, the
+                // kernel bound-checks the edges
+                [compute setComputePipelineState:_ssaoDepthPyramidPipelineState];
+                [compute setTexture:_deferredDepthColorAttachmentTexture atIndex:0];
+                for (int i = 0; i != WRY_SSAO_DEPTH_PYRAMID_LEVELS; ++i)
+                    [compute setTexture:_depthPyramidLevels[i] atIndex:1 + i];
+                [compute setBytes:&ssao length:sizeof(ssao) atIndex:0];
+                MTLSize tiles = MTLSizeMake((_depthPyramid.width + 31) / 32, (_depthPyramid.height + 31) / 32, 1);
+                [compute dispatchThreadgroups:tiles threadsPerThreadgroup:group];
+            }
             [compute setComputePipelineState:ssao.mode == WRY_SSAO_LUFT ? _ssaoLuftPipelineState : _ssaoGTAOPipelineState];
-            [compute setTexture:_deferredDepthColorAttachmentTexture atIndex:0];
+            [compute setTexture:ssao.mode == WRY_SSAO_LUFT ? _deferredDepthColorAttachmentTexture : _depthPyramid atIndex:0];
+            [compute setTexture:_deferredDepthColorAttachmentTexture atIndex:3];
             [compute setTexture:_deferredNormalColorAttachmentTexture atIndex:1];
             [compute setTexture:_ssaoTexture atIndex:2];
             [compute setBytes:&ssao length:sizeof(ssao) atIndex:0];
             [compute dispatchThreads:grid threadsPerThreadgroup:group];
             [compute setComputePipelineState:_ssaoBlurPipelineState];
             [compute setTexture:_ssaoTexture atIndex:0];
-            [compute setTexture:_deferredDepthColorAttachmentTexture atIndex:1];
-            [compute setTexture:_ssaoBlurredTexture atIndex:2];
+            [compute setTexture:_ssaoBlurredTexture atIndex:1];
             [compute dispatchThreads:grid threadsPerThreadgroup:group];
             [compute endEncoding];
         }
 
-        // The second pass over the same attachments: the composite adds
-        // the occluded ambient to the direct light, then the GUI goes on
-        // top.  The memoryless attachments are bound for the pipelines'
-        // sake only.
+        // The second pass, over the two light attachments only (plus the
+        // depth buffer, untouched): the composite adds the occluded
+        // ambient to the direct light, reading the stored depth G-buffer
+        // as a texture for its upsample, then the GUI goes on top.
         descriptor.colorAttachments[AAPLColorIndexColor].loadAction = MTLLoadActionLoad;
         descriptor.colorAttachments[AAPLColorIndexAmbient].loadAction = MTLLoadActionLoad;
         descriptor.colorAttachments[AAPLColorIndexAmbient].storeAction = MTLStoreActionDontCare;
-        descriptor.colorAttachments[AAPLColorIndexAlbedo].loadAction = MTLLoadActionDontCare;
-        descriptor.colorAttachments[AAPLColorIndexNormal].loadAction = MTLLoadActionDontCare;
-        descriptor.colorAttachments[AAPLColorIndexNormal].storeAction = MTLStoreActionDontCare;
-        descriptor.colorAttachments[AAPLColorIndexMaterial].loadAction = MTLLoadActionDontCare;
-        descriptor.colorAttachments[AAPLColorIndexDepth].loadAction = MTLLoadActionDontCare;
-        descriptor.colorAttachments[AAPLColorIndexDepth].storeAction = MTLStoreActionDontCare;
+        descriptor.colorAttachments[AAPLColorIndexAlbedo].texture = nil;
+        descriptor.colorAttachments[AAPLColorIndexNormal].texture = nil;
+        descriptor.colorAttachments[AAPLColorIndexMaterial].texture = nil;
+        descriptor.colorAttachments[AAPLColorIndexDepth].texture = nil;
         descriptor.depthAttachment.loadAction = MTLLoadActionDontCare;
         encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
         encoder.label = @"Composite and GUI";
@@ -2499,6 +2527,7 @@
                          atIndex:AAPLBufferIndexVertices];
         [encoder setFragmentBytes:&ssao length:sizeof(ssao) atIndex:AAPLBufferIndexUniforms];
         [encoder setFragmentTexture:_ssaoBlurredTexture atIndex:AAPLTextureIndexColor];
+        [encoder setFragmentTexture:_deferredDepthColorAttachmentTexture atIndex:AAPLTextureIndexNormal];
         [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                     vertexStart:0
                     vertexCount:4];
@@ -2669,12 +2698,38 @@
     _deferredAmbientColorAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _deferredAmbientColorAttachmentTexture.label = @"Ambient light G-buffer";
 
-    descriptor.pixelFormat = MTLPixelFormatR16Float;
+    // The occlusion runs at half resolution: (visibility, linear depth)
+    // per 2 x 2 block, the depth in full precision for the composite's
+    // bilateral upsample
+    descriptor.pixelFormat = MTLPixelFormatRG32Float;
     descriptor.usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
+    descriptor.width = (drawableSize.width + 1) / 2;
+    descriptor.height = (drawableSize.height + 1) / 2;
     _ssaoTexture = [_ctx.device newTextureWithDescriptor:descriptor];
-    _ssaoTexture.label = @"Screen-space occlusion";
+    _ssaoTexture.label = @"Screen-space occlusion (half resolution)";
     _ssaoBlurredTexture = [_ctx.device newTextureWithDescriptor:descriptor];
-    _ssaoBlurredTexture.label = @"Screen-space occlusion, blurred";
+    _ssaoBlurredTexture.label = @"Screen-space occlusion, blurred (half resolution)";
+
+    // The GTAO taps' depth pyramid: full resolution, built from the
+    // Depth G-buffer each frame.  R32Float: as R16Float the ground plane
+    // quantizes into terraces whose steps the taps read as horizons
+    // (horizontal banding at native resolution)
+    descriptor.pixelFormat = MTLPixelFormatR32Float;
+    descriptor.width = drawableSize.width;
+    descriptor.height = drawableSize.height;
+    descriptor.mipmapLevelCount = WRY_SSAO_DEPTH_PYRAMID_LEVELS;
+    _depthPyramid = [_ctx.device newTextureWithDescriptor:descriptor];
+    _depthPyramid.label = @"Depth pyramid";
+    for (int i = 0; i != WRY_SSAO_DEPTH_PYRAMID_LEVELS; ++i) {
+        _depthPyramidLevels[i] = [_depthPyramid newTextureViewWithPixelFormat:MTLPixelFormatR32Float
+                                                                   textureType:MTLTextureType2D
+                                                                        levels:NSMakeRange(i, 1)
+                                                                        slices:NSMakeRange(0, 1)];
+        _depthPyramidLevels[i].label = [NSString stringWithFormat:@"Depth pyramid level %d", i];
+    }
+    descriptor.mipmapLevelCount = 1;
+    descriptor.width = drawableSize.width;
+    descriptor.height = drawableSize.height;
     descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     descriptor.storageMode = MTLStorageModeMemoryless;
     

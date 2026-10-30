@@ -83,6 +83,12 @@ namespace wry {
         bool _ssao_show = false;
         float _ssao_radius = 0.5f;
         float _ssao_strength = 1.0f;
+        int _ssao_slices = 3;           // GTAO tap budget: slices x 2 sides x steps
+        int _ssao_steps = 4;
+        bool _ssao_pyramid = true;      // GTAO taps read the depth pyramid
+        // Encode the occlusion this many times per frame (ssao-repeat): a
+        // measuring aid, to make it dominate the frame and the GPU's clock
+        int _ssao_repeat = 1;
 
 
         // user interface state

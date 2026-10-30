@@ -166,6 +166,12 @@ namespace wry {
         // writes the PNG once `ready`.
         std::vector<std::shared_ptr<ScreenshotRequest>> screenshot_requests;
 
+        // GPU time of the frames presented since the gpu-time command last
+        // read it: the host's command-buffer completion handler (a Metal
+        // thread) adds each buffer's GPU span; the command reads and resets
+        Atomic<uint64_t> gpu_time_ns{0};
+        Atomic<uint64_t> gpu_time_frames{0};
+
         // The console's command stream.
         CommandSource console_source{command::Origin::console};
 
@@ -231,6 +237,9 @@ namespace wry {
         // Set by the host: what the `quit` command does (end the app the way
         // Quit To Desktop does).
         std::function<void()> on_quit;
+        // The window-size command's request, in drawable pixels; the host
+        // resizes the window (nothing happens headless)
+        std::function<void(float2)> on_window_size;
         // `quit fast`: the host, once its loop has ended and the socket has
         // flushed its replies, exits the process at once (std::_Exit)
         // instead of draining the scope and joining the threads, which

@@ -390,8 +390,11 @@ Illustrative, not exhaustive; arguments in `[]` have defaults.
   `reverse-rotate`, `flip-horizontal`, `flip-vertical`, `toggle-map`,
   `toggle-console`, `toggle-jacobians`, `toggle-points`,
   `toggle-wireframe`, `toggle-symbol-decals`,
-  `ssao off|gtao|luft|gtao-show|luft-show [radius texels] [strength %]`
-  (GTAO by default),
+  `ssao off|gtao|luft|gtao-show|luft-show [radius texels] [strength %]
+  [slices] [steps] [pyramid]` (GTAO by default: 3 slices x 4 steps per
+  side, the taps reading the depth pyramid; `pyramid 0` reads the Depth
+  G-buffer flat), `ssao-repeat [n]` (encode the occlusion n times per
+  frame: a measuring aid, see `gpu-time`),
   `pipette [Coordinate]` -- plus `drop`, `hold Term`.
 - **event injection** (local): `key KeyCombo [up|down|press]`,
   `type String`, `mouse-move x y`, `click x y [button]`,
@@ -422,7 +425,14 @@ draws the same line -- `MOUSEMOVE` and trackpad events feed keymaps
 and modal operators but never appear in the Info log, which records a
 drag as its result (`transform.translate(value=...)`), not its path.
 - **capture** (local): `screenshot [path]` (the next presented frame as
-  a PNG, replied with its path; cropping is the consumer's job).
+  a PNG, replied with its path; cropping is the consumer's job),
+  `window-size width height` (drawable pixels; offscreen, the drawable
+  itself: measure at a resolution), `gpu-time` (the mean GPU span of
+  the command buffers completed since it last ran, with the frame
+  count).  Measure offscreen (`--offscreen`, one buffer in flight, no
+  display sync): a windowed, display-synced run queues buffers and
+  their spans overlap, and a lightly loaded GPU runs at a lower clock,
+  so the same pass reads two to four times its saturated cost.
 - **world**: `write Coordinate Term` (what a click with a full hand
   does), `erase Coordinate` (right click).
 - **clock**: `pause`, `resume`, `step [n]`, plus local `frame [n]`.

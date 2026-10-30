@@ -1703,10 +1703,14 @@ namespace deferred {
     //
     // Both read the stored depth (linear view depth, the Depth colour
     // attachment; 0 is the sky) and normal G-buffers after the geometry
-    // pass and write a visibility
-    // factor per pixel, which a depth-aware blur smooths and the composite
-    // pass multiplies into the image-based light alone (the direct light
-    // and its shadow map are untouched, as with the symbol decals).
+    // pass, at half resolution (each thread owns a 2 x 2 block and reads
+    // the block's top-left texel; the taps still walk the full-resolution
+    // depth), and write (visibility, depth) per block, which a depth-aware
+    // blur smooths at the same resolution and the composite upsamples
+    // bilaterally; the cost is texture fetches, so a quarter of the
+    // threads is a quarter of the time.  The composite multiplies the
+    // factor into the image-based light alone (the direct light and its
+    // shadow map are untouched, as with the symbol decals).
     //
     // GTAO (Jimenez et al. 2016, as XeGTAO lays it out): for a few screen
     // directions through the pixel, find the horizon angle on each side by
@@ -1724,8 +1728,6 @@ namespace deferred {
     // The camera is fixed and elevated, so a world radius is nearly a
     // constant pixel radius; it is projected exactly per pixel anyway.
 
-    constant int kSSAOSlices = 4;
-    constant int kSSAOSteps = 8;
 
     // The render-space point under a pixel, from its linear view depth:
     // camera + ray * depth, the ray affine in the pixel (the MeshUniforms
@@ -1741,37 +1743,134 @@ namespace deferred {
         return clamp(u.radius * u.pixels_per_unit / depth, 2.0f, 256.0f);
     }
 
-    // Interleaved gradient noise (Jimenez), a per-pixel rotation of the
-    // sample pattern that the 4 x 4 blur below averages out
+    // Interleaved gradient noise (Jimenez), a per-block rotation of the
+    // sample pattern that the blur below averages out
     static float ssao_noise(uint2 g) {
         return fract(52.9829189f * fract(0.06711056f * (float)g.x + 0.00583715f * (float)g.y));
     }
 
+    // The depth pyramid the GTAO taps read (XeGTAO's prefilter): level 0 is
+    // the Depth G-buffer copied, each coarser level the 2 x 2 below it
+    // filtered toward its far side, so that a near occluder does not bloat
+    // into the coarse levels and over-darken; sky (0) texels weigh nothing
+    static float ssao_depth_mip_filter(float4 d, float radius) {
+        float far = max(max(d.x, d.y), max(d.z, d.w));
+        if (far <= 0.0f)
+            return 0.0f;
+        float4 w = saturate((radius - (far - d)) / (0.5f * radius));
+        w = select(w, float4(0.0f), d <= 0.0f);
+        return dot(d, w) / dot(w, float4(1.0f));
+    }
+
+    // One thread per 2 x 2 base texels; a 16 x 16 threadgroup covers a
+    // 32 x 32 tile and reduces the coarser levels in threadgroup memory.
+    // Dispatched by threadgroups (whole tiles), so the edge threads bound-
+    // check every read and write and contribute sky to the reduction
     [[kernel]] void
-    ssao_gtao_kernel(texture2d<float, access::read> depthTexture [[texture(0)]],
+    ssao_depth_pyramid_kernel(texture2d<float, access::read> depthTexture [[texture(0)]],
+                              texture2d<float, access::write> level0 [[texture(1)]],
+                              texture2d<float, access::write> level1 [[texture(2)]],
+                              texture2d<float, access::write> level2 [[texture(3)]],
+                              texture2d<float, access::write> level3 [[texture(4)]],
+                              texture2d<float, access::write> level4 [[texture(5)]],
+                              constant WrySSAOUniforms& u [[buffer(0)]],
+                              uint2 g [[thread_position_in_grid]],
+                              uint2 l [[thread_position_in_threadgroup]])
+    {
+        threadgroup float tile1[16][16];
+        threadgroup float tile2[8][8];
+        threadgroup float tile3[4][4];
+        uint w = depthTexture.get_width();
+        uint h = depthTexture.get_height();
+        uint2 b = 2u * g;
+        float4 d = float4(0.0f);
+        if (b.x < w && b.y < h) {
+            d.x = depthTexture.read(b).r;
+            level0.write(float4(d.x, 0.0f, 0.0f, 0.0f), b);
+            if (b.x + 1u < w) {
+                d.y = depthTexture.read(b + uint2(1u, 0u)).r;
+                level0.write(float4(d.y, 0.0f, 0.0f, 0.0f), b + uint2(1u, 0u));
+            }
+            if (b.y + 1u < h) {
+                d.z = depthTexture.read(b + uint2(0u, 1u)).r;
+                level0.write(float4(d.z, 0.0f, 0.0f, 0.0f), b + uint2(0u, 1u));
+            }
+            if (b.x + 1u < w && b.y + 1u < h) {
+                d.w = depthTexture.read(b + uint2(1u, 1u)).r;
+                level0.write(float4(d.w, 0.0f, 0.0f, 0.0f), b + uint2(1u, 1u));
+            }
+        }
+        float v = ssao_depth_mip_filter(d, u.radius);
+        if (g.x < level1.get_width() && g.y < level1.get_height())
+            level1.write(float4(v, 0.0f, 0.0f, 0.0f), g);
+        tile1[l.y][l.x] = v;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if ((l.x & 1u) == 0u && (l.y & 1u) == 0u) {
+            v = ssao_depth_mip_filter(float4(tile1[l.y][l.x], tile1[l.y][l.x + 1u],
+                                             tile1[l.y + 1u][l.x], tile1[l.y + 1u][l.x + 1u]), u.radius);
+            uint2 p = g / 2u;
+            if (p.x < level2.get_width() && p.y < level2.get_height())
+                level2.write(float4(v, 0.0f, 0.0f, 0.0f), p);
+            tile2[l.y / 2u][l.x / 2u] = v;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if ((l.x & 3u) == 0u && (l.y & 3u) == 0u) {
+            uint2 q = l / 2u;
+            v = ssao_depth_mip_filter(float4(tile2[q.y][q.x], tile2[q.y][q.x + 1u],
+                                             tile2[q.y + 1u][q.x], tile2[q.y + 1u][q.x + 1u]), u.radius);
+            uint2 p = g / 4u;
+            if (p.x < level3.get_width() && p.y < level3.get_height())
+                level3.write(float4(v, 0.0f, 0.0f, 0.0f), p);
+            tile3[l.y / 4u][l.x / 4u] = v;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if ((l.x & 7u) == 0u && (l.y & 7u) == 0u) {
+            uint2 q = l / 4u;
+            v = ssao_depth_mip_filter(float4(tile3[q.y][q.x], tile3[q.y][q.x + 1u],
+                                             tile3[q.y + 1u][q.x], tile3[q.y + 1u][q.x + 1u]), u.radius);
+            uint2 p = g / 8u;
+            if (p.x < level4.get_width() && p.y < level4.get_height())
+                level4.write(float4(v, 0.0f, 0.0f, 0.0f), p);
+        }
+    }
+
+    // Nearest texel of the nearest level; off-screen taps read sky
+    constexpr sampler ssao_depth_sampler(coord::normalized, filter::nearest, mip_filter::nearest, address::clamp_to_zero);
+
+    // XeGTAO's mip selection: a tap d pixels out reads level log2(d) - 3.3,
+    // so level 0 within ~10 pixels, level 1 to ~20, and so on
+    static float ssao_depth_mip(float distance_px) {
+        return clamp(log2(distance_px) - 3.3f, 0.0f, (float)(WRY_SSAO_DEPTH_PYRAMID_LEVELS - 1));
+    }
+
+    [[kernel]] void
+    ssao_gtao_kernel(texture2d<float, access::sample> depthPyramid [[texture(0)]],
                      texture2d<float, access::read> normalTexture [[texture(1)]],
                      texture2d<float, access::write> aoTexture [[texture(2)]],
+                     texture2d<float, access::read> depthTexture [[texture(3)]],
                      constant WrySSAOUniforms& u [[buffer(0)]],
                      uint2 g [[thread_position_in_grid]])
     {
         if (g.x >= aoTexture.get_width() || g.y >= aoTexture.get_height())
             return;
-        float depth = depthTexture.read(g).r;
+        uint2 f = 2u * g;                    // the block's representative texel
+        float depth = u.pyramid ? depthPyramid.read(f, 0).r : depthTexture.read(f).r;
         if (depth <= 0.0f) {
-            aoTexture.write(float4(1.0f), g);
+            aoTexture.write(float4(1.0f, 0.0f, 0.0f, 0.0f), g);
             return;
         }
-        float2 pixel = float2(g) + 0.5f;
+        float2 pixel = float2(f) + 0.5f;
         float3 P = ssao_position(u, pixel, depth);
-        float3 N = normalize(normalTexture.read(g).xyz);
+        float3 N = normalize(normalTexture.read(f).xyz);
         float3 V = normalize(u.camera_position_world.xyz - P);
         float radius_px = ssao_radius_pixels(u, depth);
         float noise = ssao_noise(g);
         float step_noise = ssao_noise(g + uint2(37u, 91u));
+        float2 inv_viewport = 1.0f / u.viewport;
 
         float visibility = 0.0f;
-        for (int s = 0; s != kSSAOSlices; ++s) {
-            float phi = ((float)s + noise) * (M_PI_F / (float)kSSAOSlices);
+        for (int s = 0; s != u.slices; ++s) {
+            float phi = ((float)s + noise) * (M_PI_F / (float)u.slices);
             float2 dir = float2(cos(phi), sin(phi));
             // The slice's direction in the world: along the screen
             // direction at this pixel's depth, flattened against V
@@ -1785,17 +1884,22 @@ namespace deferred {
             float horizon_cos[2] = {-1.0f, -1.0f};
             for (int side = 0; side != 2; ++side) {
                 float sgn = side == 0 ? 1.0f : -1.0f;
-                for (int i = 0; i != kSSAOSteps; ++i) {
-                    float t = ((float)i + 0.5f + step_noise * 0.5f) / (float)kSSAOSteps;
+                for (int i = 0; i != u.steps; ++i) {
+                    float t = ((float)i + 0.5f + step_noise * 0.5f) / (float)u.steps;
                     t = t * t;                       // denser near the pixel
-                    float2 sp = pixel + sgn * dir * (t * radius_px);
-                    if (any(sp < 0.0f) || any(sp >= u.viewport))
-                        break;
-                    uint2 sg = uint2(sp);
-                    float sd = depthTexture.read(sg).r;
+                    float distance_px = t * radius_px;
+                    float2 sp = pixel + sgn * dir * distance_px;
+                    float sd;
+                    if (u.pyramid) {
+                        sd = depthPyramid.sample(ssao_depth_sampler, sp * inv_viewport, level(ssao_depth_mip(distance_px))).r;
+                    } else {
+                        if (any(sp < 0.0f) || any(sp >= u.viewport))
+                            break;
+                        sd = depthTexture.read(uint2(sp)).r;
+                    }
                     if (sd <= 0.0f)
                         continue;
-                    float3 S = ssao_position(u, float2(sg) + 0.5f, sd);
+                    float3 S = ssao_position(u, sp, sd);
                     float3 d = S - P;
                     float dist = length(d);
                     if (dist < 1e-4f)
@@ -1823,9 +1927,9 @@ namespace deferred {
             float arc1 = (cosN + 2.0f * h1 * sin(n) - cos(2.0f * h1 - n)) * 0.25f;
             visibility += projLen * (arc0 + arc1);
         }
-        float ao = saturate(visibility / (float)kSSAOSlices);
+        float ao = saturate(visibility / (float)u.slices);
         ao = 1.0f - u.strength * (1.0f - ao);
-        aoTexture.write(float4(ao), g);
+        aoTexture.write(float4(ao, depth, 0.0f, 0.0f), g);
     }
 
     [[kernel]] void
@@ -1837,12 +1941,13 @@ namespace deferred {
     {
         if (g.x >= aoTexture.get_width() || g.y >= aoTexture.get_height())
             return;
-        float z = depthTexture.read(g).r;
+        uint2 f = 2u * g;                    // the block's representative texel
+        float z = depthTexture.read(f).r;
         if (z <= 0.0f) {
-            aoTexture.write(float4(1.0f), g);
+            aoTexture.write(float4(1.0f, 0.0f, 0.0f, 0.0f), g);
             return;
         }
-        float2 pixel = float2(g) + 0.5f;
+        float2 pixel = float2(f) + 0.5f;
         float radius_px = ssao_radius_pixels(u, z);
         // The Gaussian-weighted mean view depth around the pixel (sigma =
         // half the radius): a 9 x 9 grid of taps rotated per pixel so the
@@ -1870,23 +1975,25 @@ namespace deferred {
         float blurred = weight > 0.0f ? sum / weight : z;
         // Farther than the surroundings: darken, over one radius
         float ao = 1.0f - u.strength * saturate((z - blurred) / u.radius);
-        aoTexture.write(float4(ao), g);
+        aoTexture.write(float4(ao, z, 0.0f, 0.0f), g);
     }
 
-    // A 5 x 5 blur that stays on the surface: taps weighted down as their
-    // view depth departs from the centre's
+    // A 5 x 5 blur over the (visibility, depth) blocks that stays on the
+    // surface: taps weighted down as their depth departs from the
+    // centre's.  The depth rides along for the composite's upsample.
     [[kernel]] void
     ssao_blur_kernel(texture2d<float, access::read> aoTexture [[texture(0)]],
-                     texture2d<float, access::read> depthTexture [[texture(1)]],
-                     texture2d<float, access::write> outTexture [[texture(2)]],
+                     texture2d<float, access::write> outTexture [[texture(1)]],
                      constant WrySSAOUniforms& u [[buffer(0)]],
                      uint2 g [[thread_position_in_grid]])
     {
-        if (g.x >= outTexture.get_width() || g.y >= outTexture.get_height())
+        int2 size = int2(outTexture.get_width(), outTexture.get_height());
+        if (g.x >= (uint)size.x || g.y >= (uint)size.y)
             return;
-        float z = depthTexture.read(g).r;
+        float2 centre = aoTexture.read(g).rg;
+        float z = centre.g;
         if (z <= 0.0f) {
-            outTexture.write(float4(1.0f), g);
+            outTexture.write(float4(1.0f, 0.0f, 0.0f, 0.0f), g);
             return;
         }
         float sigma = 0.1f * u.radius;
@@ -1894,23 +2001,28 @@ namespace deferred {
         for (int j = -2; j <= 2; ++j) {
             for (int i = -2; i <= 2; ++i) {
                 int2 sp = int2(g) + int2(i, j);
-                if (any(sp < 0) || sp.x >= (int)u.viewport.x || sp.y >= (int)u.viewport.y)
+                if (any(sp < 0) || any(sp >= size))
                     continue;
-                uint2 sg = uint2(sp);
-                float sz = depthTexture.read(sg).r;
-                if (sz <= 0.0f)
+                float2 s = aoTexture.read(uint2(sp)).rg;
+                if (s.g <= 0.0f)
                     continue;
-                float dz = (sz - z) / sigma;
+                float dz = (s.g - z) / sigma;
                 float w = exp(-dz * dz);
-                sum += aoTexture.read(sg).r * w;
+                sum += s.r * w;
                 weight += w;
             }
         }
-        outTexture.write(float4(weight > 0.0f ? sum / weight : 1.0f), g);
+        outTexture.write(float4(weight > 0.0f ? sum / weight : 1.0f, z, 0.0f, 0.0f), g);
     }
 
     // ---- The composite: direct + occlusion * ambient, in a second pass
-    // over the same attachments once the occlusion texture exists
+    // over the two light attachments once the occlusion texture exists.
+    // The occlusion is at half resolution, so each pixel blends the four
+    // blocks around it bilinearly, each weighted by how close the block's
+    // depth is to the pixel's own (the stored depth, bound as a texture
+    // here): the halo stops at a silhouette instead of bleeding across it.
+    // A pixel no block sits on (a one-pixel feature) takes the plain
+    // bilinear blend.
 
     struct CompositeVertexFunctionOutput {
         float4 position [[position]];
@@ -1934,11 +2046,37 @@ namespace deferred {
     composite_fragment_function(CompositeVertexFunctionOutput in [[stage_in]],
                                 CompositeFragmentFunctionInput g,
                                 constant WrySSAOUniforms& u [[buffer(AAPLBufferIndexUniforms)]],
-                                texture2d<float, access::read> aoTexture [[texture(AAPLTextureIndexColor)]])
+                                texture2d<float, access::read> aoTexture [[texture(AAPLTextureIndexColor)]],
+                                texture2d<float, access::read> depthTexture [[texture(AAPLTextureIndexNormal)]])
     {
         float ao = 1.0f;
-        if (u.mode != WRY_SSAO_OFF)
-            ao = aoTexture.read(uint2(in.position.xy)).r;
+        if (u.mode != WRY_SSAO_OFF) {
+            uint2 p = uint2(in.position.xy);
+            float z = depthTexture.read(p).r;
+            if (z > 0.0f) {
+                // Block h represents texel 2h, so in block units the pixel
+                // sits at p / 2: even pixels on a block, odd ones between
+                float2 s = float2(p) * 0.5f;
+                int2 h0 = int2(floor(s));
+                float2 f = s - float2(h0);
+                int2 hmax = int2(aoTexture.get_width() - 1, aoTexture.get_height() - 1);
+                float sigma = 0.1f * u.radius;
+                float sum = 0.0f, weight = 0.0f, plain = 0.0f;
+                for (int j = 0; j != 2; ++j) {
+                    for (int i = 0; i != 2; ++i) {
+                        int2 h = clamp(h0 + int2(i, j), int2(0), hmax);
+                        float2 c = aoTexture.read(uint2(h)).rg;
+                        float bw = (i ? f.x : 1.0f - f.x) * (j ? f.y : 1.0f - f.y);
+                        float dz = (c.g - z) / sigma;
+                        float w = bw * (c.g > 0.0f ? exp(-dz * dz) : 0.0f);
+                        sum += c.r * w;
+                        weight += w;
+                        plain += c.r * bw;
+                    }
+                }
+                ao = weight > 1e-3f ? sum / weight : plain;
+            }
+        }
         LightingFragmentFunctionOutput out;
         if (u.show)
             out.color = half4(half3(ao), 1.0h);

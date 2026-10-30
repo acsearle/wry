@@ -265,6 +265,13 @@ typedef struct
 #define WRY_SSAO_GTAO 1
 #define WRY_SSAO_LUFT 2
 
+// The GTAO taps read a depth pyramid (R32Float, this many levels, built
+// from the Depth G-buffer each frame by ssao_depth_pyramid_kernel); a tap
+// reads the level its distance from the pixel selects, so far taps touch
+// few texels.  Not R16Float: a flat plane quantizes into terraces whose
+// steps the taps read as horizons (banding)
+#define WRY_SSAO_DEPTH_PYRAMID_LEVELS 5
+
 typedef struct {
     // The camera and its ray basis, as MeshUniforms has them
     simd_float4 camera_position_world;
@@ -277,7 +284,10 @@ typedef struct {
     float strength;                 // 1 = as estimated
     int mode;                       // WRY_SSAO_*
     int show;                       // nonzero: composite the factor itself, as grey
-    float _pad;
+    int slices;                     // GTAO: slice directions per pixel
+    int steps;                      // GTAO: taps per side per slice
+    int pyramid;                    // GTAO: taps read the depth pyramid (else the Depth G-buffer)
+    int _pad[2];
 } WrySSAOUniforms;
 
 #pragma mark - Symbol slabs

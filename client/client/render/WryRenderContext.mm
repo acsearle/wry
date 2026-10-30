@@ -97,17 +97,16 @@
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].sourceAlphaBlendFactor = MTLBlendFactorOne;
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexColor].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexAlbedo].pixelFormat = MTLPixelFormatRGBA16Float;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexNormal].pixelFormat = MTLPixelFormatRGBA16Float;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexMaterial].pixelFormat = MTLPixelFormatRGBA8Unorm;
-            renderPipelineDescriptor.colorAttachments[AAPLColorIndexDepth].pixelFormat = MTLPixelFormatR32Float;
+            // The overlay draws in the world's second (composite) pass,
+            // which binds only the two light attachments and the depth
+            // buffer; the pipeline must declare exactly those
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexAmbient].pixelFormat = MTLPixelFormatRGBA16Float;
             renderPipelineDescriptor.colorAttachments[AAPLColorIndexAmbient].writeMask = MTLColorWriteMaskNone;
             renderPipelineDescriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
             _overlayRenderPipelineState = [self newRenderPipelineStateWithDescriptor:renderPipelineDescriptor];
 
-            // GUI quads (SpriteAtlas::commit) inside the world's G-buffer
+            // GUI quads (SpriteAtlas::commit) inside the world's composite
             // pass: same attachments and blending, instanced quad shaders.
             {
                 MTLRenderPipelineDescriptor* quad = [renderPipelineDescriptor copy];

@@ -1348,13 +1348,26 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
-            "ssao", "Screen-space ambient occlusion: off, gtao or luft, with -show for the factor itself; then a radius in texels (128 per world unit) and a strength in percent", Category::local,
+            "ssao-repeat", "Encode the screen-space occlusion this many times per frame (measuring aid: with the GPU saturated by it, (frame - frame at 1) / (n - 1) is one pass's cost at full clock)", Category::local,
+            std::tuple{
+                Param<Ctx, int64_t>{"n", "1 to 64", 1},
+            },
+            with_world([](WorldState& ws, int64_t n) {
+                ws._ssao_repeat = (int)std::clamp<int64_t>(n, 1, 64);
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "ssao", "Screen-space ambient occlusion: off, gtao or luft, with -show for the factor itself; then a radius in texels (128 per world unit), a strength in percent, and for GTAO the slices and steps per side and whether the taps read the depth pyramid", Category::local,
             std::tuple{
                 Param<Ctx, String>{"mode", "off, gtao, luft, gtao-show or luft-show"},
                 Param<Ctx, int64_t>{"radius", "texels, 128 per world unit", 64},
                 Param<Ctx, int64_t>{"strength", "percent; 100 = as estimated", 100},
+                Param<Ctx, int64_t>{"slices", "GTAO slice directions per pixel, 1 to 16", 3},
+                Param<Ctx, int64_t>{"steps", "GTAO taps per side per slice, 1 to 32", 4},
+                Param<Ctx, int64_t>{"pyramid", "GTAO taps read the depth pyramid (1) or the Depth G-buffer (0)", 1},
             },
-            with_world([](WorldState& ws, String const& mode, int64_t radius_texels, int64_t strength_percent) {
+            with_world([](WorldState& ws, String const& mode, int64_t radius_texels, int64_t strength_percent, int64_t slices, int64_t steps, int64_t pyramid) {
                 const double radius = radius_texels / 128.0;
                 const double strength = strength_percent / 100.0;
                 std::string_view m((const char*)mode.chars.data(), mode.chars.size());
@@ -1370,6 +1383,9 @@ namespace wry {
                 ws._ssao_show = show;
                 ws._ssao_radius = (float)std::clamp(radius, 0.01, 8.0);
                 ws._ssao_strength = (float)std::clamp(strength, 0.0, 4.0);
+                ws._ssao_slices = (int)std::clamp<int64_t>(slices, 1, 16);
+                ws._ssao_steps = (int)std::clamp<int64_t>(steps, 1, 32);
+                ws._ssao_pyramid = pyramid != 0;
                 return Reply::ok();
             })));
 

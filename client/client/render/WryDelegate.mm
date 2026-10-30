@@ -164,6 +164,9 @@ namespace {
     // commands or the session have work to do, at a fixed dt, and are
     // never presented.
     BOOL _offscreen;
+    // The offscreen drawable's size in pixels (1920 x 1080 unless the
+    // window-size command changes it), viewed at two pixels per point
+    CGSize _offscreenSize;
     // The shared render context (device + 2D services), owned by this host and
     // borrowed by whatever scene is showing.
     WryRenderContext* _ctx;
@@ -247,6 +250,22 @@ namespace {
                                                     next:menu];
     // The `quit` command ends the app the same way.
     _gui->on_quit = [quit] { quit(); };
+    // The window-size command: pixels to points by the backing scale,
+    // the resize path then sets the drawable; offscreen, the drawable
+    // itself
+    __weak WryDelegate* weak_self = self;
+    _gui->on_window_size = [weak_self](wry::float2 pixels) {
+        WryDelegate* self = weak_self;
+        if (!self)
+            return;
+        if (self->_offscreen) {
+            self->_offscreenSize = CGSizeMake(pixels.x, pixels.y);
+            [self->_scene drawableResize:self->_offscreenSize];
+        } else if (self->_window) {
+            CGFloat scale = self->_window.backingScaleFactor;
+            [self->_window setContentSize:NSMakeSize(pixels.x / scale, pixels.y / scale)];
+        }
+    };
 }
 
 #pragma mark NSApplicationDelegate
@@ -361,6 +380,7 @@ namespace {
 // main drives it: -render while there is work, -waitForInput otherwise.
 - (void)setUpOffscreen {
     _offscreen = YES;
+    _offscreenSize = CGSizeMake(1920.0, 1080.0);
     // Offscreen is only useful driven, so the socket is implied.
     if (!_gui->control_socket) {
         std::error_code ec;
@@ -373,11 +393,11 @@ namespace {
 }
 
 - (CGSize)drawableSizePixels {
-    return _offscreen ? CGSizeMake(1920.0, 1080.0) : _metalLayer.drawableSize;
+    return _offscreen ? _offscreenSize : _metalLayer.drawableSize;
 }
 
 - (CGSize)viewSizePoints {
-    return _offscreen ? CGSizeMake(960.0, 540.0) : _metalView.bounds.size;
+    return _offscreen ? CGSizeMake(_offscreenSize.width / 2.0, _offscreenSize.height / 2.0) : _metalView.bounds.size;
 }
 
 - (BOOL)hasWork {
@@ -842,6 +862,16 @@ namespace {
     // Every transient buffer slice this frame used is reusable once the GPU
     // passes this point.
     [_ctx.arena endFrameOnCommandBuffer:command_buffer];
+    // The frame's GPU span, for the gpu-time command (a Metal thread;
+    // touches only the two counters)
+    wry::GuiContext* gui = _gui;
+    [command_buffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+        if (completed.status != MTLCommandBufferStatusCompleted)
+            return;
+        double seconds = completed.GPUEndTime - completed.GPUStartTime;
+        gui->gpu_time_ns.fetch_add_relaxed((uint64_t)(seconds * 1e9));
+        gui->gpu_time_frames.fetch_add_relaxed(1);
+    }];
     [command_buffer commit];
     // With no drawable to throttle it, an offscreen host waits out each
     // frame; this also completes screenshots before the next frame.
