@@ -749,8 +749,10 @@ namespace deferred {
     //
     // Note use of raster order groups
     //
-    // Metal does not(?) allow reading back from depth buffer so we compute it
-    // in user space
+    // Metal does not allow reading the depth attachment within the pass, so
+    // the G-buffer carries its own: linear view depth (clip w), from which
+    // every reader recovers the surface as camera + ray * depth with the
+    // MeshUniforms ray basis.  Cleared to 0, which is the sky.
     
     // TODO: clearcoat, clearcoat roughness
     //
@@ -862,9 +864,8 @@ namespace deferred {
         out.material.b = front_facing ? metallicSample.b : 0.0h;
         out.material.a = 0.0h;
         
-        // this choice of depth is the same as the hardware depth buffer
-        // note we cannot read the hardware depth buffer in the same pass
-        out.depth = in.position_clip.z;
+        // Linear view depth; the rasterized position's w is 1 / clip w
+        out.depth = 1.0f / in.position_clip.w;
         
         return out;
         
@@ -1136,7 +1137,6 @@ namespace deferred {
 
         float4 position_world = instance.model_transform * float4(hit.position, 1.0f);
         float4 position_clip = uniforms.viewprojection_transform * position_world;
-        float depth = position_clip.z / position_clip.w;
         float3 normal_world = normalize((instance.model_transform * float4(hit.normal, 0.0f)).xyz);
 
         // Texels per pixel across the cuboid face, for the atlas mip level
@@ -1151,8 +1151,8 @@ namespace deferred {
         out.albedo = half4(albedo, 1.0h);
         out.normal = half4(half3(normal_world), 0.0h);
         out.material = half4(1.0h, 0.5h, 0.0h, 0.0h);   // occlusion, roughness, metallic
-        out.depth = depth;
-        out.depth_test = depth;
+        out.depth = position_clip.w;
+        out.depth_test = position_clip.z / position_clip.w;
         return out;
     }
 
@@ -1225,11 +1225,20 @@ namespace deferred {
     // multiplies the occlusion channel in place under the G-buffer raster
     // order group.  No depth test: the box's own depth means nothing.
 
+    // The camera ray through an NDC point, with unit component along the
+    // view axis (ShaderTypes.h, MeshUniforms): camera + ray * depth is the
+    // surface at linear view depth
+    static float3 camera_ray(constant MeshUniforms& uniforms, float2 ndc) {
+        return uniforms.camera_ray_centre.xyz
+             + ndc.x * uniforms.camera_ray_dx.xyz
+             + ndc.y * uniforms.camera_ray_dy.xyz;
+    }
+
     struct SymbolDecalVertexFunctionOutput {
         float4 position_clip [[position]];
-        // The near-plane point of the pixel's ray, affine in the pixel, so
-        // interpolated without perspective
-        float4 near_world [[center_no_perspective]];
+        // The camera ray through the pixel (MeshUniforms ray basis), affine
+        // in the pixel, so interpolated without perspective
+        float3 ray [[center_no_perspective]];
         uint instance_id [[flat]];
     };
 
@@ -1256,7 +1265,7 @@ namespace deferred {
         float4 position_world = instance.model_transform * float4(p, 1.0f);
         out.position_clip = uniforms.viewprojection_transform * position_world;
         float2 ndc = out.position_clip.xy / out.position_clip.w;
-        out.near_world = uniforms.inverse_viewprojection_transform * float4(ndc, 0.0f, 1.0f);
+        out.ray = camera_ray(uniforms, ndc);
         out.instance_id = instance_id;
         return out;
     }
@@ -1297,7 +1306,7 @@ namespace deferred {
 
         WrySymbolInstance instance = instances[in.instance_id];
         // The surface under this pixel, from the G-buffer's depth, in slab space
-        float4 position_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2] * gbuffer.depth;
+        float4 position_world = float4(uniforms.camera_position_world.xyz + in.ray * gbuffer.depth, 1.0f);
         float4 q = instance.inverse_model_transform * position_world;
         float3 p = q.xyz / q.w;
         float3 half_extent = instance.half_extent.xyz;
@@ -1347,7 +1356,8 @@ namespace deferred {
     
     struct LightingVertexFunctionOutput {
         float4 near_clip [[ position ]];
-        float4 near_world;
+        // The camera ray through the pixel (MeshUniforms ray basis)
+        float3 ray [[center_no_perspective]];
     };
     
     struct LightingFragmentFunctionOutput {
@@ -1367,7 +1377,7 @@ namespace deferred {
     {
         LightingVertexFunctionOutput out;
         out.near_clip = vertexArray[vertexID];
-        out.near_world = uniforms.inverse_viewprojection_transform * out.near_clip;
+        out.ray = camera_ray(uniforms, out.near_clip.xy / out.near_clip.w);
         return out;
     }
     
@@ -1399,13 +1409,8 @@ namespace deferred {
         float  occlusion = float(gbuffer.material.r);
         float  roughness = float(gbuffer.material.g);
         float  metallic  = float(gbuffer.material.b);
-        // float  depth     = gbuffer.depth;
         
-        // compute ray direction (towards camera)
-        float4 far_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2];
-        float3 direction = in.near_world.xyz * far_world.w - far_world.xyz * in.near_world.w;
-        
-        float3 V = normalize(direction);
+        float3 V = normalize(-in.ray);       // towards the camera
         float3 N = normal;
         float3 R = reflect(-V, N);
         
@@ -1473,10 +1478,9 @@ namespace deferred {
         float  depth     = gbuffer.depth;
         // direct light is not attenuated by baked ambient occlusion
 
-        float4 position_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2] * depth;
-        float3 direction = in.near_world.xyz * position_world.w - position_world.xyz * in.near_world.w;
+        float4 position_world = float4(uniforms.camera_position_world.xyz + in.ray * depth, 1.0f);
 
-        float3 V = normalize(direction);
+        float3 V = normalize(-in.ray);       // towards the camera
         float3 N = normal;
         float3 L = uniforms.light_direction;
         float3 H = normalize(V + L);
@@ -1564,9 +1568,8 @@ namespace deferred {
         // direct light is not attenuated by baked ambient occlusion
 
         // position of the fragment in the world
-        float4 position_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2] * depth;
-        position_world /= position_world.w;
-        float3 direction = in.near_world.xyz * position_world.w - position_world.xyz * in.near_world.w;
+        float4 position_world = float4(uniforms.camera_position_world.xyz + in.ray * depth, 1.0f);
+        float3 direction = -in.ray;          // towards the camera
 
         // position of the fragment in the light's coordinate system
         float4 position_light = uniforms.light_viewprojection_transform * position_world;
@@ -1696,42 +1699,11 @@ namespace deferred {
     //     properties before lighting applied; example: stickers, tire tracks
     
     
-    [[fragment]] LightingFragmentFunctionOutput
-    decal_fragment_function(LightingVertexFunctionOutput in [[stage_in]],
-                            FragmentFunctionOutput gbuffer,
-                            constant MeshUniforms &uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
-                            texture2d<float> decal_texture [[texture(AAPLTextureIndexColor)]]) {
-        
-        LightingFragmentFunctionOutput out;
-
-        // intersect the camera ray with the depth buffer
-        
-        float  depth          = gbuffer.depth;
-        float4 position_world = in.near_world + uniforms.inverse_viewprojection_transform.columns[2] * depth;
-
-        // project the world to texture coordinate space
-        
-        // inverse_model_transform - per instance
-        // inverse_texture_transform - also per instance?
-        
-        // what is the relationship with tangent/bitangent/normal
-        
-        // discard out of bounds
-        
-        // write color
-        
-        return out;
-        
-    }
-    
-    
-    
-    
-    
     // ---- Screen-space ambient occlusion: two estimators behind one switch
     //
-    // Both read the stored depth (NDC z, the Depth colour attachment) and
-    // normal G-buffers after the geometry pass and write a visibility
+    // Both read the stored depth (linear view depth, the Depth colour
+    // attachment; 0 is the sky) and normal G-buffers after the geometry
+    // pass and write a visibility
     // factor per pixel, which a depth-aware blur smooths and the composite
     // pass multiplies into the image-based light alone (the direct light
     // and its shadow map are untouched, as with the symbol decals).
@@ -1755,20 +1727,18 @@ namespace deferred {
     constant int kSSAOSlices = 4;
     constant int kSSAOSteps = 8;
 
-    // The render-space point under a pixel, from its NDC depth
+    // The render-space point under a pixel, from its linear view depth:
+    // camera + ray * depth, the ray affine in the pixel (the MeshUniforms
+    // ray basis, copied into these uniforms)
     static float3 ssao_position(constant WrySSAOUniforms& u, float2 pixel, float depth) {
         float2 ndc = float2(2.0f * pixel.x / u.viewport.x - 1.0f, 1.0f - 2.0f * pixel.y / u.viewport.y);
-        float4 near = u.inverse_viewprojection_transform * float4(ndc, 0.0f, 1.0f);
-        float4 p = near + u.inverse_viewprojection_transform.columns[2] * depth;
-        return p.xyz / p.w;
+        float3 ray = u.camera_ray_centre.xyz + ndc.x * u.camera_ray_dx.xyz + ndc.y * u.camera_ray_dy.xyz;
+        return u.camera_position_world.xyz + ray * depth;
     }
 
-    // Pixels per world unit at a point: the radius, projected
-    static float ssao_radius_pixels(constant WrySSAOUniforms& u, float3 P) {
-        float4 c0 = u.viewprojection_transform * float4(P, 1.0f);
-        float4 c1 = u.viewprojection_transform * float4(P + float3(u.radius, 0.0f, 0.0f), 1.0f);
-        float r = abs(c1.x / c1.w - c0.x / c0.w) * 0.5f * u.viewport.x;
-        return clamp(r, 2.0f, 256.0f);
+    // The radius in pixels at a depth
+    static float ssao_radius_pixels(constant WrySSAOUniforms& u, float depth) {
+        return clamp(u.radius * u.pixels_per_unit / depth, 2.0f, 256.0f);
     }
 
     // Interleaved gradient noise (Jimenez), a per-pixel rotation of the
@@ -1787,7 +1757,7 @@ namespace deferred {
         if (g.x >= aoTexture.get_width() || g.y >= aoTexture.get_height())
             return;
         float depth = depthTexture.read(g).r;
-        if (depth >= 1.0f) {
+        if (depth <= 0.0f) {
             aoTexture.write(float4(1.0f), g);
             return;
         }
@@ -1795,7 +1765,7 @@ namespace deferred {
         float3 P = ssao_position(u, pixel, depth);
         float3 N = normalize(normalTexture.read(g).xyz);
         float3 V = normalize(u.camera_position_world.xyz - P);
-        float radius_px = ssao_radius_pixels(u, P);
+        float radius_px = ssao_radius_pixels(u, depth);
         float noise = ssao_noise(g);
         float step_noise = ssao_noise(g + uint2(37u, 91u));
 
@@ -1823,7 +1793,7 @@ namespace deferred {
                         break;
                     uint2 sg = uint2(sp);
                     float sd = depthTexture.read(sg).r;
-                    if (sd >= 1.0f)
+                    if (sd <= 0.0f)
                         continue;
                     float3 S = ssao_position(u, float2(sg) + 0.5f, sd);
                     float3 d = S - P;
@@ -1858,11 +1828,6 @@ namespace deferred {
         aoTexture.write(float4(ao), g);
     }
 
-    // Depth along the view axis
-    static float ssao_view_depth(constant WrySSAOUniforms& u, float3 P) {
-        return -(u.view_transform * float4(P, 1.0f)).z;
-    }
-
     [[kernel]] void
     ssao_luft_kernel(texture2d<float, access::read> depthTexture [[texture(0)]],
                      texture2d<float, access::read> normalTexture [[texture(1)]],
@@ -1872,15 +1837,13 @@ namespace deferred {
     {
         if (g.x >= aoTexture.get_width() || g.y >= aoTexture.get_height())
             return;
-        float depth = depthTexture.read(g).r;
-        if (depth >= 1.0f) {
+        float z = depthTexture.read(g).r;
+        if (z <= 0.0f) {
             aoTexture.write(float4(1.0f), g);
             return;
         }
         float2 pixel = float2(g) + 0.5f;
-        float3 P = ssao_position(u, pixel, depth);
-        float z = ssao_view_depth(u, P);
-        float radius_px = ssao_radius_pixels(u, P);
+        float radius_px = ssao_radius_pixels(u, z);
         // The Gaussian-weighted mean view depth around the pixel (sigma =
         // half the radius): a 9 x 9 grid of taps rotated per pixel so the
         // grid never shows, the blur pass after smoothing the rotation
@@ -1898,7 +1861,7 @@ namespace deferred {
                     continue;
                 uint2 sg = uint2(sp);
                 float sd = depthTexture.read(sg).r;
-                float sz = sd >= 1.0f ? z + u.radius : ssao_view_depth(u, ssao_position(u, float2(sg) + 0.5f, sd));
+                float sz = sd <= 0.0f ? z + u.radius : sd;
                 float w = exp(-4.0f * r2);
                 sum += sz * w;
                 weight += w;
@@ -1921,12 +1884,11 @@ namespace deferred {
     {
         if (g.x >= outTexture.get_width() || g.y >= outTexture.get_height())
             return;
-        float depth = depthTexture.read(g).r;
-        if (depth >= 1.0f) {
+        float z = depthTexture.read(g).r;
+        if (z <= 0.0f) {
             outTexture.write(float4(1.0f), g);
             return;
         }
-        float z = ssao_view_depth(u, ssao_position(u, float2(g) + 0.5f, depth));
         float sigma = 0.1f * u.radius;
         float sum = 0.0f, weight = 0.0f;
         for (int j = -2; j <= 2; ++j) {
@@ -1935,10 +1897,9 @@ namespace deferred {
                 if (any(sp < 0) || sp.x >= (int)u.viewport.x || sp.y >= (int)u.viewport.y)
                     continue;
                 uint2 sg = uint2(sp);
-                float sd = depthTexture.read(sg).r;
-                if (sd >= 1.0f)
+                float sz = depthTexture.read(sg).r;
+                if (sz <= 0.0f)
                     continue;
-                float sz = ssao_view_depth(u, ssao_position(u, float2(sg) + 0.5f, sd));
                 float dz = (sz - z) / sigma;
                 float w = exp(-dz * dz);
                 sum += aoTexture.read(sg).r * w;

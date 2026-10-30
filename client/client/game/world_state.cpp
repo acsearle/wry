@@ -619,6 +619,26 @@ namespace wry {
         _uniforms.inverse_view_transform = simd_inverse(_uniforms.view_transform);
         _uniforms.inverse_viewprojection_transform = simd_inverse(_uniforms.viewprojection_transform);
 
+        // The camera ray basis (ShaderTypes.h): the ray through an NDC
+        // point, divided by the linear depth (clip w) of its near-plane
+        // point, so that camera + ray * depth lands at depth
+        {
+            const float4x4 VP = _uniforms.viewprojection_transform;
+            const float4x4 IVP = _uniforms.inverse_viewprojection_transform;
+            const float3 C = _uniforms.camera_position_world.xyz;
+            auto ray_at = [&](float x, float y) {
+                float4 n = simd_mul(IVP, make<float4>(x, y, 0.0f, 1.0f));
+                float3 N = n.xyz / n.w;
+                float w = simd_mul(VP, make<float4>(N.x, N.y, N.z, 1.0f)).w;
+                float3 r = (N - C) / w;
+                return make<float4>(r.x, r.y, r.z, 0.0f);
+            };
+            float4 centre = ray_at(0.0f, 0.0f);
+            _uniforms.camera_ray_centre = centre;
+            _uniforms.camera_ray_dx = ray_at(1.0f, 0.0f) - centre;
+            _uniforms.camera_ray_dy = ray_at(0.0f, 1.0f) - centre;
+        }
+
         // sun setup
         
         p = simd_normalize(simd_make_float3(-2, -1, 3));
@@ -1690,6 +1710,38 @@ namespace wry {
         assert((ws._focus_tile == Coordinate{-1, -2}));
         assert(near(ws._focus_fraction.x, 0.0f) && near(ws._focus_fraction.y, 0.0f));
 
+        co_await ws.end_session(std::chrono::milliseconds(200));
+        (void) co_await scope.join();
+        co_return;
+    };
+
+    // The camera ray basis reproduces the projection: camera + ray(ndc) *
+    // depth projects back to ndc at clip w = depth, across the screen and
+    // the depth range, so the shaders' matrix-free position recovery
+    // matches the rasterizer's
+    define_test("world_state_camera_rays") {
+        coroutine::Nursery scope;
+        GuiContext gc;
+        gc.scope = &scope;
+        gc.viewport_size = float2{1280.0f, 800.0f};
+        WorldState ws(gc);
+        ws.pan_focus(float2{3.25f, -1.75f});
+        const auto& u = ws._uniforms;
+        for (float x : {-1.0f, -0.3f, 0.0f, 0.7f, 1.0f}) {
+            for (float y : {-1.0f, 0.1f, 1.0f}) {
+                for (float depth : {6.0f, 17.5f, 40.0f}) {
+                    float4 ray = u.camera_ray_centre + x * u.camera_ray_dx + y * u.camera_ray_dy;
+                    float4 p = u.camera_position_world + ray * depth;
+                    p.w = 1.0f;
+                    float4 c = simd_mul(u.viewprojection_transform, p);
+                    assert(std::abs(c.w - depth) < 1e-3f * depth);
+                    assert(std::abs(c.x / c.w - x) < 1e-4f);
+                    assert(std::abs(c.y / c.w - y) < 1e-4f);
+                }
+            }
+        }
+        // The camera itself is at zero depth
+        assert(std::abs(simd_mul(u.viewprojection_transform, u.camera_position_world).w) < 1e-4f);
         co_await ws.end_session(std::chrono::milliseconds(200));
         (void) co_await scope.join();
         co_return;

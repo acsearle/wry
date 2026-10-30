@@ -2160,7 +2160,8 @@
             descriptor.colorAttachments[AAPLColorIndexMaterial].storeAction = MTLStoreActionDontCare;
             descriptor.colorAttachments[AAPLColorIndexMaterial].texture = _deferredMaterialColorAttachmentTexture;
 
-            descriptor.colorAttachments[AAPLColorIndexDepth].clearColor = MTLClearColorMake(1, 1, 1, 1);
+            // linear view depth; 0 is the sky
+            descriptor.colorAttachments[AAPLColorIndexDepth].clearColor = MTLClearColorMake(0, 0, 0, 0);
             descriptor.colorAttachments[AAPLColorIndexDepth].loadAction = MTLLoadActionClear;
             descriptor.colorAttachments[AAPLColorIndexDepth].storeAction = MTLStoreActionStore;
             descriptor.colorAttachments[AAPLColorIndexDepth].texture = _deferredDepthColorAttachmentTexture;
@@ -2441,12 +2442,16 @@
         // Screen-space ambient occlusion over the stored depth and
         // normal, into _ssaoBlurredTexture
         WrySSAOUniforms ssao = {};
-        ssao.viewprojection_transform = uniforms.viewprojection_transform;
-        ssao.inverse_viewprojection_transform = uniforms.inverse_viewprojection_transform;
-        ssao.view_transform = uniforms.view_transform;
         ssao.camera_position_world = uniforms.camera_position_world;
+        ssao.camera_ray_centre = uniforms.camera_ray_centre;
+        ssao.camera_ray_dx = uniforms.camera_ray_dx;
+        ssao.camera_ray_dy = uniforms.camera_ray_dy;
         ssao.viewport = simd_make_float2((float)_deferredDepthColorAttachmentTexture.width,
                                          (float)_deferredDepthColorAttachmentTexture.height);
+        // One NDC unit across spans half the viewport; the ray basis
+        // vector across is perpendicular to the view axis, so at unit
+        // depth a world unit across is this many pixels
+        ssao.pixels_per_unit = 0.5f * ssao.viewport.x / simd_length(uniforms.camera_ray_dx.xyz);
         ssao.radius = _model->_ssao_radius;
         ssao.strength = _model->_ssao_strength;
         ssao.mode = _model->_ssao_mode;

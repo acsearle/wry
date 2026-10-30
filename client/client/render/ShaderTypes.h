@@ -124,6 +124,17 @@ struct MeshUniforms {
     //           normal           model            view        projection
     
     simd_float4 camera_position_world;
+
+    // The camera ray through NDC (x, y), scaled so that its component
+    // along the view axis is one: with the Depth G-buffer holding linear
+    // view depth (clip w), a pixel's surface is camera + ray * depth.  For
+    // a pinhole camera the ray is affine in NDC,
+    // ray = camera_ray_centre + x * camera_ray_dx + y * camera_ray_dy,
+    // so vertex shaders interpolate it without perspective and kernels
+    // evaluate it per tap; nobody needs a matrix.  (xyz; w unused)
+    simd_float4 camera_ray_centre;
+    simd_float4 camera_ray_dx;
+    simd_float4 camera_ray_dy;
     
     matrix_float4x4 view_transform;
     matrix_float4x4 inverse_view_transform;
@@ -255,16 +266,18 @@ typedef struct
 #define WRY_SSAO_LUFT 2
 
 typedef struct {
-    matrix_float4x4 viewprojection_transform;
-    matrix_float4x4 inverse_viewprojection_transform;
-    matrix_float4x4 view_transform;
+    // The camera and its ray basis, as MeshUniforms has them
     simd_float4 camera_position_world;
+    simd_float4 camera_ray_centre;
+    simd_float4 camera_ray_dx;
+    simd_float4 camera_ray_dy;
     simd_float2 viewport;           // pixels
+    float pixels_per_unit;          // across the view axis, at unit depth
     float radius;                   // world units
     float strength;                 // 1 = as estimated
     int mode;                       // WRY_SSAO_*
     int show;                       // nonzero: composite the factor itself, as grey
-    float _pad[2];
+    float _pad;
 } WrySSAOUniforms;
 
 #pragma mark - Symbol slabs
