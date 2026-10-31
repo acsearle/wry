@@ -159,7 +159,9 @@ namespace wry {
     // Kept in every build: the tests' drain loops on it are what hold a
     // test open until its frame has died, and in a Release build they are
     // the only thing that does (the asserts around them compile out).
-    // One relaxed add and one release sub per frame.
+    // One relaxed add and one release sub per frame.  Process-wide, so it
+    // only speaks for a test while the reactor is the test's alone: the
+    // tests check that first (FrameCensus below)
     constinit std::atomic<std::ptrdiff_t> g_cancelable_kevent_frame_count{0};
 
     template<typename F>
@@ -622,7 +624,75 @@ namespace wry {
 
     }
 
+    namespace {
+
+        // The frame-count checks assume the reactor is the test's alone.
+        // It is in the headless suite (--test-only opens no socket), but in
+        // a driven app the control socket keeps an accept frame parked
+        // (re-armed per connection), each live connection a recv frame and
+        // the idle host's wait a deadline timer (gui_context.cpp), so the
+        // count never rests at zero there: the unbounded drain
+        // loops the tests used to run spun a pool worker for the app's
+        // lifetime (the suite never finished), and the one capped wait
+        // asserted whenever a connection was open as it ran.  So each test
+        // that reads the count opens a census first: a brief wait for the
+        // count to rest at zero (the previous test's frames retiring), and
+        // if it does not, the test's count checks stand down and say so.
+        // The drains are bounded either way, so a regression fails the
+        // test instead of hanging the suite.
+        struct FrameCensus {
+
+            bool exclusive = false;
+
+            static coroutine::Future<FrameCensus> open(char const* test) {
+                // Up to 100 ms for the count to reach zero (the previous
+                // test's frames retiring), then zero throughout 20 ms: zero
+                // once is not enough, since a driven app's listener frame
+                // dies and re-arms at each accept, so the count visits zero
+                // for microseconds there
+                auto t0 = steady_clock::now();
+                std::optional<steady_clock::time_point> since_zero;
+                for (;;) {
+                    std::ptrdiff_t live = g_cancelable_kevent_frame_count.load(std::memory_order_acquire);
+                    auto now = steady_clock::now();
+                    if (live != 0) {
+                        if (since_zero || (now - t0 > milliseconds(100))) {
+                            printf("[%s] frame-count checks skipped: the reactor is shared (%td live frames)\n",
+                                   test, live);
+                            co_return FrameCensus{false};
+                        }
+                    } else if (!since_zero) {
+                        since_zero = now;
+                    } else if (now - *since_zero > milliseconds(20)) {
+                        co_return FrameCensus{true};
+                    }
+                    co_await coroutine::TransferToPoolExecutor{};
+                }
+            }
+
+            // True when the count is at rest, or is not ours to read
+            bool quiet() const {
+                return !exclusive
+                    || (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) == 0);
+            }
+
+            // Hold the test open until its frames have died: promptly, so
+            // a second is already a failure
+            coroutine::Future<> drained() const {
+                auto t0 = steady_clock::now();
+                while (exclusive
+                       && (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
+                       && (steady_clock::now() - t0 < seconds(1)))
+                    co_await coroutine::TransferToPoolExecutor{};
+                assert(quiet());
+            }
+
+        };
+
+    }
+
     define_test("kqueue_cancelable_after") {
+        FrameCensus census = co_await FrameCensus::open("kqueue_cancelable_after");
 
         // Fire path: at the deadline the task runs on the pool and its frame
         // is destroyed on completion
@@ -641,8 +711,7 @@ namespace wry {
             // The load-bearing property: the Frame dies promptly after the
             // fire, with the token never requested -- static_resume disarms
             // the callback and inherits its reference
-            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await coroutine::TransferToPoolExecutor{};
+            co_await census.drained();
         }
 
         // Cancel path: cancellation is a synchronous join -- when
@@ -661,7 +730,7 @@ namespace wry {
             assert(ran.load(std::memory_order_relaxed) == 0);
             // The whole structure -- knote withdrawn, frame freed -- retired
             // synchronously inside request_stop
-            assert(g_cancelable_kevent_frame_count.load(std::memory_order_acquire) == 0);
+            assert(census.quiet());
         }
 
         // Cancel before spawn: an already-requested token destroys the task
@@ -678,7 +747,7 @@ namespace wry {
             // The doomed-timer cleanup: the knote armed after the inline
             // cancellation is withdrawn inside spawn itself, so the frame is
             // gone before cancelable_after returns -- not at the deadline
-            assert(g_cancelable_kevent_frame_count.load(std::memory_order_acquire) == 0);
+            assert(census.quiet());
         }
 
         // Early fire vs install: a zero deadline races delivery against
@@ -698,8 +767,7 @@ namespace wry {
                 co_await coroutine::TransferToPoolExecutor{};
             // All N frames retire without a stop request, in every
             // interleaving the race produced
-            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await coroutine::TransferToPoolExecutor{};
+            co_await census.drained();
         }
 
         co_return;
@@ -791,6 +859,7 @@ namespace wry {
     };
 
     define_test("kqueue_recv_cancel") {
+        FrameCensus census = co_await FrameCensus::open("kqueue_recv_cancel");
         // Outer cancellation of a parked composed wait: 10s deadline, stop
         // lands milliseconds in, the whole tower (recv leaf, timer, recv_some frame,
         // with_deadline, child) unwinds promptly via the destroy cascade.
@@ -814,12 +883,12 @@ namespace wry {
         assert(resumed_past.load(std::memory_order_relaxed) == 0);
         assert(elapsed < seconds(2));
         // Both CancelableKEventFrames (recv leaf + deadline timer) retired
-        while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-            co_await coroutine::TransferToPoolExecutor{};
+        co_await census.drained();
         co_return;
     };
 
     define_test("kqueue_recv_early_completion_drains") {
+        FrameCensus census = co_await FrameCensus::open("kqueue_recv_early_completion_drains");
         // The scope-exit law, made observable: a recv that completes far
         // before its deadline must reap the deadline timer PROMPTLY, not at
         // the deadline.  With data already waiting, both frames should drain
@@ -833,12 +902,9 @@ namespace wry {
                                         recv_some(sockets.reader(), buffer, sizeof buffer, 0));
         assert(r.has_value() && (*r == 1));
 
-        auto t0 = steady_clock::now();
-        while ((g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-               && (steady_clock::now() - t0 < seconds(1)))
-            co_await coroutine::TransferToPoolExecutor{};
-        // If the timer is only reaped when it fires, this is still 1 here
-        assert(g_cancelable_kevent_frame_count.load(std::memory_order_acquire) == 0);
+        // If the timer is only reaped when it fires, this is still 1 after
+        // the census's one-second bound
+        co_await census.drained();
         co_return;
     };
 
@@ -876,6 +942,7 @@ namespace wry {
     // The watchdog half of that test -- request an interior source at a
     // deadline -- is with_deadline's timer, covered by kqueue_recv_deadline.
     define_test("kqueue_cancelable_sleep") {
+        FrameCensus census = co_await FrameCensus::open("kqueue_cancelable_sleep");
 
         // Duration path: the sleeper resumes after the deadline and its
         // frame is reaped promptly on the fire, token never requested
@@ -885,8 +952,7 @@ namespace wry {
             auto elapsed = steady_clock::now() - t0;
             assert(elapsed >= milliseconds(15));
             assert(elapsed < seconds(5));
-            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await coroutine::TransferToPoolExecutor{};
+            co_await census.drained();
         }
 
         // Zero-duration burst: the fire races spawn's own installation of
@@ -895,8 +961,7 @@ namespace wry {
         {
             for (int i = 0; i != 100; ++i)
                 co_await cancelable_sleep(0.0);
-            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await coroutine::TransferToPoolExecutor{};
+            co_await census.drained();
         }
 
         // Parked cancel: a stop request against a child asleep for 10s
@@ -921,8 +986,7 @@ namespace wry {
             assert(destroyed.load(std::memory_order_relaxed) == 1);
             assert(resumed_past.load(std::memory_order_relaxed) == 0);
             assert(elapsed < seconds(2));
-            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await coroutine::TransferToPoolExecutor{};
+            co_await census.drained();
         }
 
         // Cancel before park: the child's token is already requested when it
@@ -942,8 +1006,7 @@ namespace wry {
             assert(resumed_past.load(std::memory_order_relaxed) == 0);
             // The nursery retires inside the child's destroy, which spawn
             // runs before it releases the Frame: spin rather than assert
-            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await coroutine::TransferToPoolExecutor{};
+            co_await census.drained();
         }
 
         co_return;
@@ -1062,6 +1125,7 @@ namespace wry {
     }
 
     define_test("kqueue_send_some") {
+        FrameCensus census = co_await FrameCensus::open("kqueue_send_some");
 
         // Ready path: an empty socket is writable at once
         {
@@ -1136,14 +1200,14 @@ namespace wry {
             assert(destroyed.load(std::memory_order_relaxed) == 1);
             assert(resumed_past.load(std::memory_order_relaxed) == 0);
             assert(steady_clock::now() - t0 < seconds(2));
-            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await coroutine::TransferToPoolExecutor{};
+            co_await census.drained();
         }
 
         co_return;
     };
 
     define_test("kqueue_accept_connect") {
+        FrameCensus census = co_await FrameCensus::open("kqueue_accept_connect");
 
         // A parked accept completes when a connector arrives; the connect is
         // itself asynchronous; the pair then talks through send_some and
@@ -1226,8 +1290,7 @@ namespace wry {
             assert(destroyed.load(std::memory_order_relaxed) == 1);
             assert(resumed_past.load(std::memory_order_relaxed) == 0);
             assert(steady_clock::now() - t0 < seconds(2));
-            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await coroutine::TransferToPoolExecutor{};
+            co_await census.drained();
         }
 
         co_return;
@@ -1237,6 +1300,7 @@ namespace wry {
     // composed with with_deadline (whose bridge callback fires synchronously
     // against a pre-requested outer token, cancelling both arms at arm time)
     define_test("kqueue_recv_cancel_before_park") {
+        FrameCensus census = co_await FrameCensus::open("kqueue_recv_cancel_before_park");
 
         {
             SocketPair sockets;
@@ -1249,8 +1313,7 @@ namespace wry {
             assert(started.load(std::memory_order_relaxed) == 1);
             assert(destroyed.load(std::memory_order_relaxed) == 1);
             assert(resumed_past.load(std::memory_order_relaxed) == 0);
-            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await coroutine::TransferToPoolExecutor{};
+            co_await census.drained();
         }
 
         {
@@ -1265,8 +1328,7 @@ namespace wry {
             assert(started.load(std::memory_order_relaxed) == 1);
             assert(destroyed.load(std::memory_order_relaxed) == 1);
             assert(resumed_past.load(std::memory_order_relaxed) == 0);
-            while (g_cancelable_kevent_frame_count.load(std::memory_order_acquire) != 0)
-                co_await coroutine::TransferToPoolExecutor{};
+            co_await census.drained();
         }
 
         co_return;
