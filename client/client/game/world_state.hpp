@@ -106,6 +106,20 @@ namespace wry {
         // Scene exposure (the `exposure` command): scales the sun and the sky
         // alike; 1 lights a white board to about mid grey
         float _exposure = 2.0f;
+        // The symbol atlas the renderer shows (assets/NAME.png and the field
+        // beside it): "assets" is the cutout glyphs, "assets_tile" the same
+        // glyphs printed on Scrabble tiles (tools/make_tile_atlas.py)
+        wry::String _symbol_atlas = wry::String("assets_tile");
+        // The playing pieces (the machine's pentagon token): the glyph's
+        // width in world units (2 * TOKEN_A / 24 in make_assets.py: the
+        // tile box), how tall the piece stands, and its edge roundover
+        float _token_width = 21.0f / 24.0f;
+        float _token_height = 21.0f / 24.0f;
+        float _token_fillet = 0.05f;
+        // The slabs' ambient-occlusion decals on the ground under them
+        // (Shaders.metal symbol_decal_fragment_function); off, GTAO does
+        // the job, and the decal's stroke model overreaches for tiles
+        bool _symbol_decals = false;
 
 
         // user interface state

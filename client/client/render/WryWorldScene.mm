@@ -121,6 +121,8 @@
     // stroke widths, and the slab pipelines that march it in the G-buffer
     // and shadow passes
     id<MTLTexture> _symbolField;
+    std::string _symbolAtlasName;      // loaded; the model's _symbol_atlas asks for another
+    std::string _symbolAtlasMissing;   // the last name that had no png, so it is not retried every frame
     std::vector<float> _symbolStrokeWidth;
     id<MTLRenderPipelineState> _symbolGBufferRenderPipelineState;
     id<MTLRenderPipelineState> _terrainGBufferRenderPipelineState;
@@ -181,6 +183,7 @@
     simd_float4 _false_coordinate;
     simd_float4 _cdot_coordinate;
     simd_float4 _border_coordinate;
+    simd_float4 _token_truck_coordinate;   // the machine's playing piece (atlas row 15)
     
     WryMesh* _truck_mesh;
     WryMesh* _mine_mesh;
@@ -720,42 +723,8 @@
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
 
         {
-            // Mip levels allocated now, generated below once the opcode
-            // labels have been stamped into level 0.
-            _symbols = [_ctx newTextureWithMipStorageFromResource:@"assets" ofType:@"png"];
-            {
-                // The field beside the atlas (symbol_sdf.hpp): from its
-                // cache, or built from the atlas's silhouette at half the
-                // atlas resolution and cached
-                auto t0 = std::chrono::steady_clock::now();
-                wry::SymbolSDF sdf = wry::symbol_sdf_for_atlas(wry::path_for_resource("assets", "png"));
-                const int cell = sdf.cell;
-                MTLTextureDescriptor* descriptor =
-                    [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                       width:sdf.image.major()
-                                                                      height:sdf.image.minor()
-                                                                   mipmapped:NO];
-                descriptor.storageMode = MTLStorageModeShared;
-                descriptor.usage = MTLTextureUsageShaderRead;
-                _symbolField = [_ctx.device newTextureWithDescriptor:descriptor];
-                [_symbolField replaceRegion:MTLRegionMake2D(0, 0, sdf.image.major(), sdf.image.minor())
-                                mipmapLevel:0
-                                  withBytes:sdf.image.data()
-                                bytesPerRow:sdf.image.stride_bytes()];
-                _symbolField.label = @"Symbol field";
-                _symbolStrokeWidth = std::move(sdf.stroke_width);
-                auto t1 = std::chrono::steady_clock::now();
-                std::vector<float> widths;
-                for (float w : _symbolStrokeWidth)
-                    if (w > 0.0f)
-                        widths.push_back(w);
-                std::sort(widths.begin(), widths.end());
-                NSLog(@"symbol field: %d px cells, ready in %.0f ms; %zu symbols, stroke widths %.1f / %.1f / %.1f texels (min / median / max)",
-                      cell, std::chrono::duration<double, std::milli>(t1 - t0).count(),
-                      widths.size(), widths.empty() ? 0.0f : widths.front(),
-                      widths.empty() ? 0.0f : widths[widths.size() / 2],
-                      widths.empty() ? 0.0f : widths.back());
-            }
+            // The symbol atlas and its field are loaded by
+            // -loadSymbolAtlasNamed: below, once the opcode table exists
             _hackmesh = [[WryMesh alloc] init];
             _black = [_ctx newTextureFromResource:@"black" ofType:@"png"];
             _white = [_ctx newTextureFromResource:@"white" ofType:@"png"];
@@ -884,109 +853,7 @@
 //            }
 
                 
-            // Defaults matching the shipped atlas layout, overwritten by
-            // the by-name capture below; a json missing the names
-            // degrades to these rather than rendering garbage
-            constexpr float kCells = (float)wry::SymbolSDF::kCells;
-            _digit_zero_coordinate = make<float4>(0.0f / kCells, 10.0f / kCells, 0.0f, 1.0f);
-            _true_coordinate       = make<float4>(0.0f / kCells, 11.0f / kCells, 0.0f, 1.0f);
-            _false_coordinate      = make<float4>(1.0f / kCells, 11.0f / kCells, 0.0f, 1.0f);
-            _cdot_coordinate       = make<float4>(0.0f / kCells,  2.0f / kCells, 0.0f, 1.0f);
-            _border_coordinate     = make<float4>(0.0f / kCells,  3.0f / kCells, 0.0f, 1.0f);
-
-            try {
-                auto x = json::from_file<ContiguousDeque<ContiguousDeque<String>>>("assets.json");
-                ulong i = 0;
-                for (const ContiguousDeque<String>& y : x) {
-                    ulong j = 0;
-                    for (const String& z : y) {
-                        // printf("loading image for %.*s\n", (int) z.chars.size(), (const char*) z.chars.data());
-                        simd_float4 coordinate = make<float4>(j / kCells, i / kCells, 0.0f, 1.0f);
-                        // auto h = _name_to_opcode._inner._hasher.get_hash(z);
-                        // printf("hash \"%.*s\" -> %llu\n", (int) z.chars.size(), (const char*) z.chars.data(), h);
-                        auto p = _name_to_opcode.find(z);
-                        // printf("p choice\n");
-                        if (p == _name_to_opcode.end()) {
-                            // Not an opcode: capture the handful of named
-                            // non-opcode glyphs the renderer draws directly
-                            std::string_view sv((const char*) z.chars.data(),
-                                                z.chars.size());
-                            if (sv == "0")
-                                _digit_zero_coordinate = coordinate;
-                            else if (sv == "true")
-                                _true_coordinate = coordinate;
-                            else if (sv == "false")
-                                _false_coordinate = coordinate;
-                            else if (sv == "cdot")
-                                _cdot_coordinate = coordinate;
-                            else if (sv == "border2")
-                                _border_coordinate = coordinate;
-                            // Lowercase opcode-art names: wired into the
-                            // opcode coordinate table like any glyph, but
-                            // routed through this branch so the art is
-                            // NOT overstamped with label text the way the
-                            // uppercase opcode path stamps its cells
-                            else if (sv == "valve_north_south")
-                                _opcode_to_coordinate[OPCODE_VALVE_NORTH_SOUTH] = coordinate;
-                            else if (sv == "valve_east_west")
-                                _opcode_to_coordinate[OPCODE_VALVE_EAST_WEST] = coordinate;
-                        }
-                        else /* if (p != _name_to_opcode.end()) */ {
-                            // printf("p is not equal to end\n");
-                            _opcode_to_coordinate[p->second] = coordinate;
-                            
-                            
-                            // One atlas cell.  The atlas is a kCells x
-                            // kCells grid at whatever resolution it ships
-                            // in (assets.png is 4096 px, so 256 px cells);
-                            // the label glyphs are stamped at their
-                            // native pixel size regardless.
-                            const NSUInteger cell = _symbols.width / wry::SymbolSDF::kCells;
-                            matrix<RGBA8Unorm_sRGB> tile(cell, cell);
-                            MTLRegion region = MTLRegionMake2D(j*cell, i*cell, cell, cell);
-                            [_symbols getBytes:tile.data()
-                                   bytesPerRow:tile.stride_bytes()
-                                    fromRegion:region
-                                   mipmapLevel:0];
-                            
-                            float2 cursor{0.0f, 8.0f};
-                            for (char32_t charcode : z) {
-                                auto [offset, view, advance] = get_glyph(charcode);
-                                cursor.y += advance.y;
-                                if (charcode == U'_') {
-                                    cursor.x = 0;
-                                    cursor.y += 4;
-                                    continue;
-                                }
-                                if (cursor.x + advance.x >= (float) cell) {
-                                    cursor.x = 0;
-                                    cursor.y += advance.y + 4;
-                                }
-                                if ((view.major() < 3) || (view.minor() < 3))
-                                    continue;
-                                compose(tile, view, (cursor - offset).yx);
-                                cursor.x += advance.x;
-                                cursor.y -= advance.y;
-                            }
-                            
-                            [_symbols replaceRegion:region
-                                        mipmapLevel:0
-                                          withBytes:tile.data()
-                                        bytesPerRow:tile.stride_bytes()];
-
-                            
-                        }
-                        ++j;
-                    }
-                    ++i;
-                }
-            } catch (...) {
-                
-            }
-
-            // Level 0 is final (label stamping above is its last edit), so
-            // fill the mip chain.  Blocking; nothing has sampled it yet.
-            [_ctx generateMipmapsForTexture:_symbols];
+            [self loadSymbolAtlasNamed:@"assets_tile"];
 
             {
                 // Initialize the palette's grid and transform on the
@@ -1041,6 +908,170 @@
     NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
 
     return self;
+}
+
+// The symbol atlas NAME.png (the assets folder; "assets" is the cutout
+// glyphs, "assets_tile" the same glyphs printed on tiles, from
+// tools/make_tile_atlas.py) and the field beside it, then the opcode
+// labels stamped into the uppercase opcode cells and the mip chain.
+// Called once from init and again whenever the `atlas` console command
+// names another atlas (-encodeIntoCommandBuffer:); the textures in
+// flight stay alive under their encoders.
+- (void)loadSymbolAtlasNamed:(NSString*)name
+{
+    using namespace ::simd;
+    using namespace ::wry;
+
+    Table<wry::String, i64> name_to_opcode;
+    for (auto&& [k, v] : wry::OPCODE_NAMES)
+        name_to_opcode.emplace(v + 7, k);
+
+    // Mip levels allocated now, generated below once the opcode
+    // labels have been stamped into level 0.
+    _symbols = [_ctx newTextureWithMipStorageFromResource:name ofType:@"png"];
+    {
+        // The field beside the atlas (symbol_sdf.hpp): from its
+        // cache, or built from the atlas's silhouette at half the
+        // atlas resolution and cached
+        auto t0 = std::chrono::steady_clock::now();
+        wry::SymbolSDF sdf = wry::symbol_sdf_for_atlas(wry::path_for_resource(wry::StringView(name.UTF8String), "png"));
+        const int cell = sdf.cell;
+        MTLTextureDescriptor* descriptor =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                               width:sdf.image.major()
+                                                              height:sdf.image.minor()
+                                                           mipmapped:NO];
+        descriptor.storageMode = MTLStorageModeShared;
+        descriptor.usage = MTLTextureUsageShaderRead;
+        _symbolField = [_ctx.device newTextureWithDescriptor:descriptor];
+        [_symbolField replaceRegion:MTLRegionMake2D(0, 0, sdf.image.major(), sdf.image.minor())
+                        mipmapLevel:0
+                          withBytes:sdf.image.data()
+                        bytesPerRow:sdf.image.stride_bytes()];
+        _symbolField.label = @"Symbol field";
+        _symbolStrokeWidth = std::move(sdf.stroke_width);
+        auto t1 = std::chrono::steady_clock::now();
+        std::vector<float> widths;
+        for (float w : _symbolStrokeWidth)
+            if (w > 0.0f)
+                widths.push_back(w);
+        std::sort(widths.begin(), widths.end());
+        NSLog(@"symbol field: %d px cells, ready in %.0f ms; %zu symbols, stroke widths %.1f / %.1f / %.1f texels (min / median / max)",
+              cell, std::chrono::duration<double, std::milli>(t1 - t0).count(),
+              widths.size(), widths.empty() ? 0.0f : widths.front(),
+              widths.empty() ? 0.0f : widths[widths.size() / 2],
+              widths.empty() ? 0.0f : widths.back());
+    }
+
+    // Defaults matching the shipped atlas layout, overwritten by
+    // the by-name capture below; a json missing the names
+    // degrades to these rather than rendering garbage
+    constexpr float kCells = (float)wry::SymbolSDF::kCells;
+    _digit_zero_coordinate = make<float4>(0.0f / kCells, 10.0f / kCells, 0.0f, 1.0f);
+    _true_coordinate       = make<float4>(0.0f / kCells, 11.0f / kCells, 0.0f, 1.0f);
+    _false_coordinate      = make<float4>(1.0f / kCells, 11.0f / kCells, 0.0f, 1.0f);
+    _cdot_coordinate       = make<float4>(0.0f / kCells,  2.0f / kCells, 0.0f, 1.0f);
+    _border_coordinate     = make<float4>(0.0f / kCells,  3.0f / kCells, 0.0f, 1.0f);
+    _token_truck_coordinate = make<float4>(0.0f / kCells, 15.0f / kCells, 0.0f, 1.0f);
+
+    try {
+        auto x = json::from_file<ContiguousDeque<ContiguousDeque<String>>>("assets.json");
+        ulong i = 0;
+        for (const ContiguousDeque<String>& y : x) {
+            ulong j = 0;
+            for (const String& z : y) {
+                // printf("loading image for %.*s\n", (int) z.chars.size(), (const char*) z.chars.data());
+                simd_float4 coordinate = make<float4>(j / kCells, i / kCells, 0.0f, 1.0f);
+                // auto h = name_to_opcode._inner._hasher.get_hash(z);
+                // printf("hash \"%.*s\" -> %llu\n", (int) z.chars.size(), (const char*) z.chars.data(), h);
+                auto p = name_to_opcode.find(z);
+                // printf("p choice\n");
+                if (p == name_to_opcode.end()) {
+                    // Not an opcode: capture the handful of named
+                    // non-opcode glyphs the renderer draws directly
+                    std::string_view sv((const char*) z.chars.data(),
+                                        z.chars.size());
+                    if (sv == "0")
+                        _digit_zero_coordinate = coordinate;
+                    else if (sv == "true")
+                        _true_coordinate = coordinate;
+                    else if (sv == "false")
+                        _false_coordinate = coordinate;
+                    else if (sv == "cdot")
+                        _cdot_coordinate = coordinate;
+                    else if (sv == "border2")
+                        _border_coordinate = coordinate;
+                    else if (sv == "token_truck")
+                        _token_truck_coordinate = coordinate;
+                    // Lowercase opcode-art names: wired into the
+                    // opcode coordinate table like any glyph, but
+                    // routed through this branch so the art is
+                    // NOT overstamped with label text the way the
+                    // uppercase opcode path stamps its cells
+                    else if (sv == "valve_north_south")
+                        _opcode_to_coordinate[OPCODE_VALVE_NORTH_SOUTH] = coordinate;
+                    else if (sv == "valve_east_west")
+                        _opcode_to_coordinate[OPCODE_VALVE_EAST_WEST] = coordinate;
+                }
+                else /* if (p != name_to_opcode.end()) */ {
+                    // printf("p is not equal to end\n");
+                    _opcode_to_coordinate[p->second] = coordinate;
+                    
+                    
+                    // One atlas cell.  The atlas is a kCells x
+                    // kCells grid at whatever resolution it ships
+                    // in (assets.png is 4096 px, so 256 px cells);
+                    // the label glyphs are stamped at their
+                    // native pixel size regardless.
+                    const NSUInteger cell = _symbols.width / wry::SymbolSDF::kCells;
+                    matrix<RGBA8Unorm_sRGB> tile(cell, cell);
+                    MTLRegion region = MTLRegionMake2D(j*cell, i*cell, cell, cell);
+                    [_symbols getBytes:tile.data()
+                           bytesPerRow:tile.stride_bytes()
+                            fromRegion:region
+                           mipmapLevel:0];
+                    
+                    float2 cursor{0.0f, 8.0f};
+                    for (char32_t charcode : z) {
+                        auto [offset, view, advance] = get_glyph(charcode);
+                        cursor.y += advance.y;
+                        if (charcode == U'_') {
+                            cursor.x = 0;
+                            cursor.y += 4;
+                            continue;
+                        }
+                        if (cursor.x + advance.x >= (float) cell) {
+                            cursor.x = 0;
+                            cursor.y += advance.y + 4;
+                        }
+                        if ((view.major() < 3) || (view.minor() < 3))
+                            continue;
+                        compose(tile, view, (cursor - offset).yx);
+                        cursor.x += advance.x;
+                        cursor.y -= advance.y;
+                    }
+                    
+                    [_symbols replaceRegion:region
+                                mipmapLevel:0
+                                  withBytes:tile.data()
+                                bytesPerRow:tile.stride_bytes()];
+
+                    
+                }
+                ++j;
+            }
+            ++i;
+        }
+    } catch (...) {
+        
+    }
+
+    // Level 0 is final (label stamping above is its last edit), so
+    // fill the mip chain.  Blocking; nothing has sampled it yet.
+    [_ctx generateMipmapsForTexture:_symbols];
+
+    _symbolAtlasName = name.UTF8String;
+    NSLog(@"symbol atlas: %@", name);
 }
 
 - (void) drawBezier:(id<MTLRenderCommandEncoder>)encoder {
@@ -1531,6 +1562,23 @@
 
     const bool show_map = _model->_show_map;
 
+    // Another atlas asked for (the `atlas` command): swap it in before
+    // anything samples the symbols this frame
+    {
+        const wry::String& asked = _model->_symbol_atlas;
+        std::string name((const char*)asked.chars.data(), asked.chars.size());
+        if (name != _symbolAtlasName && name != _symbolAtlasMissing) {
+            std::error_code ec;
+            if (!name.empty() && std::filesystem::exists(wry::path_for_resource(wry::StringView(name.c_str()), "png"), ec)) {
+                [self loadSymbolAtlasNamed:[NSString stringWithUTF8String:name.c_str()]];
+            } else {
+                NSLog(@"symbol atlas: no %s.png in the assets folder; keeping %s", name.c_str(), _symbolAtlasName.c_str());
+                _symbolAtlasMissing = name;
+            }
+        }
+    }
+
+
     // Camera transforms.  Everything below is positioned in RENDER SPACE:
     // world space with the camera's focus tile at the origin, so positions
     // stay small floats at any world coordinate; the focus tile is added
@@ -1729,15 +1777,12 @@
         // occlusion is a faint blur the stroke model no longer describes.
         const float texels_per_cell = (float)(_symbols.width / wry::SymbolSDF::kCells);
         const float texels_per_unit = texels_per_cell * 0.5f;   // the glyph's frame
-        auto emit_symbol = [&](simd_float4 location, simd_float4 coordinate,
-                               simd_float3 across, simd_float3 up) {
-            const int cx = std::clamp((int)std::lround(coordinate.x * wry::SymbolSDF::kCells), 0, wry::SymbolSDF::kCells - 1);
-            const int cy = std::clamp((int)std::lround(coordinate.y * wry::SymbolSDF::kCells), 0, wry::SymbolSDF::kCells - 1);
-            // Capped: a solid tile's stroke is the whole cell; 20 texels
-            // keeps a ground symbol's underside (centred at z = 0.1, 12.8
-            // texels up) above the ground, where its decal can land
-            const float width = std::max(_symbolStrokeWidth[(size_t)cy * wry::SymbolSDF::kCells + (size_t)cx], 2.0f);
-            const float stroke = std::min(width, 20.0f);
+        // A slab of the cell at `coordinate`, `stroke` texels thick with
+        // fillets of `fillet`; `width` is the cell's stroke width, which
+        // sizes the decal
+        auto emit_slab = [&](simd_float4 location, simd_float4 coordinate,
+                             simd_float3 across, simd_float3 up,
+                             float stroke, float fillet, float width, bool decal, float half_xy) {
             // Slab space is source texels; the frame is one world unit
             const float texel = 1.0f / texels_per_unit;
             simd_float3 normal = simd_cross(across, up);
@@ -1749,12 +1794,12 @@
             s.model_transform = model;
             s.inverse_model_transform = simd_inverse(model);
             s.cell = make<float4>(coordinate.x, coordinate.y, 1.0f / wry::SymbolSDF::kCells, 1.0f / (float)_symbols.width);
-            s.half_extent = make<float4>(texels_per_unit * 0.5f, texels_per_unit * 0.5f, stroke * 0.5f, texels_per_cell * 0.5f);
-            s.top_radius = stroke * 0.25f;
-            s.bottom_radius = stroke * 0.25f;
+            s.half_extent = make<float4>(half_xy, half_xy, stroke * 0.5f, texels_per_cell * 0.5f);
+            s.top_radius = fillet;
+            s.bottom_radius = fillet;
             s.stroke_width = width;
             s.decal_reach = 0.0f;
-            if (normal.z > 0.99f) {
+            if (decal && _model->_symbol_decals && normal.z > 0.99f) {
                 // Flat: the underside's height above the ground, in texels
                 const float h = (location.z - stroke * 0.5f * texel) * texels_per_unit;
                 if (h <= 2.0f * width) {
@@ -1764,6 +1809,18 @@
                 }
             }
             symbols.push_back(s);
+        };
+        // A symbol: as thick as its cell's stroke, filleted by a quarter of it
+        auto emit_symbol = [&](simd_float4 location, simd_float4 coordinate,
+                               simd_float3 across, simd_float3 up) {
+            const int cx = std::clamp((int)std::lround(coordinate.x * wry::SymbolSDF::kCells), 0, wry::SymbolSDF::kCells - 1);
+            const int cy = std::clamp((int)std::lround(coordinate.y * wry::SymbolSDF::kCells), 0, wry::SymbolSDF::kCells - 1);
+            // Capped: a solid tile's stroke is the whole cell; 20 texels
+            // keeps a ground symbol's underside (centred at z = 0.1, 12.8
+            // texels up) above the ground, where its decal can land
+            const float width = std::max(_symbolStrokeWidth[(size_t)cy * wry::SymbolSDF::kCells + (size_t)cx], 2.0f);
+            const float stroke = std::min(width, 20.0f);
+            emit_slab(location, coordinate, across, up, stroke, stroke * 0.25f, width, true, texels_per_unit * 0.5f);
         };
 
         MeshVertex v;
@@ -1841,20 +1898,36 @@
                 
                 A = A * simd_matrix_rotate(atan2(dx1.x, dx1.y), make<float3>(0.0, 0.0, -1.0));
                 
+                // The machine is a playing piece: the pentagon token of
+                // atlas row 15 (tools/make_assets.py g_token_truck), one
+                // colour through, as tall as it is wide, standing on the
+                // board with its apex to the heading.  The truck mesh
+                // (_truck_mesh) is no longer instanced.
+                const float token_width = _model->_token_width;   // the glyph's: 2 * TOKEN_A / 24
                 {
-                    // now make the instance
-                    MeshInstanced m;
-                    m.model_transform = A;
-                    m.inverse_transpose_model_transform = inverse(transpose(A));
-                    m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
-                    [_truck_mesh addInstance:m];
+                    const float thickness = _model->_token_height * texels_per_unit;
+                    simd_float2 heading = simd_length(dx1) > 1e-4f ? simd_normalize(dx1) : make<float2>(0.0f, 1.0f);
+                    simd_float3 up = make<float3>(heading.x, heading.y, 0.0f);
+                    simd_float3 across = make<float3>(heading.y, -heading.x, 0.0f);
+                    simd_float4 centre = location;
+                    centre.z = _model->_token_height * 0.5f;
+                    // No occlusion decal: that models a thin slab's
+                    // underside, and a standing piece has none to show
+                    // The cuboid reaches past the frame for the apex,
+                    // which overhangs it by 0.12 units
+                    emit_slab(centre, _token_truck_coordinate, across, up, thickness, _model->_token_fillet * texels_per_unit, thickness, false, texels_per_unit * 0.6f);
                 }
                 
-                // now make the stack
-                location.z += 0.8;
+                // The carried stack, piled on the token like chips: each
+                // item sits on the one below at its own height (a slab's
+                // is emit_symbol's cap), a hair apart
+                location.z += _model->_token_height;
+                const float slab_thickness = 20.0f / texels_per_unit;
+                const float stack_gap = 0.004f;
                 for (int i = (int) wry::PersistentStack<wry::Term>::size(p->_stack); i--;) {
-                    location.z += 0.5;
                     wry::Term value = wry::PersistentStack<wry::Term>::at(p->_stack, i);
+                    const float item_height = value.is_matter() ? 0.5f : slab_thickness;
+                    location.z += item_height * 0.5f;
                     if (value.is_matter()) {
                         // held matter rides as a mesh at this stack slot,
                         // heading-aligned with the machine
@@ -1866,6 +1939,7 @@
                         m.inverse_transpose_model_transform = inverse(transpose(A));
                         m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
                         [_container_mesh addInstance:m];
+                        location.z += item_height * 0.5f + stack_gap;
                         continue;
                     }
                     simd_float4 coordinate;
@@ -1886,6 +1960,7 @@
                     }
                     emit_symbol(location, coordinate,
                                 make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f));
+                    location.z += item_height * 0.5f + stack_gap;
                 }
                 
             } else if (auto p = dynamic_cast<const LocalizedEntity*>(q)){

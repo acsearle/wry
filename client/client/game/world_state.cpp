@@ -73,6 +73,7 @@ namespace wry {
                 insert_localized_entity(p);
             }
 
+            /*
             {
                 // value source
                 Source* q = new Source;
@@ -89,6 +90,7 @@ namespace wry {
                 r->_location = Coordinate{4, 2};
                 insert_localized_entity(r);
             }
+             */
 
             world->_term_for_coordinate.set(Coordinate{-2, -2}, term_make_integer_with(7));
             world->_term_for_coordinate.set(Coordinate{0, +1}, term_make_integer_with(1));
@@ -97,10 +99,12 @@ namespace wry {
             world->_term_for_coordinate.set(Coordinate{0, +4}, term_make_opcode(OPCODE_FLIP_FLOP));
             world->_term_for_coordinate.set(Coordinate{0, +5}, term_make_integer_with(5));
 
+            /*
             // matter: shipping containers, on the ground where the demo
             // machines will drive over (through) them
             world->_term_for_coordinate.set(Coordinate{-2, +2}, term_make_matter(MATTER_SHIPPING_CONTAINER));
             world->_term_for_coordinate.set(Coordinate{-3, +4}, term_make_matter(MATTER_SHIPPING_CONTAINER));
+             */
 
             world->hack_repair_invariant();
             return world;
@@ -1427,6 +1431,37 @@ namespace wry {
             with_world([](WorldState& ws, int64_t percent) {
                 ws._exposure = (float)std::clamp<int64_t>(percent, 1, 1000) / 100.0f;
                 return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "atlas", "Show the symbols from another atlas: assets/NAME.png (and the field beside it, built on first use): assets is the cutout glyphs, assets_tile the glyphs printed on tiles", Category::local,
+            std::tuple{
+                Param<Ctx, String>{"name", "the atlas's file name without .png", String("assets_tile")},
+            },
+            with_world([](WorldState& ws, String name) {
+                ws._symbol_atlas = std::move(name);
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "token", "The playing pieces' proportions in world mm: the pentagon's width (the glyph's is 875), how tall it stands, and its edge roundover", Category::local,
+            std::tuple{
+                Param<Ctx, int64_t>{"width-mm", "the token's width; 875 matches its glyph", 875},
+                Param<Ctx, int64_t>{"height-mm", "how tall it stands", 875},
+                Param<Ctx, int64_t>{"fillet-mm", "edge roundover", 50},
+            },
+            with_world([](WorldState& ws, int64_t width, int64_t height, int64_t fillet) {
+                ws._token_width = (float)std::clamp<int64_t>(width, 100, 1000) / 1000.0f;
+                ws._token_height = (float)std::clamp<int64_t>(height, 10, 2000) / 1000.0f;
+                ws._token_fillet = (float)std::clamp<int64_t>(fillet, 0, 500) / 1000.0f;
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "toggle-decals", "Show or hide the symbols' ambient-occlusion decals on the ground (off by default; GTAO covers it)", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                return toggle(ws, ws._symbol_decals, "Symbol decals");
             })));
 
         registry.add(make_command<Ctx>(
