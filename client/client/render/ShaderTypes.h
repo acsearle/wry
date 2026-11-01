@@ -299,6 +299,38 @@ typedef struct {
     int blur_radius;                // blur taps per side, 1 to WRY_SSAO_BLUR_MAX_RADIUS
 } WrySSAOUniforms;
 
+#pragma mark - The board
+
+// The terrain, drawn as a board (Shaders.metal, deferred::terrain_*): one
+// quad over the cells in view, every fragment finding its cell's kind in
+// a dense per-frame byte map and inking the board itself -- a pastel
+// tint per kind, a world-width lattice on the cell edges, and the kind's
+// marks from the symbol field's terrain row (tools/make_assets.py,
+// TERRAIN_ROW).  The tint is looked up on a lattice offset from the
+// lines' and blurred, the misregistration of a two-colour print.
+// Distances are world units unless named otherwise.
+
+#define WRY_TERRAIN_KIND_NONE 255
+#define WRY_TERRAIN_KINDS 4
+#define WRY_TERRAIN_PATTERN_ROW 14
+#define WRY_TERRAIN_PATTERN_VARIANTS 4
+
+typedef struct {
+    simd_int2 origin;               // render-space cell of kinds[0]
+    simd_int2 size;                 // cells spanned by the map (x fastest)
+    simd_int2 focus;                // world tile at render-space origin (the variant hash wants world coordinates)
+    simd_float4 tint[WRY_TERRAIN_KINDS];        // linear rgb per kind; a unused
+    simd_float4 lattice[WRY_TERRAIN_KINDS];     // per kind: x line opacity, y arm (fraction of an edge drawn from each corner, 1 = whole), z mark opacity, w the share of cells that carry a mark
+    simd_float4 line_color;         // linear rgb of the ink; a unused
+    simd_float2 misregister;        // tint lattice offset from the lines'
+    float tint_blur;                // width of the tint's soft edge
+    float line_width;               // the lattice line
+    float line_min_pixels;          // below this on screen the line keeps its width and fades instead
+    float mark_bias;                // grown (negative) or shrunk mark edges
+    float roughness;
+    float _padding;
+} WryTerrainUniforms;
+
 #pragma mark - Symbol slabs
 
 // The thickened symbols (render/symbol_sdf.hpp): one instance per symbol,
@@ -313,6 +345,8 @@ typedef struct {
 // SymbolSDF::kRange
 // The field's distance channels, in source texels: the fine one (r) for
 // the slab's walls, the coarse one (a) for the decal's reach
+// Cells per side of the atlas and the field; must agree with SymbolSDF::kCells
+#define WRY_SYMBOL_ATLAS_CELLS 16
 #define WRY_SYMBOL_SDF_RANGE 16.0f
 #define WRY_SYMBOL_SDF_FAR_RANGE 128.0f
 

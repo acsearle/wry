@@ -91,6 +91,21 @@ namespace wry {
         // Encode the occlusion this many times per frame (ssao-repeat): a
         // measuring aid, to make it dominate the frame and the GPU's clock
         int _ssao_repeat = 1;
+        // The board (the `board` command; render/ShaderTypes.h
+        // WryTerrainUniforms): the terrain as a printed board.  World
+        // units unless named otherwise.
+        float _board_line_width = 0.035f;
+        float _board_line_min_pixels = 1.0f;
+        float _board_line_alpha = 0.85f;
+        float _board_mark_alpha = 0.7f;
+        float _board_misregister_x = 0.05f;
+        float _board_misregister_y = -0.03f;
+        float _board_tint_blur = 0.06f;
+        float _board_tint = 1.0f;           // 0 = a white board, 1 = the palette
+        float _board_mark_bias = 0.0f;      // grows (negative) or shrinks the marks
+        // Scene exposure (the `exposure` command): scales the sun and the sky
+        // alike; 1 lights a white board to about mid grey
+        float _exposure = 2.0f;
 
 
         // user interface state

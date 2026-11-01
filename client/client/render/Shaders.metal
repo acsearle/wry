@@ -1339,6 +1339,165 @@ namespace deferred {
         return out;
     }
 
+    // ---- The board ------------------------------------------------------
+    //
+    // The terrain as a printed board (WryTerrainUniforms): one quad at
+    // z = 0 over the cells in view, each fragment finding its cell's
+    // kind in the per-frame kind map and inking the board itself.  Three
+    // layers, in print order: the kind's pastel tint, read on a lattice
+    // shifted by the misregistration and blended across cell edges over
+    // tint_blur; the lattice of lines on the cell edges, a world width
+    // that is clamped to a screen minimum and fades past it (the ink
+    // stays constant as the lines thin); and the kind's marks from the
+    // symbol field's terrain row, antialiased from the distance.
+    // Everything is a function of the ground point, so there is nothing
+    // to seam between cells and no texture to mip.
+
+    struct TerrainVertexFunctionOutput {
+        float4 position_clip [[position]];
+        float2 ground;          // render space, cells centred on the integers
+    };
+
+    [[vertex]] TerrainVertexFunctionOutput
+    terrain_vertex_function(uint vertex_id [[vertex_id]],
+                            constant MeshUniforms& uniforms [[buffer(AAPLBufferIndexUniforms)]],
+                            constant WryTerrainUniforms& board [[buffer(AAPLBufferIndexInstanced)]])
+    {
+        // Two triangles, wound as the mesh quads are, over the map's
+        // cells, which are centred on the integers
+        // (the draw culls nothing, so the winding only matters for front_facing readers)
+        float2 corner = float2(float((0x34u >> vertex_id) & 1u), float((0x1Au >> vertex_id) & 1u));
+        float2 ground = float2(board.origin) - 0.5f + corner * float2(board.size);
+        TerrainVertexFunctionOutput out;
+        out.ground = ground;
+        out.position_clip = uniforms.viewprojection_transform * float4(ground, 0.0f, 1.0f);
+        return out;
+    }
+
+    // The kind of a render-space cell, or WRY_TERRAIN_KIND_NONE off the map
+    static int terrain_kind(constant WryTerrainUniforms& board, const device uchar* kinds, int2 cell) {
+        int2 i = cell - board.origin;
+        if (any(i < 0) || any(i >= board.size))
+            return WRY_TERRAIN_KIND_NONE;
+        return (int)kinds[i.y * board.size.x + i.x];
+    }
+
+    // A cell's tint, or the fallback where there is no cell
+    static float3 terrain_tint(constant WryTerrainUniforms& board, const device uchar* kinds, int2 cell, float3 fallback) {
+        int k = terrain_kind(board, kinds, cell);
+        return k == WRY_TERRAIN_KIND_NONE ? fallback : board.tint[k].rgb;
+    }
+
+    // game/terrain.hpp terrain_variant on the world coordinate: its low
+    // two bits are the variant the world map builder would pick, the
+    // next two flip the mark
+    static uint terrain_hash(int2 world) {
+        uint h = (uint)world.x * 0x9E3779B9u ^ (uint)world.y * 0x85EBCA6Bu;
+        h ^= h >> 16;
+        h *= 0x7FEB352Du;
+        h ^= h >> 15;
+        h *= 0x846CA68Bu;
+        h ^= h >> 16;
+        return h;
+    }
+
+    // Coverage of one lattice line: g is the offset across it, along the
+    // distance along it to the nearest corner (0 at a corner), arm the
+    // fraction of the edge drawn from each corner, wpp the ground spanned
+    // by a pixel across and along it
+    static float terrain_line(float g, float along, float arm, float2 wpp,
+                              constant WryTerrainUniforms& board) {
+        float half_width = 0.5f * board.line_width;
+        float clamped = max(half_width, 0.5f * board.line_min_pixels * wpp.x);
+        float fade = half_width / clamped;
+        float across = saturate((clamped - abs(g)) / wpp.x + 0.5f);
+        float reach = saturate((0.5f * arm - along) / wpp.y + 0.5f);
+        return across * reach * fade;
+    }
+
+    [[fragment]] FragmentFunctionOutput
+    terrain_fragment_function(TerrainVertexFunctionOutput in [[stage_in]],
+                              constant MeshUniforms& uniforms [[buffer(AAPLBufferIndexUniforms)]],
+                              constant WryTerrainUniforms& board [[buffer(AAPLBufferIndexInstanced)]],
+                              const device uchar* kinds [[buffer(AAPLBufferIndexVertices)]],
+                              texture2d<float> field [[texture(AAPLTextureIndexNormal)]])
+    {
+        constexpr sampler bilinear(mag_filter::linear,
+                                   min_filter::linear,
+                                   s_address::clamp_to_edge,
+                                   t_address::clamp_to_edge);
+
+        float2 p = in.ground;
+        // Ground spanned by a pixel along each axis, before any discard
+        float2 wpp = max(fwidth(p), 1e-5f);
+        float wpp_mean = 0.5f * (wpp.x + wpp.y);
+
+        int2 cell = int2(round(p));
+        int kind = terrain_kind(board, kinds, cell);
+        if (kind == WRY_TERRAIN_KIND_NONE)
+            discard_fragment();
+        kind = clamp(kind, 0, WRY_TERRAIN_KINDS - 1);
+        float3 own = board.tint[kind].rgb;
+
+        // The tint: read on the shifted lattice, blended with the
+        // neighbours across the nearer edges over tint_blur, so a
+        // boundary between kinds is a soft edge that misses the line
+        float2 q = p - board.misregister;
+        int2 tc = int2(round(q));
+        float2 f = q - float2(tc);
+        int2 towards = int2(sign(f));
+        float2 edge = 0.5f - abs(f);
+        float2 w = saturate(0.5f - edge / max(board.tint_blur, 1e-4f));
+        float3 t00 = terrain_tint(board, kinds, tc, own);
+        float3 t10 = terrain_tint(board, kinds, tc + int2(towards.x, 0), t00);
+        float3 t01 = terrain_tint(board, kinds, tc + int2(0, towards.y), t00);
+        float3 t11 = terrain_tint(board, kinds, tc + towards, t00);
+        float3 tint = mix(mix(t00, t10, w.x), mix(t01, t11, w.x), w.y);
+
+        // The lattice: lines on the half-integers.  g is the offset from
+        // the cell's centre; the nearer line on each axis lies towards
+        // sign(g), and the cell across it has a say in the line's look
+        float2 g = p - float2(cell);
+        int2 side = int2(sign(g));
+        float4 own_lattice = board.lattice[kind];
+        int kx = terrain_kind(board, kinds, cell + int2(side.x, 0));
+        int ky = terrain_kind(board, kinds, cell + int2(0, side.y));
+        float4 lx = kx == WRY_TERRAIN_KIND_NONE ? own_lattice : max(own_lattice, board.lattice[kx]);
+        float4 ly = ky == WRY_TERRAIN_KIND_NONE ? own_lattice : max(own_lattice, board.lattice[ky]);
+        // along a vertical line the nearest corner is at the half-integer y
+        float2 along = 0.5f - abs(g);
+        float vertical = terrain_line(0.5f - abs(g.x), along.y, lx.y, wpp.xy, board) * lx.x;
+        float horizontal = terrain_line(0.5f - abs(g.y), along.x, ly.y, wpp.yx, board) * ly.x;
+        float lattice = max(vertical, horizontal);
+
+        // The marks: the kind's variant from the field's terrain row,
+        // flipped by two more hash bits, on the kind's share of cells by
+        // eight more, inked by its distance
+        uint h = terrain_hash(cell + board.focus);
+        uint variant = h & (WRY_TERRAIN_PATTERN_VARIANTS - 1);
+        float share = float((h >> 4) & 255u) / 256.0f;
+        float marked = share < own_lattice.w ? 1.0f : 0.0f;
+        float2 fc = g + 0.5f;                       // across the cell, y up
+        fc.x = (h & 4u) ? 1.0f - fc.x : fc.x;
+        fc.y = (h & 8u) ? 1.0f - fc.y : fc.y;
+        float2 uv = (float2((float)(kind * WRY_TERRAIN_PATTERN_VARIANTS + variant), (float)WRY_TERRAIN_PATTERN_ROW)
+                     + float2(fc.x, 1.0f - fc.y)) / (float)WRY_SYMBOL_ATLAS_CELLS;
+        float d_texels = (field.sample(bilinear, uv).r - 0.5f) * (2.0f * WRY_SYMBOL_SDF_RANGE);
+        float d = d_texels / 256.0f + board.mark_bias;       // 256 source texels per cell
+        float mark = saturate(0.5f - d / wpp_mean) * own_lattice.z * marked;
+
+        float ink = 1.0f - (1.0f - lattice) * (1.0f - mark);
+        float3 albedo = mix(tint, board.line_color.rgb, ink);
+
+        FragmentFunctionOutput out;
+        out.light = half4(0.0h);
+        out.albedo = half4(half3(albedo), 1.0h);
+        out.normal = half4(0.0h, 0.0h, 1.0h, 0.0h);
+        out.material = half4(1.0h, half(board.roughness), 0.0h, 0.0h);
+        out.depth = 1.0f / in.position_clip.w;
+        return out;
+    }
+
     // we also need a shader that draws the shadows of smoke, dust, clouds onto an
     // illumination map from the light's perspective; these don't write the z-buffer
     // but they are masked by it, and are just absorption

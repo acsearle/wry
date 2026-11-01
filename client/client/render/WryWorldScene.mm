@@ -31,6 +31,7 @@
 #include "mesh.hpp"
 #include "palette.hpp"
 #include "platform.hpp"
+#include "sRGB.hpp"
 #include "sdf.hpp"
 #include "symbol_sdf.hpp"
 #include "term.hpp"
@@ -122,6 +123,7 @@
     id<MTLTexture> _symbolField;
     std::vector<float> _symbolStrokeWidth;
     id<MTLRenderPipelineState> _symbolGBufferRenderPipelineState;
+    id<MTLRenderPipelineState> _terrainGBufferRenderPipelineState;
     id<MTLRenderPipelineState> _symbolShadowRenderPipelineState;
     id<MTLRenderPipelineState> _symbolDecalRenderPipelineState;
 
@@ -553,6 +555,14 @@
             descriptor.label = @"Symbol slab G-buffer";
             _symbolGBufferRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
 
+            // The board: the terrain inked per fragment from its kind map
+            // and the symbol field's terrain row (ShaderTypes.h,
+            // WryTerrainUniforms)
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::terrain_vertex_function"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::terrain_fragment_function"];
+            descriptor.label = @"Board G-buffer";
+            _terrainGBufferRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
+
             // The decal multiplies the material's occlusion channel in
             // place and touches nothing else
             descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::symbol_decal_vertex_function"];
@@ -764,16 +774,16 @@
             // mipmapped path; the trilinear sampler puts the mips to use.
             // Albedo is color (sRGB); the normal and ORM maps are data,
             // loaded linear.
-//            _terrainAlbedo = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_Albedo"
-            _terrainAlbedo = [_ctx newMipmappedTextureFromResource:@"white"
+            _terrainAlbedo = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_Albedo"
+            // _terrainAlbedo = [_ctx newMipmappedTextureFromResource:@"white"
                                                             ofType:@"png"
                                                    withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
-//            _terrainNormal = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_NormalGL"
-            _terrainNormal = [_ctx newMipmappedTextureFromResource:@"blue"
+            _terrainNormal = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_NormalGL"
+            // _terrainNormal = [_ctx newMipmappedTextureFromResource:@"blue"
                                                             ofType:@"png"
                                                    withPixelFormat:MTLPixelFormatRGBA8Unorm];
-//            _terrainORM = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_ORM"
-            _terrainORM = [_ctx newMipmappedTextureFromResource:@"orange"
+            _terrainORM = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_ORM"
+            // _terrainORM = [_ctx newMipmappedTextureFromResource:@"orange"
                                                             ofType:@"png"
                                                    withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
         }
@@ -1595,11 +1605,10 @@
     // with a decal reach)
     WryBufferSlice decal_instances = {};
     NSUInteger decal_count = 0;
-    // Terrain tiles get their own buffers: same quad pipeline, but drawn
-    // with the terrain palette (not the sprite atlas) bound as albedo.
-    WryBufferSlice terrain_vertices = {};
-    WryBufferSlice terrain_indices = {};
-    NSUInteger terrain_index_count = 0;
+    // The board: the cells in view as a dense map of terrain kinds, and
+    // the look that inks them (deferred::terrain_fragment_function)
+    WryBufferSlice terrain_kinds = {};
+    WryTerrainUniforms board = {};
     // Map mode: the world-map quad, in place of all of the above.
     WryBufferSlice map_vertices = {};
     WryBufferSlice map_indices = {};
@@ -1983,55 +1992,73 @@
 
         {
 
-            // Terrain: one material-atlas-textured quad per generated tile
-            // in view, at z = 0 under the tile/entity layer.  Sourced by
-            // Morton-range descent over the terrain map, like the entity
-            // query above; cells that have no terrain yet (beyond the
-            // generated region) draw nothing and show the clear color.
-            std::vector<MeshVertex> terrain_vbuf;
-            std::vector<uint> terrain_ibuf;
-            uint terrain_k = 0;
-            visit_in_region(new_world->_terrain_for_coordinate,
-                            tile_at(grid_bounds.a.x, grid_bounds.a.y),
-                            tile_at(grid_bounds.b.x - 1, grid_bounds.b.y - 1),
-                            [&](Coordinate xy, wry::Terrain t) {
-                if ((t < 0) || (t >= wry::TERRAIN_KIND_COUNT))
-                    t = wry::TERRAIN_KIND_COUNT - 1;
-                // Atlas cell: material row from the terrain kind, variant
-                // column from the coordinate hash.  Corner order follows
-                // the sprite quads (world +y = image up = smaller v),
-                // which also orients the GL-convention normal map's +Y
-                // with the +y bitangent.  The cells' baked border is the
-                // bleed gutter.
-                float u0 = (float)wry::terrain_variant(xy) * 0.25f;
-                float v0 = (float)t * 0.25f;
-                simd_float4 location = make<float4>(_model->render_position(xy), 0.0f, 1.0f);
-                v.position = make<float4>(-0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(u0, v0 + 0.25f, 0.0f, 1.0f);
-                terrain_vbuf.push_back(v);
-                v.position = make<float4>(+0.5f, -0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(u0 + 0.25f, v0 + 0.25f, 0.0f, 1.0f);
-                terrain_vbuf.push_back(v);
-                v.position = make<float4>(+0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(u0 + 0.25f, v0, 0.0f, 1.0f);
-                terrain_vbuf.push_back(v);
-                v.position = make<float4>(-0.5f, +0.5f, 0.0f, 0.0f) + location;
-                v.coordinate = make<float4>(u0, v0, 0.0f, 1.0f);
-                terrain_vbuf.push_back(v);
-                terrain_ibuf.push_back(terrain_k);
-                terrain_ibuf.push_back(terrain_k);
-                terrain_ibuf.push_back(terrain_k + 1);
-                terrain_ibuf.push_back(terrain_k + 3);
-                terrain_ibuf.push_back(terrain_k + 2);
-                terrain_ibuf.push_back(terrain_k + 2);
-                terrain_k += 4;
-            });
-            terrain_index_count = terrain_ibuf.size();
-            if (terrain_index_count) {
-                terrain_vertices = [_ctx.arena copyBytes:terrain_vbuf.data()
-                                                  length:terrain_vbuf.size() * sizeof(MeshVertex)];
-                terrain_indices = [_ctx.arena copyBytes:terrain_ibuf.data()
-                                                 length:terrain_ibuf.size() * sizeof(uint)];
+            // The board: the terrain kinds of the cells in view, as a
+            // dense byte map over grid_bounds (clamped about its centre
+            // to a sane size), sourced by Morton-range descent over the
+            // terrain map like the entity query above; cells that have
+            // no terrain yet (beyond the generated region) are marked
+            // absent and the fragment shader discards them, showing the
+            // clear colour.
+            {
+                constexpr int kMaxCells = 512;
+                simd_int2 a = grid_bounds.a, b = grid_bounds.b;
+                for (int axis = 0; axis != 2; ++axis) {
+                    if (b[axis] - a[axis] > kMaxCells) {
+                        int c = (a[axis] + b[axis]) / 2;
+                        a[axis] = c - kMaxCells / 2;
+                        b[axis] = a[axis] + kMaxCells;
+                    }
+                }
+                board.origin = a;
+                board.size = b - a;
+                board.focus = simd_make_int2(focus_tile.x, focus_tile.y);
+                std::vector<uint8_t> map((size_t)board.size.x * (size_t)board.size.y,
+                                         (uint8_t)WRY_TERRAIN_KIND_NONE);
+                visit_in_region(new_world->_terrain_for_coordinate,
+                                tile_at(a.x, a.y),
+                                tile_at(b.x - 1, b.y - 1),
+                                [&](Coordinate xy, wry::Terrain t) {
+                    if ((t < 0) || (t >= wry::TERRAIN_KIND_COUNT))
+                        t = wry::TERRAIN_KIND_COUNT - 1;
+                    float2 r = _model->render_position(xy);
+                    int i = (int)std::lround(r.x) - a.x;
+                    int j = (int)std::lround(r.y) - a.y;
+                    if ((i < 0) || (i >= board.size.x) || (j < 0) || (j >= board.size.y))
+                        return;
+                    map[(size_t)j * (size_t)board.size.x + (size_t)i] = (uint8_t)t;
+                });
+                terrain_kinds = [_ctx.arena copyBytes:map.data() length:map.size()];
+
+                // The look: a pastel per kind, near-black ink, and the
+                // lattice's opacity and reach per kind, with the
+                // dimensions from the `board` command
+                auto linear = [](float r, float g, float b) {
+                    return make<float4>(wry::from_sRGB(r / 255.0f), wry::from_sRGB(g / 255.0f), wry::from_sRGB(b / 255.0f), 1.0f);
+                };
+                const float tint = _model->_board_tint;
+                auto pastel = [&](float r, float g, float b) {
+                    simd_float4 c = linear(r, g, b);
+                    return simd_mix(make<float4>(1.0f, 1.0f, 1.0f, 1.0f), c, make<float4>(tint, tint, tint, 0.0f));
+                };
+                // (warm of their names: the sky's light is blue)
+                board.tint[wry::TERRAIN_WATER] = pastel(216, 226, 234);
+                board.tint[wry::TERRAIN_SAND]  = pastel(244, 232, 200);
+                board.tint[wry::TERRAIN_GRASS] = pastel(224, 232, 206);
+                board.tint[wry::TERRAIN_ROCK]  = pastel(224, 220, 210);
+                // x: line opacity, y: arm (fraction of an edge drawn from
+                // each corner), z: mark opacity, w: share of cells marked
+                const float la = _model->_board_line_alpha, ma = _model->_board_mark_alpha;
+                board.lattice[wry::TERRAIN_WATER] = make<float4>(0.45f * la, 1.0f, ma, 0.55f);
+                board.lattice[wry::TERRAIN_SAND]  = make<float4>(0.7f * la, 1.0f, ma, 0.4f);
+                board.lattice[wry::TERRAIN_GRASS] = make<float4>(la, 1.0f, ma, 0.0f);
+                board.lattice[wry::TERRAIN_ROCK]  = make<float4>(la, 1.0f, ma, 0.5f);
+                board.line_color = linear(38, 38, 44);
+                board.misregister = simd_make_float2(_model->_board_misregister_x, _model->_board_misregister_y);
+                board.tint_blur = _model->_board_tint_blur;
+                board.line_width = _model->_board_line_width;
+                board.line_min_pixels = _model->_board_line_min_pixels;
+                board.mark_bias = _model->_board_mark_bias;
+                board.roughness = 0.9f;
             }
 
         }
@@ -2215,7 +2242,7 @@
                 // 1 the two give a sunlit surface about equal shares
                 // (day.png's cosine-weighted mean radiance is about 0.2,
                 // the sun's share albedo * 0.8 / pi is 0.25)
-                uniforms.ibl_scale = 1.0f;
+                uniforms.ibl_scale = _model->_exposure;
                 uniforms.ibl_transform = matrix_identity_float3x3;
                 // TODO: resurrect blending
 
@@ -2309,8 +2336,8 @@
                         [encoder setFragmentBuffer:symbol_instances.buffer
                                             offset:symbol_instances.offset
                                            atIndex:AAPLBufferIndexInstanced];
-                        //[encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
-                        [encoder setFragmentTexture:_white atIndex:AAPLTextureIndexAlbedo];
+                        [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
+                        // [encoder setFragmentTexture:_white atIndex:AAPLTextureIndexAlbedo];
                         [encoder setFragmentTexture:_symbolField atIndex:AAPLTextureIndexNormal];
                         [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                                     vertexStart:0
@@ -2323,22 +2350,27 @@
                         [encoder setFragmentTexture:_blue atIndex:AAPLTextureIndexNormal];
                     }
 
-                    // Terrain tiles (a shadow receiver only, so they skip
-                    // the shadow pass entirely): the full PBR material
-                    // atlases, with ORM feeding the occlusion / roughness
-                    // / metallic slots from one texture.
-                    if (terrain_index_count) {
-                        [encoder setFragmentTexture:_terrainAlbedo atIndex:AAPLTextureIndexAlbedo];
-                        [encoder setFragmentTexture:_terrainNormal atIndex:AAPLTextureIndexNormal];
-                        [encoder setFragmentTexture:_terrainORM atIndex:AAPLTextureIndexMetallic];
-                        [encoder setFragmentTexture:_terrainORM atIndex:AAPLTextureIndexRoughness];
-                        [encoder setFragmentTexture:_terrainORM atIndex:AAPLTextureIndexOcclusion];
-                        [encoder setVertexBuffer:terrain_vertices.buffer offset:terrain_vertices.offset atIndex:AAPLBufferIndexVertices];
-                        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangleStrip
-                                            indexCount:terrain_index_count
-                                             indexType:MTLIndexTypeUInt32
-                                           indexBuffer:terrain_indices.buffer
-                                     indexBufferOffset:terrain_indices.offset];
+                    // The board (a shadow receiver only, so it skips the
+                    // shadow pass entirely): one quad over the kind map,
+                    // inked per fragment from the symbol field's terrain
+                    // row.  Restore the mesh bindings after.
+                    if (terrain_kinds.buffer) {
+                        [encoder setRenderPipelineState:_terrainGBufferRenderPipelineState];
+                        [encoder setVertexBytes:&board length:sizeof(WryTerrainUniforms) atIndex:AAPLBufferIndexInstanced];
+                        [encoder setFragmentBytes:&board length:sizeof(WryTerrainUniforms) atIndex:AAPLBufferIndexInstanced];
+                        [encoder setFragmentBuffer:terrain_kinds.buffer offset:terrain_kinds.offset atIndex:AAPLBufferIndexVertices];
+                        [encoder setFragmentTexture:_symbolField atIndex:AAPLTextureIndexNormal];
+                        // A ground quad seen from above only; culling buys nothing
+                        [encoder setCullMode:MTLCullModeNone];
+                        [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                    vertexStart:0
+                                    vertexCount:6];
+                        [encoder setCullMode:MTLCullModeBack];
+                        [encoder setRenderPipelineState:_deferredGBufferRenderPipelineState];
+                        [encoder setVertexBytes:&mesh_instanced_things
+                                         length:sizeof(MeshInstanced)
+                                        atIndex:AAPLBufferIndexInstanced];
+                        [encoder setFragmentTexture:_blue atIndex:AAPLTextureIndexNormal];
                     }
 
                 }
@@ -2420,7 +2452,9 @@
                 
                 // The sun's irradiance at normal incidence (the Lambert
                 // term divides by pi); see ibl_scale above for the balance
-                uniforms.radiance = simd_make_float3(1.0f, 1.0f, 1.0f);
+                // A warm sun against the blue sky, so a white board lands
+                // near white rather than blue
+                uniforms.radiance = simd_make_float3(1.08f, 1.0f, 0.84f) * _model->_exposure;
                 [encoder setFragmentBytes:&uniforms
                                    length:sizeof(MeshUniforms)
                                   atIndex:AAPLBufferIndexUniforms];

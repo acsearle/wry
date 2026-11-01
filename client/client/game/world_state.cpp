@@ -1394,6 +1394,42 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
+            "board", "The terrain's look as a printed board: the lattice line's width in mm and its minimum width in pixels (thinner than that it fades instead), the line and mark opacities in percent, the tint's misregistration in mm and the width of its soft edge, the tint's strength in percent (0 is a white board), and a bias in mm on the marks' edges (negative grows them)", Category::local,
+            std::tuple{
+                Param<Ctx, int64_t>{"line-mm", "lattice line width, world mm", 30},
+                Param<Ctx, int64_t>{"min-px", "minimum lattice line width on screen, pixels", 1},
+                Param<Ctx, int64_t>{"line-alpha", "lattice opacity, percent", 80},
+                Param<Ctx, int64_t>{"mark-alpha", "mark opacity, percent", 80},
+                Param<Ctx, int64_t>{"shift-x-mm", "tint misregistration east, mm", 50},
+                Param<Ctx, int64_t>{"shift-y-mm", "tint misregistration north, mm", -30},
+                Param<Ctx, int64_t>{"blur-mm", "width of the tint's soft edge, mm", 60},
+                Param<Ctx, int64_t>{"tint", "tint strength, percent; 0 is a white board", 100},
+                Param<Ctx, int64_t>{"bias-mm", "mark edge bias, mm; negative grows the marks", 0},
+            },
+            with_world([](WorldState& ws, int64_t line_mm, int64_t min_px, int64_t line_alpha, int64_t mark_alpha, int64_t shift_x, int64_t shift_y, int64_t blur_mm, int64_t tint, int64_t bias_mm) {
+                ws._board_line_width = (float)std::clamp<int64_t>(line_mm, 0, 500) / 1000.0f;
+                ws._board_line_min_pixels = (float)std::clamp<int64_t>(min_px, 0, 16);
+                ws._board_line_alpha = (float)std::clamp<int64_t>(line_alpha, 0, 100) / 100.0f;
+                ws._board_mark_alpha = (float)std::clamp<int64_t>(mark_alpha, 0, 100) / 100.0f;
+                ws._board_misregister_x = (float)std::clamp<int64_t>(shift_x, -500, 500) / 1000.0f;
+                ws._board_misregister_y = (float)std::clamp<int64_t>(shift_y, -500, 500) / 1000.0f;
+                ws._board_tint_blur = (float)std::clamp<int64_t>(blur_mm, 1, 1000) / 1000.0f;
+                ws._board_tint = (float)std::clamp<int64_t>(tint, 0, 200) / 100.0f;
+                ws._board_mark_bias = (float)std::clamp<int64_t>(bias_mm, -200, 200) / 1000.0f;
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "exposure", "Scene exposure in percent: scales the sun and the sky alike (100 lights a white board to about mid grey)", Category::local,
+            std::tuple{
+                Param<Ctx, int64_t>{"percent", "1 to 1000", 100},
+            },
+            with_world([](WorldState& ws, int64_t percent) {
+                ws._exposure = (float)std::clamp<int64_t>(percent, 1, 1000) / 100.0f;
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
             "toggle-jacobians", "Show or hide Jacobians (debug)", Category::local,
             std::tuple<>{},
             with_world([](WorldState& ws) {
