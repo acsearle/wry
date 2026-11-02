@@ -515,8 +515,15 @@ frame exactly like real ones.
 `--control-socket [PATH]` (`open client.app --args --control-socket`);
 PATH defaults to `$TMPDIR/wry-control.sock`, which is also where the
 tools look unless `$WRY_CONTROL_SOCKET` says otherwise.  The file is
-created mode 0600 and removed at exit.  `--skip-splash` boots straight
-to the main menu, so a driven run need not wait out the splash.
+mode 0600 from the moment it appears (bound under a temporary name
+beside it, chmod, renamed into place; the process umask is never
+touched) and removed at exit.  The path is owned: a second process
+finds the first's socket live (a probe connect is answered) and refuses
+to start its own, with the error in its log; a socket file whose owner
+died is replaced; and the exit-time unlink removes only the file this
+process bound, never a successor's at the same path.  `--skip-splash`
+boots straight to the main menu, so a driven run need not wait out the
+splash.
 
 Requests are lines: a JSON object holding a command line or a
 structured invocation, or a bare command line.  An `id` (number or
@@ -657,6 +664,18 @@ default on macOS, so the smoke scripts and ctest run the game with
 under which a finding exits instead; set the same when running a
 driven binary by hand.  The windowed app keeps the defaults, since a
 real crash report is worth having there.
+
+**The suite beside the game.**  Every live process (windowed,
+`--offscreen`, `--headless`) runs the unit-test suite in the background
+on the same worker pool and reactor as the game, for the interleavings
+that exercises; `quit` waits for it to finish.  The tests are written
+to share (io/test_support.hpp: no test blocks a pool worker, every
+deadline is a generous hang detector, the transports are tested over
+socket pairs with no path on the filesystem), and the few that need the
+reactor to themselves are tagged `test_exclusive` (core/test.hpp) and
+sit out a live run, which the log says; `--test-only` runs them.
+`--no-tests` leaves the suite out altogether, which the smoke scripts
+pass so that an end-to-end failure is never a background assertion.
 
 **Offscreen host.**  `client --offscreen` runs the same scenes,
 registry and socket as a window would, but rendering to an offscreen

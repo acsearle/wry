@@ -17,7 +17,9 @@ stream, the structural diff of the two dumps names the cell, the relay
 kicks the joiner at its next report, `compare` finds the step in the
 two session logs, the host's log replays consistently through it and
 the joiner's does not reproduce what it recorded.  The binary defaults
-to the newest Debug build in DerivedData.  Exit status 0 on success.
+to the newest Debug build in DerivedData.  Both processes are launched
+with --no-tests: the unit-test suite a live process otherwise runs in
+the background is not what this measures.  Exit status 0 on success.
 Standard library only.
 """
 
@@ -94,7 +96,7 @@ class Process:
         self.log_path = os.path.join(workdir, f"{name}.log")
         self.log = open(self.log_path, "wb")
         self.process = subprocess.Popen(
-            [binary, "--headless", "--control-socket", self.socket_path, *extra],
+            [binary, "--headless", "--no-tests", "--control-socket", self.socket_path, *extra],
             stdout=self.log, stderr=subprocess.STDOUT, env=game_environment())
         deadline = time.monotonic() + 60
         while not os.path.exists(self.socket_path):

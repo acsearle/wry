@@ -55,7 +55,7 @@ namespace wry {
                 head = p;
             }
 
-            static Task run_all(std::string_view filter);
+            static Task run_all(std::string_view filter, bool shared);
             
         };
         
@@ -79,9 +79,20 @@ namespace wry {
     
     using coroutine::Task;
 
+    // A metadata tag for a test that needs the reactor and the worker pool
+    // to itself: it reads a process-wide count, or asserts that something
+    // happened promptly.  Such a test runs only when the suite is the
+    // process's whole business (--test-only); a live process, which runs
+    // the suite beside the game, skips it and says so.  Everything else in
+    // the suite is written to share (io/test_support.hpp).
+    inline constexpr const char* test_exclusive = "exclusive";
+
     // Runs every registered test whose metadata contains `filter` as a
     // substring (in any of its strings).  Empty filter runs all tests.
-    Task run_tests(std::string_view filter = {});
+    // `shared` says the process has other work (a game, a live control
+    // socket) on the same pool and reactor, so the exclusive tests are
+    // skipped.
+    Task run_tests(std::string_view filter = {}, bool shared = false);
     
 } // namespace wry
 

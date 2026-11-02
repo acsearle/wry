@@ -9,11 +9,8 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
-#include <thread>
 
-#include <poll.h>
 #include <sys/socket.h>
-#include <sys/un.h>
 #include <unistd.h>
 
 #include "gui_context.hpp"
@@ -23,6 +20,7 @@
 #include "execution.hpp"
 #include "kqueue_reactor.hpp"
 #include "test.hpp"
+#include "test_support.hpp"
 #include "world_state.hpp"
 
 namespace wry::command {
@@ -1524,28 +1522,24 @@ namespace wry {
 
     // The control socket end to end: JSON and bare-line requests, one
     // reply each, in order per connection; errors carry the request's id;
-    // a pending reply arrives when it completes; closing cancels.
+    // a pending reply arrives when it completes; closing cancels.  Over a
+    // socket pair, the test driving its end through the reactor
+    // (io/test_support.hpp); the Unix path binding is control_socket_path
     define_test("gui_context_control_socket") {
+        using testing::eventually;
         GuiContext gc;
-        std::string path = "/tmp/wry-gui-context-socket-test-" + std::to_string(::getpid()) + ".sock";
-        // Opened by hand rather than through open_control_socket, whose
-        // spawn goes to the wait group: there the accept loop would be
-        // cancelled by the root token at quit (the test runner itself is
-        // shielded from it), and this test would lose its replies.  Under
-        // this frame's nursery it inherits the runner's shield
-        std::string error;
-        gc.control_socket = ControlSocket::open(path, error);
-        assert(gc.control_socket && error.empty());
+        // Served under this frame's nursery (which inherits the runner's
+        // shield), not the process scope: there the loop would be
+        // cancelled by the root token at quit and this test would lose its
+        // replies
         coroutine::Nursery serving;
+        gc.scope = &serving;
+        gc.control_socket = ControlSocket::make();
         serving.soon(gc.control_socket->serve());
-
-        int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-        sockaddr_un address = {};
-        address.sun_family = AF_UNIX;
-        std::memcpy(address.sun_path, path.data(), path.size());
-        const int connected = ::connect(fd, (sockaddr const*)&address, sizeof(address));
-        assert(connected == 0);
-        (void) connected;
+        testing::SocketPair pair;
+        const int id = gc.control_socket->adopt(pair.release_server());
+        assert(id > 0);
+        testing::StreamReader client{pair.client()};
 
         const std::string requests =
             "{\"id\": 1, \"line\": \"help help\"}\n"
@@ -1556,30 +1550,20 @@ namespace wry {
             "{\"id\": 6, \"nonsense\": true}\n"
             "{not json\n"
             "{\"id\": 8, \"command\": \"key\", \"args\": {\"combo\": \"Shift+R x=1\"}}\n";
-        const ssize_t written = ::write(fd, requests.data(), requests.size());
-        assert(written == (ssize_t)requests.size());
-        (void) written;
+        bool written = co_await testing::send_all(pair.client(), requests);
+        assert(written);
 
         // Play the host: frames tick and commands are serviced, while the
-        // client collects reply lines.
+        // client collects reply lines
         std::vector<std::string> replies;
-        std::string pending;
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        const auto deadline = testing::soon();
         while (replies.size() < 8 && std::chrono::steady_clock::now() < deadline) {
             ++gc.frame;
             gc.service_commands();
-            pollfd p{fd, POLLIN, 0};
-            if (::poll(&p, 1, 10) > 0) {
-                char buffer[65536];
-                ssize_t n = ::read(fd, buffer, sizeof(buffer));
-                if (n <= 0)
-                    break;
-                pending.append(buffer, (size_t)n);
-                for (size_t nl; (nl = pending.find('\n')) != std::string::npos; ) {
-                    replies.push_back(pending.substr(0, nl));
-                    pending.erase(0, nl + 1);
-                }
-            }
+            auto more = co_await client.lines(8 - replies.size(), testing::soon(std::chrono::milliseconds(10)));
+            for (auto& line : more)
+                replies.push_back(std::move(line));
+            assert(!client.ended);
         }
         assert(replies.size() == 8);
 
@@ -1629,35 +1613,34 @@ namespace wry {
         assert(frame_at < four_at);
 
         // Socket invocations are recorded with their origin and the peer's
-        // label: this process, connected to itself
+        // label: over a socket pair, this process, so the label ends with
+        // its pid
         bool from_socket = false;
-        std::string expected_peer = "client " + std::to_string(::getpid());
+        const std::string pid_suffix = " " + std::to_string(::getpid());
         for (auto const& e : gc.history)
-            if (e.line == StringView("click 3 4 \"right\""))
-                from_socket = (e.origin == Origin::socket)
-                           && (e.peer == StringView(expected_peer.c_str()));
+            if (e.line == StringView("click 3 4 \"right\"")) {
+                const std::string peer(e.peer.chars.begin(), e.peer.chars.end());
+                from_socket = (e.origin == Origin::socket) && peer.ends_with(pid_suffix);
+            }
         assert(from_socket);
 
-        // Closing the connection with a command pending cancels it.
-        const std::string slow = "frame 1000\n";
-        const ssize_t w2 = ::write(fd, slow.data(), slow.size());
-        assert(w2 == (ssize_t)slow.size());
-        (void) w2;
-        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (gc.socket_sources.empty() || !gc.socket_sources.begin()->second->pending) {
+        // Closing the connection with a command pending cancels it
+        written = co_await testing::send_all(pair.client(), "frame 1000\n");
+        assert(written);
+        bool pending = co_await eventually([&] {
             gc.service_commands();
-            assert(std::chrono::steady_clock::now() < deadline);
-        }
-        ::close(fd);
-        while (!gc.socket_sources.empty()) {
+            return !gc.socket_sources.empty() && gc.socket_sources.begin()->second->pending;
+        });
+        assert(pending);
+        pair.close_client();
+        bool cancelled = co_await eventually([&] {
             gc.service_commands();
-            assert(std::chrono::steady_clock::now() < deadline);
-        }
+            return gc.socket_sources.empty();
+        });
+        assert(cancelled);
         assert(gc.history.back().line == StringView("frame 1000"));
         assert(gc.history.back().status == Reply::CANCELLED);
 
-        // The loop was spawned under the wait group, which this test cannot
-        // join, so poll for its end before the destructor's assert
         co_await gc.control_socket->shutdown(std::chrono::milliseconds(100));
         (void) co_await serving.join();
         gc.control_socket.reset();

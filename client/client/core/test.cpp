@@ -45,16 +45,32 @@ namespace wry {
             return false;
         }
 
-        wry::Task test_t::run_all(std::string_view filter) {
-            // Serially, by design: each test gets the worker pool to
-            // itself, its printed time is its own, and a test that
-            // blocks a worker or saturates the queue cannot starve the
-            // others.  (Tests that want internal parallelism fork their
-            // own nurseries.)
+        static bool _is_exclusive(const test_t::base* test) {
+            for (const char* meta : test->_metadata)
+                if (std::string_view(meta) == test_exclusive)
+                    return true;
+            return false;
+        }
+
+        wry::Task test_t::run_all(std::string_view filter, bool shared) {
+            // Serially, by design: each test gets the rest of the suite out
+            // of its way, its printed time is its own, and a test that
+            // saturates the queue cannot starve the others.  (Tests that
+            // want internal parallelism fork their own nurseries.)  The
+            // pool and the reactor are shared with the live game when there
+            // is one, so a test that cannot share declares itself exclusive
+            // and sits out a live run.
             base* head = take(get_head());
+            size_t skipped = 0;
             while (head) {
                 base* test = exchange(head, head->next);
                 if (!_matches_filter(test, filter)) {
+                    delete test;
+                    continue;
+                }
+                if (shared && _is_exclusive(test)) {
+                    test->print_metadata("skipped: exclusive, and the process is live", 0.0);
+                    ++skipped;
                     delete test;
                     continue;
                 }
@@ -64,13 +80,16 @@ namespace wry {
                 test->print_metadata("", (t1 - t0) * 1e-9);
                 delete test;
             }
-            printf("[all] : unit tests complete\n");
+            if (skipped)
+                printf("[all] : unit tests complete (%zu exclusive tests skipped; run them with --test-only)\n", skipped);
+            else
+                printf("[all] : unit tests complete\n");
         }
 
     } // namespace detail
 
-    wry::Task run_tests(std::string_view filter) {
-        return detail::test_t::run_all(filter);
+    wry::Task run_tests(std::string_view filter, bool shared) {
+        return detail::test_t::run_all(filter, shared);
     }
     
 } // namespace wry

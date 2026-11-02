@@ -7,7 +7,6 @@
 
 #include <cerrno>
 #include <cstring>
-#include <thread>
 #include <variant>
 
 #include <sys/socket.h>
@@ -19,6 +18,7 @@
 #include "host.hpp"
 #include "save.hpp"
 #include "test.hpp"
+#include "test_support.hpp"
 #include "unicode.hpp"
 #include "wire.hpp"
 #include "world.hpp"
@@ -451,16 +451,7 @@ namespace wry {
 
     namespace {
 
-        template<typename F>
-        bool eventually(F&& f, std::chrono::seconds timeout = std::chrono::seconds(5)) {
-            auto deadline = std::chrono::steady_clock::now() + timeout;
-            while (!f()) {
-                if (std::chrono::steady_clock::now() >= deadline)
-                    return false;
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            }
-            return true;
-        }
+        using testing::eventually;
 
     } // namespace
 
@@ -481,7 +472,7 @@ namespace wry {
             for (Step& s : client.take_steps())
                 steps.push_back(std::move(s));
         };
-        bool subscribed = eventually([&] {
+        bool subscribed = co_await eventually([&] {
             take();
             return client.state() == RemoteServer::State::SUBSCRIBED || client.state() == RemoteServer::State::JOINED;
         });
@@ -493,14 +484,14 @@ namespace wry {
         // goes straight to the relay's inbox while the request travels the
         // socket, so the test keeps stepping, as the clock would)
         client.submit(make_write_action(Coordinate{1, 1}, term_make_integer_with(7)));
-        bool joined = eventually([&] {
+        bool joined = co_await eventually([&] {
             host->relay().step(1);
             take();
             return client.state() == RemoteServer::State::JOINED;
         });
         assert(joined);
         (void) joined;
-        bool acted = eventually([&] {
+        bool acted = co_await eventually([&] {
             host->relay().step(1);
             take();
             for (Step& s : steps)
@@ -593,7 +584,7 @@ namespace wry {
         assert(port && *port != 0);
 
         host->relay().step(2);
-        bool stepped = eventually([&] { return host->relay().clock().head >= 3; });
+        bool stepped = co_await eventually([&] { return host->relay().clock().head >= 3; });
         assert(stepped);
         (void) stepped;
         auto joiner = RemoteServer::make(scope);
@@ -603,7 +594,7 @@ namespace wry {
         // The joiner's HELLO has the relay ask the host's client for a
         // save at the head; the test plays the host's World
         std::vector<RemoteServer::Donation> donations;
-        bool asked = eventually([&] {
+        bool asked = co_await eventually([&] {
             (void) joiner->take_steps();
             (void) host->client().take_steps();
             for (auto& d : host->client().take_donations())
@@ -630,7 +621,7 @@ namespace wry {
         // The joiner assembles the save, loads it, and proves receipt with
         // its hash; the JOIN waits for that proof, then rides a step
         std::optional<RemoteServer::DonatedSave> save;
-        bool received = eventually([&] {
+        bool received = co_await eventually([&] {
             (void) host->client().take_steps();     // sends the serialized save
             (void) joiner->take_steps();
             save = joiner->take_save();
@@ -650,7 +641,7 @@ namespace wry {
         }
         // The JOIN is not yet admitted: no report
         host->relay().step(1);
-        bool pending = eventually([&] {
+        bool pending = co_await eventually([&] {
             (void) joiner->take_steps();
             return joiner->head() >= boundary + 1;
         });
@@ -658,7 +649,7 @@ namespace wry {
         (void) pending;
         host->client().report_hash(boundary, w->content_hash());
         joiner->report_hash(boundary, loaded->content_hash());
-        bool joined = eventually([&] {
+        bool joined = co_await eventually([&] {
             host->relay().step(1);
             (void) host->client().take_steps();
             (void) joiner->take_steps();
@@ -675,19 +666,19 @@ namespace wry {
         joiner->report_hash(later - 1, 0x1111);
         joiner->report_hash(later, 0x2222);
         host->client().report_hash(later, 0x2222);
-        bool agreed = eventually([&] {
+        bool agreed = co_await eventually([&] {
             (void) joiner->take_steps();
             return joiner->state() == RemoteServer::State::JOINED;
-        }, std::chrono::seconds(1));
+        });
         assert(agreed);
         (void) agreed;
         host->relay().step(1);
-        bool one_more = eventually([&] { return host->relay().clock().head > later; });
+        bool one_more = co_await eventually([&] { return host->relay().clock().head > later; });
         assert(one_more);
         (void) one_more;
         host->client().report_hash(later + 1, 0x3333);
         joiner->report_hash(later + 1, 0xbad);
-        bool desynced = eventually([&] {
+        bool desynced = co_await eventually([&] {
             (void) joiner->take_steps();
             return joiner->state() == RemoteServer::State::DISCONNECTED;
         });
@@ -702,7 +693,7 @@ namespace wry {
             spare.reset();
             refused->dial("127.0.0.1", dead);
         }
-        bool failed = eventually([&] {
+        bool failed = co_await eventually([&] {
             (void) refused->take_steps();
             return refused->state() == RemoteServer::State::DISCONNECTED;
         });
@@ -712,7 +703,7 @@ namespace wry {
         // A second joiner, agreeing, is told of the shutdown
         auto second = RemoteServer::make(scope);
         second->dial("127.0.0.1", *port);
-        bool subscribed = eventually([&] {
+        bool subscribed = co_await eventually([&] {
             (void) second->take_steps();
             return second->state() == RemoteServer::State::SUBSCRIBED;
         });
@@ -720,7 +711,7 @@ namespace wry {
         (void) subscribed;
         second->report_hash(later + 1, 0x3333);
         co_await host->shutdown(std::chrono::milliseconds(200));
-        bool told = eventually([&] {
+        bool told = co_await eventually([&] {
             (void) second->take_steps();
             return second->state() == RemoteServer::State::DISCONNECTED;
         });

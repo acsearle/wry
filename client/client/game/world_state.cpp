@@ -17,7 +17,6 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
-#include <thread>
 
 #include <unistd.h>
 
@@ -34,6 +33,7 @@
 #include "session_log.hpp"
 #include "terrain.hpp"
 #include "test.hpp"
+#include "test_support.hpp"
 #include "world_dump.hpp"
 
 namespace wry {
@@ -2002,16 +2002,7 @@ namespace wry {
 
     namespace {
 
-        template<typename F>
-        bool eventually(F&& f, std::chrono::seconds timeout = std::chrono::seconds(5)) {
-            auto deadline = std::chrono::steady_clock::now() + timeout;
-            while (!f()) {
-                if (std::chrono::steady_clock::now() >= deadline)
-                    return false;
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            }
-            return true;
-        }
+        using testing::eventually;
 
     } // namespace
 
@@ -2055,7 +2046,7 @@ namespace wry {
             };
 
             gc.issue(command::Origin::console, "pause");
-            bool paused = eventually([&] { return relay.clock().paused; });
+            bool paused = co_await eventually([&] { return relay.clock().paused; });
             assert(paused);
             (void) paused;
             co_await catch_up(relay.clock().head);
@@ -2090,7 +2081,7 @@ namespace wry {
 
             // Resume: the clock runs again
             gc.issue(command::Origin::console, "resume");
-            bool running = eventually([&] { return !relay.clock().paused && relay.clock().head > before + 7; });
+            bool running = co_await eventually([&] { return !relay.clock().paused && relay.clock().head > before + 7; });
             assert(running);
             (void) running;
 
@@ -2273,7 +2264,7 @@ namespace wry {
             };
 
             issue("pause");
-            bool paused = eventually([&] { return relay.clock().paused; });
+            bool paused = co_await eventually([&] { return relay.clock().paused; });
             assert(paused);
             (void) paused;
             co_await catch_up(relay.clock().head);
@@ -2390,7 +2381,7 @@ namespace wry {
             assert(ws._host);
             ws.join(String("127.0.0.1"), 1);            // nothing listens on port 1
             assert(ws._remote && ws._awaiting_save);
-            bool refused = eventually([&] {
+            bool refused = co_await eventually([&] {
                 (void) ws._server->take_steps();
                 return ws._remote->state() == RemoteServer::State::DISCONNECTED;
             });
@@ -2406,11 +2397,11 @@ namespace wry {
             assert(ws._host && !ws._awaiting_save);
             Relay& relay = ws._host->relay();
             relay.pause();
-            bool paused = eventually([&] { return relay.clock().paused; });
+            bool paused = co_await eventually([&] { return relay.clock().paused; });
             assert(paused);
             (void) paused;
             relay.step(2);
-            bool applied = eventually([&] {
+            bool applied = co_await eventually([&] {
                 for (Step& s : ws._server->take_steps())
                     ws._backlog.push_back(std::move(s));
                 return ws._backlog.size() + ws._steps_taken >= 3 && relay.clock().head >= 3;

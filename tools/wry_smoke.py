@@ -9,8 +9,11 @@ tools/wry_net_smoke.py drives) on a private control socket, plays a
 short scripted session through the command interface (main menu, NEW
 GAME, a write, steps, a screenshot), checks each reply, then quits and
 requires a clean exit.  The binary defaults to the newest Debug build in
-DerivedData, so the session runs under the scheme's sanitizers.  Exit
-status 0 on success.  Standard library only.
+DerivedData, so the session runs under the scheme's sanitizers.  The
+process is launched with --no-tests: the unit-test suite a live process
+otherwise runs in the background is not what this measures, and a
+failing assertion there would abort the exit this requires.  Exit status
+0 on success.  Standard library only.
 """
 
 import glob
@@ -83,7 +86,7 @@ def main(argv):
     log_path = os.path.join(workdir, "client.log")
     print(f"wry_smoke: {binary}\n  log: {log_path}")
     with open(log_path, "wb") as log:
-        process = subprocess.Popen([binary, "--offscreen", "--control-socket", socket_path],
+        process = subprocess.Popen([binary, "--offscreen", "--no-tests", "--control-socket", socket_path],
                                    stdout=log, stderr=subprocess.STDOUT, env=game_environment())
     try:
         deadline = time.monotonic() + 60

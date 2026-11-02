@@ -144,6 +144,13 @@ int main(int argc, const char** argv) {
     //       No window, but the Metal scenes rendering to an offscreen
     //       drawable, so screenshots work; otherwise as --headless.
     //
+    //   --no-tests
+    //       A live process (windowed, --offscreen, --headless) otherwise
+    //       runs the unit-test suite in the background beside the game,
+    //       for the interleavings that exercises; this turns that off, for
+    //       end-to-end runs that want the game alone (the smoke scripts) or
+    //       a quicker start.  Ignored with --test-only.
+    //
     //   --control-socket [PATH], --host [PORT], --join ADDRESS:PORT,
     //   --skip-splash
     //       (read by GuiContext::configure_from_arguments)
@@ -152,6 +159,7 @@ int main(int argc, const char** argv) {
     bool test_only = false;
     bool headless = false;
     bool offscreen = false;
+    bool no_tests = false;
     std::string_view test_filter;
     for (int i = 1; i < argc; ++i) {
         std::string_view a = argv[i];
@@ -165,6 +173,8 @@ int main(int argc, const char** argv) {
             headless = true;
         } else if (a == "--offscreen") {
             offscreen = true;
+        } else if (a == "--no-tests") {
+            no_tests = true;
         }
     }
 
@@ -215,10 +225,14 @@ int main(int argc, const char** argv) {
     // written to be cancelled (a test that owns a nursery with live children
     // sleeps before stopping them, and a root stop request landing in that
     // sleep destroys the test's frame under its nursery, which asserts), so
-    // QUIT waits for the suite.
-    root.soon([](std::string_view filter) -> wry::coroutine::Task {
-        (void) co_await wry::execution::shield(wry::run_tests(filter));
-    }(test_filter));
+    // QUIT waits for the suite.  In a live process the suite shares the
+    // pool and the reactor with the game (the exclusive tests sit out), and
+    // --no-tests leaves it out altogether.
+    if (test_only || !no_tests) {
+        root.soon([](std::string_view filter, bool shared) -> wry::coroutine::Task {
+            (void) co_await wry::execution::shield(wry::run_tests(filter, shared));
+        }(test_filter, !test_only));
+    }
 
 
     wry::mutator_pin();

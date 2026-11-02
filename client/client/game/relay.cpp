@@ -9,7 +9,6 @@
 #include <cstring>
 #include <map>
 #include <mutex>
-#include <thread>
 #include <variant>
 #include <vector>
 
@@ -23,6 +22,7 @@
 #include "relay.hpp"
 #include "single_consumer_event.hpp"
 #include "test.hpp"
+#include "test_support.hpp"
 #include "wire.hpp"
 
 namespace wry {
@@ -723,16 +723,7 @@ namespace wry {
             return std::string(wire::decode_kick(kicks[0]).value());
         }
 
-        template<typename F>
-        bool eventually(F&& f, std::chrono::seconds timeout = std::chrono::seconds(5)) {
-            auto deadline = std::chrono::steady_clock::now() + timeout;
-            while (!f()) {
-                if (std::chrono::steady_clock::now() >= deadline)
-                    return false;
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            }
-            return true;
-        }
+        using testing::eventually;
 
         Relay::Limits paused_limits() {
             Relay::Limits limits;
@@ -757,7 +748,7 @@ namespace wry {
 
         RawClient a{*relay, scope};
         a.hello();
-        bool welcomed = eventually([&] {
+        bool welcomed = co_await eventually([&] {
             a.drain();
             return !a.of(wire::WELCOME).empty();
         });
@@ -768,7 +759,7 @@ namespace wry {
         assert(welcome->quantum_ns == (uint64_t)std::chrono::nanoseconds(std::chrono::hours(1)).count());
         // The stream so far followed: the PAUSED step, if the pause had
         // been applied before the handshake; either way head agrees
-        bool caught_up = eventually([&] {
+        bool caught_up = co_await eventually([&] {
             a.drain();
             return a.of(wire::STEP).size() >= welcome->head;
         });
@@ -778,14 +769,14 @@ namespace wry {
         // An action before the JOIN is a violation
         RawClient b{*relay, scope};
         b.hello();
-        bool b_welcomed = eventually([&] {
+        bool b_welcomed = co_await eventually([&] {
             b.drain();
             return !b.of(wire::WELCOME).empty();
         });
         assert(b_welcomed);
         (void) b_welcomed;
         b.send(wire::encode_action(1, action_line(1)));
-        bool b_kicked = eventually([&] {
+        bool b_kicked = co_await eventually([&] {
             b.drain();
             return !b.closed.empty();
         });
@@ -815,11 +806,11 @@ namespace wry {
             }
             return found;
         };
-        bool joined = eventually([&] {
+        bool joined = co_await eventually([&] {
             relay->step(1);
             a.drain();
             return !join_steps().empty();
-        }, std::chrono::seconds(2));
+        });
         assert(joined);
         (void) joined;
         assert(join_steps().size() == 1);
@@ -841,11 +832,11 @@ namespace wry {
                         ++mine;
             return mine;
         };
-        bool queued = eventually([&] {
+        bool queued = co_await eventually([&] {
             relay->step(1);
             a.drain();
             return count_mine() == 5;
-        }, std::chrono::seconds(2));
+        });
         assert(queued);
         (void) queued;
         std::vector<std::string> steps = a.of(wire::STEP);
@@ -872,7 +863,7 @@ namespace wry {
         // processed, and the client is gone from the next step
         a.send(wire::encode_action(9, action_line(9)));
         a.send(wire::encode_action(6, action_line(6)));
-        bool a_kicked = eventually([&] {
+        bool a_kicked = co_await eventually([&] {
             a.drain();
             return !a.closed.empty();
         });
@@ -904,7 +895,7 @@ namespace wry {
         b.hello();
         a.send(wire::encode_join_request("a"));
         b.send(wire::encode_join_request("b"));
-        bool welcomed = eventually([&] {
+        bool welcomed = co_await eventually([&] {
             a.drain();
             b.drain();
             return !a.of(wire::WELCOME).empty() && !b.of(wire::WELCOME).empty();
@@ -927,12 +918,12 @@ namespace wry {
             }
             return joins;
         };
-        bool joined = eventually([&] {
+        bool joined = co_await eventually([&] {
             relay->step(1);
             a.drain();
             b.drain();
             return joins_seen().size() == 2;
-        }, std::chrono::seconds(2));
+        });
         assert(joined);
         (void) joined;
         {
@@ -941,7 +932,7 @@ namespace wry {
             assert(joins[0] == a.server_id || joins[0] == b.server_id);
             assert(joins[1] == a.server_id || joins[1] == b.server_id);
         }
-        bool b_joined = eventually([&] {
+        bool b_joined = co_await eventually([&] {
             a.drain();
             b.drain();
             return b.of(wire::STEP).size() == a.of(wire::STEP).size();
@@ -968,11 +959,11 @@ namespace wry {
             }
             return actions;
         };
-        bool arrived = eventually([&] {
+        bool arrived = co_await eventually([&] {
             relay->step(1);
             a.drain();
             return actions_seen().size() == 3;
-        }, std::chrono::seconds(2));
+        });
         assert(arrived);
         (void) arrived;
         {
@@ -987,7 +978,7 @@ namespace wry {
         // A flood: more pending actions than the limit allows
         for (int i = 2; i <= 8; ++i)
             b.send(wire::encode_action((uint64_t)i, action_line(i)));
-        bool flooded = eventually([&] {
+        bool flooded = co_await eventually([&] {
             b.drain();
             return !b.closed.empty();
         });
@@ -999,7 +990,7 @@ namespace wry {
 
         // a quits; both exits ride the next step as LEAVEs, in order
         a.send(wire::encode_quit());
-        bool a_closed = eventually([&] {
+        bool a_closed = co_await eventually([&] {
             a.drain();
             return !a.closed.empty();
         });
@@ -1010,7 +1001,7 @@ namespace wry {
         RawClient c{*relay, scope};
         c.hello();
         relay->step(1);
-        bool replayed = eventually([&] {
+        bool replayed = co_await eventually([&] {
             c.drain();
             if (c.of(wire::WELCOME).empty())
                 return false;
@@ -1039,7 +1030,7 @@ namespace wry {
 
         // Shutdown tells the survivors
         co_await relay->shutdown(std::chrono::milliseconds(200));
-        bool told = eventually([&] {
+        bool told = co_await eventually([&] {
             c.drain();
             return !c.closed.empty();
         });
@@ -1062,7 +1053,7 @@ namespace wry {
         RawClient a{*relay, scope};
         r.hello();
         a.hello();
-        bool welcomed = eventually([&] {
+        bool welcomed = co_await eventually([&] {
             r.drain();
             a.drain();
             return !r.of(wire::WELCOME).empty() && !a.of(wire::WELCOME).empty();
@@ -1070,7 +1061,7 @@ namespace wry {
         assert(welcomed);
         (void) welcomed;
         relay->step(3);
-        bool stepped = eventually([&] { return relay->clock().head >= 4; });
+        bool stepped = co_await eventually([&] { return relay->clock().head >= 4; });
         assert(stepped);
         (void) stepped;
 
@@ -1081,7 +1072,7 @@ namespace wry {
         r.send(wire::encode_hash(2, 0x22));
         a.send(wire::encode_hash(2, 0x22));
         a.send(wire::encode_join_request("a"));
-        bool joined = eventually([&] {
+        bool joined = co_await eventually([&] {
             relay->step(1);
             a.drain();
             for (std::string const& m : a.of(wire::STEP))
@@ -1092,7 +1083,7 @@ namespace wry {
                             return true;
                     }
             return false;
-        }, std::chrono::seconds(2));
+        });
         assert(joined && a.closed.empty());
         (void) joined;
 
@@ -1100,7 +1091,7 @@ namespace wry {
         // whichever report came second
         r.send(wire::encode_hash(3, 0x33));
         a.send(wire::encode_hash(3, 0x99));
-        bool desynced = eventually([&] {
+        bool desynced = co_await eventually([&] {
             a.drain();
             return !a.closed.empty();
         });
@@ -1113,14 +1104,14 @@ namespace wry {
         RawClient b{*relay, scope};
         b.hello();
         b.send(wire::encode_hash(4, 0x44));        // before the reference's
-        bool b_welcomed = eventually([&] {
+        bool b_welcomed = co_await eventually([&] {
             b.drain();
             return !b.of(wire::WELCOME).empty();
         });
         assert(b_welcomed);
         (void) b_welcomed;
         r.send(wire::encode_hash(4, 0x4444));
-        bool b_desynced = eventually([&] {
+        bool b_desynced = co_await eventually([&] {
             b.drain();
             return !b.closed.empty();
         });
@@ -1134,7 +1125,7 @@ namespace wry {
         RawClient c{*relay, scope};
         c.hello();
         c.send(wire::encode_hash(1000, 0x1));
-        bool c_kicked = eventually([&] {
+        bool c_kicked = co_await eventually([&] {
             c.drain();
             return !c.closed.empty();
         });
@@ -1147,7 +1138,7 @@ namespace wry {
         // The reference itself is never kicked for a hash
         r.send(wire::encode_hash(2, 0x2222));      // changes its mind; nobody to disagree with it
         r.send(wire::encode_join_request("r"));
-        bool r_alive = eventually([&] {
+        bool r_alive = co_await eventually([&] {
             relay->step(1);
             r.drain();
             for (std::string const& m : r.of(wire::STEP))
@@ -1158,7 +1149,7 @@ namespace wry {
                             return true;
                     }
             return false;
-        }, std::chrono::seconds(2));
+        });
         assert(r_alive && r.closed.empty());
         (void) r_alive;
 
@@ -1182,7 +1173,7 @@ namespace wry {
             x.send(wire::encode_hash(1, 0x1));
             y.send(wire::encode_hash(1, 0x2));
             x.send(wire::encode_join_request("x"));
-            bool x_alive = eventually([&] {
+            bool x_alive = co_await eventually([&] {
                 lone->step(1);
                 x.drain();
                 y.drain();
@@ -1194,7 +1185,7 @@ namespace wry {
                                 return true;
                         }
                 return false;
-            }, std::chrono::seconds(2));
+            });
             assert(x_alive && x.closed.empty() && y.closed.empty());
             (void) x_alive;
             co_await lone->shutdown(std::chrono::milliseconds(100));
@@ -1213,14 +1204,14 @@ namespace wry {
 
         RawClient r{*relay, scope, true};   // the reference, and so the donor
         r.hello();
-        bool r_welcomed = eventually([&] {
+        bool r_welcomed = co_await eventually([&] {
             r.drain();
             return !r.of(wire::WELCOME).empty();
         });
         assert(r_welcomed);
         (void) r_welcomed;
         relay->step(2);
-        bool stepped = eventually([&] { return relay->clock().head >= 3; });
+        bool stepped = co_await eventually([&] { return relay->clock().head >= 3; });
         assert(stepped);
         (void) stepped;
 
@@ -1229,7 +1220,7 @@ namespace wry {
         // the head
         RawClient j{*relay, scope};
         j.hello();
-        bool asked = eventually([&] {
+        bool asked = co_await eventually([&] {
             r.drain();
             j.drain();
             return !r.of(wire::REQUEST_SAVE).empty() && !j.of(wire::WELCOME).empty();
@@ -1252,7 +1243,7 @@ namespace wry {
         r.send(wire::encode_save_data(request->transfer, 0, std::string_view(blob).substr(0, 100000)));
         r.send(wire::encode_save_data(request->transfer, 1, std::string_view(blob).substr(100000)));
         r.send(wire::encode_save_end(request->transfer));
-        bool delivered = eventually([&] {
+        bool delivered = co_await eventually([&] {
             j.drain();
             return !j.of(wire::SAVE_END).empty();
         });
@@ -1291,7 +1282,7 @@ namespace wry {
             return n;
         };
         relay->step(2);
-        bool waited = eventually([&] {
+        bool waited = co_await eventually([&] {
             j.drain();
             return j.of(wire::STEP).size() >= 2;
         });
@@ -1299,18 +1290,18 @@ namespace wry {
         (void) waited;
         j.send(wire::encode_hash(welcome->head, 0xabc));
         relay->step(2);
-        bool unverified = eventually([&] {
+        bool unverified = co_await eventually([&] {
             j.drain();
             return j.of(wire::STEP).size() >= 4;
         });
         assert(unverified && joins_for(j, j.server_id) == 0);
         (void) unverified;
         r.send(wire::encode_hash(welcome->head, 0xabc));
-        bool admitted = eventually([&] {
+        bool admitted = co_await eventually([&] {
             relay->step(1);
             j.drain();
             return joins_for(j, j.server_id) == 1;
-        }, std::chrono::seconds(2));
+        });
         assert(admitted);
         (void) admitted;
         assert(j.of(wire::SAVE_DATA).size() == 2);   // the late chunk never came
@@ -1323,7 +1314,7 @@ namespace wry {
         RawClient y{*relay, scope};
         y.hello();
         y.send(wire::encode_save_request(1, 1));
-        bool refused = eventually([&] {
+        bool refused = co_await eventually([&] {
             x.drain();
             y.drain();
             return !x.closed.empty() && !y.closed.empty();
@@ -1361,7 +1352,7 @@ namespace wry {
             RawClient d{*late, late_scope};
             d.hello();
             late->step(1);
-            bool welcomed = eventually([&] {
+            bool welcomed = co_await eventually([&] {
                 d.drain();
                 return !d.of(wire::WELCOME).empty() && d.of(wire::STEP).size() >= 2;
             });
@@ -1376,22 +1367,22 @@ namespace wry {
         }
 
         // The clock runs from the start
-        bool ticking = eventually([&] { return relay->clock().head >= 3; });
+        bool ticking = co_await eventually([&] { return relay->clock().head >= 3; });
         assert(ticking);
         (void) ticking;
         relay->pause();
-        bool paused = eventually([&] { return relay->clock().paused; });
+        bool paused = co_await eventually([&] { return relay->clock().paused; });
         assert(paused);
         (void) paused;
         uint64_t head = relay->clock().head;
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        co_await testing::pause(std::chrono::milliseconds(50));
         assert(relay->clock().head == head);           // stopped
         relay->step(4);
-        bool stepped = eventually([&] { return relay->clock().head == head + 4; });
+        bool stepped = co_await eventually([&] { return relay->clock().head == head + 4; });
         assert(stepped && relay->clock().paused);
         (void) stepped;
         relay->resume();
-        bool running = eventually([&] { return !relay->clock().paused && relay->clock().head > head + 4; });
+        bool running = co_await eventually([&] { return !relay->clock().paused && relay->clock().head > head + 4; });
         assert(running);
         (void) running;
 
@@ -1400,7 +1391,7 @@ namespace wry {
         RawClient a{*relay, scope};
         a.hello();
         RawClient silent{*relay, scope};
-        bool seen = eventually([&] {
+        bool seen = co_await eventually([&] {
             a.drain();
             silent.drain();
             return !silent.closed.empty() && a.of(wire::STEP).size() >= head + 4;
@@ -1423,7 +1414,7 @@ namespace wry {
 
         // Brutal close ends the task without waiting for anyone
         relay->close();
-        bool ended = eventually([&] { return relay->finished(); });
+        bool ended = co_await eventually([&] { return relay->finished(); });
         assert(ended);
         (void) ended;
         co_await a.transport->shutdown(std::chrono::milliseconds(100));

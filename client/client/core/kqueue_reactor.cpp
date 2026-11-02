@@ -626,20 +626,19 @@ namespace wry {
 
     namespace {
 
-        // The frame-count checks assume the reactor is the test's alone.
-        // It is in the headless suite (--test-only opens no socket), but in
-        // a driven app the control socket keeps an accept frame parked
-        // (re-armed per connection), each live connection a recv frame and
-        // the idle host's wait a deadline timer (gui_context.cpp), so the
-        // count never rests at zero there: the unbounded drain
-        // loops the tests used to run spun a pool worker for the app's
-        // lifetime (the suite never finished), and the one capped wait
-        // asserted whenever a connection was open as it ran.  So each test
-        // that reads the count opens a census first: a brief wait for the
-        // count to rest at zero (the previous test's frames retiring), and
-        // if it does not, the test's count checks stand down and say so.
-        // The drains are bounded either way, so a regression fails the
-        // test instead of hanging the suite.
+        // The frame-count checks assume the reactor is the test's alone,
+        // which only --test-only guarantees: in a live process the control
+        // socket keeps an accept frame parked (re-armed per connection),
+        // each live connection a recv frame and the idle host's wait a
+        // deadline timer (gui_context.cpp), so the count never rests at
+        // zero there.  The tests that read it are therefore tagged
+        // test_exclusive (core/test.hpp) and the runner skips them in a
+        // live process.  The census below is the belt to those braces: a
+        // brief wait for the count to rest at zero (the previous test's
+        // frames retiring) and, if it does not, the count checks stand down
+        // and say so rather than assert on someone else's frames.  The
+        // drains are bounded either way, so a regression fails the test
+        // instead of hanging the suite.
         struct FrameCensus {
 
             bool exclusive = false;
@@ -691,7 +690,7 @@ namespace wry {
 
     }
 
-    define_test("kqueue_cancelable_after") {
+    define_test("kqueue_cancelable_after", test_exclusive) {
         FrameCensus census = co_await FrameCensus::open("kqueue_cancelable_after");
 
         // Fire path: at the deadline the task runs on the pool and its frame
@@ -858,7 +857,7 @@ namespace wry {
         co_return;
     };
 
-    define_test("kqueue_recv_cancel") {
+    define_test("kqueue_recv_cancel", test_exclusive) {
         FrameCensus census = co_await FrameCensus::open("kqueue_recv_cancel");
         // Outer cancellation of a parked composed wait: 10s deadline, stop
         // lands milliseconds in, the whole tower (recv leaf, timer, recv_some frame,
@@ -887,7 +886,7 @@ namespace wry {
         co_return;
     };
 
-    define_test("kqueue_recv_early_completion_drains") {
+    define_test("kqueue_recv_early_completion_drains", test_exclusive) {
         FrameCensus census = co_await FrameCensus::open("kqueue_recv_early_completion_drains");
         // The scope-exit law, made observable: a recv that completes far
         // before its deadline must reap the deadline timer PROMPTLY, not at
@@ -941,7 +940,7 @@ namespace wry {
     // deadline, and an outer stop request destroys a sleeping host promptly.
     // The watchdog half of that test -- request an interior source at a
     // deadline -- is with_deadline's timer, covered by kqueue_recv_deadline.
-    define_test("kqueue_cancelable_sleep") {
+    define_test("kqueue_cancelable_sleep", test_exclusive) {
         FrameCensus census = co_await FrameCensus::open("kqueue_cancelable_sleep");
 
         // Duration path: the sleeper resumes after the deadline and its
@@ -1124,7 +1123,7 @@ namespace wry {
 
     }
 
-    define_test("kqueue_send_some") {
+    define_test("kqueue_send_some", test_exclusive) {
         FrameCensus census = co_await FrameCensus::open("kqueue_send_some");
 
         // Ready path: an empty socket is writable at once
@@ -1206,7 +1205,7 @@ namespace wry {
         co_return;
     };
 
-    define_test("kqueue_accept_connect") {
+    define_test("kqueue_accept_connect", test_exclusive) {
         FrameCensus census = co_await FrameCensus::open("kqueue_accept_connect");
 
         // A parked accept completes when a connector arrives; the connect is
@@ -1299,7 +1298,7 @@ namespace wry {
     // The recv awaitable's copy of the cancel-before-park path, bare and
     // composed with with_deadline (whose bridge callback fires synchronously
     // against a pre-requested outer token, cancelling both arms at arm time)
-    define_test("kqueue_recv_cancel_before_park") {
+    define_test("kqueue_recv_cancel_before_park", test_exclusive) {
         FrameCensus census = co_await FrameCensus::open("kqueue_recv_cancel_before_park");
 
         {

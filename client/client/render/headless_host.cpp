@@ -10,6 +10,7 @@
 #include "garbage_collected.hpp"
 #include "main_menu.hpp"
 #include "test.hpp"
+#include "test_support.hpp"
 #include "world_state.hpp"
 
 namespace wry {
@@ -130,14 +131,16 @@ namespace wry {
         {
             HeadlessHost host(gc);
 
-            // Run frames until the issued pending replies have completed,
-            // waiting for the session's input as run() would
-            auto settle = [&] {
+            // Run frames until the issued pending replies have completed.
+            // Where run() would block in host.wait for the session's input,
+            // this test, on a pool worker, sleeps on the reactor instead
+            // (io/test_support.hpp: a test never blocks a worker)
+            auto settle = [&]() -> coroutine::Task {
                 for (int i = 0; i != 2000 && !gc.detached.empty(); ++i) {
                     if (!gc.idle())
                         host.frame();
                     else
-                        host.wait(std::chrono::milliseconds(10));
+                        co_await testing::pause(std::chrono::milliseconds(10));
                 }
                 assert(gc.detached.empty());
             };
@@ -163,7 +166,7 @@ namespace wry {
                 if (!gc.idle())
                     host.frame();
                 else
-                    host.wait(std::chrono::milliseconds(10));
+                    co_await testing::pause(std::chrono::milliseconds(10));
             }
             assert(joined());
 
@@ -177,7 +180,7 @@ namespace wry {
             assert(before.reply.text == StringView("null"));
             [[maybe_unused]] auto stepped = gc.issue(Origin::gui, "step 2");
             assert(stepped.reply.status == Reply::PENDING);
-            settle();
+            co_await settle();
             [[maybe_unused]] auto after = gc.issue(Origin::gui, "get Coordinate(1, 1)");
             assert(after.reply.text == StringView("OPCODE::SWAP"));
 
