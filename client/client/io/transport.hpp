@@ -178,12 +178,21 @@ namespace wry {
 
         using Event = std::variant<Opened, Message, Closed, Posted>;
 
-        // Bind and listen at a Unix path (replacing a stale socket file;
-        // the file is created owner-only) or a TCP address and port (an
+        // Bind and listen at a Unix path or a TCP address and port (an
         // address of "127.0.0.1", "::1", "0.0.0.0", "::"; port 0 for an
         // ephemeral one, read back with port()).  Null, with `error` set,
         // on failure.  Nothing is accepted until the task from serve()
         // runs; connections queue in the backlog meanwhile.
+        //
+        // The Unix path is owned for the transport's life.  A live listener
+        // there (one that answers a connect) is an error: another process
+        // has the path.  A dead socket file is replaced; anything else at
+        // the path is an error.  The file is owner-only from the moment it
+        // appears at `path`: it is bound under a temporary name beside it,
+        // chmod 0600, then renamed into place (the process umask is never
+        // touched, since other threads may be creating files).  close()
+        // and the destructor unlink the path only while it is still the
+        // file this transport bound (same inode), never a successor's.
         static std::unique_ptr<Transport> listen_unix(std::string const& path,
                                                       Codec const& codec, Limits limits,
                                                       std::string& error);
@@ -232,7 +241,8 @@ namespace wry {
         [[nodiscard]] coroutine::Task shutdown(std::chrono::milliseconds grace);
 
         // Brutal and immediate: cancels the loop and every connection, and
-        // unlinks a Unix path.  Does not wait for the coroutines: that is
+        // unlinks a Unix path (if still ours; see listen_unix).  Does not
+        // wait for the coroutines: that is
         // the spawner's join.  Requests stop, so call it on a pinned
         // thread: the cancelled frames unwind on the caller.  Idempotent
         void close();
@@ -279,7 +289,12 @@ namespace wry {
     private:
         Transport() = default;
 
+        // Unlink the Unix path if the file there is still the one we bound
+        void _unlink_path();
+
         std::string _path;                  // a Unix listener's, to unlink
+        uint64_t _path_inode = 0;           // of the socket file we bound, with its device
+        uint64_t _path_device = 0;
         uint16_t _port = 0;                 // a TCP listener's, as bound
         std::shared_ptr<Shared> _shared;
         std::stop_source _stop;             // close(): everything

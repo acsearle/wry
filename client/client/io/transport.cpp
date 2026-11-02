@@ -14,7 +14,6 @@
 #include <map>
 #include <mutex>
 #include <optional>
-#include <thread>
 #include <variant>
 #include <vector>
 
@@ -23,7 +22,6 @@
 #include <libproc.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
@@ -38,6 +36,7 @@
 #include "random.hpp"
 #include "single_consumer_event.hpp"
 #include "test.hpp"
+#include "test_support.hpp"
 #include "transport.hpp"
 #include "utility.hpp"
 
@@ -801,39 +800,138 @@ namespace wry {
         return t;
     }
 
+    namespace {
+
+        // What is at a Unix socket path: nothing; a socket file nobody
+        // answers at (a previous process died without unlinking it); a
+        // socket a listener answers at; or a file that is not a socket.  The
+        // probe is a non-blocking connect: a listener accepts it into its
+        // backlog (it sees one connection open and close at once), a dead
+        // file refuses it.  So does a live listener whose backlog of 16 is
+        // full at that instant, which would then be replaced: the accept
+        // loop drains its backlog continuously, so that is a burst of
+        // sixteen simultaneous connectors, not a steady state
+        enum class PathState { absent, stale, live, other };
+
+        PathState probe_unix_path(std::string const& path, sockaddr_un const& address,
+                                  std::string& error) {
+            struct stat st = {};
+            if (::lstat(path.c_str(), &st) != 0) {
+                if (errno == ENOENT)
+                    return PathState::absent;
+                error = errno_message("stat", errno);
+                return PathState::other;
+            }
+            if (!S_ISSOCK(st.st_mode)) {
+                error = path + " exists and is not a socket";
+                return PathState::other;
+            }
+            Descriptor probe{::socket(AF_UNIX, SOCK_STREAM, 0)};
+            if (probe.fd == -1 || !set_nonblocking(probe.fd)) {
+                error = errno_message("socket", errno);
+                return PathState::other;
+            }
+            if (::connect(probe.fd, (sockaddr const*)&address, sizeof(address)) == 0)
+                return PathState::live;
+            switch (errno) {
+                case EINPROGRESS:
+                case EAGAIN:
+                    return PathState::live;
+                case ECONNREFUSED:
+                case ENOENT:                // unlinked between the stat and the connect
+                    return PathState::stale;
+                default:
+                    error = errno_message("connect", errno);
+                    return PathState::other;
+            }
+        }
+
+    } // namespace
+
     std::unique_ptr<Transport> Transport::listen_unix(std::string const& path,
                                                       Codec const& codec, Limits limits,
                                                       std::string& error) {
+        // The socket is bound under a temporary name beside its final one,
+        // so both must fit
+        const std::string temporary = path + ".tmp";
         sockaddr_un address = {};
         address.sun_family = AF_UNIX;
-        if (path.empty() || path.size() >= sizeof(address.sun_path)) {
+        if (path.empty() || temporary.size() >= sizeof(address.sun_path)) {
             error = "socket path is empty or too long";
             return nullptr;
         }
         std::memcpy(address.sun_path, path.data(), path.size());
 
-        int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-        if (fd == -1) {
+        // Another process's live socket is theirs; a dead one is replaced
+        // by the rename below
+        switch (probe_unix_path(path, address, error)) {
+            case PathState::live:
+                error = "another process is listening at " + path;
+                return nullptr;
+            case PathState::other:
+                return nullptr;
+            case PathState::absent:
+            case PathState::stale:
+                break;
+        }
+
+        Descriptor fd{::socket(AF_UNIX, SOCK_STREAM, 0)};
+        if (fd.fd == -1) {
             error = errno_message("socket", errno);
             return nullptr;
         }
-        // A socket file left by a previous run would make bind fail.
-        (void) ::unlink(path.c_str());
-        // Owner-only from creation: bind makes the file under the umask.
-        // The umask is process-wide, so this is done once, at startup.
-        mode_t old_mask = ::umask(0177);
-        int bound = ::bind(fd, (sockaddr const*)&address, sizeof(address));
-        ::umask(old_mask);
-        if (bound == -1 || ::listen(fd, 16) == -1 || !set_nonblocking(fd)) {
-            error = errno_message(bound == -1 ? "bind" : "listen", errno);
-            ::close(fd);
+        // Bound under the temporary name, made owner-only, listening, and
+        // only then renamed into place: a connector that finds the final
+        // name finds a listening, 0600 socket.  The umask is not touched;
+        // the temporary name is briefly connectable under it, but nobody is
+        // looking for it
+        sockaddr_un temporary_address = {};
+        temporary_address.sun_family = AF_UNIX;
+        std::memcpy(temporary_address.sun_path, temporary.data(), temporary.size());
+        (void) ::unlink(temporary.c_str());
+        if (::bind(fd.fd, (sockaddr const*)&temporary_address, sizeof(temporary_address)) == -1) {
+            error = errno_message("bind", errno);
+            return nullptr;
+        }
+        const char* failed = nullptr;
+        if (::chmod(temporary.c_str(), 0600) == -1)
+            failed = "chmod";
+        else if (::listen(fd.fd, 16) == -1)
+            failed = "listen";
+        else if (!set_nonblocking(fd.fd))
+            failed = "fcntl";
+        else if (::rename(temporary.c_str(), path.c_str()) == -1)
+            failed = "rename";
+        if (failed) {
+            error = errno_message(failed, errno);
+            (void) ::unlink(temporary.c_str());
             return nullptr;
         }
 
         std::unique_ptr<Transport> t = make(codec, limits);
         t->_path = path;
-        t->_listen_fd = fd;
+        t->_listen_fd = fd.release();
+        // The identity of the file we own there, for the unlink at close
+        struct stat st = {};
+        if (::lstat(path.c_str(), &st) == 0) {
+            t->_path_inode = (uint64_t)st.st_ino;
+            t->_path_device = (uint64_t)st.st_dev;
+        }
         return t;
+    }
+
+    void Transport::_unlink_path() {
+        if (_path.empty())
+            return;
+        // Only the file we bound: a successor at the same path (another
+        // process that replaced our dead file, or a test reopening it) is
+        // not ours to remove.  Idempotent: a second call finds nothing, or
+        // not ours
+        struct stat st = {};
+        if ((::lstat(_path.c_str(), &st) == 0)
+            && ((uint64_t)st.st_ino == _path_inode)
+            && ((uint64_t)st.st_dev == _path_device))
+            (void) ::unlink(_path.c_str());
     }
 
     std::unique_ptr<Transport> Transport::listen_tcp(std::string const& address, uint16_t port,
@@ -920,8 +1018,7 @@ namespace wry {
         assert(finished());
         if (_listen_fd != -1)
             ::close(_listen_fd);
-        if (!_path.empty())
-            (void) ::unlink(_path.c_str());
+        _unlink_path();
     }
 
     coroutine::Task Transport::shutdown(std::chrono::milliseconds grace) {
@@ -963,8 +1060,7 @@ namespace wry {
         // spawner's join waits for them.  The accepting source follows
         // through the bridge in serve_under
         _stop.request_stop();
-        if (!_path.empty())
-            (void) ::unlink(_path.c_str());
+        _unlink_path();
     }
 
     coroutine::MultiProducerSingleConsumerQueue<Transport::Event>& Transport::events() {
@@ -1031,111 +1127,12 @@ namespace wry {
             return message;
         }
 
-        std::string test_socket_path(const char* name) {
-            return std::string("/tmp/wry-") + name + '-' + std::to_string(::getpid()) + ".sock";
-        }
-
-        int connect_unix(std::string const& path) {
-            int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-            assert(fd != -1);
-            sockaddr_un address = {};
-            address.sun_family = AF_UNIX;
-            std::memcpy(address.sun_path, path.data(), path.size());
-            int connected = ::connect(fd, (sockaddr const*)&address, sizeof(address));
-            assert(connected == 0);
-            (void) connected;
-            int one = 1;
-            (void) ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
-            return fd;
-        }
-
-        // Read until `want` bytes have arrived, or time out
-        std::string read_bytes(int fd, size_t want) {
-            std::string got;
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-            while (got.size() < want && std::chrono::steady_clock::now() < deadline) {
-                pollfd p{fd, POLLIN, 0};
-                if (::poll(&p, 1, 50) <= 0)
-                    continue;
-                char buffer[65536];
-                ssize_t n = ::read(fd, buffer, std::min(sizeof buffer, want - got.size()));
-                if (n <= 0)
-                    break;
-                got.append(buffer, (size_t)n);
-            }
-            return got;
-        }
-
-        // Read until `want` newline-terminated lines have arrived, or time
-        // out (the caller asserts on the count)
-        std::vector<std::string> read_lines(int fd, size_t want) {
-            std::vector<std::string> lines;
-            std::string pending;
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-            while (lines.size() < want && std::chrono::steady_clock::now() < deadline) {
-                pollfd p{fd, POLLIN, 0};
-                if (::poll(&p, 1, 50) <= 0)
-                    continue;
-                char buffer[4096];
-                ssize_t n = ::read(fd, buffer, sizeof(buffer));
-                if (n <= 0)
-                    break;
-                pending.append(buffer, (size_t)n);
-                for (size_t nl; (nl = pending.find('\n')) != std::string::npos; ) {
-                    lines.push_back(pending.substr(0, nl));
-                    pending.erase(0, nl + 1);
-                }
-            }
-            return lines;
-        }
-
-        // Write all of `bytes`, blocking as needed, or time out
-        bool write_all(int fd, std::string_view bytes) {
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-            size_t sent = 0;
-            while (sent < bytes.size() && std::chrono::steady_clock::now() < deadline) {
-                ssize_t n = ::send(fd, bytes.data() + sent, bytes.size() - sent, 0);
-                if (n > 0) {
-                    sent += (size_t)n;
-                    continue;
-                }
-                if (n < 0 && errno == EAGAIN) {
-                    pollfd p{fd, POLLOUT, 0};
-                    (void) ::poll(&p, 1, 50);
-                    continue;
-                }
-                return false;
-            }
-            return sent == bytes.size();
-        }
-
-        // Drains the inbox: messages into `messages`, closings into
-        // `closed`, openings into `opened`
-        void drain(Transport& transport,
-                   std::vector<Transport::Message>& messages,
-                   std::vector<Transport::Closed>& closed,
-                   std::vector<Transport::Opened>* opened = nullptr) {
-            for (auto& event : transport.events().try_take()) {
-                if (auto* message = std::get_if<Transport::Message>(&event))
-                    messages.push_back(std::move(*message));
-                else if (auto* open = std::get_if<Transport::Opened>(&event)) {
-                    if (opened)
-                        opened->push_back(std::move(*open));
-                } else if (auto* close = std::get_if<Transport::Closed>(&event))
-                    closed.push_back(std::move(*close));
-            }
-        }
-
-        template<typename F>
-        bool eventually(F&& f, std::chrono::seconds timeout = std::chrono::seconds(5)) {
-            auto deadline = std::chrono::steady_clock::now() + timeout;
-            while (!f()) {
-                if (std::chrono::steady_clock::now() >= deadline)
-                    return false;
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            }
-            return true;
-        }
+        using testing::drain;
+        using testing::eventually;
+        using testing::send_all;
+        using testing::soon;
+        using testing::SocketPair;
+        using testing::StreamReader;
 
     } // namespace
 
@@ -1253,9 +1250,9 @@ namespace wry {
         std::vector<Transport::Closed> server_closed, client_closed;
         std::vector<Transport::Opened> server_opened, client_opened;
         client->send((uint64_t)id, tagged(1, "hello"));
-        bool heard = eventually([&] {
-            drain(*server, server_messages, server_closed, &server_opened);
-            drain(*client, client_messages, client_closed, &client_opened);
+        bool heard = co_await eventually([&] {
+            drain(server->events(), server_messages, server_closed, &server_opened);
+            drain(client->events(), client_messages, client_closed, &client_opened);
             return !server_messages.empty();
         });
         assert(heard);
@@ -1272,8 +1269,8 @@ namespace wry {
         {
             std::string big = tagged(2, std::string(300000, 'b'));
             server->send(accepted, big);
-            bool arrived = eventually([&] {
-                drain(*client, client_messages, client_closed);
+            bool arrived = co_await eventually([&] {
+                drain(client->events(), client_messages, client_closed);
                 return !client_messages.empty();
             });
             assert(arrived && client_messages[0].bytes == big);
@@ -1283,9 +1280,9 @@ namespace wry {
         // A kick: the farewell reaches the peer, then the end of stream;
         // the kicker records the reason
         server->kick(accepted, "testing");
-        bool farewell = eventually([&] {
-            drain(*client, client_messages, client_closed);
-            drain(*server, server_messages, server_closed);
+        bool farewell = co_await eventually([&] {
+            drain(client->events(), client_messages, client_closed);
+            drain(server->events(), server_messages, server_closed);
             return !client_closed.empty() && !server_closed.empty();
         });
         assert(farewell);
@@ -1315,58 +1312,54 @@ namespace wry {
     define_test("transport_inbound_bound") {
         // A peer that sends faster than the consumer consumes is held at
         // the bound: at most max_unconsumed of its Messages alive, the
-        // rest in the kernel buffers until its sends block
+        // rest in the kernel buffers until its sends park
         Transport::LineCodec codec{1 << 20};
         Transport::Limits limits;
         limits.max_unconsumed = 4;
-        std::string path = test_socket_path("transport-inbound");
-        std::string error;
-        auto server = Transport::listen_unix(path, codec, limits, error);
-        assert(server && error.empty());
+        auto server = Transport::make(codec, limits);
         Nursery nursery;
         nursery.soon(server->serve());
+        SocketPair pair;
+        const int id = server->adopt(pair.release_server());
+        assert(id > 0);
 
-        int client = connect_unix(path);
-        bool nonblocking = set_nonblocking(client);
-        assert(nonblocking);
-        (void) nonblocking;
         const std::string line = std::string(65536, 'l') + '\n';
         size_t written = 0;
-        // A non-blocking send of the line from wherever the last partial
-        // send stopped: the bytes sent, or -1 with EAGAIN
-        auto send_line = [&] {
-            size_t offset = written % line.size();
-            ssize_t n = ::send(client, line.data() + offset, line.size() - offset, 0);
-            if (n > 0)
-                written += (size_t)n;
-            return n;
-        };
-        bool blocked = false;
-        {
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-            while (std::chrono::steady_clock::now() < deadline) {
-                ssize_t n = send_line();
-                if (n > 0)
-                    continue;
-                assert(n < 0 && errno == EAGAIN);
-                // Blocked: give the reader a chance, then see if it stays
-                // blocked, which is the bound holding
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                if (send_line() > 0)
-                    continue;
-                blocked = true;
-                break;
-            }
-        }
-        // The inbox holds no more than the bound, and the rest is in
-        // flight: in the reader's hands or the kernel's
+        // Messages taken from the inbox and kept: each holds its credit,
+        // so these are what the bound counts
         std::vector<Transport::Message> held;
         std::vector<Transport::Closed> closed;
-        drain(*server, held, closed);
+        auto hold = [&] {
+            drain(server->events(), held, closed);
+            assert(held.size() <= limits.max_unconsumed);
+        };
+        // Send the line, from wherever the last partial send stopped, until
+        // a send finds no room for long enough to be the bound holding:
+        // the reader is parked, so nothing drains the buffers
+        bool blocked = false;
+        while (!blocked && (written < (size_t)1 << 30)) {
+            hold();
+            const size_t offset = written % line.size();
+            std::optional<ssize_t> n = co_await with_deadline(soon(std::chrono::milliseconds(500)),
+                                                              send_some(pair.client(), line.data() + offset,
+                                                                        line.size() - offset, 0));
+            if (!n) {
+                blocked = true;
+            } else if (*n == -EAGAIN) {
+                continue;
+            } else {
+                assert(*n > 0);
+                written += (size_t)*n;
+            }
+        }
         assert(blocked);
-        (void) blocked;
-        assert(held.size() == limits.max_unconsumed);
-        assert(closed.empty());
+        // The inbox holds the bound exactly, and the rest is in flight: in
+        // the reader's hands or the kernel's
+        bool at_bound = co_await eventually([&] {
+            hold();
+            return held.size() == limits.max_unconsumed;
+        });
+        assert(at_bound && closed.empty());
         // Consuming (destroying the Messages) returns the credits: the
         // reader resumes, the peer can send again, and everything written
         // arrives, whole.  From here every batch is tallied and dropped
@@ -1374,7 +1367,7 @@ namespace wry {
         size_t delivered_count = 0;
         auto consume = [&] {
             std::vector<Transport::Message> batch;
-            drain(*server, batch, closed);
+            drain(server->events(), batch, closed);
             for (auto& message : batch) {
                 assert(message.bytes.size() == line.size() - 1);
                 delivered_bytes += message.bytes.size() + 1;
@@ -1385,30 +1378,29 @@ namespace wry {
             delivered_bytes += message.bytes.size() + 1;
         delivered_count = held.size();
         held.clear();
-        bool flowed = eventually([&] {
+        bool flowed = co_await eventually([&] {
             consume();
             return delivered_count > limits.max_unconsumed;
         });
         assert(flowed);
-        (void) flowed;
-        bool unblocked = eventually([&] {
-            ssize_t n = send_line();
-            consume();
-            return n > 0;
-        });
-        assert(unblocked);
-        (void) unblocked;
-        ::close(client);
-        bool complete = eventually([&] {
+        // Finish the partial line, and one more whole one, now that the
+        // peer reads again
+        const size_t offset = written % line.size();
+        bool sent = co_await send_all(pair.client(), line.substr(offset));
+        assert(sent);
+        written += line.size() - offset;
+        sent = co_await send_all(pair.client(), line);
+        assert(sent);
+        written += line.size();
+        pair.close_client();
+        bool complete = co_await eventually([&] {
             consume();
             return !closed.empty();
         });
         assert(complete);
-        (void) complete;
         consume();
-        // Whole lines arrive as messages; a final partial line is lost at
-        // the close, as it should be
-        assert(delivered_bytes <= written && written - delivered_bytes < line.size());
+        // Every whole line arrived as a message, and nothing else
+        assert(delivered_bytes == written);
         assert(closed[0].reason == "end of stream");
 
         co_await server->shutdown(std::chrono::milliseconds(100));
@@ -1424,39 +1416,39 @@ namespace wry {
         Transport::Limits limits;
         limits.max_queued_bytes = 256 << 10;
         limits.kick_grace = std::chrono::milliseconds(200);
-        std::string path = test_socket_path("transport-outbound");
-        std::string error;
-        auto server = Transport::listen_unix(path, codec, limits, error);
-        assert(server && error.empty());
+        auto server = Transport::make(codec, limits);
         Nursery nursery;
         nursery.soon(server->serve());
+        SocketPair pair;
+        const int id = server->adopt(pair.release_server());
+        assert(id > 0);
 
-        int client = connect_unix(path);
-        bool sent = write_all(client, "hi\n");
+        bool sent = co_await send_all(pair.client(), "hi\n");
         assert(sent);
-        (void) sent;
         std::vector<Transport::Message> messages;
         std::vector<Transport::Closed> closed;
-        bool heard = eventually([&] {
-            drain(*server, messages, closed);
+        bool heard = co_await eventually([&] {
+            drain(server->events(), messages, closed);
             return !messages.empty();
         });
-        assert(heard);
-        (void) heard;
-        const uint64_t id = messages[0].connection;
+        assert(heard && messages[0].connection == (uint64_t)id);
         auto t0 = std::chrono::steady_clock::now();
         for (int i = 0; i != 64; ++i)
-            server->send(id, std::string(64 << 10, 'y'));       // nobody reads it
-        bool kicked = eventually([&] {
-            drain(*server, messages, closed);
+            server->send((uint64_t)id, std::string(64 << 10, 'y'));       // nobody reads it
+        bool kicked = co_await eventually([&] {
+            drain(server->events(), messages, closed);
             return !closed.empty();
         });
         assert(kicked);
-        (void) kicked;
-        assert(closed[0].connection == id && closed[0].reason == "kicked: slow consumer");
+        assert(closed[0].connection == (uint64_t)id && closed[0].reason == "kicked: slow consumer");
+        // The grace was waited for (a lower bound holds whatever the load)
         assert(std::chrono::steady_clock::now() - t0 >= std::chrono::milliseconds(150));
         assert(server->connections() == 0);
-        ::close(client);
+        // The peer, reading at last, gets what fit in the buffers and the
+        // end of stream, never the whole backlog
+        StreamReader peer{pair.client()};
+        (void) co_await peer.end_of_stream();
+        assert(peer.ended && peer.pending.size() < limits.max_queued_bytes);
 
         co_await server->shutdown(std::chrono::milliseconds(100));
         (void) co_await nursery.join();
@@ -1469,47 +1461,41 @@ namespace wry {
         // stream
         Transport::LineCodec codec{1 << 20};
         Transport::Limits limits;
-        std::string path = test_socket_path("transport-kick");
-        std::string error;
-        auto server = Transport::listen_unix(path, codec, limits, error);
-        assert(server && error.empty());
+        auto server = Transport::make(codec, limits);
         Nursery nursery;
         nursery.soon(server->serve());
+        SocketPair pair;
+        const int id = server->adopt(pair.release_server());
+        assert(id > 0);
+        StreamReader peer{pair.client()};
 
-        int client = connect_unix(path);
-        bool sent = write_all(client, "one\n");
+        bool sent = co_await send_all(pair.client(), "one\n");
         assert(sent);
-        (void) sent;
         std::vector<Transport::Message> messages;
         std::vector<Transport::Closed> closed;
         std::vector<Transport::Opened> opened;
-        bool heard = eventually([&] {
-            drain(*server, messages, closed, &opened);
+        bool heard = co_await eventually([&] {
+            drain(server->events(), messages, closed, &opened);
             return !messages.empty();
         });
         assert(heard);
-        (void) heard;
-        assert(opened.size() == 1 && opened[0].peer == "client " + std::to_string(::getpid()));
-        const uint64_t id = messages[0].connection;
-        server->kick(id, "bye");
-        server->kick(id, "again");                      // idempotent: the first wins
-        (void) ::send(client, "late\n", 5, 0);        // may already be refused
-        auto lines = read_lines(client, 1);
+        assert(opened.size() == 1 && opened[0].connection == (uint64_t)id);
+        assert(opened[0].peer.ends_with(" " + std::to_string(::getpid())));
+        server->kick((uint64_t)id, "bye");
+        server->kick((uint64_t)id, "again");                 // idempotent: the first wins
+        (void) ::send(pair.client(), "late\n", 5, 0);        // non-blocking; may already be refused
+        auto lines = co_await peer.lines(1);
         assert(lines.size() == 1 && lines[0] == "bye");
-        char byte;
-        const ssize_t after = ::read(client, &byte, 1);
-        assert(after == 0);                             // then end of stream
-        (void) after;
-        bool reported = eventually([&] {
-            drain(*server, messages, closed);
+        bool ended = co_await peer.end_of_stream();
+        assert(ended && peer.pending.empty());               // then the end of stream, nothing else
+        bool reported = co_await eventually([&] {
+            drain(server->events(), messages, closed);
             return !closed.empty();
         });
         assert(reported);
-        (void) reported;
         assert(closed[0].reason == "kicked: bye");
-        assert(messages.size() == 1);                   // never "late"
-        server->send(id, "nobody hears this");
-        ::close(client);
+        assert(messages.size() == 1);                        // never "late"
+        server->send((uint64_t)id, "nobody hears this");
 
         co_await server->shutdown(std::chrono::milliseconds(100));
         (void) co_await nursery.join();
@@ -1517,24 +1503,26 @@ namespace wry {
 
         // A violation kicks with its reason, after the messages before it
         Transport::LineCodec strict{8};
-        auto picky = Transport::listen_unix(path, strict, limits, error);
-        assert(picky && error.empty());
+        auto picky = Transport::make(strict, limits);
         Nursery scope;
         scope.soon(picky->serve());
-        int bad = connect_unix(path);
-        sent = write_all(bad, "fine\n123456789\n");
+        SocketPair bad_pair;
+        const int bad_id = picky->adopt(bad_pair.release_server());
+        assert(bad_id > 0);
+        StreamReader bad{bad_pair.client()};
+        sent = co_await send_all(bad_pair.client(), "fine\n123456789\n");
         assert(sent);
-        bool violated = eventually([&] {
-            drain(*picky, messages, closed);
+        bool violated = co_await eventually([&] {
+            drain(picky->events(), messages, closed);
             return closed.size() == 2;
         });
         assert(violated);
-        (void) violated;
         assert(messages.size() == 2 && messages[1].bytes == "fine");
-        assert(closed[1].reason == "kicked: line too long");
-        auto farewell = read_lines(bad, 1);
+        assert(closed[1].connection == (uint64_t)bad_id && closed[1].reason == "kicked: line too long");
+        auto farewell = co_await bad.lines(1);
         assert(farewell.size() == 1 && farewell[0] == "line too long");
-        ::close(bad);
+        bool bad_ended = co_await bad.end_of_stream();
+        assert(bad_ended);
         co_await picky->shutdown(std::chrono::milliseconds(100));
         (void) co_await scope.join();
         co_return;

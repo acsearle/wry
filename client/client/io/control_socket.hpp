@@ -44,11 +44,22 @@ namespace wry {
         // A line longer than this kicks its connection.
         static constexpr size_t max_line = 1 << 20;
 
-        // Bind and listen at `path` (replacing a stale socket file).  Null,
-        // with `error` set, on failure.  Nothing is accepted until the task
-        // from serve() runs; connections queue in the backlog meanwhile.
+        // Bind and listen at `path`: Transport::listen_unix with the control
+        // codec and limits (a live listener there is refused, a dead socket
+        // file replaced, the file owner-only).  Null, with `error` set, on
+        // failure.  Nothing is accepted until the task from serve() runs;
+        // connections queue in the backlog meanwhile.
         static std::unique_ptr<ControlSocket> open(std::string const& path,
                                                    std::string& error);
+
+        // No listener: a control socket whose connections are adopted, for
+        // tests to drive over a socket pair with no path on the filesystem
+        static std::unique_ptr<ControlSocket> make();
+
+        // Serve an already connected descriptor (one end of a socket pair)
+        // as a connection: its id, or -errno with the descriptor closed.
+        // serve() must be spawned, or about to be
+        int adopt(int fd);
 
         // The connection loop, as a task for the caller to spawn where this
         // socket should live: the process scope for the singleton, a
