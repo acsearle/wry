@@ -246,8 +246,27 @@
                          withPixelFormat:(MTLPixelFormat)pixelFormat
                                mipmapped:(BOOL)mipmapped
 {
+    return [self newTextureFromResource:name
+                                 ofType:ext
+                        withPixelFormat:pixelFormat
+                              mipmapped:mipmapped
+                          premultiplied:YES];
+}
+
+- (id<MTLTexture>)newTextureFromResource:(NSString*)name
+                                  ofType:(NSString*)ext
+                         withPixelFormat:(MTLPixelFormat)pixelFormat
+                               mipmapped:(BOOL)mipmapped
+                           premultiplied:(BOOL)premultiplied
+{
     wry::matrix<wry::RGBA8Unorm_sRGB> image = wry::from_png(wry::path_for_resource([name UTF8String], [ext UTF8String]).c_str());
-    wry::multiply_alpha_inplace(image);
+    // PNGs are straight alpha; the 2D pipelines blend premultiplied, so
+    // the usual load multiplies through.  The symbol atlas is kept
+    // straight (premultiplied:NO): its transparent margins carry the
+    // colour the slabs' walls read (Shaders.metal symbol_march), and the
+    // 2D draws of it premultiply in the shader (WryQuadFlagStraight)
+    if (premultiplied)
+        wry::multiply_alpha_inplace(image);
 
     MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
     descriptor.textureType = MTLTextureType2D;
@@ -284,13 +303,16 @@
     return texture;
 }
 
+// The symbol atlas: mip storage for the renderer to fill once level 0 is
+// final, and straight alpha (see above)
 - (id<MTLTexture>)newTextureWithMipStorageFromResource:(NSString*)name
                                                 ofType:(NSString*)ext
 {
     return [self newTextureFromResource:name
                                  ofType:ext
                         withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
-                              mipmapped:YES];
+                              mipmapped:YES
+                          premultiplied:NO];
 }
 
 - (void)generateMipmapsForTexture:(id<MTLTexture>)texture

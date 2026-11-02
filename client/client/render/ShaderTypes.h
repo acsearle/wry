@@ -237,6 +237,9 @@ enum WryQuadFlag {
     WryQuadFlagMasked   = 1u << 1,  // multiply by rounded-box coverage
     WryQuadFlagFiltered = 1u << 2,  // sample trilinear (default: nearest,
                                     // for texels drawn 1:1, e.g. glyphs)
+    WryQuadFlagStraight = 1u << 3,  // the texture is straight alpha (the symbol
+                                    // atlas): premultiply the sample for the
+                                    // (one, one minus alpha) blend
 };
 
 typedef struct

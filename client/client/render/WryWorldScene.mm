@@ -1234,6 +1234,8 @@
                mipmapLevel:0];
         unsigned char* p[1];
         p[0] = (unsigned char*) tile.data();
+        // The atlas is straight alpha with coloured margins, so say so,
+        // or AppKit reads the margin as premultiplied colour
         NSBitmapImageRep* a = [[NSBitmapImageRep alloc]
                               initWithBitmapDataPlanes:p
                                             pixelsWide:(NSInteger) cell
@@ -1243,6 +1245,7 @@
                                               hasAlpha:YES
                                               isPlanar:NO
                                         colorSpaceName:NSCalibratedRGBColorSpace
+                                          bitmapFormat:NSBitmapFormatAlphaNonpremultiplied
                                            bytesPerRow:tile.stride_bytes()
                                           bitsPerPixel:32];
         NSImage* b = [[NSImage alloc] initWithSize:NSMakeSize(32.0, 32.0)];
@@ -1360,7 +1363,7 @@
                     simd_make_float4(cell.a.x, cell.a.y, cell.b.x, cell.b.y),
                     RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f));
                 g.uv = simd_make_float4(uv + 0.25f * cell_uv, uv + 0.75f * cell_uv);
-                g.flags = WryQuadFlagTextured | WryQuadFlagFiltered;
+                g.flags = WryQuadFlagTextured | WryQuadFlagFiltered | WryQuadFlagStraight;
                 quads.push_back(g);
             }
         }

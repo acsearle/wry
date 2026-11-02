@@ -98,6 +98,11 @@
 // (the symbol atlas stamps labels into it): allocates the full mip chain
 // but fills only level 0.  Sampling the other levels is undefined until
 // the caller has finished editing and called -generateMipmapsForTexture:.
+- (nonnull id<MTLTexture>)newTextureFromResource:(nonnull NSString*)name
+                                          ofType:(nonnull NSString*)ext
+                                 withPixelFormat:(MTLPixelFormat)pixelFormat
+                                       mipmapped:(BOOL)mipmapped
+                                   premultiplied:(BOOL)premultiplied;
 - (nonnull id<MTLTexture>)newTextureWithMipStorageFromResource:(nonnull NSString*)name
                                                         ofType:(nonnull NSString*)ext;
 

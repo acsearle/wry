@@ -1036,7 +1036,8 @@ namespace deferred {
     struct SymbolHit {
         float3 position;   // slab space
         float3 normal;     // slab space, unit
-        float2 uv;         // atlas, pulled inside the silhouette for colour
+        float2 uv;         // atlas: the print under a face, the margin past a wall
+        bool print;        // the face's print (else the wall's margin)
     };
 
     // March the ray origin + t * direction (direction unit, origin outside
@@ -1096,9 +1097,17 @@ namespace deferred {
             n = float3(0.0f, 0.0f, zs);
         hit.position = p;
         hit.normal = normalize(n);
-        // Colour from inside the silhouette: the wall sits on the 0.5
-        // contour, where the atlas texel is half background
-        hit.uv = symbol_uv(instance, p.xy - g * max(f.x + r + 0.5f, 0.0f));
+        // Colour: a face (and the upper half of its fillet) shows the
+        // print under it; a wall (and the lower half of the fillet) shows
+        // the atlas's margin half a texel outside the silhouette, which
+        // the atlas tools fill with the edge's colour (or whatever is
+        // painted there: tools/make_assets.py extend_margins,
+        // tools/make_tile_atlas.py).  The atlas is straight alpha, so the
+        // margin's colour is read as is, alpha ignored
+        bool print = w.y > w.x;   // the face, or the fillet's upper half
+        float2 uv_point = print ? p.xy : p.xy - g * (f.x - 0.5f);
+        hit.uv = symbol_uv(instance, uv_point);
+        hit.print = print;
         return true;
     }
 
@@ -1140,11 +1149,15 @@ namespace deferred {
         float3 normal_world = normalize((instance.model_transform * float4(hit.normal, 0.0f)).xyz);
 
         // Texels per pixel across the cuboid face, for the atlas mip level
+        // of a face's print.  A wall reads the base level: its margin
+        // colour is uniform, and the cuboid's footprint at a grazing wall
+        // would pick a mip that averages the print into it
         float2 footprint = fwidth(in.position_slab.xy);
-        float lod = max(log2(max(footprint.x, footprint.y)), 0.0f);
-        half4 albedoSample = albedoTexture.sample(trilinearSampler, hit.uv, level(lod));
-        // The atlas is premultiplied; the surface is opaque
-        half3 albedo = albedoSample.rgb / max(albedoSample.a, 0.05h);
+        float lod = hit.print ? max(log2(max(footprint.x, footprint.y)), 0.0f) : 0.0f;
+        // The atlas is straight alpha with its margins coloured, so the
+        // colour is read as is wherever the march sends the uv (see
+        // symbol_march); the surface is opaque
+        half3 albedo = albedoTexture.sample(trilinearSampler, hit.uv, level(lod)).rgb;
 
         SymbolFragmentFunctionOutput out;
         out.light = half4(0.0h, 0.0h, 0.0h, 0.0h);
@@ -2734,9 +2747,12 @@ quadFragmentShader(QuadRasterizerData in [[stage_in]],
         constexpr sampler trilinearSampler(mag_filter::linear,
                                            min_filter::linear,
                                            mip_filter::linear);
-        color *= (in.flags & WryQuadFlagFiltered)
+        half4 sample = (in.flags & WryQuadFlagFiltered)
             ? colorTexture.sample(trilinearSampler, in.texCoord)
             : colorTexture.sample(nearestSampler, in.texCoord);
+        if (in.flags & WryQuadFlagStraight)
+            sample.rgb *= sample.a;
+        color *= sample;
     }
 
     if (in.flags & WryQuadFlagMasked) {
