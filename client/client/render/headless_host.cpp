@@ -131,18 +131,29 @@ namespace wry {
         {
             HeadlessHost host(gc);
 
-            // Run frames until the issued pending replies have completed.
-            // Where run() would block in host.wait for the session's input,
-            // this test, on a pool worker, sleeps on the reactor instead
-            // (io/test_support.hpp: a test never blocks a worker)
-            auto settle = [&]() -> coroutine::Task {
-                for (int i = 0; i != 2000 && !gc.detached.empty(); ++i) {
-                    if (!gc.idle())
-                        host.frame();
-                    else
-                        co_await testing::pause(std::chrono::milliseconds(10));
+            // Run frames until `done` holds.  A frame applies whatever the
+            // relay has delivered; what it has not delivered yet arrives
+            // through the pool and the reactor, so between frames with
+            // nothing to apply this test, on a pool worker, sleeps on the
+            // reactor rather than spinning (io/test_support.hpp: a test
+            // never blocks a worker).  The bound is the hang detector, not
+            // a frame count: a frame count is a timing claim in disguise
+            // (2000 of them was a second, which a cold offscreen launch
+            // under a sanitizer exceeded while its backdrop decoded on the
+            // pool).  Note that gc.idle() is false while a detached reply
+            // is pending, so it cannot be the signal to sleep on here
+            auto frames_until = [&](auto done) -> coroutine::Task {
+                const auto deadline = testing::soon();
+                while (!done()) {
+                    assert(std::chrono::steady_clock::now() < deadline);
+                    host.frame();
+                    WorldState* world = host.world();
+                    if (!(world && world->has_server_input()))
+                        co_await testing::pause(std::chrono::milliseconds(1));
                 }
-                assert(gc.detached.empty());
+            };
+            auto settle = [&]() -> coroutine::Task {
+                co_await frames_until([&] { return gc.detached.empty(); });
             };
 
             // The menu: laid out by the first frame, so its buttons can be
@@ -162,12 +173,7 @@ namespace wry {
                 String text = gc.issue(Origin::gui, "session").reply.text;
                 return std::string_view(text.data(), text.chars.size()).starts_with("host joined");
             };
-            for (int i = 0; i != 2000 && !joined(); ++i) {
-                if (!gc.idle())
-                    host.frame();
-                else
-                    co_await testing::pause(std::chrono::milliseconds(10));
-            }
+            co_await frames_until(joined);
             assert(joined());
 
             // A write, stepped in: `step` is pending until the relay's
