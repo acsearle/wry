@@ -1352,6 +1352,90 @@ namespace deferred {
         return out;
     }
 
+    // ---- Decals: images projected onto the G-buffer (WryDecalInstance).
+    //
+    // The same scheme as the occlusion decal above: a box rasterized
+    // after the frame's geometry, no depth test, each fragment finding
+    // the surface under it from the G-buffer's depth and editing the
+    // G-buffer in place under its raster order group.  This one paints:
+    // the stored albedo moves toward the image's colour by its coverage,
+    // and the material's roughness and metallic toward the instance's by
+    // the coverage times their weights.  Surfaces facing away from the
+    // decal's +z by more than the cutoff are left alone, so a print on a
+    // tile's face stops at the tile's walls.
+
+    struct DecalVertexFunctionOutput {
+        float4 position_clip [[position]];
+        float3 ray [[center_no_perspective]];
+        uint instance_id [[flat]];
+    };
+
+    [[vertex]] DecalVertexFunctionOutput
+    decal_vertex_function(uint vertex_id [[vertex_id]],
+                          uint instance_id [[instance_id]],
+                          constant MeshUniforms& uniforms [[buffer(AAPLBufferIndexUniforms)]],
+                          const device WryDecalInstance* instances [[buffer(AAPLBufferIndexInstanced)]])
+    {
+        DecalVertexFunctionOutput out;
+        WryDecalInstance instance = instances[instance_id];
+        float3 corner = symbol_cube_corner[symbol_cube_index[vertex_id]] * 0.5f;
+        float4 position_world = instance.model_transform * float4(corner, 1.0f);
+        out.position_clip = uniforms.viewprojection_transform * position_world;
+        float2 ndc = out.position_clip.xy / out.position_clip.w;
+        out.ray = camera_ray(uniforms, ndc);
+        out.instance_id = instance_id;
+        return out;
+    }
+
+    struct DecalFragmentFunctionOutput {
+        half4 albedo   [[color(AAPLColorIndexAlbedo),   raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        half4 material [[color(AAPLColorIndexMaterial), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+    };
+
+    [[fragment]] DecalFragmentFunctionOutput
+    decal_fragment_function(DecalVertexFunctionOutput in [[stage_in]],
+                            FragmentFunctionOutput gbuffer,
+                            constant MeshUniforms& uniforms [[buffer(AAPLBufferIndexUniforms)]],
+                            const device WryDecalInstance* instances [[buffer(AAPLBufferIndexInstanced)]],
+                            texture2d<half> image [[texture(AAPLTextureIndexAlbedo)]])
+    {
+        constexpr sampler trilinear(mag_filter::linear,
+                                    min_filter::linear,
+                                    mip_filter::linear,
+                                    s_address::clamp_to_edge,
+                                    t_address::clamp_to_edge);
+
+        WryDecalInstance instance = instances[in.instance_id];
+        // The surface under this pixel, in decal space
+        float4 position_world = float4(uniforms.camera_position_world.xyz + in.ray * gbuffer.depth, 1.0f);
+        float4 q = instance.inverse_model_transform * position_world;
+        float3 p = q.xyz / q.w;
+        float2 uv = instance.uv_rect.xy + float2(p.x + 0.5f, 0.5f - p.y) * instance.uv_rect.zw;
+        // The image's footprint, before any lane leaves (the neighbours'
+        // uv is the surface's, which is what the mip level should see)
+        float2 duvdx = dfdx(uv), duvdy = dfdy(uv);
+
+        if (gbuffer.depth <= 0.0f || any(abs(p) > 0.5f))
+            discard_fragment();
+        float3 axis = normalize(instance.model_transform.columns[2].xyz);
+        if (dot(float3(gbuffer.normal.xyz), axis) < instance.normal_cutoff)
+            discard_fragment();
+
+        half4 s = image.sample(trilinear, uv, gradient2d(duvdx, duvdy));
+        half coverage = s.a * half(instance.tint.a);
+        half3 colour = half3(instance.tint.rgb) * s.rgb;
+
+        DecalFragmentFunctionOutput out;
+        out.albedo = half4(mix(gbuffer.albedo.rgb, colour, coverage), gbuffer.albedo.a);
+        half2 toward = half2(instance.material.xy);
+        half2 weight = half2(instance.material.zw) * coverage;
+        out.material = half4(gbuffer.material.r,
+                             mix(gbuffer.material.g, toward.x, weight.x),
+                             mix(gbuffer.material.b, toward.y, weight.y),
+                             gbuffer.material.a);
+        return out;
+    }
+
     // ---- The board ------------------------------------------------------
     //
     // The terrain as a printed board (WryTerrainUniforms): one quad at

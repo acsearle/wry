@@ -115,6 +115,9 @@
     // symbols?
     
     id<MTLTexture> _symbols;
+    // The cutout glyphs (assets.png, whatever atlas _symbols shows), for
+    // decals that print a glyph on a surface: the digits on a number tile
+    id<MTLTexture> _glyphs;
     WryMesh* _hackmesh;
 
     // The symbol field beside the atlas (symbol_sdf.hpp), its per-cell
@@ -128,6 +131,7 @@
     id<MTLRenderPipelineState> _terrainGBufferRenderPipelineState;
     id<MTLRenderPipelineState> _symbolShadowRenderPipelineState;
     id<MTLRenderPipelineState> _symbolDecalRenderPipelineState;
+    id<MTLRenderPipelineState> _decalRenderPipelineState;   // images onto the G-buffer (WryDecalInstance)
 
     // Screen-space ambient occlusion: the image-based light accumulates
     // in its own attachment, the estimators run over the stored depth
@@ -184,6 +188,8 @@
     simd_float4 _cdot_coordinate;
     simd_float4 _border_coordinate;
     simd_float4 _token_truck_coordinate;   // the machine's playing piece (atlas row 15)
+    simd_float4 _blank_coordinate;         // the plain tile numbers are printed on
+    simd_float4 _dash_coordinate;          // the minus sign's glyph
     
     WryMesh* _truck_mesh;
     WryMesh* _mine_mesh;
@@ -577,6 +583,15 @@
             descriptor.colorAttachments[AAPLColorIndexMaterial].writeMask = MTLColorWriteMaskRed;
             descriptor.colorAttachments[AAPLColorIndexDepth].writeMask = MTLColorWriteMaskNone;
             _symbolDecalRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
+
+            // Image decals paint the albedo and the material's roughness
+            // and metallic in place (WryDecalInstance)
+            descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::decal_vertex_function"];
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::decal_fragment_function"];
+            descriptor.label = @"Decal";
+            descriptor.colorAttachments[AAPLColorIndexAlbedo].writeMask = MTLColorWriteMaskAll;
+            descriptor.colorAttachments[AAPLColorIndexMaterial].writeMask = MTLColorWriteMaskGreen | MTLColorWriteMaskBlue;
+            _decalRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
             descriptor.colorAttachments[AAPLColorIndexColor].writeMask = MTLColorWriteMaskAll;
             descriptor.colorAttachments[AAPLColorIndexAlbedo].writeMask = MTLColorWriteMaskAll;
             descriptor.colorAttachments[AAPLColorIndexNormal].writeMask = MTLColorWriteMaskAll;
@@ -929,6 +944,15 @@
     // Mip levels allocated now, generated below once the opcode
     // labels have been stamped into level 0.
     _symbols = [_ctx newTextureWithMipStorageFromResource:name ofType:@"png"];
+    // The cutout glyphs for decals, always the plain atlas: straight
+    // alpha, coloured margins, mips filled now (nothing is stamped on it)
+    _glyphs = [_ctx newTextureFromResource:@"assets"
+                                    ofType:@"png"
+                           withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
+                                 mipmapped:YES
+                             premultiplied:NO];
+    _glyphs.label = @"Glyphs";
+    [_ctx generateMipmapsForTexture:_glyphs];
     {
         // The field beside the atlas (symbol_sdf.hpp): from its
         // cache, or built from the atlas's silhouette at half the
@@ -973,6 +997,8 @@
     _cdot_coordinate       = make<float4>(0.0f / kCells,  2.0f / kCells, 0.0f, 1.0f);
     _border_coordinate     = make<float4>(0.0f / kCells,  3.0f / kCells, 0.0f, 1.0f);
     _token_truck_coordinate = make<float4>(0.0f / kCells, 15.0f / kCells, 0.0f, 1.0f);
+    _blank_coordinate       = make<float4>(4.0f / kCells, 11.0f / kCells, 0.0f, 1.0f);
+    _dash_coordinate        = make<float4>(11.0f / kCells, 0.0f / kCells, 0.0f, 1.0f);
 
     try {
         auto x = json::from_file<ContiguousDeque<ContiguousDeque<String>>>("assets.json");
@@ -1003,6 +1029,10 @@
                         _border_coordinate = coordinate;
                     else if (sv == "token_truck")
                         _token_truck_coordinate = coordinate;
+                    else if (sv == "blank")
+                        _blank_coordinate = coordinate;
+                    else if (sv == "dash1")
+                        _dash_coordinate = coordinate;
                     // Lowercase opcode-art names: wired into the
                     // opcode coordinate table like any glyph, but
                     // routed through this branch so the art is
@@ -1656,6 +1686,8 @@
     // with a decal reach)
     WryBufferSlice decal_instances = {};
     NSUInteger decal_count = 0;
+    WryBufferSlice print_instances = {};
+    NSUInteger print_count = 0;
     // The board: the cells in view as a dense map of terrain kinds, and
     // the look that inks them (deferred::terrain_fragment_function)
     WryBufferSlice terrain_kinds = {};
@@ -1758,6 +1790,7 @@
         // per entity, plus the cursor); this is only a hint.
         std::vector<WrySymbolInstance> symbols;
         std::vector<WrySymbolInstance> decals;
+        std::vector<WryDecalInstance> prints;   // image decals: the digits on number tiles
         size_t symbol_hint = 2
             + (size_t)(grid_bounds.b.x - grid_bounds.a.x) * (size_t)(grid_bounds.b.y - grid_bounds.a.y)
             + ptrs.size();
@@ -1824,6 +1857,48 @@
             const float width = std::max(_symbolStrokeWidth[(size_t)cy * wry::SymbolSDF::kCells + (size_t)cx], 2.0f);
             const float stroke = std::min(width, 20.0f);
             emit_slab(location, coordinate, across, up, stroke, stroke * 0.25f, width, true, texels_per_unit * 0.5f);
+        };
+        // A number: the blank tile with the value's decimal digits
+        // printed on its face as decals (WryDecalInstance) from the
+        // cutout atlas's digit glyphs, the row shrunk to fit the face; a
+        // leading minus is the dash glyph's middle half in the digits'
+        // blue.  Very large values just get small (to be designed).
+        const float kDigitPitch = 12.5f / 24.0f;   // the monospace digits' advance, frame units -> world
+        const float kNumberWidth = 0.78f;          // the row's room on the face
+        auto emit_number = [&](simd_float4 location, simd_float3 across, simd_float3 up, int64_t value) {
+            emit_symbol(location, _blank_coordinate, across, up);
+            const std::string text = std::to_string(value);
+            const int n = (int)text.size();
+            const float scale = std::min(1.0f, kNumberWidth / (kDigitPitch * (float)n));
+            simd_float3 normal = simd_cross(across, up);
+            // The tile's face: emit_symbol's thickness cap, half of it out
+            simd_float3 face = location.xyz + normal * (10.0f / texels_per_unit);
+            const float cell_uv = 1.0f / (float)wry::SymbolSDF::kCells;
+            for (int i = 0; i != n; ++i) {
+                const char ch = text[(size_t)i];
+                const bool minus = ch == '-';
+                const float x = ((float)i - (float)(n - 1) * 0.5f) * kDigitPitch * scale;
+                const float w = scale * (minus ? 0.5f : 1.0f);
+                simd_float4x4 model = simd_matrix(simd_make_float4(across * w, 0.0f),
+                                                  simd_make_float4(up * scale, 0.0f),
+                                                  simd_make_float4(normal * 0.08f, 0.0f),
+                                                  simd_make_float4(face + across * x, 1.0f));
+                WryDecalInstance d = {};
+                d.model_transform = model;
+                d.inverse_model_transform = simd_inverse(model);
+                simd_float4 cell = minus ? _dash_coordinate
+                    : _digit_zero_coordinate + make<float4>((float)(ch - '0') * cell_uv, 0.0f, 0.0f, 0.0f);
+                // The glyph's frame is the central half of its cell; the
+                // minus shows the central half of the dash's frame
+                d.uv_rect = minus
+                    ? make<float4>(cell.x + 0.375f * cell_uv, cell.y + 0.25f * cell_uv, 0.25f * cell_uv, 0.5f * cell_uv)
+                    : make<float4>(cell.x + 0.25f * cell_uv, cell.y + 0.25f * cell_uv, 0.5f * cell_uv, 0.5f * cell_uv);
+                d.tint = minus ? wry::from_sRGB(make<float4>(0x5b / 255.0f, 0x5b / 255.0f, 1.0f, 1.0f))
+                               : make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
+                d.material = make<float4>(0.5f, 0.0f, 0.0f, 0.0f);   // the ink keeps the tile's finish
+                d.normal_cutoff = 0.5f;
+                prints.push_back(d);
+            }
         };
 
         MeshVertex v;
@@ -1952,9 +2027,9 @@
                         coordinate = wry::term_as_boolean(value)
                             ? _true_coordinate : _false_coordinate;
                     } else if (value.is_inty()) {
-                        // number, as hex
-                        coordinate = _digit_zero_coordinate
-                            + make<float4>((value.as_int() & 15) / (float)wry::SymbolSDF::kCells, 0.0f, 0.0f, 0.0f);
+                        emit_number(location, make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f), value.as_int());
+                        location.z += item_height * 0.5f + stack_gap;
+                        continue;
                     } else {
                         // not renderable yet (heap integer, string, ...):
                         // the same neutral dot the ground uses, rather than
@@ -1991,19 +2066,16 @@
                 
                 if (auto r = dynamic_cast<const Source*>(q)) {
                     
-                    simd_float4 coordinate;
-                    if (wry::term_is_boolean(r->_of_this)) {
-                        coordinate = wry::term_as_boolean(r->_of_this)
-                            ? _true_coordinate : _false_coordinate;
-                    } else {
-                        coordinate = _digit_zero_coordinate
-                            + make<float4>(((r->_of_this.is_inty() ? r->_of_this.as_int() : 0) & 15) / (float)wry::SymbolSDF::kCells, 0.0f, 0.0f, 0.0f);
-                    }
-                    
                     // Upright on the source's front face: image right is
                     // world x, image up is world z
-                    emit_symbol(location + make<float4>(0.0f, -0.1f, 0.0f, 0.0f), coordinate,
-                                make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 0.0f, 1.0f));
+                    const simd_float4 front = location + make<float4>(0.0f, -0.1f, 0.0f, 0.0f);
+                    if (wry::term_is_boolean(r->_of_this)) {
+                        emit_symbol(front, wry::term_as_boolean(r->_of_this) ? _true_coordinate : _false_coordinate,
+                                    make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 0.0f, 1.0f));
+                    } else {
+                        emit_number(front, make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 0.0f, 1.0f),
+                                    r->_of_this.is_inty() ? r->_of_this.as_int() : 0);
+                    }
 
                 }
 
@@ -2035,9 +2107,8 @@
                         coordinate = wry::term_as_boolean(q)
                             ? _true_coordinate : _false_coordinate;
                     } else if (q.is_inty()) {
-                        // number, as hex
-                        coordinate = _digit_zero_coordinate
-                            + make<float4>((q.as_int() & 15) / (float)wry::SymbolSDF::kCells, 0.0f, 0.0f, 0.0f);
+                        emit_number(location, make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f), q.as_int());
+                        continue;
                     } else if (q.is_opcode()) {
                         //printf("q is opcode\n");
                         auto p = _opcode_to_coordinate.find(q.as_opcode());
@@ -2161,6 +2232,10 @@
         if (decal_count)
             decal_instances = [_ctx.arena copyBytes:decals.data()
                                              length:decals.size() * sizeof(WrySymbolInstance)];
+        print_count = prints.size();
+        if (print_count)
+            print_instances = [_ctx.arena copyBytes:prints.data()
+                                             length:prints.size() * sizeof(WryDecalInstance)];
 
     }
 
@@ -2478,6 +2553,26 @@
                                 vertexCount:36
                               instanceCount:decal_count];
                     [encoder setDepthStencilState:_ctx.enabledDepthStencilState];
+                }
+
+                // Image decals: the digits printed on the number tiles,
+                // onto whatever the G-buffer holds inside their boxes
+                if (print_count) {
+                    [encoder setRenderPipelineState:_decalRenderPipelineState];
+                    [encoder setDepthStencilState:_ctx.disabledDepthStencilState];
+                    [encoder setVertexBuffer:print_instances.buffer
+                                      offset:print_instances.offset
+                                     atIndex:AAPLBufferIndexInstanced];
+                    [encoder setFragmentBuffer:print_instances.buffer
+                                        offset:print_instances.offset
+                                       atIndex:AAPLBufferIndexInstanced];
+                    [encoder setFragmentTexture:_glyphs atIndex:AAPLTextureIndexAlbedo];
+                    [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                vertexStart:0
+                                vertexCount:36
+                              instanceCount:print_count];
+                    [encoder setDepthStencilState:_ctx.enabledDepthStencilState];
+                    [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
                 }
 
                 /*

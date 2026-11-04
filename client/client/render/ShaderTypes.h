@@ -365,6 +365,31 @@ typedef struct
     float decal_reach;          // texels beyond the silhouette the ambient-occlusion decal fades out by; 0 for none
 } WrySymbolInstance;
 
+#pragma mark - Decals
+
+// An image projected onto whatever the G-buffer already holds inside a
+// box (Shaders.metal, deferred::decal_*), drawn after the geometry of
+// the frame.  Decal space is the unit box: x and y in [-0.5, 0.5] across
+// the image (y up the image), z in [-0.5, 0.5] along its projection
+// (+z toward the viewer of the print), origin at the image's centre; the
+// model transform carries that to the world, any scale per axis.  Each
+// fragment reads the G-buffer's depth, finds the surface point in decal
+// space, rejects points outside the box or on surfaces facing away from
+// +z by more than the cutoff, samples the image (straight alpha) and
+// blends the stored albedo toward tint.rgb * image.rgb by image.a *
+// tint.a; roughness and metallic blend toward the instance's by the same
+// coverage times their weights.  Normals are left alone for now (a
+// normal map would resolve in this same frame).
+typedef struct {
+    matrix_float4x4 model_transform;
+    matrix_float4x4 inverse_model_transform;
+    simd_float4 uv_rect;        // xy: the image's top-left uv (decal (-0.5, +0.5)); zw: uv per unit of x and of -y
+    simd_float4 tint;           // rgb multiplies the image's colour; a scales its coverage
+    simd_float4 material;       // x roughness and y metallic to blend toward; z and w their weights (0 leaves the surface's)
+    float normal_cutoff;        // the surface normal's least cosine with the decal's +z
+    float _padding[3];
+} WryDecalInstance;
+
 
 
 //static constexpr constant uint32_t AAPLMaxTotalThreadsPerObjectThreadgroup = 1;

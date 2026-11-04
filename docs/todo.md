@@ -1,6 +1,7 @@
 # Todo
 
 List of one-line reminders of things to think and do
+- LANDED 2026-11-04: image decals (ShaderTypes.h WryDecalInstance, Shaders.metal deferred::decal_*, WryWorldScene.mm prints / emit_number): a box drawn after the frame's geometry with no depth test, each fragment finding the surface from the G-buffer's depth and blending the stored albedo toward tint * image by the image's coverage, and roughness / metallic toward the instance's by weighted coverage; surfaces facing away from the decal's +z past a cutoff are skipped.  Hero case: numbers are the `blank` tile (assets.json row 11 col 4, tiled by name) with their decimal string printed from the cutout atlas's digit glyphs (_glyphs, assets.png loaded straight alpha), shrunk to fit the face; a minus is the dash glyph's middle half.  Follow-ups: normals are not projected (the instance's frame would carry a normal map); very large integers just shrink (Factorio-style 2.1M suffixes?); the cursor's held-value image still cuts a single hex digit from the atlas; the hex digit row 10 is only read by the decals now
 -
 - FEEDBACK (2026-11-01): U-turn is prominent and unhelpful.  Tile captions too small (zoom?).  Hexadecimal is very confusing, modulus numbers are confusing (multi-digit with decals in Factorio 4-character style "2.1M"?).
 - TODO: Live unit tests fighting stuff
