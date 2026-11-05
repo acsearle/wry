@@ -47,6 +47,7 @@
 #include "font.hpp"
 #include "gui_event.hpp"
 #include "gui_keymap.hpp"
+#include "gui_line_editor.hpp"
 #include "palette.hpp"
 #include "rect.hpp"
 #include "simd.hpp"
@@ -327,8 +328,10 @@ namespace wry {
 
         // Quake-style drop-down console: toggled by the toggle-console
         // binding (backtick by default), captures all keyboard input
-        // while active.  Enter issues the input line as a command
-        // (core/docs/commands.md); Up / Down recall earlier input.
+        // while active.  The input line is a LineEditor (cursor, word
+        // motion, kill and yank: gui_line_editor.hpp).  Enter issues it
+        // as a command (core/docs/commands.md); Up / Down (Ctrl-P /
+        // Ctrl-N) recall earlier input.
         class ConsoleOverlay : public Overlay {
         public:
             ConsoleOverlay();
@@ -357,9 +360,11 @@ namespace wry {
             bool modal_keyboard() const override { return _active; }
             bool modal_mouse()    const override { return false; }
 
-            // Direct access (chiefly for the model's append_log shim and
-            // for the bring-up where the initial banner is pushed).
+            // The output lines, oldest first.
             ContiguousDeque<String>& lines() { return _lines; }
+
+            // The line being typed.
+            LineEditor const& input() const { return _input; }
 
             // Wired by the model so the console can echo "[~] Show console"
             // etc. into the floating log.
@@ -370,7 +375,14 @@ namespace wry {
             void set_keymap(Keymap const* k) { _keymap = k; }
 
         private:
-            ContiguousDeque<String> _lines;     // output, then the input line last
+            ContiguousDeque<String> _lines;     // output, oldest first
+            LineEditor _input;                  // the line being typed
+            // Painting state.  The input line scrolls sideways to keep
+            // the caret in view; the caret's blink restarts (solid) at
+            // each keystroke.
+            float _input_scroll = 0.0f;         // pixels of text off the left
+            bool _caret_touched = true;
+            uint64_t _caret_frame = 0;          // frame the blink restarted at
             bool _active = false;
             LogOverlay* _log = nullptr;
             Keymap const* _keymap = nullptr;

@@ -150,13 +150,10 @@ namespace wry {
 
         ConsoleOverlay::ConsoleOverlay() {
             _lines.emplace_back("WryApplication");
-            _lines.emplace_back("");
         }
 
         void ConsoleOverlay::print(StringView line) {
-            String input = std::move(_lines.back());
-            _lines.back() = String(line);
-            _lines.push_back(std::move(input));
+            _lines.emplace_back(line);
         }
 
         bool ConsoleOverlay::on_event(Event const& e) {
@@ -201,20 +198,51 @@ namespace wry {
             // Active: full console keymap.  modal_keyboard() == true so the
             // dispatcher blocks any keyboard events we don't explicitly claim
             // from leaking to lower overlays / legacy handlers.
-            if (e.key == 'c' && e.mods.has(Modifiers::Ctrl)) {
+
+            // Any keystroke restarts the caret's blink, so it is solid
+            // while typing or moving.
+            _caret_touched = true;
+
+            const bool ctrl_only = e.mods.has(Modifiers::Ctrl)
+                && !e.mods.has(Modifiers::Alt) && !e.mods.has(Modifiers::Cmd);
+
+            if (e.key == 'c' && ctrl_only) {
                 if (_cancel)
                     _cancel();
                 return true;
             }
 
+            // Recall replaces the line and puts the cursor at its end.
+            auto recall_older = [this] {
+                if (_recall_index > 0)
+                    _input.set(_recall[--_recall_index]);
+            };
+            auto recall_newer = [this] {
+                if (_recall_index < _recall.size()) {
+                    if (++_recall_index < _recall.size())
+                        _input.set(_recall[_recall_index]);
+                    else
+                        _input.clear();
+                }
+            };
+
+            if (ctrl_only && e.key == 'p') {
+                recall_older();
+                return true;
+            }
+            if (ctrl_only && e.key == 'n') {
+                recall_newer();
+                return true;
+            }
+
             switch (e.key) {
                 case key::Enter: {
+                    String input = _input.take();
                     if (!_issue) {
-                        _lines.emplace_back();
+                        // Unwired: the line just joins the output.
+                        _lines.push_back(std::move(input));
                         break;
                     }
-                    String input = std::move(_lines.back());
-                    _lines.back() = String();
                     if (!input.empty()) {
                         if (_recall.empty() || _recall.back() != input)
                             _recall.push_back(input);
@@ -228,40 +256,16 @@ namespace wry {
                     _active = false;
                     if (_log) _log->append("[ESC] Hide console");
                     break;
-                case key::Backspace:
-                    if (!_lines.back().empty()) {
-                        _lines.back().pop_back();
-                    }
-                    break;
                 case key::ArrowUp:
-                    if (_recall_index > 0)
-                        _lines.back() = _recall[--_recall_index];
+                    recall_older();
                     break;
                 case key::ArrowDown:
-                    if (_recall_index < _recall.size()) {
-                        if (++_recall_index < _recall.size())
-                            _lines.back() = _recall[_recall_index];
-                        else
-                            _lines.back() = String();
-                    }
-                    break;
-                case key::ArrowLeft:
-                    if (!_lines.back().empty()) {
-                        auto ch = _lines.back().back();
-                        _lines.back().pop_back();
-                        _lines.back().push_front(ch);
-                    }
-                    break;
-                case key::ArrowRight:
-                    if (!_lines.back().empty()) {
-                        auto ch = _lines.back().front_and_pop_front();
-                        _lines.back().push_back(ch);
-                    }
+                    recall_newer();
                     break;
                 default:
-                    if (e.text[0] != '\0') {
-                        _lines.back().append(e.text);
-                    }
+                    // Everything else is line editing: cursor motion,
+                    // erasure, insertion (gui_line_editor.hpp).
+                    _input.on_key(e);
                     break;
             }
             return true;
@@ -274,28 +278,65 @@ namespace wry {
             const RGBA8Unorm_sRGB color(1.0f, 1.0f, 1.0f, 1.0f);
             const float left   = p.font->height * 0.5f;
             const float slot_h = p.font->height;
-            // Bottommost slot ends a half-line above the bottom edge.
-            float slot_top = p.viewport_size_px.y - p.font->height * 0.5f;
-            bool first = true;
+            auto baseline_of = [&](float slot_top) {
+                return slot_top + slot_h * 0.5f
+                    + (p.font->ascender + p.font->descender) * 0.5f;
+            };
 
+            // The input line takes the bottommost slot, which ends a
+            // half-line above the bottom edge.
+            float slot_top = p.viewport_size_px.y - p.font->height * 0.5f - slot_h;
+            {
+                const float baseline = baseline_of(slot_top);
+                const float2 pen = p.draw_text_run(simd_make_float2(left, baseline),
+                                                   "> ", color);
+
+                // The field runs from the prompt to a half-line short of
+                // the right edge.  Positions below are pixels from the
+                // start of the text.
+                const float field_a = pen.x;
+                const float field_w = std::max(p.viewport_size_px.x - left - field_a, 0.0f);
+                const float caret = wry::text_run_width(p.font, _input.before());
+                const float total = caret + wry::text_run_width(p.font, _input.after());
+
+                // Scroll the least that keeps the caret inside the field
+                // with some text visible on either side of it, and never
+                // further than leaves the end of the text at the right
+                // edge (so erasing at the end scrolls back).
+                const float margin = std::min(2.0f * p.font->height, field_w * 0.25f);
+                _input_scroll = std::max(_input_scroll, caret - (field_w - margin));
+                _input_scroll = std::min(_input_scroll, caret - margin);
+                _input_scroll = std::clamp(_input_scroll, 0.0f,
+                                           std::max(total - field_w, 0.0f));
+
+                // The caret: a bar one stem wide between two characters,
+                // spanning the glyph cell.
+                const float bar = std::max(p.font->stem_width, 1.0f);
+                const rect<float> previous = p.push_clip(rect<float>(
+                    field_a, slot_top, field_a + field_w + bar, slot_top + slot_h));
+                p.draw_text_run(simd_make_float2(field_a - _input_scroll, baseline),
+                                _input.text(), color);
+                if (_caret_touched) {
+                    _caret_touched = false;
+                    _caret_frame = p.frame_count;
+                }
+                if (((p.frame_count - _caret_frame) & 0x40) == 0) {
+                    const float x = field_a + caret - _input_scroll;
+                    p.fill_rect(rect<float>(x, baseline - p.font->ascender,
+                                            x + bar, baseline - p.font->descender),
+                                color);
+                }
+                p.pop_clip(previous);
+            }
+
+            // Output above it, newest at the bottom.
             for (auto it = _lines.end();
                  (slot_top >= 0) && (it != _lines.begin()); )
             {
                 --it;
                 slot_top -= slot_h;
-                const float baseline = slot_top + slot_h * 0.5f
-                    + (p.font->ascender + p.font->descender) * 0.5f;
-                float2 pen = simd_make_float2(left, baseline);
-                if (first)
-                    pen = p.draw_text_run(pen, "> ", color);
-                const float2 end_pen = p.draw_text_run(pen, *it, color);
-                if (first) {
-                    // Blinking cursor on the input (most recent) line.
-                    p.draw_text_run(end_pen,
-                                    (p.frame_count & 0x40) ? "_" : " ",
-                                    color);
-                    first = false;
-                }
+                p.draw_text_run(simd_make_float2(left, baseline_of(slot_top)),
+                                *it, color);
             }
         }
 

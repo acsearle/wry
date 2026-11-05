@@ -1287,9 +1287,23 @@ namespace wry {
             gc.console_overlay.on_event(key(gui::key::Enter, ""));
             assert(gc.history.back().line == StringView("history 1"));
             assert(gc.history.back().origin == Origin::console);
-            // Up recalls it.
+            assert(gc.console_overlay.input().empty());
+            // Up recalls it, with the cursor at its end.
             gc.console_overlay.on_event(key(gui::key::ArrowUp, ""));
-            assert(gc.console_overlay.lines().back() == StringView("history 1"));
+            assert(gc.console_overlay.input().text() == StringView("history 1"));
+            assert(gc.console_overlay.input().cursor() == 9);
+            // The line is edited at the cursor: Home, Delete x 7 and
+            // typing turn it into "help 1"; Down past the newest entry
+            // clears it.
+            gc.console_overlay.on_event(key(gui::key::Home, ""));
+            for (int i = 0; i != 7; ++i)
+                gc.console_overlay.on_event(key(gui::key::Delete, ""));
+            for (char ch : std::string_view("help"))
+                gc.console_overlay.on_event(key((uint32_t)ch, std::string(1, ch).c_str()));
+            assert(gc.console_overlay.input().text() == StringView("help 1"));
+            assert(gc.console_overlay.input().cursor() == 4);
+            gc.console_overlay.on_event(key(gui::key::ArrowDown, ""));
+            assert(gc.console_overlay.input().empty());
         }
 
         // History is printable as itself.
