@@ -814,39 +814,35 @@ namespace deferred {
     // TODO: Three.js shaders suggest there is a conventional structure for
     //       texture packing like OcclusionRoughnessMetallic <=> RGB
 
-    [[fragment]] FragmentFunctionOutput
-    fragment_function(VertexFunctionOutput in [[stage_in]],
-                               bool front_facing [[front_facing]], //:todo: for debugging
-                               constant MeshUniforms& uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
-                               texture2d<half> emissiveTexture [[texture(AAPLTextureIndexEmissive) ]],
-                               texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]],
-                               texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
-                               texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
-                               texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]],
-                               texture2d<half> occlusionTexture [[texture(AAPLTextureIndexOcclusion)]])
-
+    // The body of the mesh fragment functions below: the textures'
+    // sampler is theirs to choose
+    static FragmentFunctionOutput
+    fragment_body(VertexFunctionOutput in,
+                  bool front_facing,
+                  constant MeshUniforms& uniforms,
+                  texture2d<half> emissiveTexture,
+                  texture2d<half> albedoTexture,
+                  texture2d<half> metallicTexture,
+                  texture2d<half> normalTexture,
+                  texture2d<half> roughnessTexture,
+                  texture2d<half> occlusionTexture,
+                  sampler textureSampler)
     {
-        
-        constexpr sampler trilinearSampler(mag_filter::linear,
-                                           min_filter::linear,
-                                           mip_filter::linear,
-                                           s_address::repeat,
-                                           t_address::repeat);
         
         FragmentFunctionOutput out;
         
-        half4 albedoSample = albedoTexture.sample(trilinearSampler, in.coordinate.xy);
+        half4 albedoSample = albedoTexture.sample(textureSampler, in.coordinate.xy);
         
         // the g-buffer can't support transparency so we just discard on a
         // threshold
         if (albedoSample.a < 0.5f)
             discard_fragment();
         
-        half4 normalSample = normalTexture.sample(trilinearSampler, in.coordinate.xy);
-        half4 roughnessSample = roughnessTexture.sample(trilinearSampler, in.coordinate.xy);
-        half4 metallicSample = metallicTexture.sample(trilinearSampler, in.coordinate.xy);
-        half4 emissiveSample = emissiveTexture.sample(trilinearSampler, in.coordinate.xy);
-        half4 occlusionSample = occlusionTexture.sample(trilinearSampler, in.coordinate.xy);
+        half4 normalSample = normalTexture.sample(textureSampler, in.coordinate.xy);
+        half4 roughnessSample = roughnessTexture.sample(textureSampler, in.coordinate.xy);
+        half4 metallicSample = metallicTexture.sample(textureSampler, in.coordinate.xy);
+        half4 emissiveSample = emissiveTexture.sample(textureSampler, in.coordinate.xy);
+        half4 occlusionSample = occlusionTexture.sample(textureSampler, in.coordinate.xy);
 
         normalSample = normalSample * 2.0h - 1.0h;
 
@@ -869,6 +865,50 @@ namespace deferred {
         
         return out;
         
+    }
+
+    [[fragment]] FragmentFunctionOutput
+    fragment_function(VertexFunctionOutput in [[stage_in]],
+                               bool front_facing [[front_facing]], //:todo: for debugging
+                               constant MeshUniforms& uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                               texture2d<half> emissiveTexture [[texture(AAPLTextureIndexEmissive) ]],
+                               texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]],
+                               texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
+                               texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
+                               texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]],
+                               texture2d<half> occlusionTexture [[texture(AAPLTextureIndexOcclusion)]])
+    {
+        constexpr sampler trilinearSampler(mag_filter::linear,
+                                           min_filter::linear,
+                                           mip_filter::linear,
+                                           s_address::repeat,
+                                           t_address::repeat);
+        return fragment_body(in, front_facing, uniforms, emissiveTexture, albedoTexture,
+                             metallicTexture, normalTexture, roughnessTexture,
+                             occlusionTexture, trilinearSampler);
+    }
+
+    // The world-map quad: one texel per tile, so magnification shows the
+    // tiles as the flat cells they are rather than a blur between them
+    [[fragment]] FragmentFunctionOutput
+    map_fragment_function(VertexFunctionOutput in [[stage_in]],
+                               bool front_facing [[front_facing]],
+                               constant MeshUniforms& uniforms  [[ buffer(AAPLBufferIndexUniforms) ]],
+                               texture2d<half> emissiveTexture [[texture(AAPLTextureIndexEmissive) ]],
+                               texture2d<half> albedoTexture [[texture(AAPLTextureIndexAlbedo) ]],
+                               texture2d<half> metallicTexture [[texture(AAPLTextureIndexMetallic)]],
+                               texture2d<half> normalTexture [[texture(AAPLTextureIndexNormal)]],
+                               texture2d<half> roughnessTexture [[texture(AAPLTextureIndexRoughness)]],
+                               texture2d<half> occlusionTexture [[texture(AAPLTextureIndexOcclusion)]])
+    {
+        constexpr sampler mapSampler(mag_filter::nearest,
+                                     min_filter::linear,
+                                     mip_filter::linear,
+                                     s_address::repeat,
+                                     t_address::repeat);
+        return fragment_body(in, front_facing, uniforms, emissiveTexture, albedoTexture,
+                             metallicTexture, normalTexture, roughnessTexture,
+                             occlusionTexture, mapSampler);
     }
     
     

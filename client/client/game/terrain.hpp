@@ -32,14 +32,15 @@ namespace wry {
     inline constexpr int TERRAIN_KIND_COUNT = 4;
 
     // Representative solid color per kind, as sRGB bytes, indexed by
-    // Terrain.  Used by the world-map builder (1 px/tile) and echoed by
-    // the synthesized water tile in assets/terrain; the in-world tiles
-    // themselves now render from the terrain material atlases.
+    // Terrain: the board's pastels (warm of their names: the sky's light
+    // is blue).  The board (WryWorldScene.mm's WryTerrainUniforms tints)
+    // and the world-map builder (1 px/tile) both ink from here, so the
+    // map reads as the board seen from afar.
     inline constexpr uint8_t TERRAIN_COLOR_SRGB[TERRAIN_KIND_COUNT][4] = {
-        {  58, 110, 165, 255 },   // TERRAIN_WATER
-        { 214, 194, 138, 255 },   // TERRAIN_SAND
-        { 104, 148,  76, 255 },   // TERRAIN_GRASS
-        { 128, 124, 118, 255 },   // TERRAIN_ROCK
+        { 216, 226, 234, 255 },   // TERRAIN_WATER
+        { 244, 232, 200, 255 },   // TERRAIN_SAND
+        { 224, 232, 206, 255 },   // TERRAIN_GRASS
+        { 224, 220, 210, 255 },   // TERRAIN_ROCK
     };
 
     // Which variant column of the terrain material atlas (4 materials by

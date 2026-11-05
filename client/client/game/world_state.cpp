@@ -602,7 +602,13 @@ namespace wry {
         // it.  In render space the focus is at the sub-tile fraction, so
         // the view first brings that to the origin, then rotates the eye
         // onto the Z axis.
-        float3 p = _camera_offset;
+        //
+        // The zoom dollies the camera along its own line of sight: the
+        // offset (and with it the clip planes) scales by 1 / zoom, the
+        // field of view never changes.  Map view keeps the default camera
+        // and scales the map quad instead (map_model_transform).
+        const float dolly = 1.0f / (show_map() ? ZOOM_DEFAULT : _zoom);
+        float3 p = _camera_offset * dolly;
         float2 f = _focus_fraction;
         _uniforms.camera_position_world = make<float4>(p.x + f.x, p.y + f.y, p.z, 1.0f);
         quatf q(simd_normalize(p), simd_make_float3(0, 0, 1));
@@ -610,7 +616,9 @@ namespace wry {
                               float4x4(q) *
                               simd_matrix_translate(-f.x, -f.y, 0.0f);
         
-        simd_float4x4 F = simd_mul(matrix_perspective_right_hand(M_PI_2, 1, 5, 50),
+        simd_float4x4 F = simd_mul(matrix_perspective_right_hand(M_PI_2, 1,
+                                                                 5.0f * dolly,
+                                                                 50.0f * dolly),
                                    simd_matrix_scale(1, 1, -1, 1));
         
         float aspect_ratio = _gui.viewport_size.x / _gui.viewport_size.y;
@@ -898,8 +906,15 @@ namespace wry {
         // direction and lighting stay the world's own
         float2 f = _focus_fraction;
         return simd_mul(simd_matrix_translate(f.x, f.y, 0.0f),
-                        simd_mul(simd_matrix_scale(1.0f / zoom),
+                        simd_mul(simd_matrix_scale(zoom),
                                  simd_matrix_translate(-f.x, -f.y, 0.0f)));
+    }
+
+    void WorldState::set_zoom(float zoom) {
+        if (!std::isfinite(zoom))
+            return;
+        _zoom = std::clamp(zoom, ZOOM_MIN, ZOOM_MAX);
+        _regenerate_uniforms();
     }
 
     // The cursor's ray meets the ground plane here, in render space
@@ -1340,7 +1355,11 @@ namespace wry {
             "toggle-map", "Switch between the world and the map", Category::local,
             std::tuple<>{},
             with_world([](WorldState& ws) {
-                ws._show_map = !ws._show_map;
+                // Classify the current zoom and jump to the other view's
+                // default: from any world zoom to the canonical map, from
+                // any map zoom back to the default world view.
+                ws.set_zoom(ws.show_map() ? WorldState::ZOOM_DEFAULT
+                                          : WorldState::ZOOM_MAP_DEFAULT);
                 return Reply::ok();
             })));
 
@@ -1431,6 +1450,20 @@ namespace wry {
             with_world([](WorldState& ws, int64_t percent) {
                 ws._exposure = (float)std::clamp<int64_t>(percent, 1, 1000) / 100.0f;
                 return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "zoom", "The view's zoom in percent (100 is the default world view, 200 the closest; below 50 is map view, 1/64 of the world view at TAB's default): set it, or with 0 print it", Category::local,
+            std::tuple{
+                Param<Ctx, int64_t>{"percent", "0 to print; else 0.39 (1/256) to 200", 0},
+            },
+            with_world([](WorldState& ws, int64_t percent) {
+                if (percent > 0)
+                    ws.set_zoom((float)percent / 100.0f);
+                char buffer[64];
+                snprintf(buffer, sizeof buffer, "zoom %.4g%% (%s view)",
+                         ws._zoom * 100.0f, ws.show_map() ? "map" : "world");
+                return Reply::ok(String(StringView(buffer)));
             })));
 
         registry.add(make_command<Ctx>(
@@ -1588,7 +1621,7 @@ namespace wry {
                 // No world edits in map mode.  Left places what the hand
                 // holds -- an empty hand places nothing, so erasing is
                 // never an accident -- and right erases.
-                if (_show_map)
+                if (show_map())
                     break;
                 // A click off the ground edits nothing.
                 if (auto tile = cursor_tile()) {
@@ -1604,52 +1637,51 @@ namespace wry {
 
             case WryEventKindScroll: {
                 // Scroll deltas are drawable pixels, 1024 of them to the
-                // tile; the content follows the fingers, so the focus moves
-                // against the delta (image y is down, world y is up).  The
-                // map is drawn at 1/_map_zoom scale, so a map-mode swipe
-                // traverses _map_zoom times the world distance for the
-                // same on-screen travel.  The focus is shared: leaving map
-                // mode keeps you looking at the spot you panned to.
-                float shuttle = (_show_map ? _map_zoom : 1.0f) / 1024.0f;
+                // tile at the default zoom; the content follows the
+                // fingers, so the focus moves against the delta (image y
+                // is down, world y is up).  The view shows 1 / zoom times
+                // the default field, so a swipe traverses 1 / zoom times
+                // the world distance for the same on-screen travel, in
+                // world and map view alike.  The focus is shared: leaving
+                // map view keeps you looking at the spot you panned to.
+                float shuttle = 1.0f / (_zoom * 1024.0f);
                 pan_focus(make<float2>(-e.scroll_delta.x * shuttle,
                                        +e.scroll_delta.y * shuttle));
                 break;
             }
 
             case WryEventKindMagnify: {
-                // Trackpad pinch zooms the map (map mode only; the world
-                // view has no zoom).  Anchored at the cursor: the map point
-                // under the fingers stays put, like every maps app.
+                // Trackpad pinch zooms, in world and map view alike, and
+                // across the boundary between them.  Anchored at the
+                // cursor: the ground point under the fingers stays put,
+                // like every maps app.
                 //
-                // The map is scaled by 1/Z about the focus f (render
-                // space; the renderer's map model transform), so a map
-                // point q lands at (q - f) / Z.  Holding the cursor's
-                // point q fixed on screen across Z -> Z' needs
-                // (q - f) / Z == (q - f') / Z', so
-                //     f' = q - (q - f) * (Z' / Z).
-                if (!_show_map)
-                    break;
-                constexpr float MAP_ZOOM_MIN = 8.0f;    // texels get blocky
-                constexpr float MAP_ZOOM_MAX = 256.0f;  // whole map, small
+                // Either view is render space scaled by Z about the
+                // focus f (literally so for the map quad; a dolly about
+                // the focus comes to the same thing), so a ground point q
+                // lands at (q - f) * Z.  Holding the cursor's point q
+                // fixed on screen across Z -> Z' needs
+                // (q - f) * Z == (q - f') * Z', so
+                //     f' = q - (q - f) * (Z / Z').
                 float factor = 1.0f + e.magnification;
                 if (factor < 0.5f) factor = 0.5f;   // one event is a nudge
                 if (factor > 2.0f) factor = 2.0f;
-                float old_zoom = _map_zoom;
-                _map_zoom = std::clamp(_map_zoom / factor,
-                                       MAP_ZOOM_MIN, MAP_ZOOM_MAX);
-                if (_map_zoom == old_zoom)
-                    break;
+                float old_zoom = _zoom;
 
-                // q: the cursor's ground-plane point under the CURRENT map
-                // transform (same projection cursor_on_ground does for
-                // the world, with the map's model matrix).
-                simd_float4x4 model = map_model_transform(old_zoom);
-                simd_float4x4 A = simd_mul(_uniforms.viewprojection_transform,
-                                           model);
+                // q: the cursor's ground-plane point under the CURRENT
+                // view: the camera's own projection (which carries the
+                // world-view dolly) with the map's model matrix in map
+                // view.
+                simd_float4x4 A = _uniforms.viewprojection_transform;
+                if (show_map())
+                    A = simd_mul(A, map_model_transform(old_zoom));
                 simd_float4 b = simd_make_float4(_mouse.x, _mouse.y, 0.0f, 1.0f);
                 float2 q = project_screen_ray(A, b);
 
-                float s = _map_zoom / old_zoom;
+                set_zoom(old_zoom * factor);
+                if (_zoom == old_zoom)
+                    break;
+                float s = old_zoom / _zoom;
                 pan_focus((q - _focus_fraction) * (1.0f - s));
                 break;
             }
@@ -1685,7 +1717,7 @@ namespace wry {
 
                 // Unbound keys: hex-key writes are world edits, and not in
                 // map mode.
-                if (!_show_map &&
+                if (!show_map() &&
                     ((e.key >= '0' && e.key <= '9') ||
                      (e.key >= 'a' && e.key <= 'f'))) {
                     int64_t k = wry::base36::from_base36_table[e.key];
@@ -1738,7 +1770,7 @@ namespace wry {
             // In map mode the palette is hidden and must be inert too, so the
             // scene stack is skipped while it holds only the palette; a menu
             // or save list pushed above it restores normal dispatch.
-            bool stack_active = !_show_map || (_stack.size() > 1);
+            bool stack_active = !show_map() || (_stack.size() > 1);
             if (!_gui.overlays.dispatch(e))
                 if (!(stack_active && _stack.dispatch(e)))
                     pump_legacy_event(e);
@@ -1800,6 +1832,115 @@ namespace wry {
         ws.pump_legacy_event(e);
         assert((ws._focus_tile == Coordinate{-1, -2}));
         assert(near(ws._focus_fraction.x, 0.0f) && near(ws._focus_fraction.y, 0.0f));
+
+        // Zoomed, the same swipe traverses 1 / zoom as far: a tile per
+        // 2048 pixels at the closest world view, 64 tiles per 1024 in the
+        // canonical map view
+        ws._focus_tile = Coordinate{0, 0};
+        ws._focus_fraction = float2{0.0f, 0.0f};
+        ws.set_zoom(WorldState::ZOOM_MAX);
+        assert(!ws.show_map());
+        e.scroll_delta = float2{2048.0f, -2048.0f};
+        ws.pump_legacy_event(e);
+        assert((ws._focus_tile == Coordinate{-1, -1}));
+        assert(near(ws._focus_fraction.x, 0.0f) && near(ws._focus_fraction.y, 0.0f));
+        ws._focus_tile = Coordinate{0, 0};
+        ws.set_zoom(WorldState::ZOOM_MAP_DEFAULT);
+        assert(ws.show_map());
+        e.scroll_delta = float2{1024.0f, 0.0f};
+        ws.pump_legacy_event(e);
+        assert((ws._focus_tile == Coordinate{-64, 0}));
+        assert(near(ws._focus_fraction.x, 0.0f) && near(ws._focus_fraction.y, 0.0f));
+        ws.set_zoom(WorldState::ZOOM_DEFAULT);
+
+        co_await ws.end_session(std::chrono::milliseconds(200));
+        (void) co_await scope.join();
+        co_return;
+    };
+
+    // The zoom: a dolly in world view (the camera's distance from the
+    // focus scales by 1 / zoom, its direction and field of view do not),
+    // map view below ZOOM_MAP under the default camera, TAB jumping
+    // between the two views' defaults, and the pinch holding the ground
+    // point under the cursor still in either view
+    define_test("world_state_zoom") {
+        coroutine::Nursery scope;
+        GuiContext gc;
+        gc.scope = &scope;
+        gc.viewport_size = float2{1280.0f, 800.0f};
+        WorldState ws(gc);
+        auto near = [](float a, float b) { return std::abs(a - b) < 1e-3f; };
+        auto camera = [&] {
+            float4 c = ws._uniforms.camera_position_world;
+            return make<float3>(c.x - ws._focus_fraction.x, c.y - ws._focus_fraction.y, c.z);
+        };
+        const float3 c1 = camera();
+        assert(ws._zoom == WorldState::ZOOM_DEFAULT && !ws.show_map());
+
+        // Dolly: half the distance at 2x, along the same line
+        ws.set_zoom(2.0f);
+        assert(near(simd_length(camera()), 0.5f * simd_length(c1)));
+        assert(near(simd_length(simd_normalize(camera()) - simd_normalize(c1)), 0.0f));
+        // Clamped at the ends
+        ws.set_zoom(100.0f);
+        assert(ws._zoom == WorldState::ZOOM_MAX);
+        ws.set_zoom(0.0f);
+        assert(ws._zoom == WorldState::ZOOM_MIN && ws.show_map());
+        // The threshold, and the default camera on the map side of it
+        ws.set_zoom(WorldState::ZOOM_MAP);
+        assert(!ws.show_map());
+        assert(near(simd_length(camera()), 2.0f * simd_length(c1)));
+        ws.set_zoom(std::nextafter(WorldState::ZOOM_MAP, 0.0f));
+        assert(ws.show_map());
+        assert(near(simd_length(camera() - c1), 0.0f));
+
+        // TAB classifies and jumps to the other view's default
+        ws.set_zoom(1.7f);
+        (void) gc.issue(command::Origin::binding, StringView("toggle-map"));
+        assert(ws._zoom == WorldState::ZOOM_MAP_DEFAULT && ws.show_map());
+        ws.set_zoom(WorldState::ZOOM_MIN);
+        (void) gc.issue(command::Origin::binding, StringView("toggle-map"));
+        assert(ws._zoom == WorldState::ZOOM_DEFAULT && !ws.show_map());
+
+        // The pinch anchors the ground under the cursor: the world point
+        // there (focus tile plus the render-space point, as the handler
+        // finds it under the current view) is the same before and after
+        ws._mouse = float2{0.3f, -0.45f};
+        auto under_cursor = [&] {
+            simd_float4x4 A = ws._uniforms.viewprojection_transform;
+            if (ws.show_map())
+                A = simd_mul(A, ws.map_model_transform(ws._zoom));
+            float2 q = project_screen_ray(A, make<float4>(ws._mouse, 0.0f, 1.0f));
+            return simd_make_double2((double)ws._focus_tile.x + q.x,
+                                     (double)ws._focus_tile.y + q.y);
+        };
+        auto pinch = [&](float magnification) {
+            gui::Event e{};
+            e.kind = WryEventKindMagnify;
+            e.magnification = magnification;
+            ws.pump_legacy_event(e);
+        };
+        for (float zoom : {1.0f, 1.5f, WorldState::ZOOM_MAP_DEFAULT, 0.51f}) {
+            for (float m : {0.4f, -0.3f, -0.05f}) {
+                ws._focus_tile = Coordinate{5, -3};
+                ws._focus_fraction = float2{0.0f, 0.0f};
+                ws.set_zoom(zoom);
+                simd_double2 before = under_cursor();
+                pinch(m);
+                assert(ws._zoom != zoom);
+                simd_double2 after = under_cursor();
+                assert(simd_length(after - before) < 1e-3);
+            }
+        }
+        // ... and across the boundary: from the world side into map view
+        ws._focus_tile = Coordinate{5, -3};
+        ws._focus_fraction = float2{0.0f, 0.0f};
+        ws.set_zoom(0.55f);
+        assert(!ws.show_map());
+        simd_double2 before = under_cursor();
+        pinch(-0.2f);
+        assert(ws.show_map());
+        assert(simd_length(under_cursor() - before) < 1e-3);
 
         co_await ws.end_session(std::chrono::milliseconds(200));
         (void) co_await scope.join();
@@ -1919,13 +2060,15 @@ namespace wry {
         }
         assert(last_issued_starts_with("write "));
 
-        // Map mode: neither button edits.
-        ws._show_map = true;
+        // Map view: neither button edits.
+        ws.set_zoom(WorldState::ZOOM_MAP_DEFAULT);
+        assert(ws.show_map());
         issued = gc.history.size();
         ws.pump_legacy_event(mouse_up(gui::MouseButton::Left));
         ws.pump_legacy_event(mouse_up(gui::MouseButton::Right));
         assert(gc.history.size() == issued);
-        ws._show_map = false;
+        ws.set_zoom(WorldState::ZOOM_DEFAULT);
+        assert(!ws.show_map());
 
         // Escape: the first drops the hand without opening the menu, the
         // second opens the menu.

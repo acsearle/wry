@@ -1135,6 +1135,20 @@ namespace wry {
                 return Reply::ok();
             }));
 
+        registry.add(make_command<Ctx>(
+            "magnify", "Inject a trackpad pinch at the last injected pointer position: the magnification in percent (+100 doubles, -50 halves)", Category::local,
+            std::tuple{
+                Param<Ctx, int64_t>{"percent", "fractional change, times 100"},
+            },
+            [](Ctx& c, int64_t percent) {
+                gui::Event e{};
+                e.kind = WryEventKindMagnify;
+                e.location = c.gui.injected_pointer_pt;
+                e.magnification = (float)percent / 100.0f;
+                c.gui.events.push(e);
+                return Reply::ok();
+            }));
+
         // ---- Widget queries.
 
         registry.add(make_command<Ctx>(

@@ -172,22 +172,38 @@ namespace wry {
         // camera for the new fraction
         void pan_focus(float2 delta);
 
-        // Map mode's model transform: render space scaled by 1/zoom about
+        // Map view's model transform: render space scaled by `zoom` about
         // the focus (the renderer draws the map quad through it, and the
         // pinch handler anchors its zoom with it)
         simd_float4x4 map_model_transform(float zoom) const;
 
-        // Map mode (TAB): the renderer draws the world-map quad instead of
-        // the world, the palette hides, scroll pans at the map scale, and
-        // world edits are suppressed.  The minimap shows whenever this is
-        // off.
-        bool _show_map = false;
-
-        // Map-mode zoom: how many world units span one normal-view unit
-        // (64 = the canonical map scale; pinch varies it, clamped).  Kept
-        // across TAB toggles.  Scroll-pan speed follows it so a swipe
-        // always traverses what it visually crosses.
-        float _map_zoom = 64.0f;
+        // The zoom: the view's magnification relative to the default.
+        // A separate scalar, applied to the camera every time the
+        // uniforms are regenerated, never accumulated into a matrix.
+        //
+        // In world view (zoom >= ZOOM_MAP) the camera keeps its field of
+        // view and sits at _camera_offset / zoom from the focus: dolly,
+        // not telephoto, so zooming out never distorts.  Below ZOOM_MAP
+        // the world gives way to map view: the renderer draws the world-
+        // map quad scaled by zoom about the focus under the default
+        // camera (so the view direction and lighting stay the world's
+        // own), the palette hides, and world edits are suppressed.  The
+        // two meet exactly at ZOOM_MAP (a dolly about the focus is a
+        // similarity transform), so pinching across it is seamless.  The
+        // minimap shows whenever map view is off.
+        //
+        // Pinch varies it, anchored at the cursor; TAB classifies it as
+        // world or map and jumps to the other's default; scroll-pan
+        // speed follows it so a swipe always traverses what it visually
+        // crosses.
+        static constexpr float ZOOM_DEFAULT = 1.0f;
+        static constexpr float ZOOM_MAX = 2.0f;          // closest world view
+        static constexpr float ZOOM_MAP = 0.5f;          // below: map view
+        static constexpr float ZOOM_MAP_DEFAULT = 1.0f / 64.0f;  // TAB's map
+        static constexpr float ZOOM_MIN = 1.0f / 256.0f; // whole map, small
+        float _zoom = ZOOM_DEFAULT;
+        bool show_map() const { return _zoom < ZOOM_MAP; }
+        void set_zoom(float zoom);
 
         // World-map pipeline: ~1 Hz background rebuild of the
         // one-pixel-per-tile map image, double-buffered into textures on

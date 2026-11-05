@@ -77,6 +77,7 @@
     // deferred physically-based lighting render pass
     
     id <MTLRenderPipelineState> _deferredGBufferRenderPipelineState;
+    id <MTLRenderPipelineState> _mapGBufferRenderPipelineState;  // the map quad: nearest magnification
     id <MTLRenderPipelineState> _deferredLinesRenderPipelineState;
     id <MTLRenderPipelineState> _deferredPointsRenderPipelineState;
 
@@ -558,6 +559,10 @@
             descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::fragment_function"];
             descriptor.label = @"Deferred G-buffer";
             _deferredGBufferRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
+
+            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::map_fragment_function"];
+            descriptor.label = @"Deferred G-buffer (world map)";
+            _mapGBufferRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
 
             descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::symbol_vertex_function"];
             descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::symbol_fragment_function"];
@@ -1303,7 +1308,7 @@
     // on below the edge), and on it a rounded square per opcode, one gap
     // apart, each under its glyph from _symbols.  One instanced draw with
     // _symbols bound; the untextured quads ignore it.
-    if (!_model->_show_map) {
+    if (!_model->show_map()) {
         auto& palette = _model->_palette_overlay;
         auto& m = palette.controls()._payload;
         const float vw = _model->_gui.viewport_size.x;
@@ -1447,7 +1452,7 @@
     // world rect (so panning past the edge shows plate, not smeared or
     // wrapped texels).  Drawn before the atlas commit, so all sprite-atlas
     // GUI (log, console, menus) stays on top.
-    if (!_model->_show_map) {
+    if (!_model->show_map()) {
         using wry::WorldMap;
 
         const float SIZE = 512.0f;    // drawable px; 2 px per map texel
@@ -1593,7 +1598,7 @@
         delete built;
     }
 
-    const bool show_map = _model->_show_map;
+    const bool show_map = _model->show_map();
 
     // Another atlas asked for (the `atlas` command): swap it in before
     // anything samples the symbols this frame
@@ -1712,11 +1717,11 @@
         // rect runs [X0 - 0.5, X0 + EXTENT - 0.5) per axis and uv 0..1
         // lands texel centers on tile centers.
         //
-        // The zoom (x64 canonically; pinch varies _map_zoom) is a model
-        // transform: scale the quad by 1/zoom about the camera focus,
-        // leaving the camera itself alone, so the view direction and
-        // lighting are the world's own.
-        map_instanced.model_transform = _model->map_model_transform(_model->_map_zoom);
+        // The zoom (1/64 canonically; pinch varies it, below ZOOM_MAP) is
+        // a model transform: scale the quad by the zoom about the camera
+        // focus, leaving the camera itself at its default, so the view
+        // direction and lighting are the world's own.
+        map_instanced.model_transform = _model->map_model_transform(_model->_zoom);
         map_instanced.inverse_transpose_model_transform
             = simd_inverse(simd_transpose(map_instanced.model_transform));
 
@@ -1981,7 +1986,6 @@
                 // colour through, as tall as it is wide, standing on the
                 // board with its apex to the heading.  The truck mesh
                 // (_truck_mesh) is no longer instanced.
-                const float token_width = _model->_token_width;   // the glyph's: 2 * TOKEN_A / 24
                 {
                     const float thickness = _model->_token_height * texels_per_unit;
                     simd_float2 heading = simd_length(dx1) > 1e-4f ? simd_normalize(dx1) : make<float2>(0.0f, 1.0f);
@@ -2189,11 +2193,12 @@
                     simd_float4 c = linear(r, g, b);
                     return simd_mix(make<float4>(1.0f, 1.0f, 1.0f, 1.0f), c, make<float4>(tint, tint, tint, 0.0f));
                 };
-                // (warm of their names: the sky's light is blue)
-                board.tint[wry::TERRAIN_WATER] = pastel(216, 226, 234);
-                board.tint[wry::TERRAIN_SAND]  = pastel(244, 232, 200);
-                board.tint[wry::TERRAIN_GRASS] = pastel(224, 232, 206);
-                board.tint[wry::TERRAIN_ROCK]  = pastel(224, 220, 210);
+                // The pastels are terrain.hpp's TERRAIN_COLOR_SRGB, so
+                // the world map (world_map.cpp) is inked the same
+                for (int k = 0; k != wry::TERRAIN_KIND_COUNT; ++k) {
+                    const uint8_t* c = wry::TERRAIN_COLOR_SRGB[k];
+                    board.tint[k] = pastel(c[0], c[1], c[2]);
+                }
                 // x: line opacity, y: arm (fraction of an edge drawn from
                 // each corner), z: mark opacity, w: share of cells marked
                 const float la = _model->_board_line_alpha, ma = _model->_board_mark_alpha;
@@ -2459,7 +2464,9 @@
                 if (show_map) {
 
                     // Map mode: the world-map quad alone, lit by the same
-                    // deferred pipeline as the world it stands in for.
+                    // deferred pipeline as the world it stands in for,
+                    // its texels magnified as flat cells.
+                    [encoder setRenderPipelineState:_mapGBufferRenderPipelineState];
                     [encoder setFragmentTexture:_mapTexture[_mapFrontIndex] atIndex:AAPLTextureIndexAlbedo];
                     [encoder setVertexBuffer:map_vertices.buffer offset:map_vertices.offset atIndex:AAPLBufferIndexVertices];
                     [encoder setVertexBytes:&map_instanced
@@ -2470,6 +2477,7 @@
                                          indexType:MTLIndexTypeUInt32
                                        indexBuffer:map_indices.buffer
                                  indexBufferOffset:map_indices.offset];
+                    [encoder setRenderPipelineState:_deferredGBufferRenderPipelineState];
 
                 } else {
 
