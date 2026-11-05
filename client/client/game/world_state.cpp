@@ -1383,7 +1383,8 @@ namespace wry {
         registry.add(make_command<Ctx>(
             "ssao", "Screen-space ambient occlusion: off, gtao or luft, with -show for the factor itself; then a radius in texels (128 per world unit), a strength in percent, and for GTAO the slices and steps per side and whether the taps read the depth pyramid; then the blur kernel and its taps per side", Category::local,
             std::tuple{
-                Param<Ctx, String>{"mode", "off, gtao, luft, gtao-show or luft-show"},
+                Param<Ctx, String>{"mode", "off, gtao, luft, gtao-show or luft-show", {}, nullptr,
+                                   {"off", "gtao", "luft", "gtao-show", "luft-show"}},
                 Param<Ctx, int64_t>{"radius", "texels, 128 per world unit", 64},
                 Param<Ctx, int64_t>{"strength", "percent; 100 = as estimated", 100},
                 Param<Ctx, int64_t>{"slices", "GTAO slice directions per pixel, 1 to 16", 3},

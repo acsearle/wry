@@ -620,6 +620,10 @@ namespace wry {
         }
     }
 
+    void GuiContext::persist_console_history() {
+        console_overlay.history().attach(settings_paths.directory / "console_history.txt");
+    }
+
     void GuiContext::_service_control_socket() {
         if (!control_socket)
             return;
@@ -960,7 +964,7 @@ namespace wry {
             "the process as soon as this reply is sent, skipping the shutdown drain",
             Category::session,
             std::tuple{
-                Param<Ctx, String>{"how", "clean or fast", String("clean")},
+                Param<Ctx, String>{"how", "clean or fast", String("clean"), nullptr, {"clean", "fast"}},
             },
             [](Ctx& c, String const& how) {
                 const bool fast = how == StringView("fast");
@@ -1049,7 +1053,8 @@ namespace wry {
             "key", "Inject a keystroke: press (down then up), down, or up", Category::local,
             std::tuple{
                 Param<Ctx, gui::KeyCombo>{"combo", "the key and modifiers"},
-                Param<Ctx, String>{"action", "press, down or up", String("press")},
+                Param<Ctx, String>{"action", "press, down or up", String("press"), nullptr,
+                                   {"press", "down", "up"}},
             },
             [](Ctx& c, gui::KeyCombo const& combo, String const& action) {
                 const bool down = action == StringView("press") || action == StringView("down");
@@ -1110,7 +1115,8 @@ namespace wry {
             std::tuple{
                 Param<Ctx, int64_t>{"x", "points from the left"},
                 Param<Ctx, int64_t>{"y", "points from the top"},
-                Param<Ctx, String>{"button", "left, right or middle", String("left")},
+                Param<Ctx, String>{"button", "left, right or middle", String("left"), nullptr,
+                                   {"left", "right", "middle"}},
             },
             [](Ctx& c, int64_t x, int64_t y, String const& name) {
                 auto button = button_from_name(name);
@@ -1293,8 +1299,9 @@ namespace wry {
             assert(gc.console_overlay.input().text() == StringView("history 1"));
             assert(gc.console_overlay.input().cursor() == 9);
             // The line is edited at the cursor: Home, Delete x 7 and
-            // typing turn it into "help 1"; Down past the newest entry
-            // clears it.
+            // typing turn it into "help 1".  An edited line is no longer
+            // a history entry on show but a draft, with nothing newer
+            // than it: Down leaves it be.
             gc.console_overlay.on_event(key(gui::key::Home, ""));
             for (int i = 0; i != 7; ++i)
                 gc.console_overlay.on_event(key(gui::key::Delete, ""));
@@ -1303,13 +1310,180 @@ namespace wry {
             assert(gc.console_overlay.input().text() == StringView("help 1"));
             assert(gc.console_overlay.input().cursor() == 4);
             gc.console_overlay.on_event(key(gui::key::ArrowDown, ""));
-            assert(gc.console_overlay.input().empty());
+            assert(gc.console_overlay.input().text() == StringView("help 1"));
         }
 
         // History is printable as itself.
         auto h = gc.issue(Origin::console, "history 2");
         assert(h.reply.status == Reply::OK);
 
+        co_return;
+    };
+
+    // The console around its line editor: history walks, Tab, the grey
+    // suggestion, and paste.
+    define_test("gui_context_console_editing") {
+        GuiContext gc;
+        gc.issue(Origin::binding, "toggle-console");
+        auto& console = gc.console_overlay;
+        assert(console.active());
+
+        using gui::Modifiers;
+        auto press = [&](uint32_t k, uint16_t mods = 0, const char* text = "") {
+            gui::Event e{};
+            e.kind = WryEventKindKeyDown;
+            e.key = k;
+            e.mods.bits = mods;
+            std::strncpy(e.text, text, sizeof(e.text) - 1);
+            const bool consumed = console.on_event(e);
+            assert(consumed);
+            (void) consumed;
+        };
+        auto type = [&](std::string_view text) {
+            for (char ch : text)
+                press((uint32_t)ch, 0, std::string(1, ch).c_str());
+        };
+        auto shows = [&](const char* text) {
+            return console.input().text() == StringView(text);
+        };
+        auto clear = [&] {
+            press('a', Modifiers::Cmd, "a");
+            press(gui::key::Backspace);
+            assert(console.input().empty());
+        };
+
+        // ---- Tab.  As far as the candidates agree, then the list.
+        type("tog");
+        press(gui::key::Tab);
+        assert(shows("toggle-"));
+        const size_t before_list = console.lines().size();
+        press(gui::key::Tab);
+        assert(shows("toggle-") && console.lines().size() > before_list);
+        // A single candidate completes whole, with a space after it.
+        type("con");
+        press(gui::key::Tab);
+        assert(shows("toggle-console "));
+        clear();
+        // An argument: `help` takes a command, `quit` one of two words;
+        // letter case is corrected.
+        type("help TOGGLE-CON");
+        press(gui::key::Tab);
+        assert(shows("help toggle-console "));
+        clear();
+        type("quit ");
+        const size_t before_words = console.lines().size();
+        press(gui::key::Tab);
+        assert(shows("quit ") && console.lines().size() == before_words + 1);
+        assert(console.lines().back() == StringView("clean  fast"));
+        type("f");
+        press(gui::key::Tab);
+        assert(shows("quit fast "));
+        clear();
+        // No candidates: the command's usage, once.
+        type("frame ");
+        const size_t before_usage = console.lines().size();
+        press(gui::key::Tab);
+        press(gui::key::Tab);
+        assert(shows("frame ") && console.lines().size() == before_usage + 1);
+        clear();
+        // Mid-line: only the word before the cursor is replaced, and no
+        // space is added where one already follows.
+        type("hel toggle-console");
+        press(gui::key::Home);
+        press(gui::key::ArrowRight, Modifiers::Alt);
+        press(gui::key::Tab);
+        assert(shows("help toggle-console") && console.input().cursor() == 4);
+        // ... and the completion is one undo step.
+        press('z', Modifiers::Cmd, "z");
+        assert(shows("hel toggle-console"));
+        clear();
+
+        // ---- The suggestion, from completion: what Tab would add.  As
+        // far as several candidates agree ...
+        assert(console.suggestion().empty());
+        type("tog");
+        assert(console.suggestion() == StringView("gle-"));
+        press(gui::key::ArrowRight);
+        assert(shows("toggle-") && console.suggestion().empty());
+        // ... but never a correction of what was typed.
+        clear();
+        type("TOG");
+        assert(console.suggestion().empty());
+        clear();
+        // The whole word where only one completes the line.
+        type("hi");
+        assert(console.suggestion() == StringView("story"));
+        // Not while the cursor is inside the line, nor with a selection.
+        press(gui::key::ArrowLeft);
+        assert(console.suggestion().empty());
+        press(gui::key::ArrowRight);
+        assert(console.suggestion() == StringView("story"));
+        press(gui::key::ArrowLeft, Modifiers::Shift);
+        assert(console.suggestion().empty());
+        press(gui::key::ArrowRight);
+        // Right at the end of the line takes it.
+        press(gui::key::ArrowRight);
+        assert(shows("history") && console.suggestion().empty());
+        type(" 1");
+        press(gui::key::Enter);
+        assert(gc.history.back().line == StringView("history 1"));
+        type("help help");
+        press(gui::key::Enter);
+        assert(console.history().entries().size() == 2);
+
+        // ---- The suggestion, from history: the newest line that began
+        // this way.  Alt-Right takes a word of it, End the rest.
+        type("he");
+        assert(console.suggestion() == StringView("lp help"));
+        press(gui::key::ArrowRight, Modifiers::Alt);
+        assert(shows("help") && console.suggestion() == StringView(" help"));
+        press(gui::key::End);
+        assert(shows("help help"));
+        clear();
+
+        // ---- Walking the history.  The typed line is the prefix
+        // searched for, and comes back at the end of the walk.
+        type("h");
+        press(gui::key::ArrowUp);
+        assert(shows("help help") && console.input().cursor() == 9);
+        press(gui::key::ArrowUp);
+        assert(shows("history 1"));
+        press(gui::key::ArrowUp);
+        assert(shows("history 1"));
+        press('n', Modifiers::Ctrl);
+        assert(shows("help help"));
+        press(gui::key::ArrowDown);
+        assert(shows("h"));
+        type("i");
+        press('p', Modifiers::Ctrl);
+        assert(shows("history 1"));
+        // A recalled line that is edited and submitted is a new entry;
+        // the old one stands.
+        press(gui::key::Backspace);
+        type("2");
+        press(gui::key::Enter);
+        assert(console.history().entries().size() == 3);
+        assert(console.history().entries()[0] == StringView("history 1"));
+        assert(console.history().entries()[2] == StringView("history 2"));
+
+        // ---- Paste.  The clipboard is the context's own until a host
+        // replaces it.  Each line break submits; the rest stays.
+        const size_t issued = gc.history.size();
+        gc.clipboard.write("p help\r\n\n# a comment\nhistory 3\nhistory");
+        type("hel");
+        press('v', Modifiers::Cmd, "v");
+        assert(gc.history.size() == issued + 2);
+        assert(gc.history[issued].line == StringView("help \"help\""));
+        assert(gc.history.back().line == StringView("history 3"));
+        assert(shows("history"));
+        // Copy and cut go to the same clipboard.
+        press('a', Modifiers::Cmd, "a");
+        press('x', Modifiers::Cmd, "x");
+        assert(console.input().empty());
+        assert(gc.clipboard.read() == StringView("history"));
+
+        (void) shows; (void) before_list; (void) before_words;
+        (void) before_usage; (void) issued;
         co_return;
     };
 

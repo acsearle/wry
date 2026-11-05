@@ -120,6 +120,11 @@ namespace wry {
         gui::LogOverlay log_overlay;
         gui::ConsoleOverlay console_overlay;
 
+        // Where copy, cut and paste go.  Private to the process until a
+        // windowed host points it at the system clipboard
+        // (render/gui_clipboard.hpp).
+        gui::Clipboard clipboard;
+
         // Settings UI, app-tier so the same overlays serve the main-menu
         // scene and the in-game menu.  Pushed dynamically onto `overlays`
         // by open_settings() / the KEY BINDINGS button; popped via
@@ -216,6 +221,12 @@ namespace wry {
         // settings paths, warnings to the log.  After `scope` is set and
         // the cwd is the assets directory
         void configure_from_arguments(int argc, const char* const* argv);
+
+        // Keep what is typed into the console across launches, in
+        // console_history.txt beside settings.json.  For a host a person
+        // types into: driven runs and tests do not call it, so scripts do
+        // not write the user's history.
+        void persist_console_history();
         // Block for up to `timeout` until there is input to frame on: a
         // line on the control socket, or news on the world's connection
         // (finalized steps, donation requests, a save transfer), taking
@@ -293,8 +304,17 @@ namespace wry {
                     (void) issue(origin, line);
             });
             console_overlay.set_cancel([this] { cancel(console_source); });
+            console_overlay.set_complete([this](StringView before) {
+                return command::complete(commands, before);
+            });
+            console_overlay.set_clipboard(&clipboard);
             register_app_commands(commands);
             register_world_commands(commands);
+            // `help` takes a command's name: complete it from the names.
+            for (auto& spec : commands._commands)
+                if (spec.name == StringView("help"))
+                    for (auto const& other : commands._commands)
+                        spec.params[0].words.push_back(other.name);
             settings_overlay.set_context(this);
             key_bindings_overlay.set_context(this);
             overlays.push(&log_overlay);       // bottom: floating status text

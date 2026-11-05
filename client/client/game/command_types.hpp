@@ -73,6 +73,7 @@ namespace wry::command {
         static constexpr const char* example = "OPCODE::SWAP (or bare SWAP)";
         static std::expected<OPCODE, Error> read(Node const& node);
         static void print(String& out, OPCODE const& x);
+        static std::vector<String> words();
     };
 
     template<> struct Type<MATTER> {
@@ -80,6 +81,7 @@ namespace wry::command {
         static constexpr const char* example = "MATTER::SHIPPING_CONTAINER";
         static std::expected<MATTER, Error> read(Node const& node);
         static void print(String& out, MATTER const& x);
+        static std::vector<String> words();
     };
 
     // Term arguments are rooted while bound (commands.md section 6: the
@@ -97,6 +99,7 @@ namespace wry::command {
         static std::expected<Term, Error> read(Node const& node);
         static void print(String& out, Term const& x);
         static bool printable(Term const& x);
+        static std::vector<String> words();
     };
 
     // The action codec (multiplayer.md section 7): an action's canonical

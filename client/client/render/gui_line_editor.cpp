@@ -47,6 +47,16 @@ namespace wry::gui {
             return *utf8::iterator(s.chars.begin() + i);
         }
 
+        // The nearest boundary at or before byte offset i, clamped to the
+        // line.
+        std::size_t snap(StringView s, std::size_t i) {
+            i = std::min(i, (std::size_t)s.chars.size());
+            while (i > 0 && i < s.chars.size()
+                   && ((unsigned char)s.chars.begin()[i] & 0xC0) == 0x80)
+                --i;
+            return i;
+        }
+
         // ---- Runs.
         //
         // Word motion in both directions is "cross the separators, then
@@ -104,34 +114,42 @@ namespace wry::gui {
         return StringView(trusted, _text.chars.begin() + _cursor, _text.chars.end());
     }
 
-    void LineEditor::set(StringView text) {
-        clear();
-        insert(text);
+    StringView LineEditor::selected() const {
+        return StringView(trusted,
+                          _text.chars.begin() + selection_first(),
+                          _text.chars.begin() + selection_last());
     }
 
-    String LineEditor::take() {
-        String line(std::move(_text));
-        clear();
-        return line;
-    }
+    // ---- Whole-line operations.
 
-    void LineEditor::clear() {
-        _text = String();
-        _cursor = 0;
-        _chaining = false;
-    }
-
-    void LineEditor::insert(StringView text) {
-        // Filter into a copy first: `text` may view our own storage.
+    void LineEditor::_reset(StringView text) {
         String clean;
         for (char32_t c : text)
             if (!is_control(c))
                 clean.push_back(c);
-        _text.chars.insert(_text.chars.begin() + _cursor,
-                           clean.chars.begin(), clean.chars.end());
-        _cursor += clean.chars.size();
+        _text = std::move(clean);
+        _cursor = _anchor = _text.chars.size();
         _chaining = false;
+        _undo.clear();
+        _redo.clear();
+        _last_change = Change::none;
     }
+
+    void LineEditor::set(StringView text) {
+        _reset(text);
+    }
+
+    String LineEditor::take() {
+        String line(std::move(_text));
+        _reset(StringView());
+        return line;
+    }
+
+    void LineEditor::clear() {
+        _reset(StringView());
+    }
+
+    // ---- Motion.
 
     std::size_t LineEditor::left_of_cursor(Unit unit) const {
         switch (unit) {
@@ -162,6 +180,142 @@ namespace wry::gui {
         return _cursor;
     }
 
+    void LineEditor::move_left(Unit unit, bool extend) {
+        if (!extend && has_selection()) {
+            _cursor = selection_first();
+            if (unit != Unit::character)
+                _cursor = left_of_cursor(unit);
+        } else {
+            _cursor = left_of_cursor(unit);
+        }
+        if (!extend)
+            _anchor = _cursor;
+        _chaining = false;
+        _last_change = Change::none;
+    }
+
+    void LineEditor::move_right(Unit unit, bool extend) {
+        if (!extend && has_selection()) {
+            _cursor = selection_last();
+            if (unit != Unit::character)
+                _cursor = right_of_cursor(unit);
+        } else {
+            _cursor = right_of_cursor(unit);
+        }
+        if (!extend)
+            _anchor = _cursor;
+        _chaining = false;
+        _last_change = Change::none;
+    }
+
+    void LineEditor::move_to(std::size_t offset, bool extend) {
+        _cursor = snap(_text, offset);
+        if (!extend)
+            _anchor = _cursor;
+        _chaining = false;
+        _last_change = Change::none;
+    }
+
+    void LineEditor::select_all() {
+        _anchor = 0;
+        _cursor = _text.chars.size();
+        _chaining = false;
+        _last_change = Change::none;
+    }
+
+    void LineEditor::select_word_at(std::size_t offset) {
+        const std::size_t n = _text.chars.size();
+        std::size_t first = snap(_text, offset);
+        if (n == 0)
+            return;
+        // The character clicked is the one after the offset; at the end
+        // of the line, the last one.
+        if (first == n)
+            first = step_left(_text, first);
+        std::size_t last = step_right(_text, first);
+        const char32_t c = code_point_at(_text, first);
+        // A word or a run of spaces grows to the whole run; any other
+        // mark stands alone.
+        auto grow = [&](auto in_run) {
+            while (first > 0 && in_run(code_point_at(_text, step_left(_text, first))))
+                first = step_left(_text, first);
+            while (last < n && in_run(code_point_at(_text, last)))
+                last = step_right(_text, last);
+        };
+        if (in_word(c))
+            grow(in_word);
+        else if (c == U' ')
+            grow([](char32_t x) { return x == U' '; });
+        _anchor = first;
+        _cursor = last;
+        _chaining = false;
+        _last_change = Change::none;
+    }
+
+    // ---- Editing.
+
+    // Remember the present state as one to undo back to, unless this
+    // change continues the previous one.  Any new change invalidates
+    // what was undone.
+    void LineEditor::_checkpoint(Change kind, bool joins_previous) {
+        if (!(joins_previous && kind == _last_change)) {
+            // Bounded: the oldest states go first.
+            if (_undo.size() == 256)
+                _undo.erase(_undo.begin());
+            _undo.push_back(State{_text, _cursor, _anchor});
+        }
+        _redo.clear();
+        _last_change = kind;
+    }
+
+    // Replace [first, last) by `text`, which holds no control characters
+    // and is not a view of _text.
+    void LineEditor::_splice(std::size_t first, std::size_t last, StringView text) {
+        assert(first <= last && last <= _text.chars.size());
+        _text.chars.erase(_text.chars.begin() + first, _text.chars.begin() + last);
+        _text.chars.insert(_text.chars.begin() + first,
+                           text.chars.begin(), text.chars.end());
+        _cursor = _anchor = first + text.chars.size();
+    }
+
+    void LineEditor::insert(StringView text) {
+        // Filter into a copy first: `text` may view our own storage.
+        String clean;
+        std::size_t count = 0;
+        char32_t typed = 0;
+        for (char32_t c : text) {
+            if (!is_control(c)) {
+                clean.push_back(c);
+                typed = c;
+                ++count;
+            }
+        }
+        if (clean.empty() && !has_selection())
+            return;
+        // One character over no selection is typing.  A run of typing is
+        // one undo step, until a word starts after a space.
+        if (count == 1 && !has_selection()) {
+            const bool starts_word = _typed_space && typed != U' ';
+            _checkpoint(Change::typing, !starts_word);
+            _typed_space = (typed == U' ');
+        } else {
+            _checkpoint(Change::other, false);
+        }
+        _splice(selection_first(), selection_last(), clean);
+        _chaining = false;
+    }
+
+    void LineEditor::replace(std::size_t first, std::size_t last, StringView text) {
+        assert(snap(_text, first) == first && snap(_text, last) == last);
+        String clean;
+        for (char32_t c : text)
+            if (!is_control(c))
+                clean.push_back(c);
+        _checkpoint(Change::other, false);
+        _splice(first, last, clean);
+        _chaining = false;
+    }
+
     void LineEditor::_kill(std::size_t first, std::size_t last, bool leftward) {
         assert(first <= _cursor && _cursor <= last);
         if (first == last)
@@ -173,30 +327,47 @@ namespace wry::gui {
         const char* a = _text.chars.begin() + first;
         const char* b = _text.chars.begin() + last;
         _killed.chars.insert(leftward ? _killed.chars.begin() : _killed.chars.end(), a, b);
-        _text.chars.erase(a, b);
-        _cursor = first;
+        _checkpoint(Change::other, false);
+        _splice(first, last, StringView());
         _chaining = true;
     }
 
     void LineEditor::erase_left(Unit unit) {
+        if (has_selection()) {
+            _checkpoint(Change::other, false);
+            _splice(selection_first(), selection_last(), StringView());
+            _chaining = false;
+            return;
+        }
         const std::size_t first = left_of_cursor(unit);
         if (unit != Unit::character) {
             _kill(first, _cursor, true);
             return;
         }
-        _text.chars.erase(_text.chars.begin() + first, _text.chars.begin() + _cursor);
-        _cursor = first;
         _chaining = false;
+        if (first == _cursor)
+            return;
+        _checkpoint(Change::erasing, true);
+        _splice(first, _cursor, StringView());
     }
 
     void LineEditor::erase_right(Unit unit) {
+        if (has_selection()) {
+            _checkpoint(Change::other, false);
+            _splice(selection_first(), selection_last(), StringView());
+            _chaining = false;
+            return;
+        }
         const std::size_t last = right_of_cursor(unit);
         if (unit != Unit::character) {
             _kill(_cursor, last, false);
             return;
         }
-        _text.chars.erase(_text.chars.begin() + _cursor, _text.chars.begin() + last);
         _chaining = false;
+        if (last == _cursor)
+            return;
+        _checkpoint(Change::erasing, true);
+        _splice(_cursor, last, StringView());
     }
 
     void LineEditor::yank() {
@@ -205,26 +376,85 @@ namespace wry::gui {
         insert(_killed);
     }
 
+    // ---- Undo.
+
+    bool LineEditor::undo() {
+        if (_undo.empty())
+            return false;
+        _redo.push_back(State{std::move(_text), _cursor, _anchor});
+        State& state = _undo.back();
+        _text = std::move(state.text);
+        _cursor = state.cursor;
+        _anchor = state.anchor;
+        _undo.pop_back();
+        _chaining = false;
+        _last_change = Change::none;
+        return true;
+    }
+
+    bool LineEditor::redo() {
+        if (_redo.empty())
+            return false;
+        _undo.push_back(State{std::move(_text), _cursor, _anchor});
+        State& state = _redo.back();
+        _text = std::move(state.text);
+        _cursor = state.cursor;
+        _anchor = state.anchor;
+        _redo.pop_back();
+        _chaining = false;
+        _last_change = Change::none;
+        return true;
+    }
+
+    // ---- Clipboard.
+
+    void LineEditor::copy() const {
+        if (_clipboard && _clipboard->write && has_selection())
+            _clipboard->write(selected());
+    }
+
+    void LineEditor::cut() {
+        if (!_clipboard || !_clipboard->write || !has_selection())
+            return;
+        _clipboard->write(selected());
+        _checkpoint(Change::other, false);
+        _splice(selection_first(), selection_last(), StringView());
+        _chaining = false;
+    }
+
+    void LineEditor::paste() {
+        if (!_clipboard || !_clipboard->read)
+            return;
+        String flat;
+        for (char32_t c : _clipboard->read())
+            flat.push_back((c == U'\n' || c == U'\r' || c == U'\t') ? U' ' : c);
+        insert(flat);
+    }
+
+    // ---- Keys.
+
     bool LineEditor::on_key(Event const& e) {
         if (e.kind != WryEventKindKeyDown)
             return false;
 
+        const bool shift = e.mods.has(Modifiers::Shift);
         const bool ctrl = e.mods.has(Modifiers::Ctrl);
         const bool alt = e.mods.has(Modifiers::Alt);
         const bool cmd = e.mods.has(Modifiers::Cmd);
 
-        // The modifier on an arrow or an erase key picks the unit.
+        // The modifier on an arrow or an erase key picks the unit; Shift
+        // on a motion key extends the selection.
         const Unit unit = cmd ? Unit::line
                         : (alt || ctrl) ? Unit::word
                         : Unit::character;
 
         switch (e.key) {
-            case key::ArrowLeft:  move_left(unit);        return true;
-            case key::ArrowRight: move_right(unit);       return true;
-            case key::Home:       move_left(Unit::line);  return true;
-            case key::End:        move_right(Unit::line); return true;
-            case key::Backspace:  erase_left(unit);       return true;
-            case key::Delete:     erase_right(unit);      return true;
+            case key::ArrowLeft:  move_left(unit, shift);        return true;
+            case key::ArrowRight: move_right(unit, shift);       return true;
+            case key::Home:       move_left(Unit::line, shift);  return true;
+            case key::End:        move_right(Unit::line, shift); return true;
+            case key::Backspace:  erase_left(unit);              return true;
+            case key::Delete:     erase_right(unit);             return true;
             default:
                 break;
         }
@@ -241,6 +471,18 @@ namespace wry::gui {
                 case 'u': erase_left(Unit::line);        return true;
                 case 'k': erase_right(Unit::line);       return true;
                 case 'y': yank();                        return true;
+                default:
+                    break;
+            }
+        }
+
+        if (cmd && !ctrl && !alt) {
+            switch (e.key) {
+                case 'a': select_all();                  return true;
+                case 'z': shift ? redo() : undo();       return true;
+                case 'c': copy();                        return true;
+                case 'x': cut();                         return true;
+                case 'v': paste();                       return true;
                 default:
                     break;
             }
@@ -265,6 +507,13 @@ namespace wry::gui {
     // Tests.
 
     namespace {
+
+        // An assertion whose operand has effects the test depends on:
+        // the operand is evaluated in every build (assert's is not).
+        void must(bool ok) {
+            assert(ok);
+            (void) ok;
+        }
 
         Event key_event(uint32_t k, uint16_t mods = 0, const char* text = "") {
             Event e{};
@@ -433,74 +682,284 @@ namespace wry::gui {
 
             LineEditor ed;
             type(ed, "hold OPCODE::SWAP");
-            assert(ed.on_key(key_event(key::ArrowLeft, alt)));
+            must(ed.on_key(key_event(key::ArrowLeft, alt)));
             assert(ed.cursor() == 13);
-            assert(ed.on_key(key_event(key::ArrowLeft, cmd)));
+            must(ed.on_key(key_event(key::ArrowLeft, cmd)));
             assert(ed.cursor() == 0);
-            assert(ed.on_key(key_event(key::ArrowRight, ctrl)));
+            must(ed.on_key(key_event(key::ArrowRight, ctrl)));
             assert(ed.cursor() == 4);
-            assert(ed.on_key(key_event(key::End)));
+            must(ed.on_key(key_event(key::End)));
             assert(ed.cursor() == 17);
-            assert(ed.on_key(key_event(key::Home)));
+            must(ed.on_key(key_event(key::Home)));
             assert(ed.cursor() == 0);
-            assert(ed.on_key(key_event('e', ctrl)));
+            must(ed.on_key(key_event('e', ctrl)));
             assert(ed.cursor() == 17);
-            assert(ed.on_key(key_event('a', ctrl)));
-            assert(ed.on_key(key_event('f', ctrl)));
+            must(ed.on_key(key_event('a', ctrl)));
+            must(ed.on_key(key_event('f', ctrl)));
             assert(ed.cursor() == 1);
-            assert(ed.on_key(key_event('b', ctrl)));
+            must(ed.on_key(key_event('b', ctrl)));
             assert(ed.cursor() == 0);
-            assert(ed.on_key(key_event('d', ctrl)));
+            must(ed.on_key(key_event('d', ctrl)));
             assert(ed.text() == StringView("old OPCODE::SWAP"));
-            assert(ed.on_key(key_event(key::Delete, alt)));
+            must(ed.on_key(key_event(key::Delete, alt)));
             assert(ed.text() == StringView(" OPCODE::SWAP"));
-            assert(ed.on_key(key_event('e', ctrl)));
-            assert(ed.on_key(key_event(key::Backspace, alt)));
+            must(ed.on_key(key_event('e', ctrl)));
+            must(ed.on_key(key_event(key::Backspace, alt)));
             assert(ed.text() == StringView(" OPCODE::"));
-            assert(ed.on_key(key_event('w', ctrl)));
+            must(ed.on_key(key_event('w', ctrl)));
             assert(ed.text() == StringView(" "));
             // The two kills were consecutive, so the yank returns both.
-            assert(ed.on_key(key_event('y', ctrl)));
+            must(ed.on_key(key_event('y', ctrl)));
             assert(ed.text() == StringView(" OPCODE::SWAP"));
-            assert(ed.on_key(key_event('h', ctrl)));
+            must(ed.on_key(key_event('h', ctrl)));
             assert(ed.text() == StringView(" OPCODE::SWA"));
-            assert(ed.on_key(key_event(key::Backspace, cmd)));
+            must(ed.on_key(key_event(key::Backspace, cmd)));
             assert(ed.empty());
             type(ed, "abcd");
             ed.move_left(Unit::character);
             ed.move_left(Unit::character);
-            assert(ed.on_key(key_event('k', ctrl)));
+            must(ed.on_key(key_event('k', ctrl)));
             assert(ed.text() == StringView("ab"));
-            assert(ed.on_key(key_event('u', ctrl)));
+            must(ed.on_key(key_event('u', ctrl)));
             assert(ed.empty());
 
-            // Chords are not text: Cmd-V arrives with the text "v".
-            assert(!ed.on_key(key_event('v', cmd, "v")));
-            assert(!ed.on_key(key_event('q', ctrl)));
+            // Chords are not text: Cmd-Q arrives with the text "q".
+            must(!ed.on_key(key_event('q', cmd, "q")));
+            must(!ed.on_key(key_event('q', ctrl)));
             assert(ed.empty());
             // Alt text is: Alt-A types a-ring on a US layout.
-            assert(ed.on_key(key_event('a', alt, "\xC3\xA5")));
+            must(ed.on_key(key_event('a', alt, "\xC3\xA5")));
             assert(ed.text() == StringView("\xC3\xA5"));
             // A sequence the event buffer cut short is dropped, not stored.
-            assert(ed.on_key(key_event(key::Unknown, 0, "\xE2\x82")));
+            must(ed.on_key(key_event(key::Unknown, 0, "\xE2\x82")));
             assert(ed.text() == StringView("\xC3\xA5"));
 
             // The owner's keys and other event kinds are not ours.
-            assert(!ed.on_key(key_event(key::Enter)));
-            assert(!ed.on_key(key_event(key::ArrowUp)));
-            assert(!ed.on_key(key_event(key::Tab)));
-            assert(!ed.on_key(key_event(key::Escape)));
+            must(!ed.on_key(key_event(key::Enter)));
+            must(!ed.on_key(key_event(key::ArrowUp)));
+            must(!ed.on_key(key_event(key::Tab)));
+            must(!ed.on_key(key_event(key::Escape)));
             Event up = key_event('x', 0, "x");
             up.kind = WryEventKindKeyUp;
-            assert(!ed.on_key(up));
+            must(!ed.on_key(up));
             (void) ctrl; (void) alt; (void) cmd;
         }
 
         co_return;
     };
 
+    define_test("gui_line_editor_selection")
+    {
+        using Unit = LineEditor::Unit;
+        const uint16_t shift = Modifiers::Shift;
+        const uint16_t alt = Modifiers::Alt;
+        const uint16_t cmd = Modifiers::Cmd;
+
+        LineEditor ed;
+        ed.set("hold OPCODE::SWAP");
+        assert(!ed.has_selection() && ed.selected().empty());
+
+        // Shift with a motion leaves the anchor behind.
+        must(ed.on_key(key_event(key::ArrowLeft, shift | alt)));
+        assert(ed.anchor() == 17 && ed.cursor() == 13);
+        assert(ed.selected() == StringView("SWAP"));
+        must(ed.on_key(key_event(key::ArrowLeft, shift)));
+        assert(ed.selected() == StringView(":SWAP"));
+        // ... and moving back past the anchor turns the selection round.
+        ed.move_right(Unit::line, true);
+        assert(!ed.has_selection());
+        ed.move_left(Unit::line, true);
+        assert(ed.selected() == StringView("hold OPCODE::SWAP"));
+        assert(ed.selection_first() == 0 && ed.selection_last() == 17);
+
+        // An unshifted character move collapses to that end and stops.
+        ed.move_to(5);
+        ed.move_to(11, true);
+        assert(ed.selected() == StringView("OPCODE"));
+        ed.move_left(Unit::character);
+        assert(!ed.has_selection() && ed.cursor() == 5);
+        ed.move_to(11, true);
+        ed.move_right(Unit::character);
+        assert(!ed.has_selection() && ed.cursor() == 11);
+        // A larger move continues from that end.
+        ed.move_to(5);
+        ed.move_to(11, true);
+        ed.move_left(Unit::word);
+        assert(!ed.has_selection() && ed.cursor() == 0);
+
+        // Typing replaces the selection; so do Backspace and Delete,
+        // whatever their unit.
+        ed.move_to(5);
+        ed.move_to(11, true);
+        type(ed, "X");
+        assert(ed.text() == StringView("hold X::SWAP") && ed.cursor() == 6);
+        ed.move_to(4, true);
+        must(ed.on_key(key_event(key::Backspace, alt)));
+        assert(ed.text() == StringView("hold::SWAP") && ed.cursor() == 4);
+        ed.move_to(6, true);
+        must(ed.on_key(key_event(key::Delete)));
+        assert(ed.text() == StringView("holdSWAP"));
+
+        // Select all.
+        must(ed.on_key(key_event('a', cmd, "a")));
+        assert(ed.selected() == StringView("holdSWAP"));
+        assert(ed.text() == StringView("holdSWAP"));
+
+        // move_to clamps, and snaps into a code point's start.
+        ed.set("a\xE2\x82\xAC" "b");
+        ed.move_to(2);
+        assert(ed.cursor() == 1);
+        ed.move_to(3);
+        assert(ed.cursor() == 1);
+        ed.move_to(99);
+        assert(ed.cursor() == 5);
+
+        // A double click takes the word, the spaces, or the one mark.
+        //      0         1
+        //      01234567890123456
+        ed.set("hold  OPCODE::SWAP");
+        ed.select_word_at(2);
+        assert(ed.selected() == StringView("hold"));
+        ed.select_word_at(4);
+        assert(ed.selected() == StringView("  "));
+        ed.select_word_at(8);
+        assert(ed.selected() == StringView("OPCODE"));
+        ed.select_word_at(12);
+        assert(ed.selected() == StringView(":"));
+        ed.select_word_at(18);      // the end: the last word
+        assert(ed.selected() == StringView("SWAP"));
+        ed.clear();
+        ed.select_word_at(0);
+        assert(!ed.has_selection());
+
+        (void) shift; (void) alt; (void) cmd;
+        co_return;
+    };
+
+    define_test("gui_line_editor_undo")
+    {
+        using Unit = LineEditor::Unit;
+        const uint16_t shift = Modifiers::Shift;
+        const uint16_t cmd = Modifiers::Cmd;
+
+        LineEditor ed;
+        must(!ed.undo() && !ed.redo());
+
+        // Typing is undone a word at a time: each step ends where a new
+        // word began.
+        type(ed, "one two three");
+        must(ed.undo());
+        assert(ed.text() == StringView("one two "));
+        must(ed.undo());
+        assert(ed.text() == StringView("one "));
+        must(ed.undo());
+        assert(ed.empty());
+        must(!ed.undo());
+        // ... and redone the same way, until a new edit.
+        must(ed.redo() && ed.redo());
+        assert(ed.text() == StringView("one two ") && ed.cursor() == 8);
+        type(ed, "x");
+        must(!ed.redo());
+        assert(ed.text() == StringView("one two x"));
+
+        // A run of Backspaces is one step; moving the cursor ends a run.
+        ed.erase_left(Unit::character);
+        ed.erase_left(Unit::character);
+        ed.erase_left(Unit::character);
+        assert(ed.text() == StringView("one tw"));
+        ed.move_left(Unit::character);
+        ed.erase_left(Unit::character);
+        assert(ed.text() == StringView("one w"));
+        must(ed.undo());
+        assert(ed.text() == StringView("one tw") && ed.cursor() == 5);
+        must(ed.undo());
+        assert(ed.text() == StringView("one two x") && ed.cursor() == 9);
+
+        // Erasing nothing is not a step.
+        ed.erase_right(Unit::character);
+        must(ed.undo());
+        assert(ed.text() == StringView("one two "));
+
+        // A kill, a replaced selection and a replace() are each a step,
+        // and undo brings the selection back.
+        ed.set("alpha beta");
+        ed.erase_left(Unit::word);
+        assert(ed.text() == StringView("alpha "));
+        ed.move_to(0);
+        ed.move_to(5, true);
+        type(ed, "A");
+        assert(ed.text() == StringView("A "));
+        ed.replace(0, 1, "omega");
+        assert(ed.text() == StringView("omega ") && ed.cursor() == 5);
+        must(ed.on_key(key_event('z', cmd, "z")));
+        assert(ed.text() == StringView("A "));
+        must(ed.on_key(key_event('z', cmd, "z")));
+        assert(ed.text() == StringView("alpha ") && ed.selected() == StringView("alpha"));
+        must(ed.on_key(key_event('z', cmd, "z")));
+        assert(ed.text() == StringView("alpha beta") && ed.cursor() == 10);
+        must(ed.on_key(key_event('z', cmd | shift, "Z")));
+        assert(ed.text() == StringView("alpha "));
+
+        // A new line has nothing to undo.
+        ed.set("recalled");
+        must(!ed.undo() && !ed.redo());
+        type(ed, "!");
+        (void) ed.take();
+        must(!ed.undo());
+
+        (void) shift; (void) cmd;
+        co_return;
+    };
+
+    define_test("gui_line_editor_clipboard")
+    {
+        const uint16_t cmd = Modifiers::Cmd;
+
+        // Without a clipboard the keys are still editing keys, and inert.
+        LineEditor ed;
+        ed.set("abc");
+        ed.select_all();
+        must(ed.on_key(key_event('x', cmd, "x")));
+        must(ed.on_key(key_event('v', cmd, "v")));
+        assert(ed.text() == StringView("abc"));
+
+        Clipboard clipboard;
+        ed.set_clipboard(&clipboard);
+
+        // Copy and cut take the selection; with none they leave the
+        // clipboard alone.
+        clipboard.write("kept");
+        ed.move_to(0);
+        must(ed.on_key(key_event('c', cmd, "c")));
+        must(ed.on_key(key_event('x', cmd, "x")));
+        assert(clipboard.read() == StringView("kept"));
+        ed.move_to(1);
+        ed.move_to(3, true);
+        must(ed.on_key(key_event('c', cmd, "c")));
+        assert(clipboard.read() == StringView("bc") && ed.text() == StringView("abc"));
+        ed.move_to(0);
+        ed.move_to(1, true);
+        must(ed.on_key(key_event('x', cmd, "x")));
+        assert(clipboard.read() == StringView("a") && ed.text() == StringView("bc"));
+
+        // Paste inserts at the cursor or over the selection, as one undo
+        // step, with line breaks and tabs flattened to spaces.
+        ed.move_to(1);
+        must(ed.on_key(key_event('v', cmd, "v")));
+        assert(ed.text() == StringView("bac") && ed.cursor() == 2);
+        clipboard.write("one\ntwo\tthree\r\n");
+        ed.select_all();
+        must(ed.on_key(key_event('v', cmd, "v")));
+        assert(ed.text() == StringView("one two three  "));
+        must(ed.undo());
+        assert(ed.text() == StringView("bac"));
+
+        (void) cmd;
+        co_return;
+    };
+
     // Differential test: random edits against the obvious model, a vector
-    // of code points and an index into it.
+    // of code points with a cursor and an anchor indexing it.
     define_test("gui_line_editor_random")
     {
         using Unit = LineEditor::Unit;
@@ -518,62 +977,110 @@ namespace wry::gui {
 
         LineEditor ed;
         std::u32string model;
-        std::size_t at = 0;     // index into model
+        std::size_t at = 0;         // the cursor, as an index into model
+        std::size_t from = 0;       // the anchor
 
-        for (int step = 0; step != 4000; ++step) {
-            switch (random(9)) {
+        // Remove the model's selection, if any; true if there was one.
+        auto erase_selection = [&] {
+            if (at == from)
+                return false;
+            const std::size_t first = std::min(at, from);
+            model.erase(first, std::max(at, from) - first);
+            at = from = first;
+            return true;
+        };
+
+        for (int step = 0; step != 6000; ++step) {
+            switch (random(12)) {
                 case 0: case 1: case 2: {
                     char32_t c = alphabet[random(alphabet_size)];
                     String one;
                     one.push_back(c);
                     ed.insert(one);
+                    erase_selection();
                     model.insert(model.begin() + at, c);
-                    ++at;
+                    from = ++at;
                     break;
                 }
                 case 3:
                     ed.move_left(Unit::character);
-                    if (at > 0) --at;
+                    if (at != from) at = std::min(at, from);
+                    else if (at > 0) --at;
+                    from = at;
                     break;
                 case 4:
                     ed.move_right(Unit::character);
-                    if (at < model.size()) ++at;
+                    if (at != from) at = std::max(at, from);
+                    else if (at < model.size()) ++at;
+                    from = at;
                     break;
                 case 5:
                     ed.erase_left(Unit::character);
-                    if (at > 0) model.erase(--at, 1);
+                    if (!erase_selection() && at > 0) {
+                        model.erase(--at, 1);
+                        from = at;
+                    }
                     break;
                 case 6:
                     ed.erase_right(Unit::character);
-                    if (at < model.size()) model.erase(at, 1);
+                    if (!erase_selection() && at < model.size())
+                        model.erase(at, 1);
                     break;
                 case 7:
                     // Rarely, so lines grow long between resets.
                     if (random(8) == 0) {
                         if (random(2)) { ed.move_left(Unit::line);  at = 0; }
                         else           { ed.move_right(Unit::line); at = model.size(); }
+                        from = at;
                     }
                     break;
                 case 8:
                     if (random(100) == 0) {
                         ed.clear();
                         model.clear();
-                        at = 0;
+                        at = from = 0;
+                    }
+                    break;
+                case 9:
+                    ed.move_left(Unit::character, true);
+                    if (at > 0) --at;
+                    break;
+                case 10:
+                    ed.move_right(Unit::character, true);
+                    if (at < model.size()) ++at;
+                    break;
+                case 11:
+                    // An edit and its undo are the identity, selection
+                    // included; so are an undo and its redo.
+                    if (random(4) == 0) {
+                        ed.insert("zz");
+                        const bool undone = ed.undo();
+                        assert(undone);
+                        (void) undone;
+                        if (ed.undo()) {
+                            const bool redone = ed.redo();
+                            assert(redone);
+                            (void) redone;
+                        }
                     }
                     break;
             }
 
-            // Same text, and the cursor is after the same number of
-            // code points.
-            String expected, prefix;
+            // Same text, and the cursor and the anchor are after the same
+            // numbers of code points.
+            String expected;
+            std::size_t cursor_bytes = 0;
+            std::size_t anchor_bytes = 0;
             for (std::size_t i = 0; i != model.size(); ++i) {
+                if (i == at) cursor_bytes = expected.chars.size();
+                if (i == from) anchor_bytes = expected.chars.size();
                 expected.push_back(model[i]);
-                if (i < at)
-                    prefix.push_back(model[i]);
             }
+            if (at == model.size()) cursor_bytes = expected.chars.size();
+            if (from == model.size()) anchor_bytes = expected.chars.size();
             assert(ed.text() == StringView(expected));
-            assert(ed.cursor() == prefix.chars.size());
-            assert(ed.before() == StringView(prefix));
+            assert(ed.cursor() == cursor_bytes);
+            assert(ed.anchor() == anchor_bytes);
         }
 
         co_return;

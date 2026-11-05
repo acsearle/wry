@@ -50,6 +50,20 @@ namespace wry::command {
             out.append(StringView(spelling + prefix));
         }
 
+        // Every enumerator as a word, for completion: TYPE::NAME, and
+        // the bare NAME where the reader accepts it.
+        template<typename E, size_t N>
+        void append_enum_words(std::vector<String>& out, const char* type_name,
+                               std::pair<E, const char*> const (&names)[N], bool bare) {
+            for (auto const& [value, spelling] : names) {
+                String qualified;
+                print_enum(qualified, type_name, spelling);
+                out.push_back(std::move(qualified));
+                if (bare)
+                    out.emplace_back(StringView(spelling + std::strlen(type_name) + 1));
+            }
+        }
+
         // Whether `word` names an enumerator of any Term enum, for the
         // suggestion attached to a bare word in Term context.
         template<typename E, size_t N>
@@ -163,12 +177,33 @@ namespace wry::command {
         print_enum(out, name, name_from_OPCODE(x));
     }
 
+    std::vector<String> Type<OPCODE>::words() {
+        std::vector<String> out;
+        append_enum_words(out, name, OPCODE_NAMES, true);
+        return out;
+    }
+
     std::expected<MATTER, Error> Type<MATTER>::read(Node const& node) {
         return read_enum(node, name, MATTER_NAMES);
     }
 
     void Type<MATTER>::print(String& out, MATTER const& x) {
         print_enum(out, name, name_from_MATTER(x));
+    }
+
+    std::vector<String> Type<MATTER>::words() {
+        std::vector<String> out;
+        append_enum_words(out, name, MATTER_NAMES, true);
+        return out;
+    }
+
+    // A Term's enumerators must be qualified; its other words are the
+    // keywords.
+    std::vector<String> Type<Term>::words() {
+        std::vector<String> out = { String("null"), String("true"), String("false") };
+        append_enum_words(out, Type<OPCODE>::name, OPCODE_NAMES, false);
+        append_enum_words(out, Type<MATTER>::name, MATTER_NAMES, false);
+        return out;
     }
 
     // ----------------------------------------------------------------

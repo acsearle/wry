@@ -127,6 +127,39 @@ namespace {
                                 (float)(view.bounds.size.height - v.y));
     }
 
+    // Point `clipboard` at the system's.  NSPasteboardTypeString is its
+    // plain-text flavour (UTF-8): nearly every application that copies
+    // text offers it alongside whatever richer form it has, and a
+    // pasteboard holding no text at all reads as empty.
+    void use_system_clipboard(wry::gui::Clipboard& clipboard) {
+        clipboard.read = [] {
+            wry::String text;
+            @autoreleasepool {
+                NSString* string = [[NSPasteboard generalPasteboard]
+                                    stringForType:NSPasteboardTypeString];
+                const char* utf8 = string.UTF8String;
+                if (utf8) {
+                    const size_t n = strlen(utf8);
+                    if (wry::utf8::isvalid(utf8, utf8 + n))
+                        text = wry::String(wry::trusted, utf8, n);
+                }
+            }
+            return text;
+        };
+        clipboard.write = [](wry::StringView text) {
+            @autoreleasepool {
+                NSString* string = [[NSString alloc] initWithBytes:text.chars.begin()
+                                                            length:text.chars.size()
+                                                          encoding:NSUTF8StringEncoding];
+                if (!string)
+                    return;
+                NSPasteboard* pasteboard = [NSPasteboard generalPasteboard];
+                [pasteboard clearContents];
+                [pasteboard setString:string forType:NSPasteboardTypeString];
+            }
+        };
+    }
+
     void fill_text_from_characters(wry::gui::Event& ev, NSString* characters) {
         if (!characters || characters.length == 0)
             return;
@@ -272,7 +305,13 @@ namespace {
 
 - (void)applicationWillFinishLaunching:(NSNotification *)aNotification {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
-    
+
+    // A person is at this host (the offscreen one never gets here): copy
+    // and paste go through the system clipboard, and what they type into
+    // the console is kept across launches.
+    use_system_clipboard(_gui->clipboard);
+    _gui->persist_console_history();
+
     NSScreen* screen = [NSScreen mainScreen];
     CGFloat scaleFactor = [screen backingScaleFactor];
     NSRect contentRect = NSMakeRect(0.0, 0.0, 1920.0 / scaleFactor,

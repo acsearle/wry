@@ -136,6 +136,10 @@ namespace wry::command {
     //     static bool printable(T const&);         // default: always
     //     static constexpr const char* example;    // a literal, for tool
     //                                              //   schemas and help
+    //     static std::vector<String> words();      // every word `read`
+    //                                              //   accepts, if they
+    //                                              //   can be listed: for
+    //                                              //   completion
     //
     // `read` is contextual: it is called only where a T is expected, so it
     // may accept abbreviations (a bare enumerator, a bare word as a
@@ -218,6 +222,7 @@ namespace wry::command {
         static constexpr const char* name = "Bool";
         static std::expected<bool, Error> read(Node const& node);
         static void print(String& out, bool x);
+        static std::vector<String> words();
     };
 
     template<> struct Type<int64_t> {
@@ -335,6 +340,10 @@ namespace wry::command {
         const char* summary;
         std::variant<std::monostate, T, compute_type> default_ = {};
         const char* default_summary = nullptr;  // describes a computed default
+        // The words this parameter accepts, where its type cannot say (a
+        // String that is really one of a few modes): for completion.
+        // Empty: the type's own words, if it has any.
+        std::vector<const char*> words = {};
     };
 
     // Description of a parameter for help text and, later, tool schemas.
@@ -346,6 +355,8 @@ namespace wry::command {
         bool has_default = false;
         String default_text;            // canonical constant, or the
                                         // computed default's description
+        std::vector<String> words;      // the words an argument may be, if
+                                        // they can be listed (completion)
     };
 
     template<typename Context>
@@ -405,6 +416,12 @@ namespace wry::command {
             info.type_name = String(Type<T>::name);
             if constexpr (requires { Type<T>::example; })
                 info.type_example = String(Type<T>::example);
+            if (!param.words.empty()) {
+                for (const char* word : param.words)
+                    info.words.emplace_back(word);
+            } else if constexpr (requires { Type<T>::words(); }) {
+                info.words = Type<T>::words();
+            }
             if (auto* constant = std::get_if<T>(&param.default_)) {
                 info.has_default = true;
                 Type<T>::print(info.default_text, *constant);
@@ -570,6 +587,84 @@ namespace wry::command {
             out.append(StringView("\n"));
         }
         return out;
+    }
+
+    // ================================================================
+    // Completion
+    // ================================================================
+    //
+    // What could stand where the cursor is (the console's Tab).  The
+    // line up to the cursor ends in a possibly empty word -- the one
+    // being typed -- and what precedes it says what that word is: the
+    // command, or the argument of a parameter, positional or `name=`.
+    // Nothing is offered inside a string or the parentheses of a literal.
+
+    struct Completion {
+        // The word being completed is bytes [first, end) of the line
+        // given; a candidate replaces all of it.
+        size_t first = 0;
+        // Whole words that could stand there, sorted, each beginning
+        // with what was typed up to letter case (`swa` offers `SWAP`).
+        // A parameter name is offered as `name=`.
+        std::vector<String> candidates;
+        // The command's signature, when the word is one of its
+        // arguments: something to show when there are no candidates.
+        String usage;
+    };
+
+    // The longest prefix all the candidates share, up to letter case,
+    // spelled as the first one spells it; empty for no candidates.
+    String common_prefix(std::span<String const> candidates);
+
+    namespace detail {
+
+        // Where the cursor is in a line: the word being typed, the
+        // complete syntax before it, and the `name=` it follows if any.
+        struct CompletionSite {
+            size_t first = 0;
+            String word;
+            LineSyntax line;
+            String name;
+        };
+
+        std::optional<CompletionSite> completion_site(StringView before);
+
+        // Append every word in `words` that begins with `prefix`, up to
+        // letter case.
+        void complete_from(std::vector<String>& candidates,
+                           StringView prefix,
+                           std::span<String const> words);
+
+        // The candidates for an argument of a command with these
+        // parameters.
+        void complete_argument(std::vector<String>& candidates,
+                               CompletionSite const& site,
+                               std::span<ParamInfo const> params);
+
+        void sort_candidates(std::vector<String>& candidates);
+
+    } // namespace detail
+
+    template<typename Context>
+    Completion complete(Registry<Context> const& registry, StringView before) {
+        Completion completion;
+        completion.first = before.chars.size();
+        auto site = detail::completion_site(before);
+        if (!site)
+            return completion;
+        completion.first = site->first;
+        if (site->line.command.empty()) {
+            // The command word itself.
+            std::vector<String> names;
+            for (auto const& c : registry._commands)
+                names.push_back(c.name);
+            detail::complete_from(completion.candidates, site->word, names);
+        } else if (auto* spec = registry.find(site->line.command)) {
+            completion.usage = help_line(spec->name, spec->summary, spec->params);
+            detail::complete_argument(completion.candidates, *site, spec->params);
+        }
+        detail::sort_candidates(completion.candidates);
+        return completion;
     }
 
 } // namespace wry::command

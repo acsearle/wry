@@ -10,6 +10,7 @@
 #include <cstring>
 #include <limits>
 #include <random>
+#include <string_view>
 
 #include "command.hpp"
 #include "test.hpp"
@@ -516,6 +517,10 @@ namespace wry::command {
         out.append(StringView(x ? "true" : "false"));
     }
 
+    std::vector<String> Type<bool>::words() {
+        return { String("true"), String("false") };
+    }
+
     std::expected<int64_t, Error> Type<int64_t>::read(Node const& node) {
         return read_int64(node);
     }
@@ -676,6 +681,191 @@ namespace wry::command {
         }
         return out;
     }
+
+    // ================================================================
+    // Completion
+    // ================================================================
+
+    namespace {
+
+        char fold(char ch) {
+            return (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
+        }
+
+        // Whether `text` begins with `prefix`, ASCII letters compared
+        // without case.
+        bool begins_with_folded(StringView text, StringView prefix) {
+            if (text.chars.size() < prefix.chars.size())
+                return false;
+            for (size_t i = 0; i != prefix.chars.size(); ++i)
+                if (fold(text.chars.begin()[i]) != fold(prefix.chars.begin()[i]))
+                    return false;
+            return true;
+        }
+
+    } // namespace
+
+    String common_prefix(std::span<String const> candidates) {
+        if (candidates.empty())
+            return String();
+        StringView first = candidates[0];
+        size_t n = first.chars.size();
+        for (String const& other : candidates.subspan(1)) {
+            n = std::min(n, (size_t)other.chars.size());
+            for (size_t i = 0; i != n; ++i) {
+                if (fold(first.chars.begin()[i]) != fold(other.chars.begin()[i])) {
+                    n = i;
+                    break;
+                }
+            }
+        }
+        // Not through the middle of a multi-byte character.
+        while (n > 0 && n < first.chars.size()
+               && ((unsigned char)first.chars.begin()[n] & 0xC0) == 0x80)
+            --n;
+        return String(StringView(trusted, first.chars.begin(), first.chars.begin() + n));
+    }
+
+    namespace detail {
+
+        std::optional<CompletionSite> completion_site(StringView before) {
+            const char* begin = before.chars.begin();
+            const char* end = before.chars.end();
+
+            // The word being typed: the trailing run of word bytes.
+            const char* word = end;
+            while (word != begin && is_word_byte(word[-1]))
+                --word;
+
+            CompletionSite site;
+            site.first = (size_t)(word - begin);
+            site.word = String(StringView(trusted, word, end));
+
+            // `name =` directly before it makes it that parameter's
+            // argument.
+            const char* head = word;
+            while (head != begin && is_space(head[-1]))
+                --head;
+            if (head != begin && head[-1] == '=') {
+                --head;
+                while (head != begin && is_space(head[-1]))
+                    --head;
+                const char* name = head;
+                while (name != begin && is_word_byte(name[-1]))
+                    --name;
+                if (name == head)
+                    return std::nullopt;
+                site.name = String(StringView(trusted, name, head));
+                head = name;
+            } else {
+                head = word;
+            }
+
+            // What precedes must be whole syntax: this is what fails
+            // inside a string or an open parenthesis.
+            auto line = parse_line(StringView(trusted, begin, head));
+            if (!line)
+                return std::nullopt;
+            if (line->command.empty() && !site.name.empty())
+                return std::nullopt;
+            // A word directly after a closed literal is not a new
+            // argument: `Coordinate(1, 2)x`.
+            if (head == word && word != begin && !is_space(word[-1]))
+                return std::nullopt;
+            site.line = std::move(*line);
+            return site;
+        }
+
+        void complete_from(std::vector<String>& candidates,
+                           StringView prefix,
+                           std::span<String const> words) {
+            for (String const& word : words)
+                if (begins_with_folded(word, prefix))
+                    candidates.push_back(word);
+        }
+
+        void complete_argument(std::vector<String>& candidates,
+                               CompletionSite const& site,
+                               std::span<ParamInfo const> params) {
+            // Bind the arguments already given, as bind_arguments does: a
+            // named one to its parameter, a positional one to the first
+            // parameter still free.
+            std::vector<bool> bound(params.size(), false);
+            auto index_of = [&](StringView name) {
+                size_t index = 0;
+                while (index != params.size() && params[index].name != name)
+                    ++index;
+                return index;
+            };
+            auto first_free = [&] {
+                size_t index = 0;
+                while (index != params.size() && bound[index])
+                    ++index;
+                return index;
+            };
+            for (ArgumentSyntax const& argument : site.line.arguments) {
+                size_t index = argument.name.empty() ? first_free() : index_of(argument.name);
+                if (index == params.size() || bound[index])
+                    return;     // the line is already wrong
+                bound[index] = true;
+            }
+            size_t target = site.name.empty() ? first_free() : index_of(site.name);
+            if (target == params.size() || bound[target])
+                return;
+
+            // The parameter's words.  Where a word may be written bare or
+            // qualified (SWAP, OPCODE::SWAP) both are listed, and the
+            // qualified spellings are offered only when no unqualified
+            // word fits: `o` means OVER, `opc` means OPCODE::.
+            std::vector<String> const& words = params[target].words;
+            std::vector<String> fits;
+            complete_from(fits, site.word, words);
+            const bool any_plain = std::any_of(fits.begin(), fits.end(), [](String const& word) {
+                return !split_qualified(word);
+            });
+            for (String const& word : fits) {
+                auto split = split_qualified(word);
+                const bool redundant = any_plain && split
+                    && std::any_of(words.begin(), words.end(), [&](String const& other) {
+                        return other == split->second;
+                    });
+                if (!redundant)
+                    candidates.push_back(word);
+            }
+            // What was typed may instead be the bare part of a word that
+            // must be qualified here (a Term): offer the whole word.
+            if (candidates.empty() && !site.word.empty()) {
+                for (String const& word : params[target].words) {
+                    auto split = split_qualified(word);
+                    if (split && begins_with_folded(split->second, site.word))
+                        candidates.push_back(word);
+                }
+            }
+
+            // Or the start of a parameter's name.
+            if (site.name.empty() && !site.word.empty()) {
+                for (size_t index = 0; index != params.size(); ++index) {
+                    if (!bound[index] && begins_with_folded(params[index].name, site.word)) {
+                        String named = params[index].name;
+                        named.push_back('=');
+                        candidates.push_back(std::move(named));
+                    }
+                }
+            }
+        }
+
+        void sort_candidates(std::vector<String>& candidates) {
+            auto bytes = [](String const& x) {
+                return std::string_view(x.chars.begin(), x.chars.size());
+            };
+            std::sort(candidates.begin(), candidates.end(),
+                      [&](String const& a, String const& b) { return bytes(a) < bytes(b); });
+            candidates.erase(std::unique(candidates.begin(), candidates.end(),
+                                         [&](String const& a, String const& b) { return bytes(a) == bytes(b); }),
+                             candidates.end());
+        }
+
+    } // namespace detail
 
     // ================================================================
     // Tests
@@ -991,6 +1181,139 @@ namespace wry::command {
             assert(!one.empty());
         }
 
+        co_return;
+    };
+
+    define_test("command_completion") {
+
+        Registry<TestContext> registry;
+        using Ctx = TestContext;
+
+        registry.add(make_command<Ctx>(
+            "step", "Advance", Category::clock,
+            std::tuple{ Param<Ctx, int64_t>{"count", "how many", int64_t{1}} },
+            [](Ctx&, int64_t) { return Reply::ok(); }));
+        registry.add(make_command<Ctx>(
+            "state-hash", "Hash", Category::local,
+            std::tuple<>{},
+            [](Ctx&) { return Reply::ok(); }));
+        registry.add(make_command<Ctx>(
+            "shade", "Set the shading", Category::local,
+            std::tuple{
+                Param<Ctx, String>{"mode", "off, flat or smooth", String("flat"), nullptr,
+                                   {"off", "flat", "smooth"}},
+                Param<Ctx, bool>{"shadows", "cast shadows", true},
+                Param<Ctx, int64_t>{"samples", "per pixel", int64_t{4}},
+            },
+            [](Ctx&, String const&, bool, int64_t) { return Reply::ok(); }));
+
+        auto complete = [&](const char* before) {
+            return command::complete(registry, StringView(before));
+        };
+        auto is = [](Completion const& c, std::initializer_list<const char*> expected) {
+            if (c.candidates.size() != expected.size())
+                return false;
+            size_t i = 0;
+            for (const char* e : expected)
+                if (c.candidates[i++] != StringView(e))
+                    return false;
+            return true;
+        };
+
+        // The command word: by prefix, sorted; everything for no prefix.
+        {
+            auto c = complete("st");
+            assert(c.first == 0 && is(c, {"state-hash", "step"}) && c.usage.empty());
+            assert(common_prefix(c.candidates) == StringView("st"));
+            assert(is(complete("  sta"), {"state-hash"}));
+            assert(complete("  sta").first == 2);
+            assert(is(complete(""), {"shade", "state-hash", "step"}));
+            assert(is(complete("ST"), {"state-hash", "step"}));
+            assert(is(complete("x"), {}));
+        }
+
+        // An argument: the parameter's words, positional or named, and
+        // the usage line either way.
+        {
+            auto c = complete("shade ");
+            assert(c.first == 6 && is(c, {"flat", "off", "smooth"}));
+            assert(c.usage == help_line("shade", "Set the shading", registry.find("shade")->params));
+            assert(is(complete("shade s"), {"samples=", "shadows=", "smooth"}));
+            assert(common_prefix(complete("shade s").candidates) == StringView("s"));
+            assert(is(complete("shade sm"), {"smooth"}));
+            assert(is(complete("shade flat "), {"false", "true"}));
+            assert(is(complete("shade flat t"), {"true"}));
+            assert(is(complete("shade shadows=f"), {"false"}));
+            assert(complete("shade shadows=f").first == 14);
+            assert(is(complete("shade shadows = "), {"false", "true"}));
+            // A named argument frees the positional slot it did not take.
+            assert(is(complete("shade shadows=false "), {"flat", "off", "smooth"}));
+            assert(is(complete("shade mode=off "), {"false", "true"}));
+            // Names are offered only once something is typed, and only
+            // for parameters not yet given.
+            assert(is(complete("shade off s"), {"samples=", "shadows="}));
+            assert(is(complete("shade off samples=2 s"), {"shadows="}));
+            // A type with no words: nothing but the usage.
+            auto n = complete("step ");
+            assert(is(n, {}) && !n.usage.empty() && n.first == 5);
+        }
+
+        // Nowhere to complete: an unknown command, too many arguments, a
+        // parameter given twice, inside a string or a literal, straight
+        // after one.
+        {
+            assert(is(complete("nope "), {}) && complete("nope ").usage.empty());
+            assert(is(complete("shade off true 1 "), {}));
+            assert(is(complete("shade mode=off mode="), {}));
+            assert(is(complete("shade \"sm"), {}));
+            assert(is(complete("shade Tag(sm"), {}));
+            assert(is(complete("shade Tag(1)sm"), {}));
+            assert(is(complete("=x"), {}));
+        }
+
+        // Qualified words: the bare spelling is preferred where both are
+        // accepted; where only the qualified one is, the bare part still
+        // finds it.
+        {
+            ParamInfo both;
+            both.name = String("op");
+            both.words = { String("OPCODE::SWAP"), String("SWAP"),
+                           String("OPCODE::OVER"), String("OVER") };
+            ParamInfo qualified;
+            qualified.name = String("term");
+            qualified.words = { String("null"), String("OPCODE::SWAP"), String("OPCODE::OVER") };
+            const ParamInfo params[] = { both, qualified };
+
+            auto at = [&](const char* before) {
+                Completion c;
+                auto site = detail::completion_site(StringView(before));
+                assert(site);
+                detail::complete_argument(c.candidates, *site, params);
+                detail::sort_candidates(c.candidates);
+                return c;
+            };
+            assert(is(at("put "), {"OVER", "SWAP"}));
+            assert(is(at("put sw"), {"SWAP"}));
+            assert(is(at("put o"), {"OVER", "op="}));
+            assert(is(at("put OPC"), {"OPCODE::OVER", "OPCODE::SWAP"}));
+            assert(common_prefix(at("put OPC").candidates) == StringView("OPCODE::"));
+            assert(is(at("put SWAP "), {"OPCODE::OVER", "OPCODE::SWAP", "null"}));
+            assert(is(at("put SWAP sw"), {"OPCODE::SWAP"}));
+            assert(is(at("put SWAP n"), {"null"}));
+            (void) at;
+        }
+
+        // The common prefix ignores case, takes the first spelling, and
+        // does not split a character.
+        {
+            const String mixed[] = { String("Alpha"), String("alpine") };
+            assert(common_prefix(mixed) == StringView("Alp"));
+            const String split[] = { String("a\xC3\xA9"), String("a\xC3\xA8") };
+            assert(common_prefix(split) == StringView("a"));
+            assert(common_prefix({}).empty());
+        }
+
+        (void) complete; (void) is;
         co_return;
     };
 

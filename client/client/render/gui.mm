@@ -157,7 +157,19 @@ namespace wry {
         }
 
         bool ConsoleOverlay::on_event(Event const& e) {
-            if (e.kind != WryEventKindKeyDown) return false;
+            switch (e.kind) {
+                case WryEventKindKeyDown:
+                    return _on_key(e);
+                case WryEventKindMouseDown:
+                case WryEventKindMouseMove:
+                case WryEventKindMouseUp:
+                    return _on_mouse(e);
+                default:
+                    return false;
+            }
+        }
+
+        bool ConsoleOverlay::_on_key(Event const& e) {
 
             // The toggle follows the user's toggle-console binding
             // (backtick by default).  Suppressed on auto-repeat so a held
@@ -203,70 +215,283 @@ namespace wry {
             // while typing or moving.
             _caret_touched = true;
 
-            const bool ctrl_only = e.mods.has(Modifiers::Ctrl)
-                && !e.mods.has(Modifiers::Alt) && !e.mods.has(Modifiers::Cmd);
+            const bool shift = e.mods.has(Modifiers::Shift);
+            const bool ctrl = e.mods.has(Modifiers::Ctrl);
+            const bool alt = e.mods.has(Modifiers::Alt);
+            const bool cmd = e.mods.has(Modifiers::Cmd);
+            const bool plain = !ctrl && !alt && !cmd;
+            const bool ctrl_only = ctrl && !alt && !cmd;
+            const bool cmd_only = cmd && !ctrl && !alt;
 
-            if (e.key == 'c' && ctrl_only) {
-                if (_cancel)
-                    _cancel();
-                return true;
-            }
+            // The keys that are the console's rather than the editor's.
+            enum { none, cancel, paste, complete, submit, close, older, newer,
+                   accept, accept_word } what = none;
 
-            // Recall replaces the line and puts the cursor at its end.
-            auto recall_older = [this] {
-                if (_recall_index > 0)
-                    _input.set(_recall[--_recall_index]);
-            };
-            auto recall_newer = [this] {
-                if (_recall_index < _recall.size()) {
-                    if (++_recall_index < _recall.size())
-                        _input.set(_recall[_recall_index]);
-                    else
-                        _input.clear();
-                }
-            };
-
-            if (ctrl_only && e.key == 'p') {
-                recall_older();
-                return true;
-            }
-            if (ctrl_only && e.key == 'n') {
-                recall_newer();
-                return true;
-            }
+            // A motion to the right at the end of the line has nowhere
+            // to go: it takes the suggestion instead.
+            const bool at_end = !_input.has_selection()
+                && _input.after().empty() && !_suggestion.empty() && !shift;
 
             switch (e.key) {
-                case key::Enter: {
-                    String input = _input.take();
-                    if (!_issue) {
-                        // Unwired: the line just joins the output.
-                        _lines.push_back(std::move(input));
-                        break;
-                    }
-                    if (!input.empty()) {
-                        if (_recall.empty() || _recall.back() != input)
-                            _recall.push_back(input);
-                    }
-                    _recall_index = _recall.size();
-                    if (!input.empty())
-                        _issue(command::Origin::console, input);
+                case 'c':            if (ctrl_only) what = cancel;   break;
+                case 'v':            if (cmd_only)  what = paste;    break;
+                case 'p':            if (ctrl_only) what = older;    break;
+                case 'n':            if (ctrl_only) what = newer;    break;
+                case key::Tab:       if (plain)     what = complete; break;
+                case key::Enter:     what = submit;                  break;
+                case key::Escape:    what = close;                   break;
+                case key::ArrowUp:   what = older;                   break;
+                case key::ArrowDown: what = newer;                   break;
+                case key::ArrowRight:
+                    if (at_end)
+                        what = (alt || ctrl) ? accept_word : accept;
                     break;
-                }
-                case key::Escape:
+                case key::End:       if (at_end) what = accept;      break;
+                case 'e':
+                case 'f':            if (at_end && ctrl_only) what = accept; break;
+                default:
+                    break;
+            }
+
+            switch (what) {
+                case cancel:
+                    if (_cancel)
+                        _cancel();
+                    break;
+                case paste:
+                    _paste();
+                    break;
+                case complete:
+                    _complete_word();
+                    break;
+                case submit:
+                    _submit();
+                    break;
+                case close:
                     _active = false;
+                    _dragging = false;
                     if (_log) _log->append("[ESC] Hide console");
                     break;
-                case key::ArrowUp:
-                    recall_older();
+                case older:
+                    // A walk replaces the line and puts the cursor at
+                    // its end; the line typed so far is the draft.
+                    if (auto line = _history.older(_input.text()))
+                        _input.set(*line);
                     break;
-                case key::ArrowDown:
-                    recall_newer();
+                case newer:
+                    if (auto line = _history.newer(_input.text()))
+                        _input.set(*line);
                     break;
-                default:
+                case accept:
+                    _accept_suggestion(true);
+                    break;
+                case accept_word:
+                    _accept_suggestion(false);
+                    break;
+                case none:
                     // Everything else is line editing: cursor motion,
-                    // erasure, insertion (gui_line_editor.hpp).
+                    // selection, erasure, insertion, undo, copy and cut
+                    // (gui_line_editor.hpp).
                     _input.on_key(e);
                     break;
+            }
+            _update_suggestion();
+            return true;
+        }
+
+        void ConsoleOverlay::_submit() {
+            String input = _input.take();
+            if (!_issue) {
+                // Unwired: the line just joins the output.
+                _lines.push_back(std::move(input));
+                return;
+            }
+            _history.add(input);
+            if (!input.empty())
+                _issue(command::Origin::console, input);
+        }
+
+        // Pasted text is typed text: it goes in at the cursor, and each
+        // line break in it is an Enter.  So a pasted script runs, line
+        // by line, and whatever follows its last line break is left on
+        // the input line to be finished.
+        void ConsoleOverlay::_paste() {
+            if (!_clipboard || !_clipboard->read)
+                return;
+            const String text = _clipboard->read();
+            String segment;
+            char32_t previous = 0;
+            for (char32_t c : text) {
+                if (c == U'\n' || c == U'\r') {
+                    // CR LF is one break.
+                    if (!(c == U'\n' && previous == U'\r')) {
+                        _input.insert(segment);
+                        segment.clear();
+                        _submit();
+                    }
+                } else {
+                    segment.push_back(c == U'\t' ? U' ' : c);
+                }
+                previous = c;
+            }
+            _input.insert(segment);
+        }
+
+        // Tab.  Replace the word before the cursor with as much as all
+        // of its completions agree on: the whole word and a space if
+        // there is only one.  If that adds nothing, list them; if there
+        // are none, say what the command takes.
+        void ConsoleOverlay::_complete_word() {
+            if (!_complete)
+                return;
+            const StringView before = _input.before();
+            command::Completion completion = _complete(before);
+            if (completion.candidates.empty()) {
+                if (!completion.usage.empty()
+                    && (_lines.empty() || _lines.back() != completion.usage))
+                    print(completion.usage);
+                return;
+            }
+            const StringView word(trusted, before.chars.begin() + completion.first,
+                                  before.chars.end());
+            String replacement = command::common_prefix(completion.candidates);
+            if (completion.candidates.size() == 1) {
+                // A finished word is followed by a space, unless it is a
+                // `name=` or a space is there already.
+                const StringView after = _input.after();
+                if (replacement.back() != U'=' && (after.empty() || after.front() != U' '))
+                    replacement.push_back(' ');
+            }
+            if (replacement.chars.size() >= word.chars.size() && replacement != word) {
+                _input.replace(completion.first, _input.cursor(), replacement);
+                return;
+            }
+            // Nothing to add: show the choices, a screenful of columns
+            // at most per line.
+            String line;
+            for (String const& candidate : completion.candidates) {
+                if (!line.empty() && line.chars.size() + candidate.chars.size() > 96) {
+                    print(line);
+                    line.clear();
+                }
+                if (!line.empty())
+                    line.append(StringView("  "));
+                line.append(candidate);
+            }
+            if (!line.empty())
+                print(line);
+        }
+
+        void ConsoleOverlay::_accept_suggestion(bool whole) {
+            StringView rest = _suggestion;
+            if (!whole) {
+                // One word: the spaces before it and the run after them.
+                const char* p = rest.chars.begin();
+                const char* end = rest.chars.end();
+                while (p != end && *p == ' ')
+                    ++p;
+                while (p != end && *p != ' ')
+                    ++p;
+                rest.reset(StringView(trusted, rest.chars.begin(), p));
+            }
+            const String copy(rest);    // _update_suggestion will replace it
+            _input.insert(copy);
+        }
+
+        void ConsoleOverlay::_update_suggestion() {
+            _suggestion.clear();
+            if (!_active || _input.empty() || _input.has_selection()
+                || !_input.after().empty())
+                return;
+            const StringView text = _input.text();
+            // History first: the newest line that began this way.
+            const StringView line = _history.suggest(text);
+            if (!line.empty()) {
+                _suggestion = String(StringView(trusted,
+                                                line.chars.begin() + text.chars.size(),
+                                                line.chars.end()));
+                return;
+            }
+            // Else what Tab would add to the word: as much as all of its
+            // completions agree on, the whole word if there is only one.
+            // Only where that continues the word as spelled; a
+            // completion that would correct its case is left to Tab.
+            if (!_complete)
+                return;
+            command::Completion completion = _complete(text);
+            if (completion.candidates.empty())
+                return;
+            const String agreed = command::common_prefix(completion.candidates);
+            const std::size_t typed = text.chars.size() - completion.first;
+            if (agreed.chars.size() > typed
+                && std::equal(text.chars.begin() + completion.first, text.chars.end(),
+                              agreed.chars.begin()))
+                _suggestion = String(StringView(trusted,
+                                                agreed.chars.begin() + typed,
+                                                agreed.chars.end()));
+        }
+
+        // The cursor position nearest pixel x, as of the last paint.
+        std::size_t ConsoleOverlay::_offset_at(float x) const {
+            std::size_t offset = 0;
+            float nearest = std::numeric_limits<float>::infinity();
+            for (Stop const& stop : _stops) {
+                const float distance = std::abs(stop.x - x);
+                if (distance < nearest) {
+                    nearest = distance;
+                    offset = stop.offset;
+                }
+            }
+            return offset;
+        }
+
+        bool ConsoleOverlay::_on_mouse(Event const& e) {
+            if (!_active) {
+                _dragging = false;
+                return false;
+            }
+            const float x = e.location.x;
+            const float y = e.location.y;
+
+            if (e.kind == WryEventKindMouseDown) {
+                if (e.button != MouseButton::Left
+                    || x < _input_row.a.x || x >= _input_row.b.x
+                    || y < _input_row.a.y || y >= _input_row.b.y)
+                    return false;
+                const std::size_t offset = _offset_at(x);
+                const auto now = std::chrono::steady_clock::now();
+                const bool again = (offset == _click_offset)
+                    && (now - _click_time < std::chrono::milliseconds(400));
+                _clicks = again ? (_clicks % 3) + 1 : 1;
+                _click_offset = offset;
+                _click_time = now;
+                switch (_clicks) {
+                    case 1:
+                        // Shift-click extends from the anchor.
+                        _input.move_to(offset, e.mods.has(Modifiers::Shift));
+                        _dragging = true;
+                        break;
+                    case 2:
+                        _input.select_word_at(offset);
+                        break;
+                    default:
+                        _input.select_all();
+                        break;
+                }
+                _caret_touched = true;
+                _update_suggestion();
+                return true;
+            }
+
+            // A drag follows the pointer wherever it goes until release.
+            if (!_dragging)
+                return false;
+            if (e.kind == WryEventKindMouseMove) {
+                _input.move_to(_offset_at(x), true);
+                _caret_touched = true;
+                _update_suggestion();
+            } else {
+                _dragging = false;
             }
             return true;
         }
@@ -276,6 +501,8 @@ namespace wry {
             if (!p.font || !p.atlas) return;
 
             const RGBA8Unorm_sRGB color(1.0f, 1.0f, 1.0f, 1.0f);
+            const RGBA8Unorm_sRGB grey(0.5f, 0.5f, 0.5f, 1.0f);
+            const RGBA8Unorm_sRGB highlight(0.08f, 0.17f, 0.42f, 1.0f);
             const float left   = p.font->height * 0.5f;
             const float slot_h = p.font->height;
             auto baseline_of = [&](float slot_top) {
@@ -292,12 +519,31 @@ namespace wry {
                                                    "> ", color);
 
                 // The field runs from the prompt to a half-line short of
-                // the right edge.  Positions below are pixels from the
-                // start of the text.
+                // the right edge.
                 const float field_a = pen.x;
                 const float field_w = std::max(p.viewport_size_px.x - left - field_a, 0.0f);
-                const float caret = wry::text_run_width(p.font, _input.before());
-                const float total = caret + wry::text_run_width(p.font, _input.after());
+
+                // Every cursor position's distance from the start of the
+                // text: one before each character, one after the last.
+                _stops.clear();
+                float total = 0.0f;
+                float caret = 0.0f, first = 0.0f, last = 0.0f;
+                {
+                    const StringView text = _input.text();
+                    auto note = [&](std::size_t offset) {
+                        _stops.push_back(Stop{offset, total});
+                        if (offset == _input.cursor()) caret = total;
+                        if (offset == _input.selection_first()) first = total;
+                        if (offset == _input.selection_last()) last = total;
+                    };
+                    for (auto it = text.begin(); it != text.end(); ++it) {
+                        note((std::size_t)(it.base - text.chars.begin()));
+                        auto glyph = p.font->charmap.find(*it);
+                        if (glyph != p.font->charmap.end())
+                            total += glyph->second.advance;
+                    }
+                    note((std::size_t)text.chars.size());
+                }
 
                 // Scroll the least that keeps the caret inside the field
                 // with some text visible on either side of it, and never
@@ -309,23 +555,37 @@ namespace wry {
                 _input_scroll = std::clamp(_input_scroll, 0.0f,
                                            std::max(total - field_w, 0.0f));
 
-                // The caret: a bar one stem wide between two characters,
-                // spanning the glyph cell.
+                // What the mouse will need: the row, and the stops in
+                // pixels.
+                const float origin = field_a - _input_scroll;
+                _input_row = rect<float>(0.0f, slot_top,
+                                         p.viewport_size_px.x, slot_top + slot_h);
+                for (Stop& stop : _stops)
+                    stop.x += origin;
+
+                // The selection behind the text; the text; the grey
+                // suggestion after it; and the caret, a bar one stem
+                // wide between two characters, spanning the glyph cell.
                 const float bar = std::max(p.font->stem_width, 1.0f);
+                const float top = baseline - p.font->ascender;
+                const float bottom = baseline - p.font->descender;
                 const rect<float> previous = p.push_clip(rect<float>(
                     field_a, slot_top, field_a + field_w + bar, slot_top + slot_h));
-                p.draw_text_run(simd_make_float2(field_a - _input_scroll, baseline),
-                                _input.text(), color);
+                if (_input.has_selection())
+                    p.fill_rect(rect<float>(origin + first, top, origin + last, bottom),
+                                highlight);
+                const float2 end = p.draw_text_run(simd_make_float2(origin, baseline),
+                                                   _input.text(), color);
+                if (!_suggestion.empty())
+                    p.draw_text_run(end, _suggestion, grey);
                 if (_caret_touched) {
                     _caret_touched = false;
                     _caret_frame = p.frame_count;
                 }
-                if (((p.frame_count - _caret_frame) & 0x40) == 0) {
-                    const float x = field_a + caret - _input_scroll;
-                    p.fill_rect(rect<float>(x, baseline - p.font->ascender,
-                                            x + bar, baseline - p.font->descender),
+                if (((p.frame_count - _caret_frame) & 0x40) == 0)
+                    p.fill_rect(rect<float>(origin + caret, top,
+                                            origin + caret + bar, bottom),
                                 color);
-                }
                 p.pop_clip(previous);
             }
 

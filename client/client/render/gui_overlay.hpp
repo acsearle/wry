@@ -47,7 +47,9 @@
 #include "font.hpp"
 #include "gui_event.hpp"
 #include "gui_keymap.hpp"
+#include "gui_clipboard.hpp"
 #include "gui_line_editor.hpp"
+#include "gui_line_history.hpp"
 #include "palette.hpp"
 #include "rect.hpp"
 #include "simd.hpp"
@@ -328,10 +330,22 @@ namespace wry {
 
         // Quake-style drop-down console: toggled by the toggle-console
         // binding (backtick by default), captures all keyboard input
-        // while active.  The input line is a LineEditor (cursor, word
-        // motion, kill and yank: gui_line_editor.hpp).  Enter issues it
-        // as a command (core/docs/commands.md); Up / Down (Ctrl-P /
-        // Ctrl-N) recall earlier input.
+        // while active.  Enter issues the input line as a command
+        // (core/docs/commands.md).  The line is a LineEditor with a
+        // LineHistory behind it; the conventions for all of it are in
+        // render/docs/line_editing.md.  Beyond the editor's own keys:
+        //
+        //   Enter                    submit
+        //   Up / Down, Ctrl-P / N    walk the history (the typed line is
+        //                            kept, and is the search prefix)
+        //   Tab                      complete the word before the cursor
+        //   Right / End at the end   accept the grey suggestion
+        //   Alt-Right at the end     accept one word of it
+        //   Cmd-V                    paste; each line break submits
+        //   Ctrl-C                   cancel the pending command
+        //   Escape, the toggle key   close
+        //   click / drag / double    place the cursor / select / select a
+        //   click on the input line  word
         class ConsoleOverlay : public Overlay {
         public:
             ConsoleOverlay();
@@ -355,8 +369,20 @@ namespace wry {
             // command and the lines queued behind it.
             void set_cancel(std::function<void()> f) { _cancel = std::move(f); }
 
+            // Wired by GuiContext to the registry: what could stand at
+            // the end of this text (Tab, and the grey suggestion).
+            using Complete = std::function<command::Completion(StringView before)>;
+            void set_complete(Complete f) { _complete = std::move(f); }
+
+            // Wired by GuiContext: where copy, cut and paste go.
+            void set_clipboard(Clipboard const* c) {
+                _clipboard = c;
+                _input.set_clipboard(c);
+            }
+
             // While active, the console eats keyboard but lets clicks
-            // through to whatever is behind it.
+            // through to whatever is behind it, except those on its
+            // input line.
             bool modal_keyboard() const override { return _active; }
             bool modal_mouse()    const override { return false; }
 
@@ -365,6 +391,16 @@ namespace wry {
 
             // The line being typed.
             LineEditor const& input() const { return _input; }
+
+            // What the user has submitted.  The host attaches a file to
+            // make it outlive the process.
+            LineHistory& history() { return _history; }
+
+            // The grey text offered after the line: the rest of the
+            // newest history entry that begins with it, else of the one
+            // word that completes it.  Empty unless the cursor is at the
+            // end of a non-empty line.
+            StringView suggestion() const { return _suggestion; }
 
             // Wired by the model so the console can echo "[~] Show console"
             // etc. into the floating log.
@@ -375,21 +411,52 @@ namespace wry {
             void set_keymap(Keymap const* k) { _keymap = k; }
 
         private:
+            bool _on_key(Event const&);
+            bool _on_mouse(Event const&);
+            void _submit();
+            void _paste();
+            void _complete_word();
+            void _accept_suggestion(bool whole);
+            void _update_suggestion();
+            std::size_t _offset_at(float x) const;
+
             ContiguousDeque<String> _lines;     // output, oldest first
             LineEditor _input;                  // the line being typed
+            LineHistory _history;
+            String _suggestion;
+
             // Painting state.  The input line scrolls sideways to keep
             // the caret in view; the caret's blink restarts (solid) at
             // each keystroke.
             float _input_scroll = 0.0f;         // pixels of text off the left
             bool _caret_touched = true;
             uint64_t _caret_frame = 0;          // frame the blink restarted at
+
+            // Where the input line was last painted, for the mouse: the
+            // row, and each cursor position's x.  A click lands on the
+            // nearest position.
+            struct Stop {
+                std::size_t offset;             // a cursor position
+                float x;                        // its caret, in pixels
+            };
+            rect<float> _input_row = {0.0f, 0.0f, 0.0f, 0.0f};
+            std::vector<Stop> _stops;
+
+            // The mouse.  A press on the input line starts a drag that
+            // extends the selection until release; presses in quick
+            // succession on one spot count up: word, then line.
+            bool _dragging = false;
+            int _clicks = 0;
+            std::size_t _click_offset = 0;
+            std::chrono::steady_clock::time_point _click_time{};
+
             bool _active = false;
             LogOverlay* _log = nullptr;
             Keymap const* _keymap = nullptr;
+            Clipboard const* _clipboard = nullptr;
             Issue _issue;
             std::function<void()> _cancel;
-            std::vector<String> _recall;        // submitted input, oldest first
-            size_t _recall_index = 0;           // == _recall.size(): fresh input
+            Complete _complete;
         };
 
         // The opcode-picker grid.  For phase 2 this overlay handles input

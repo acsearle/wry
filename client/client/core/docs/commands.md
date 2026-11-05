@@ -312,6 +312,25 @@ binding may write `write @cursor @hand`.  Context words are readers
 that consult context at issue time and are printed resolved; they are
 not variables: nothing assigns them, and the set is fixed in C++.
 
+**Completion** (`command::complete`, the console's Tab) is read off
+the registry.  The line up to the cursor ends in the word being typed;
+what precedes it, parsed by stage 1, says what that word is.  The first
+word completes against the command names.  A later word is the argument
+of a parameter -- the first one still free, or the one a preceding
+`name=` names -- and completes against that parameter's words: those
+its type lists (`Type<T>::words()`: `true` and `false`, the enumerators
+bare and qualified, a Term's keywords and qualified enumerators), or
+those the parameter declares itself where it is a String that is really
+one of a few modes (`Param::words`: `ssao`'s mode, `quit`'s how).  A
+partly typed parameter name completes to `name=`.  Matching ignores
+letter case and the candidate replaces what was typed, so `swa`
+becomes `SWAP`.  Nothing is offered inside a string or the parentheses
+of a literal, where the preceding text is not whole syntax.  When a
+position has no words to offer (an Int, a Coordinate) the result
+carries the command's signature instead, for the console to show.
+What the console then does with the candidates is in
+render/docs/line_editing.md.
+
 ## 6. Replies and history
 
 A handler returns a reply: success or error, and an optional result.
