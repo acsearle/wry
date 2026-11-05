@@ -629,12 +629,14 @@ namespace wry {
         });
         assert(received && save->boundary == boundary);
         (void) received;
-        World* loaded = load_world_from_bytes(save->bytes);
-        assert(loaded && loaded->_time == (Time)boundary);
-        assert(loaded->content_hash() == w->content_hash());
+        // Rooted: it is read again after the waits below, and a wait is a
+        // suspension, across which this worker's pin is not held
+        Root<World const*> loaded{load_world_from_bytes(save->bytes)};
+        assert(loaded._ptr && loaded._ptr->_time == (Time)boundary);
+        assert(loaded._ptr->content_hash() == w->content_hash());
         {
             Term t{};
-            bool has_term = loaded->_term_for_coordinate.try_get(Coordinate{2, 3}, t);
+            bool has_term = loaded._ptr->_term_for_coordinate.try_get(Coordinate{2, 3}, t);
             assert(has_term);
             (void) has_term;
             assert(term_eq(t, term_make_string_with("donated")));
@@ -648,7 +650,7 @@ namespace wry {
         assert(pending && joiner->state() == RemoteServer::State::SUBSCRIBED);
         (void) pending;
         host->client().report_hash(boundary, w->content_hash());
-        joiner->report_hash(boundary, loaded->content_hash());
+        joiner->report_hash(boundary, loaded._ptr->content_hash());
         bool joined = co_await eventually([&] {
             host->relay().step(1);
             (void) host->client().take_steps();
