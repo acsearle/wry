@@ -27,6 +27,7 @@
 #include "kqueue_reactor.hpp"
 #include "ctype.hpp"
 #include "garbage_collected.hpp"
+#include "machine.hpp"
 #include "matter.hpp"
 #include "save.hpp"
 #include "save_format.hpp"
@@ -98,6 +99,60 @@ namespace wry {
             world->_term_for_coordinate.set(Coordinate{0, +3}, term_make_integer_with(3));
             world->_term_for_coordinate.set(Coordinate{0, +4}, term_make_opcode(OPCODE_FLIP_FLOP));
             world->_term_for_coordinate.set(Coordinate{0, +5}, term_make_integer_with(5));
+
+            // Materials demo, south of the spawner's tracks (its machines
+            // leave north up x = 0 and split along y = 4).
+            {
+                auto put = [&](i32 x, i32 y, Term t) {
+                    world->_term_for_coordinate.set(Coordinate{x, y}, t);
+                };
+                auto machine_at_rest = [&](i32 x, i32 y, i64 heading) {
+                    Machine* m = new Machine;
+                    m->_entity_id = world->generate_entity_id();
+                    m->_old_location = Coordinate{x, y};
+                    m->_new_location = Coordinate{x, y};
+                    m->_old_heading = heading;
+                    m->_new_heading = heading;
+                    m->seal();
+                    world->_entity_for_entity_id.set(m->_entity_id, m);
+                    world->_entity_id_for_coordinate.set(Coordinate{x, y}, m->_entity_id);
+                    EntityIDSet located;
+                    located.set(m->_entity_id);
+                    world->_located_for_coordinate.set(Coordinate{x, y}, located);
+                    world->_waiting_on_time.set({Time{0}, m->_entity_id});
+                };
+
+                // A pile of each terrain matter, WATER (north) to
+                // LIMESTONE (south), on the grass at x = -5
+                for (i32 k = 0; k != 7; ++k)
+                    put(-5, -k, term_make_matter((MATTER)(MATTER_WATER + k)));
+
+                // A loop through the coal patch south-east of the origin:
+                // MINE digs coal out of (3, -5), BURY puts it back into
+                // (5, -5), so the machine shakes twice a lap and carries
+                // one pile in between
+                put(1, -5, term_make_opcode(OPCODE_TURN_EAST));
+                put(2, -5, term_make_opcode(OPCODE_MINE));
+                put(4, -5, term_make_opcode(OPCODE_BURY));
+                put(7, -5, term_make_opcode(OPCODE_TURN_SOUTH));
+                put(7, -7, term_make_opcode(OPCODE_TURN_WEST));
+                put(1, -7, term_make_opcode(OPCODE_TURN_NORTH));
+                machine_at_rest(1, -6, HEADING_NORTH);
+
+                // A loader: takes three piles from the ground (LOAD
+                // moves matter) and picks up two literals on the way,
+                // then halts showing a mixed stack
+                put(-8, -5, term_make_opcode(OPCODE_LOAD));
+                put(-8, -4, term_make_matter(MATTER_IRON_ORE));
+                put(-8, -3, term_make_integer_with(3));
+                put(-8, -2, term_make_opcode(OPCODE_LOAD));
+                put(-8, -1, term_make_matter(MATTER_LIMESTONE));
+                put(-8,  0, term_make_opcode(OPCODE_LOAD));
+                put(-8,  1, term_make_matter(MATTER_COAL));
+                put(-8,  2, term_make_integer_with(5));
+                put(-8,  3, term_make_opcode(OPCODE_HALT));
+                machine_at_rest(-8, -6, HEADING_NORTH);
+            }
 
             /*
             // matter: shipping containers, on the ground where the demo

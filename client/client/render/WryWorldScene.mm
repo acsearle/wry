@@ -9,6 +9,7 @@
 #include "ShaderTypes.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <bit>
 #include <random>
@@ -28,6 +29,8 @@
 #include "font.hpp"
 #include "gui_widget.hpp"
 #include "json.hpp"
+#include "machine.hpp"
+#include "matter.hpp"
 #include "mesh.hpp"
 #include "palette.hpp"
 #include "platform.hpp"
@@ -41,6 +44,9 @@
 
 #include "save.hpp"
 #include "server.hpp"
+
+static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
+              "ShaderTypes.h WryTerrainUniforms is sized per terrain kind");
 
 @implementation WryWorldScene
 {
@@ -195,9 +201,19 @@
     WryMesh* _truck_mesh;
     WryMesh* _mine_mesh;
     WryMesh* _furnace_mesh;
-    // Default visualization for every MATTER code until per-code
-    // appearances (meshes / tints / decals) exist.
+    // The visualization of MATTER_SHIPPING_CONTAINER
     WryMesh* _container_mesh;
+    // The terrain matters (MATTER_WATER .. MATTER_LIMESTONE) are a dark
+    // tile captioned with the kind (atlas row 2, by name from assets.json)
+    // carrying a pile of it: the poured-stockpile mesh (assets
+    // stockpile.obj, tools/stockpile_gen.py), tinted MATTER_COLOR_SRGB
+    WryMesh* _stockpile_mesh;
+    std::array<simd_float4, std::size(wry::MATTER_NAMES)> _matter_coordinate;
+    std::array<bool, std::size(wry::MATTER_NAMES)> _matter_has_coordinate;
+
+    // The shake of a digging machine (Machine::PHASE_MINING): a fresh
+    // random offset each frame.  Renderer-side only.
+    std::minstd_rand _shake;
     
     // The opcode palette's data and selection now live on
     // _model->_palette_overlay; the renderer reads it for painting only.
@@ -819,6 +835,8 @@
             f(_furnace_mesh, "furnace.obj");
             f(_mine_mesh, "mine.obj");
             f(_truck_mesh, "truck2.obj");
+            f(_stockpile_mesh, "stockpile.obj");
+            _stockpile_mesh.roughnessTexture = _white;   // loose stuff is matte
 
             // Baked-detail workflow: the render mesh is the 12-triangle box
             // proxy; the corrugation and door geometry live in the normal and
@@ -1004,6 +1022,7 @@
     _token_truck_coordinate = make<float4>(0.0f / kCells, 15.0f / kCells, 0.0f, 1.0f);
     _blank_coordinate       = make<float4>(4.0f / kCells, 11.0f / kCells, 0.0f, 1.0f);
     _dash_coordinate        = make<float4>(11.0f / kCells, 0.0f / kCells, 0.0f, 1.0f);
+    _matter_has_coordinate.fill(false);
 
     try {
         auto x = json::from_file<ContiguousDeque<ContiguousDeque<String>>>("assets.json");
@@ -1038,6 +1057,14 @@
                         _blank_coordinate = coordinate;
                     else if (sv == "dash1")
                         _dash_coordinate = coordinate;
+                    // The matter tiles: the MATTER code's own name
+                    else if (sv.starts_with("MATTER_")) {
+                        wry::MATTER m = wry::MATTER_from_name(std::string(sv).c_str());
+                        if ((m >= 0) && ((size_t)m < _matter_coordinate.size())) {
+                            _matter_coordinate[(size_t)m] = coordinate;
+                            _matter_has_coordinate[(size_t)m] = true;
+                        }
+                    }
                     // Lowercase opcode-art names: wired into the
                     // opcode coordinate table like any glyph, but
                     // routed through this branch so the art is
@@ -1706,6 +1733,7 @@
     _mine_mesh.instanceCount = 0;
     _truck_mesh.instanceCount = 0;
     _container_mesh.instanceCount = 0;
+    _stockpile_mesh.instanceCount = 0;
     // raid model for data
 
     if (show_map) {
@@ -1906,6 +1934,66 @@
             }
         };
 
+        // How tall a term stands when drawn: a chip is emit_symbol's
+        // slab (its thickness cap); a terrain matter is that slab plus
+        // its pile; the shipping container is its mesh.  A machine's
+        // stack piles its terms each on the one below, so the step up is
+        // the term's own height.
+        const float slab_thickness = 20.0f / texels_per_unit;
+        // The pile: the stockpile is authored at real scale (13.31 m
+        // across, 3.59 m tall, Z-up, base at z = 0); it is seated on the
+        // tile's face 2/3 of a unit across, its centre 1/12 of a unit
+        // north of the tile's, clear of the caption on the south edge
+        // (the frame's panel above the caption band, make_tile_atlas.py)
+        constexpr float pile_scale = (2.0f / 3.0f) / 13.31f;
+        constexpr float pile_height = 3.588f * pile_scale;
+        constexpr float pile_north = 2.0f / 24.0f;
+        auto has_tile = [&](wry::Term value) -> bool {
+            if (!value.is_matter())
+                return false;
+            auto m = (size_t)value.as_matter();
+            return (m < _matter_has_coordinate.size()) && _matter_has_coordinate[m];
+        };
+        auto term_height = [&](wry::Term value) -> float {
+            if (has_tile(value))
+                return slab_thickness + pile_height;
+            if (value.is_matter())
+                return 0.5f;   // the container
+            return slab_thickness;
+        };
+        // A matter tile and its pile, the tile centred at `location`
+        // (lying flat, world-aligned like every symbol)
+        auto emit_matter_tile = [&](simd_float4 location, wry::Term value) {
+            const size_t m = (size_t)value.as_matter();
+            emit_symbol(location, _matter_coordinate[m],
+                        make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f));
+            simd_float4 base = location;
+            base.y += pile_north;
+            base.z += slab_thickness * 0.5f;
+            auto A = simd_matrix_translate(base) * simd_matrix_scale(pile_scale);
+            MeshInstanced pile;
+            pile.model_transform = A;
+            pile.inverse_transpose_model_transform = inverse(transpose(A));
+            const uint8_t* c = m < std::size(wry::MATTER_COLOR_SRGB)
+                ? wry::MATTER_COLOR_SRGB[m] : wry::MATTER_COLOR_SRGB[0];
+            pile.albedo = make<float4>(wry::from_sRGB(c[0] / 255.0f),
+                                       wry::from_sRGB(c[1] / 255.0f),
+                                       wry::from_sRGB(c[2] / 255.0f), 1.0f);
+            [_stockpile_mesh addInstance:pile];
+        };
+        // The shipping container: its mesh standing at `base` (its
+        // underside), heading-aligned by `yaw`
+        auto emit_container = [&](simd_float4 base, float yaw) {
+            auto A = simd_matrix_translate(base);
+            A = A * simd_matrix_rotate(yaw, make<float3>(0.0, 0.0, -1.0));
+            A = A * simd_matrix_scale(container_mesh_scale);
+            MeshInstanced m;
+            m.model_transform = A;
+            m.inverse_transpose_model_transform = inverse(transpose(A));
+            m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
+            [_container_mesh addInstance:m];
+        };
+
         MeshVertex v;
         v.tangent = make<float4>(1.0f, 0.0f, 0.0f, 0.0f);
         v.bitangent = make<float4>(0.0f, 1.0f, 0.0f, 0.0f);
@@ -1930,8 +2018,11 @@
                 auto dx0 = make<float2>(sin(h0), cos(h0));
                 auto dx1 = make<float2>(sin(h1), cos(h1));
                                 
+                // While digging the machine is at rest on its cell (the
+                // dig's times bracket the dig, not a move), shaking
+                const bool digging = p->_phase == wry::Machine::PHASE_MINING;
                 float t = 1.0;
-                if (tnow < p->_new_time) {
+                if (!digging && (tnow < p->_new_time)) {
                     assert(tnow >= p->_old_time);
                     t = (tnow - p->_old_time) / (float) (p->_new_time - p->_old_time);
                 }
@@ -1975,6 +2066,13 @@
 
                 simd_float4 location = make<float4>(0.0, 0.0, 0.0, 1.0f);
                 location.xy = x1;
+                if (digging) {
+                    // a new small random offset every frame; the carried
+                    // stack shakes with the token
+                    std::uniform_real_distribution<float> jiggle(-0.035f, 0.035f);
+                    location.x += jiggle(_shake);
+                    location.y += jiggle(_shake);
+                }
                 
                 
                 auto A = simd_matrix_translate(location);
@@ -2000,49 +2098,42 @@
                     emit_slab(centre, _token_truck_coordinate, across, up, thickness, _model->_token_fillet * texels_per_unit, thickness, false, texels_per_unit * 0.6f);
                 }
                 
-                // The carried stack, piled on the token like chips: each
-                // item sits on the one below at its own height (a slab's
-                // is emit_symbol's cap), a hair apart
-                location.z += _model->_token_height;
-                const float slab_thickness = 20.0f / texels_per_unit;
+                // The carried stack, piled on the token: each item sits
+                // on the one below, a hair apart, and the step up is the
+                // item's own height (term_height: a chip, a matter tile
+                // and its pile, a container)
                 const float stack_gap = 0.004f;
+                float base = _model->_token_height;
+                const float yaw = atan2(dx1.x, dx1.y);
                 for (int i = (int) wry::PersistentStack<wry::Term>::size(p->_stack); i--;) {
                     wry::Term value = wry::PersistentStack<wry::Term>::at(p->_stack, i);
-                    const float item_height = value.is_matter() ? 0.5f : slab_thickness;
-                    location.z += item_height * 0.5f;
-                    if (value.is_matter()) {
+                    const float item_height = term_height(value);
+                    simd_float4 under = location;     // the item's underside
+                    under.z = base;
+                    simd_float4 centre = location;    // a chip's or tile's centre
+                    centre.z = base + slab_thickness * 0.5f;
+                    base += item_height + stack_gap;
+                    if (has_tile(value)) {
+                        emit_matter_tile(centre, value);
+                    } else if (value.is_matter()) {
                         // held matter rides as a mesh at this stack slot,
                         // heading-aligned with the machine
-                        auto A = simd_matrix_translate(location);
-                        A = A * simd_matrix_rotate(atan2(dx1.x, dx1.y), make<float3>(0.0, 0.0, -1.0));
-                        A = A * simd_matrix_scale(container_mesh_scale);
-                        MeshInstanced m;
-                        m.model_transform = A;
-                        m.inverse_transpose_model_transform = inverse(transpose(A));
-                        m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
-                        [_container_mesh addInstance:m];
-                        location.z += item_height * 0.5f + stack_gap;
-                        continue;
-                    }
-                    simd_float4 coordinate;
-                    if (value.is_opcode()) {
-                        coordinate = _opcode_to_coordinate[value.as_opcode()];
+                        emit_container(under, yaw);
+                    } else if (value.is_opcode()) {
+                        emit_symbol(centre, _opcode_to_coordinate[value.as_opcode()],
+                                    make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f));
                     } else if (wry::term_is_boolean(value)) {
-                        coordinate = wry::term_as_boolean(value)
-                            ? _true_coordinate : _false_coordinate;
+                        emit_symbol(centre, wry::term_as_boolean(value) ? _true_coordinate : _false_coordinate,
+                                    make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f));
                     } else if (value.is_inty()) {
-                        emit_number(location, make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f), value.as_int());
-                        location.z += item_height * 0.5f + stack_gap;
-                        continue;
+                        emit_number(centre, make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f), value.as_int());
                     } else {
                         // not renderable yet (heap integer, string, ...):
                         // the same neutral dot the ground uses, rather than
                         // a garbage hex digit cut from the bit pattern
-                        coordinate = _cdot_coordinate;
+                        emit_symbol(centre, _cdot_coordinate,
+                                    make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f));
                     }
-                    emit_symbol(location, coordinate,
-                                make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f));
-                    location.z += item_height * 0.5f + stack_gap;
                 }
                 
             } else if (auto p = dynamic_cast<const LocalizedEntity*>(q)){
@@ -2121,17 +2212,15 @@
                         } else {
                             printf("q is opcode but was not found, %d\n", q.as_opcode());
                         }
+                    } else if (has_tile(q)) {
+                        // a terrain matter: its tile and pile
+                        emit_matter_tile(location, q);
+                        continue;
                     } else if (q.is_matter()) {
-                        // matter renders as a mesh sitting on an ordinary
-                        // empty tile
+                        // the container renders as a mesh sitting on an
+                        // ordinary empty tile
                         coordinate = _cdot_coordinate;
-                        auto A = simd_matrix_translate(location);
-                        A = A * simd_matrix_scale(container_mesh_scale);
-                        MeshInstanced m;
-                        m.model_transform = A;
-                        m.inverse_transpose_model_transform = inverse(transpose(A));
-                        m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
-                        [_container_mesh addInstance:m];
+                        emit_container(location, 0.0f);
                     } else {
                         //printf("q is mystery\n");
                         coordinate = _cdot_coordinate;
@@ -2172,7 +2261,7 @@
                                 tile_at(b.x - 1, b.y - 1),
                                 [&](Coordinate xy, wry::Terrain t) {
                     if ((t < 0) || (t >= wry::TERRAIN_KIND_COUNT))
-                        t = wry::TERRAIN_KIND_COUNT - 1;
+                        t = wry::TERRAIN_ROCK;   // an unknown code: plain ground
                     float2 r = _model->render_position(xy);
                     int i = (int)std::lround(r.x) - a.x;
                     int j = (int)std::lround(r.y) - a.y;
@@ -2206,6 +2295,11 @@
                 board.lattice[wry::TERRAIN_SAND]  = make<float4>(0.7f * la, 1.0f, ma, 0.4f);
                 board.lattice[wry::TERRAIN_GRASS] = make<float4>(la, 1.0f, ma, 0.0f);
                 board.lattice[wry::TERRAIN_ROCK]  = make<float4>(la, 1.0f, ma, 0.5f);
+                // the ores are prospects: most cells marked, so a patch
+                // reads by its marks as well as its tint
+                board.lattice[wry::TERRAIN_COAL]      = make<float4>(la, 1.0f, ma, 0.8f);
+                board.lattice[wry::TERRAIN_IRON_ORE]  = make<float4>(la, 1.0f, ma, 0.8f);
+                board.lattice[wry::TERRAIN_LIMESTONE] = make<float4>(la, 1.0f, ma, 0.7f);
                 board.line_color = linear(38, 38, 44);
                 board.misregister = simd_make_float2(_model->_board_misregister_x, _model->_board_misregister_y);
                 board.tint_blur = _model->_board_tint_blur;
@@ -2316,6 +2410,7 @@
         [_mine_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
         [_truck_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
         [_container_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
+        [_stockpile_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
         
         // TODO: add an irradiance buffer from the light
         //
@@ -2540,6 +2635,7 @@
                 [_mine_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
                 [_truck_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
                 [_container_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
+                [_stockpile_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
 
                 // Symbol decals: now that everything that can lie under a
                 // slab is in the G-buffer, multiply the slabs' ambient

@@ -59,7 +59,7 @@ namespace wry {
                             Coordinate{X0 + E - 1, Y0 + j + SLICE_ROWS - 1},
                             [map](Coordinate xy, Terrain t) {
                 if ((t < 0) || (t >= TERRAIN_KIND_COUNT))
-                    t = TERRAIN_KIND_COUNT - 1;
+                    t = TERRAIN_ROCK;   // an unknown code: plain ground
                 plot(*map, xy, TERRAIN_COLOR_SRGB[t]);
             });
             co_await coroutine::TransferToPoolExecutor{};

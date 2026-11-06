@@ -314,8 +314,13 @@ typedef struct {
 // Distances are world units unless named otherwise.
 
 #define WRY_TERRAIN_KIND_NONE 255
-#define WRY_TERRAIN_KINDS 4
+#define WRY_TERRAIN_KINDS 7
+// The symbol atlas row of the marks of terrain kinds 0-3 (water, sand,
+// grass, rock), at column kind * 4 + variant; the ores (coal, iron ore,
+// limestone: kinds 4-6) are in WRY_TERRAIN_ORE_PATTERN_ROW at column
+// (kind - 4) * 4 + variant (tools/make_assets.py TERRAIN_ROW / ORE_TERRAIN_ROW)
 #define WRY_TERRAIN_PATTERN_ROW 14
+#define WRY_TERRAIN_ORE_PATTERN_ROW 12
 #define WRY_TERRAIN_PATTERN_VARIANTS 4
 
 typedef struct {

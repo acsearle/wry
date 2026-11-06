@@ -743,6 +743,9 @@ namespace deferred {
         float4 tangent_world;
         float4 bitangent_world;
         float4 normal_world;
+        // MeshInstanced::albedo: a linear tint multiplying the albedo
+        // texture (white for an untinted instance)
+        half4 tint [[flat]];
     };
     
     // This is the g-buffer
@@ -800,6 +803,7 @@ namespace deferred {
         MeshInstanced instance = instancedArray[instance_id];
         
         out.coordinate = in.coordinate;
+        out.tint = half4(instance.albedo);
         
         float4 position_world = instance.model_transform * in.position;
         out.tangent_world   = instance.inverse_transpose_model_transform * in.tangent;
@@ -851,7 +855,7 @@ namespace deferred {
                                          half3(in.normal_world.xyz)) * normalSample.xyz);
 
         out.light = front_facing ? emissiveSample : half4(1.0h, 0.0h, 1.0h, 0.0h);
-        out.albedo.rgb = front_facing ? albedoSample.rgb : 0.0h;
+        out.albedo.rgb = front_facing ? albedoSample.rgb * in.tint.rgb : 0.0h;
         out.albedo.a = 1.0h;
         out.normal.xyz = front_facing ? normal : 0.0h;
         out.normal.w = 0.0h;
@@ -1617,7 +1621,10 @@ namespace deferred {
         float2 fc = g + 0.5f;                       // across the cell, y up
         fc.x = (h & 4u) ? 1.0f - fc.x : fc.x;
         fc.y = (h & 8u) ? 1.0f - fc.y : fc.y;
-        float2 uv = (float2((float)(kind * WRY_TERRAIN_PATTERN_VARIANTS + variant), (float)WRY_TERRAIN_PATTERN_ROW)
+        // (kinds 0-3 in the pattern row, the ores 4-6 in the ore row)
+        int pattern_row = kind < 4 ? WRY_TERRAIN_PATTERN_ROW : WRY_TERRAIN_ORE_PATTERN_ROW;
+        int pattern_column = (kind & 3) * WRY_TERRAIN_PATTERN_VARIANTS + (int)variant;
+        float2 uv = (float2((float)pattern_column, (float)pattern_row)
                      + float2(fc.x, 1.0f - fc.y)) / (float)WRY_SYMBOL_ATLAS_CELLS;
         float d_texels = (field.sample(bilinear, uv).r - 0.5f) * (2.0f * WRY_SYMBOL_SDF_RANGE);
         float d = d_texels / 256.0f + board.mark_bias;       // 256 source texels per cell
