@@ -1,7 +1,8 @@
 # The Machine Language
 
 Documentation for the language defined by `OPCODE` (game/opcode.hpp) and its
-interpreter `Machine::notify` (game/machine.cpp), as of 2026-07-23.  The
+interpreter `Machine::notify` (game/machine.cpp), as of 2026-07-23
+(MINE and BURY, 5.8, added 2026-11-07).  The
 second half of this document is a design review: rough edges and open
 questions, plus a changelog of the defects already fixed.  Section 10
 records future directions -- direction of travel, not commitments.
@@ -54,8 +55,10 @@ Matter is conserved.  A `MATTER` Term denotes a physical object; the
 opcode semantics refuse to copy it (`DUPLICATE`, `OVER`) or destroy it
 (`STORE` onto matter waits instead of overwriting).  Numbers, by
 contrast, are information: freely copied by reading and destroyed by
-overwriting.  Only a `Source` entity creates matter and only a `Sink`
-destroys it.
+overwriting.  Matter enters and leaves the world only at its edges: a
+`Source` entity creates it and a `Sink` destroys it, and the ground is
+both -- `MINE` digs a terrain kind's own matter out of it and `BURY`
+returns matching matter to it (5.8).
 
 ### Headings
 
@@ -74,7 +77,7 @@ A machine is, in language terms:
 | location    | the cell it is on (or arriving at)                          |
 | heading     | direction of travel, quarter-turns from north               |
 | stack       | a stack of Terms, unbounded depth                           |
-| pending op  | `_on_arrival`: a deferred memory opcode, applied on arrival |
+| pending op  | `_on_arrival`: a deferred memory or dig opcode, applied on arrival |
 
 The stack is a persistent linked list; pushes of null Terms are silently
 discarded, and all partial operations (arity or type mismatch) leave the
@@ -89,6 +92,11 @@ The interpreter is a pipeline over two cells: the opcode a machine drives
 over is *executed* at that cell, but its *memory effect* (if it is one of
 the four memory opcodes) applies to the **next** cell the machine enters.
 Precisely, at each arrival at cell C:
+
+0. **A pending dig comes first.**  If `_on_arrival` is `MINE` or `BURY`
+   the machine first spends the terrain's dig time on C (5.8), then
+   applies the dig's effect to its stack, clears `_on_arrival`, and runs
+   the rest of this cycle as an ordinary arrival.
 
 1. **Pending memory op gates interpretation.**  If `_on_arrival` (set at
    the previous cell) is `LOAD`, `STORE`, `EXCHANGE`, or `SKIP`, the value
@@ -390,6 +398,56 @@ three other analyses already drew (no-random-access, 8.3's winding,
 a blueprint does not rewrite combinator constants.
 
 
+### 5.8 Digging (prefix opcodes; operand = the terrain under the next cell)
+
+| opcode | effect on arrival at operand cell                                    |
+|--------|----------------------------------------------------------------------|
+| MINE   | dig for the terrain's time, then ( -- m ) push the terrain's matter  |
+| BURY   | dig for the terrain's time, then ( m -- ) destroy m if it is exactly the terrain's matter; otherwise nothing (the time was wasted) |
+
+Added 2026-11-07 with the first materials: terrain kinds water, sand,
+grass, rock, coal, iron ore, limestone, and one matter kind for each
+(`MATTER_WATER` .. `MATTER_LIMESTONE`).  `terrain.hpp` `TERRAIN_MINING`
+gives each kind its dig time and matter:
+
+| terrain   | ticks | yields           |
+|-----------|-------|------------------|
+| water     |  64   | MATTER_WATER     |
+| sand      | 128   | MATTER_SAND      |
+| grass     | 192   | MATTER_GRASS     |
+| rock      | 512   | MATTER_ROCK      |
+| coal      | 320   | MATTER_COAL      |
+| iron ore  | 448   | MATTER_IRON_ORE  |
+| limestone | 384   | MATTER_LIMESTONE |
+| (none)    |  64   | nothing          |
+
+(A hop is 64 ticks.)  That water piles up and grass is minable is
+accepted for now.
+
+Semantics, and the choices in them:
+
+- **Latched like the memory ops.**  The dig addresses the cell straight
+  ahead of the glyph, laid out as `[MINE] [x]`.  But the operand is the
+  *ground* under x, not its value, so x is **not** protected: once the
+  dig is done the arrival proceeds with nothing latched, and x is
+  executed or auto-picked as usual.  `[MINE] [DROP]` digs and then puts
+  the product down ahead; `[MINE] [HALT]` digs and parks holding it.
+- **The dig is time at the cell** (`PHASE_MINING`; the machine shakes in
+  place).  It happens before anything else at the arrival -- before the
+  cell is even read for execution -- and is committed: it cannot be
+  interrupted, and a machine whose way on is then blocked parks holding
+  what it dug.  The dig's duration is fixed when it starts; its yield is
+  read from the terrain when it finishes.
+- **Conservation.**  The ground is a Source for its own matter (MINE) and
+  a Sink for its own matter (BURY).  BURY destroys only an exact match of
+  the top of stack; anything else -- information, other matter, an empty
+  stack -- is left alone and the dig time is simply lost.  Matter is
+  never converted.
+- **Terrain is not consumed** (yet): digging does not change the ground,
+  and burying does not fill it.  Depletion, and terrain mutated by
+  digging and filling, are natural next steps (10.8).
+- **Reorientation**: both are invariant.
+
 ## 6. Idioms
 
 The examples use compass conventions (y increases northward/up) and this
@@ -494,6 +552,7 @@ the gate token, and the queue behind it is the wait set.
 
 ### 6.8 Matter logistics
 
+`MINE` digs matter out of the ground and `BURY` returns it (5.8).
 `LOAD` takes a container (the cell empties), `DROP` puts the carried one
 down in the next empty cell ahead (waiting for it to empty if needed),
 `EXCHANGE` swaps cargo with the ground, `STORE` places it but only into
