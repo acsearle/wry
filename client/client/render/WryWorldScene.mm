@@ -205,9 +205,10 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
     WryMesh* _container_mesh;
     // The terrain matters (MATTER_WATER .. MATTER_LIMESTONE) are a dark
     // tile captioned with the kind (atlas row 2, by name from assets.json)
-    // carrying a pile of it: the poured-stockpile mesh (assets
-    // stockpile.obj, tools/stockpile_gen.py), tinted MATTER_COLOR_SRGB
-    WryMesh* _stockpile_mesh;
+    // carrying a pile of it: sand art in an invisible cube, poured in
+    // light grey layers (assets sandbox.obj + sandbox_layers.png,
+    // tools/sandbox_gen.py), tinted MATTER_COLOR_SRGB
+    WryMesh* _sandbox_mesh;
     std::array<simd_float4, std::size(wry::MATTER_NAMES)> _matter_coordinate;
     std::array<bool, std::size(wry::MATTER_NAMES)> _matter_has_coordinate;
 
@@ -835,8 +836,11 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
             f(_furnace_mesh, "furnace.obj");
             f(_mine_mesh, "mine.obj");
             f(_truck_mesh, "truck2.obj");
-            f(_stockpile_mesh, "stockpile.obj");
-            _stockpile_mesh.roughnessTexture = _white;   // loose stuff is matte
+            f(_sandbox_mesh, "sandbox.obj");
+            _sandbox_mesh.roughnessTexture = _white;   // loose stuff is matte
+            _sandbox_mesh.albedoTexture = [_ctx newMipmappedTextureFromResource:@"sandbox_layers"
+                                                                         ofType:@"png"
+                                                                withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
 
             // Baked-detail workflow: the render mesh is the 12-triangle box
             // proxy; the corrugation and door geometry live in the normal and
@@ -1733,7 +1737,7 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
     _mine_mesh.instanceCount = 0;
     _truck_mesh.instanceCount = 0;
     _container_mesh.instanceCount = 0;
-    _stockpile_mesh.instanceCount = 0;
+    _sandbox_mesh.instanceCount = 0;
     // raid model for data
 
     if (show_map) {
@@ -1940,13 +1944,13 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
         // stack piles its terms each on the one below, so the step up is
         // the term's own height.
         const float slab_thickness = 20.0f / texels_per_unit;
-        // The pile: the stockpile is authored at real scale (13.31 m
-        // across, 3.59 m tall, Z-up, base at z = 0); it is seated on the
-        // tile's face 2/3 of a unit across, its centre 1/12 of a unit
-        // north of the tile's, clear of the caption on the south edge
-        // (the frame's panel above the caption band, make_tile_atlas.py)
-        constexpr float pile_scale = (2.0f / 3.0f) / 13.31f;
-        constexpr float pile_height = 3.588f * pile_scale;
+        // The pile: the sandbox is authored as a unit cube (Z-up, floor
+        // centred on the origin); it is seated on the tile's face 0.6 of
+        // a unit on a side, its centre 1/12 of a unit north of the
+        // tile's, clear of the caption on the south edge (the frame's
+        // panel above the caption band, make_tile_atlas.py)
+        constexpr float pile_scale = 0.6f;
+        constexpr float pile_height = pile_scale;   // the peak meets the lid
         constexpr float pile_north = 2.0f / 24.0f;
         auto has_tile = [&](wry::Term value) -> bool {
             if (!value.is_matter())
@@ -1979,7 +1983,7 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
             pile.albedo = make<float4>(wry::from_sRGB(c[0] / 255.0f),
                                        wry::from_sRGB(c[1] / 255.0f),
                                        wry::from_sRGB(c[2] / 255.0f), 1.0f);
-            [_stockpile_mesh addInstance:pile];
+            [_sandbox_mesh addInstance:pile];
         };
         // The shipping container: its mesh standing at `base` (its
         // underside), heading-aligned by `yaw`
@@ -2410,7 +2414,7 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
         [_mine_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
         [_truck_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
         [_container_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
-        [_stockpile_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
+        [_sandbox_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
         
         // TODO: add an irradiance buffer from the light
         //
@@ -2635,7 +2639,7 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
                 [_mine_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
                 [_truck_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
                 [_container_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
-                [_stockpile_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
+                [_sandbox_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
 
                 // Symbol decals: now that everything that can lie under a
                 // slab is in the G-buffer, multiply the slabs' ambient

@@ -78,18 +78,19 @@ X(MATTER_LIMESTONE),\
         return MATTER{-1};
     }
 
-    // Representative colour of each kind's pile (the stockpile the board
-    // draws on a matter tile), as sRGB bytes indexed by MATTER code.
+    // Representative colour of each kind's pile (the sand-art box the
+    // board draws on a matter tile; it multiplies the box's light grey
+    // layers), as sRGB bytes indexed by MATTER code.
     // Renderer-side cosmetics only -- never simulation state.
     inline constexpr uint8_t MATTER_COLOR_SRGB[][4] = {
         { 200, 200, 200, 255 },   // MATTER_SHIPPING_CONTAINER (drawn as its mesh)
-        {  70, 130, 205, 255 },   // MATTER_WATER
-        { 222, 196, 140, 255 },   // MATTER_SAND
-        {  96, 160,  70, 255 },   // MATTER_GRASS
-        { 140, 136, 128, 255 },   // MATTER_ROCK
-        {  40,  40,  44, 255 },   // MATTER_COAL
-        { 160,  80,  50, 255 },   // MATTER_IRON_ORE
-        { 232, 228, 212, 255 },   // MATTER_LIMESTONE
+        { 110, 160, 220, 255 },   // MATTER_WATER
+        { 232, 208, 150, 255 },   // MATTER_SAND
+        { 120, 180,  90, 255 },   // MATTER_GRASS
+        { 165, 160, 150, 255 },   // MATTER_ROCK
+        {  60,  60,  66, 255 },   // MATTER_COAL
+        { 185,  98,  62, 255 },   // MATTER_IRON_ORE
+        { 240, 236, 222, 255 },   // MATTER_LIMESTONE
     };
     static_assert(std::size(MATTER_COLOR_SRGB) == std::size(MATTER_NAMES));
 
