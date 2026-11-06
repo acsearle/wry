@@ -42,6 +42,7 @@ namespace wry {
             SHUTDOWN = 5,   // bytes: u64 grace in milliseconds
             DEADLINE = 6,   // bytes: u64 connection: the handshake deadline
             REFERENCE = 7,  // bytes: u64 client: whose hashes are the truth
+            STEP_IF_PAUSED = 8, // bytes: u64 n
         };
 
         std::string u64_bytes(uint64_t x) {
@@ -496,6 +497,22 @@ namespace wry {
                         finalize(s);
                     return true;
                 }
+                case STEP_IF_PAUSED: {
+                    // Decided here, in inbox order: a PAUSE posted before
+                    // this has already been handled, which the poster
+                    // cannot tell from clock()
+                    bool paused = false;
+                    {
+                        std::scoped_lock lock{s->mutex};
+                        paused = s->paused;
+                    }
+                    if (paused) {
+                        uint64_t n = u64_of(posted.bytes);
+                        for (uint64_t i = 0; i != n; ++i)
+                            finalize(s);
+                    }
+                    return true;
+                }
                 case DEADLINE: {
                     uint64_t id = u64_of(posted.bytes);
                     auto it = s->clients.find(id);
@@ -626,6 +643,10 @@ namespace wry {
 
     void Relay::step(uint64_t n) {
         _shared->transport->post(STEP, u64_bytes(n));
+    }
+
+    void Relay::step_if_paused(uint64_t n) {
+        _shared->transport->post(STEP_IF_PAUSED, u64_bytes(n));
     }
 
     coroutine::Task Relay::shutdown(std::chrono::milliseconds grace) {
@@ -1419,6 +1440,38 @@ namespace wry {
         (void) ended;
         co_await a.transport->shutdown(std::chrono::milliseconds(100));
         co_await silent.transport->shutdown(std::chrono::milliseconds(100));
+        (void) co_await scope.join();
+        co_return;
+    };
+
+    define_test("relay_step_if_paused") {
+        // An hour's quantum: running or paused, only the posts below move
+        // the head, so every count is exact
+        auto relay = Relay::make(paused_limits());
+        Nursery scope;
+        scope.soon(relay->serve());
+        const uint64_t head = relay->clock().head;
+
+        // Running, it does nothing.  The pause behind it marks that it has
+        // been handled: the head is the PAUSED step alone
+        relay->step_if_paused(3);
+        relay->pause();
+        bool paused = co_await eventually([&] { return relay->clock().paused; });
+        assert(paused && relay->clock().head == head + 1);
+        (void) paused;
+
+        // The decision is the relay's, in inbox order.  Posted behind a
+        // pause it steps, though clock() may still read running when it
+        // is posted: a caller that tested clock() first would step
+        // nothing here and wait forever
+        relay->resume();
+        relay->pause();
+        relay->step_if_paused(3);
+        bool stepped = co_await eventually([&] { return relay->clock().head == head + 5; });
+        assert(stepped && relay->clock().paused);
+        (void) stepped;
+
+        co_await relay->shutdown(std::chrono::milliseconds(100));
         (void) co_await scope.join();
         co_return;
     };

@@ -176,19 +176,28 @@ namespace wry {
             co_await frames_until(joined);
             assert(joined());
 
-            // A write, stepped in: `step` is pending until the relay's
-            // steps have arrived and been applied
+            // A write, stepped in: `step` is pending until that many more
+            // steps have arrived and been applied.  Which step carries the
+            // write is not fixed: the pause and the steps are posted to
+            // the relay while the write crosses the client's socket, so
+            // the steps can be finalized before it arrives, and the steps
+            // a reply counts can be ones already on their way.  So step
+            // until it shows, as the smoke scripts do
             [[maybe_unused]] auto paused = gc.issue(Origin::gui, "pause");
             assert(paused.reply.status == Reply::OK);
             [[maybe_unused]] auto written = gc.issue(Origin::gui, "write Coordinate(1, 1) OPCODE::SWAP");
             assert(written.reply.status == Reply::OK);
-            [[maybe_unused]] auto before = gc.issue(Origin::gui, "get Coordinate(1, 1)");
-            assert(before.reply.text == StringView("null"));
-            [[maybe_unused]] auto stepped = gc.issue(Origin::gui, "step 2");
-            assert(stepped.reply.status == Reply::PENDING);
-            co_await settle();
-            [[maybe_unused]] auto after = gc.issue(Origin::gui, "get Coordinate(1, 1)");
-            assert(after.reply.text == StringView("OPCODE::SWAP"));
+            auto landed = [&] {
+                return gc.issue(Origin::gui, "get Coordinate(1, 1)").reply.text == StringView("OPCODE::SWAP");
+            };
+            [[maybe_unused]] bool before = landed();
+            assert(!before);
+            for (const auto deadline = testing::soon(); !landed();) {
+                assert(std::chrono::steady_clock::now() < deadline);
+                [[maybe_unused]] auto stepped = gc.issue(Origin::gui, "step");
+                assert(stepped.reply.status == Reply::PENDING);
+                co_await settle();
+            }
 
             // A screenshot is refused by the next frame
             [[maybe_unused]] auto shot = gc.issue(Origin::gui, "screenshot \"/dev/null\"");

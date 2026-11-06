@@ -104,10 +104,15 @@ namespace wry {
         // The clock, from the host (the clock commands).  pause finalizes
         // one more step carrying PAUSED and stops the timer; resume
         // restarts it, the next step carrying RESUMED; step(n) finalizes n
-        // steps at once, paused or not
+        // steps at once, paused or not; step_if_paused(n) does so only if
+        // the clock is paused when the relay comes to it.  These are
+        // handled in the order posted, and clock() lags them, so "step if
+        // paused" has to be asked of the relay: a caller that tests
+        // clock().paused and then steps misses a pause it has just posted
         void pause();
         void resume();
         void step(uint64_t n);
+        void step_if_paused(uint64_t n);
 
         // Graceful end: SHUTDOWN to every client, the transport's own
         // graceful shutdown, then the task ends.  Resolves once it has.

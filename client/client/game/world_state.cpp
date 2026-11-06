@@ -1164,8 +1164,11 @@ namespace wry {
                 if (n < 0)
                     return Reply::error(String("n must be non-negative"));
                 WorldState& ws = *c.world;
-                if (ws._host && ws._host->relay().clock().paused)
-                    ws._host->relay().step((uint64_t)n);
+                // The relay decides, in order behind any `pause` or
+                // `resume` just issued; clock() here would still read the
+                // state before them
+                if (ws._host)
+                    ws._host->relay().step_if_paused((uint64_t)n);
                 return Reply::later(std::make_shared<StepPending>(
                     c.gui, &ws, ws._steps_taken + (uint64_t)n));
             }));

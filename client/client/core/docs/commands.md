@@ -493,8 +493,15 @@ whatever the clock does.
   carries PAUSED.  Frames continue, so the GUI stays live and
   screenshots work.
 - `step n`, while paused, has the relay finalize n steps at once; the
-  command replies once this client has applied them.  While running it
-  only waits for n more steps.
+  command replies once this client has applied n more steps.  While
+  running it only waits for n more steps.  Paused or running is the
+  relay's decision when the request reaches it, in order behind any
+  `pause` or `resume` issued before, so `pause` then `step n` steps.
+  The steps counted are the next n to arrive, which just after a
+  `pause` can include ones already on their way; and a `write` issued
+  just before travels the session's socket, so it may ride a later
+  step than these.  A script that needs the write steps until it reads
+  it back.
 - `resume` starts the timer again; the next step carries RESUMED.
 - `frame n` waits n frames without regard to the step clock, for GUI
   animation and overlay settling.
