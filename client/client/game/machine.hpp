@@ -30,6 +30,9 @@ namespace wry {
             PHASE_TRAVELLING,
             PHASE_WAITING_FOR_OLD,
             PHASE_WAITING_FOR_NEW,
+            PHASE_MINING,          // digging (MINE or BURY, still latched
+                                   // in _on_arrival) at _new_location
+                                   // from _old_time until _new_time
         } _phase = PHASE_WAITING_FOR_NEW;
         
         i64 _on_arrival = OPCODE_NOOP;
@@ -38,7 +41,10 @@ namespace wry {
         
 
         // The _old_* and _new_* states represent the beginning and end states
-        // of travelling.  They are used by the visualization as a lerp
+        // of travelling.  They are used by the visualization as a lerp.
+        // While PHASE_MINING the locations and headings agree and the
+        // times bracket the dig (the visualization shakes the machine
+        // in place instead).
         
         i64 _old_heading = HEADING_NORTH;
         i64 _new_heading = HEADING_NORTH;

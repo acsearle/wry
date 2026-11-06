@@ -32,6 +32,13 @@ namespace wry {
     //                   done nothing at all.
     //   apply_pending   the latched memory op's effect at this cell
     //                   (LOAD / STORE / EXCHANGE / auto-pickup).
+    //   the dig         MINE and BURY, latched like the memory ops, are
+    //                   timed: on arrival at their operand cell the
+    //                   machine spends the terrain's dig time there
+    //                   (PHASE_MINING) before anything else, then applies
+    //                   the dig's effect and re-enters the arrival with
+    //                   nothing latched, so the cell is planned, executed
+    //                   and auto-picked as normal.
     //   the action switch  the executed opcode's stack and world
     //                   effects, in notify's commit tail.
     //
@@ -321,6 +328,37 @@ namespace wry {
             }
         }
 
+        // MINE and BURY latch across the hop like the memory ops, but
+        // their operand is the terrain under the next cell, not its
+        // value: they do not suppress executing or auto-picking it.
+        bool pending_digs(i64 pending) {
+            return (pending == OPCODE_MINE) || (pending == OPCODE_BURY);
+        }
+
+        TerrainMining dig_at(Transaction* tx, Coordinate xy) {
+            Terrain t = -1;
+            return tx->try_read_terrain_for_coordinate(xy, t)
+                ? terrain_mining(t)
+                : TERRAIN_MINING_NONE;
+        }
+
+        // The finished dig's effect: MINE pushes the terrain's matter
+        // (creating it: the ground is a Source); BURY destroys the top
+        // of the stack if it is exactly that matter (the ground is a
+        // Sink for its own kind), and otherwise the time was wasted.
+        void apply_dig(Machine* new_this, i64 pending, TerrainMining dig) {
+            if (dig.matter < 0)
+                return;
+            Term product = term_make_matter((MATTER)dig.matter);
+            if (pending == OPCODE_MINE) {
+                new_this->push(product);
+            } else {
+                Term top = new_this->peek();
+                if (top.is_matter() && (top._data == product._data))
+                    new_this->pop();
+            }
+        }
+
     } // anonymous namespace
 
     int64_t Machine::notify(TransactionContext* context) const {
@@ -335,7 +373,26 @@ namespace wry {
         
         //printf("Machine::notify()\n");
 
-        switch (_phase) {
+        // The state the arrival is planned from: ourselves as we were at
+        // the start of this transaction, unless a dig finishes first, in
+        // which case the arrival proceeds from the dug state (see the
+        // banner; the dig is the one effect that precedes the plan).
+        const Machine* self = this;
+
+        if (_phase == PHASE_MINING) {
+            if ((context->now() - _new_time) < 0) {
+                // spurious wakeup; the dig is not done
+                return 0;
+            }
+            // The cell's terrain is read again now: what the dig yields
+            // is what is there when it finishes
+            apply_dig(new_this, _on_arrival, dig_at(tx, _new_location));
+            new_this->_on_arrival = OPCODE_NOOP;
+            new_this->_phase = PHASE_WAITING_FOR_NEW;
+            self = new_this;
+        }
+
+        switch (new_this->_phase) {
                 
             case PHASE_TRAVELLING: {
                 // Machine is travelling from old location to new location
@@ -362,9 +419,9 @@ namespace wry {
                     EntityIDSet located;
                     (void) tx->try_read_located_for_coordinate(_old_location, located);
                     EntityIDSet without;
-                    EntityID self = this->_entity_id;
-                    located.for_each([&without, self](EntityID id) {
-                        if (id != self)
+                    EntityID me = this->_entity_id;
+                    located.for_each([&without, me](EntityID id) {
+                        if (id != me)
                             without.set(id);
                     });
                     tx->write_located_for_coordinate(_old_location, without);
@@ -388,11 +445,30 @@ namespace wry {
                 (void) tx->try_read_entity_id_for_coordinate(_new_location, occupant);
                 assert(occupant == this->_entity_id);
 
+                // A latched MINE or BURY digs before anything else
+                // happens here: spend the terrain's dig time on this
+                // cell, shaking in place.  Nothing else is read or
+                // decided until the dig is done (the PHASE_MINING
+                // prologue above), so the cell's glyph is the one there
+                // when it finishes.  Like travel, the dig is committed
+                // time: it cannot be interrupted, and a machine that
+                // then parks keeps what it dug.
+                if (pending_digs(self->_on_arrival)) {
+                    TerrainMining dig = dig_at(tx, _new_location);
+                    new_this->_phase = PHASE_MINING;
+                    new_this->_old_time = context->now();
+                    new_this->_new_time = context->now() + dig.ticks;
+                    tx->write_entity_for_entity_id(this->_entity_id, new_this);
+                    tx->wait_on_time(new_this->_new_time);
+                    tx->on_abort_retry();
+                    return 0;
+                }
+
                 // Decide, then commit: the plan gathers every read and
                 // chooses a disposition; writes happen only once we know
                 // which path we are on.  See the interpreter banner at
                 // the top of this file.
-                ArrivalPlan plan = plan_arrival(this, tx);
+                ArrivalPlan plan = plan_arrival(self, tx);
 
                 switch (plan.disposition) {
 
@@ -475,7 +551,7 @@ namespace wry {
                     tx->write_located_for_coordinate(plan.beyond, located);
                 }
 
-                apply_pending(this, new_this, tx, plan.cell_value);
+                apply_pending(self, new_this, tx, plan.cell_value);
 
                 // Apply the executed action.  latched is what enters
                 // _on_arrival: usually the action itself, but DROP of
@@ -1424,6 +1500,97 @@ namespace wry {
                                                                at_junction);
             assert(!at_junction.contains(mq_a));
             assert(!at_junction.contains(mq_b));
+        }
+
+        co_return;
+    };
+
+    // MINE and BURY: the timed dig.  One northbound track over laid
+    // terrain (the value plane is mostly empty: the operand is the
+    // ground), checked mid-dig and at rest.
+    //
+    //   (0,1)  MINE     (0,2)  grass          dig 192, push GRASS
+    //   (0,3)  BURY     (0,4)  grass          dig 192, GRASS destroyed
+    //   (0,5)  MINE     (0,6)  rock, value 7  dig 512, push ROCK; then the
+    //                                          cell runs as normal: 7 is
+    //                                          auto-picked (not data)
+    //   (0,7)  DROP                           drops the 7 (information)
+    //   (0,8)  BURY     (0,9)  sand           dig 128, ROCK is not SAND:
+    //                                          nothing destroyed
+    //   (0,10) MINE     (0,11) no terrain,    dig 64 yielding nothing;
+    //                          value HALT      then HALT executes
+    //
+    // 11 hops (704) plus digs 192 + 192 + 512 + 128 + 64 = 1088: the
+    // machine parks on (0,11) at 1792, holding exactly the ROCK.
+    define_test("machine_mine_bury") {
+
+        World* w = new World;
+        EntityID m0 = test_machine_at_rest(w, 0, 0);
+        test_put(w, 0,  1, term_make_opcode(OPCODE_MINE));
+        w->_terrain_for_coordinate.set(Coordinate{0, 2}, TERRAIN_GRASS);
+        test_put(w, 0,  3, term_make_opcode(OPCODE_BURY));
+        w->_terrain_for_coordinate.set(Coordinate{0, 4}, TERRAIN_GRASS);
+        test_put(w, 0,  5, term_make_opcode(OPCODE_MINE));
+        w->_terrain_for_coordinate.set(Coordinate{0, 6}, TERRAIN_ROCK);
+        test_put(w, 0,  6, term_make_integer_with(7));
+        test_put(w, 0,  7, term_make_opcode(OPCODE_DROP));
+        test_put(w, 0,  8, term_make_opcode(OPCODE_BURY));
+        w->_terrain_for_coordinate.set(Coordinate{0, 9}, TERRAIN_SAND);
+        test_put(w, 0, 10, term_make_opcode(OPCODE_MINE));
+        test_put(w, 0, 11, term_make_opcode(OPCODE_HALT));
+
+        static_assert(TERRAIN_MINING[TERRAIN_GRASS].ticks == 192);
+        static_assert(TERRAIN_MINING[TERRAIN_ROCK].ticks == 512);
+        static_assert(TERRAIN_MINING[TERRAIN_SAND].ticks == 128);
+        static_assert(TERRAIN_MINING_NONE.ticks == 64);
+
+        w->hack_repair_invariant();
+        Root<World*> world{w};
+
+        // Mid-dig: arrived on (0,2) at 128, digging until 320, holding
+        // only that cell, nothing on the stack yet
+        co_await test_step_until(world, Time{200});
+        {
+            const Machine* m = test_machine_for(world, m0);
+            assert(m->_phase == Machine::PHASE_MINING);
+            assert((m->_new_location == Coordinate{0, 2}));
+            assert((m->_old_location == Coordinate{0, 2}));
+            assert(m->_old_time == Time{128});
+            assert(m->_new_time == Time{320});
+            assert(m->_on_arrival == OPCODE_MINE);
+            assert((test_stack_is(m, {})));
+            assert((test_located_only_at(world, m0, 0, 2,
+                                         {Coordinate{0, 1}, Coordinate{0, 3}})));
+        }
+
+        // Just past the first dig: GRASS is on the stack and the machine
+        // is travelling on to (0,3)
+        co_await test_step_until(world, Time{330});
+        {
+            const Machine* m = test_machine_for(world, m0);
+            assert(m->_phase == Machine::PHASE_TRAVELLING);
+            assert((m->_new_location == Coordinate{0, 3}));
+            assert((test_stack_is(m, {term_make_matter(MATTER_GRASS)})));
+        }
+
+        co_await test_step_until(world, Time{1900});
+        {
+            const Machine* m = test_machine_for(world, m0);
+            assert(m->_phase == Machine::PHASE_WAITING_FOR_NEW);
+            assert((m->_new_location == Coordinate{0, 11}));
+            assert(m->_new_time == Time{1792});
+            assert(m->_on_arrival == OPCODE_NOOP);
+            assert((test_stack_is(m, {term_make_matter(MATTER_ROCK)})));
+            assert((test_located_only_at(world, m0, 0, 11,
+                                         {Coordinate{0, 9}, Coordinate{0, 10}})));
+        }
+        // The dug cells' values are untouched: the dig reads the ground,
+        // and the 7 was copied, not taken
+        {
+            Term t{};
+            assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{0, 2}, t));
+            assert(world._ptr->_term_for_coordinate.try_get(Coordinate{0, 6}, t));
+            assert(t._data == term_make_integer_with(7)._data);
         }
 
         co_return;

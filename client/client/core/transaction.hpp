@@ -178,6 +178,10 @@ namespace wry {
         bool try_read_entity_id_for_coordinate(Coordinate, EntityID&) const;
         bool try_read_located_for_coordinate(Coordinate, EntityIDSet&) const;
         bool try_read_entity_for_entity_id(EntityID, const Entity*&) const;
+        // Terrain is read-only to the simulation for now (nothing writes
+        // it during a step), so a plain read of the step's world: no
+        // verb, no conflict, no wait
+        bool try_read_terrain_for_coordinate(Coordinate, Terrain&) const;
 
 
         void write_value_for_coordinate(Coordinate, Term, int = WRITE_ON_COMMIT);
@@ -276,6 +280,7 @@ namespace wry {
         bool try_read_entity_id_for_coordinate(Coordinate, EntityID&);
         bool try_read_located_for_coordinate(Coordinate, EntityIDSet&);
         bool try_read_entity_for_entity_id(EntityID, const Entity*&);
+        bool try_read_terrain_for_coordinate(Coordinate, Terrain&);
 
     };
     

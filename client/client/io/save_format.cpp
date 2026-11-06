@@ -468,7 +468,7 @@ namespace wry {
         m->_free_entity_id = read_entity_id(L);
         {
             const uint32_t phase = L.read_u32();
-            if (phase > (uint32_t)Machine::PHASE_WAITING_FOR_NEW)
+            if (phase > (uint32_t)Machine::PHASE_MINING)
                 L.fail("machine phase out of range");
             m->_phase = (decltype(m->_phase))phase;
         }

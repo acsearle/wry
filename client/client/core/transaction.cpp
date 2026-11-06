@@ -26,6 +26,10 @@ namespace wry {
         return this->_world->_entity_for_entity_id.try_get(key, victim);
     }
 
+    bool TransactionContext::try_read_terrain_for_coordinate(Coordinate key, Terrain& victim) {
+        return this->_world->_terrain_for_coordinate.try_get(key, victim);
+    }
+
     
     uint64_t transaction_priority(EntityID entity_id, Time time) {
         return splitmix64(splitmix64(entity_id.data) ^ (uint64_t)time);
@@ -54,6 +58,10 @@ namespace wry {
 
     bool Transaction::try_read_entity_for_entity_id(EntityID key, Entity const*& victim) const {
         return _context->try_read_entity_for_entity_id(key, victim);
+    }
+
+    bool Transaction::try_read_terrain_for_coordinate(Coordinate key, Terrain& victim) const {
+        return _context->try_read_terrain_for_coordinate(key, victim);
     }
 
     template<typename Key, typename T>
