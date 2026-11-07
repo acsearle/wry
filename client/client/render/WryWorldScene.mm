@@ -30,6 +30,7 @@
 #include "gui_widget.hpp"
 #include "json.hpp"
 #include "machine.hpp"
+#include "spawner.hpp"
 #include "matter.hpp"
 #include "mesh.hpp"
 #include "palette.hpp"
@@ -209,6 +210,12 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
     // light grey layers (assets sandbox.obj + sandbox_layers.png,
     // tools/sandbox_gen.py), tinted MATTER_COLOR_SRGB
     WryMesh* _sandbox_mesh;
+    // The Ship (spawner.hpp): a bulk carrier assembled from a kit of
+    // one-cell modules, prow + four holds + stern (assets ship_*.obj,
+    // ship_palette.png, tools/ship_gen.py), authored prow +x
+    WryMesh* _ship_prow_mesh;
+    WryMesh* _ship_hold_mesh;
+    WryMesh* _ship_stern_mesh;
     std::array<simd_float4, std::size(wry::MATTER_NAMES)> _matter_coordinate;
     std::array<bool, std::size(wry::MATTER_NAMES)> _matter_has_coordinate;
 
@@ -837,6 +844,20 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
             f(_mine_mesh, "mine.obj");
             f(_truck_mesh, "truck2.obj");
             f(_sandbox_mesh, "sandbox.obj");
+            {
+                id<MTLTexture> palette = [_ctx newMipmappedTextureFromResource:@"ship_palette"
+                                                                        ofType:@"png"
+                                                               withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
+                f(_ship_prow_mesh, "ship_prow.obj");
+                f(_ship_hold_mesh, "ship_hold.obj");
+                f(_ship_stern_mesh, "ship_stern.obj");
+                // painted wood: a dielectric (f's default is fully
+                // metallic, the white texture's blue channel)
+                for (WryMesh* m : {_ship_prow_mesh, _ship_hold_mesh, _ship_stern_mesh}) {
+                    m.albedoTexture = palette;
+                    m.metallicTexture = _black;
+                }
+            }
             _sandbox_mesh.roughnessTexture = _white;   // loose stuff is matte
             _sandbox_mesh.albedoTexture = [_ctx newMipmappedTextureFromResource:@"sandbox_layers"
                                                                          ofType:@"png"
@@ -1490,7 +1511,8 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
         const float MARGIN = 24.0f;
         float2 vp = _model->_gui.viewport_size;
         const float bx0 = vp.x - MARGIN - SIZE;   // box, screen px, y-down
-        const float by0 = MARGIN;
+        // below the money line (drawn with the GUI, below)
+        const float by0 = MARGIN + [self moneyLineHeight] + MARGIN * 0.5f;
 
         // Window (tile units, render space), centered on the camera focus.
         const float cx = _model->_focus_fraction.x;
@@ -1571,12 +1593,37 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
             0.0f, 0.0f,
             _model->_gui.viewport_size.x, _model->_gui.viewport_size.y,
         };
+        // The money (World::_money), right-justified above the minimap:
+        // "$1234"
+        if (!_model->show_map() && painter.font) {
+            const float MARGIN = 24.0f;
+            char text[32];
+            snprintf(text, sizeof(text), "$%lld",
+                     (long long)_model->_world_to_render._ptr->_money);
+            float width = 0.0f;
+            for (const char* c = text; *c; ++c) {
+                auto g = painter.font->charmap.find((char32_t)*c);
+                if (g != painter.font->charmap.end())
+                    width += g->second.advance;
+            }
+            const float right = _model->_gui.viewport_size.x - MARGIN;
+            const float baseline = MARGIN + painter.font->ascender;
+            painter.draw_text_run(simd_make_float2(right - width, baseline),
+                                  wry::StringView(text),
+                                  RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f));
+        }
         _model->_stack.paint(painter);
         _model->_gui.overlays.paint(painter);
     }
 
     _ctx.atlas->commit((__bridge void*)encoder,
                        (__bridge void*)_ctx.overlayQuadRenderPipelineState);
+}
+
+// The height of the money line above the minimap: one line of the GUI
+// font
+-(float)moneyLineHeight {
+    return _ctx.font ? (_ctx.font->ascender - _ctx.font->descender) : 32.0f;
 }
 
 -(void)resetCursor {
@@ -1738,6 +1785,9 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
     _truck_mesh.instanceCount = 0;
     _container_mesh.instanceCount = 0;
     _sandbox_mesh.instanceCount = 0;
+    _ship_prow_mesh.instanceCount = 0;
+    _ship_hold_mesh.instanceCount = 0;
+    _ship_stern_mesh.instanceCount = 0;
     // raid model for data
 
     if (show_map) {
@@ -1967,13 +2017,9 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
         };
         // A matter tile and its pile, the tile centred at `location`
         // (lying flat, world-aligned like every symbol)
-        auto emit_matter_tile = [&](simd_float4 location, wry::Term value) {
+        // A pile alone, standing on `base` (its floor's centre)
+        auto emit_pile = [&](simd_float4 base, wry::Term value) {
             const size_t m = (size_t)value.as_matter();
-            emit_symbol(location, _matter_coordinate[m],
-                        make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f));
-            simd_float4 base = location;
-            base.y += pile_north;
-            base.z += slab_thickness * 0.5f;
             auto A = simd_matrix_translate(base) * simd_matrix_scale(pile_scale);
             MeshInstanced pile;
             pile.model_transform = A;
@@ -1985,6 +2031,20 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
                                        wry::from_sRGB(c[2] / 255.0f), 1.0f);
             [_sandbox_mesh addInstance:pile];
         };
+        auto emit_matter_tile = [&](simd_float4 location, wry::Term value) {
+            const size_t m = (size_t)value.as_matter();
+            emit_symbol(location, _matter_coordinate[m],
+                        make<float3>(1.0f, 0.0f, 0.0f), make<float3>(0.0f, 1.0f, 0.0f));
+            simd_float4 base = location;
+            base.y += pile_north;
+            base.z += slab_thickness * 0.5f;
+            emit_pile(base, value);
+        };
+        // The holds of the Ships in view: what is put in a hold is drawn
+        // as its pile alone, standing on the hold's floor (ship_gen.py
+        // HOLD_FLOOR), peeking over the deck
+        constexpr float ship_hold_floor = 0.02f;
+        std::vector<wry::Coordinate> ship_holds;
         // The shipping container: its mesh standing at `base` (its
         // underside), heading-aligned by `yaw`
         auto emit_container = [&](simd_float4 base, float yaw) {
@@ -2140,6 +2200,29 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
                     }
                 }
                 
+            } else if (auto p = dynamic_cast<const wry::Ship*>(q)) {
+
+                // The kit, module by module from the prow aft, each in
+                // its cell and turned to the ship's heading (the modules
+                // are authored prow +x, i.e. heading east)
+                const float yaw = (float)((p->_heading & 3) - wry::HEADING_EAST) * (float)M_PI_2;
+                for (int k = 0; k != wry::Ship::SHIP_LENGTH; ++k) {
+                    wry::Coordinate c = p->cell(k);
+                    simd_float4 location = make<float4>(_model->render_position(c), 0.0f, 1.0f);
+                    auto A = simd_matrix_translate(location)
+                        * simd_matrix_rotate(yaw, make<float3>(0.0, 0.0, -1.0));
+                    MeshInstanced m;
+                    m.model_transform = A;
+                    m.inverse_transpose_model_transform = inverse(transpose(A));
+                    m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
+                    WryMesh* mesh = (k == 0) ? _ship_prow_mesh
+                        : (k == wry::Ship::SHIP_LENGTH - 1) ? _ship_stern_mesh
+                        : _ship_hold_mesh;
+                    [mesh addInstance:m];
+                    if ((k != 0) && (k != wry::Ship::SHIP_LENGTH - 1))
+                        ship_holds.push_back(c);
+                }
+
             } else if (auto p = dynamic_cast<const LocalizedEntity*>(q)){
 
                 simd_float4 location = make<float4>(_model->render_position(p->_location) + make<float2>(0.0f, 1.0f), 0.0f, 1.0f);
@@ -2202,6 +2285,11 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
                     // is the empty cell, not something to mark with a dot.
                     if (wry::term_is_null(q))
                         continue;
+                    if (has_tile(q)
+                        && std::find(ship_holds.begin(), ship_holds.end(), tile_at(i, j)) != ship_holds.end()) {
+                        emit_pile(make<float4>(i, j, ship_hold_floor, 1.0f), q);
+                        continue;
+                    }
                     if (wry::term_is_boolean(q)) {
                         coordinate = wry::term_as_boolean(q)
                             ? _true_coordinate : _false_coordinate;
@@ -2415,6 +2503,9 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
         [_truck_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
         [_container_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
         [_sandbox_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
+        [_ship_prow_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
+        [_ship_hold_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
+        [_ship_stern_mesh drawWithRenderCommandEncoder:render_command_encoder arena:_ctx.arena];
         
         // TODO: add an irradiance buffer from the light
         //
@@ -2640,6 +2731,9 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
                 [_truck_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
                 [_container_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
                 [_sandbox_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
+                [_ship_prow_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
+                [_ship_hold_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
+                [_ship_stern_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
 
                 // Symbol decals: now that everything that can lie under a
                 // slab is in the G-buffer, multiply the slabs' ambient

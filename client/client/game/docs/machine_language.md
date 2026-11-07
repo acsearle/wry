@@ -2,7 +2,7 @@
 
 Documentation for the language defined by `OPCODE` (game/opcode.hpp) and its
 interpreter `Machine::notify` (game/machine.cpp), as of 2026-07-23
-(MINE and BURY, 5.8, added 2026-11-07).  The
+(MINE and BURY, 5.8, and DUMP, 5.9, added 2026-11-07).  The
 second half of this document is a design review: rough edges and open
 questions, plus a changelog of the defects already fixed.  Section 10
 records future directions -- direction of travel, not commitments.
@@ -58,7 +58,8 @@ contrast, are information: freely copied by reading and destroyed by
 overwriting.  Matter enters and leaves the world only at its edges: a
 `Source` entity creates it and a `Sink` destroys it, and the ground is
 both -- `MINE` digs a terrain kind's own matter out of it and `BURY`
-returns matching matter to it (5.8).
+returns matching matter to it (5.8).  A `Ship` destroys priced matter
+put into its holds, paying its price into the world's money (5.9).
 
 ### Headings
 
@@ -447,6 +448,57 @@ Semantics, and the choices in them:
   and burying does not fill it.  Depletion, and terrain mutated by
   digging and filling, are natural next steps (10.8).
 - **Reorientation**: both are invariant.
+
+### 5.9 Trade: DUMP, the Ship, and money
+
+| opcode | effect                                                               |
+|--------|----------------------------------------------------------------------|
+| DUMP   | turn back (as TURN_BACK), and ( x -- ) put x in the cell behind -- the cell we were heading for -- waiting until it is empty; an empty stack just turns |
+
+Added 2026-11-07 with the first world scalar, **money**
+(`World::_money`, an integer shown as `$1234` above the minimap), and
+the first market, the **Ship** (`spawner.hpp`): a moored bulk carrier,
+a line of six occupied cells -- prow, four holds, stern -- that
+machines drive around, not through.  Board-game logic, not a
+simulation: anything put into a hold that has a price (`matter.hpp`
+`MATTER_PRICE`) vanishes, and its price is added to the money.
+
+| matter    | price | | matter    | price |
+|-----------|-------| |-----------|-------|
+| water     |  --   | | coal      |   8   |
+| sand      |   2   | | iron ore  |  12   |
+| grass     |   1   | | limestone |   5   |
+| rock      |   3   | | container |  --   |
+
+Semantics, and the choices in them:
+
+- **DUMP is store-and-turn.**  Drive up beside a hold, and the glyph
+  under you turns you round and puts the top of the stack into the hold
+  behind you; you leave back the way you came.  Unlike STORE it is not a
+  prefix op: its operand is the cell *behind* the turn, which the
+  machine never enters (a hold is occupied by the Ship).  Like a STORE of
+  matter it waits for the cell to be empty, so a machine parks at the
+  quay, turned and loaded, until the Ship has sold the last load.
+- **Unpriced things stay put.**  Water, a container, a number: the Ship
+  leaves it in the hold, which then blocks that hold.  Taking things back
+  out of a hold is not built yet.
+- **Money is transactional.**  The Ship proposes the whole new balance
+  (`Transaction::write_money`), so concurrent writers conflict and all
+  but one retry next tick.  It is the obvious first candidate for a
+  concurrently-commutative value (sales and purchases need not conflict,
+  only an overdraft must).
+- **Four holds, four shuttles.**  Each hold serves the trucks that
+  turn back at it; with four holds, four trucks can shuttle over their
+  own paths without meeting.  A fifth must be multiplexed onto one of
+  them, which can deadlock unless the shared approach is guarded (a
+  VALVE's mutual exclusion, 6.7).
+- **Reorientation**: invariant (it is heading-relative).
+
+Shuttle idiom: DUMP at the quay end, and at the far end
+`[MINE] [SKIP] [ ] [TURN_BACK]` laid out away from the quay, over the
+ore: outbound, MINE digs the ore under the SKIP; inbound, the SKIP steps
+over the MINE, so a round trip digs once (the starting world's coal
+shuttle, `world_state.cpp`).
 
 ## 6. Idioms
 

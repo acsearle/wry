@@ -127,17 +127,41 @@ namespace wry {
                 for (i32 k = 0; k != 7; ++k)
                     put(-5, -k, term_make_matter((MATTER)(MATTER_WATER + k)));
 
-                // A loop through the coal patch south-east of the origin:
-                // MINE digs coal out of (3, -5), BURY puts it back into
-                // (5, -5), so the machine shakes twice a lap and carries
-                // one pile in between
-                put(1, -5, term_make_opcode(OPCODE_TURN_EAST));
-                put(2, -5, term_make_opcode(OPCODE_MINE));
-                put(4, -5, term_make_opcode(OPCODE_BURY));
-                put(7, -5, term_make_opcode(OPCODE_TURN_SOUTH));
-                put(7, -7, term_make_opcode(OPCODE_TURN_WEST));
-                put(1, -7, term_make_opcode(OPCODE_TURN_NORTH));
-                machine_at_rest(1, -6, HEADING_NORTH);
+                // The market: a Ship moored in a little basin south of
+                // the spawner, prow east, its holds at x = 1 .. 4 on
+                // y = -2
+                for (i32 x = -1; x <= 6; ++x)
+                    for (i32 y = -2; y <= -1; ++y)
+                        world->_terrain_for_coordinate.set(Coordinate{x, y}, TERRAIN_WATER);
+                {
+                    Ship* ship = new Ship;
+                    ship->_entity_id = world->generate_entity_id();
+                    ship->_location = Coordinate{5, -2};
+                    ship->_heading = HEADING_EAST;
+                    ship->seal();
+                    world->_entity_for_entity_id.set(ship->_entity_id, ship);
+                    world->_waiting_on_time.set({Time{0}, ship->_entity_id});
+                    for (int k = 0; k != Ship::SHIP_LENGTH; ++k) {
+                        Coordinate c = ship->cell(k);
+                        world->_entity_id_for_coordinate.set(c, ship->_entity_id);
+                        EntityIDSet located;
+                        (void) world->_located_for_coordinate.try_get(c, located);
+                        located.set(ship->_entity_id);
+                        world->_located_for_coordinate.set(c, located);
+                    }
+                }
+
+                // A coal shuttle up and down x = 3, into the hold at
+                // (3, -2).  Southbound, MINE digs the coal under the SKIP
+                // at (3, -5); northbound, that SKIP steps over the MINE,
+                // so a round trip digs once.  DUMP at the quay turns the
+                // machine round and puts the coal in the hold behind it;
+                // TURN_BACK at (3, -7) is the other end.
+                put(3, -3, term_make_opcode(OPCODE_DUMP));
+                put(3, -4, term_make_opcode(OPCODE_MINE));
+                put(3, -5, term_make_opcode(OPCODE_SKIP));
+                put(3, -7, term_make_opcode(OPCODE_TURN_BACK));
+                machine_at_rest(3, -6, HEADING_NORTH);
 
                 // A loader: takes three piles from the ground (LOAD
                 // moves matter) and picks up two literals on the way,
