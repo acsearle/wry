@@ -388,7 +388,8 @@ namespace wry {
             World* changed = new World(w->_time, w->_entity_id_source, w->_ready,
                                        w->_entity_id_for_coordinate, w->_located_for_coordinate,
                                        w->_entity_for_entity_id, terms, w->_terrain_for_coordinate,
-                                       w->_waiting_on_time, w->_player_for_client);
+                                       w->_waiting_on_time, w->_player_for_client,
+                                       w->_money);
             changed->seal();
             Root<World const*> keep{changed};
             const std::string other = dump_world(changed);

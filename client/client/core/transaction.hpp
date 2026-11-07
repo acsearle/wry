@@ -205,6 +205,12 @@ namespace wry {
         void wait_on_located_for_coordinate(Coordinate, int = WAIT_ON_COMMIT);
 
         
+        // The money scalar (World::_money): read the step's balance,
+        // propose the whole new one.  Exclusive like every write; nothing
+        // waits on it yet
+        int64_t read_money() const;
+        void write_money(int64_t, int = WRITE_ON_COMMIT);
+
         void write_entity_id_for_time(Time, EntityID, int = WAIT_ON_COMMIT);
         void wait_on_time(Time, int = WAIT_ON_COMMIT);
         
@@ -259,6 +265,8 @@ namespace wry {
         Map<Coordinate> _verb_located_for_coordinate;
         Map<Coordinate> _verb_value_for_coordinate;
         Map<EntityID> _verb_entity_for_entity_id;
+        // The money scalar: a map with the one key 0
+        Map<Time> _verb_money;
         
 //        // "wait on" (a write to) a key is nonexclusive.  A transaction can
 //        // choose to write if it COMMITs, or ABORTs, or both.

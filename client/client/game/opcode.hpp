@@ -82,6 +82,7 @@ X(OPCODE_VALVE_EAST_WEST),\
 X(OPCODE_DO_NOT_QUEUE),\
 X(OPCODE_MINE),\
 X(OPCODE_BURY),\
+X(OPCODE_DUMP),\
 
     enum OPCODE
     : int64_t {
@@ -219,6 +220,7 @@ X(OPCODE_VALVE_EAST_WEST,          OPCODE_VALVE_NORTH_SOUTH,        OPCODE_VALVE
 X(OPCODE_DO_NOT_QUEUE,             OPCODE_DO_NOT_QUEUE,             OPCODE_DO_NOT_QUEUE),\
 X(OPCODE_MINE,                     OPCODE_MINE,                     OPCODE_MINE),\
 X(OPCODE_BURY,                     OPCODE_BURY,                     OPCODE_BURY),\
+X(OPCODE_DUMP,                     OPCODE_DUMP,                     OPCODE_DUMP),\
 
     constexpr std::pair<OPCODE, OPCODE> ROTATE_CLOCKWISE_OPCODE[] = {
 

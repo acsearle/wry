@@ -58,13 +58,15 @@ namespace wry {
     // Version 6: bumped 2026-10-21; the World's client id -> Player map
     //            (_player_for_client, multiplayer.md section 9.3) is
     //            appended to the World record.
+    // Version 7: bumped 2026-11-07; the World's money scalar (_money,
+    //            i64) is appended to the World record.
     //
     // Additive vocabulary (new ENUMERATION metas / codes) does NOT bump
     // the version: layout is unchanged and older files remain loadable.
     //   2026-07-05: TERM_ENUM_META_MATTER = 4 (matter.hpp codes).
     // ---------------------------------------------------------------------
 
-    enum : uint32_t { TERM_SAVE_VERSION = 6 };
+    enum : uint32_t { TERM_SAVE_VERSION = 7 };
 
     // The first word of a save file: 'WRYS'
     inline constexpr uint32_t SAVE_MAGIC = 0x57525953;

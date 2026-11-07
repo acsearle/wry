@@ -98,6 +98,16 @@ namespace wry {
         using PlayerForClient = PersistentMap<ClientID, EntityID, DefaultKeyService<ClientID>, ScanDiscipline>;
         PlayerForClient _player_for_client;
 
+        // Money: the players' shared purse, the first world scalar.  An
+        // integer, and transactional like everything else: a writer
+        // proposes the whole new balance (TransactionContext::_verb_money),
+        // so concurrent writers conflict and all but one retry.  It is the
+        // candidate for the first concurrently-commutative value (a sale
+        // and a purchase need not conflict, only overdraw).  Earned by
+        // Ships (spawner.hpp); shown above the minimap.  Appended to the
+        // record in save version 7.
+        int64_t _money;
+
         World()
         : _time{0}
         , _entity_id_source{1}
@@ -109,6 +119,7 @@ namespace wry {
         , _terrain_for_coordinate{}
         , _waiting_on_time{}
         , _player_for_client{}
+        , _money{0}
         {
         }
 
@@ -121,7 +132,8 @@ namespace wry {
               WaitableMap<Coordinate, Term> value_for_coordinate,
               WaitableMap<Coordinate, Terrain> terrain_for_coordinate,
               Set waiting_on_time,
-              PlayerForClient player_for_client)
+              PlayerForClient player_for_client,
+              int64_t money)
         : _time(time)
         , _entity_id_source(entity_id_source)
         , _ready(ready)
@@ -132,6 +144,7 @@ namespace wry {
         , _terrain_for_coordinate(terrain_for_coordinate)
         , _waiting_on_time(waiting_on_time)
         , _player_for_client(player_for_client)
+        , _money(money)
         {
         }
 
@@ -177,6 +190,7 @@ namespace wry {
             v.state("_terrain_for_coordinate", _terrain_for_coordinate);
             v.state("_waiting_on_time", TimeWheelFold{_waiting_on_time, _ready, _time});
             v.state("_player_for_client", _player_for_client);
+            v.state("_money", _money);
         }
 
         // One step: apply the server events among `commands` (JOIN, LEAVE;

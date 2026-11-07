@@ -25,7 +25,8 @@ namespace wry {
     // puts it down ahead, EXCHANGE swaps -- but never copy or destroy
     // it; DUPLICATE and OVER refuse matter, and arithmetic ignores it.
     // Matter enters and leaves the world only at its edges: Source
-    // entities create it and Sink entities destroy it, and the ground
+    // entities create it and Sink entities destroy it, a Ship sells it
+    // (destroying it for MATTER_PRICE money), and the ground
     // itself is both -- MINE digs a terrain kind's matter out of the
     // ground (creating it) and BURY returns matching matter to it
     // (destroying it); see terrain.hpp TERRAIN_MINING and the gates in
@@ -93,6 +94,29 @@ X(MATTER_LIMESTONE),\
         { 240, 236, 222, 255 },   // MATTER_LIMESTONE
     };
     static_assert(std::size(MATTER_COLOR_SRGB) == std::size(MATTER_NAMES));
+
+    // What a Ship pays for each kind, indexed by MATTER code: whole
+    // dollars, added to World::_money as the Ship consumes it.  Zero is
+    // unpriced: a Ship refuses it, leaving it in the hold (so a water
+    // load blocks that hold until somebody takes it back out).
+    // Simulation state: changing a price changes the game's history.
+    inline constexpr int64_t MATTER_PRICE[] = {
+         0,   // MATTER_SHIPPING_CONTAINER
+         0,   // MATTER_WATER
+         2,   // MATTER_SAND
+         1,   // MATTER_GRASS
+         3,   // MATTER_ROCK
+         8,   // MATTER_COAL
+        12,   // MATTER_IRON_ORE
+         5,   // MATTER_LIMESTONE
+    };
+    static_assert(std::size(MATTER_PRICE) == std::size(MATTER_NAMES));
+
+    constexpr int64_t matter_price(int code) {
+        return ((code >= 0) && ((std::size_t)code < std::size(MATTER_PRICE)))
+            ? MATTER_PRICE[code]
+            : 0;
+    }
 
     constexpr const char* name_from_MATTER(MATTER value) {
         for (std::size_t i = 0; i != std::size(MATTER_NAMES); ++i) {

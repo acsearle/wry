@@ -194,7 +194,8 @@ namespace wry {
             _term_for_coordinate,
             _terrain_for_coordinate,
             _waiting_on_time,
-            _player_for_client
+            _player_for_client,
+            _money
         };
         for (Command const& c : commands) {
             switch (c.kind) {
@@ -638,6 +639,24 @@ namespace wry {
 
         // -- completion barrier --
 
+        // Money: one key, so no parallel rebuild; the transactions are
+        // resolved by now (or resolve here, idempotently).  At most one
+        // writer commits; there are no persistent waiters yet.
+        int64_t next_money = _money;
+        {
+            auto verb_money = freeze(context._verb_money);
+            for (auto const& kv : verb_money) {
+                for (auto candidate = kv.second.load_acquire();
+                     candidate != nullptr;
+                     candidate = candidate->_next) {
+                    Transaction::State resolution = candidate->resolve();
+                    if ((resolution == Transaction::State::COMMITTED)
+                        && (candidate->_operation & Transaction::Operation::WRITE_ON_COMMIT))
+                        next_money = get<int64_t>(candidate->_desired);
+                }
+            }
+        }
+
         // Terrain has no transaction channel yet; the persistent map is
         // carried over unchanged (an O(1) structural share, not a copy).
 
@@ -651,7 +670,8 @@ namespace wry {
             std::move(new_value_for_coordinate),
             _terrain_for_coordinate,
             std::move(new_next_waiting_on_time),
-            _player_for_client
+            _player_for_client,
+            next_money
         }};
 
         // Seal the step's World here, while it is still this thread's

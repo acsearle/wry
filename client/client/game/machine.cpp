@@ -84,6 +84,7 @@ namespace wry {
                 case OPCODE_FLOP_FLIP:
                     return {Steering::STEER_RELATIVE, -1};
                 case OPCODE_TURN_BACK:
+                case OPCODE_DUMP:
                     return {Steering::STEER_RELATIVE, +2};
                 case OPCODE_BRANCH_RIGHT:
                     return {Steering::STEER_STACK_RELATIVE, +1};
@@ -134,6 +135,7 @@ namespace wry {
                 PROCEED,           // claim next_location, apply effects
                 PARK_HALT,         // sleep until the value under us changes
                 PARK_STORE_GUARD,  // the pending STORE may not act yet
+                PARK_DUMP_GUARD,   // DUMP's target cell is not empty
                 PARK_OCCUPIED,     // next_location is occupied
                 PARK_VALVE,        // a valve ahead is crossed to our axis
                 PARK_JUNCTION,     // a DO_NOT_QUEUE ahead whose exit is
@@ -145,6 +147,7 @@ namespace wry {
             bool steering_pop;     // the action consumed the top of stack
             i64 next_heading;
             Coordinate next_location;
+            Coordinate dump_target; // DUMP: the cell behind us, as we turn
             bool claim_beyond;     // DO_NOT_QUEUE: also claim `beyond`
             Coordinate beyond;     // the junction's exit cell
         };
@@ -220,6 +223,23 @@ namespace wry {
                     || (pending.is_matter()
                         && !term_is_null(plan.cell_value))) {
                     plan.disposition = ArrivalPlan::PARK_STORE_GUARD;
+                    return plan;
+                }
+            }
+
+            // DUMP is TURN_BACK and STORE together: we turn round and put
+            // the top of the stack behind us, into the cell we were
+            // heading for (a Ship's hold, typically).  It waits, like a
+            // STORE of matter, until that cell is empty; an empty stack
+            // puts nothing there and just turns.
+            if (plan.action == OPCODE_DUMP) {
+                plan.dump_target = step_from(self->_new_location,
+                                             self->_new_heading);
+                Term behind = {};
+                (void) tx->try_read_value_for_coordinate(plan.dump_target,
+                                                         behind);
+                if (!term_is_null(self->peek()) && !term_is_null(behind)) {
+                    plan.disposition = ArrivalPlan::PARK_DUMP_GUARD;
                     return plan;
                 }
             }
@@ -489,6 +509,16 @@ namespace wry {
                         tx->on_abort_retry();
                         return 0;
 
+                    case ArrivalPlan::PARK_DUMP_GUARD:
+                        // wait for the cell behind to empty (a Ship
+                        // selling the last load), or for the instruction
+                        // under us to change
+                        tx->write_entity_for_entity_id(this->_entity_id, new_this);
+                        tx->wait_on_value_for_coordinate(plan.dump_target);
+                        tx->wait_on_value_for_coordinate(_new_location);
+                        tx->on_abort_retry();
+                        return 0;
+
                     case ArrivalPlan::PARK_OCCUPIED:
                         tx->write_entity_for_entity_id(this->_entity_id, new_this);
                         // wait for our destination to clear
@@ -581,6 +611,14 @@ namespace wry {
                     case OPCODE_HEADING_LOAD:
                         new_this->push(Term(_new_heading));
                         break;
+
+                    case OPCODE_DUMP: {
+                        // (the turn is the steering above; the planner
+                        // vetted the target cell)
+                        Term top = new_this->pop();
+                        if (!term_is_null(top))
+                            tx->write_value_for_coordinate(plan.dump_target, top);
+                    } break;
                         
                     case OPCODE_DROP:
                         // matter is not destroyed; it is put down in the
@@ -1591,6 +1629,82 @@ namespace wry {
             assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{0, 2}, t));
             assert(world._ptr->_term_for_coordinate.try_get(Coordinate{0, 6}, t));
             assert(t._data == term_make_integer_with(7)._data);
+        }
+
+        co_return;
+    };
+
+    // The Ship market and DUMP: two trucks each MINE a load and DUMP it
+    // into a hold of a Ship moored across their road.  Coal is priced, so
+    // the Ship sells it (the hold empties, the money rises by its price);
+    // water is not, so it stays in its hold.  Each truck turns back over
+    // its own path, its stack emptied by the DUMP.
+    define_test("machine_dump_ship") {
+
+        World* w = new World;
+        Ship* ship = new Ship;
+        ship->_entity_id = w->generate_entity_id();
+        ship->_location = Coordinate{5, 4};
+        ship->_heading = HEADING_EAST;
+        ship->seal();
+        w->_entity_for_entity_id.set(ship->_entity_id, ship);
+        for (int k = 0; k != Ship::SHIP_LENGTH; ++k) {
+            Coordinate c = ship->cell(k);
+            w->_entity_id_for_coordinate.set(c, ship->_entity_id);
+            EntityIDSet s; s.set(ship->_entity_id);
+            w->_located_for_coordinate.set(c, s);
+        }
+        assert((ship->cell(2) == Coordinate{3, 4}));
+        w->_waiting_on_time.set({Time{0}, ship->_entity_id});
+
+        // Truck A: coal into hold 3 at (2, 4)
+        EntityID ma = test_machine_at_rest(w, 2, 0);
+        test_put(w, 2, 1, term_make_opcode(OPCODE_MINE));
+        w->_terrain_for_coordinate.set(Coordinate{2, 2}, TERRAIN_COAL);
+        test_put(w, 2, 3, term_make_opcode(OPCODE_DUMP));
+        test_put(w, 2, -1, term_make_opcode(OPCODE_HALT));
+
+        // Truck B: water into hold 2 at (3, 4)
+        EntityID mb = test_machine_at_rest(w, 3, 0);
+        test_put(w, 3, 1, term_make_opcode(OPCODE_MINE));
+        w->_terrain_for_coordinate.set(Coordinate{3, 2}, TERRAIN_WATER);
+        test_put(w, 3, 3, term_make_opcode(OPCODE_DUMP));
+        test_put(w, 3, -1, term_make_opcode(OPCODE_HALT));
+
+        // Truck C: coal for the same hold, from the north side; it finds
+        // B's unsellable water there and waits beside it, turned round
+        // but still loaded (taking things out of a hold is not built)
+        EntityID mc = test_machine_at_rest(w, 3, 9, HEADING_SOUTH);
+        test_put(w, 3, 8, term_make_opcode(OPCODE_MINE));
+        w->_terrain_for_coordinate.set(Coordinate{3, 7}, TERRAIN_COAL);
+        test_put(w, 3, 6, term_make_opcode(OPCODE_NOOP));
+        test_put(w, 3, 5, term_make_opcode(OPCODE_DUMP));
+
+        static_assert(MATTER_PRICE[MATTER_COAL] == 8);
+        static_assert(MATTER_PRICE[MATTER_WATER] == 0);
+
+        w->hack_repair_invariant();
+        Root<World*> world{w};
+
+        co_await test_step_until(world, Time{2000});
+        {
+            const Machine* a = test_machine_for(world, ma);
+            const Machine* b = test_machine_for(world, mb);
+            assert((a->_new_location == Coordinate{2, -1}));
+            assert((b->_new_location == Coordinate{3, -1}));
+            assert(a->_new_heading == HEADING_SOUTH);
+            assert(b->_new_heading == HEADING_SOUTH);
+            assert((test_stack_is(a, {})));
+            assert((test_stack_is(b, {})));
+            assert(world._ptr->_money == 8);
+            Term t{};
+            assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{2, 4}, t));
+            assert(world._ptr->_term_for_coordinate.try_get(Coordinate{3, 4}, t));
+            assert(t._data == term_make_matter(MATTER_WATER)._data);
+            const Machine* c = test_machine_for(world, mc);
+            assert((c->_new_location == Coordinate{3, 5}));
+            assert(c->_phase == Machine::PHASE_WAITING_FOR_NEW);
+            assert((test_stack_is(c, {term_make_matter(MATTER_COAL)})));
         }
 
         co_return;

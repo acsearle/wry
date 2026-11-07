@@ -10,6 +10,7 @@
 #include "world.hpp"
 #include "transaction.hpp"
 #include "utility.hpp"
+#include "matter.hpp"
 
 namespace wry {
     
@@ -32,6 +33,37 @@ namespace wry {
         return 0;
     }
         
+    int64_t Ship::notify(TransactionContext* context) const {
+        // Sell whatever priced matter is in the holds, all in one
+        // transaction: empty those holds and pay for them.  Watch every
+        // hold for its next delivery (a sold hold through our own write,
+        // which also wakes a machine waiting to deliver there).  If we
+        // lose a race -- for the money, or for a hold -- try again next
+        // tick.
+        Transaction* tx = Transaction::make(context, this, SHIP_HOLDS + 2);
+        int64_t earned = 0;
+        for (int k = 1; k <= SHIP_HOLDS; ++k) {
+            Coordinate hold = cell(k);
+            Term cargo = {};
+            int64_t price = 0;
+            if (tx->try_read_value_for_coordinate(hold, cargo) && cargo.is_matter())
+                price = matter_price(cargo.as_matter());
+            if (price > 0) {
+                tx->write_value_for_coordinate(hold, term_make_empty(),
+                                               Transaction::Operation::WRITE_ON_COMMIT
+                                               | Transaction::Operation::WAIT_ON_COMMIT);
+                earned += price;
+            } else {
+                // empty, or unpriced: wait for it to change
+                tx->wait_on_value_for_coordinate(hold, Transaction::Operation::WAIT_ON_COMMIT);
+            }
+        }
+        if (earned)
+            tx->write_money(tx->read_money() + earned);
+        tx->on_abort_retry();
+        return 0;
+    }
+
     int64_t Spawner::notify(TransactionContext* context) const {
         Transaction* tx = Transaction::make(context, this, 10);
 

@@ -556,7 +556,8 @@ namespace wry {
         World* next = new World(w->_time, w->_entity_id_source, w->_ready,
                                 w->_entity_id_for_coordinate, w->_located_for_coordinate,
                                 w->_entity_for_entity_id, terms, w->_terrain_for_coordinate,
-                                w->_waiting_on_time, w->_player_for_client);
+                                w->_waiting_on_time, w->_player_for_client,
+                                w->_money);
         next->seal();
         _world_to_render = next;
         _worlds.emplace_back(next);

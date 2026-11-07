@@ -187,6 +187,19 @@ namespace wry {
                                                           operation);
     }
 
+    int64_t Transaction::read_money() const {
+        return _context->_world->_money;
+    }
+
+    auto Transaction::
+    write_money(int64_t desired, int operation) -> void {
+        transaction_verb_generic(this,
+                                 &(_context->_verb_money),
+                                 Time{0},
+                                 desired,
+                                 operation);
+    }
+
     auto Transaction::
     write_entity_id_for_time(Time key, EntityID value, int operation) -> void {
         assert(key > _context->now());

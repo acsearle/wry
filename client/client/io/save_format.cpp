@@ -109,6 +109,7 @@ namespace wry {
     template<> struct save_type_traits<Sink>      { static constexpr uint64_t value = Sink::SAVE_TYPE_TAG; };
     template<> struct save_type_traits<Counter>   { static constexpr uint64_t value = Counter::SAVE_TYPE_TAG; };
     template<> struct save_type_traits<Evenator>  { static constexpr uint64_t value = Evenator::SAVE_TYPE_TAG; };
+    template<> struct save_type_traits<Ship>      { static constexpr uint64_t value = Ship::SAVE_TYPE_TAG; };
     template<> struct save_type_traits<Player>    { static constexpr uint64_t value = Player::SAVE_TYPE_TAG; };
     template<> struct save_type_traits<HeapInt64> { static constexpr uint64_t value = HeapInt64::SAVE_TYPE_TAG; };
     template<> struct save_type_traits<HeapString>{ static constexpr uint64_t value = HeapString::SAVE_TYPE_TAG; };
@@ -368,6 +369,7 @@ namespace wry {
     void Counter::_save_body(Saver& s) const    { save_fields(this, s); }
     void Evenator::_save_body(Saver& s) const   { save_fields(this, s); }
     void Source::_save_body(Saver& s) const     { save_fields(this, s); }
+    void Ship::_save_body(Saver& s) const       { save_fields(this, s); }
     void Player::_save_body(Saver& s) const     { save_fields(this, s); }
     void HeapInt64::_save_body(Saver& s) const  { save_fields(this, s); }
     void HeapString::_save_body(Saver& s) const { save_fields(this, s); }
@@ -424,6 +426,7 @@ namespace wry {
         SaveRef ter_ki  = L.read_u32();
         SaveRef wait    = L.read_u32();
         SaveRef players = L.read_u32();
+        w->_money = (int64_t)L.read_u64();
 
         w->_entity_id_for_coordinate.kv._inner = L.ref<NodeEntityID_U64>(eid_kv);
         w->_player_for_client._inner           = L.ref<NodeEntityID_U64>(players);
@@ -501,6 +504,16 @@ namespace wry {
         p->_free_entity_id = read_entity_id(L);
         p->_location = L.read_pod<Coordinate>();
         p->_of_this = decode_value(L.read_u64(), L);
+        p->seal();
+    }
+
+    static void load_into_ship(Loader& L, SaveRef id) {
+        Ship* p = new Ship;
+        L._ptrs[id] = p;
+        p->_entity_id = read_entity_id(L);
+        p->_free_entity_id = read_entity_id(L);
+        p->_location = L.read_pod<Coordinate>();
+        p->_heading = (i64)L.read_u64();
         p->seal();
     }
 
@@ -631,6 +644,7 @@ namespace wry {
         { save_type_tag_v<Sink>,                                             "wry::Sink",                           &load_into_localized_entity<Sink> },
         { save_type_tag_v<Counter>,                                          "wry::Counter",                        &load_into_localized_entity<Counter> },
         { save_type_tag_v<Evenator>,                                         "wry::Evenator",                       &load_into_localized_entity<Evenator> },
+        { save_type_tag_v<Ship>,                                             "wry::Ship",                           &load_into_ship },
         { save_type_tag_v<Player>,                                           "wry::Player",                         &load_into_player },
         { save_type_tag_v<HeapInt64>,                                        "wry::HeapInt64",                      &load_into_heap_int64 },
         { save_type_tag_v<HeapString>,                                       "wry::HeapString",                     &load_into_heap_string },
@@ -1161,6 +1175,11 @@ namespace wry {
         source->_entity_id = w->generate_entity_id();
         Sink* sink = new Sink;
         sink->_entity_id = w->generate_entity_id();
+        Ship* ship = new Ship;
+        ship->_entity_id = w->generate_entity_id();
+        ship->_location = Coordinate{-3, 7};
+        ship->_heading = HEADING_WEST;
+        w->_money = -42;
 
         spawner->_location = Coordinate{0, 0};
         source->_location = Coordinate{2, 2};
@@ -1175,7 +1194,8 @@ namespace wry {
         w->_entity_id_source = EntityID{1000001};
 
         for (const Entity* e : { (const Entity*)player, (const Entity*)spawner,
-                                 (const Entity*)source, (const Entity*)sink }) {
+                                 (const Entity*)source, (const Entity*)sink,
+                                 (const Entity*)ship }) {
             e->seal();
             w->_entity_for_entity_id.set(e->_entity_id, e);
         }
@@ -1216,6 +1236,12 @@ namespace wry {
         const Entity* sk2 = get(sink->_entity_id);
         assert(sk2->_save_type_tag() == Sink::SAVE_TYPE_TAG);
         assert((static_cast<const Sink*>(sk2)->_location == Coordinate{4, 2}));
+
+        const Entity* sh2 = get(ship->_entity_id);
+        assert(sh2->_save_type_tag() == Ship::SAVE_TYPE_TAG);
+        assert((static_cast<const Ship*>(sh2)->_location == Coordinate{-3, 7}));
+        assert(static_cast<const Ship*>(sh2)->_heading == HEADING_WEST);
+        assert(w2->_money == -42);
 
         // The cursor comes back past every entity in the save
         assert(w2->_entity_id_source.data > sink->_entity_id.data);
