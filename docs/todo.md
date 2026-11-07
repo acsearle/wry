@@ -16,9 +16,10 @@
 - Command help: show some key suggestions, e.g. depending on symmetry of what is held, show [R], [SHIFT]+[R] or [H],[L]
 - Left-click on a TRUCK to have the camera track it, and to explode the stack to make it more viewable
 - Compute the font drop-shadow in a shader
-- Load/save etc. game as Commands
+- Load/save game etc. as Commands
 - Commutative operations on World values.  Operation is applied when its transaction commits, concurrently, in any order.  Could be an atomic add on the value in the new World, for example.  Money is an example.  Attempt a widthdrawal if enough money \_now\_; but if enough people do it on the same turn, goes negative.  Don't try to prevent that, just penalize it - apply overdraft or interest every "month" based on lowest balance.  Fancier implementation for busy variables is to apply the deltas to thread locals and merge at the end of step.
-- Power, water, heat want to be partial differential equations.  Not allowed--simply too expensive to compute.  But even a simple global scalar might be heavily contested.  If we think about combining trees, maybe what we can do is have discrete lumps move around.  Building has a buffer of electrictity; occasionally requests top-up electricity from its local substation; likewise the substation holds a buffer it requests from superstation etc., from a power station.  No node has too many attachments, contention is low, and blackouts are local but contagious.
+- Help text, display text, etc. needs a to have meta that allows the easy inclusion (and rendering) of glyphs and keycaps and stuff.
+- If chemical formulas become an important part of the way we present stuff, we need subscript support
 
 ## Things to change
 - Raise the TRUCK's lowest surface so it hovers and a tile just slides under it
@@ -27,13 +28,22 @@
 - Bloom is calculated but not used.  Decide.
 - Make the palette a GUI widget
 - Make the console a GUI widget
-- Replace Futura Medium Condensed with something else with clear license.
+- Replace Futura Medium Condensed with something we clearly have rights to.   Noto Condensed?
 - Replace the current font weight with something heavier
 - The pixel-scale font shadow is not enough to guarantee clarity.  We need a heavy outline for free text, and no shadow at all
 
 ## Bugs
 - GTAO scale is specified in pixels?  (Why does it even have a scale, should be scale-free exponentially spaced samples?)
 
+## To be decided
+- Power, water, heat want to be partial differential equations.  Not allowed--simply too expensive to compute.  But even a simple global scalar might be heavily contested.  If we think about combining trees, maybe what we can do is have discrete lumps move around.  Building has a buffer of electrictity; occasionally requests top-up electricity from its local substation; likewise the substation holds a buffer it requests from superstation etc., from a power station.  No node has too many attachments, contention is low, and blackouts are local but contagious.
+- How to display matter.  Just the name, an abstract shape, a molecule, a "mineral sample", a bucket o' stuff?  (Factorio is inconsistent here)
+- How to distinguish ghost Terms via some simple visual effect
+- How to display temporary cosmetics to cover up server round-trip.  Possibly, a renderer-scoped table of temporary modifiers to be applied while drawing the world.
+- How to handle pop-in pop-out of Terms as they are mined, shipped, picked up etc.
+
+## Other
+- 
 ## Won't do
 Things that have been decided against
 - Non-shadow-casting fairy light shader for running lights, headlights, etc.
