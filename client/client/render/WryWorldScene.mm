@@ -858,8 +858,11 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
                     m.metallicTexture = _black;
                 }
             }
-            _sandbox_mesh.roughnessTexture = _white;   // loose stuff is matte
-            _sandbox_mesh.albedoTexture = [_ctx newMipmappedTextureFromResource:@"sandbox_layers"
+            // loose stuff is a matte dielectric: roughness 1 (the white
+            // texture's green channel) and metallic 0 (black's blue)
+            _sandbox_mesh.roughnessTexture = _white;
+            _sandbox_mesh.metallicTexture = _black;
+            _sandbox_mesh.albedoTexture = [_ctx newMipmappedTextureFromResource:@"sandbox_photo"
                                                                          ofType:@"png"
                                                                 withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
 
