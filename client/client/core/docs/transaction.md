@@ -10,7 +10,8 @@ order, and exactly one writer per location wins. The whole tick is a pure
 function of the previous `World`, so the simulation stays deterministic
 (see `game/docs` on determinism).
 
-Read this alongside `World::step()` in `game/world.cpp`. `transaction.hpp`
+Read this alongside `World::step()` and `World::_advance()` in
+`game/world.cpp`. `transaction.hpp`
 defines the data structures; `World::step()` is the driver that gives them
 meaning, including the barrier the memory-ordering argument depends on.
 
@@ -74,8 +75,8 @@ because each client is internally consistent while disagreeing with its peer.
 Uniqueness is the single-machine invariant; cross-client determinism of
 assignment is the multiplayer one, and they are separate. Entity creation
 therefore has to be a deterministic function of already-agreed state (in Calvin
-terms, it flows through the same ordered log). `EntityID::oracle()` in
-`entity_id.hpp` flags this as a deferred open problem.
+terms, it flows through the same ordered log). How the code does this is
+"Deterministic EntityID assignment" below.
 
 Preferred framing: deterministic + transactional + versioned (MVCC). Treat
 "STM" as a loose colloquial handle only, and if it is used in prose, qualify it:
@@ -94,25 +95,38 @@ References:
 ## The tick is two phases separated by a barrier
 
 ```
-World::step(old_world):
-  -- Phase 1: PROPOSE (parallel over ready entities) -----------------
-  for each ready EntityID, in parallel:
+World::step(commands):                 (world.cpp)
+  if any JOIN/LEAVE: stage a copy with the events applied (_with_events)
+  _advance(commands):
+  -- Phase 1: PROPOSE (parallel, one nursery) ----------------------
+  fork notify_and_accumulate(_ready):
+      a tree walk over the frozen ready set; at each ready EntityID
       entity->notify(context)
           builds a Transaction, calls verbs (write_*/wait_on_*),
-          each verb appends a Node onto a per-key lock-free list
-  -- BARRIER (parallel_for_each join) -------------------------------
-  -- Phase 2: RESOLVE + REBUILD (per contended key) -----------------
-  for each key touched by some transaction:
-      walk its conflict list, resolve() each node
-      the single committed writer's value goes into the new map
-      waiters / displaced occupants are queued into next_ready
-  -- BARRIER (nursery join) -----------------------------------------
-  return new World{ new_time, new maps..., new schedule }
+          each verb appends a Node onto a per-key lock-free list,
+          and returns how many new EntityIDs it requests
+      the walk writes per-node rank prefixes, returns the tick total
+  fork: copy the time wheel's next_time bucket into next_ready
+  -- BARRIER (nursery.join) ----------------------------------------
+  -- Phase 2: RESOLVE + REBUILD (per touched key, parallel) --------
+  freeze each TransactionContext verb map
+  fork one rebuild per WaitableMap, plus the time wheel:
+      at each touched key, walk its conflict list, resolve() each node
+      the single committed writer's value goes into the new kv map
+      the key's waiter index (ki) is rewritten
+      woken waiters are inserted into next_ready
+      an installed Entity receives its EntityID ticket, then is sealed
+  -- BARRIER (nursery.join) ----------------------------------------
+  resolve the money scalar; make any terrain chunks the step needs
+  return new World{ next_time, cursor + tick total, freeze(next_ready),
+                    new maps..., new wheel }, sealed
 ```
 
-Phase 1 only *mutates* the proposal graph. Phase 2 only *reads* it (plus the
-per-transaction `_state` cache). Nothing in Phase 2 races with Phase 1, and
-that separation is the entire basis for the relaxed atomics below.
+Phase 1 only *mutates* the proposal graph (and the ready set's rank fields;
+see "Late-written fields on published objects"). Phase 2 only *reads* the
+graph (plus the per-transaction `_state` cache). Nothing in Phase 2 races with
+Phase 1, and that separation is the entire basis for the relaxed atomics
+below.
 
 ## The proposal graph
 
@@ -139,7 +153,8 @@ TransactionContext::Map<Key>       |   (one lock-free list per touched key)
 
 There is one `Map` per (verb, key-type) pair in `TransactionContext`:
 `_verb_value_for_coordinate`, `_verb_entity_id_for_coordinate`,
-`_verb_entity_for_entity_id`, and `_wait_on_time`. The map is an
+`_verb_located_for_coordinate`, `_verb_entity_for_entity_id`, `_verb_money`
+(one key), and `_wait_on_time`. The map is an
 `EpochDiscipline` concurrent skiplist; its entries are address-stable, so a
 node can cache `&head`.
 
@@ -206,7 +221,8 @@ EntityIDs therefore always receive distinct priorities within a tick.
 
 The chain that must hold:
 
-1. EntityIDs are unique and never reused (see `entity_id.hpp`).
+1. EntityIDs are unique and never reused (see "Deterministic EntityID
+   assignment").
 2. `splitmix64(uint64_t)` is injective, hence bijective on 64 bits.
 3. Therefore `priority(., t)` is injective in the id, so priorities are unique.
 
@@ -248,8 +264,10 @@ Key properties:
 ## Memory ordering
 
 The load-bearing fact: **Phase 1 happens-before Phase 2**, established by the
-`co_await ready.coroutine_parallel_for_each(...)` join in `World::step()` (the
-thread pool's task-completion path carries the release/acquire edge). Every
+first `co_await nursery.join()` in `World::_advance()`, which joins
+`notify_and_accumulate` and every frame it forked (the coroutine nursery's
+completion path carries the release/acquire edge; this document does not
+re-derive it). Every
 proposal write in Phase 1 is therefore visible to every resolver in Phase 2.
 
 Given that edge:
@@ -286,20 +304,98 @@ intact if either enum is edited.
 
 ## Waiting and scheduling
 
-Rebuild (`coroutine_parallel_rebuild2` over a `WaitableMap`) does three things
-per committed write to a key:
+An entity runs only when its EntityID is in the ready set of the World being
+stepped (`World::_ready`). It gets there for the next tick in one of two ways:
+it waited on a key and a committed write to that key happened, or it waited on
+a time and that time came. Both are expressed as non-exclusive verb nodes; the
+`WAIT_*` bits say which outcome of the waiter's *own* transaction the wait is
+conditional on:
 
-1. write the value into the new `kv` map;
-2. requeue everyone who was waiting on that key (the `ki` waiter index from the
-   *previous* world, plus this tick's `wait_on_*` nodes) into `next_ready`;
-3. requeue the displaced previous occupant where relevant (e.g. the entity that
-   vacated a coordinate).
+- `WAIT_ON_COMMIT` -- the wait takes effect only if my transaction commits;
+- `WAIT_ON_ABORT` -- only if it aborts (`on_abort_retry()` is the idiom);
+- `WAIT_ALWAYS` -- either way.
 
-`_wait_on_time` is the timer wheel: `wait_on_time(t)` / `on_commit_sleep_for` /
-`on_abort_retry` insert `(time, entity_id)` so the entity re-fires on a future
-tick. `partition_first(_waiting_on_time, time)` at the top of `step()` splits
-out the entities due this tick. `next_ready` is finally merged back into
-`new_waiting_on_time` at `new_time`.
+A wait whose condition does not hold is simply dropped. That is a sharp edge:
+an entity whose only waits are `WAIT_ON_COMMIT` and whose transaction aborts is
+never woken again unless something else names it. `Player::notify`
+(`player.cpp`) uses `WAIT_ALWAYS` for exactly this reason, and
+`Machine::notify` pairs its waits with `on_abort_retry()`.
+
+The schedule lives in three places:
+
+```
+World::_ready            FrozenSkiplistMap<EntityID, ReadyValue>
+                         who runs at _time (ordered by EntityID)
+World::_waiting_on_time  PersistentSet<(Time, EntityID)>, the time wheel
+                         who runs at a time > _time
+WaitableMap::ki          PersistentMap<Key, WaitSet>, per map
+                         who runs at the first commit to this key
+```
+
+`_advance` asserts (Debug) that nothing in the wheel is due at or before
+`_time`; anything due now is in `_ready` instead. The save and the World hash
+fold `_ready` back in as the wheel's `(_time, id)` bucket
+(`World::TimeWheelFold`, `world.hpp`), so the split is invisible to both.
+`World::hack_repair_invariant()` establishes it for a hand-built or loaded
+World by moving the `_time` bucket out of the wheel into `_ready`.
+
+### Building `next_ready`
+
+`next_ready` is a `ConcurrentSkiplistMap<EntityID, ReadyValue>` local to
+`World::_advance()`. Every producer below inserts with `try_emplace`, which is
+a no-op for an id already present, so the final contents are a set union and
+do not depend on which thread inserted what, or in which order. It is frozen
+into the new World's `_ready` only after the Phase 2 join; nothing reads it
+before then.
+
+1. **The wheel's next bucket.** At the top of `_advance`,
+   `partition_first(_waiting_on_time, next_time)` splits the wheel into the
+   `next_time` bucket and the rest. The bucket is copied into `next_ready` by a
+   `coroutine_parallel_for_each` forked into the *same* nursery as
+   `notify_and_accumulate`, so it overlaps Phase 1 (notify never touches
+   `next_ready`). The rest is the base the new wheel is rebuilt from.
+2. **Time waits proposed this tick.** `wait_on_time(t)` (and its sugar
+   `on_commit_sleep_for`, `on_abort_retry`) appends a node to
+   `TransactionContext::_wait_on_time` keyed by `t` with the caller's id as
+   payload; `write_entity_id_for_time(t, id)` is the same with another
+   entity's id (a Spawner schedules its newborn Machine this way). Both assert
+   `t > now`. In Phase 2, `action_for_waiting_on_time` (`world.cpp`) tests
+   `resolve() & _operation` on each node (see "A useful bit trick"): if it
+   fires and `t == next_time` the id goes straight into `next_ready`; if
+   `t > next_time` it is merged into the new wheel. The wheel's rebuild
+   (`coroutine_parallel_rebuild` over a `PersistentSet`, `persistent_set.hpp`)
+   is a serial loop, but it runs as one fork concurrent with the four map
+   rebuilds.
+3. **Key waits.** `wait_on_value_for_coordinate`,
+   `wait_on_entity_id_for_coordinate`, `wait_on_located_for_coordinate` and
+   `wait_on_entity_for_entity_id` append a waiter node to the *same* per-key
+   list the writers use. The four `action_for_*` lambdas in `_advance` (one per
+   `WaitableMap`, identical in shape) walk a touched key's list and classify
+   each node: the one committed `WRITE_ON_COMMIT` node is the writer; any
+   other node with `resolve() & _operation` nonzero is a fired waiter. Then:
+
+   - **The key was written.** The kv map takes the writer's value (a null
+     `Term` erases the key in the term map; absence is the one representation
+     of empty). Everyone in this World's `ki` set for the key is woken into
+     `next_ready`, and so is every fired waiter from this tick. The key's
+     `ki` entry is replaced by `{writer}` if the writer's node also carries
+     `WAIT_ON_COMMIT` (it waits against the value it just wrote), else erased.
+   - **No write, but fired waiters.** They are not woken; they are merged
+     (set union) into the key's `ki` entry and wait for a later commit.
+   - **Neither.** The key's kv and ki are unchanged.
+
+   A `ki` entry is only ever added to, replaced, or erased as a whole
+   (`WaitSetMergeCombine`, `waitable_map.hpp`), and only a committed write
+   wakes it. So an entity that was woken by some other route stays in stale
+   `ki` sets and later gets a spurious wakeup; notify must tolerate that (for
+   example the `PHASE_MINING` early return in `Machine::notify`).
+
+The rebuilds are `coroutine_parallel_rebuild2_unified` (`waitable_map.hpp`):
+one modifier-driven co-recursion over kv, ki and the frozen verb map, forking
+per AMT child, with the `action_for_*` lambda (resolution, `next_ready`
+inserts, the ticket write below) evaluated lazily at the leaves. Untouched
+subtrees are shared with the previous World. See
+`container/docs/parallel_rebuild.md`.
 
 ## Invariants and assumptions
 
@@ -325,14 +421,14 @@ out the entities due this tick. `next_ready` is finally merged back into
   between distinct entities, so such a regression fails fast instead of
   silently letting two writers commit. The debug `assert(!writer)` during
   rebuild remains as a second line of defense.
-- **`write_entity_id_for_coordinate` ignores its `operation` argument** and
-  hardcodes `WRITE_ON_COMMIT`, diverging from the other write verbs that thread
-  `operation` through. Likely unintended; revisit before relying on
-  `WAIT_ON_COMMIT` semantics for that verb.
-- **Rebuild is serial today.** `coroutine_parallel_rebuild2` /
-  `parallel_rebuild` are the "Simple single-threaded implementation" per their
-  own TODOs. The per-key resolution is structured to parallelize, but the tree
-  rebuild does not yet.
+- **The time wheel's rebuild is serial.** The four `WaitableMap` rebuilds are
+  parallel (`coroutine_parallel_rebuild2_unified`), but the wheel's
+  `coroutine_parallel_rebuild` (`persistent_set.hpp`) is a single loop over the
+  frozen `_wait_on_time` map; it overlaps the others as one fork.
+- **A commit-only wait dies with its transaction.** See "Waiting and
+  scheduling": an aborted transaction whose waits are all `WAIT_ON_COMMIT`
+  leaves its entity unscheduled. Every producer has to pair its waits with an
+  abort path.
 - **Resolution recurses on the C++ stack.** Conflict chains are statistically
   short, but a pathological (or adversarial) chain could grow the stack
   unboundedly. No depth bound or explicit work-stack today.
@@ -340,65 +436,155 @@ out the entities due this tick. `next_ready` is finally merged back into
   independent transactions per entity; coupling the waitset more tightly to
   writes; densifying `next_ready`).
 
-## Open design: deterministic EntityID assignment
+## Deterministic EntityID assignment
 
 New EntityIDs must be assigned by a rule identical on every client (not merely
 unique), because `priority = hash(EntityID)` drives conflict resolution and any
-divergence desyncs the sim (see `entity_id.hpp`). The scheme:
+divergence desyncs the sim (see "How the multiplayer plan maps onto Calvin").
 
-A transaction needing N new IDs registers the count N into a priority-ordered
-structure during the tick. After the freeze barrier, its base is
-`start_base + prefix_sum(counts of all higher-priority requesters)`, and
-`start_base` advances by the tick total each step (IDs never reused). The
-`[base, base+N)` ranges partition the tick's block, so they are unique; the
-prefix sum is over the fixed priority order with an associative operator, so the
-result is independent of thread schedule and machine. New-entity references in a
-transaction's proposed writes are stated relative to `base` and rewritten to
-absolute IDs in an assign sub-phase between the barrier and resolution. IDs
-burned by aborting transactions are acceptable holes.
+The rules (decided 2026-08-16):
 
-### Computing the prefix sum without a build phase
+- Every id comes from one cursor, `World::_entity_id_source` (starts at 1; 0
+  means "no EntityID"). The cursor only grows.
+- Ids are permanent: never reused, and never compacted at load. A remap would
+  change priorities, hence conflict outcomes, so a loaded save would fork from
+  its own history; it would also break peer replay and ids embedded in Terms.
+  Holes (ids handed out and never used) are accepted; the 64-bit ceiling is
+  designed around, not budgeted per session.
 
-Avoid a dedicated post-barrier "build the index" pass (the barrier is already
-ugly; do no bulk work in it). Instead make the priority-ordered structure a
-skiplist whose order-statistic augmentation is filled in *lazily by the lookups
-themselves*, demand-driven and cooperatively.
+### Outside a step: `generate_entity_id`
 
-Augment each forward pointer with a `span`: the number of level-0 nodes it skips
-over. A node's rank is the sum of spans along the search path to it, and a
-transaction's base is the rank-based prefix sum of counts. Properties:
+Code that builds a World it alone holds -- worldgen (`game/world_state.cpp`),
+the JOIN event in `World::_with_events()`, test fixtures -- calls
+`World::generate_entity_id()`, a plain post-increment of the cursor. Order is
+deterministic because that code is sequential (or, for JOIN, follows the
+order of the server's event stream).
 
-- Spans are unused during mutation (plain concurrent inserts, no span traffic).
-  Sentinel `span == 0` means "unknown"; a real forward pointer always advances
-  at least one node, so a true span is `>= 1`.
-- After the freeze, a lookup that needs an uncomputed span drops a level and
-  sums the lower-level spans across the gap (recursing where those are also
-  unknown), then publishes the completed span. It never stores a running partial
-  -- only the final value -- so a reader sees sentinel-or-final, never a torn
-  intermediate.
-- The race is benign: `span(A -> B) = rank(B) - rank(A)` is a deterministic
-  function of the frozen topology, so every thread computing a given span writes
-  identical bits. Concurrent writers are idempotent; no CAS needed, a plain
-  relaxed store suffices.
-- Memory ordering is relaxed. The freeze barrier already publishes the topology
-  (nodes, pointers, keys) to every lookup thread; a span is a self-contained
-  scalar, and a reader that consumes it then steps to nodes already visible via
-  the barrier, so nothing is reachable only through the span store and no
-  acquire/release edge is required. (Release/acquire would only improve memo
-  sharing -- fewer duplicate computes -- a cache knob, not correctness.)
+### Inside a step: requests, rank, tickets
 
-Cost: the first full-depth lookup computes and publishes the top-down spine in
-`O(N)`; later lookups reuse it and only fill the regions their own path drops
-into, `O(log N)` each. Aggregate is `O(N)` to populate (each span computed once,
-by whoever reaches it first) plus `O(Q log N)` for Q queries; spans on no query
-path stay unset. The one rough edge is a cold-start herd: W workers launching
-their first lookup together may each redo the top spine before one publishes,
-bounded by `O(W * N)` and one-time -- negligible at W = 4.
+During a step the World is immutable and notifies run in parallel, so nobody
+may touch the cursor. Instead an entity *requests* ids and is later handed a
+*ticket*:
 
-The memo is per-client and never shared over the wire, and base IDs are
-topology-independent (a pure function of the ordered set and the counts), so
-clients with differently shaped skiplists still compute identical bases. The
-whole lazy/racy memo is invisible to determinism.
+1. **Request.** `Entity::notify(TransactionContext*)` returns an `int64_t`:
+   the number of new ids it wants this tick. Today only `Spawner::notify`
+   (`game/spawner.cpp`) returns nonzero, and always 1.
+2. **Rank.** The ready set is ordered by EntityID
+   (`DefaultKeyService<EntityID>` encodes the raw id), *not* by priority. An
+   entity's block is `[cursor + prefix, cursor + prefix + requested)`, where
+   `prefix` is the sum of the requests of every ready entity with a smaller
+   EntityID. The blocks of one tick tile `[cursor, cursor + total)`, so they
+   are disjoint; the next World's cursor is `_entity_id_source +
+   entity_id_requests` (the tick total), whether or not the requesters commit.
+3. **Delivery.** In `action_for_entity_for_entity_id`, once the committed
+   writer of key `k` is known, `try_lookup_cumulant(_ready, k, cumulant)` is
+   consulted; if it returns true the installed Entity gets
+   `_free_entity_id = _entity_id_source + cumulant`, and is then `seal()`ed.
+   The ticket is the block's first id; the holder knows its own count.
+   Normally the writer of `k` is `k`'s own successor clone, so a requester
+   that commits a write to itself receives its ticket in the same tick.
+4. **Spend.** A Spawner with a ticket names its new Machine with it, installs
+   a successor clone with `_free_entity_id = 0`, and requests 1 again; the
+   same rebuild deals the successor a fresh ticket. A Spawner without one
+   installs a clone and requests 1, spawning nothing that tick. So a ticket
+   dealt at the end of tick T is spent at T+1 or later.
+
+`try_lookup_cumulant` returns false for an id not in the ready set (an entity
+installed by someone else's transaction, e.g. the Machine a Spawner just made)
+and for a ready entity that requested 0 (every Machine successor). In both
+cases the installed Entity keeps whatever `_free_entity_id` its builder gave
+it; that is what stops a held ticket from being clobbered.
+
+Ids are burned, never reissued, when a requester's transaction aborts, or
+when it requests but does not write its own key: the cursor advanced anyway.
+Each spawn-capable entity also holds one reserved-but-unspent id at all times,
+burned when it dies. Both are accepted.
+
+Pre-loaded tickets must be minted from the cursor, never written as a literal,
+or they collide with the first block dealt (which starts at the cursor).
+Worldgen's Spawner does this (`p->_free_entity_id =
+world->generate_entity_id()` in `world_state.cpp`); a JOIN's Player gets an
+explicit `EntityID{}`; the Spawners built by the fixtures in
+`io/save_format.cpp` and `game/world_dump.cpp` start ticketless and request on
+their first notify.
+
+### Computing the prefix without a build phase
+
+The prefix is computed by the notify traversal itself, so there is no
+post-barrier "build the index" pass and no assign sub-phase.
+
+`notify_and_accumulate` (`world.cpp`) instantiates `rank_frame` over the
+frozen ready set. A frozen skiplist is the left-child/right-sibling encoding
+of a tree: each node is discovered exactly once, at its own top level, by the
+frame whose interval `[self, bound)` contains it (`Node::for_each_child`). One
+coroutine frame per node (and one for the head):
+
+```
+rank_frame(self, bound):
+  for each child of self in [self, bound): fork rank_frame(child, ...)
+                                           into results[child height]
+  if not head: results[0] = notify(self); self.requested = results[0]
+  join
+  prefix-sum results[0 .. height]
+  for each child: child.n = results[child height - 1]
+  return results[height]                      // this subtree's total
+```
+
+A height-h child covers a later key interval than every lower child of the
+same frame, so `child.n` is the sum of the requests that precede the child
+*within its parent's frame*. The head frame's return is the tick total.
+
+`try_lookup_cumulant(ready, id, victim)` runs an ordinary `find` with a
+visitor that adds the `n` of every node it *enters*. A search enters each node
+on its path from that node's left-child/right-sibling parent, at the node's
+top level, so the per-frame prefixes telescope to the absolute exclusive
+prefix; the head is never entered and needs no `n`.
+
+Determinism: ready-set membership is World state; the requests are notify's
+output, a function of that state; the prefix is integer addition over
+EntityID order, exact and associative. The per-node `n` values depend on the
+skiplist's node heights, which this argument does not need clients to agree
+on; only the telescoped sum along a search path is observable, and that is the
+topology-independent rank prefix. The `ready_rank` test after `_advance` in
+`world.cpp` is the oracle: random ready maps with synthetic weights (some
+zero), `rank_frame` run exactly as the step runs it, every lookup checked
+against the brute-force exclusive prefix, and absent ids and zero requesters
+required to return false.
+
+### Late-written fields on published objects
+
+The scheme writes two `mutable` fields after the object that holds them is,
+or is about to be, part of an immutable World. Both rest on a single-writer
+plus barrier argument rather than on atomics.
+
+- **`ReadyValue::n` and `ReadyValue::requested`** (`world.hpp`). These live in
+  the nodes of `_ready` of the World being stepped, which is sealed and may
+  be shared. They are plain `int64_t`, created as `-1` by `next_ready`'s
+  `try_emplace` and written during the *next* `_advance`: `requested` by the
+  node's own frame, `n` by its parent frame after that frame's
+  `nursery.join()`. Each field has exactly one writer per `_advance`. They are
+  read only by `try_lookup_cumulant` in Phase 2, after the Phase 1 join, which
+  orders every write before every read; the lookup asserts both are `>= 0`.
+  They are neither saved nor hashed (`_ready` is `transient` in
+  `World::_fields`, and `TimeWheelFold` hashes only the ids), so writing them
+  does not disturb the World's seal.
+
+  Unenforced contract: at most one `_advance` runs over a given `_ready` at a
+  time. `_with_events` copies the World, and the staged copy shares the base
+  World's frozen ready nodes, so stepping a World and its staged copy (or one
+  World twice) concurrently would be a data race on these fields. The values
+  written would be identical, but that is still undefined behaviour in C++.
+  No caller found doing so; not verified exhaustively.
+- **`Entity::_free_entity_id`** (`entity.hpp`). Installed Entities are const.
+  The successor a transaction proposes is built by its proposer in Phase 1
+  (`Machine::notify` keeps building its clone after handing it to the
+  transaction), is reachable only through its node's `_desired` until the
+  rebuild installs it, and receives its ticket in
+  `action_for_entity_for_entity_id`, the unique committer leaf for its key,
+  immediately before `seal()`. The field *is* hashed state, so the ticket
+  must land before the seal; the new World that publishes the Entity is
+  constructed after the Phase 2 join. Losing proposals' clones are never
+  ticketed or sealed.
 
 ## File map
 
@@ -406,8 +592,14 @@ whole lazy/racy memo is invisible to determinism.
 core/transaction.hpp   Transaction, Node, TransactionContext, verb declarations,
                        ExternallyDiscriminatedVariant, State/Operation enums
 core/transaction.cpp   transaction_verb_generic, resolve/abort/commit, verbs
-game/world.cpp         World::step() -- the driver, the barriers, the rebuild
-game/entity.hpp        Entity::notify(TransactionContext*) -- producer hook
+game/world.cpp         World::step() / _advance() -- the driver, the barriers,
+                       the rebuild; notify_and_accumulate, rank_frame,
+                       try_lookup_cumulant, the ready_rank oracle test
+game/entity.hpp        Entity::notify(TransactionContext*) -- producer hook,
+                       Entity::_free_entity_id
+game/world.hpp         ReadyValue, World::_ready / _waiting_on_time / cursor
 game/machine.cpp       Machine::notify -- a worked producer example
-container/waitable_map.hpp   WaitableMap (kv + ki) and parallel rebuild
+game/spawner.cpp       Spawner::notify -- the one EntityID requester
+container/waitable_map.hpp   WaitableMap (kv + ki), WaitSetMergeCombine,
+                       coroutine_parallel_rebuild2_unified
 ```
