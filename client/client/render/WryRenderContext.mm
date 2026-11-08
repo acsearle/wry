@@ -164,7 +164,7 @@
 
             _atlas = new wry::SpriteAtlas(2048, (__bridge void*)device,
                                           (__bridge void*)_arena);
-            _font = new wry::Font(build_font(*_atlas));
+            _font = new wry::Font(build_font(*_atlas, 2.0f));
 
             _font2 = build_font2();
         }
@@ -175,6 +175,14 @@
 
 - (wry::Font2&)font2 {
     return _font2;
+}
+
+- (void)setFontPixelsPerPoint:(float)pixelsPerPoint {
+    const float clamped = std::clamp(pixelsPerPoint, 0.25f,
+                                     wry::Font::max_pixels_per_point);
+    if (clamped == _font->pixels_per_point)
+        return;
+    *_font = wry::build_font(*_atlas, clamped);
 }
 
 // ---- Factory helpers ---------------------------------------------------

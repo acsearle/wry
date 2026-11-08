@@ -89,6 +89,13 @@ namespace wry {
             float2 viewport_size_px = {0.0f, 0.0f};
             uint64_t frame_count = 0;   // for cursor blink, etc.
 
+            // Drawable pixels per UI point (GuiContext::pixels_per_point;
+            // see MeasureContext in gui_widget.hpp for the model).  The
+            // default is the hosts' default, a Retina display at UI scale 1.
+            float pixels_per_point = 2.0f;
+
+            float pt(float points) const { return points * pixels_per_point; }
+
             // Current clip rect in screen-space (logical points).  The
             // renderer initialises this to the viewport rect each frame;
             // widgets push tighter clips via push_clip / pop_clip.
@@ -173,10 +180,13 @@ namespace wry {
             static constexpr float kEdgeSigma = 0.5f;
 
             // Drop shadow defaults (for boxes; text is outlined instead):
-            // a [1 4 6 4 1]/16 binomial blur (sigma 1 px) of the shape,
-            // offset 2 px down, opaque black.
-            static constexpr float kShadowSigma = 1.0f;
-            static constexpr float2 kShadowOffset = {0.0f, 2.0f};
+            // a Gaussian blur of sigma 0.5 pt of the shape, offset 1 pt
+            // down, opaque black.  (At 2 px/pt, the [1 4 6 4 1]/16
+            // binomial's sigma of 1 px, 2 px down.)
+            static constexpr float kShadowSigmaPt = 0.5f;
+            static constexpr float2 kShadowOffsetPt = {0.0f, 1.0f};
+            float shadow_sigma() const { return pt(kShadowSigmaPt); }
+            float2 shadow_offset() const { return kShadowOffsetPt * pixels_per_point; }
 
             // Solid-color rectangle with rounded corners, antialiased in
             // quadFragmentShader.  The 50%-coverage edge lies on `r`.
@@ -195,11 +205,9 @@ namespace wry {
             // The shadow `r` (with corner radii) casts: the same shape,
             // offset, and blurred by sigma.  Paint it before the shape.
             void drop_shadow(rect<float> r, float4 radii,
-                             RGBA8Unorm_sRGB color = RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 1.0f),
-                             float sigma = kShadowSigma,
-                             float2 offset = kShadowOffset) {
-                r += offset;
-                push_blurred_round_rect(r, radii, sigma, color);
+                             RGBA8Unorm_sRGB color = RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 1.0f)) {
+                r += shadow_offset();
+                push_blurred_round_rect(r, radii, shadow_sigma(), color);
             }
 
             // Rounded rectangle blurred by an isotropic Gaussian of the
@@ -713,6 +721,7 @@ namespace wry {
             std::optional<Action> _capturing;
 
             bool _rows_dirty = true;
+            float _built_pixels_per_point = 0.0f;   // of the font rebuild() used
 
             // Gaps and corner radii derive from the font.
             void rebuild(Font const*);

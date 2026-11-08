@@ -762,7 +762,8 @@ namespace wry {
             float text_w = ctx.font
                 ? wry::text_run_width(ctx.font, _label)
                 : 0.0f;
-            float natural_w = std::max(kMinWidth, text_w + 2.0f * kHorizPadding);
+            float natural_w = std::max(ctx.pt(kMinWidthPt),
+                                       text_w + 2.0f * ctx.pt(kHorizPaddingPt));
 
             // Height fits the font's glyph cell plus padding above and
             // below.  Glyph cell extent = ascender - descender (descender
@@ -770,10 +771,10 @@ namespace wry {
             // available we use a hand-tuned fallback large enough for
             // anything reasonable; that keeps measure() side-effect-free
             // even in degenerate setups.
-            float natural_h = kFallbackHeight;
+            float natural_h = ctx.pt(kFallbackHeightPt);
             if (ctx.font) {
                 const float cell_h = ctx.font->ascender - ctx.font->descender;
-                natural_h = cell_h + 2.0f * kVertPadding;
+                natural_h = cell_h + 2.0f * ctx.pt(kVertPaddingPt);
             }
 
             _last_measured_size = c.constrain(Size{ natural_w, natural_h });
@@ -883,9 +884,9 @@ namespace wry {
                 const float text_w   = wry::text_run_width(p.font, _label);
 
                 // Horizontal pen: centered, clamped to leave at least
-                // kHorizPadding on the left.
+                // the horizontal padding on the left.
                 const float pen_x = _rect.a.x +
-                    std::max(kHorizPadding, (button_w - text_w) * 0.5f);
+                    std::max(p.pt(kHorizPaddingPt), (button_w - text_w) * 0.5f);
 
                 // Vertical baseline: place the midpoint of the cap-height
                 // band at the button midpoint.  (Centering the ascender-
@@ -907,6 +908,7 @@ namespace wry {
         // ================================================================
 
         Size Column::measure(SizeConstraints c, MeasureContext const& ctx) {
+            _spacing = _spacing_is_gap ? Panel::gap(ctx.font) : ctx.pt(_spacing_pt);
             float max_w = 0.0f;
             float total_h = 0.0f;
             for (std::size_t i = 0; i < _children.size(); ++i) {
@@ -1006,7 +1008,7 @@ namespace wry {
         }
 
         Size ButtonPanel::measure(SizeConstraints c, MeasureContext const& ctx) {
-            _column->set_spacing(gap(ctx.font));
+            _column->set_spacing_gap();
 
             // Radii are ordered (x0,y0) (x1,y0) (x1,y1) (x0,y1), y-down.
             const float r = Button::default_corner_radius(ctx.font);
@@ -1028,12 +1030,12 @@ namespace wry {
         Size TextCell::measure(SizeConstraints c, MeasureContext const& ctx) {
             // Same natural size rule as Button, so rows mixing the two
             // line up.
-            float w = 2.0f * Button::kHorizPadding;
+            float w = 2.0f * ctx.pt(Button::kHorizPaddingPt);
             float h = 0.0f;
             if (ctx.font) {
                 w += wry::text_run_width(ctx.font, _text);
                 h = ctx.font->ascender - ctx.font->descender
-                    + 2.0f * Button::kVertPadding;
+                    + 2.0f * ctx.pt(Button::kVertPaddingPt);
             }
             _last_measured_size = c.constrain(Size{ w, h });
             return _last_measured_size;
@@ -1049,7 +1051,7 @@ namespace wry {
             const float baseline = (_rect.a.y + _rect.b.y) * 0.5f
                 + p.font->cap_height * 0.5f;
             rect<float> prev = p.push_clip(_rect);
-            p.draw_text_run(simd_make_float2(_rect.a.x + Button::kHorizPadding,
+            p.draw_text_run(simd_make_float2(_rect.a.x + p.pt(Button::kHorizPaddingPt),
                                              baseline),
                             _text, RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f),
                             Painter::TextGround::panel);
@@ -1061,6 +1063,7 @@ namespace wry {
         // ================================================================
 
         Size Row::measure(SizeConstraints c, MeasureContext const& ctx) {
+            _spacing = _spacing_is_gap ? Panel::gap(ctx.font) : ctx.pt(_spacing_pt);
             float total_w = 0.0f;
             float max_h = 0.0f;
             for (std::size_t i = 0; i < _children.size(); ++i) {
@@ -1112,7 +1115,7 @@ namespace wry {
                                      : 0.0f;
             const float h = ctx.font
                 ? (ctx.font->ascender - ctx.font->descender)
-                : 20.0f;   // fallback; only hit if measure is called fontless
+                : ctx.pt(10.0f);   // fallback; only hit if measure is called fontless
             _last_measured_size = c.constrain(Size{ w, h });
             return _last_measured_size;
         }
@@ -1139,7 +1142,7 @@ namespace wry {
 
         Size MinWidth::measure(SizeConstraints c, MeasureContext const& ctx) {
             Size s = _child ? _child->measure(c, ctx) : Size{};
-            _last_measured_size = c.constrain(Size{ std::max(s.w, _min_w),
+            _last_measured_size = c.constrain(Size{ std::max(s.w, ctx.pt(_min_w)),
                                                     s.h });
             return _last_measured_size;
         }
@@ -1374,7 +1377,7 @@ namespace wry {
             // position-space transition: `desired` is a Size (no location);
             // we choose `x`, `y` here to turn it into the screen rect we
             // pass to arrange.
-            MeasureContext mctx{ p.font };
+            MeasureContext mctx{ p.font, p.pixels_per_point };
             SizeConstraints c = SizeConstraints::loose(p.viewport_size_px);
             Size desired = _root->measure(c, mctx);
             float x = (p.viewport_size_px.x - desired.w) * 0.5f;
@@ -1399,7 +1402,7 @@ namespace wry {
 
             // Bottom action bar.
             auto action_bar = std::make_unique<Row>();
-            action_bar->set_spacing(8.0f);
+            action_bar->set_spacing(4.0f);
             action_bar->add(std::make_unique<Button>("Load",   [this] {
                 load_selected();
             }));
@@ -1411,7 +1414,7 @@ namespace wry {
             }));
 
             auto root_col = std::make_unique<Column>();
-            root_col->set_spacing(12.0f);
+            root_col->set_spacing(6.0f);
             root_col->add(std::move(title));
             root_col->add(std::move(scroll));
             root_col->add(std::move(action_bar));
@@ -1431,7 +1434,7 @@ namespace wry {
             auto games = enumerate_games();  // (filename, id), newest first
 
             auto rows_col = std::make_unique<Column>();
-            rows_col->set_spacing(2.0f);
+            rows_col->set_spacing(1.0f);
             _row_buttons.clear();
             _save_ids.clear();
             _row_buttons.reserve(games.size());
@@ -1549,7 +1552,7 @@ namespace wry {
 
             if (!_root) return;
 
-            MeasureContext mctx{ p.font };
+            MeasureContext mctx{ p.font, p.pixels_per_point };
 
             // Cap the scroll view at "N + 0.5" rows.  Row height is the
             // Button natural height with the same font; compute it the
@@ -1558,7 +1561,7 @@ namespace wry {
                 const int n_visible = 5;
                 const float cell_h =
                     p.font->ascender - p.font->descender;
-                const float row_h = cell_h + 2.0f * Button::kVertPadding;
+                const float row_h = cell_h + 2.0f * p.pt(Button::kVertPaddingPt);
                 _scroll->set_height_cap((n_visible + 0.5f) * row_h);
             }
 
@@ -1578,7 +1581,7 @@ namespace wry {
 
         SettingsOverlay::SettingsOverlay() {
             auto col = std::make_unique<Column>();
-            col->set_spacing(12.0f);
+            col->set_spacing(6.0f);
 
             col->add(std::make_unique<Label>("Settings"));
 
@@ -1636,7 +1639,7 @@ namespace wry {
                         RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.5f));
             if (!_root) return;
 
-            MeasureContext mctx{ p.font };
+            MeasureContext mctx{ p.font, p.pixels_per_point };
             SizeConstraints c = SizeConstraints::loose(p.viewport_size_px);
             Size desired = _root->measure(c, mctx);
             float x = (p.viewport_size_px.x - desired.w) * 0.5f;
@@ -1663,15 +1666,15 @@ namespace wry {
         }
 
         void KeyBindingsOverlay::rebuild(Font const* font) {
-            // Column min-widths (drawable px): action name | bindings.
+            // Column min-widths (points): action name | bindings.
             // The Clear button trails at its natural width.
             //
             // The rows sit on a Panel, one gap apart, and each row's three
             // cells are one gap apart, so every cell reads as outlined.
             // Each row is rounded only at its ends.  Radii are ordered
             // (x0,y0) (x1,y0) (x1,y1) (x0,y1), y-down.
-            constexpr float kActionColumnWidth   = 420.0f;
-            constexpr float kBindingsColumnWidth = 360.0f;
+            constexpr float kActionColumnWidth   = 210.0f;
+            constexpr float kBindingsColumnWidth = 180.0f;
 
             auto title = std::make_unique<Label>("Key Bindings");
 
@@ -1686,11 +1689,10 @@ namespace wry {
                             "Escape closes.");
             }
 
-            const float gap = Panel::gap(font);
             const float r = Button::default_corner_radius(font);
 
             auto rows = std::make_unique<Column>();
-            rows->set_spacing(gap);
+            rows->set_spacing_gap();
             for (size_t i = 0; i != action_count; ++i) {
                 Action a = (Action)i;
 
@@ -1734,7 +1736,7 @@ namespace wry {
                 combos_cell->set_corner_radii(simd_make_float4(0.0f, 0.0f, 0.0f, 0.0f));
 
                 auto row = std::make_unique<Row>();
-                row->set_spacing(gap);
+                row->set_spacing_gap();
                 row->add(std::make_unique<MinWidth>(
                     kActionColumnWidth, std::move(action_button)));
                 row->add(std::make_unique<MinWidth>(
@@ -1748,13 +1750,13 @@ namespace wry {
             scroll->set_child(std::move(rows));
 
             auto bar = std::make_unique<Row>();
-            bar->set_spacing(8.0f);
+            bar->set_spacing(4.0f);
             bar->add(std::make_unique<Button>("Back", [this] {
                 wants_close = true;
             }));
 
             auto col = std::make_unique<Column>();
-            col->set_spacing(12.0f);
+            col->set_spacing(6.0f);
             col->add(std::move(title));
             col->add(std::make_unique<Label>(hint));
             col->add(std::make_unique<Panel>(std::move(scroll)));
@@ -1825,9 +1827,13 @@ namespace wry {
 
         void KeyBindingsOverlay::paint(Painter& p) {
             // Deferred tree (re)build: safe here, between dispatches.
-            if (_rows_dirty) {
+            // The rows' corner radii come from the font: rebuild when it
+            // was rebuilt at another UI scale.
+            const float ppp = p.font ? p.font->pixels_per_point : 0.0f;
+            if (_rows_dirty || ppp != _built_pixels_per_point) {
                 rebuild(p.font);
                 _rows_dirty = false;
+                _built_pixels_per_point = ppp;
             }
 
             p.fill_rect(rect<float>{0.0f, 0.0f,
@@ -1836,14 +1842,14 @@ namespace wry {
                         RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.5f));
             if (!_root) return;
 
-            MeasureContext mctx{ p.font };
+            MeasureContext mctx{ p.font, p.pixels_per_point };
 
             // Cap the row list so long action lists scroll rather than
             // overflow the viewport ("N + 0.5 rows", the save-list idiom).
             if (_scroll && p.font) {
                 const int n_visible = 10;
                 const float cell_h = p.font->ascender - p.font->descender;
-                const float row_h = cell_h + 2.0f * Button::kVertPadding
+                const float row_h = cell_h + 2.0f * p.pt(Button::kVertPaddingPt)
                     + Panel::gap(p.font);
                 _scroll->set_height_cap((n_visible + 0.5f) * row_h);
             }

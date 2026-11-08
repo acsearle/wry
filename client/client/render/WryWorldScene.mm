@@ -1532,6 +1532,10 @@ struct WryNumberGlyph {
         using wry::gui::Panel;
         const float gap = Panel::gap(_ctx.font);
         const float cell_radius = Button::default_corner_radius(_ctx.font);
+        Painter scale;
+        scale.pixels_per_point = _model->_gui.pixels_per_point();
+        const float shadow_sigma = scale.shadow_sigma();
+        const float2 shadow_offset = scale.shadow_offset();
         const float panel_radius = cell_radius + gap;
         const float half_gap = 0.5f * gap;
         auto radii = [](float r) { return simd_make_float4(r, r, r, r); };
@@ -1550,11 +1554,11 @@ struct WryNumberGlyph {
             plate.a -= half_gap;
             plate.b += half_gap;
             plate.b.y = std::max(plate.b.y, vh + panel_radius
-                                 + 3.0f * Painter::kShadowSigma
-                                 + Painter::kShadowOffset.y);
+                                 + 3.0f * shadow_sigma
+                                 + shadow_offset.y);
             push(Painter::blurred_round_rect_quad(
-                plate + Painter::kShadowOffset, radii(panel_radius),
-                Painter::kShadowSigma, RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 1.0f)));
+                plate + shadow_offset, radii(panel_radius),
+                shadow_sigma, RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 1.0f)));
             const float k = Panel::kPanelGray;
             push(Painter::blurred_round_rect_quad(
                 plate, radii(panel_radius), Painter::kEdgeSigma,
@@ -1725,6 +1729,7 @@ struct WryNumberGlyph {
         painter.atlas = _ctx.atlas;
         painter.font = _ctx.font;
         painter.viewport_size_px = _model->_gui.viewport_size;
+        painter.pixels_per_point = _model->_gui.pixels_per_point();
         painter.frame_count = (uint64_t)_frame_count;
         // Default clip: the full viewport.  Widgets push tighter clips
         // around their own contents via Painter::push_clip / pop_clip.

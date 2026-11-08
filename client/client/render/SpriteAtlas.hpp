@@ -59,6 +59,14 @@ namespace wry {
         // GUI primitive (glyph, fill, rounded box); see ShaderTypes.h.
         std::size_t _size;
         packer<std::size_t> _packer;
+
+        // The font's own region: a square of the atlas, half its side,
+        // reserved at construction and packed separately, so a rebuild of
+        // the font at another UI scale (font.mm build_font) empties it
+        // wholesale instead of fragmenting the main packer, which never
+        // coalesces what it releases.
+        rect<std::size_t> _font_region;
+        packer<std::size_t> _font_packer{std::size_t{0}};
         ContiguousDeque<WryQuadInstance> _quads;
 
         // Opaque pimpl pointer.  Holds the id<MTLTexture> and the
@@ -129,6 +137,15 @@ namespace wry {
 
         Sprite place(matrix_view<const RGBA8Unorm_sRGB>, float2 origin = { 0, 0 });
         void release(Sprite);
+
+        // Place into, or empty, the font region.  Sprites placed there
+        // before a reset are invalid after it; the GPU may still be
+        // drawing a frame that samples them, which at worst shows one
+        // frame of mismatched glyphs during a rescale.
+        Sprite place_font(matrix_view<const RGBA8Unorm_sRGB>, float2 origin = { 0, 0 });
+        void reset_font_region();
+
+        Sprite _write(rect<std::size_t>::T2 tl, matrix_view<const RGBA8Unorm_sRGB>, float2 origin);
 
     }; // SpriteAtlas
 

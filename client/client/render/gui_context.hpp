@@ -107,6 +107,20 @@ namespace wry {
         // Drawable-pixel viewport size, set by the active scene on resize.
         float2 viewport_size = {};
 
+        // Drawable pixels per view point: the display's backing scale
+        // factor, set by the host each frame (NSWindow backingScaleFactor).
+        // The offscreen and headless hosts, which have no display, keep a
+        // Retina Mac's 2, which their view sizes already assume.
+        float backing_scale = 2.0f;
+
+        // Drawable pixels per UI point.  The UI is laid out in drawable
+        // pixels (viewport_size; events are promoted to them), but every
+        // UI dimension is defined in points and multiplied by this, or
+        // derived from the font, which is rasterized at it.  So the UI
+        // keeps its physical size across displays and window sizes,
+        // rather than scaling with the drawable.
+        float pixels_per_point() const { return backing_scale; }
+
         // User settings.  Constructed as the compiled-in defaults so the
         // keymap is live from the first event; the host replaces them
         // with load_settings(settings_paths, ...) at startup (after the

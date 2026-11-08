@@ -48,6 +48,21 @@ namespace wry {
 
         _impl->texture = [device newTextureWithDescriptor:descriptor];
         _quads.reserve(16384);
+
+        const std::size_t k = n / 2;
+        auto tl = _packer.place(simd::make<simd::ulong2>(k, k));
+        _font_region = rect<std::size_t>(tl.x, tl.y, tl.x + k, tl.y + k);
+        reset_font_region();
+    }
+
+    void SpriteAtlas::reset_font_region() {
+        _font_packer = packer<std::size_t>(_font_region);
+    }
+
+    Sprite SpriteAtlas::place_font(matrix_view<const RGBA8Unorm_sRGB> v, float2 origin) {
+        auto tl = _font_packer.place(simd::make<simd::ulong2>(v.major(),
+                                                              v.minor()));
+        return _write(tl, v, origin);
     }
 
     SpriteAtlas::~SpriteAtlas() {
@@ -88,6 +103,10 @@ namespace wry {
     Sprite SpriteAtlas::place(matrix_view<const RGBA8Unorm_sRGB> v, float2 origin) {
         auto tl = _packer.place(simd::make<simd::ulong2>(v.major(),
                                                  v.minor()));
+        return _write(tl, v, origin);
+    }
+
+    Sprite SpriteAtlas::_write(rect<std::size_t>::T2 tl, matrix_view<const RGBA8Unorm_sRGB> v, float2 origin) {
         if (v.major() != 0) {
             [_impl->texture replaceRegion:MTLRegionMake2D(tl.x, tl.y,
                                                           v.major(), v.minor())

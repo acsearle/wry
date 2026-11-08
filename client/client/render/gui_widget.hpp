@@ -110,11 +110,20 @@ namespace wry::gui {
     };
 
     // Inputs to the measure pass that aren't constraints.  Anything a
-    // widget needs to compute its natural size goes here -- today that's
-    // just the font, but theme / dpi / locale / fallback metrics will all
-    // accumulate here as the GUI grows.
+    // widget needs to compute its natural size goes here: the font, and
+    // the UI scale.
+    //
+    // Units.  Layout happens in drawable pixels, but every dimension is
+    // defined in points and multiplied by pixels_per_point
+    // (GuiContext::pixels_per_point: the display's backing scale times
+    // the user's UI scale) -- or derived from the font, which is
+    // rasterized at that scale.  The default is the hosts' default: a
+    // Retina display at UI scale 1.
     struct MeasureContext {
         Font const* font = nullptr;
+        float pixels_per_point = 2.0f;
+
+        float pt(float points) const { return points * pixels_per_point; }
     };
 
     class Widget {
@@ -214,17 +223,17 @@ namespace wry::gui {
         rect<float> bounds() const override { return _rect; }
         String state() const override;
 
-        // Padding constants are public so containers that need to size a
-        // ScrollView to "N + 0.5 rows" can ask for the row height without
-        // having to measure a sample button.
-        static constexpr float kHorizPadding = 16.0f;
-        static constexpr float kVertPadding  = 8.0f;
-        static constexpr float kMinWidth     = 80.0f;
+        // Padding constants, in points, are public so containers that
+        // need to size a ScrollView to "N + 0.5 rows" can ask for the row
+        // height without having to measure a sample button.
+        static constexpr float kHorizPaddingPt = 8.0f;
+        static constexpr float kVertPaddingPt  = 4.0f;
+        static constexpr float kMinWidthPt     = 40.0f;
 
     private:
-        // Fallback height if measure() is called without a font (shouldn't
-        // happen in practice but keeps the widget defensible).
-        static constexpr float kFallbackHeight = 48.0f;
+        // Fallback height (points) if measure() is called without a font
+        // (the headless host; keeps the widget defensible).
+        static constexpr float kFallbackHeightPt = 24.0f;
 
         String _label;
         move_only_function<void()> _on_click;
@@ -248,7 +257,10 @@ namespace wry::gui {
             return *this;
         }
 
-        void set_spacing(float s) { _spacing = s; }
+        // Spacing between children, in points; or one Panel gap (a font
+        // stem width), for cells that should read as outlined.
+        void set_spacing(float points) { _spacing_pt = points; _spacing_is_gap = false; }
+        void set_spacing_gap() { _spacing_is_gap = true; }
 
         const char* kind() const override { return "Column"; }
         rect<float> bounds() const override { return _rect; }
@@ -268,7 +280,9 @@ namespace wry::gui {
 
     private:
         std::vector<std::unique_ptr<Widget>> _children;
-        float _spacing = 8.0f;
+        float _spacing_pt = 4.0f;
+        bool _spacing_is_gap = false;
+        float _spacing = 0.0f;      // pixels, resolved by measure
         rect<float> _rect = {0, 0, 0, 0};
     };
 
@@ -389,7 +403,9 @@ namespace wry::gui {
             return *this;
         }
 
-        void set_spacing(float s) { _spacing = s; }
+        // As Column's.
+        void set_spacing(float points) { _spacing_pt = points; _spacing_is_gap = false; }
+        void set_spacing_gap() { _spacing_is_gap = true; }
 
         const char* kind() const override { return "Row"; }
         rect<float> bounds() const override { return _rect; }
@@ -405,7 +421,9 @@ namespace wry::gui {
 
     private:
         std::vector<std::unique_ptr<Widget>> _children;
-        float _spacing = 8.0f;
+        float _spacing_pt = 4.0f;
+        bool _spacing_is_gap = false;
+        float _spacing = 0.0f;      // pixels, resolved by measure
         rect<float> _rect = {0, 0, 0, 0};
     };
 
@@ -432,7 +450,7 @@ namespace wry::gui {
 
     // ----------------------------------------------------------------
     // MinWidth: single-child wrapper that widens the child's measured
-    // width to at least `min_w`.  Rows built from naturally-sized
+    // width to at least `min_w` points.  Rows built from naturally-sized
     // widgets are ragged; wrapping each cell in a MinWidth aligns
     // unrelated rows into columns (a poor man's table grid).  The child
     // is arranged into the full widened rect -- children already accept

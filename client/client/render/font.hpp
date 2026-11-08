@@ -35,10 +35,28 @@ namespace wry {
         // Height in pixels of a flat-topped capital (measured from 'H')
         // above the baseline.  All-caps labels center this band.
         float cap_height;
-        
+
+        // The UI's pixels per point the glyphs were rasterized for
+        // (GuiContext::pixels_per_point): every metric above is in
+        // drawable pixels at that scale.
+        float pixels_per_point;
+
+        // The em, in points.  14.45 pt at the hosts' default 2 px/pt is
+        // the 28.9 px em the font was tuned at (font.mm).
+        static constexpr float em_points = 14.45f;
+
+        // The largest pixels_per_point the font region of the atlas
+        // holds a full rasterization at; build_font clamps to it.
+        static constexpr float max_pixels_per_point = 4.0f;
+
     };
-    
-    Font build_font(SpriteAtlas&);
+
+    // Rasterize the printable-ASCII glyphs at Font::em_points *
+    // pixels_per_point pixels to the em into the atlas's font region
+    // (SpriteAtlas::font_region), which is first emptied: a rebuild
+    // replaces the previous font's glyphs, so at most one Font built by
+    // this function is valid at a time.
+    Font build_font(SpriteAtlas&, float pixels_per_point);
 
     
     

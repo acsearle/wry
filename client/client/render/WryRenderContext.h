@@ -50,6 +50,12 @@
 
 @property (nonatomic, readonly, nonnull) wry::SpriteAtlas* atlas;
 @property (nonatomic, readonly, nonnull) wry::Font* font;
+
+// Rasterize the font afresh for a UI scale (GuiContext::pixels_per_point)
+// if it was built for another; the Font is replaced in place, so the
+// pointer stays valid.  The host calls this each frame before the scenes
+// paint.  The font starts at the hosts' default, 2.
+- (void)setFontPixelsPerPoint:(float)pixelsPerPoint;
 @property (nonatomic, readonly, nonnull) id<MTLRenderPipelineState> overlayRenderPipelineState;
 
 // GUI quad pipelines for SpriteAtlas::commit (quadVertexShader /

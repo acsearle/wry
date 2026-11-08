@@ -11,6 +11,7 @@
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
 
+#include <algorithm>
 #include <iostream>
 
 #include "assert.hpp"
@@ -220,9 +221,14 @@ namespace wry {
         };
     }
 
-    Font build_font(SpriteAtlas& atl) {
+    Font build_font(SpriteAtlas& atl, float pixels_per_point) {
+
+        pixels_per_point = std::clamp(pixels_per_point, 0.25f,
+                                      Font::max_pixels_per_point);
+        atl.reset_font_region();
 
         Font result;
+        result.pixels_per_point = pixels_per_point;
         result.stem_width = 1.0f; // fallback if the font lacks 'I'
         result.cap_height = result.ascender; // fallback if it lacks 'H'
 
@@ -238,8 +244,10 @@ namespace wry {
         int upem = handle.units_per_em();
         // Sized to keep the mean advance over printable ASCII of the font
         // it replaced, Futura Medium Condensed at a 40 px em: 0.3736 em vs
-        // Noto Sans Light's 0.5171 em, so 40 * 0.3736 / 0.5171 = 28.9 px.
-        constexpr float target_em_pixels = 28.9f;
+        // Noto Sans Light's 0.5171 em, so 40 * 0.3736 / 0.5171 = 28.9 px,
+        // at the 2 px/pt it was tuned at: Font::em_points.  Rasterized at
+        // the UI's scale rather than scaled as a bitmap.
+        const float target_em_pixels = Font::em_points * pixels_per_point;
         float pixel_size_du = (float)upem / target_em_pixels;
 
         auto m = handle.metrics_for_face();
@@ -284,8 +292,8 @@ namespace wry {
             // The pen origin within u: rgba_padded put the coverage bitmap
             // at (2 * kGlyphPad, 2 * kGlyphPad).  The sprite is the image
             // inset by the outer band (see kGlyphPad).
-            Sprite s = atl.place(u, make<float2>(2 * kGlyphPad - gb.bitmap_left,
-                                                  2 * kGlyphPad + gb.bitmap_top));
+            Sprite s = atl.place_font(u, make<float2>(2 * kGlyphPad - gb.bitmap_left,
+                                                       2 * kGlyphPad + gb.bitmap_top));
             {
                 const float2 inset = make<float2>(kGlyphPad, kGlyphPad);
                 const float2 duv = (s.b.texCoord - s.a.texCoord)

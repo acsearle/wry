@@ -865,6 +865,12 @@ namespace {
     // sets this on resize, but the menu scene does not, so the host does.
     CGSize drawable = [self drawableSizePixels];
     _gui->viewport_size = simd_make_float2((float)drawable.width, (float)drawable.height);
+    // The UI's scale: the display's backing scale (offscreen, the 2 that
+    // -viewSizePoints assumes), with the font rasterized to match before
+    // anything paints.
+    if (!_offscreen && _window)
+        _gui->backing_scale = (float)_window.backingScaleFactor;
+    [_ctx setFontPixelsPerPoint:_gui->pixels_per_point()];
     _gui->scene_widgets = [_scene respondsToSelector:@selector(widgetRoot)]
         ? [_scene widgetRoot] : nullptr;
     _gui->service_commands();

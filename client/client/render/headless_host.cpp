@@ -98,7 +98,7 @@ namespace wry {
             // `press` see its buttons' rects.  There is no font, so the
             // widgets measure by their fallbacks; the layout differs from a
             // rendered one, which only `widgets` can tell
-            gui::MeasureContext context{};
+            gui::MeasureContext context{nullptr, _gui.pixels_per_point()};
             gui::SizeConstraints constraints = gui::SizeConstraints::loose(_gui.viewport_size);
             gui::Size desired = _menu->measure(constraints, context);
             const float x = (viewport_width_px - desired.w) * 0.5f;

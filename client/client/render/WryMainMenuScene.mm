@@ -140,10 +140,11 @@
     painter.atlas = _ctx.atlas;
     painter.font = _ctx.font;
     painter.viewport_size_px = _viewportPx;
+    painter.pixels_per_point = _gui->pixels_per_point();
     painter.frame_count = _frameCount;
     painter.clip = wry::rect<float>{0.0f, 0.0f, _viewportPx.x, _viewportPx.y};
 
-    MeasureContext mctx{ _ctx.font };
+    MeasureContext mctx{ _ctx.font, _gui->pixels_per_point() };
     SizeConstraints c = SizeConstraints::loose(_viewportPx);
     // Qualify Size: <MacTypes.h> defines a global ::Size that the function-scope
     // `using namespace wry::gui` would otherwise make ambiguous.
@@ -164,6 +165,7 @@
     overlay_painter.atlas = _ctx.atlas;
     overlay_painter.font = _ctx.font;
     overlay_painter.viewport_size_px = _viewportPx;
+    overlay_painter.pixels_per_point = _gui->pixels_per_point();
     overlay_painter.frame_count = _frameCount;
     overlay_painter.clip = wry::rect<float>{0.0f, 0.0f, _viewportPx.x, _viewportPx.y};
     _gui->overlays.paint(overlay_painter);
