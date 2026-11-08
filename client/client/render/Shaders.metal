@@ -694,11 +694,14 @@ float3 Fresnel_Schlick_roughness(float cosTheta, float3 F0, float roughness) {
 // s is the G-buffer's material.a; the coat's roughness r_c is one
 // constant (a varnish is smooth; the G-buffer's normal.w is free if a
 // material ever wants its own).  It is 1/8, the prefiltered sky's level
-// 1 and the sharpest level the coat reads: level 0 (1/16) currently
-// samples as non-finite (black), which wants investigating first.  It is 1/8, the prefiltered sky's level
-// 1, the sharpest the coat reads: level 0 (1/16) currently samples as
-// non-finite (black) and wants investigating before anything smoother.  s = 0 skips the lobe: an uncoated
-// surface shades by the same formula as before (the branch's presence
+// 1 (the lighting pass reads roughness r at lod log2(r) + 4; level 0,
+// 1/16, is sound since the GGX sampler fix of 2026-11-08 and the coat no
+// longer clamps its lod).  Not smoother: Filament floors perceptual
+// roughness at 0.089 against specular aliasing, and at 1/16 the sun's
+// coat lobe peaks 16x higher over 1/16 the solid angle, a sub-pixel glint
+// on the slab bevels with no temporal filter to resolve it.  s = 0 skips
+// the lobe: an uncoated surface shades by the same formula as before (the
+// branch's presence
 // moves fast-math codegen by at most an 8-bit step at a few pixels).
 
 constant float kClearCoatF0 = 0.04f;
@@ -1834,7 +1837,7 @@ namespace deferred {
         // share of the sharper prefiltered sky and passes the rest
         float clear_coat = float(gbuffer.material.a);
         if (clear_coat > 0.0f) {
-            float coatLod = max(log2(kClearCoatRoughness) + 4, 1.0f);   // not level 0
+            float coatLod = log2(kClearCoatRoughness) + 4;
             float3 coatSample = environmentTexture.sample(trilinearSampler,
                                                           uniforms.ibl_transform * R,
                                                           level(coatLod)).rgb;
