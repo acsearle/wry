@@ -172,9 +172,9 @@ namespace wry {
             // the rasterized glyphs (font.mm).
             static constexpr float kEdgeSigma = 0.5f;
 
-            // Drop shadow defaults, matching the shadow once baked onto the
-            // glyphs: a [1 4 6 4 1]/16 binomial blur (sigma 1 px) of the
-            // shape, offset 2 px down, opaque black.
+            // Drop shadow defaults (for boxes; text is outlined instead):
+            // a [1 4 6 4 1]/16 binomial blur (sigma 1 px) of the shape,
+            // offset 2 px down, opaque black.
             static constexpr float kShadowSigma = 1.0f;
             static constexpr float2 kShadowOffset = {0.0f, 2.0f};
 
@@ -229,6 +229,13 @@ namespace wry {
                 return q;
             }
 
+            // What lies under a run of text.  Free text (the default) is
+            // drawn over the world or other arbitrary backgrounds, so it
+            // gets a heavy dark outline (WryQuadFlagOutlined) to read on
+            // light and dark alike; text on an opaque panel or button
+            // already has a known dark ground and is drawn plain.
+            enum class TextGround { free, panel };
+
             // Draw a single line of text starting at the given baseline
             // pen position.  No line breaks, no y-axis early-out.  Stops
             // early when the pen passes the right edge of the current
@@ -239,7 +246,8 @@ namespace wry {
             // Defined in gui.mm; declaration only here.
             float2 draw_text_run(float2 pen,
                                  StringView text,
-                                 RGBA8Unorm_sRGB color);
+                                 RGBA8Unorm_sRGB color,
+                                 TextGround ground = TextGround::free);
         };
 
         class Overlay {

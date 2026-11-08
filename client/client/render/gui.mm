@@ -39,7 +39,8 @@ namespace wry {
 
         float2 Painter::draw_text_run(float2 pen,
                                       StringView text,
-                                      RGBA8Unorm_sRGB color) {
+                                      RGBA8Unorm_sRGB color,
+                                      TextGround ground) {
             if (!font || !atlas) return pen;
 
             // Walk the run.  `pen` is the baseline position; the per-glyph
@@ -58,7 +59,10 @@ namespace wry {
                 if (pen.x > clip.b.x) break;
                 auto q = font->charmap.find(c);
                 if (q == font->charmap.end()) continue;
-                push_sprite_clipped(q->second.sprite_ + pen, color);
+                WryQuadInstance quad = SpriteAtlas::make_quad(q->second.sprite_ + pen, color);
+                if (ground == TextGround::free)
+                    quad.flags |= WryQuadFlagOutlined;
+                push_quad_clipped(quad);
                 pen.x += q->second.advance;
             }
             return pen;
@@ -121,7 +125,7 @@ namespace wry {
         void LogOverlay::paint(Painter& p) {
             if (!p.font || !p.atlas) return;
 
-            const RGBA8Unorm_sRGB color(0.5f, 0.5f, 0.5f, 1.0f);
+            const RGBA8Unorm_sRGB color(1.0f, 1.0f, 1.0f, 1.0f);   // white inside the outline
             const float left   = p.font->height * 0.5f;
             const float slot_h = p.font->height;
             // Place each line's glyph cell visually centered in a slot of
@@ -792,7 +796,7 @@ namespace wry {
         }
 
         RGBA8Unorm_sRGB Button::background_color(bool selected, bool hover, bool pressed) {
-            // Dark enough for the white, shadow-baked label to read
+            // Dark enough for the white (unoutlined) label to read
             // clearly.  (Linear values; RGBA8Unorm_sRGB encodes them.)
             RGBA8Unorm_sRGB bg;
             if (selected) {
@@ -865,7 +869,7 @@ namespace wry {
 
                 rect<float> prev_clip = p.push_clip(_rect);
                 p.draw_text_run(simd_make_float2(pen_x, baseline),
-                                _label, fg);
+                                _label, fg, Painter::TextGround::panel);
                 p.pop_clip(prev_clip);
             }
         }
@@ -1019,7 +1023,8 @@ namespace wry {
             rect<float> prev = p.push_clip(_rect);
             p.draw_text_run(simd_make_float2(_rect.a.x + Button::kHorizPadding,
                                              baseline),
-                            _text, RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f));
+                            _text, RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f),
+                            Painter::TextGround::panel);
             p.pop_clip(prev);
         }
 
@@ -1096,7 +1101,7 @@ namespace wry {
                 + (p.font->ascender + p.font->descender) * 0.5f;
             rect<float> prev = p.push_clip(_rect);
             p.draw_text_run(simd_make_float2(_rect.a.x, baseline),
-                            _text, color);
+                            _text, color);  // over the dimmed backdrop, not a panel
             p.pop_clip(prev);
         }
 

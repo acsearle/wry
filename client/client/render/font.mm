@@ -27,76 +27,40 @@
 
 namespace wry {
     
-    // Baked glyph drop shadow, matching Painter::drop_shadow's defaults: the
-    // glyph's shape offset 2 px down and blurred to a total Gaussian sigma
-    // of 1 px, opaque black.  The coverage is already prefiltered at sigma
-    // 0.5 (rasterize_glyph), and Gaussians compose in quadrature, so the
-    // extra blur applied here is sqrt(1 - 0.25).
-    constexpr int kShadowDrop = 2;    // px, down
-    constexpr int kShadowPad = 3;     // px, ~3.5 sigma of the extra blur
-    constexpr float kShadowSigma = 0.8660254f;
+    // Glyphs are stored as premultiplied white coverage, padded with
+    // transparent texels so quadFragmentShader can draw a dark outline
+    // around them (WryQuadFlagOutlined): it dilates the coverage by taking
+    // the max over a disc of taps of radius WRY_GLYPH_OUTLINE_RADIUS
+    // texels.  The image is padded by two bands of kGlyphPad texels:
+    //
+    // - the inner band lies inside the sprite's quad, room for the
+    //   outline to spill past the coverage bitmap (whose own 3 px Gaussian
+    //   margin is measured from the control-point bbox, not the ink);
+    // - the outer band lies outside the quad, so the taps of a fragment at
+    //   the quad's edge read this glyph's own transparent texels rather
+    //   than a neighbor's in the atlas.
+    constexpr int kGlyphPad = 3;  // texels, >= WRY_GLYPH_OUTLINE_RADIUS
+    static_assert(kGlyphPad >= WRY_GLYPH_OUTLINE_RADIUS + 0.5f);
 
-    // Composite a coverage bitmap, as premultiplied white, over its own
-    // drop shadow.  The result is larger than the input by kShadowPad on
-    // every side plus kShadowDrop at the bottom; the input sits at
-    // (kShadowPad, kShadowPad).  Tinting by a vertex color colors the glyph
-    // and leaves the shadow black.
-    matrix<RGBA8Unorm_sRGB> rgba_with_shadow(matrix_view<R8Unorm> x) {
+    // The coverage bitmap as premultiplied white, with 2 * kGlyphPad
+    // transparent texels on every side.  Tinting by a vertex color colors
+    // the glyph.
+    matrix<RGBA8Unorm_sRGB> rgba_padded(matrix_view<R8Unorm> x) {
         const size_t h = x.minor();
         const size_t w = x.major();
-        const size_t P = kShadowPad;
-        const size_t H = h + 2 * P + kShadowDrop;
+        const size_t P = 2 * kGlyphPad;
+        const size_t H = h + 2 * P;
         const size_t W = w + 2 * P;
-
-        // Normalized sampled Gaussian, taps -P..P.
-        float k[2 * kShadowPad + 1];
-        float sum = 0.0f;
-        for (int t = -kShadowPad; t <= kShadowPad; ++t)
-            sum += k[t + kShadowPad] = std::exp(-0.5f * (t * t) / (kShadowSigma * kShadowSigma));
-        for (float& v : k)
-            v /= sum;
-
-        // Offset coverage, then separable blur: rows, then columns.
-        matrix<float> a(H, W);
-        matrix<float> b(H, W);
-        for (size_t i = 0; i != H; ++i)
-            for (size_t j = 0; j != W; ++j)
-                a[i, j] = 0.0f;
-        for (size_t i = 0; i != h; ++i)
-            for (size_t j = 0; j != w; ++j)
-                a[i + P + kShadowDrop, j + P] = x[i, j];
-        for (size_t i = 0; i != H; ++i)
-            for (size_t j = 0; j != W; ++j) {
-                float v = 0.0f;
-                for (int t = -kShadowPad; t <= kShadowPad; ++t) {
-                    const ptrdiff_t jj = (ptrdiff_t)j + t;
-                    if (0 <= jj && jj < (ptrdiff_t)W)
-                        v += k[t + kShadowPad] * a[i, (size_t)jj];
-                }
-                b[i, j] = v;
-            }
-        for (size_t i = 0; i != H; ++i)
-            for (size_t j = 0; j != W; ++j) {
-                float v = 0.0f;
-                for (int t = -kShadowPad; t <= kShadowPad; ++t) {
-                    const ptrdiff_t ii = (ptrdiff_t)i + t;
-                    if (0 <= ii && ii < (ptrdiff_t)H)
-                        v += k[t + kShadowPad] * b[(size_t)ii, j];
-                }
-                a[i, j] = v;
-            }
-
-        // Glyph over shadow: alpha = g + s (1 - g); color is premultiplied
-        // white, g, converted from linear to sRGB by the table.
         matrix<RGBA8Unorm_sRGB> c(H, W);
         for (size_t i = 0; i != H; ++i)
             for (size_t j = 0; j != W; ++j) {
                 R8Unorm g(0.0f);
                 if (P <= i && i < P + h && P <= j && j < P + w)
                     g = x[i - P, j - P];
-                const float gf = g;
                 auto& p = c[i, j];
-                p.a = gf + a[i, j] * (1.0f - gf);
+                p.a = (float)g;
+                // Color is premultiplied white, g, converted from linear
+                // to sRGB by the table.
                 const uchar d = _multiply_alpha_table[g._][255];
                 p.r._ = d;
                 p.g._ = d;
@@ -201,13 +165,13 @@ namespace wry {
     // bitmap at the given design-units-per-pixel scale, using the analytic
     // Gaussian-prefilter integrator above.  The returned offsets match
     // FreeType's bitmap_left/bitmap_top conventions so the rest of the
-    // pipeline (apply_shadow, atlas placement) needs no changes.
+    // pipeline (rgba_padded, atlas placement) needs no changes.
     static GlyphBitmap rasterize_glyph(std::vector<bezier4> const& curves,
                                        float pixel_size_du)
     {
         if (curves.empty()) {
             // Empty glyph (e.g. space).  Hand back a zero-sized bitmap; the
-            // downstream apply_shadow will produce a 4x4 fully-transparent
+            // downstream rgba_padded will produce a 12x12 fully-transparent
             // result, the atlas will place it, and only the advance matters.
             return GlyphBitmap{matrix<R8Unorm>{}, 0, 0};
         }
@@ -293,7 +257,7 @@ namespace wry {
 
             auto curves = handle.outline_for_glyph_index(glyph_index);
             auto gb = rasterize_glyph(curves, pixel_size_du);
-            matrix<RGBA8Unorm_sRGB> u = rgba_with_shadow(gb.coverage);
+            matrix<RGBA8Unorm_sRGB> u = rgba_padded(gb.coverage);
 
             // Stem width: integrate coverage along the middle row of 'I'.
             // The Gaussian prefilter preserves the integral, so this is
@@ -317,10 +281,20 @@ namespace wry {
                 result.stem_width = w;
             }
 
-            // The pen origin within u: rgba_with_shadow put the coverage
-            // bitmap at (kShadowPad, kShadowPad).
-            Sprite s = atl.place(u, make<float2>(kShadowPad - gb.bitmap_left,
-                                                  kShadowPad + gb.bitmap_top));
+            // The pen origin within u: rgba_padded put the coverage bitmap
+            // at (2 * kGlyphPad, 2 * kGlyphPad).  The sprite is the image
+            // inset by the outer band (see kGlyphPad).
+            Sprite s = atl.place(u, make<float2>(2 * kGlyphPad - gb.bitmap_left,
+                                                  2 * kGlyphPad + gb.bitmap_top));
+            {
+                const float2 inset = make<float2>(kGlyphPad, kGlyphPad);
+                const float2 duv = (s.b.texCoord - s.a.texCoord)
+                    / make<float2>(u.major(), u.minor());
+                s.a.position.xy += inset;
+                s.b.position.xy -= inset;
+                s.a.texCoord += inset * duv;
+                s.b.texCoord -= inset * duv;
+            }
 
             float advance = handle.advance_for_glyph_index(glyph_index)
                             / pixel_size_du;

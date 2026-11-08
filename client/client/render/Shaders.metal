@@ -2883,7 +2883,35 @@ quadFragmentShader(QuadRasterizerData in [[stage_in]],
             : colorTexture.sample(nearestSampler, in.texCoord);
         if (in.flags & WryQuadFlagStraight)
             sample.rgb *= sample.a;
-        color *= sample;
+        if (in.flags & WryQuadFlagOutlined) {
+            // A glyph over its outline: the coverage dilated by a disc of
+            // radius WRY_GLYPH_OUTLINE_RADIUS texels, as the max over the
+            // integer offsets inside it (21 taps, the center being the
+            // sample already taken).  The coverage is Gaussian-prefiltered
+            // (font.mm), so the max of shifted copies keeps an antialiased
+            // edge.  font.mm pads each glyph so no tap leaves its image.
+            const float2 texel = 1.0f / float2(colorTexture.get_width(),
+                                               colorTexture.get_height());
+            constexpr int R = int(WRY_GLYPH_OUTLINE_RADIUS);
+            constexpr float R2 = WRY_GLYPH_OUTLINE_RADIUS * WRY_GLYPH_OUTLINE_RADIUS;
+            half dilated = sample.a;
+            for (int dy = -R; dy <= R; ++dy)
+                for (int dx = -R; dx <= R; ++dx)
+                    if (float(dx * dx + dy * dy) <= R2)
+                        dilated = max(dilated,
+                                      colorTexture.sample(nearestSampler,
+                                                          in.texCoord + float2(dx, dy) * texel).a);
+            // Light strokes are thinner than the prefilter, so their peak
+            // coverage is well below one; doubling saturates the outline
+            // (its edge moves out to the 25% coverage contour).  Black,
+            // nearly opaque, faded with the tint.
+            constexpr half kOutlineAlpha = 0.9h;
+            const half4 fill = color * sample;
+            const half outline = saturate(dilated * 2.0h) * kOutlineAlpha * color.a;
+            color = fill + (1.0h - fill.a) * half4(0.0h, 0.0h, 0.0h, outline);
+        } else {
+            color *= sample;
+        }
     }
 
     if (in.flags & WryQuadFlagMasked) {

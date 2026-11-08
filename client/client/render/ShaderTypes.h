@@ -240,7 +240,16 @@ enum WryQuadFlag {
     WryQuadFlagStraight = 1u << 3,  // the texture is straight alpha (the symbol
                                     // atlas): premultiply the sample for the
                                     // (one, one minus alpha) blend
+    WryQuadFlagOutlined = 1u << 4,  // a glyph: draw a dark outline under the
+                                    // textured coverage by dilating the
+                                    // atlas alpha (see quadFragmentShader)
 };
+
+// Outline radius of WryQuadFlagOutlined glyphs, in atlas texels (drawn 1:1
+// as pixels, so the outline scales with the glyphs if they are scaled).
+// The dilation taps the integer offsets within this radius; font.mm pads
+// each glyph's atlas image to keep those taps inside it.
+#define WRY_GLYPH_OUTLINE_RADIUS 2.25f
 
 typedef struct
 {
