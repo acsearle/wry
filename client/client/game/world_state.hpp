@@ -23,6 +23,7 @@
 #include "concurrent_queue.hpp"
 #include "contiguous_deque.hpp"
 #include "entity.hpp"
+#include "functional.hpp"
 #include "gui_context.hpp"
 #include "gui_event.hpp"
 #include "gui_keymap.hpp"
@@ -307,7 +308,7 @@ namespace wry {
         void corrupt(Coordinate at, Term term);
 
         RemoteServer* _client();
-        void _start_session();
+        void _start_session(std::optional<int> save);
         void _start_hosting(uint64_t head);
         void _start_joining(String const& address, uint16_t port);
         void _end_session(std::chrono::milliseconds grace);
@@ -333,7 +334,9 @@ namespace wry {
         // been done
         [[nodiscard]] coroutine::Task end_session(std::chrono::milliseconds grace);
 
-        explicit WorldState(GuiContext& gui) : _gui(gui) {
+        // The game from the starting scenario, or from save `save`
+        // (save_ID.wry; the main menu's `load`)
+        explicit WorldState(GuiContext& gui, std::optional<int> save = std::nullopt) : _gui(gui) {
 
             // Overlay wiring.  The floating log + console are app-tier now:
             // GuiContext owns them (its ctor wires console->log and pushes them
@@ -346,10 +349,10 @@ namespace wry {
             _stack.push(&_palette_overlay);
 
             // The session and the first world: our own host and the
-            // starting scenario, or, on --join, a client of another's
-            // game.  At construction _worlds is empty, so the drain inside
-            // is a no-op.
-            _start_session();
+            // starting scenario or the save, or, on --join and no save, a
+            // client of another's game.  At construction _worlds is empty,
+            // so the drain inside is a no-op.
+            _start_session(save);
 
             _regenerate_uniforms();
 
@@ -367,9 +370,12 @@ namespace wry {
         void new_game();
         void load_from_save(int id);
 
-        // Serialize the displayed world to a new save file.  Synchronous for
-        // now; the world is read non-destructively (popped and re-pushed).
-        void save_current();
+        // Serialize the displayed world to a new save file, in the
+        // background (io/save.hpp): `on_done(id)` runs on a worker thread
+        // once it has published save_ID.wry, or failed (id 0).  The world
+        // is read non-destructively (popped and re-pushed).  False, and
+        // nothing saved, if there is no displayed world
+        bool save_current(move_only_function<void(int)> on_done = {});
 
         void _regenerate_uniforms();
 

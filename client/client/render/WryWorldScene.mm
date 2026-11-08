@@ -1633,7 +1633,8 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
     [_cursor set];
 }
 
-// WryScene: the world scene runs until the app quits; no transitions yet.
+// WryScene: the world scene asks for no successor; the host replaces it with a
+// main menu on `main-menu` (GuiContext::on_main_menu).
 - (id<WryScene>)nextScene {
     return nil;
 }

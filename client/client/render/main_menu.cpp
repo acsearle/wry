@@ -26,25 +26,21 @@ namespace wry {
             panel->add(std::make_unique<Button>(label, std::move(on_click)));
         };
 
-        // NEW GAME: fresh starting world, then drop into it.
-        add("New Game", [g, shared] {
-            // Fresh WorldState (its constructor installs the starting world).
-            auto world = std::make_shared<WorldState>(*g);
-            if (shared->on_world)
-                shared->on_world(std::move(world));
+        // NEW GAME: the `new-game` command, which at the menu builds a
+        // WorldState (its constructor installs the starting world) for the
+        // host to show (GuiContext::on_world).
+        add("New Game", [g] {
+            (void) g->issue(command::Origin::gui, "new-game");
         });
 
         // LOAD GAME: for now load the most recent save (enumerate_games
-        // returns (filename, id) newest first); a real save picker is the
-        // eventual UX.
-        add("Load Game", [g, shared] {
+        // returns (name, id) newest first) with the `load` command; a real
+        // save picker is the eventual UX.
+        add("Load Game", [g] {
             auto games = enumerate_games();
-            if (!games.empty()) {
-                auto world = std::make_shared<WorldState>(*g);
-                world->load_from_save(games.front().second);
-                if (shared->on_world)
-                    shared->on_world(std::move(world));
-            }
+            if (!games.empty())
+                (void) g->issue_with(command::Origin::gui, "load",
+                                     String(StringView(games.front().first.c_str())));
         });
 
         // JOIN GAME: joining is the `join` command and --join today; a

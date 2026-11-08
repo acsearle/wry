@@ -10,9 +10,8 @@ render/gui_context.cpp, the world commands in game/world_state.cpp,
 io/control_socket.{hpp,cpp}, the --headless host in
 render/headless_host.{hpp,cpp} and the --offscreen host in
 render/WryDelegate.mm, both driven from core/main.mm, tools/wryctl,
-tools/wry_mcp.py, tools/wry_smoke.py).  Of the section 7 vocabulary, the session commands
-other than `quit` (new-game, save, load, list-saves) are not yet
-written; the main menu's buttons reach them through `press`.
+tools/wry_mcp.py, tools/wry_smoke.py), the section 7 session commands
+included: the main menu's and the in-game menu's buttons issue them.
 
 Status: normative design.  Section 11 lists what remains open.
 
@@ -458,10 +457,21 @@ drag as its result (`transform.translate(value=...)`), not its path.
 - **world**: `write Coordinate Term` (what a click with a full hand
   does), `erase Coordinate` (right click).
 - **clock**: `pause`, `resume`, `step [n]`, plus local `frame [n]`.
-- **session**: `new-game`, `save [name]`, `load name`, `list-saves`,
-  `quit [clean|fast]` (`fast` exits the process the moment the reply
-  has been flushed, skipping the shutdown drain and joins -- tens of
-  seconds under the sanitizers -- for quick test turnover); and the
+- **session**: `new-game`, `save`, `load name`, `list-saves`,
+  `main-menu`, `quit [clean|fast]`.  A save's name is its file's,
+  `save_ID.wry` (saves are not yet named by the user, so `save` takes
+  no name), and `save` replies with it once the background save has
+  been written; `list-saves` replies with the names, one per line,
+  newest first.  At the main menu `new-game` and `load` build a game
+  and hand it to the host to show (`GuiContext::on_world`); in a game
+  they replace the world in place, ending the session and hosting a
+  fresh one from the new world (a joined client leaves its game), as
+  the in-game menu's buttons do.  `main-menu` (Quit to Main Menu) has
+  the host drop the game once the frame is over, which ends its
+  session, and show the main menu; `quit [clean|fast]` (`fast` exits
+  the process the moment the reply has been flushed, skipping the
+  shutdown drain and joins -- tens of seconds under the sanitizers --
+  for quick test turnover); and the
   multiplayer trio `host [port]` (listen for players;
   replies with the bound port, 0 picking one), `join address:port`
   (abandon the local game; the host's client donates its world as of

@@ -19,19 +19,25 @@ namespace wry {
     : _gui(gui) {
         assert(_gui.scope);
         _menu = make_main_menu(_gui, MainMenuActions{
-            .on_world = [this](std::shared_ptr<WorldState> world) {
-                _next_world = std::move(world);
-            },
             .on_quit = [this] {
                 _done = true;
             },
         });
         // The `quit` command ends the host the same way
         _gui.on_quit = [this] { _done = true; };
+        // `new-game` and `load` at the menu (its buttons issue them) built
+        // a world: shown from the next frame
+        _gui.on_world = [this](std::shared_ptr<WorldState> world) {
+            _next_world = std::move(world);
+        };
+        // `main-menu`: the world is dropped at the end of this frame
+        _gui.on_main_menu = [this] { _to_menu = true; };
     }
 
     HeadlessHost::~HeadlessHost() {
         _gui.on_quit = nullptr;
+        _gui.on_world = nullptr;
+        _gui.on_main_menu = nullptr;
         _gui.scene_widgets = nullptr;
         _next_world.reset();
         _world.reset();
@@ -106,6 +112,14 @@ namespace wry {
             request->ready.store_release(true);
         }
         _gui.screenshot_requests.clear();
+
+        // `main-menu` this frame: the world goes (its destructor ends the
+        // session, blocking, as the scene's release does in a window), and
+        // the menu shows from the next frame
+        if (_to_menu) {
+            _to_menu = false;
+            _world.reset();
+        }
 
         // A menu button built a world this frame: show it from the next.
         // The renderer would size the viewport and the shadow map here;
@@ -213,6 +227,48 @@ namespace wry {
             assert(quit_issued.reply.status == Reply::OK);
             assert(host.done());
 
+            co_await host.world()->end_session(std::chrono::milliseconds(200));
+        }
+        (void) co_await scope.join();
+    };
+
+    // Quit to the main menu and back: `new-game` issued at the menu shows
+    // a world from the next frame; `main-menu` drops it at the end of the
+    // frame it is issued in, after which the commands have no world and
+    // the menu's buttons are live again.  The world's session is ended by
+    // awaiting first, since the drop would end it blocking, and a test
+    // never blocks a worker
+    define_test("headless_host_main_menu") {
+        using command::Origin;
+        using command::Reply;
+        coroutine::Nursery scope;
+        GuiContext gc;
+        gc.scope = &scope;
+        {
+            HeadlessHost host(gc);
+            auto expect = [&](const char* line, Reply::Status want) {
+                [[maybe_unused]] const Reply::Status got = gc.issue(Origin::gui, StringView(line)).reply.status;
+                assert(got == want);
+            };
+            host.frame();
+            assert(host.world() == nullptr);
+            expect("main-menu", Reply::ERROR);           // no game to quit
+            expect("new-game", Reply::OK);
+            host.frame();
+            assert(host.world() != nullptr && gc.world == host.world());
+
+            co_await host.world()->end_session(std::chrono::milliseconds(200));
+            expect("main-menu", Reply::OK);
+            assert(host.world() != nullptr);                // until the frame ends
+            host.frame();
+            assert(host.world() == nullptr && gc.world == nullptr);
+            expect("save", Reply::ERROR);                   // no world to save
+
+            // The menu again: laid out by this frame, pressed in the next
+            host.frame();
+            expect("press \"New Game\"", Reply::OK);
+            host.frame();
+            assert(host.world() != nullptr && gc.world == host.world());
             co_await host.world()->end_session(std::chrono::milliseconds(200));
         }
         (void) co_await scope.join();

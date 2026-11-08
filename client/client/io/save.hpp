@@ -31,9 +31,10 @@ bool save_game(const World* world);
 // so it does not pin the epoch or monopolize a worker), writes a temp +
 // atomic rename, with the blocking flush offloaded to a throwaway thread.
 // The snapshot World must be immutable; the Root keeps it alive for the
-// duration.  When the save finishes, `on_done(ok)` is invoked on a worker
-// thread (ok == false on any I/O failure).
-coroutine::Task save_game(Root<World const*> snapshot, move_only_function<void(bool)> on_done = {});
+// duration.  When the save finishes, `on_done(id)` is invoked on a worker
+// thread with the id of the save published (save_ID.wry), or 0 on any I/O
+// failure.
+coroutine::Task save_game(Root<World const*> snapshot, move_only_function<void(int)> on_done = {});
 void delete_game(int id);
 
 // The save format's bytes (a file's whole contents) for a frozen World,
@@ -45,7 +46,10 @@ void delete_game(int id);
 std::vector<uint8_t> serialize_world(const World* world);
 World* _Nullable load_world_from_bytes(std::span<const uint8_t> bytes);
 
+// The saves as (name, id), newest (highest id) first; a save's name is its
+// file's, save_ID.wry
 std::vector<std::pair<std::string, int>> enumerate_games();
+std::string save_name(int id);
 
 // Where the saves live (created if absent); the session logs live beside
 // them (game/session_log.hpp)

@@ -256,6 +256,15 @@ namespace wry {
         // Set by the host: what the `quit` command does (end the app the way
         // Quit To Desktop does).
         std::function<void()> on_quit;
+        // Set by the host that shows the main menu: what `new-game` and
+        // `load` do there, where no world is showing (the main menu's NEW
+        // GAME and LOAD GAME issue them): show the WorldState they built,
+        // from the next frame
+        std::function<void(std::shared_ptr<WorldState>)> on_world;
+        // Set by the host: what `main-menu` does (the in-game menu's Quit
+        // to Main Menu): once this frame is over, drop the world showing,
+        // which ends its session, and show the main menu
+        std::function<void()> on_main_menu;
         // The window-size command's request, in drawable pixels; the host
         // resizes the window (nothing happens headless)
         std::function<void(float2)> on_window_size;

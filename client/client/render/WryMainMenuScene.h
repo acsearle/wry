@@ -21,12 +21,12 @@
 
 @interface WryMainMenuScene : NSObject <WryScene>
 
-// On NEW / LOAD the menu builds a fresh `WorldState` (borrowing `gui`) and hands
-// it to `nextFactory`, which wraps it in the world scene.  `quit` is invoked by
-// QUIT TO DESKTOP to ask the host to exit.
+// NEW / LOAD issue `new-game` / `load`, which build a fresh `WorldState`
+// (borrowing `gui`) and hand it to the host's GuiContext::on_world, which wraps
+// it in the world scene.  `quit` is invoked by QUIT TO DESKTOP to ask the host
+// to exit.
 - (nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
                                     gui:(nonnull wry::GuiContext*)gui
-                                   next:(nonnull id<WryScene> (^)(std::shared_ptr<wry::WorldState>))nextFactory
                                    quit:(nonnull void (^)(void))quit;
 
 @end

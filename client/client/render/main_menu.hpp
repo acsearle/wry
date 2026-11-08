@@ -25,18 +25,17 @@ namespace wry {
     struct GuiContext;
     struct WorldState;
 
+    // NEW GAME and LOAD GAME issue `new-game` and `load`, which hand the
+    // WorldState they build to the host's GuiContext::on_world
     struct MainMenuActions {
-        // NEW GAME and LOAD GAME built a WorldState (the starting scenario,
-        // or the newest save loaded into it): show it
-        std::function<void(std::shared_ptr<WorldState>)> on_world;
         // QUIT TO DESKTOP
         std::function<void()> on_quit;
     };
 
     // The panel; the actions are called from its buttons' click handlers,
     // on the thread that dispatches events to it (main), while the panel
-    // lives.  `gui` is borrowed for the WorldStates built and for the
-    // settings overlay
+    // lives.  `gui` is borrowed for the commands the buttons issue and for
+    // the settings overlay
     std::unique_ptr<gui::ButtonPanel> make_main_menu(GuiContext& gui, MainMenuActions actions);
 
 } // namespace wry

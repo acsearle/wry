@@ -207,6 +207,12 @@ namespace {
     // layer doesn't depend on which scene is showing.  Boots to a splash and
     // transitions splash -> main menu -> world (see applicationWillFinishLaunching).
     id<WryScene> _scene;
+    // The scene a command asked for this frame, shown after it is presented:
+    // the world scene `new-game` / `load` built at the main menu
+    // (GuiContext::on_world), or a fresh main menu for `main-menu`
+    id<WryScene> _pendingScene;
+    // Builds a main menu scene (the boot chain's, and `main-menu`'s)
+    id<WryScene> (^_makeMenu)(void);
     NSThread* _renderThread;
     WryAudio* _audio;
     NSCursor* _cursor;
@@ -241,13 +247,16 @@ namespace {
     // Boot flow: splash -> main menu -> world.  The world scene is built lazily
     // (its asset load is heavy) the moment the menu hands control on.
     WryRenderContext* ctx = _ctx;
-    // The menu builds a WorldState (NEW / LOAD) and hands it here to be wrapped
-    // in the world scene -- the host no longer owns the world state.
-    id<WryScene> (^makeWorld)(std::shared_ptr<wry::WorldState>) =
-        ^id<WryScene>(std::shared_ptr<wry::WorldState> world) {
-            return [[WryWorldScene alloc] initWithContext:ctx model:world];
-        };
     __weak WryDelegate* weakSelf = self;
+    // `new-game` and `load` at the menu (its NEW / LOAD issue them) build a
+    // WorldState and hand it here to be wrapped in the world scene -- the host
+    // no longer owns the world state.  Shown once this frame is presented.
+    _gui->on_world = [weakSelf, ctx](std::shared_ptr<wry::WorldState> world) {
+        WryDelegate* strongSelf = weakSelf;
+        if (!strongSelf)
+            return;
+        strongSelf->_pendingScene = [[WryWorldScene alloc] initWithContext:ctx model:std::move(world)];
+    };
     void (^quit)(void) = ^{
         WryDelegate* strongSelf = weakSelf;
         if (!strongSelf)
@@ -270,11 +279,20 @@ namespace {
         [strongSelf->_window orderOut:nil];
         strongSelf.done = YES;  // ends main's render loop -> shutdown
     };
-    WryMainMenuScene* menu =
-        [[WryMainMenuScene alloc] initWithContext:_ctx
-                                              gui:_gui
-                                             next:makeWorld
-                                             quit:quit];
+    wry::GuiContext* gui = _gui;
+    _makeMenu = ^id<WryScene>(void) {
+        return [[WryMainMenuScene alloc] initWithContext:ctx gui:gui quit:quit];
+    };
+    id<WryScene> menu = _makeMenu();
+    // `main-menu` (the in-game menu's Quit to Main Menu): a fresh menu, shown
+    // once this frame is presented; the world scene's release then drops the
+    // WorldState, whose destructor ends its session
+    _gui->on_main_menu = [weakSelf] {
+        WryDelegate* strongSelf = weakSelf;
+        if (!strongSelf)
+            return;
+        strongSelf->_pendingScene = strongSelf->_makeMenu();
+    };
     if (_gui->skip_splash)
         _scene = menu;
     else
@@ -921,6 +939,10 @@ namespace {
     // key for the menu, a timer for the splash).  Swap after presenting, and
     // size the incoming scene to the current drawable before its first frame.
     id<WryScene> next = _scene.nextScene;
+    if (_pendingScene) {
+        next = _pendingScene;
+        _pendingScene = nil;
+    }
     if (next) {
         _scene = next;
         [_scene drawableResize:[self drawableSizePixels]];

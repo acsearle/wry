@@ -25,9 +25,6 @@
     simd_float2 _viewportPx;       // drawable pixels; widgets lay out in this
     uint64_t _frameCount;
     std::unique_ptr<wry::gui::ButtonPanel> _root;   // the button panel (render/main_menu.hpp)
-    id<WryScene> _pendingNext;     // set by NEW / LOAD; -nextScene returns it
-    // Wraps a freshly-built WorldState in the world scene.
-    id<WryScene> (^_nextFactory)(std::shared_ptr<wry::WorldState>);
     void (^_quit)(void);
 
     // Backdrop: streaming "mainMenu*.png" album (Ken Burns pan + crossfade),
@@ -37,13 +34,11 @@
 
 - (nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
                                     gui:(nonnull wry::GuiContext*)gui
-                                   next:(nonnull id<WryScene> (^)(std::shared_ptr<wry::WorldState>))nextFactory
                                    quit:(nonnull void (^)(void))quit
 {
     if ((self = [super init])) {
         _ctx = context;
         _gui = gui;
-        _nextFactory = [nextFactory copy];
         _quit = [quit copy];
         _viewportPx = simd_make_float2(0.0f, 0.0f);
         _frameCount = 0;
@@ -59,9 +54,6 @@
         // (self -> _root -> button -> lambda -> self).
         __unsafe_unretained WryMainMenuScene* uself = self;
         _root = wry::make_main_menu(*gui, wry::MainMenuActions{
-            .on_world = [uself](std::shared_ptr<wry::WorldState> world) {
-                uself->_pendingNext = uself->_nextFactory ? uself->_nextFactory(std::move(world)) : nil;
-            },
             .on_quit = [uself] {
                 if (uself->_quit) uself->_quit();
             },
@@ -182,8 +174,9 @@
     return _target;
 }
 
+// The host switches to the world scene (GuiContext::on_world)
 - (id<WryScene>)nextScene {
-    return _pendingNext;
+    return nil;
 }
 
 @end

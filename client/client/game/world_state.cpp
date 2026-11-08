@@ -379,15 +379,18 @@ namespace wry {
         return _remote.get();
     }
 
-    void WorldState::_start_session() {
-        if (!_gui.join_address.empty()) {
+    void WorldState::_start_session(std::optional<int> save) {
+        if (!save && !_gui.join_address.empty()) {
             _start_joining(_gui.join_address, _gui.join_port);
             // A placeholder to draw until the host's save arrives
             _awaiting_save = true;
             install_displayed_world(*this, make_starting_world());
             return;
         }
-        new_game();
+        if (save)
+            load_from_save(*save);
+        else
+            new_game();
         if (_gui.host_port) {
             auto bound = host_listen(*_gui.host_port);
             String message;
@@ -703,7 +706,7 @@ namespace wry {
         (void) execution::sync_wait(_apply_step_async(step));
     }
 
-    void WorldState::save_current() {
+    bool WorldState::save_current(move_only_function<void(int)> on_done) {
         // Hand a rooted snapshot of the displayed world to the async saver and
         // return to the frame immediately; the save no longer blocks the main
         // thread.  The world is an immutable persistent structure that
@@ -713,14 +716,21 @@ namespace wry {
         // finishes.
         Root<World const*> w;
         if (!_worlds.try_pop_front(w))
-            return;
+            return false;
         // The callback runs on a worker thread when the save finishes; post the
-        // result for the main-thread pump to surface in the log.
+        // result for the main-thread pump to surface in the log.  It holds
+        // the GuiContext, which outlives every WorldState and the scope's
+        // drain, not this WorldState, which a return to the main menu may
+        // have destroyed by then
         assert(_gui.scope);
-        _gui.scope->soon(save_game(w, [this](bool ok) {
-            _gui.post_notification(ok ? "Saved." : "Save failed.");
+        GuiContext* gui = &_gui;
+        _gui.scope->soon(save_game(w, [gui, on_done = std::move(on_done)](int id) mutable {
+            gui->post_notification(id ? "Saved." : "Save failed.");
+            if (on_done)
+                on_done(id);
         }));
         _worlds.push_front(std::move(w));
+        return true;
     }
 
 
@@ -1302,6 +1312,55 @@ namespace wry {
             }
         };
 
+        // `save`: done once the background save has published (or failed).
+        // The result is shared with the save's completion callback, which
+        // stores it on a worker thread; it holds no WorldState, so the save
+        // may outlive the world it was taken from
+        struct SaveResult {
+            // -1 until the save finishes; then the id published, or 0.
+            // The callback's store_release pairs with poll's load_acquire
+            Atomic<int> id{-1};
+        };
+
+        struct SavePending final : command::Pending {
+            std::shared_ptr<SaveResult> result;
+            explicit SavePending(std::shared_ptr<SaveResult> r) : result(std::move(r)) {}
+
+            std::optional<Reply> poll() override {
+                const int id = result->id.load_acquire();
+                if (id < 0)
+                    return std::nullopt;
+                if (id == 0)
+                    return Reply::error(String("the save failed"));
+                return Reply::ok(widen(save_name(id)));
+            }
+
+            // The save carries on; only the wait for it stops
+            void cancel() override {}
+        };
+
+        // The id of the save `name` names, as list-saves prints it, if
+        // there is one
+        std::optional<int> save_named(String const& name) {
+            const std::string wanted = narrow(name);
+            for (auto const& [file, id] : enumerate_games())
+                if (file == wanted)
+                    return id;
+            return std::nullopt;
+        }
+
+        // new-game and load at the main menu: a WorldState for the host to
+        // show, as the main menu's buttons once built themselves.  Its
+        // constructor starts the session from the starting scenario (or
+        // joins, on --join) or the save, as the in-game path's new_game
+        // and load_from_save do
+        Reply show_new_world(Ctx& c, std::optional<int> save) {
+            if (!c.gui.on_world)
+                return Reply::error(String("this host cannot show a world"));
+            c.gui.on_world(std::make_shared<WorldState>(c.gui, save));
+            return Reply::ok();
+        }
+
     } // namespace
 
     void register_world_commands(CommandRegistry& registry) {
@@ -1430,6 +1489,70 @@ namespace wry {
                 if (!ws._remote)
                     return Reply::error(String("not in a joined game"));
                 ws.leave();
+                return Reply::ok();
+            })));
+
+        // The games (commands.md section 7).  At the main menu, where no
+        // world is showing, new-game and load build one for the host to
+        // show (GuiContext::on_world); in a game they replace the world in
+        // place, as the in-game menu always has.  Either way the session
+        // ends and a fresh one is hosted from the new world (new_game,
+        // load_from_save): a joined client leaves its game
+        registry.add(make_command<Ctx>(
+            "new-game", "Start a game from the starting scenario: from the main menu, or in place of the game showing (which ends its session)", Category::session,
+            std::tuple<>{},
+            [](Ctx& c) {
+                if (!c.world)
+                    return show_new_world(c, std::nullopt);
+                c.world->new_game();
+                return Reply::ok();
+            }));
+
+        registry.add(make_command<Ctx>(
+            "save", "Save the displayed world as a new save; replies with its name once it is written", Category::session,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                auto result = std::make_shared<SaveResult>();
+                if (!ws.save_current([result](int id) { result->id.store_release(id); }))
+                    return Reply::error(String("no displayed world"));
+                return Reply::later(std::make_shared<SavePending>(std::move(result)));
+            })));
+
+        registry.add(make_command<Ctx>(
+            "load", "Load a save: from the main menu, or in place of the game showing (which ends its session)", Category::session,
+            std::tuple{
+                Param<Ctx, String>{"name", "the save, as list-saves names it"},
+            },
+            [](Ctx& c, String const& name) {
+                const std::optional<int> id = save_named(name);
+                if (!id)
+                    return Reply::error(widen("no save named " + narrow(name)));
+                if (!c.world)
+                    return show_new_world(c, id);
+                c.world->load_from_save(*id);
+                return Reply::ok();
+            }));
+
+        registry.add(make_command<Ctx>(
+            "list-saves", "The saves, one name per line, newest first", Category::session,
+            std::tuple<>{},
+            [](Ctx&) {
+                std::string text;
+                for (auto const& [file, id] : enumerate_games()) {
+                    if (!text.empty())
+                        text += "\n";
+                    text += file;
+                }
+                return Reply::ok(widen(text));
+            }));
+
+        registry.add(make_command<Ctx>(
+            "main-menu", "Quit to the main menu: end the game showing (and its session) and show the menu", Category::session,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                if (!ws._gui.on_main_menu)
+                    return Reply::error(String("this host has no main menu"));
+                ws._gui.on_main_menu();
                 return Reply::ok();
             })));
 
@@ -2728,6 +2851,113 @@ namespace wry {
     // A join that never gets its save (a dead address) must not leave the
     // next session unable to apply a step: ending the session clears the
     // awaiting-save hold and any donation outstanding.
+    // The session commands (commands.md section 7): at the main menu (no
+    // world) new-game and load build a WorldState and hand it to the host
+    // (GuiContext::on_world, stood in for here); in a game they replace
+    // the world in place; save replies with the new save's name once it
+    // is written, list-saves names it, and load restores it; main-menu
+    // asks the host to drop the world.  In-place replacement ends the
+    // session, blocking, so the test ends it first by awaiting (a test
+    // never blocks a worker).  The save it makes is deleted at the end
+    define_test("world_state_session_commands") {
+        using command::Origin;
+        using command::Reply;
+        coroutine::Nursery scope;
+        GuiContext gc;
+        gc.scope = &scope;
+        std::shared_ptr<WorldState> shown;
+        bool to_menu = false;
+        gc.on_world = [&](std::shared_ptr<WorldState> w) { shown = std::move(w); };
+        gc.on_main_menu = [&] { to_menu = true; };
+        auto issue = [&](const char* line) { return gc.issue(Origin::console, StringView(line)); };
+        // Issued outside assert: the suite also runs in a Release build
+        auto expect = [&](const char* line, Reply::Status want) {
+            [[maybe_unused]] const Reply::Status got = issue(line).reply.status;
+            assert(got == want);
+        };
+        auto expect_load = [&](String const& name) {
+            [[maybe_unused]] const Reply::Status got = gc.issue_with(Origin::console, "load", name).reply.status;
+            assert(got == Reply::OK);
+        };
+        auto displayed_hash = [&] { return narrow(issue("state-hash").reply.text); };
+
+        // The main menu: nothing to save or leave; a save must exist
+        expect("save", Reply::ERROR);
+        expect("main-menu", Reply::ERROR);
+        expect("load \"no-such-save.wry\"", Reply::ERROR);
+        expect("list-saves", Reply::OK);
+        assert(!shown && !gc.world);
+
+        // new-game from the menu: the host is handed the world to show
+        expect("new-game", Reply::OK);
+        assert(shown && gc.world == shown.get());
+        WorldState* ws = shown.get();
+        [[maybe_unused]] const std::string start = displayed_hash();
+
+        // An edit off the stream, then saved: the reply is the save's name,
+        // once it is written
+        expect("corrupt Coordinate(5, 5) OPCODE::SWAP", Reply::OK);
+        [[maybe_unused]] const std::string edited = displayed_hash();
+        assert(edited != start);
+        expect("save", Reply::PENDING);
+        const uint64_t save_seq = gc.history.back().seq;
+        auto save_entry = [&]() -> command::HistoryEntry const* {
+            for (auto const& e : gc.history)
+                if (e.seq == save_seq)
+                    return &e;
+            return nullptr;
+        };
+        for (const auto deadline = testing::soon(); save_entry()->status == Reply::PENDING;) {
+            assert(std::chrono::steady_clock::now() < deadline);
+            ++gc.frame;
+            gc.service_commands();
+            co_await testing::pause(std::chrono::milliseconds(1));
+        }
+        assert(save_entry()->status == Reply::OK);
+        const String name = save_entry()->reply;
+        const std::optional<int> id = save_named(name);
+        assert(id);
+        if (!id)
+            co_return;
+        {
+            [[maybe_unused]] const std::string listed = "\n" + narrow(issue("list-saves").reply.text) + "\n";
+            assert(listed.find("\n" + narrow(name) + "\n") != std::string::npos);
+        }
+
+        // new-game and load in place: the same WorldState, its world
+        // replaced, the session ended and hosted afresh
+        co_await ws->end_session(std::chrono::milliseconds(200));
+        expect("new-game", Reply::OK);
+        assert(gc.world == ws && ws->_host);
+        [[maybe_unused]] const std::string renewed = displayed_hash();
+        assert(renewed == start);
+        co_await ws->end_session(std::chrono::milliseconds(200));
+        expect_load(name);
+        assert(gc.world == ws && ws->_host);
+        [[maybe_unused]] const std::string reloaded = displayed_hash();
+        assert(reloaded == edited);
+
+        // main-menu: the host is asked to drop the world; doing so leaves
+        // no world for the commands, and load from the menu builds one
+        // from the save
+        expect("main-menu", Reply::OK);
+        assert(to_menu);
+        co_await ws->end_session(std::chrono::milliseconds(200));
+        shown.reset();
+        assert(!gc.world);
+        expect_load(name);
+        assert(shown && gc.world == shown.get() && shown->_host);
+        [[maybe_unused]] const std::string menu_loaded = displayed_hash();
+        assert(menu_loaded == edited);
+
+        co_await shown->end_session(std::chrono::milliseconds(200));
+        shown.reset();
+        delete_game(*id);
+        assert(!save_named(name));
+        (void) co_await scope.join();
+        co_return;
+    };
+
     define_test("world_state_abandoned_join") {
         coroutine::Nursery scope;
         GuiContext gc;

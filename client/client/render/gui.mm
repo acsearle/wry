@@ -1285,19 +1285,20 @@ namespace wry {
             }));
 
             // NEW replaces the displayed world with a fresh starting world
-            // and closes the menu so the user drops straight into it.
+            // (the `new-game` command) and closes the menu so the user drops
+            // straight into it.
             panel->add(std::make_unique<Button>("New", [this] {
                 if (_model) {
-                    _model->new_game();
+                    (void) _model->_gui.issue(command::Origin::gui, "new-game");
                     this->wants_close = true;
                 }
             }));
 
-            // SAVE writes the displayed world to a new save file, leaving the
-            // menu open.
+            // SAVE writes the displayed world to a new save file (the `save`
+            // command), leaving the menu open.
             panel->add(std::make_unique<Button>("Save", [this] {
                 if (_model)
-                    _model->save_current();
+                    (void) _model->_gui.issue(command::Origin::gui, "save");
             }));
 
             // Push the app-tier settings UI over this menu.  It lives on
@@ -1306,6 +1307,13 @@ namespace wry {
             panel->add(std::make_unique<Button>("Settings", [this] {
                 if (_model)
                     _model->_gui.open_settings();
+            }));
+
+            // QUIT TO MAIN MENU (the `main-menu` command): the host drops
+            // this world, and with it this overlay, once the frame is over
+            panel->add(std::make_unique<Button>("Quit to Main Menu", [this] {
+                if (_model)
+                    (void) _model->_gui.issue(command::Origin::gui, "main-menu");
             }));
 
             _root = std::move(panel);
@@ -1451,8 +1459,10 @@ namespace wry {
             if (_selected_index < 0 ||
                 _selected_index >= (int)_save_ids.size())
                 return;  // empty list / no selection
+            // The `load` command, by the save's name
             if (_model)
-                _model->load_from_save(_save_ids[_selected_index]);
+                (void) _model->_gui.issue_with(command::Origin::gui, "load",
+                    String(StringView(save_name(_save_ids[_selected_index]).c_str())));
             // Pop the save list; the main menu below remains for the user to
             // dismiss (CONTINUE / ESC) back into the freshly-loaded game.
             wants_close = true;

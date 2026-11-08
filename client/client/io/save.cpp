@@ -46,10 +46,14 @@ namespace wry {
         }
 
         std::filesystem::path save_path_for_id(int id) {
-            char buf[32];
-            std::snprintf(buf, sizeof buf, "save_%d.wry", id);
-            return saves_dir() / buf;
+            return saves_dir() / save_name(id);
         }
+    }
+
+    std::string save_name(int id) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "save_%d.wry", id);
+        return buf;
     }
 
     std::filesystem::path saves_directory() {
@@ -139,13 +143,15 @@ namespace wry {
     // if every step succeeded, atomically rename it into the next free save id
     // (picked here, under a lock, so concurrent saves can't collide).  On any
     // failure the temp is removed and nothing is published: a failed save leaves
-    // no file rather than a corrupt one.  Returns whether a save was published.
-    static bool publish_or_discard(int fd, const std::filesystem::path& temp_path, bool ok) {
+    // no file rather than a corrupt one.  Returns the id published, or 0 if
+    // none was (ids start at 1).
+    static int publish_or_discard(int fd, const std::filesystem::path& temp_path, bool ok) {
         ok = (close(fd) == 0) && ok;  // close() always runs; its error counts
+        int next_id = 0;
         if (ok) {
             static std::mutex save_id_mutex;
             std::scoped_lock guard{save_id_mutex};
-            int next_id = 1;
+            next_id = 1;
             for (auto& entry : std::filesystem::directory_iterator(saves_dir())) {
                 const auto& p = entry.path();
                 if (p.extension() != ".wry") continue;
@@ -161,7 +167,7 @@ namespace wry {
             std::error_code ec;
             std::filesystem::remove(temp_path, ec);
         }
-        return ok;
+        return ok ? next_id : 0;
     }
 
     // Synchronous save: blocks on the flush -- fine, this is the synchronous API
@@ -173,7 +179,7 @@ namespace wry {
         int fd = make_temp_save(temp);
         if (fd < 0) return false;
         bool ok = write_all(fd, buffer.data(), buffer.size()) && flush_temp_save(fd);
-        return publish_or_discard(fd, temp, ok);
+        return publish_or_discard(fd, temp, ok) != 0;
     }
 
     // Detached coroutine form of save_game.  Holds the rooted snapshot in its
@@ -181,13 +187,13 @@ namespace wry {
     // file write, and between file chunks -- so it never holds a worker's mutator
     // pin across the whole save, letting the epoch advance in between.  The
     // blocking F_FULLFSYNC is offloaded to a throwaway thread.  When the save
-    // finishes, on_done(ok) reports the result.
-    static coroutine::Future<bool> background_save_coroutine(Root<World const*> snapshot) {
+    // finishes, it returns the id published (0 if none was).
+    static coroutine::Future<int> background_save_coroutine(Root<World const*> snapshot) {
         std::vector<uint8_t> buffer = serialize_world(&*snapshot);
 
         co_await coroutine::TransferToPoolExecutor{};  // yield after the walk
 
-        bool ok = false;
+        int id = 0;
         std::filesystem::path temp;
         int fd = make_temp_save(temp);
         if (fd >= 0) {
@@ -216,18 +222,18 @@ namespace wry {
                 flushed = flush_temp_save(fd);
 #endif
             }
-            ok = publish_or_discard(fd, temp, wrote && flushed);
+            id = publish_or_discard(fd, temp, wrote && flushed);
         }
         // Fall off the end: final_suspend frees this frame (and the Root, on a
         // mutator worker) and resumes the continuation.
-        co_return ok;
+        co_return id;
     }
 
-    coroutine::Task save_game(Root<World const*> snapshot, move_only_function<void(bool)> on_done) {
+    coroutine::Task save_game(Root<World const*> snapshot, move_only_function<void(int)> on_done) {
         // The frame owns the Root snapshot; the spawner's scope owns the frame
-        bool ok = co_await background_save_coroutine(std::move(snapshot));
+        int id = co_await background_save_coroutine(std::move(snapshot));
         if (on_done)
-            on_done(ok);
+            on_done(id);
     }
 
     World* load_game(int id) {
@@ -372,13 +378,15 @@ namespace wry {
         // edge.
         Root<World const*> root(w);
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-        std::optional<bool> result = co_await with_deadline(deadline, background_save_coroutine(std::move(root)));
-        assert(result.value_or(false));
+        std::optional<int> result = co_await with_deadline(deadline, background_save_coroutine(std::move(root)));
+        assert(result.value_or(0) > 0);
 
         int found = -1;
         for (auto& [name, id] : enumerate_games())
             if (read_save_file(id) == ref) { found = id; break; }
         assert(found >= 0);
+        // The id reported is the file published
+        assert(result.value_or(0) == found);
         delete_game(found);
 
         co_return;

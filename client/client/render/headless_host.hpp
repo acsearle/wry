@@ -79,6 +79,8 @@ namespace wry {
         std::shared_ptr<WorldState> _world;
         // Built by a menu button this frame; shown from the next
         std::shared_ptr<WorldState> _next_world;
+        // `main-menu` this frame: drop the world at its end
+        bool _to_menu = false;
         bool _done = false;
     };
 
