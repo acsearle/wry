@@ -72,6 +72,10 @@ namespace wry {
         s.write_u32(SAVE_VERSION);
         size_t record_count_offset = s._stream.size();
         s.write_u32(0);  // placeholder
+        // The World's content hash, for the loader to check what it
+        // rebuilt (Loader::load_and_commission).  O(1): the maps cache
+        // their hashes, and the entities are sealed
+        s.write_u64(world->_compute_content_hash());
 
         SaveRef root_ref = s.save_world(world);
         s.resolve_pending();
@@ -239,8 +243,7 @@ namespace wry {
         Loader L;
         L._cursor = buf.data();
         L._end    = buf.data() + buf.size();
-        World* w = L.load_world();
-        if (w) w->hack_repair_invariant();
+        World* w = L.load_and_commission();
         // Version-rejected (or otherwise unreadable) file: empty world, the
         // same fallback as an absent file.
         return w ? w : new World;
@@ -250,10 +253,7 @@ namespace wry {
         Loader L;
         L._cursor = bytes.data();
         L._end    = bytes.data() + bytes.size();
-        World* w = L.load_world();
-        if (w)
-            w->hack_repair_invariant();
-        return w;
+        return L.load_and_commission();
     }
 
     World* continue_game() {

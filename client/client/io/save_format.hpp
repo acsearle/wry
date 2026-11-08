@@ -63,13 +63,17 @@ namespace wry {
     // Version 8: bumped 2026-11-08; the World's terrain seed (_seed, u64,
     //            terrain.hpp's on-demand generation) is appended to the
     //            World record.
+    // Version 9: bumped 2026-11-08; the file header carries the World's
+    //            content hash after the record count, and the loader
+    //            rejects a file whose commissioned World does not
+    //            reproduce it.
     //
     // Additive vocabulary (new ENUMERATION metas / codes) does NOT bump
     // the version: layout is unchanged and older files remain loadable.
     //   2026-07-05: TERM_ENUM_META_MATTER = 4 (matter.hpp codes).
     // ---------------------------------------------------------------------
 
-    enum : uint32_t { TERM_SAVE_VERSION = 8 };
+    enum : uint32_t { TERM_SAVE_VERSION = 9 };
 
     // The first word of a save file: 'WRYS'
     inline constexpr uint32_t SAVE_MAGIC = 0x57525953;
@@ -251,6 +255,11 @@ namespace wry {
         bool _failed = false;
         const char* _why = nullptr;
 
+        // The World content hash the writer recorded in the header (save
+        // version 9): what the loaded World must reproduce once
+        // commissioned (load_and_commission).
+        uint64_t _expected_hash = 0;
+
         void fail(const char* why) {
             if (!_failed) {
                 _failed = true;
@@ -327,6 +336,11 @@ namespace wry {
         // Drive the load.  Returns the World root, or null if the bytes
         // were not a save this build reads, with _why saying what failed.
         World* _Nullable load_world();
+
+        // load_world, then commission the World (hack_repair_invariant)
+        // and check that it reproduces the header's hash: null, with _why
+        // set, if it does not.  What the game's loaders use.
+        World* _Nullable load_and_commission();
 
     }; // struct Loader
 

@@ -20,6 +20,7 @@
 //    - PersistentStack<Term>                      // machine stack cells
 //
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
@@ -681,7 +682,7 @@ namespace wry {
 
     // -----------------------------------------------------------------------
     // Loader driver.  File layout:
-    //   [magic u32] [version u32] [record_count u32]
+    //   [magic u32] [version u32] [record_count u32] [world hash u64]
     //   N records, each: [tag varint] [body_len u32] [body bytes...]
     //   [root SaveRef u32]
     // -----------------------------------------------------------------------
@@ -690,6 +691,7 @@ namespace wry {
         uint32_t magic   = read_u32();
         uint32_t version = read_u32();
         uint32_t count   = read_u32();
+        _expected_hash   = read_u64();
         if (_failed) {
             fprintf(stderr, "save: %s; refusing to load\n", _why);
             return nullptr;
@@ -757,6 +759,20 @@ namespace wry {
         return root;
     }
 
+
+    World* Loader::load_and_commission() {
+        World* w = load_world();
+        if (!w)
+            return nullptr;
+        w->hack_repair_invariant();
+        if (w->content_hash() != _expected_hash) {
+            fail("the loaded World does not reproduce the hash it was saved with");
+            fprintf(stderr, "save: %s (%016llx, file says %016llx); refusing to load\n", _why,
+                    (unsigned long long)w->content_hash(), (unsigned long long)_expected_hash);
+            return nullptr;
+        }
+        return w;
+    }
 
     // -----------------------------------------------------------------------
     // The content hash oracle (see save_format.hpp).
@@ -850,6 +866,7 @@ namespace wry {
         s.write_u32(TERM_SAVE_VERSION);
         size_t record_count_offset = s._stream.size();
         s.write_u32(0);  // placeholder
+        s.write_u64(w->_compute_content_hash());
         SaveRef root_ref = s.save_world(w);
         s.resolve_pending();
         uint32_t record_count = s._next_ref - 1;
@@ -864,6 +881,45 @@ namespace wry {
         L._end    = buffer.data() + buffer.size();
         return L.load_world();
     }
+
+    // The header's World hash (save version 9): a file loads only if the
+    // commissioned World reproduces it.  Flipping a bit of the recorded
+    // hash, or a value the hash covers that still parses, is refused;
+    // the intact file loads.
+    define_test("save_format_header_hash") {
+        World* w = new World;
+        w->_time = Time{7};
+        w->_money = 123;
+        w->_seed = 99;
+        w->_term_for_coordinate.set(Coordinate{1, 2}, term_make_integer_with(5));
+        w->hack_repair_invariant();
+        Root<World*> keep{w};
+        std::vector<uint8_t> good = test_save_to_buffer(w);
+        auto load = [](std::vector<uint8_t> const& bytes) {
+            Loader L;
+            L._cursor = bytes.data();
+            L._end = bytes.data() + bytes.size();
+            World* r = L.load_and_commission();
+            assert(r || L._why);
+            return r;
+        };
+        World* back = load(good);
+        assert(back && back->content_hash() == w->content_hash());
+        // the hash itself, after magic, version and record count
+        std::vector<uint8_t> bad = good;
+        bad[12] ^= 1;
+        assert(!load(bad));
+        // a covered value: the money, the u64 after the World record's
+        // refs, located by searching for it (123 is unique in this file)
+        std::vector<uint8_t> also_bad = good;
+        const uint64_t money = 123;
+        auto at = std::search(also_bad.begin() + 20, also_bad.end(),
+                              (const uint8_t*)&money, (const uint8_t*)&money + 8);
+        assert(at != also_bad.end());
+        *at ^= 2;
+        assert(!load(also_bad));
+        co_return;
+    };
 
     // The loader faces untrusted bytes (a donated save): every truncation
     // of a valid save, and random corruptions of it, load as null or as a
