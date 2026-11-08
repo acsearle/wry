@@ -30,6 +30,7 @@
 - Raise the TRUCK's lowest surface so it hovers and a tile just slides under it
   - DONE 2026-11-08: the token and its stack ride token_lift = tile slab thickness + 0.015 above the board (WryWorldScene.mm)
 - Investigate radiance cascade as a GTAO alternative.  Can we ditch the shadow map and directional light entirely?
+  - INVESTIGATED 2026-11-08 -> docs/radiance_cascades.md
 - Tune the lighting.  Environment map is currently a daytime desert; try indoors with a window.
 - Bloom is calculated but not used.  Decide.
   - 2026-11-08: no longer computed unless shown: `toggle-bloom` (off by default) runs the blur and presents light + blur/8.  As built it blurs the HUD too (it runs after the composite-and-GUI pass) and, with no HDR highlights in the scene, reads as a uniform haze (assets/bloom_off_vs_on.png).  DECIDE: delete, or move before the GUI with a threshold
