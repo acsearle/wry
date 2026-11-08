@@ -677,30 +677,12 @@ namespace wry {
 
         float PaletteOverlay::top_pixels() const {
             if (!_model) return 0.0f;
-            const float vw = _model->_gui.viewport_size.x;
-            const float vh = _model->_gui.viewport_size.y;
-            if (vw <= 0.0f || vh <= 0.0f) return vh;
-            simd_float4x4 screen_to_palette = simd_mul(
-                matrix_float4x4{{
-                    {1.0f,        0.0f,           0.0f, 0.0f},
-                    {0.0f, -vw / vh,              0.0f, 0.0f},
-                    {0.0f,        0.0f,           1.0f, 0.0f},
-                    {0.0f,       -1.0f,           0.0f, 1.0f},
-                }},
-                _controls._transform);
-            // despite its name (shared with on_event) the composition maps
-            // palette to screen: project_screen_ray solves A [s t 0 u] =
-            // [x y z 1] for the palette point under a screen point
-            const simd_float4x4& palette_to_screen = screen_to_palette;
-            auto const& m = _controls._payload;
-            float top = vh;
-            for (float a : { 0.0f, (float)m.minor() })
-                for (float b : { 0.0f, (float)m.major() }) {
-                    simd_float4 p = simd_mul(palette_to_screen, simd_make_float4(a, b, 0.0f, 1.0f));
-                    float ndc_y = p.y / p.w;
-                    top = std::min(top, (1.0f - ndc_y) * 0.5f * vh);
-                }
-            return std::max(top, 0.0f);
+            const float2 viewport = _model->_gui.viewport_size;
+            if (viewport.x <= 0.0f || viewport.y <= 0.0f) return viewport.y;
+            // the cells' rect from (0, 0), as the renderer and hit test lay
+            // them out (cells_rect: screen space, y down)
+            return cells_rect(0.0f, 0.0f, 0.0f, 0.0f, viewport,
+                              _model->_gui.pixels_per_point()).a.y;
         }
 
         void PaletteOverlay::replace_glyph(Term previous, Term next) {
