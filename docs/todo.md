@@ -132,6 +132,7 @@ List of one-line reminders of things to think and do
 - Transactional non-exclusive commutative operations, like addition
 - Strip the WRY_GC_DEBUG crash-trap tier once the UAF stays silent (condition in garbage_collected.cpp banner)
 - Sweep the GUI with WRY-GC-UNPINNED watched, then promote the detector print to assert
+  - DONE 2026-11-08: offscreen sweeps (new game, map, follow, writes, save, main menu, second game, resize; WRY_GC_QUARANTINE 0 and 1) and the suite printed nothing; _debug_note_unpinned now prints the site and asserts.  The CRASH-1 trap tier (the line above) is NOT stripped: it needs Antony's call on "silent long enough"
 - thread_public.cpp comments still say "static Root" / "drop the root" over the raw-pointer code
   - DONE 2026-11-08: both comments now describe the raw pointer + one-time root-set entry (sentinel) and the ring's strong edge (deregister)
 - Rewrite transaction.md's "Open design: deterministic EntityID assignment" (lazy-span/relative-refs scheme is obsolete) to the landed ready-set-rank + ticket design; also its "Waiting and scheduling" section still describes the old single-partition/copy-back flow

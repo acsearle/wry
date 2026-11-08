@@ -34,9 +34,8 @@
 //
 // STANDING (keep): _debug_note_unpinned, the dynamic check of the real GC
 // entry contract (pinned-ness) at allocate/shade/root_up/register_weak.  It
-// found both feeders of the thread-reap lost-report crash; a clean suite is
-// silent.  Candidate for print->assert promotion once a GUI session has
-// been observed clean.
+// found both feeders of the thread-reap lost-report crash; an assert since
+// 2026-11-08, after clean suite and GUI sweeps.
 //
 // CRASH-1 TRAP (remove once the fixes below have soaked): the freed-object
 // ring, walk phase/object labels, ASan report narration, and
@@ -294,21 +293,22 @@ namespace wry {
     static int _debug_next_start = 0;
     static int _debug_live_count = 0;
 
-    // Soft detector for GC traffic from unpinned threads (the lost-report
-    // feeder for the thread-reap crash).  Prints the first few offenders
-    // per site instead of asserting, so one run maps every bad site.
+    // Detector for GC traffic from unpinned threads (the lost-report
+    // feeder for the thread-reap crash).  It began as a soft detector that
+    // printed the first offenders per site; promoted to an assert
+    // 2026-11-08 after the suite and offscreen GUI sweeps (new game, map,
+    // follow, writes, save, main menu, a second game, a resize; with and
+    // without WRY_GC_QUARANTINE) printed nothing.  It still names the
+    // site and thread first, since the abort's stack is the offender's.
     static void _debug_note_unpinned(const char* site, const void* ptr) {
         if (epoch::local_state.is_pinned)
             return;
-        static Atomic<int64_t> _count{0};
-        int64_t n = _count.fetch_add_relaxed(1);
-        if (n < 16) {
-            char name[64] = {};
-            pthread_getname_np(pthread_self(), name, sizeof name);
-            fprintf(stderr,
-                    "WRY-GC-UNPINNED: %s(%p) on unpinned thread \"%s\" (%p)\n",
-                    site, ptr, name, (void*)pthread_self());
-        }
+        char name[64] = {};
+        pthread_getname_np(pthread_self(), name, sizeof name);
+        fprintf(stderr,
+                "WRY-GC-UNPINNED: %s(%p) on unpinned thread \"%s\" (%p)\n",
+                site, ptr, name, (void*)pthread_self());
+        assert(false && "GC entry contract: allocate/shade/root/weak on an unpinned thread");
     }
 #else
     static void _debug_note_unpinned(const char*, const void*) {}
