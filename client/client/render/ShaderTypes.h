@@ -392,16 +392,26 @@ typedef struct
 // +z by more than the cutoff, samples the image (straight alpha) and
 // blends the stored albedo toward tint.rgb * image.rgb by image.a *
 // tint.a; roughness and metallic blend toward the instance's by the same
-// coverage times their weights.  Normals are left alone for now (a
-// normal map would resolve in this same frame).
+// coverage times their weights, the emitted light toward emissive.rgb
+// by the coverage times emissive.a, and the occlusion is multiplied by
+// 1 - occlusion * coverage.  With emboss nonzero the coverage is also a
+// height field, emboss world units tall where the image is opaque
+// (negative presses it in), whose slope tilts the stored normal: central
+// differences of the coverage emboss_radius of uv either side of the
+// fragment (or the pixel's footprint, if larger), across the surface
+// along the frame's x and y.  Zero in the newer fields (emissive,
+// emboss, occlusion) leaves those channels as they were.
 typedef struct {
     matrix_float4x4 model_transform;
     matrix_float4x4 inverse_model_transform;
     simd_float4 uv_rect;        // xy: the image's top-left uv (decal (-0.5, +0.5)); zw: uv per unit of x and of -y
     simd_float4 tint;           // rgb multiplies the image's colour; a scales its coverage
     simd_float4 material;       // x roughness and y metallic to blend toward; z and w their weights (0 leaves the surface's)
+    simd_float4 emissive;       // rgb the light to blend toward (the light attachment's units); a its weight (0 leaves the surface's)
     float normal_cutoff;        // the surface normal's least cosine with the decal's +z
-    float _padding[3];
+    float emboss;               // world height of the opaque image over the surface; negative debosses; 0 leaves the normal
+    float emboss_radius;        // uv: half the span of the coverage's central differences (the bevel's width)
+    float occlusion;            // the ambient occlusion the opaque image adds: occlusion *= 1 - occlusion * coverage
 } WryDecalInstance;
 
 

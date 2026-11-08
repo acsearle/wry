@@ -631,13 +631,16 @@ struct WryNumberGlyph {
             descriptor.colorAttachments[AAPLColorIndexDepth].writeMask = MTLColorWriteMaskNone;
             _symbolDecalRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
 
-            // Image decals paint the albedo and the material's roughness
-            // and metallic in place (WryDecalInstance)
+            // Image decals paint the emitted light, the albedo, the
+            // normal (embossing) and the material's occlusion, roughness
+            // and metallic in place (WryDecalInstance); the depth stays
             descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::decal_vertex_function"];
             descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::decal_fragment_function"];
             descriptor.label = @"Decal";
+            descriptor.colorAttachments[AAPLColorIndexColor].writeMask = MTLColorWriteMaskAll;
             descriptor.colorAttachments[AAPLColorIndexAlbedo].writeMask = MTLColorWriteMaskAll;
-            descriptor.colorAttachments[AAPLColorIndexMaterial].writeMask = MTLColorWriteMaskGreen | MTLColorWriteMaskBlue;
+            descriptor.colorAttachments[AAPLColorIndexNormal].writeMask = MTLColorWriteMaskAll;
+            descriptor.colorAttachments[AAPLColorIndexMaterial].writeMask = MTLColorWriteMaskRed | MTLColorWriteMaskGreen | MTLColorWriteMaskBlue;
             _decalRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
             descriptor.colorAttachments[AAPLColorIndexColor].writeMask = MTLColorWriteMaskAll;
             descriptor.colorAttachments[AAPLColorIndexAlbedo].writeMask = MTLColorWriteMaskAll;

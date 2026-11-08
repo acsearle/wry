@@ -1401,12 +1401,25 @@ namespace deferred {
     // The same scheme as the occlusion decal above: a box rasterized
     // after the frame's geometry, no depth test, each fragment finding
     // the surface under it from the G-buffer's depth and editing the
-    // G-buffer in place under its raster order group.  This one paints:
+    // G-buffer in place under its raster order groups.  This one paints:
     // the stored albedo moves toward the image's colour by its coverage,
-    // and the material's roughness and metallic toward the instance's by
-    // the coverage times their weights.  Surfaces facing away from the
-    // decal's +z by more than the cutoff are left alone, so a print on a
-    // tile's face stops at the tile's walls.
+    // the material's roughness and metallic toward the instance's by the
+    // coverage times their weights, the emitted light (the light
+    // attachment, before any light accumulates) toward the instance's
+    // emissive by the coverage times its weight, and the occlusion down
+    // by the coverage times the instance's.  Surfaces facing away from
+    // the decal's +z by more than the cutoff are left alone, so a print
+    // on a tile's face stops at the tile's walls.
+    //
+    // Embossing treats the coverage as a height field h = emboss * c
+    // over the surface and tilts the stored normal n by its slope,
+    // n' = normalize(n - grad h), the gradient taken across the surface
+    // in the frame's x and y (Gram-Schmidt against n, so it follows a
+    // surface the box meets at an angle).  The slope is a central
+    // difference of the coverage over 2r of uv, r the instance's radius
+    // or the pixel's footprint if that is larger, sampled at the mip
+    // level of r: the bevel is about r wide, and fades out (the slope
+    // shrinks with the widening step) rather than aliasing far away.
 
     struct DecalVertexFunctionOutput {
         float4 position_clip [[position]];
@@ -1432,7 +1445,9 @@ namespace deferred {
     }
 
     struct DecalFragmentFunctionOutput {
+        half4 light    [[color(AAPLColorIndexColor),    raster_order_group(AAPLRasterOrderGroupLighting)]];
         half4 albedo   [[color(AAPLColorIndexAlbedo),   raster_order_group(AAPLRasterOrderGroupGBuffer)]];
+        half4 normal   [[color(AAPLColorIndexNormal),   raster_order_group(AAPLRasterOrderGroupGBuffer)]];
         half4 material [[color(AAPLColorIndexMaterial), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
     };
 
@@ -1470,13 +1485,40 @@ namespace deferred {
         half3 colour = half3(instance.tint.rgb) * s.rgb;
 
         DecalFragmentFunctionOutput out;
+        half emitting = half(instance.emissive.a) * coverage;
+        out.light = half4(mix(gbuffer.light.rgb, half3(instance.emissive.rgb), emitting), gbuffer.light.a);
         out.albedo = half4(mix(gbuffer.albedo.rgb, colour, coverage), gbuffer.albedo.a);
         half2 toward = half2(instance.material.xy);
         half2 weight = half2(instance.material.zw) * coverage;
-        out.material = half4(gbuffer.material.r,
+        out.material = half4(gbuffer.material.r * (1.0h - half(instance.occlusion) * coverage),
                              mix(gbuffer.material.g, toward.x, weight.x),
                              mix(gbuffer.material.b, toward.y, weight.y),
                              gbuffer.material.a);
+
+        out.normal = gbuffer.normal;
+        if (instance.emboss != 0.0f) {
+            float r = max(instance.emboss_radius, max(length(duvdx), length(duvdy)));
+            gradient2d level(float2(r, 0.0f), float2(0.0f, r));
+            float2 du = float2(r, 0.0f), dv = float2(0.0f, r);
+            float east  = image.sample(trilinear, uv + du, level).a;
+            float west  = image.sample(trilinear, uv - du, level).a;
+            float north = image.sample(trilinear, uv - dv, level).a;   // up the image is -v
+            float south = image.sample(trilinear, uv + dv, level).a;
+            // The height's slope per world unit along the frame's x and y:
+            // 2r of uv is 2r / uv_rect.z decal units of x, each
+            // |columns[0]| world units long (and so for y)
+            float3 ex = instance.model_transform.columns[0].xyz;
+            float3 ey = instance.model_transform.columns[1].xyz;
+            float height = instance.emboss * instance.tint.a;
+            float2 slope = height * float2((east - west) * instance.uv_rect.z / length(ex),
+                                           (north - south) * instance.uv_rect.w / length(ey)) / (2.0f * r);
+            float3 n = float3(gbuffer.normal.xyz);
+            float3 t = ex - n * dot(n, ex);
+            float3 b = ey - n * dot(n, ey);
+            t = normalize(t);
+            b = normalize(b - t * dot(t, b));
+            out.normal = half4(half3(normalize(n - slope.x * t - slope.y * b)), gbuffer.normal.w);
+        }
         return out;
     }
 
