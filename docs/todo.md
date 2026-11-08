@@ -26,6 +26,7 @@
 - Load/save game etc. as Commands  -> DONE 2026-11-08 (the session commands line below)
 - Commutative operations on World values.  Operation is applied when its transaction commits, concurrently, in any order.  Could be an atomic add on the value in the new World, for example.  Money is an example.  Attempt a widthdrawal if enough money \_now\_; but if enough people do it on the same turn, goes negative.  Don't try to prevent that, just penalize it - apply overdraft or interest every "month" based on lowest balance.  Fancier implementation for busy variables is to apply the deltas to thread locals and merge at the end of step.
 - Help text, display text, etc. needs a to have meta that allows the easy inclusion (and rendering) of glyphs and keycaps and stuff.
+  - STARTED 2026-11-08: keycaps.  Painter::draw_marked_text / marked_text_width draw `[...]` as a key (panel text on a dark rounded key; `[[` escapes); the palette hint uses it.  Next: glyphs (opcode / matter symbols inline)
 - If chemical formulas become an important part of the way we present stuff, we need subscript support
 
 ## Things to change

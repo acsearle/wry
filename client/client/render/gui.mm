@@ -68,6 +68,84 @@ namespace wry {
             return pen;
         }
 
+        namespace {
+
+            // One pass over marked-up text: plain runs and keycaps, in
+            // order, with the keycap's padding.  `emit(text, is_key)`.
+            template<typename F>
+            void walk_marked_text(StringView text, F&& emit) {
+                std::string run;
+                auto flush = [&](bool key) {
+                    if (!run.empty() || key)
+                        emit(run, key);
+                    run.clear();
+                };
+                while (!text.empty()) {
+                    char32_t c = text.front();
+                    text.pop_front();
+                    if (c == U'[') {
+                        if (!text.empty() && text.front() == U'[') {
+                            text.pop_front();
+                            run += '[';
+                            continue;
+                        }
+                        flush(false);
+                        while (!text.empty() && text.front() != U']') {
+                            char32_t k = text.front();
+                            text.pop_front();
+                            if (k < 0x80) run += (char)k;
+                        }
+                        if (!text.empty()) text.pop_front();   // the ']'
+                        flush(true);
+                        continue;
+                    }
+                    if (c < 0x80) run += (char)c;
+                }
+                flush(false);
+            }
+
+        } // namespace
+
+        float Painter::marked_text_width(StringView text) const {
+            if (!font) return 0.0f;
+            float width = 0.0f;
+            const float pad = pt(3.0f);
+            walk_marked_text(text, [&](std::string const& run, bool key) {
+                for (char c : run) {
+                    auto q = font->charmap.find((char32_t)(unsigned char)c);
+                    if (q != font->charmap.end()) width += q->second.advance;
+                }
+                if (key) width += 2.0f * pad + pt(2.0f);   // padding, and a gap after
+            });
+            return width;
+        }
+
+        float2 Painter::draw_marked_text(float2 pen, StringView text, RGBA8Unorm_sRGB color) {
+            if (!font || !atlas) return pen;
+            const float pad = pt(3.0f);
+            walk_marked_text(text, [&](std::string const& run, bool key) {
+                if (!key) {
+                    pen = draw_text_run(pen, StringView(run.c_str()), color, TextGround::free);
+                    return;
+                }
+                float w = 0.0f;
+                for (char c : run) {
+                    auto q = font->charmap.find((char32_t)(unsigned char)c);
+                    if (q != font->charmap.end()) w += q->second.advance;
+                }
+                rect<float> key_rect{
+                    pen.x, pen.y - font->ascender - pad * 0.5f,
+                    pen.x + w + 2.0f * pad, pen.y - font->descender + pad * 0.5f,
+                };
+                fill_round_rect(key_rect, pt(3.0f), RGBA8Unorm_sRGB(0.12f, 0.12f, 0.14f, 0.9f));
+                float2 inner = pen;
+                inner.x += pad;
+                (void) draw_text_run(inner, StringView(run.c_str()), color, TextGround::panel);
+                pen.x += w + 2.0f * pad + pt(2.0f);
+            });
+            return pen;
+        }
+
         // ================================================================
         // OverlayStack
         // ================================================================

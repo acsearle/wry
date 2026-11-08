@@ -256,6 +256,15 @@ namespace wry {
                                  StringView text,
                                  RGBA8Unorm_sRGB color,
                                  TextGround ground = TextGround::free);
+
+            // Marked-up text: a single line where `[...]` is a keycap --
+            // its contents drawn as panel text on a small dark rounded
+            // key, e.g. "[Shift+R] rotate back"; `[[` is a literal '['.
+            // The first piece of the help-text markup the todo asks for
+            // (glyphs would be the next).  marked_text_width measures the
+            // same layout without drawing.  Defined in gui.mm.
+            float2 draw_marked_text(float2 pen, StringView text, RGBA8Unorm_sRGB color);
+            float marked_text_width(StringView text) const;
         };
 
         class Overlay {

@@ -1745,17 +1745,12 @@ struct WryNumberGlyph {
         // palette (WorldState::hand_hint)
         if (!_model->show_map() && painter.font && _model->is_holding()) {
             const std::string hint = _model->hand_hint();
-            float width = 0.0f;
-            for (char c : hint) {
-                auto g = painter.font->charmap.find((char32_t)c);
-                if (g != painter.font->charmap.end())
-                    width += g->second.advance;
-            }
+            const float width = painter.marked_text_width(wry::StringView(hint.c_str()));
             const float top = _model->_palette_overlay.top_pixels();
             const float baseline = top - 6.0f * _model->_gui.pixels_per_point() + painter.font->descender;   // 6 pt clear of the palette
-            painter.draw_text_run(simd_make_float2((_model->_gui.viewport_size.x - width) * 0.5f, baseline),
-                                  wry::StringView(hint.c_str()),
-                                  RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f));
+            painter.draw_marked_text(simd_make_float2((_model->_gui.viewport_size.x - width) * 0.5f, baseline),
+                                     wry::StringView(hint.c_str()),
+                                     RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f));
         }
         _model->_stack.paint(painter);
         _model->_gui.overlays.paint(painter);
