@@ -5,6 +5,8 @@
 //  Created by Antony Searle on 17/10/2026.
 //
 
+#include <stdexcept>
+#include <string_view>
 #include <atomic>
 #include <cassert>
 #include <optional>
@@ -57,6 +59,38 @@ namespace wry::coroutine {
         assert(ok == 7);
 
         // A nursery that absorbed a cancellation is not reusable
+        co_return;
+    };
+
+    namespace {
+
+        Future<int> rethrow_child() {
+            co_await TransferToPoolExecutor{};
+            throw std::runtime_error("boom");
+            co_return 0;
+        }
+
+    }
+
+    // co_await of an error Outcome (coroutine.hpp OutcomeAwaitable): the
+    // exception a child threw rethrows in the awaiter, and the outcome is
+    // left empty (value() takes the error).  The rethrow path had no direct
+    // test.
+    define_test("nursery_outcome_rethrow") {
+        execution::Outcome<int> result;
+        Nursery nursery;
+        nursery.soon(result, rethrow_child());
+        [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
+        assert(cancelled == 0);
+        assert(result.has_error());
+        bool caught = false;
+        try {
+            [[maybe_unused]] int never = co_await result;
+        } catch (std::runtime_error const& e) {
+            caught = (std::string_view(e.what()) == "boom");
+        }
+        assert(caught);
+        assert(result._variant.index() == 0);
         co_return;
     };
 
