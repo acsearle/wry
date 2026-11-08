@@ -667,6 +667,32 @@ float3 Fresnel_Schlick_roughness(float cosTheta, float3 F0, float roughness) {
     return F0 + (max(float3(1.0 - roughness), F0) - F0) * pow(saturate(1.0f - cosTheta), 5.0);
 }
 
+// Clear coat
+//
+// A thin smooth dielectric layer over the base BRDF (glTF
+// KHR_materials_clearcoat, Filament's clear-coat model): a second GGX
+// specular lobe with F0 = 0.04 and its own roughness, sharing the base's
+// normal.  Its Fresnel weight, scaled by the strength s, is reflected;
+// the rest transmits to the base and back, so the base's whole response
+// is attenuated by it (Filament's single (1 - Fc) for both legs):
+//
+//     direct:  f = f_base * (1 - s Fc(VdotH)) + s D_c Fc / (4 LdotH^2)  (Kelemen)
+//     ambient: L = L_base * (1 - s Ec) + s Ec prefiltered(R, r_c),
+//              Ec = 0.04 A(NdotV, r_c) + B(NdotV, r_c)   (the split-sum LUT)
+//
+// s is the G-buffer's material.a; the coat's roughness r_c is one
+// constant (a varnish is smooth; the G-buffer's normal.w is free if a
+// material ever wants its own).  It is 1/8, the prefiltered sky's level
+// 1 and the sharpest level the coat reads: level 0 (1/16) currently
+// samples as non-finite (black), which wants investigating first.  It is 1/8, the prefiltered sky's level
+// 1, the sharpest the coat reads: level 0 (1/16) currently samples as
+// non-finite (black) and wants investigating before anything smoother.  s = 0 skips the lobe: an uncoated
+// surface shades by the same formula as before (the branch's presence
+// moves fast-math codegen by at most an 8-bit step at a few pixels).
+
+constant float kClearCoatF0 = 0.04f;
+constant float kClearCoatRoughness = 0.125f;
+
 // "Split sum" approximation lookup table
 
 // TODO: make this a kernel operation
@@ -757,8 +783,6 @@ namespace deferred {
     // every reader recovers the surface as camera + ray * depth with the
     // MeshUniforms ray basis.  Cleared to 0, which is the sky.
     
-    // TODO: clearcoat, clearcoat roughness
-    //
     // TODO: is g-buffer storage 'free' until we free up the imageblock?
     //       perhaps we should just write out the world position
 
@@ -778,7 +802,8 @@ namespace deferred {
 
         // scalar material fields, packed one per channel following the
         // glTF occlusion-roughness-metallic channel convention:
-        // r = ambient occlusion, g = roughness, b = metallic
+        // r = ambient occlusion, g = roughness, b = metallic, and
+        // a = clear-coat strength (0 for none; see kClearCoatRoughness)
         half4 material            [[color(AAPLColorIndexMaterial),
                                     raster_order_group(AAPLRasterOrderGroupGBuffer)]];
 
@@ -1207,7 +1232,7 @@ namespace deferred {
         out.light = half4(0.0h, 0.0h, 0.0h, 0.0h);
         out.albedo = half4(albedo, 1.0h);
         out.normal = half4(half3(normal_world), 0.0h);
-        out.material = half4(1.0h, 0.5h, 0.0h, 0.0h);   // occlusion, roughness, metallic
+        out.material = half4(1.0h, 0.5h, 0.0h, half(instance.clear_coat));   // occlusion, roughness, metallic, clear coat
         out.depth = position_clip.w;
         out.depth_test = position_clip.z / position_clip.w;
         return out;
@@ -1791,8 +1816,22 @@ namespace deferred {
         float3 specular = (F * fresnelSample.r + fresnelSample.g) * reflectedSample.rgb;
         
         float3 Lo = (kD * diffuse + specular) * occlusion * uniforms.ibl_scale.rgb;
-        
         out.color.rgb = half3(Lo);
+
+        // Clear coat (see kClearCoatRoughness): the varnish reflects its
+        // share of the sharper prefiltered sky and passes the rest
+        float clear_coat = float(gbuffer.material.a);
+        if (clear_coat > 0.0f) {
+            float coatLod = max(log2(kClearCoatRoughness) + 4, 1.0f);   // not level 0
+            float3 coatSample = environmentTexture.sample(trilinearSampler,
+                                                          uniforms.ibl_transform * R,
+                                                          level(coatLod)).rgb;
+            float4 coatFresnel = fresnelTexture.sample(bilinearSampler,
+                                                       float2(NdotV, kClearCoatRoughness));
+            float Ec = clear_coat * (kClearCoatF0 * coatFresnel.r + coatFresnel.g);
+            out.color.rgb = half3(Lo * (1.0f - Ec) + Ec * coatSample * occlusion * uniforms.ibl_scale.rgb);
+        }
+
         //out.color.rgb = half3(-V);
         out.color.a = 1.0f;
         
@@ -1871,10 +1910,25 @@ namespace deferred {
         float3 kD = (1.0f - kS) * (1.0 - metallic);
         
         float3 Lo = (kD * albedo * M_1_PI_F + specular) * NdotL * uniforms.radiance * shadowFactor;
-        
-        // Lo = clamp(Lo, 0.0f, 4096.0f);
-        
         out.color.rgb = half3(Lo);
+
+        // Clear coat (see kClearCoatRoughness): a second, sharper,
+        // dielectric lobe on the same normal; the base sees what it
+        // transmits
+        float clear_coat = float(gbuffer.material.a);
+        if (clear_coat > 0.0f) {
+            float coatAlpha = kClearCoatRoughness * kClearCoatRoughness;
+            float Dc = distribution_Trowbridge_Reitz(NdotH, coatAlpha * coatAlpha);
+            // Kelemen's visibility, G / (4 NdotV NdotL) ~ 1 / (4 LdotH^2),
+            // as Filament's coat uses
+            float Vc = 0.25f / max(HdotV * HdotV, 1e-4f);
+            float Fc = clear_coat * Fresnel_Schlick(HdotV, float3(kClearCoatF0)).x;
+            float coat = Dc * Vc * Fc;
+            out.color.rgb = half3(Lo * (1.0f - Fc) + coat * NdotL * uniforms.radiance * shadowFactor);
+        }
+
+        // Lo = clamp(Lo, 0.0f, 4096.0f);
+
         //out.color.rgb = half3(in.position_clip.xyz/in.position_clip.w) * 0.01h;
         //out.color.rg = half2(lightSpacePosition.xy);
         //out.color.b = shadowSample;

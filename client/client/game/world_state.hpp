@@ -126,6 +126,12 @@ namespace wry {
         float _token_width = 21.0f / 24.0f;
         float _token_height = 21.0f / 24.0f;
         float _token_fillet = 0.05f;
+        // The pieces' varnish (the `coat` command): the clear-coat
+        // strength, 0 to 1, of the tiles and symbols (the child's painted
+        // wooden blocks) and of the machine's token; 0 is unvarnished
+        // (Shaders.metal kClearCoatRoughness)
+        float _coat_tiles = 0.5f;
+        float _coat_token = 0.5f;
         // The slabs' ambient-occlusion decals on the ground under them
         // (Shaders.metal symbol_decal_fragment_function); off, GTAO does
         // the job, and the decal's stroke model overreaches for tiles

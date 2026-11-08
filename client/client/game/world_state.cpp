@@ -1853,6 +1853,18 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
+            "coat", "The playing pieces' varnish: the clear-coat strength in percent of the tiles and symbols and of the machine's token (0 is unvarnished; a smooth dielectric layer over the paint)", Category::local,
+            std::tuple{
+                Param<Ctx, int64_t>{"tiles", "the tiles' and symbols' clear coat, percent", 50},
+                Param<Ctx, int64_t>{"token", "the token's clear coat, percent", 50},
+            },
+            with_world([](WorldState& ws, int64_t tiles, int64_t token) {
+                ws._coat_tiles = (float)std::clamp<int64_t>(tiles, 0, 100) / 100.0f;
+                ws._coat_token = (float)std::clamp<int64_t>(token, 0, 100) / 100.0f;
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
             "toggle-decals", "Show or hide the symbols' ambient-occlusion decals on the ground (off by default; GTAO covers it)", Category::local,
             std::tuple<>{},
             with_world([](WorldState& ws) {

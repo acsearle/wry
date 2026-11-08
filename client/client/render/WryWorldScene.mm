@@ -2075,6 +2075,7 @@ struct WryNumberGlyph {
             s.bottom_radius = fillet;
             s.stroke_width = width;
             s.decal_reach = 0.0f;
+            s.clear_coat = _model->_coat_tiles;
             if (decal && _model->_symbol_decals && normal.z > 0.99f) {
                 // Flat: the underside's height above the ground, in texels
                 const float h = (location.z - stroke * 0.5f * texel) * texels_per_unit;
@@ -2311,6 +2312,7 @@ struct WryNumberGlyph {
                     // The cuboid reaches past the frame for the apex,
                     // which overhangs it by 0.12 units
                     emit_slab(centre, _token_truck_coordinate, across, up, thickness, _model->_token_fillet * texels_per_unit, thickness, false, texels_per_unit * 0.6f);
+                    symbols.back().clear_coat = _model->_coat_token;
                 }
                 
                 // The carried stack, piled on the token: each item sits
@@ -2701,8 +2703,9 @@ struct WryNumberGlyph {
             descriptor.colorAttachments[AAPLColorIndexNormal].storeAction = MTLStoreActionStore;
             descriptor.colorAttachments[AAPLColorIndexNormal].texture = _deferredNormalColorAttachmentTexture;
 
-            // clear to (occlusion 1, roughness 1, metallic 0), matching the
-            // background surface properties the old layout cleared to
+            // clear to (occlusion 1, roughness 1, metallic 0, no clear
+            // coat), matching the background surface properties the old
+            // layout cleared to
             descriptor.colorAttachments[AAPLColorIndexMaterial].clearColor = MTLClearColorMake(1, 1, 0, 0);
             descriptor.colorAttachments[AAPLColorIndexMaterial].loadAction = MTLLoadActionClear;
             descriptor.colorAttachments[AAPLColorIndexMaterial].storeAction = MTLStoreActionDontCare;
@@ -2723,9 +2726,6 @@ struct WryNumberGlyph {
             descriptor.depthAttachment.loadAction = MTLLoadActionClear;
             descriptor.depthAttachment.storeAction = MTLStoreActionDontCare;
             descriptor.depthAttachment.texture = _deferredDepthAttachmentTexture;
-            
-            // TODO: Clearcoat and clearcoat roughness; we'll need these for
-            // wet materials?
             
             encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
             

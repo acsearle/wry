@@ -404,6 +404,8 @@ typedef struct
     float bottom_radius;        // stroke width, their sum below the thickness
     float stroke_width;         // texels: the cell's, the decal's far edge
     float decal_reach;          // texels beyond the silhouette the ambient-occlusion decal fades out by; 0 for none
+    float clear_coat;           // the varnish's strength, 0 to 1 (G-buffer material.a; Shaders.metal kClearCoatRoughness)
+    float _padding[3];
 } WrySymbolInstance;
 
 #pragma mark - Decals
