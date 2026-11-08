@@ -16,6 +16,7 @@
 - Data driven: try to move properties out of the executable and into data files as much as possible.  e.g. prices, opcode \_displayed\_ names, help text etc.
 - Context help for item under cursor: hover or side panel like Factorio
 - Command help: show some key suggestions, e.g. depending on symmetry of what is held, show [R], [SHIFT]+[R] or [H],[L]
+  - DONE 2026-11-08: a hint line centred over the palette while holding (WorldState::hand_hint): only the reorientations that change the held opcode, by its symmetry class (direction-like: rotate both ways + the one mirror that moves it; axis-like: rotate; handedness-like: one "mirror"), with the live keymap's combos, then [click] place and [Esc] drop.  Test world_state_hand_hint
 - Left-click on a TRUCK to have the camera track it, and to explode the stack to make it more viewable
   - DONE 2026-11-08 (camera half): left click with an empty hand on a truck issues `follow` (also a console/wryctl command, `follow Coordinate(x,y)`); the camera centres each frame on where the renderer drew it (or its tile, when it was off screen); panning, a click off any truck, or the machine vanishing stops it.  OPEN: "explode the stack" needs a design
 - DONE 2026-11-08: Compute the font drop-shadow in a shader.  Superseded: the baked shadow is gone and the outline below is computed in quadFragmentShader

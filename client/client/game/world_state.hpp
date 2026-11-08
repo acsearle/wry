@@ -402,6 +402,11 @@ namespace wry {
         // empty hand is the pipette: it copies the tile under the cursor
         // into the hand, matter excepted.
         bool is_holding() const { return !term_is_null(_holding_value._value); }
+        // The keys that act on what is in hand, for the hint line over the
+        // palette: only the reorientations that change it (by its
+        // symmetry class, opcode.hpp), bound as the live keymap says; then
+        // place and drop.  Empty with an empty hand.
+        std::string hand_hint() const;
         void drop_hand();
         void hold(Term t);
         bool pipette_at(Coordinate xy);

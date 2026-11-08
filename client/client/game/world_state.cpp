@@ -1039,6 +1039,51 @@ namespace wry {
         return machine ? id : EntityID{};
     }
 
+    std::string WorldState::hand_hint() const {
+        if (!is_holding())
+            return {};
+        auto keys = [this](gui::Action a) {
+            std::string out;
+            for (gui::KeyCombo c : _gui.settings.keymap.combos_from_action(a)) {
+                String s = gui::string_from_combo(c);
+                out += out.empty() ? "[" : " / [";
+                out.append(s.data(), s.chars.size());
+                out += "]";
+            }
+            return out;
+        };
+        std::string hint;
+        auto add = [&hint](std::string const& k, const char* what) {
+            if (k.empty())
+                return;   // unbound
+            if (!hint.empty())
+                hint += "    ";
+            hint += k + " " + what;
+        };
+        const Term t = _holding_value._value;
+        if (t.is_opcode()) {
+            const OPCODE o = (OPCODE)t.as_opcode();
+            const bool turns = opcode_rotated_clockwise(o) != o;
+            const bool two_cycle = turns && (opcode_rotated_clockwise(opcode_rotated_clockwise(o)) == o);
+            if (turns) {
+                add(keys(gui::Action::rotate), "rotate");
+                if (!two_cycle)   // a 2-cycle turns back the same either way
+                    add(keys(gui::Action::reverse_rotate), "rotate back");
+            }
+            const bool h = opcode_mirrored_horizontal(o) != o;
+            const bool v = opcode_mirrored_vertical(o) != o;
+            if (h && v && (opcode_mirrored_horizontal(o) == opcode_mirrored_vertical(o)))
+                add(keys(gui::Action::flip_horizontal), "mirror");   // either mirror swaps it
+            else {
+                if (h) add(keys(gui::Action::flip_horizontal), "mirror east-west");
+                if (v) add(keys(gui::Action::flip_vertical), "mirror north-south");
+            }
+        }
+        add("[click]", "place");
+        add("[Esc]", "drop");
+        return hint;
+    }
+
     // Centre on where the renderer last drew the followed machine (render
     // space is relative to the focus tile, so the step is that position
     // less the focus fraction): a frame behind the drawing, and smooth.
@@ -2428,6 +2473,35 @@ namespace wry {
     // the hand, matter excepted; with a full hand Q drops it.  Sampling
     // reads the displayed world -- here the starting world laid out by
     // make_starting_world, before any step.
+    // The hint over the palette names only the keys that change what is
+    // in hand (opcode.hpp's symmetry classes), as bound by default
+    define_test("world_state_hand_hint") {
+        coroutine::Nursery scope;
+        GuiContext gc;
+        gc.scope = &scope;
+        {
+            WorldState ws(gc);
+            auto has = [](std::string const& h, const char* s) { return h.find(s) != std::string::npos; };
+            assert(ws.hand_hint().empty());
+            ws.hold(term_make_opcode(OPCODE_TURN_NORTH));   // direction-like
+            std::string h = ws.hand_hint();
+            assert(has(h, "[R] rotate") && has(h, "[Shift+R] rotate back"));
+            assert(has(h, "[V] mirror north-south") && !has(h, "east-west"));
+            ws.hold(term_make_opcode(OPCODE_TURN_LEFT));    // handedness-like
+            h = ws.hand_hint();
+            assert(!has(h, "rotate") && has(h, "[H] mirror") && !has(h, "north-south"));
+            ws.hold(term_make_opcode(OPCODE_VALVE_NORTH_SOUTH));   // axis-like
+            h = ws.hand_hint();
+            assert(has(h, "[R] rotate") && !has(h, "rotate back") && !has(h, "mirror"));
+            ws.hold(term_make_opcode(OPCODE_ADD));          // invariant
+            h = ws.hand_hint();
+            assert(!has(h, "rotate") && !has(h, "mirror") && has(h, "[click] place"));
+            co_await ws.end_session(std::chrono::milliseconds(200));
+        }
+        (void) co_await scope.join();
+        co_return;
+    };
+
     define_test("world_state_pipette") {
         coroutine::Nursery scope;
         GuiContext gc;

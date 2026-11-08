@@ -486,6 +486,11 @@ namespace wry {
             // once at startup by the renderer / app glue.
             void set_model(struct ::wry::WorldState* m) { _model = m; }
 
+            // The palette's top edge in drawable pixels (y down), from the
+            // same composition on_event inverts; the viewport's height if
+            // there is no viewport
+            float top_pixels() const;
+
             // Bring-up: WryRenderer fills this at init from assets.json.
             // The struct name `Palette<T>` reads as "a grid of T values";
             // this particular grid is "the controls", hence `_controls`.
