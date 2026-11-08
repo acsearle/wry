@@ -429,7 +429,8 @@ typedef struct
 // differences of the coverage emboss_radius of uv either side of the
 // fragment (or the pixel's footprint, if larger), across the surface
 // along the frame's x and y.  Zero in the newer fields (emissive,
-// emboss, occlusion) leaves those channels as they were.
+// emboss, occlusion) leaves those channels as they were, and zero
+// lod_bias samples the mip level of the pixel's footprint.
 typedef struct {
     matrix_float4x4 model_transform;
     matrix_float4x4 inverse_model_transform;
@@ -441,6 +442,7 @@ typedef struct {
     float emboss;               // world height of the opaque image over the surface; negative debosses; 0 leaves the normal
     float emboss_radius;        // uv: half the span of the coverage's central differences (the bevel's width)
     float occlusion;            // the ambient occlusion the opaque image adds: occlusion *= 1 - occlusion * coverage
+    float lod_bias;             // added to the image's mip level (negative sharpens: text seen at a glancing angle); 0 leaves the footprint's
 } WryDecalInstance;
 
 

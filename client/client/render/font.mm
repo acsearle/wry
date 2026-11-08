@@ -16,6 +16,7 @@
 
 #include "assert.hpp"
 #include "debug.hpp"
+#include "decal_text.hpp"
 #include "font.hpp"
 #include "image.hpp"
 #include "utility.hpp"
@@ -170,8 +171,92 @@ namespace wry {
         return result;
     }
 
+    // The decal face (decal_text.hpp): the same rasterizer, at a size
+    // fixed for the world rather than the UI, into a texture of its own
+    // as straight-alpha white (the decal shader tints the image's rgb
+    // and blends by its alpha; the symbol glyphs it also prints are
+    // straight too).  Glyphs are packed left to right in rows (shelves)
+    // of a 1024-wide image whose height is rounded up to a power of two
+    // (the mip kernel wants one), each with DecalFont::kPad transparent
+    // texels on every side.
+    DecalFont build_decal_font(const char* path, float em_texels) {
+        DecalFont result;
+        result.em_texels = em_texels;
+        ContiguousDeque<byte> bytes = bytes_from_file(path);
+        auto handle = otf::Handle::parse({bytes.data(), bytes.size()});
+        const float upem = (float)handle.units_per_em();
+        const float pixel_size_du = upem / em_texels;
 
-    
+        struct Placed {
+            int charcode;
+            CoverageBitmap bitmap;
+            int x, y;   // the padded image's top-left in the texture
+        };
+        std::vector<Placed> placed;
+        constexpr int kWidth = 1024;
+        const int P = DecalFont::kPad;
+        int x = 0, y = 0, shelf = 0;
+        for (int charcode = 32; charcode != 127; ++charcode) {
+            const int glyph_index = handle.glyph_index_for_character(charcode);
+            if (glyph_index == 0)
+                continue;
+            auto curves = handle.outline_for_glyph_index(glyph_index);
+            if (charcode == 'H') {
+                float top = -INFINITY;
+                for (auto const& curve : curves)
+                    for (int i = 0; i != 4; ++i)
+                        top = std::max(top, curve.columns[i].y);
+                result.cap_height = top / upem;
+            }
+            DecalFont::Glyph& g = result.glyphs[(size_t)charcode];
+            g.present = true;
+            g.advance = handle.advance_for_glyph_index(glyph_index) / upem;
+            CoverageBitmap gb = rasterize_coverage(curves, pixel_size_du);
+            const int w = (int)gb.coverage.major();
+            const int h = (int)gb.coverage.minor();
+            if (w == 0 || h == 0)
+                continue;   // the space: an advance only
+            const int W = w + 2 * P, H = h + 2 * P;
+            if (x + W > kWidth) {
+                x = 0;
+                y += shelf;
+                shelf = 0;
+            }
+            placed.push_back(Placed{charcode, std::move(gb), x, y});
+            x += W;
+            shelf = std::max(shelf, H);
+        }
+        int height = 1;
+        while (height < y + shelf)
+            height *= 2;
+        result.width = kWidth;
+        result.height = height;
+        // White everywhere, so mips and bilinear taps of the edge never
+        // pull in a dark rgb; alpha zero outside the glyphs
+        result.rgba.assign((size_t)kWidth * (size_t)height * 4, 255);
+        for (size_t i = 3; i < result.rgba.size(); i += 4)
+            result.rgba[i] = 0;
+        for (const Placed& p : placed) {
+            const matrix<R8Unorm>& c = p.bitmap.coverage;
+            const int w = (int)c.major(), h = (int)c.minor();
+            for (int row = 0; row != h; ++row)
+                for (int col = 0; col != w; ++col)
+                    result.rgba[((size_t)(p.y + P + row) * kWidth + (size_t)(p.x + P + col)) * 4 + 3] = c[row, col]._;
+            DecalFont::Glyph& g = result.glyphs[(size_t)p.charcode];
+            const int W = w + 2 * P, H = h + 2 * P;
+            g.uv_rect = simd_make_float4((float)p.x / kWidth, (float)p.y / (float)height,
+                                         (float)W / kWidth, (float)H / (float)height);
+            // The padded image's top-left from the pen (texels, y up):
+            // the bitmap's, less the padding
+            g.offset = simd_make_float2((float)(p.bitmap.left - P) / em_texels,
+                                        (float)(p.bitmap.top + P) / em_texels);
+            g.size = simd_make_float2((float)W / em_texels, (float)H / em_texels);
+        }
+        return result;
+    }
+
+
+
     Font2 build_font2() {
 
         Font2 result;

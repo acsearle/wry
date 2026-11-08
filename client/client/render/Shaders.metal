@@ -1505,7 +1505,8 @@ namespace deferred {
         if (dot(float3(gbuffer.normal.xyz), axis) < instance.normal_cutoff)
             discard_fragment();
 
-        half4 s = image.sample(trilinear, uv, gradient2d(duvdx, duvdy));
+        const float footprint = exp2(instance.lod_bias);
+        half4 s = image.sample(trilinear, uv, gradient2d(duvdx * footprint, duvdy * footprint));
         half coverage = s.a * half(instance.tint.a);
         half3 colour = half3(instance.tint.rgb) * s.rgb;
 

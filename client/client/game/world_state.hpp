@@ -136,6 +136,11 @@ namespace wry {
         // (Shaders.metal symbol_decal_fragment_function); off, GTAO does
         // the job, and the decal's stroke model overreaches for tiles
         bool _symbol_decals = false;
+        // The tile captions printed as decals (`caption-decals`), at this
+        // percent of the baked captions' size, on the caption-free tile
+        // faces (assets_tile_nocaption.png in place of assets_tile.png);
+        // 0 keeps the captions baked into the atlas
+        int _caption_decals = 0;
 
 
         // user interface state

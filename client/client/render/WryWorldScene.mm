@@ -32,6 +32,8 @@
 #include "gui_widget.hpp"
 #include "json.hpp"
 #include "machine.hpp"
+#include "decal_text.hpp"
+#include "font.hpp"
 #include "number_caption.hpp"
 #include "spawner.hpp"
 #include "matter.hpp"
@@ -141,6 +143,15 @@ struct WryNumberGlyph {
     // The cutout glyphs (assets.png, whatever atlas _symbols shows), for
     // decals that print a glyph on a surface: the digits on a number tile
     id<MTLTexture> _glyphs;
+    // Strings printed as decals (decal_text.hpp): the face, rasterized on
+    // first use (the `caption-decals` command) into its own texture, and
+    // each atlas cell's caption (an opcode's name, a matter's kind; empty
+    // for the rest), the text tools/make_tile_atlas.py prints on the tile
+    // faces of assets_tile.png and leaves blank on assets_tile_nocaption.png
+    wry::DecalFont _decalFont;
+    id<MTLTexture> _decalFontTexture;
+    std::array<std::string, wry::SymbolSDF::kCells * wry::SymbolSDF::kCells> _cellCaption;
+    std::array<bool, wry::SymbolSDF::kCells * wry::SymbolSDF::kCells> _cellCaptionLight;   // white ink (the dark matter tiles)
     WryMesh* _hackmesh;
 
     // The symbol field beside the atlas (symbol_sdf.hpp), its per-cell
@@ -1131,6 +1142,9 @@ struct WryNumberGlyph {
     for (int k = 0; k != 5; ++k)
         _si_coordinate[k] = make<float4>((float)(2 + k) / kCells, 15.0f / kCells, 0.0f, 1.0f);
     _matter_has_coordinate.fill(false);
+    for (std::string& caption : _cellCaption)
+        caption.clear();
+    _cellCaptionLight.fill(false);
 
     try {
         auto x = json::from_file<ContiguousDeque<ContiguousDeque<String>>>("assets.json");
@@ -1140,6 +1154,24 @@ struct WryNumberGlyph {
             for (const String& z : y) {
                 // printf("loading image for %.*s\n", (int) z.chars.size(), (const char*) z.chars.data());
                 simd_float4 coordinate = make<float4>(j / kCells, i / kCells, 0.0f, 1.0f);
+                {
+                    // The cell's caption, by make_tile_atlas.py's rule:
+                    // rows 0-11, an uppercase name (Python's isupper:
+                    // some letter, none lowercase) with underscores as
+                    // spaces, the MATTER_ prefix dropped (white on the
+                    // dark matter tiles)
+                    std::string_view sv((const char*) z.chars.data(), z.chars.size());
+                    const bool upper = std::any_of(sv.begin(), sv.end(), [](char c) { return c >= 'A' && c <= 'Z'; })
+                        && std::none_of(sv.begin(), sv.end(), [](char c) { return c >= 'a' && c <= 'z'; });
+                    const size_t k = (size_t)i * wry::SymbolSDF::kCells + (size_t)j;
+                    if (i < 12 && j < (ulong)wry::SymbolSDF::kCells && upper) {
+                        const bool matter = sv.starts_with("MATTER_");
+                        std::string text(matter ? sv.substr(7) : sv);
+                        std::replace(text.begin(), text.end(), '_', ' ');
+                        _cellCaption[k] = std::move(text);
+                        _cellCaptionLight[k] = matter;
+                    }
+                }
                 // auto h = name_to_opcode._inner._hasher.get_hash(z);
                 // printf("hash \"%.*s\" -> %llu\n", (int) z.chars.size(), (const char*) z.chars.data(), h);
                 auto p = name_to_opcode.find(z);
@@ -1368,6 +1400,38 @@ struct WryNumberGlyph {
     std::rotate(_buffers, _buffers + 1, _buffers + 4);
      */
     
+}
+
+// The decal face (decal_text.hpp), rasterized once on first use:
+// Noto Sans Condensed SemiBold (OFL, assets/Noto_Sans/OFL.txt) at
+// kDecalEmTexels to the em, about three texels per pixel for a tile
+// caption at the closest zoom, into a straight-alpha texture with the
+// binomial mips (the whole image one cell; the glyphs' padding keeps them
+// apart down to level 4)
+- (void)loadDecalFont
+{
+    constexpr float kDecalEmTexels = 96.0f;
+    auto t0 = std::chrono::steady_clock::now();
+    _decalFont = wry::build_decal_font("Noto_Sans/static/NotoSans_Condensed-SemiBold.ttf", kDecalEmTexels);
+    MTLTextureDescriptor* descriptor =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
+                                                           width:(NSUInteger)_decalFont.width
+                                                          height:(NSUInteger)_decalFont.height
+                                                       mipmapped:YES];
+    descriptor.storageMode = MTLStorageModeShared;
+    descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    _decalFontTexture = [_ctx.device newTextureWithDescriptor:descriptor];
+    [_decalFontTexture replaceRegion:MTLRegionMake2D(0, 0, (NSUInteger)_decalFont.width, (NSUInteger)_decalFont.height)
+                         mipmapLevel:0
+                           withBytes:_decalFont.rgba.data()
+                         bytesPerRow:(NSUInteger)_decalFont.width * 4];
+    _decalFontTexture.label = @"Decal font";
+    [_ctx generateMipmapsForTexture:_decalFontTexture cellSize:0 straightAlpha:YES];
+    _decalFont.rgba = {};   // on the GPU now
+    auto t1 = std::chrono::steady_clock::now();
+    NSLog(@"decal font: %d x %d texels at %.0f to the em, cap height %.3f em, ready in %.0f ms",
+          _decalFont.width, _decalFont.height, kDecalEmTexels, _decalFont.cap_height,
+          std::chrono::duration<double, std::milli>(t1 - t0).count());
 }
 
 // A number's caption as glyphs on its tile: number_caption's text (at
@@ -1888,6 +1952,13 @@ struct WryNumberGlyph {
     {
         const wry::String& asked = _model->_symbol_atlas;
         std::string name((const char*)asked.chars.data(), asked.chars.size());
+        // Captions printed as decals (`caption-decals`) go on the tile
+        // faces made blank for them, laid out the same
+        // (make_tile_atlas.py --no-caption-text)
+        if (_model->_caption_decals > 0 && name == "assets_tile")
+            name = "assets_tile_nocaption";
+        if (_model->_caption_decals > 0 && !_decalFontTexture)
+            [self loadDecalFont];
         if (name != _symbolAtlasName && name != _symbolAtlasMissing) {
             std::error_code ec;
             if (!name.empty() && std::filesystem::exists(wry::path_for_resource(wry::StringView(name.c_str()), "png"), ec)) {
@@ -1976,6 +2047,8 @@ struct WryNumberGlyph {
     NSUInteger decal_count = 0;
     WryBufferSlice print_instances = {};
     NSUInteger print_count = 0;
+    WryBufferSlice string_instances = {};
+    NSUInteger string_count = 0;
     // The board: the cells in view as a dense map of terrain kinds, and
     // the look that inks them (deferred::terrain_fragment_function)
     WryBufferSlice terrain_kinds = {};
@@ -2083,11 +2156,86 @@ struct WryNumberGlyph {
         std::vector<WrySymbolInstance> symbols;
         std::vector<WrySymbolInstance> decals;
         std::vector<WryDecalInstance> prints;   // image decals: the digits on number tiles
+        std::vector<WryDecalInstance> strings;  // image decals from the decal font (_decalFontTexture)
         size_t symbol_hint = 2
             + (size_t)(grid_bounds.b.x - grid_bounds.a.x) * (size_t)(grid_bounds.b.y - grid_bounds.a.y)
             + ptrs.size();
         symbols.reserve(symbol_hint);
         decals.reserve(symbol_hint);
+
+        // A string printed as decals from the decal font (decal_text.hpp)
+        // on a surface: its baseline through `location` along `across`,
+        // capitals cap_height world units tall up `up`, centred on
+        // `location` or starting there, shrunk to max_width (<= 0: never);
+        // ink of `colour` (linear rgb; a scales the coverage), raised
+        // `emboss` world units at full size (negative presses it in; 0
+        // prints it flat).  The boxes reach 0.04 units either side of the
+        // surface along across x up, and print only on surfaces facing
+        // within 60 degrees of it.  Nothing without the font
+        // (-loadDecalFont, on with `caption-decals`).
+        // Text is small and seen at a slant, where the footprint's
+        // longer axis picks a mip that blurs the strokes across: sample
+        // finer (measured at zoom 100: the captions' contrast)
+        const float kStringLodBias = -0.75f;
+        auto emit_string = [&](simd_float3 location, simd_float3 across, simd_float3 up,
+                               std::string_view text, float cap_height, float max_width,
+                               wry::DecalAlign align, simd_float4 colour, float emboss) {
+            if (!_decalFontTexture)
+                return;
+            simd_float3 normal = simd_cross(across, up);
+            wry::DecalTextRun run = wry::layout_decal_text(_decalFont, text, cap_height, max_width, align);
+            for (const wry::DecalGlyphPlacement& g : run.glyphs) {
+                simd_float4x4 model = simd_matrix(simd_make_float4(across * g.size.x, 0.0f),
+                                                  simd_make_float4(up * g.size.y, 0.0f),
+                                                  simd_make_float4(normal * 0.08f, 0.0f),
+                                                  simd_make_float4(location + across * g.centre.x + up * g.centre.y, 1.0f));
+                WryDecalInstance d = {};
+                d.model_transform = model;
+                d.inverse_model_transform = simd_inverse(model);
+                d.uv_rect = g.uv_rect;
+                d.tint = colour;
+                d.material = make<float4>(0.5f, 0.0f, 0.0f, 0.0f);   // the ink keeps the surface's finish
+                d.normal_cutoff = 0.5f;
+                d.emboss = emboss * run.scale;
+                // The bevel: about two texels of the face at its mip
+                d.emboss_radius = 2.0f / (float)_decalFont.height;
+                d.lod_bias = kStringLodBias;
+                strings.push_back(d);
+            }
+        };
+        // The caption of the atlas cell at `coordinate` (_cellCaption),
+        // printed on the face of its tile as decals when `caption-decals`
+        // is on, in the band make_tile_atlas.py leaves for it: the face
+        // is `face`, the glyph frame (24 units to the world unit, y down)
+        // centred on it, laid out by tile_caption_layout at
+        // _caption_decals percent of the baked size
+        const float caption_size = (float)_model->_caption_decals / 100.0f;
+        auto emit_caption = [&](simd_float3 face, simd_float4 coordinate, simd_float3 across, simd_float3 up) {
+            if (caption_size <= 0.0f || !_decalFontTexture)
+                return;
+            const int cx = (int)std::lround(coordinate.x * wry::SymbolSDF::kCells);
+            const int cy = (int)std::lround(coordinate.y * wry::SymbolSDF::kCells);
+            if (cx < 0 || cy < 0 || cx >= wry::SymbolSDF::kCells || cy >= wry::SymbolSDF::kCells)
+                return;
+            const size_t k = (size_t)cy * wry::SymbolSDF::kCells + (size_t)cx;
+            const std::string& name = _cellCaption[k];
+            if (name.empty())
+                return;
+            const float unit = 1.0f / wry::TileCaption::kFrame;
+            const simd_float4 ink = _cellCaptionLight[k] ? make<float4>(1.0f, 1.0f, 1.0f, 1.0f)
+                                                         : make<float4>(0.0f, 0.0f, 0.0f, 1.0f);
+            wry::TileCaption caption = wry::tile_caption_layout(_decalFont, name);
+            for (size_t n = 0; n != caption.lines.size(); ++n) {
+                // A larger size keeps the last baseline and spreads the
+                // lines above it in proportion
+                const float baseline = caption.baselines.back()
+                    + (caption.baselines[n] - caption.baselines.back()) * std::max(caption_size, 1.0f);
+                const float baseline_up = 0.5f - baseline * unit;
+                emit_string(face + up * baseline_up, across, up, caption.lines[n],
+                            caption.cap * caption_size * unit, wry::TileCaption::kWidth * unit,
+                            wry::DecalAlign::centre, ink, 0.0f);
+            }
+        };
 
         // A symbol slab centred at `location`, showing the atlas cell at
         // `coordinate` (its top-left uv), its face spanned by the world
@@ -2150,6 +2298,7 @@ struct WryNumberGlyph {
             const float width = std::max(_symbolStrokeWidth[(size_t)cy * wry::SymbolSDF::kCells + (size_t)cx], 2.0f);
             const float stroke = std::min(width, 20.0f);
             emit_slab(location, coordinate, across, up, stroke, stroke * 0.25f, width, true, texels_per_unit * 0.5f);
+            emit_caption(location.xyz + simd_cross(across, up) * (stroke * 0.5f / texels_per_unit), coordinate, across, up);
         };
         // A number: the blank tile with the value's caption (at most
         // four characters and a minus: "1234", "-12k", "1.2M";
@@ -2632,6 +2781,10 @@ struct WryNumberGlyph {
         if (print_count)
             print_instances = [_ctx.arena copyBytes:prints.data()
                                              length:prints.size() * sizeof(WryDecalInstance)];
+        string_count = strings.size();
+        if (string_count)
+            string_instances = [_ctx.arena copyBytes:strings.data()
+                                              length:strings.size() * sizeof(WryDecalInstance)];
 
     }
 
@@ -2988,6 +3141,26 @@ struct WryNumberGlyph {
                                 vertexStart:0
                                 vertexCount:36
                               instanceCount:print_count];
+                    [encoder setDepthStencilState:_ctx.enabledDepthStencilState];
+                    [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
+                }
+
+                // String decals: the tile captions (`caption-decals`),
+                // the same pipeline over the decal font's texture
+                if (string_count) {
+                    [encoder setRenderPipelineState:_decalRenderPipelineState];
+                    [encoder setDepthStencilState:_ctx.disabledDepthStencilState];
+                    [encoder setVertexBuffer:string_instances.buffer
+                                      offset:string_instances.offset
+                                     atIndex:AAPLBufferIndexInstanced];
+                    [encoder setFragmentBuffer:string_instances.buffer
+                                        offset:string_instances.offset
+                                       atIndex:AAPLBufferIndexInstanced];
+                    [encoder setFragmentTexture:_decalFontTexture atIndex:AAPLTextureIndexAlbedo];
+                    [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                vertexStart:0
+                                vertexCount:36
+                              instanceCount:string_count];
                     [encoder setDepthStencilState:_ctx.enabledDepthStencilState];
                     [encoder setFragmentTexture:_symbols atIndex:AAPLTextureIndexAlbedo];
                 }

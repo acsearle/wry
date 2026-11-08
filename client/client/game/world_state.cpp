@@ -1881,6 +1881,16 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
+            "caption-decals", "Print the tiles' captions as decals in Noto Sans Condensed, at PERCENT of the baked size, on caption-free tile faces (assets_tile_nocaption.png); 0 goes back to the Futura captions baked into assets_tile.png", Category::local,
+            std::tuple{
+                Param<Ctx, int64_t>{"percent", "the captions' size against the baked ones; 0 for the baked captions", 100},
+            },
+            with_world([](WorldState& ws, int64_t percent) {
+                ws._caption_decals = (int)std::clamp<int64_t>(percent, 0, 200);
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
             "toggle-decals", "Show or hide the symbols' ambient-occlusion decals on the ground (off by default; GTAO covers it)", Category::local,
             std::tuple<>{},
             with_world([](WorldState& ws) {
