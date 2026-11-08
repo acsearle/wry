@@ -2,6 +2,7 @@
 
 ## Things to build
 - Terrain on-demand when a machine nears the edge.  Generation allowed to be expensive, so what we should probably do is deterministically require it to be added at some well-defined point, but also eagerly compute a boundary of terrain in the background so we usually don't have to stall the simulation.  Chunked at some convenient size (16x16?).
+  - DONE 2026-11-08: 16x16 chunks, a pure function of the new World::_seed (save v8; 0 = hand-made world, never generates).  Each step makes the missing chunks of the 3x3 block around every cell proposed for occupation (World::_advance), so >= 16 cells of terrain always lie ahead of a mover; the berth search makes chunks as it reads.  Synchronous: ~0.3 ms/chunk in Debug+ASan (terrain_chunk_cost), so the background frontier precompute is NOT built -- revisit when the generator gets expensive.  OPEN: the minimap only covers its fixed 256x256 window.
 -  Coroutines that wait on Metal to finish something.  Via MTLSharedEvent?  Cancellation?
 - Async resource loading; do we just load everything in parallel or is there a benefit to serializing parts (like disk access).  Cache?
 - High quality mip-map generation on GPU via separable Gaussian

@@ -12,6 +12,7 @@
 
 #include "coordinate.hpp"
 #include "matter.hpp"
+#include "waitable_map.hpp"
 
 namespace wry {
 
@@ -99,13 +100,65 @@ namespace wry {
 
     struct World;
 
-    // Fill a 256x256 block of terrain centered on the origin from
-    // deterministic band-limited noise fields (bln.h): an elevation
-    // field banded into water/sand/grass/rock, and one deposit field per
-    // ore kind (coal, iron ore, limestone) whose upper tail claims land.  Same params in, same
-    // terrain out, bitwise, on every platform -- terrain generation must be
-    // reproducible for lockstep multiplayer and late-join.  Caller owns the
-    // (unpublished, under-construction) world; see make_starting_world.
+    // ---- Generation ----------------------------------------------------
+    //
+    // The terrain of a world is a pure function of its seed (World::_seed)
+    // and the cell: bln.h noise fields (integer-only, bitwise identical on
+    // every platform, and chunk-consistent: independently generated blocks
+    // agree on shared cells) banded and thresholded per cell.  It is made
+    // in chunks of TERRAIN_CHUNK^2 cells, aligned to multiples of
+    // TERRAIN_CHUNK, on demand:
+    //
+    //   - make_starting_world makes the TERRAIN_STARTING_EXTENT^2 block
+    //     centered on the origin (generate_starting_terrain);
+    //   - each World step makes, before publishing the next World, every
+    //     missing chunk in the 3x3 block around each cell an entity
+    //     proposed to occupy that step (World::_advance).  Proposals are a
+    //     deterministic function of the World, so every peer makes the
+    //     same chunks at the same step, and the 3x3 block keeps at least
+    //     one chunk of terrain ahead of anything moving one cell a step;
+    //   - worldgen searches (the Ship's berth) may make chunks as they go.
+    //
+    // Once made, terrain is World state like any other: saved, hashed and
+    // donated to a joining client, never regenerated.  A chunk is made
+    // when its corner cell is absent; making it fills only absent cells,
+    // so terrain set by hand (a pier, a test's fixture) stands.  A World
+    // whose _seed is 0 (hand-made: tests, fixtures) never makes terrain.
+    //
+    // Cost: about 0.3 ms a chunk in the Debug + ASan build (terrain_chunk_
+    // cost; four noise fields, each paying its octave pyramid's apron on a
+    // small block), so a step makes its handful synchronously -- a machine
+    // crossing into a new chunk column makes three.  The background
+    // precompute of the frontier imagined in docs/todo.md waits for a
+    // generator that is actually expensive.
+
+    inline constexpr int32_t TERRAIN_CHUNK = 16;
+    inline constexpr int32_t TERRAIN_STARTING_EXTENT = 256;
+
+    // The seed of the starting world: elevation 20, deposits 840..842
+    inline constexpr uint64_t WORLD_SEED_DEFAULT = 20;
+
+    // The chunk index holding cell coordinate v (floor division)
+    constexpr int32_t terrain_chunk_of(int32_t v) {
+        return (v >= 0) ? (v / TERRAIN_CHUNK) : -((-v + TERRAIN_CHUNK - 1) / TERRAIN_CHUNK);
+    }
+
+    // The chunk (cx, cy) of the terrain of `seed`, row-major from its
+    // south-west corner (cx * TERRAIN_CHUNK, cy * TERRAIN_CHUNK)
+    void generate_terrain_chunk(uint64_t seed, int32_t cx, int32_t cy, Terrain* out);
+
+    // Make chunk (cx, cy) in `terrain` if its corner cell is absent;
+    // true if it did
+    bool ensure_terrain_chunk(uint64_t seed, WaitableMap<Coordinate, Terrain>& terrain,
+                              int32_t cx, int32_t cy);
+
+    // Make the missing chunks of the 3x3 block around xy's chunk; how many
+    int ensure_terrain_around(uint64_t seed, WaitableMap<Coordinate, Terrain>& terrain,
+                              Coordinate xy);
+
+    // Make the TERRAIN_STARTING_EXTENT^2 block centered on the origin from
+    // world->_seed.  Caller owns the (unpublished, under-construction)
+    // world; see make_starting_world.
     void generate_starting_terrain(World* world);
 
 } // namespace wry

@@ -108,6 +108,12 @@ namespace wry {
         // record in save version 7.
         int64_t _money;
 
+        // The seed the terrain is generated from, on demand, chunk by chunk
+        // (terrain.hpp): the starting world's is WORLD_SEED_DEFAULT; 0 is a
+        // hand-made world (tests, fixtures) that never generates terrain.
+        // Appended to the record in save version 8.
+        uint64_t _seed;
+
         World()
         : _time{0}
         , _entity_id_source{1}
@@ -120,6 +126,7 @@ namespace wry {
         , _waiting_on_time{}
         , _player_for_client{}
         , _money{0}
+        , _seed{0}
         {
         }
 
@@ -133,7 +140,8 @@ namespace wry {
               WaitableMap<Coordinate, Terrain> terrain_for_coordinate,
               Set waiting_on_time,
               PlayerForClient player_for_client,
-              int64_t money)
+              int64_t money,
+              uint64_t seed)
         : _time(time)
         , _entity_id_source(entity_id_source)
         , _ready(ready)
@@ -145,6 +153,7 @@ namespace wry {
         , _waiting_on_time(waiting_on_time)
         , _player_for_client(player_for_client)
         , _money(money)
+        , _seed(seed)
         {
         }
 
@@ -191,6 +200,7 @@ namespace wry {
             v.state("_waiting_on_time", TimeWheelFold{_waiting_on_time, _ready, _time});
             v.state("_player_for_client", _player_for_client);
             v.state("_money", _money);
+            v.state("_seed", _seed);
         }
 
         // One step: apply the server events among `commands` (JOIN, LEAVE;

@@ -5,6 +5,7 @@
 //  Created by Antony Searle on 30/7/2023.
 //
 
+#include <algorithm>
 #include <map>
 
 #include "transaction.hpp"
@@ -195,7 +196,8 @@ namespace wry {
             _terrain_for_coordinate,
             _waiting_on_time,
             _player_for_client,
-            _money
+            _money,
+            _seed
         };
         for (Command const& c : commands) {
             switch (c.kind) {
@@ -658,7 +660,30 @@ namespace wry {
         }
 
         // Terrain has no transaction channel yet; the persistent map is
-        // carried over unchanged (an O(1) structural share, not a copy).
+        // carried over (an O(1) structural share, not a copy), plus any
+        // chunks this step makes on demand (terrain.hpp): the 3x3 chunk
+        // block around every cell proposed for occupation.  The proposals
+        // are a deterministic function of this World, whatever order the
+        // concurrent verb map enumerates them in, and making a chunk is a
+        // pure function of (seed, chunk) that never overwrites, so the
+        // order the chunks are made in cannot change the result.
+        WaitableMap<Coordinate, Terrain> next_terrain = _terrain_for_coordinate;
+        if (_seed) {
+            std::vector<std::pair<int32_t, int32_t>> chunks;
+            for (auto const& kv : verb_entity_id_for_coordinate) {
+                const int32_t cx = terrain_chunk_of(kv.first.x);
+                const int32_t cy = terrain_chunk_of(kv.first.y);
+                // the common case, a move within made terrain, costs one
+                // lookup per cell: the corner-presence test below
+                for (int32_t j = cy - 1; j <= cy + 1; ++j)
+                    for (int32_t i = cx - 1; i <= cx + 1; ++i)
+                        chunks.emplace_back(i, j);
+            }
+            std::sort(chunks.begin(), chunks.end());
+            chunks.erase(std::unique(chunks.begin(), chunks.end()), chunks.end());
+            for (auto [i, j] : chunks)
+                (void) ensure_terrain_chunk(_seed, next_terrain, i, j);
+        }
 
         Root<World*> next_world{new World{
             next_time,
@@ -668,10 +693,11 @@ namespace wry {
             std::move(new_located_for_coordinate),
             std::move(new_entity_for_entity_id),
             std::move(new_value_for_coordinate),
-            _terrain_for_coordinate,
+            std::move(next_terrain),
             std::move(new_next_waiting_on_time),
             _player_for_client,
-            next_money
+            next_money,
+            _seed
         }};
 
         // Seal the step's World here, while it is still this thread's

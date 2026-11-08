@@ -50,6 +50,7 @@ namespace wry {
         World* make_starting_world() {
             World* world = new World;
 
+            world->_seed = WORLD_SEED_DEFAULT;
             generate_starting_terrain(world);
 
             auto insert_localized_entity = [&](LocalizedEntity const* entity_ptr) {
@@ -136,7 +137,11 @@ namespace wry {
                 // touches land.  The pier's cells become rock, whatever
                 // they were.  No such berth, no ship (pre-alpha: fine).
                 {
+                    // the search makes terrain as it reads it, so it is
+                    // not bounded by the starting block (terrain.hpp)
                     auto water = [&](i32 x, i32 y) {
+                        (void) ensure_terrain_chunk(world->_seed, world->_terrain_for_coordinate,
+                                                    terrain_chunk_of(x), terrain_chunk_of(y));
                         Terrain t = -1;
                         return world->_terrain_for_coordinate.try_get(Coordinate{x, y}, t)
                             && (t == TERRAIN_WATER);
@@ -625,7 +630,7 @@ namespace wry {
                                 w->_entity_id_for_coordinate, w->_located_for_coordinate,
                                 w->_entity_for_entity_id, terms, w->_terrain_for_coordinate,
                                 w->_waiting_on_time, w->_player_for_client,
-                                w->_money);
+                                w->_money, w->_seed);
         next->seal();
         _world_to_render = next;
         _worlds.emplace_back(next);

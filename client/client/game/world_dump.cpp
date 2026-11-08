@@ -389,7 +389,7 @@ namespace wry {
                                        w->_entity_id_for_coordinate, w->_located_for_coordinate,
                                        w->_entity_for_entity_id, terms, w->_terrain_for_coordinate,
                                        w->_waiting_on_time, w->_player_for_client,
-                                       w->_money);
+                                       w->_money, w->_seed);
             changed->seal();
             Root<World const*> keep{changed};
             const std::string other = dump_world(changed);

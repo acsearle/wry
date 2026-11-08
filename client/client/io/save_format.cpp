@@ -427,6 +427,7 @@ namespace wry {
         SaveRef wait    = L.read_u32();
         SaveRef players = L.read_u32();
         w->_money = (int64_t)L.read_u64();
+        w->_seed = L.read_u64();
 
         w->_entity_id_for_coordinate.kv._inner = L.ref<NodeEntityID_U64>(eid_kv);
         w->_player_for_client._inner           = L.ref<NodeEntityID_U64>(players);
@@ -1180,6 +1181,7 @@ namespace wry {
         ship->_location = Coordinate{-3, 7};
         ship->_heading = HEADING_WEST;
         w->_money = -42;
+        w->_seed = 0x0123456789abcdefull;
 
         spawner->_location = Coordinate{0, 0};
         source->_location = Coordinate{2, 2};
@@ -1242,6 +1244,7 @@ namespace wry {
         assert((static_cast<const Ship*>(sh2)->_location == Coordinate{-3, 7}));
         assert(static_cast<const Ship*>(sh2)->_heading == HEADING_WEST);
         assert(w2->_money == -42);
+        assert(w2->_seed == 0x0123456789abcdefull);
 
         // The cursor comes back past every entity in the save
         assert(w2->_entity_id_source.data > sink->_entity_id.data);

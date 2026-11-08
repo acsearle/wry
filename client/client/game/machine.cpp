@@ -1710,4 +1710,51 @@ namespace wry {
         co_return;
     };
 
+    // Terrain on demand (terrain.hpp): a machine driving east from the
+    // only made chunk finds terrain made ahead of it, one chunk at least,
+    // and no further than the 3x3 block around the cells it entered; the
+    // made cells equal the generator's; a seed-0 World makes none.
+    define_test("machine_terrain_on_demand") {
+        for (uint64_t seed : { uint64_t{0}, WORLD_SEED_DEFAULT }) {
+            World* w = new World;
+            w->_seed = seed;
+            if (seed)
+                (void) ensure_terrain_chunk(seed, w->_terrain_for_coordinate, 0, 0);
+            EntityID m = test_machine_at_rest(w, 8, 8, HEADING_EAST);
+            w->hack_repair_invariant();
+            Root<World*> world{w};
+            // a free machine crosses a cell in ~57 ticks
+            co_await test_step_until(world, Time{3500});
+            const Machine* a = test_machine_for(world, m);
+            const i32 x = a->_new_location.x;
+            assert(x > 3 * TERRAIN_CHUNK);   // it drove out of the made chunk
+            const i32 cx = terrain_chunk_of(x);
+            Terrain t = -1;
+            const auto& terrain = world._ptr->_terrain_for_coordinate;
+            if (!seed) {
+                assert(!terrain.try_get(Coordinate{x, 8}, t));
+                assert(!terrain.try_get(Coordinate{0, 0}, t));
+                continue;
+            }
+            // made: every cell of the chunks around the machine, rows
+            // y = -16 .. 31, the next chunk east included
+            for (i32 y = -TERRAIN_CHUNK; y < 2 * TERRAIN_CHUNK; ++y)
+                for (i32 xx = (cx - 1) * TERRAIN_CHUNK; xx < (cx + 2) * TERRAIN_CHUNK; ++xx)
+                    assert(terrain.try_get(Coordinate{xx, y}, t));
+            // and equal to the generator's
+            Terrain cells[TERRAIN_CHUNK * TERRAIN_CHUNK];
+            generate_terrain_chunk(seed, cx + 1, 0, cells);
+            for (i32 j = 0; j != TERRAIN_CHUNK; ++j)
+                for (i32 i = 0; i != TERRAIN_CHUNK; ++i) {
+                    assert(terrain.try_get(Coordinate{(cx + 1) * TERRAIN_CHUNK + i, j}, t));
+                    assert(t == cells[j * TERRAIN_CHUNK + i]);
+                }
+            // not made: two chunks ahead, and two rows of chunks off the track
+            assert(!terrain.try_get(Coordinate{(cx + 2) * TERRAIN_CHUNK, 8}, t));
+            assert(!terrain.try_get(Coordinate{x, 2 * TERRAIN_CHUNK}, t));
+            assert(!terrain.try_get(Coordinate{x, -TERRAIN_CHUNK - 1}, t));
+        }
+        co_return;
+    };
+
 } // namespace wry::sim
