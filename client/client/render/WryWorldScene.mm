@@ -30,6 +30,7 @@
 #include "gui_widget.hpp"
 #include "json.hpp"
 #include "machine.hpp"
+#include "number_caption.hpp"
 #include "spawner.hpp"
 #include "matter.hpp"
 #include "mesh.hpp"
@@ -48,6 +49,18 @@
 
 static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
               "ShaderTypes.h WryTerrainUniforms is sized per terrain kind");
+
+// One character of a number tile's caption (number_caption.hpp), laid
+// out on the tile's face: centred `x` world units right of the face's
+// centre, `w` wide and `h` tall, showing `uv_rect` of the cutout atlas
+// (_glyphs) in `tint`
+struct WryNumberGlyph {
+    float x;
+    float w;
+    float h;
+    simd_float4 uv_rect;
+    simd_float4 tint;
+};
 
 @implementation WryWorldScene
 {
@@ -198,6 +211,11 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
     simd_float4 _token_truck_coordinate;   // the machine's playing piece (atlas row 15)
     simd_float4 _blank_coordinate;         // the plain tile numbers are printed on
     simd_float4 _dash_coordinate;          // the minus sign's glyph
+    // The number tiles' abbreviations (number_caption.hpp): the decimal
+    // point and the SI suffixes k, M, G, T, P (atlas row 15 after the
+    // token; 'E' is the hex row's)
+    simd_float4 _point_coordinate;
+    simd_float4 _si_coordinate[5];
     
     WryMesh* _truck_mesh;
     WryMesh* _mine_mesh;
@@ -1050,6 +1068,9 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
     _token_truck_coordinate = make<float4>(0.0f / kCells, 15.0f / kCells, 0.0f, 1.0f);
     _blank_coordinate       = make<float4>(4.0f / kCells, 11.0f / kCells, 0.0f, 1.0f);
     _dash_coordinate        = make<float4>(11.0f / kCells, 0.0f / kCells, 0.0f, 1.0f);
+    _point_coordinate       = make<float4>(1.0f / kCells, 15.0f / kCells, 0.0f, 1.0f);
+    for (int k = 0; k != 5; ++k)
+        _si_coordinate[k] = make<float4>((float)(2 + k) / kCells, 15.0f / kCells, 0.0f, 1.0f);
     _matter_has_coordinate.fill(false);
 
     try {
@@ -1085,6 +1106,11 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
                         _blank_coordinate = coordinate;
                     else if (sv == "dash1")
                         _dash_coordinate = coordinate;
+                    else if (sv == "point")
+                        _point_coordinate = coordinate;
+                    else if (sv.starts_with("si_") && sv.size() == 4
+                             && std::string_view("kMGTP").find(sv[3]) != std::string_view::npos)
+                        _si_coordinate[std::string_view("kMGTP").find(sv[3])] = coordinate;
                     // The matter tiles: the MATTER code's own name
                     else if (sv.starts_with("MATTER_")) {
                         wry::MATTER m = wry::MATTER_from_name(std::string(sv).c_str());
@@ -1279,6 +1305,59 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
     
 }
 
+// A number's caption as glyphs on its tile: number_caption's text (at
+// most four characters and a minus) in a row of monospace advances, the
+// minus and the decimal point taking 0.6 of one, shrunk to fit the face.
+// Each character shows the central half of its atlas cell (its frame);
+// the narrow ones the central quarter of the frame's width (6 of its 24
+// units: the dash's middle, the point), the minus in the digits' blue
+// (its dash glyph is white).
+- (std::vector<WryNumberGlyph>)numberGlyphs:(int64_t)value
+{
+    using namespace simd;
+    const float kDigitPitch = 12.5f / 24.0f;   // the monospace digits' advance, frame units -> world
+    const float kNumberWidth = 0.78f;          // the row's room on the face
+    const float cell_uv = 1.0f / (float)wry::SymbolSDF::kCells;
+    const std::string text = wry::number_caption(value);
+    auto narrow = [](char ch) { return ch == '-' || ch == '.'; };
+    const float kNarrowAdvance = 0.6f;
+    float advances = 0.0f;
+    for (char ch : text)
+        advances += narrow(ch) ? kNarrowAdvance : 1.0f;
+    const float scale = std::min(1.0f, kNumberWidth / (kDigitPitch * advances));
+    std::vector<WryNumberGlyph> result;
+    float cursor = -0.5f * advances;
+    for (char ch : text) {
+        const float advance = narrow(ch) ? kNarrowAdvance : 1.0f;
+        simd_float4 cell;
+        if (ch == '-')
+            cell = _dash_coordinate;
+        else if (ch == '.')
+            cell = _point_coordinate;
+        else if (ch >= '0' && ch <= '9')
+            cell = _digit_zero_coordinate + make<float4>((float)(ch - '0') * cell_uv, 0.0f, 0.0f, 0.0f);
+        else if (ch == 'E')
+            cell = _digit_zero_coordinate + make<float4>(14.0f * cell_uv, 0.0f, 0.0f, 0.0f);
+        else {
+            const size_t k = std::string_view("kMGTP").find(ch);
+            assert(k != std::string_view::npos);
+            cell = _si_coordinate[k];
+        }
+        WryNumberGlyph g;
+        g.x = (cursor + 0.5f * advance) * kDigitPitch * scale;
+        g.w = scale * (narrow(ch) ? 0.25f : 1.0f);
+        g.h = scale;
+        g.uv_rect = narrow(ch)
+            ? make<float4>(cell.x + 0.4375f * cell_uv, cell.y + 0.25f * cell_uv, 0.125f * cell_uv, 0.5f * cell_uv)
+            : make<float4>(cell.x + 0.25f * cell_uv, cell.y + 0.25f * cell_uv, 0.5f * cell_uv, 0.5f * cell_uv);
+        g.tint = (ch == '-') ? wry::from_sRGB(make<float4>(0x5b / 255.0f, 0x5b / 255.0f, 1.0f, 1.0f))
+                             : make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
+        result.push_back(g);
+        cursor += advance;
+    }
+    return result;
+}
+
 - (void) drawOverlay:(id<MTLRenderCommandEncoder>)encoder {
 
     using namespace simd;
@@ -1305,8 +1384,7 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
         else if (wry::term_is_boolean(held))
             coordinate = wry::term_as_boolean(held) ? _true_coordinate : _false_coordinate;
         else if (held.is_inty())
-            coordinate = _digit_zero_coordinate
-                + make<float4>((held.as_int() & 15) / (float)wry::SymbolSDF::kCells, 0.0f, 0.0f, 0.0f);
+            coordinate = _blank_coordinate;   // the caption is printed on below
         else
             coordinate = _cdot_coordinate;
         // The glyph's frame, the central half of its atlas cell (the rest
@@ -1322,6 +1400,61 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
                bytesPerRow:tile.stride_bytes()
                 fromRegion:region
                mipmapLevel:0];
+        if (held.is_inty()) {
+            // The number tile's caption, as the board prints it
+            // (-numberGlyphs:), composited over the blank tile in linear
+            // light: each glyph's atlas rect cut from the cutout atlas
+            // and resampled bilinearly into its place on the frame (one
+            // world unit, image y down, the decal's local +y up)
+            const NSUInteger atlas = _glyphs.width;
+            for (const WryNumberGlyph& g : [self numberGlyphs:held.as_int()]) {
+                const NSUInteger x0 = (NSUInteger)std::lround(g.uv_rect.x * atlas);
+                const NSUInteger y0 = (NSUInteger)std::lround(g.uv_rect.y * _glyphs.height);
+                const NSUInteger sw = (NSUInteger)std::lround(g.uv_rect.z * atlas);
+                const NSUInteger sh = (NSUInteger)std::lround(g.uv_rect.w * _glyphs.height);
+                std::vector<unsigned char> source(sw * sh * 4);
+                [_glyphs getBytes:source.data()
+                      bytesPerRow:sw * 4
+                       fromRegion:MTLRegionMake2D(x0, y0, sw, sh)
+                      mipmapLevel:0];
+                auto texel = [&](long sx, long sy, int k) -> float {
+                    sx = std::clamp(sx, 0L, (long)sw - 1);
+                    sy = std::clamp(sy, 0L, (long)sh - 1);
+                    return source[((size_t)sy * sw + (size_t)sx) * 4 + (size_t)k] / 255.0f;
+                };
+                for (NSUInteger py = 0; py != cell; ++py) {
+                    for (NSUInteger px = 0; px != cell; ++px) {
+                        // The pixel centre in the glyph quad's local
+                        // -0.5 .. 0.5 square (Shaders.metal decal uv)
+                        const float u = ((float)px + 0.5f) / (float)cell - 0.5f;
+                        const float v = 0.5f - ((float)py + 0.5f) / (float)cell;
+                        const float lx = (u - g.x) / g.w;
+                        const float ly = v / g.h;
+                        if (std::abs(lx) > 0.5f || std::abs(ly) > 0.5f)
+                            continue;
+                        const float fx = (lx + 0.5f) * (float)sw - 0.5f;
+                        const float fy = (0.5f - ly) * (float)sh - 0.5f;
+                        const long ix = (long)std::floor(fx), iy = (long)std::floor(fy);
+                        const float tx = fx - (float)ix, ty = fy - (float)iy;
+                        float rgba[4];
+                        for (int k = 0; k != 4; ++k) {
+                            const float a = texel(ix, iy, k) * (1.0f - tx) + texel(ix + 1, iy, k) * tx;
+                            const float b = texel(ix, iy + 1, k) * (1.0f - tx) + texel(ix + 1, iy + 1, k) * tx;
+                            rgba[k] = a * (1.0f - ty) + b * ty;
+                        }
+                        const float alpha = rgba[3];
+                        if (alpha <= 0.0f)
+                            continue;
+                        unsigned char* d = (unsigned char*)tile.data() + py * tile.stride_bytes() + px * 4;
+                        for (int k = 0; k != 3; ++k) {
+                            const float ink = wry::from_sRGB(rgba[k]) * g.tint[k];
+                            const float under = wry::from_sRGB(d[k] / 255.0f);
+                            d[k] = (unsigned char)std::lround(std::clamp(wry::to_sRGB(ink * alpha + under * (1.0f - alpha)), 0.0f, 1.0f) * 255.0f);
+                        }
+                    }
+                }
+            }
+        }
         unsigned char* p[1];
         p[0] = (unsigned char*) tile.data();
         // The atlas is straight alpha with coloured margins, so say so,
@@ -1965,43 +2098,26 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
             const float stroke = std::min(width, 20.0f);
             emit_slab(location, coordinate, across, up, stroke, stroke * 0.25f, width, true, texels_per_unit * 0.5f);
         };
-        // A number: the blank tile with the value's decimal digits
-        // printed on its face as decals (WryDecalInstance) from the
-        // cutout atlas's digit glyphs, the row shrunk to fit the face; a
-        // leading minus is the dash glyph's middle half in the digits'
-        // blue.  Very large values just get small (to be designed).
-        const float kDigitPitch = 12.5f / 24.0f;   // the monospace digits' advance, frame units -> world
-        const float kNumberWidth = 0.78f;          // the row's room on the face
+        // A number: the blank tile with the value's caption (at most
+        // four characters and a minus: "1234", "-12k", "1.2M";
+        // number_caption.hpp) printed on its face as decals
+        // (WryDecalInstance) from the cutout atlas's glyphs
+        // (-numberGlyphs:)
         auto emit_number = [&](simd_float4 location, simd_float3 across, simd_float3 up, int64_t value) {
             emit_symbol(location, _blank_coordinate, across, up);
-            const std::string text = std::to_string(value);
-            const int n = (int)text.size();
-            const float scale = std::min(1.0f, kNumberWidth / (kDigitPitch * (float)n));
             simd_float3 normal = simd_cross(across, up);
             // The tile's face: emit_symbol's thickness cap, half of it out
             simd_float3 face = location.xyz + normal * (10.0f / texels_per_unit);
-            const float cell_uv = 1.0f / (float)wry::SymbolSDF::kCells;
-            for (int i = 0; i != n; ++i) {
-                const char ch = text[(size_t)i];
-                const bool minus = ch == '-';
-                const float x = ((float)i - (float)(n - 1) * 0.5f) * kDigitPitch * scale;
-                const float w = scale * (minus ? 0.5f : 1.0f);
-                simd_float4x4 model = simd_matrix(simd_make_float4(across * w, 0.0f),
-                                                  simd_make_float4(up * scale, 0.0f),
+            for (const WryNumberGlyph& g : [self numberGlyphs:value]) {
+                simd_float4x4 model = simd_matrix(simd_make_float4(across * g.w, 0.0f),
+                                                  simd_make_float4(up * g.h, 0.0f),
                                                   simd_make_float4(normal * 0.08f, 0.0f),
-                                                  simd_make_float4(face + across * x, 1.0f));
+                                                  simd_make_float4(face + across * g.x, 1.0f));
                 WryDecalInstance d = {};
                 d.model_transform = model;
                 d.inverse_model_transform = simd_inverse(model);
-                simd_float4 cell = minus ? _dash_coordinate
-                    : _digit_zero_coordinate + make<float4>((float)(ch - '0') * cell_uv, 0.0f, 0.0f, 0.0f);
-                // The glyph's frame is the central half of its cell; the
-                // minus shows the central half of the dash's frame
-                d.uv_rect = minus
-                    ? make<float4>(cell.x + 0.375f * cell_uv, cell.y + 0.25f * cell_uv, 0.25f * cell_uv, 0.5f * cell_uv)
-                    : make<float4>(cell.x + 0.25f * cell_uv, cell.y + 0.25f * cell_uv, 0.5f * cell_uv, 0.5f * cell_uv);
-                d.tint = minus ? wry::from_sRGB(make<float4>(0x5b / 255.0f, 0x5b / 255.0f, 1.0f, 1.0f))
-                               : make<float4>(1.0f, 1.0f, 1.0f, 1.0f);
+                d.uv_rect = g.uv_rect;
+                d.tint = g.tint;
                 d.material = make<float4>(0.5f, 0.0f, 0.0f, 0.0f);   // the ink keeps the tile's finish
                 d.normal_cutoff = 0.5f;
                 prints.push_back(d);
