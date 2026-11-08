@@ -61,6 +61,21 @@
     return s;
 }
 
+// The ordering edges reuse relies on, for a chunk stamped N:
+//   - CPU writes to a slice (shared storage) precede -commit on this
+//     thread, and commit makes them visible to the command buffer's reads.
+//   - The signal is encoded after the frame's last encoder has ended, so
+//     the GPU sets the event to N only after every command before it in
+//     the command buffer -- every draw reading the chunk -- has completed.
+//   - -allocate: polls signaledValue on the render thread; observing a
+//     value >= N therefore orders that frame's GPU reads before the next
+//     CPU write into the chunk (a write-after-read).  The GPU never writes
+//     these chunks, so no visibility edge back to the CPU is needed.
+// Testing stamp <= signaledValue (not ==) takes a later frame's value as
+// covering every earlier frame.  That assumes one queue's frame buffers
+// finish (and so signal) in commit order, which is how Metal schedules
+// a single queue's command buffers; we rely on it rather than on any
+// documented cross-buffer guarantee of encodeSignalEvent.
 - (void)endFrameOnCommandBuffer:(id<MTLCommandBuffer>)commandBuffer {
     [self assertOwner];
     [commandBuffer encodeSignalEvent:_event value:_core.end_frame()];

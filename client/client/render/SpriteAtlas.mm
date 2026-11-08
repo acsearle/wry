@@ -64,6 +64,12 @@ namespace wry {
         [renderEncoder setRenderPipelineState:pipeline];
         if (_quads.empty())
             return;
+        // A fresh arena slice per commit, so the menu's two commits per
+        // frame and the up-to-3 frames in flight never share bytes.  The
+        // slice's chunk is recycled only once the arena's MTLSharedEvent
+        // reaches the value this frame's command buffer signals after its
+        // draws (WryBufferArena -endFrameOnCommandBuffer:), so this memcpy
+        // cannot overwrite instances an earlier frame's draw still reads.
         WryBufferSlice slice = [_impl->arena copyBytes:_quads.data()
                                                 length:_quads.size() * sizeof(WryQuadInstance)];
         [renderEncoder setVertexBuffer:slice.buffer
