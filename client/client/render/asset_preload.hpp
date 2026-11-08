@@ -29,6 +29,17 @@
 //  failed: the caller falls back to the synchronous load, which then
 //  reports the problem the way it always has.
 //
+//  The world scene keeps what it makes from these (the Metal textures and
+//  buffers) in the render context for the process, so a later New Game
+//  neither decodes nor finds anything here (WryRenderContext assetCache).
+//
+//  A symbol atlas is one request for both of its parts, the atlas image
+//  and its field, so that a field rebuilt on a cache miss is built from
+//  the decode the texture uses rather than a second one.  The `atlas
+//  NAME` switch asks for one outside the table (symbol_atlas_detached):
+//  its requester owns the slot and polls it from the frame loop, and
+//  wait() (New Game's) never waits for it.
+//
 
 #ifndef asset_preload_hpp
 #define asset_preload_hpp
@@ -78,6 +89,20 @@ namespace wry {
                 std::unique_lock lock{mutex};
                 published.wait(lock, [this] { return done; });
             }
+
+            // Whether take() would return at once.  True is final: done
+            // is set once, and seeing it under the mutex orders the
+            // publisher's writes to the value before the caller's take
+            bool ready() {
+                std::scoped_lock lock{mutex};
+                return done;
+            }
+        };
+
+        // The atlas PNG as decoded (straight alpha) and its field
+        struct SymbolAtlas {
+            matrix<RGBA8Unorm_sRGB> image;
+            SymbolSDF field;
         };
 
         // The tasks are spawned into `scope` (the process scope), which
@@ -92,15 +117,25 @@ namespace wry {
         void image(std::filesystem::path const& path, bool premultiplied);
         // An OBJ by from_obj, then MeshVertexify'd
         void mesh(std::filesystem::path const& path);
-        // The symbol field for the atlas at `path`, by
-        // symbol_sdf_for_atlas_parallel (which may build and write the
-        // cache: request each atlas at most once at a time)
-        void symbol_field(std::filesystem::path const& path);
+        // The symbol atlas at `path`, decoded, and its field by
+        // symbol_sdf_for_atlas_parallel (from the cache beside it, read
+        // concurrently with the decode; or, on a miss, built from that
+        // decode and cached)
+        void symbol_atlas(std::filesystem::path const& path);
+        // The same, but not entered in the table: the caller owns the
+        // only reference besides the task's, polls ready() and takes it;
+        // dropping it abandons the result (the task still runs to its
+        // end, then frees it)
+        // `in_flight`: a field built on a cache miss queues that many cells
+        // at a time (build_symbol_sdf_parallel), for a request made while
+        // a world is running
+        std::shared_ptr<Slot<SymbolAtlas>> symbol_atlas_detached(std::filesystem::path const& path,
+                                                                 int in_flight);
 
         // The decoded value, waiting for its task if it is still running
         std::optional<matrix<RGBA8Unorm_sRGB>> take_image(std::filesystem::path const& path, bool premultiplied);
         std::optional<wry::mesh::mesh> take_mesh(std::filesystem::path const& path);
-        std::optional<SymbolSDF> take_symbol_field(std::filesystem::path const& path);
+        std::optional<SymbolAtlas> take_symbol_atlas(std::filesystem::path const& path);
 
         // Until every request not yet taken has finished, without taking
         void wait();
@@ -110,7 +145,7 @@ namespace wry {
         coroutine::Nursery* _scope;
         std::map<std::pair<std::string, bool>, std::shared_ptr<Slot<matrix<RGBA8Unorm_sRGB>>>> _images;
         std::map<std::string, std::shared_ptr<Slot<wry::mesh::mesh>>> _meshes;
-        std::map<std::string, std::shared_ptr<Slot<SymbolSDF>>> _symbol_fields;
+        std::map<std::string, std::shared_ptr<Slot<SymbolAtlas>>> _symbol_atlases;
 
     };
 

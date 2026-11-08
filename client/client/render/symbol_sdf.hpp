@@ -99,18 +99,36 @@ namespace wry {
 
     // The same field, its cells built concurrently on the pool, one child
     // task each (they are independent; the bytes are identical).  The
-    // atlas's storage must outlive the await
-    coroutine::Future<SymbolSDF> build_symbol_sdf_parallel(matrix_view<const RGBA8Unorm_sRGB> atlas, int cell);
+    // atlas's storage must outlive the await.
+    //
+    // `in_flight` > 0 queues the cells that many at a time (waves, each
+    // joined before the next): the pool's queue is FIFO, and the frame
+    // loop's world step waits on tasks of its own, which would otherwise
+    // queue behind every cell (seconds in Debug).  0 queues them all at
+    // once, the fastest when nothing else is waiting
+    coroutine::Future<SymbolSDF> build_symbol_sdf_parallel(matrix_view<const RGBA8Unorm_sRGB> atlas, int cell,
+                                                           int in_flight = 0);
 
     // The field for the atlas PNG at `atlas_path`, at half its resolution:
     // from the cache PNG beside it when that is newer than the atlas,
     // else built and cached.
     //
-    // A cache miss builds with build_symbol_sdf_parallel.  The blocking
-    // form waits on the calling thread, which must not be a pool worker;
-    // on the pool, await the other
-    SymbolSDF symbol_sdf_for_atlas(std::filesystem::path const& atlas_path);
-    coroutine::Future<SymbolSDF> symbol_sdf_for_atlas_parallel(std::filesystem::path atlas_path);
+    // A cache miss builds with build_symbol_sdf_parallel, from `decoded`
+    // if given (the atlas already decoded from atlas_path by the caller,
+    // for its texture: its storage must outlive the await), else from a
+    // decode of its own.  The blocking form waits on the calling thread,
+    // which must not be a pool worker; on the pool, await the other.
+    // Concurrent calls for one atlas are safe (each writes its own
+    // temporary and renames it over the cache; the bytes are identical)
+    SymbolSDF symbol_sdf_for_atlas(std::filesystem::path const& atlas_path,
+                                   matrix<RGBA8Unorm_sRGB> const* decoded = nullptr);
+    coroutine::Future<SymbolSDF> symbol_sdf_for_atlas_parallel(std::filesystem::path atlas_path,
+                                                               matrix<RGBA8Unorm_sRGB> const* decoded = nullptr,
+                                                               int in_flight = 0);
+
+    // Whether the cache beside the atlas is there and newer than it (a
+    // hit for symbol_sdf_for_atlas, unless its shape is wrong)
+    bool symbol_sdf_cache_fresh(std::filesystem::path const& atlas_path);
 
     // The signed distance of a texel's centre from the edge of a half-plane
     // covering fraction `a` of it, the edge's unit normal being (gx, gy)

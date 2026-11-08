@@ -58,6 +58,24 @@
 // new scene for every New Game would otherwise redo it.  Main thread only.
 @property (nonatomic, readonly, nonnull) NSMutableDictionary<NSString*, id<MTLTexture>>* environmentCache;
 
+// Metal objects made from resource files, kept for the process and shared
+// by every scene that asks again (a second New Game), by a key naming the
+// file, its modification time and how it was made (-assetKeyForResource:
+// ofType:recipe:).  Only objects nobody writes after they are made go in:
+// the mipmapped textures below, the shared textures, and what scenes put
+// here themselves (the world scene's mesh buffers and finished symbol
+// atlases).  Holding them costs their memory once the scene is gone
+// (docs/async_loading.md).  Main thread only.
+@property (nonatomic, readonly, nonnull) NSMutableDictionary<NSString*, id>* assetCache;
+
+// "NAME.EXT|<mtime>|recipe": a file changed on disk misses
+- (nonnull NSString*)assetKeyForResource:(nonnull NSString*)name
+                                  ofType:(nonnull NSString*)ext
+                                  recipe:(nonnull NSString*)recipe;
+
+// Bytes the GPU holds for assetCache and environmentCache
+- (NSUInteger)cachedAssetBytes;
+
 // Rasterize the font afresh for a UI scale (GuiContext::pixels_per_point)
 // if it was built for another; the Font is replaced in place, so the
 // pointer stays valid.  The host calls this each frame before the scenes
@@ -107,9 +125,17 @@
                                           ofType:(nonnull NSString*)ext
                                  withPixelFormat:(MTLPixelFormat)pixelFormat;
 
+// A single-level texture, premultiplied, made once per process and shared
+// (assetCache): the caller must never write it.
+- (nonnull id<MTLTexture>)sharedTextureFromResource:(nonnull NSString*)name
+                                             ofType:(nonnull NSString*)ext
+                                    withPixelFormat:(MTLPixelFormat)pixelFormat;
+
 // Opt-in mipmapped variant for textures that are NOT CPU-mutated after
 // load (mesh materials).  Allocates the full mip chain and fills it with
-// a blit generateMipmaps, blocking until complete.  The plain
+// a blit generateMipmaps, blocking until complete.  Made once per process
+// and shared (assetCache): the caller must never write it; the same holds
+// for every newMipmappedTextureFromResource variant.  The plain
 // newTextureFromResource stays single-level because some callers mutate
 // the texture bytes after loading.
 - (nonnull id<MTLTexture>)newMipmappedTextureFromResource:(nonnull NSString*)name
@@ -127,6 +153,14 @@
                                    premultiplied:(BOOL)premultiplied;
 - (nonnull id<MTLTexture>)newTextureWithMipStorageFromResource:(nonnull NSString*)name
                                                         ofType:(nonnull NSString*)ext;
+
+// The texture those make, from an image already decoded (as it is, no
+// premultiplication): level 0 filled, the rest of the chain (if
+// mipmapped) left for -generateMipmapsForTexture...
+- (nonnull id<MTLTexture>)newTextureWithImage:(wry::matrix<wry::RGBA8Unorm_sRGB> const&)image
+                                  pixelFormat:(MTLPixelFormat)pixelFormat
+                                    mipmapped:(BOOL)mipmapped
+                                        label:(nonnull NSString*)label;
 
 // Fill levels 1... of `texture` from level 0 with a blit generateMipmaps,
 // blocking until complete.  Call again after any later level-0 edit.  On

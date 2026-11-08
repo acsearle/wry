@@ -30,6 +30,7 @@
 @implementation WryRenderContext
 {
     NSMutableDictionary<NSString*, id<MTLTexture>>* _environmentCache;
+    NSMutableDictionary<NSString*, id>* _assetCache;
     // C++ ivars for the shared 2D services.  The id<MTL*> / scalar
     // properties auto-synthesize their backing ivars; these don't, so they
     // are declared explicitly.  (_atlas / _font also serve as the backing
@@ -49,6 +50,40 @@
     if (!_environmentCache)
         _environmentCache = [NSMutableDictionary new];
     return _environmentCache;
+}
+
+- (NSMutableDictionary<NSString*, id>*)assetCache {
+    if (!_assetCache)
+        _assetCache = [NSMutableDictionary new];
+    return _assetCache;
+}
+
+- (NSString*)assetKeyForResource:(NSString*)name
+                          ofType:(NSString*)ext
+                          recipe:(NSString*)recipe
+{
+    const std::filesystem::path path = wry::path_for_resource([name UTF8String], [ext UTF8String]);
+    std::error_code ec;
+    const auto stamp = std::filesystem::last_write_time(path, ec);
+    const long long ticks = ec ? -1LL : (long long)stamp.time_since_epoch().count();
+    return [NSString stringWithFormat:@"%@.%@|%lld|%@", name, ext, ticks, recipe];
+}
+
+- (NSUInteger)cachedAssetBytes {
+    NSUInteger total = 0;
+    auto add = [&](id object) {
+        if ([object conformsToProtocol:@protocol(MTLResource)])
+            total += [(id<MTLResource>)object allocatedSize];
+        else if ([object isKindOfClass:[NSArray class]])
+            for (id element in (NSArray*)object)
+                if ([element conformsToProtocol:@protocol(MTLResource)])
+                    total += [(id<MTLResource>)element allocatedSize];
+    };
+    for (NSString* key in _assetCache)
+        add(_assetCache[key]);
+    for (NSString* key in _environmentCache)
+        add(_environmentCache[key]);
+    return total;
 }
 
 - (nonnull instancetype)initWithDevice:(nonnull id<MTLDevice>)device
@@ -337,6 +372,14 @@
         wry::multiply_alpha_inplace(image);
     }
 
+    return [self newTextureWithImage:image pixelFormat:pixelFormat mipmapped:mipmapped label:name];
+}
+
+- (id<MTLTexture>)newTextureWithImage:(wry::matrix<wry::RGBA8Unorm_sRGB> const&)image
+                          pixelFormat:(MTLPixelFormat)pixelFormat
+                            mipmapped:(BOOL)mipmapped
+                                label:(NSString*)name
+{
     MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
     descriptor.textureType = MTLTextureType2D;
     descriptor.pixelFormat = pixelFormat;
@@ -362,12 +405,33 @@
     return texture;
 }
 
+// The textures below are finished before they are cached and never
+// written again (no caller edits them: that is their contract), so frames
+// of any number of scenes may sample one concurrently.  The key carries
+// everything the bytes depend on: the file (and its modification time),
+// the pixel format, the alpha treatment and the mip filter.
+
+- (id<MTLTexture>)sharedTextureFromResource:(NSString*)name
+                                     ofType:(NSString*)ext
+                            withPixelFormat:(MTLPixelFormat)pixelFormat
+{
+    NSString* key = [self assetKeyForResource:name ofType:ext
+                                       recipe:[NSString stringWithFormat:@"texture/%lu/premultiplied/single", (unsigned long)pixelFormat]];
+    if (id<MTLTexture> cached = self.assetCache[key])
+        return cached;
+    id<MTLTexture> texture = [self newTextureFromResource:name ofType:ext withPixelFormat:pixelFormat];
+    self.assetCache[key] = texture;
+    return texture;
+}
+
 - (id<MTLTexture>)newMipmappedTextureFromResource:(NSString*)name
                                            ofType:(NSString*)ext
                                   withPixelFormat:(MTLPixelFormat)pixelFormat
 {
-    // Only for textures that are never CPU-mutated after load; the returned
-    // texture is complete and immutable.
+    NSString* key = [self assetKeyForResource:name ofType:ext
+                                       recipe:[NSString stringWithFormat:@"texture/%lu/premultiplied/box", (unsigned long)pixelFormat]];
+    if (id<MTLTexture> cached = self.assetCache[key])
+        return cached;
     id<MTLTexture> texture = [self newTextureFromResource:name
                                                    ofType:ext
                                           withPixelFormat:pixelFormat
@@ -376,6 +440,7 @@
         wry::LoadTimer timer("  generate mipmaps ", name.UTF8String);
         [self generateMipmapsForTexture:texture];
     }
+    self.assetCache[key] = texture;
     return texture;
 }
 
@@ -384,11 +449,36 @@
                                   withPixelFormat:(MTLPixelFormat)pixelFormat
                                          cellSize:(NSUInteger)cell
 {
+    return [self newMipmappedTextureFromResource:name
+                                          ofType:ext
+                                 withPixelFormat:pixelFormat
+                                        cellSize:cell
+                                   straightAlpha:NO];
+}
+
+- (id<MTLTexture>)newMipmappedTextureFromResource:(NSString*)name
+                                           ofType:(NSString*)ext
+                                  withPixelFormat:(MTLPixelFormat)pixelFormat
+                                         cellSize:(NSUInteger)cell
+                                    straightAlpha:(BOOL)straightAlpha
+{
+    NSString* key = [self assetKeyForResource:name ofType:ext
+                                       recipe:[NSString stringWithFormat:@"texture/%lu/%@/kernel%lu",
+                                               (unsigned long)pixelFormat,
+                                               straightAlpha ? @"straight" : @"premultiplied",
+                                               (unsigned long)cell]];
+    if (id<MTLTexture> cached = self.assetCache[key])
+        return cached;
     id<MTLTexture> texture = [self newTextureFromResource:name
                                                    ofType:ext
                                           withPixelFormat:pixelFormat
-                                                mipmapped:YES];
-    [self generateMipmapsForTexture:texture cellSize:cell straightAlpha:NO];
+                                                mipmapped:YES
+                                            premultiplied:!straightAlpha];
+    {
+        wry::LoadTimer timer("  generate mipmaps ", name.UTF8String);
+        [self generateMipmapsForTexture:texture cellSize:cell straightAlpha:straightAlpha];
+    }
+    self.assetCache[key] = texture;
     return texture;
 }
 

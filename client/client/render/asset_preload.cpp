@@ -69,15 +69,49 @@ namespace wry {
             co_return;
         }
 
-        coroutine::Task build_symbol_field(Publisher<SymbolSDF> out, std::string path) {
-            LoadTimer timer("preload symbol field ", path.c_str());
+        // On a cache hit the two parts are independent: the decode as a
+        // child, the field (the longer, ~380 ms Debug) here, so that the
+        // field starts when this task does (a child joins the back of the
+        // pool's queue); the join's acquire of the child's release
+        // decrement orders its writes before the reads below, as in
+        // build_symbol_sdf_parallel.  On a miss the field is built from
+        // the one decode.  Either part empty publishes nothing (the
+        // synchronous load reports it)
+        coroutine::Task decode_symbol_atlas(Publisher<AssetPreload::SymbolAtlas> out, std::string path,
+                                            int in_flight) {
+            LoadTimer timer("preload symbol atlas ", path.c_str());
             std::error_code ec;
             if (!std::filesystem::exists(path, ec))
                 co_return;
-            try {
-                out.value = co_await symbol_sdf_for_atlas_parallel(path);
-            } catch (...) {
+            AssetPreload::SymbolAtlas result;
+            if (symbol_sdf_cache_fresh(path)) {
+                coroutine::Nursery image;
+                image.soon([](matrix<RGBA8Unorm_sRGB>* image, std::string const* path) -> coroutine::Task {
+                    LoadTimer timer("preload symbol atlas image ", path->c_str());
+                    try {
+                        *image = from_png(StringView(path->c_str()));
+                    } catch (...) {
+                    }
+                    co_return;
+                }(&result.image, &path));
+                {
+                    LoadTimer timer("preload symbol field ", path.c_str());
+                    try {
+                        result.field = co_await symbol_sdf_for_atlas_parallel(path);
+                    } catch (...) {
+                    }
+                }
+                [[maybe_unused]] std::ptrdiff_t cancelled = co_await image.join();
+            } else {
+                try {
+                    result.image = from_png(StringView(path.c_str()));
+                    LoadTimer timer("preload symbol field (build) ", path.c_str());
+                    result.field = co_await symbol_sdf_for_atlas_parallel(path, &result.image, in_flight);
+                } catch (...) {
+                }
             }
+            if (result.image.minor() && result.field.image.minor())
+                out.value = std::move(result);
             co_return;
         }
 
@@ -101,13 +135,20 @@ namespace wry {
         _scope->soon(decode_mesh(Publisher(std::move(slot)), key));
     }
 
-    void AssetPreload::symbol_field(std::filesystem::path const& path) {
+    void AssetPreload::symbol_atlas(std::filesystem::path const& path) {
         std::string key = path.string();
-        if (_symbol_fields.contains(key))
+        if (_symbol_atlases.contains(key))
             return;
-        auto slot = std::make_shared<Slot<SymbolSDF>>();
-        _symbol_fields.emplace(key, slot);
-        _scope->soon(build_symbol_field(Publisher(std::move(slot)), key));
+        auto slot = std::make_shared<Slot<SymbolAtlas>>();
+        _symbol_atlases.emplace(key, slot);
+        _scope->soon(decode_symbol_atlas(Publisher(std::move(slot)), key, 0));
+    }
+
+    std::shared_ptr<AssetPreload::Slot<AssetPreload::SymbolAtlas>>
+    AssetPreload::symbol_atlas_detached(std::filesystem::path const& path, int in_flight) {
+        auto slot = std::make_shared<Slot<SymbolAtlas>>();
+        _scope->soon(decode_symbol_atlas(Publisher(slot), path.string(), in_flight));
+        return slot;
     }
 
     namespace {
@@ -130,8 +171,8 @@ namespace wry {
         return take_from(_meshes, path.string());
     }
 
-    std::optional<SymbolSDF> AssetPreload::take_symbol_field(std::filesystem::path const& path) {
-        return take_from(_symbol_fields, path.string());
+    std::optional<AssetPreload::SymbolAtlas> AssetPreload::take_symbol_atlas(std::filesystem::path const& path) {
+        return take_from(_symbol_atlases, path.string());
     }
 
     void AssetPreload::wait() {
@@ -139,7 +180,7 @@ namespace wry {
             slot->wait();
         for (auto& [key, slot] : _meshes)
             slot->wait();
-        for (auto& [key, slot] : _symbol_fields)
+        for (auto& [key, slot] : _symbol_atlases)
             slot->wait();
     }
 

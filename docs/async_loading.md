@@ -156,6 +156,93 @@ Costs and caveats:
 - `day.png` is decoded twice by the scene (prefiltered map and irradiance
   map); only the first is preloaded.
 
+## Follow-up: reuse across scenes, the `atlas` switch off main
+
+Measured 2026-11-08 on branch todo/loading-reuse, the same way (Debug:
+`frame 300`, `new-game`, `frame 60`, `main-menu`, `frame 10`, `new-game`,
+`frame 60`, `atlas assets`, `frame 1`...; 3 runs Debug, 5 Release,
+medians; the machine shared, load average 5-36).
+
+The preload served the first world scene only: a second New Game (after
+`main-menu`, or a load) decoded and uploaded everything again.  Now what
+the scene makes from its files is kept for the process in
+`WryRenderContext.assetCache` (beside environmentCache), keyed by file,
+modification time and recipe (pixel format, alpha, mip filter), and
+shared by every later scene:
+
+- the mipmapped textures (terrain, container, sandbox, ship palette):
+  every newMipmappedTextureFromResource variant now caches; the five
+  constant-colour textures through the new sharedTextureFromResource;
+- each mesh's vertex and index buffers (written once by
+  newBufferWithBytes, only read by draws); the WryMesh around them, with
+  its instance array and textures, is still made per scene;
+- the cutout glyphs (assets.png, straight, kernel mips);
+- each symbol atlas, finished: the texture with its opcode labels stamped
+  and its mips generated, the field texture, and the stroke widths, keyed
+  also by assets.json's modification time (it names the stamped cells).
+  A cached atlas is installed by pointer swap; the scene still reads
+  assets.json for its own coordinate tables, without stamping.
+
+Why sharing is safe: nothing writes any of these after it is cached.  The
+label stamping and the mip generation (blocking) happen before insertion;
+the `atlas` switch replaces the scene's references, it does not edit the
+textures; `caption-decals` swaps to another file (another key);
+`ui-scale` rebuilds the font in the SpriteAtlas, which is not cached; the
+per-frame state (mesh instances, the world map double buffer, G-buffers)
+stays in the scene.  Frames still in flight from an old scene sample the
+same immutable textures as the new one.
+
+The `atlas NAME` switch no longer blocks the frame loop.  A cached atlas
+swaps at once; otherwise -requestSymbolAtlasNamed: asks the preload for a
+detached request (AssetPreload::symbol_atlas_detached: a slot outside the
+table, so New Game's wait() never waits for it, held only by the scene
+and the task), keeps the old atlas up, and polls the slot each frame
+(Slot::ready(), under the mutex the task published under, so the decode's
+writes happen-before the main thread's reads; take() cannot block once
+ready).  The install on main (texture upload, stamping, mips) is the only
+main-thread part.  Asking for another name, or the old one, abandons the
+request: the task finishes and frees the slot.  On a field cache miss the
+cells are built two at a time (build_symbol_sdf_parallel's `in_flight`):
+the pool's queue is FIFO and the world step sync_waits on pool tasks of
+its own every frame (WorldState::_apply_step), so 256 cells queued at once
+stalled frames for the whole build (24 s in one run) although main never
+waited on the build itself.  Two of the four workers: the build takes
+about twice as long, and frames keep their pace.
+
+A symbol atlas is now one preload request (AssetPreload::symbol_atlas):
+on a field cache hit the image decode runs as a child while the field is
+read from its cache; on a miss the field is built from the one decode,
+not a second (symbol_sdf_for_atlas_parallel's `decoded`).  The field
+cache's temporary is unique per call (pid + counter), so two builds of
+one atlas at once (an abandoned request still running as a later scene
+asks again) cannot write one file.
+
+| Main thread, ms (median)                        | Debug before | Debug after | Release before | Release after |
+|-------------------------------------------------|-------------:|------------:|---------------:|--------------:|
+| first New Game: wait for asset preload          |          115 |         118 |              0 |             0 |
+| first New Game: WryWorldScene init              |          419 |         418 |            351 |           351 |
+| second New Game: WryWorldScene init             |         1305 |          10 |            274 |           1.2 |
+| `atlas` switch, field cache hit: frame stalled  | 834 (2 runs) |   52 (none) |            196 |     49 (none) |
+|   of which the install on main                  |         ~785 |          81 |           ~150 |            33 |
+| `atlas` switch, field cache miss: main blocked  |        15200 |          81 |            ~550 |            33 |
+
+The stalled-frame rows are the round trip of `frame 1` after the switch;
+an undisturbed `frame 1` is ~50 ms Debug, ~44 ms Release.  After, the
+switch lands ~0.46 s (Debug, hit), ~31 s (Debug, miss, two cells at a
+time), ~0.65 s (Release, miss) after it is asked; during the Debug miss
+build `frame 10` took 91 ms median, 131 ms max (undisturbed ~85).  The
+misses are single runs (an atlas copied to a temporary name).
+
+Memory: the cache holds 25 entries, 237 MiB, after the first world scene
+(two 4096^2 RGBA8 atlases with mips, 85 MiB each: assets_tile stamped and
+the assets glyphs; the 16 MiB field; ~40 MiB of 1024^2 mipped textures;
+the 8 MiB prefiltered sky; the meshes), and ~101 MiB more for each other
+atlas shown (338 MiB after one `atlas assets`).  While a world is up this
+is no more than before (the scene held the same objects); what is new is
+that it stays held at the main menu after the world is gone, where before
+only the prefiltered sky (~8 MiB) stayed.  Nothing evicts: a session that
+cycles through every atlas keeps them all.
+
 ## Plan (not done)
 
 1. The IBL prefilter: compute it once per process (in the render context,
@@ -163,14 +250,14 @@ Costs and caveats:
    of GPU wait from New Game.  Independently, the scene's mip generation
    need not block (one queue executes in commit order); with
    `shared_event_wait` (render/metal_event.hpp) it could await instead.
-2. `atlas NAME` at runtime: rebuild on a worker and swap the textures when
-   it lands, instead of the main thread's sync_wait (16 s Debug on a miss,
-   during which the session's steps queue).
+2. DONE (the follow-up above): `atlas NAME` decodes and builds on the
+   pool and swaps when it lands.
 3. make_starting_world (21 ms Release, ~400 ms Debug) runs on main at New
    Game; it is a pure function of the seed and could be built on the pool
    while the scene initializes, the hosting started after.
 4. build_font (55 ms Release, 240 ms Debug, before the first frame):
    FreeType rasterization could run on the pool with a face per task,
    placing into the SpriteAtlas on main.
-5. Share one decode of assets_tile.png between the texture and a field
-   rebuild; decode the field cache PNG into the texture directly.
+5. DONE (the follow-up above): one decode of the atlas serves the
+   texture and a field rebuild.  Still open: decode the field cache PNG
+   into the texture directly (it is copied once into a SymbolSDF).

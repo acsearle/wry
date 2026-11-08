@@ -17,6 +17,8 @@
 #include <limits>
 
 #include "symbol_sdf.hpp"
+
+#include <atomic>
 #include "coroutine.hpp"
 #include "nursery.hpp"
 #include "test.hpp"
@@ -307,18 +309,22 @@ namespace wry {
     // is awaited before either is touched again.  The join's acquire of
     // the children's release decrements (Nursery::_static_resume, the
     // join's `Establish child completions happens-before`) orders every
-    // child's texel writes before stroke_widths reads them.
-    coroutine::Future<SymbolSDF> build_symbol_sdf_parallel(matrix_view<const RGBA8Unorm_sRGB> atlas, int cell) {
+    // child's texel writes before stroke_widths reads them.  In waves
+    // (`in_flight`), each wave is such a nursery, joined before the next
+    // is queued, so the same holds wave by wave.
+    coroutine::Future<SymbolSDF> build_symbol_sdf_parallel(matrix_view<const RGBA8Unorm_sRGB> atlas, int cell,
+                                                           int in_flight) {
         constexpr int kCells = SymbolSDF::kCells;
+        constexpr int kCount = kCells * kCells;
         SymbolSDF result = symbol_sdf_shell(atlas, cell);
-        {
+        const int wave = (in_flight > 0) ? in_flight : kCount;
+        for (int first = 0; first < kCount; first += wave) {
             coroutine::Nursery cells;
-            for (int cy = 0; cy != kCells; ++cy)
-                for (int cx = 0; cx != kCells; ++cx)
-                    cells.soon([](matrix_view<const RGBA8Unorm_sRGB> atlas, SymbolSDF* result, int cx, int cy) -> coroutine::Task {
-                        build_symbol_sdf_cell(atlas, *result, cx, cy);
-                        co_return;
-                    }(atlas, &result, cx, cy));
+            for (int k = first; k != std::min(first + wave, kCount); ++k)
+                cells.soon([](matrix_view<const RGBA8Unorm_sRGB> atlas, SymbolSDF* result, int cx, int cy) -> coroutine::Task {
+                    build_symbol_sdf_cell(atlas, *result, cx, cy);
+                    co_return;
+                }(atlas, &result, k % kCells, k / kCells));
             [[maybe_unused]] std::ptrdiff_t cancelled = co_await cells.join();
             assert(cancelled == 0);
         }
@@ -354,15 +360,28 @@ namespace wry {
     // API moves the bytes untouched either way (the file's sRGB tag is
     // only an interpretation).  Rebuilt when missing, older than the
     // atlas, or not the shape expected.
-    coroutine::Future<SymbolSDF> symbol_sdf_for_atlas_parallel(std::filesystem::path atlas_path) {
-        constexpr int kCells = SymbolSDF::kCells;
-        std::filesystem::path cache_path = atlas_path;
-        cache_path.replace_filename(atlas_path.stem().string() + "_field_v3.png");
+    namespace {
+        std::filesystem::path symbol_sdf_cache_path(std::filesystem::path const& atlas_path) {
+            std::filesystem::path cache_path = atlas_path;
+            cache_path.replace_filename(atlas_path.stem().string() + "_field_v3.png");
+            return cache_path;
+        }
+    }
+
+    bool symbol_sdf_cache_fresh(std::filesystem::path const& atlas_path) {
+        const std::filesystem::path cache_path = symbol_sdf_cache_path(atlas_path);
         std::error_code ec;
-        const bool fresh = std::filesystem::exists(cache_path, ec)
+        return std::filesystem::exists(cache_path, ec)
             && std::filesystem::last_write_time(cache_path, ec) >= std::filesystem::last_write_time(atlas_path, ec)
             && !ec;
-        if (fresh) {
+    }
+
+    coroutine::Future<SymbolSDF> symbol_sdf_for_atlas_parallel(std::filesystem::path atlas_path,
+                                                               matrix<RGBA8Unorm_sRGB> const* decoded,
+                                                               int in_flight) {
+        constexpr int kCells = SymbolSDF::kCells;
+        const std::filesystem::path cache_path = symbol_sdf_cache_path(atlas_path);
+        if (symbol_sdf_cache_fresh(atlas_path)) {
             matrix<RGBA8Unorm_sRGB> png = from_png(StringView(cache_path.string().c_str()));
             if (png.minor() == png.major() && png.minor() % (std::size_t)kCells == 0 && png.minor() > 0) {
                 SymbolSDF result;
@@ -375,9 +394,14 @@ namespace wry {
                 co_return result;
             }
         }
-        matrix<RGBA8Unorm_sRGB> atlas = from_png(StringView(atlas_path.string().c_str()));
+        matrix<RGBA8Unorm_sRGB> own;
+        if (!decoded) {
+            own = from_png(StringView(atlas_path.string().c_str()));
+            decoded = &own;
+        }
+        matrix<RGBA8Unorm_sRGB> const& atlas = *decoded;
         const int cell = (int)(atlas.minor() / (std::size_t)kCells) / 2;
-        SymbolSDF result = co_await build_symbol_sdf_parallel(atlas, cell);
+        SymbolSDF result = co_await build_symbol_sdf_parallel(atlas, cell, in_flight);
         matrix<RGBA8Unorm_sRGB> png(result.image.minor(), result.image.major());
         for (std::size_t y = 0; y != png.minor(); ++y)
             std::memcpy(&png[(ptrdiff_t)y, 0], &result.image[(ptrdiff_t)y, 0], png.major() * sizeof(SymbolSDFTexel));
@@ -387,7 +411,12 @@ namespace wry {
         // PNG, so a torn cache with a fresh mtime would abort every launch)
         {
             std::filesystem::path temporary = cache_path;
-            temporary += ".partial-" + std::to_string((unsigned long)getpid());
+            // Unique to this call, so two builds of one atlas at once
+            // (a scene's abandoned `atlas` request still running as the
+            // next scene asks again) never write one file
+            static std::atomic<unsigned long> serial{0};
+            temporary += ".partial-" + std::to_string((unsigned long)getpid())
+                + "-" + std::to_string(serial.fetch_add(1, std::memory_order_relaxed));
             to_png(png, StringView(temporary.string().c_str()));
             std::error_code ec;
             std::filesystem::rename(temporary, cache_path, ec);
@@ -399,8 +428,9 @@ namespace wry {
 
     // Blocks the calling thread, which must not be a pool worker: the
     // children run on the pool
-    SymbolSDF symbol_sdf_for_atlas(std::filesystem::path const& atlas_path) {
-        return execution::sync_wait(symbol_sdf_for_atlas_parallel(atlas_path)).value();
+    SymbolSDF symbol_sdf_for_atlas(std::filesystem::path const& atlas_path,
+                                   matrix<RGBA8Unorm_sRGB> const* decoded) {
+        return execution::sync_wait(symbol_sdf_for_atlas_parallel(atlas_path, decoded)).value();
     }
 
     // ----------------------------------------------------------------
@@ -533,6 +563,12 @@ namespace wry {
                                a.image.major() * sizeof(SymbolSDFTexel)) == 0);
         assert(a.stroke_width == b.stroke_width);
         assert(a.stroke_width_at(7, 2) > 0.0f && a.stroke_width_at(0, 0) == 0.0f);
+        // In waves (3 does not divide the 256 cells: a short last wave)
+        SymbolSDF w = co_await build_symbol_sdf_parallel(atlas, n / 2, 3);
+        for (std::size_t y = 0; y != a.image.minor(); ++y)
+            assert(std::memcmp(&a.image[(ptrdiff_t)y, 0], &w.image[(ptrdiff_t)y, 0],
+                               a.image.major() * sizeof(SymbolSDFTexel)) == 0);
+        assert(a.stroke_width == w.stroke_width);
 
         if (std::getenv("WRY_BENCH") && std::filesystem::exists("assets_tile.png")) {
             matrix<RGBA8Unorm_sRGB> tiles = from_png(StringView("assets_tile.png"));

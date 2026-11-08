@@ -161,6 +161,10 @@ struct WryNumberGlyph {
     id<MTLTexture> _symbolField;
     std::string _symbolAtlasName;      // loaded; the model's _symbol_atlas asks for another
     std::string _symbolAtlasMissing;   // the last name that had no png, so it is not retried every frame
+    // The `atlas` switch in flight (-requestSymbolAtlasNamed:): its name
+    // and its decode's slot, shared only with the task publishing it
+    std::string _symbolAtlasPending;
+    std::shared_ptr<wry::AssetPreload::Slot<wry::AssetPreload::SymbolAtlas>> _symbolAtlasPendingSlot;
     std::vector<float> _symbolStrokeWidth;
     id<MTLRenderPipelineState> _symbolGBufferRenderPipelineState;
     id<MTLRenderPipelineState> _terrainGBufferRenderPipelineState;
@@ -275,13 +279,14 @@ struct WryNumberGlyph {
 // trip.  A list that drifts from the init costs only speed: an asset taken
 // but never requested decodes on the spot, and one requested but never
 // taken stays decoded in the preload (memory, until the context dies).
+// Only the first scene takes these: it leaves what it makes in the render
+// context's assetCache, where later scenes find it.
 + (void)preloadAssetsWithContext:(WryRenderContext*)context {
     wry::AssetPreload* preload = context.assetPreload;
     if (!preload)
         return;
     // Longest first: the pool starts them in order
-    preload->symbol_field(wry::path_for_resource("assets_tile", "png"));
-    preload->image(wry::path_for_resource("assets_tile", "png"), false);
+    preload->symbol_atlas(wry::path_for_resource("assets_tile", "png"));
     preload->image(wry::path_for_resource("assets", "png"), false);
     for (const char* name : {"terrain/Terrain_Albedo", "terrain/Terrain_NormalGL", "terrain/Terrain_ORM",
                              "day", "sandbox_photo", "Container20_AO", "Container20_Normal", "testpattern"})
@@ -719,14 +724,16 @@ struct WryNumberGlyph {
             // -loadSymbolAtlasNamed: below, once the opcode table exists
             pipelinesTimer.reset();
             _hackmesh = [[WryMesh alloc] init];
-            _black = [_ctx newTextureFromResource:@"black" ofType:@"png"];
-            _white = [_ctx newTextureFromResource:@"white" ofType:@"png"];
-            _blue = [_ctx newTextureFromResource:@"blue"
-                                          ofType:@"png"
-                                 withPixelFormat:MTLPixelFormatRGBA8Unorm];
-            _darkgray = [_ctx newTextureFromResource:@"gray_sRGB" ofType:@"png"];
+            // Constant-colour material inputs, shared with later scenes
+            // (never written)
+            _black = [_ctx sharedTextureFromResource:@"black" ofType:@"png" withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
+            _white = [_ctx sharedTextureFromResource:@"white" ofType:@"png" withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
+            _blue = [_ctx sharedTextureFromResource:@"blue"
+                                             ofType:@"png"
+                                    withPixelFormat:MTLPixelFormatRGBA8Unorm];
+            _darkgray = [_ctx sharedTextureFromResource:@"gray_sRGB" ofType:@"png" withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
             //_darkgray = [_ctx newTextureFromResource:@"darkgray" ofType:@"png"];
-            _orange = [_ctx newTextureFromResource:@"orange" ofType:@"png"];
+            _orange = [_ctx sharedTextureFromResource:@"orange" ofType:@"png" withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
 
         }
 
@@ -778,22 +785,33 @@ struct WryNumberGlyph {
         {
             auto f = [&](WryMesh *__strong& p, std::filesystem::path v) {
                 wry::LoadTimer timer("mesh ", v.c_str());
-                // Preloaded (parsed and vertexified on the pool), or now
-                std::optional<wry::mesh::mesh> preloaded;
-                if (wry::AssetPreload* preload = _ctx.assetPreload) {
-                    wry::LoadTimer timer("  take preloaded ", v.c_str());
-                    preloaded = preload->take_mesh(v);
+                // The vertex and index buffers are written once, here, and
+                // only read by draws after, so every scene shares one pair
+                // per file (the render context's assetCache); the instances
+                // and textures are the WryMesh's, made fresh per scene
+                NSString* stem = [NSString stringWithUTF8String:v.stem().c_str()];
+                NSString* key = [_ctx assetKeyForResource:stem ofType:@"obj" recipe:@"mesh/vertexified"];
+                NSArray<id<MTLBuffer>>* buffers = _ctx.assetCache[key];
+                if (!buffers) {
+                    // Preloaded (parsed and vertexified on the pool), or now
+                    std::optional<wry::mesh::mesh> preloaded;
+                    if (wry::AssetPreload* preload = _ctx.assetPreload) {
+                        wry::LoadTimer timer("  take preloaded ", v.c_str());
+                        preloaded = preload->take_mesh(v);
+                    }
+                    if (!preloaded) {
+                        wry::LoadTimer timer("  from_obj and MeshVertexify ", v.c_str());
+                        preloaded = wry::from_obj(v);
+                        preloaded->MeshVertexify();
+                    }
+                    wry::mesh::mesh& m = *preloaded;
+                    buffers = @[newBufferWithArray(m.hack_MeshVertex), newBufferWithArray(m.hack_triangle_strip)];
+                    _ctx.assetCache[key] = buffers;
                 }
-                if (!preloaded) {
-                    wry::LoadTimer timer("  from_obj and MeshVertexify ", v.c_str());
-                    preloaded = wry::from_obj(v);
-                    preloaded->MeshVertexify();
-                }
-                wry::mesh::mesh& m = *preloaded;
-                
+
                 p = [[WryMesh alloc] init];
-                p.vertexBuffer = newBufferWithArray(m.hack_MeshVertex);
-                p.indexBuffer = newBufferWithArray(m.hack_triangle_strip);
+                p.vertexBuffer = buffers[0];
+                p.indexBuffer = buffers[1];
                 
                 p.emissiveTexture = _black;
                 p.albedoTexture = _white; // [_ctx newTextureFromResource:@"PaintedMetal009_1K-PNG_Color" ofType:@"png"];
@@ -939,6 +957,14 @@ struct WryNumberGlyph {
         
     NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
 
+    if (wry::load_timing_enabled()) {
+        char detail[64];
+        std::snprintf(detail, sizeof(detail), "%lu entries, %.1f MiB",
+                      (unsigned long)(_ctx.assetCache.count + _ctx.environmentCache.count),
+                      (double)[_ctx cachedAssetBytes] / (1024.0 * 1024.0));
+        wry::load_timing_mark("asset cache: ", detail);
+    }
+
     return self;
 }
 
@@ -946,23 +972,54 @@ struct WryNumberGlyph {
 // glyphs, "assets_tile" the same glyphs printed on tiles, from
 // tools/make_tile_atlas.py) and the field beside it, then the opcode
 // labels stamped into the uppercase opcode cells and the mip chain.
-// Called once from init and again whenever the `atlas` console command
-// names another atlas (-encodeIntoCommandBuffer:); the textures in
-// flight stay alive under their encoders.
+//
+// Made once per process per atlas (and per assets.json, which names the
+// cells the labels go on): the finished textures and stroke widths go in
+// the render context's assetCache, and nothing writes them after (the
+// stamping and the mips come before they are cached; an `atlas` switch
+// swaps the scene's references, it does not edit the textures), so later
+// scenes and later switches share them.  The textures in flight stay
+// alive under their encoders.
+//
+// Synchronous: from the cache, from the preload, or decoded (and the
+// field built, on a cache miss) now.  The init calls this; the `atlas`
+// command goes through -requestSymbolAtlasNamed:, which keeps the
+// decode off the main thread.
 - (void)loadSymbolAtlasNamed:(NSString*)name
 {
-    using namespace ::simd;
-    using namespace ::wry;
+    if ([self installCachedSymbolAtlasNamed:name])
+        return;
+    const std::filesystem::path atlasPath = wry::path_for_resource(wry::StringView(name.UTF8String), "png");
+    std::optional<wry::AssetPreload::SymbolAtlas> decoded;
+    if (wry::AssetPreload* preload = _ctx.assetPreload) {
+        wry::LoadTimer timer("  take preloaded symbol atlas ", name.UTF8String);
+        decoded = preload->take_symbol_atlas(atlasPath);
+    }
+    if (!decoded) {
+        wry::LoadTimer timer("  decode symbol atlas and field ", name.UTF8String);
+        decoded.emplace();
+        decoded->image = wry::from_png(atlasPath.c_str());
+        decoded->field = wry::symbol_sdf_for_atlas(atlasPath, &decoded->image);
+    }
+    [self installSymbolAtlasNamed:name decoded:std::move(*decoded)];
+}
 
-    Table<wry::String, i64> name_to_opcode;
-    for (auto&& [k, v] : wry::OPCODE_NAMES)
-        name_to_opcode.emplace(v + 7, k);
+- (NSString*)symbolAtlasKeyNamed:(NSString*)name {
+    // assets.json: the labels stamped depend on it
+    NSString* layout = [_ctx assetKeyForResource:@"assets" ofType:@"json" recipe:@""];
+    return [_ctx assetKeyForResource:name ofType:@"png"
+                              recipe:[@"symbol atlas/" stringByAppendingString:layout]];
+}
 
-    // Mip levels allocated now, generated below once the opcode
-    // labels have been stamped into level 0.
-    _symbols = [_ctx newTextureWithMipStorageFromResource:name ofType:@"png"];
-    // The cutout glyphs for decals, always the plain atlas: straight
-    // alpha, coloured margins, mips filled now (nothing is stamped on it)
+// The cutout glyphs for decals, always the plain atlas: straight alpha,
+// coloured margins, mips filled at once (nothing is stamped on it); made
+// once per process (assetCache) and never written
+- (void)loadGlyphs {
+    NSString* key = [_ctx assetKeyForResource:@"assets" ofType:@"png" recipe:@"glyphs"];
+    if (id<MTLTexture> cached = _ctx.assetCache[key]) {
+        _glyphs = cached;
+        return;
+    }
     _glyphs = [_ctx newTextureFromResource:@"assets"
                                     ofType:@"png"
                            withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
@@ -972,18 +1029,50 @@ struct WryNumberGlyph {
     [_ctx generateMipmapsForTexture:_glyphs
                            cellSize:_glyphs.width / wry::SymbolSDF::kCells
                       straightAlpha:YES];
+    _ctx.assetCache[key] = _glyphs;
+}
+
+// The atlas NAME as made before this process, if it was: swapped in at
+// once (the layout read again for this scene's tables, nothing stamped)
+- (BOOL)installCachedSymbolAtlasNamed:(NSString*)name {
+    NSArray* cached = _ctx.assetCache[[self symbolAtlasKeyNamed:name]];
+    if (!cached)
+        return NO;
+    wry::LoadTimer timer("  install cached symbol atlas ", name.UTF8String);
+    _symbols = cached[0];
+    _symbolField = cached[1];
+    NSData* widths = cached[2];
+    const float* w = (const float*)widths.bytes;
+    _symbolStrokeWidth.assign(w, w + widths.length / sizeof(float));
+    if (!_glyphs)
+        [self loadGlyphs];
+    [self readSymbolAtlasLayoutStamping:NO];
+    _symbolAtlasName = name.UTF8String;
+    NSLog(@"symbol atlas: %@ (made earlier this process)", name);
+    return YES;
+}
+
+// Make the atlas's textures from its decode (main thread: the textures,
+// the label stamping, the mips' blocking GPU wait), then cache them
+- (void)installSymbolAtlasNamed:(NSString*)name decoded:(wry::AssetPreload::SymbolAtlas&&)decoded
+{
+    wry::LoadTimer installTimer("  install symbol atlas ", name.UTF8String);
+    // Mip levels allocated now, generated below once the opcode
+    // labels have been stamped into level 0.  Straight alpha (see
+    // -newTextureWithMipStorageFromResource:)
+    id<MTLTexture> symbols = [_ctx newTextureWithImage:decoded.image
+                                           pixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
+                                             mipmapped:YES
+                                                 label:name];
+    decoded.image = {};
+    if (!_glyphs)
+        [self loadGlyphs];
+    id<MTLTexture> field = nil;
+    std::vector<float> strokeWidth;
     {
-        // The field beside the atlas (symbol_sdf.hpp): from its
-        // cache, or built from the atlas's silhouette at half the
-        // atlas resolution and cached
-        auto t0 = std::chrono::steady_clock::now();
-        wry::LoadTimer timer("  symbol field");
-        const std::filesystem::path atlasPath = wry::path_for_resource(wry::StringView(name.UTF8String), "png");
-        std::optional<wry::SymbolSDF> preloaded;
-        if (wry::AssetPreload* preload = _ctx.assetPreload)
-            preloaded = preload->take_symbol_field(atlasPath);
-        wry::SymbolSDF sdf = preloaded ? std::move(*preloaded) : wry::symbol_sdf_for_atlas(atlasPath);
-        const int cell = sdf.cell;
+        // The field beside the atlas (symbol_sdf.hpp), from its cache or
+        // built from the atlas's silhouette at half the atlas resolution
+        wry::SymbolSDF& sdf = decoded.field;
         MTLTextureDescriptor* descriptor =
             [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
                                                                width:sdf.image.major()
@@ -991,25 +1080,115 @@ struct WryNumberGlyph {
                                                            mipmapped:NO];
         descriptor.storageMode = MTLStorageModeShared;
         descriptor.usage = MTLTextureUsageShaderRead;
-        _symbolField = [_ctx.device newTextureWithDescriptor:descriptor];
-        [_symbolField replaceRegion:MTLRegionMake2D(0, 0, sdf.image.major(), sdf.image.minor())
-                        mipmapLevel:0
-                          withBytes:sdf.image.data()
-                        bytesPerRow:sdf.image.stride_bytes()];
-        _symbolField.label = @"Symbol field";
-        _symbolStrokeWidth = std::move(sdf.stroke_width);
-        auto t1 = std::chrono::steady_clock::now();
+        field = [_ctx.device newTextureWithDescriptor:descriptor];
+        [field replaceRegion:MTLRegionMake2D(0, 0, sdf.image.major(), sdf.image.minor())
+                 mipmapLevel:0
+                   withBytes:sdf.image.data()
+                 bytesPerRow:sdf.image.stride_bytes()];
+        field.label = @"Symbol field";
+        strokeWidth = std::move(sdf.stroke_width);
         std::vector<float> widths;
-        for (float w : _symbolStrokeWidth)
+        for (float w : strokeWidth)
             if (w > 0.0f)
                 widths.push_back(w);
         std::sort(widths.begin(), widths.end());
-        NSLog(@"symbol field: %d px cells, ready in %.0f ms; %zu symbols, stroke widths %.1f / %.1f / %.1f texels (min / median / max)",
-              cell, std::chrono::duration<double, std::milli>(t1 - t0).count(),
-              widths.size(), widths.empty() ? 0.0f : widths.front(),
+        NSLog(@"symbol field: %d px cells; %zu symbols, stroke widths %.1f / %.1f / %.1f texels (min / median / max)",
+              sdf.cell, widths.size(), widths.empty() ? 0.0f : widths.front(),
               widths.empty() ? 0.0f : widths[widths.size() / 2],
               widths.empty() ? 0.0f : widths.back());
     }
+
+    _symbols = symbols;
+    _symbolField = field;
+    _symbolStrokeWidth = strokeWidth;
+    [self readSymbolAtlasLayoutStamping:YES];
+
+    // Level 0 is final (label stamping above is its last edit), so
+    // fill the mip chain.  Blocking; nothing has sampled it yet.  The
+    // kernel stays inside each kCells x kCells cell
+    {
+        wry::LoadTimer timer("  symbol atlas mipmaps");
+        [_ctx generateMipmapsForTexture:_symbols
+                               cellSize:_symbols.width / wry::SymbolSDF::kCells
+                          straightAlpha:YES];
+    }
+
+    // Finished: from here on only read
+    _ctx.assetCache[[self symbolAtlasKeyNamed:name]] =
+        @[_symbols, _symbolField,
+          [NSData dataWithBytes:strokeWidth.data() length:strokeWidth.size() * sizeof(float)]];
+
+    _symbolAtlasName = name.UTF8String;
+    NSLog(@"symbol atlas: %@", name);
+}
+
+// The `atlas` command's NAME (the frame loop calls this each frame while
+// it differs from the atlas shown).  Made earlier this process: swapped in
+// now.  Otherwise its decode (and, on a field cache miss, the build: 17 s
+// in Debug) runs on the pool as a detached preload request
+// (AssetPreload::symbol_atlas_detached) and the old atlas stays up until
+// -pollSymbolAtlasRequest finds it ready; the frame loop, and with it a
+// self-hosted session's steps, never waits.  Asking for another name
+// abandons the request in flight (its task finishes and frees it).
+- (void)requestSymbolAtlasNamed:(const std::string&)name {
+    if (name == _symbolAtlasPending)
+        return;
+    NSString* ns = [NSString stringWithUTF8String:name.c_str()];
+    _symbolAtlasPending.clear();
+    _symbolAtlasPendingSlot.reset();
+    if ([self installCachedSymbolAtlasNamed:ns])
+        return;
+    wry::AssetPreload* preload = _ctx.assetPreload;
+    if (!preload) {
+        [self loadSymbolAtlasNamed:ns];
+        return;
+    }
+    wry::load_timing_mark("atlas switch requested ", name.c_str());
+    _symbolAtlasPending = name;
+    // A field built on a cache miss queues two cells at a time, so the
+    // world step's own pool tasks never wait behind more than one (the
+    // queue is FIFO; all 256 at once stalled frames for the whole build).
+    // Two of the four workers: the build takes about twice as long
+    constexpr int kFieldCellsInFlight = 2;
+    _symbolAtlasPendingSlot = preload->symbol_atlas_detached(wry::path_for_resource(wry::StringView(name.c_str()), "png"),
+                                                             kFieldCellsInFlight);
+}
+
+- (void)cancelSymbolAtlasRequest {
+    _symbolAtlasPending.clear();
+    _symbolAtlasPendingSlot.reset();
+}
+
+// The request's decode, if it has landed: installed (main thread, a few
+// tens of ms: the texture uploads, the stamping and the mip kernel).  The
+// slot's ready() and take() lock the mutex the task published under, so
+// the task's writes to the decode happen-before the reads here; take()
+// cannot block once ready() said true.  A failed decode (published empty)
+// falls back to the synchronous load, which reports it as it always has
+- (void)pollSymbolAtlasRequest {
+    if (!_symbolAtlasPendingSlot || !_symbolAtlasPendingSlot->ready())
+        return;
+    std::optional<wry::AssetPreload::SymbolAtlas> decoded = _symbolAtlasPendingSlot->take();
+    NSString* ns = [NSString stringWithUTF8String:_symbolAtlasPending.c_str()];
+    [self cancelSymbolAtlasRequest];
+    wry::LoadTimer timer("atlas switch install ", ns.UTF8String);
+    if (decoded)
+        [self installSymbolAtlasNamed:ns decoded:std::move(*decoded)];
+    else
+        [self loadSymbolAtlasNamed:ns];
+}
+
+// The cell coordinates and captions of assets.json, for the atlas just
+// made current; with `stamp`, the opcode labels stamped into its level 0
+// as well (before its mips and before it is shared: only when making it)
+- (void)readSymbolAtlasLayoutStamping:(BOOL)stamp
+{
+    using namespace ::simd;
+    using namespace ::wry;
+
+    Table<wry::String, i64> name_to_opcode;
+    for (auto&& [k, v] : wry::OPCODE_NAMES)
+        name_to_opcode.emplace(v + 7, k);
 
     // Defaults matching the shipped atlas layout, overwritten by
     // the by-name capture below; a json missing the names
@@ -1108,8 +1287,13 @@ struct WryNumberGlyph {
                 else /* if (p != name_to_opcode.end()) */ {
                     // printf("p is not equal to end\n");
                     _opcode_to_coordinate[p->second] = coordinate;
-                    
-                    
+                    // Stamped once, when the atlas is made; a cached
+                    // atlas has its labels already
+                    if (!stamp) {
+                        ++j;
+                        continue;
+                    }
+
                     // One atlas cell.  The atlas is a kCells x
                     // kCells grid at whatever resolution it ships
                     // in (assets.png is 4096 px, so 256 px cells);
@@ -1158,18 +1342,6 @@ struct WryNumberGlyph {
         
     }
 
-    // Level 0 is final (label stamping above is its last edit), so
-    // fill the mip chain.  Blocking; nothing has sampled it yet.  The
-    // kernel stays inside each kCells x kCells cell
-    {
-        wry::LoadTimer timer("  symbol atlas mipmaps");
-        [_ctx generateMipmapsForTexture:_symbols
-                               cellSize:_symbols.width / wry::SymbolSDF::kCells
-                          straightAlpha:YES];
-    }
-
-    _symbolAtlasName = name.UTF8String;
-    NSLog(@"symbol atlas: %@", name);
 }
 
 - (void) drawBezier:(id<MTLRenderCommandEncoder>)encoder {
@@ -1832,8 +2004,9 @@ struct WryNumberGlyph {
 
     const bool show_map = _model->show_map();
 
-    // Another atlas asked for (the `atlas` command): swap it in before
-    // anything samples the symbols this frame
+    // Another atlas asked for (the `atlas` command): asked of the pool,
+    // and swapped in before anything samples the symbols in the frame
+    // its decode has landed by (-requestSymbolAtlasNamed:)
     {
         const wry::String& asked = _model->_symbol_atlas;
         std::string name((const char*)asked.chars.data(), asked.chars.size());
@@ -1844,15 +2017,21 @@ struct WryNumberGlyph {
             name = "assets_tile_nocaption";
         if (_model->_caption_decals > 0 && !_decalFontTexture)
             [self loadDecalFont];
-        if (name != _symbolAtlasName && name != _symbolAtlasMissing) {
+        if (name == _symbolAtlasName) {
+            // Asked back before the other landed
+            if (!_symbolAtlasPending.empty())
+                [self cancelSymbolAtlasRequest];
+        } else if (name != _symbolAtlasMissing) {
             std::error_code ec;
             if (!name.empty() && std::filesystem::exists(wry::path_for_resource(wry::StringView(name.c_str()), "png"), ec)) {
-                [self loadSymbolAtlasNamed:[NSString stringWithUTF8String:name.c_str()]];
+                [self requestSymbolAtlasNamed:name];
             } else {
                 NSLog(@"symbol atlas: no %s.png in the assets folder; keeping %s", name.c_str(), _symbolAtlasName.c_str());
                 _symbolAtlasMissing = name;
+                [self cancelSymbolAtlasRequest];
             }
         }
+        [self pollSymbolAtlasRequest];
     }
 
 
