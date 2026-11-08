@@ -614,14 +614,25 @@ float3 sample_Trowbridge_Reitz(float2 chi, float alpha2) {
     
     // note that this form of the quotient is robust against both
     // \alpha = 0 and \alpha = 1
-    float cosTheta2 = (1.0 - chi.y) / (1.0 + (alpha2 - 1.0) * chi.y);
+    //
+    // sin^2 is its own quotient, not 1 - cos^2: for a small alpha2 the
+    // lobe is so narrow that cos^2 = 1 - O(alpha2 chi.y) and, under
+    // -fmetal-math-mode=fast's approximate division, rounds to just
+    // above 1 for some samples, and sqrt(1 - cos^2) is then NaN.  That
+    // one sample poisoned every texel of the prefiltered sky's level 0
+    // (roughness 1/16, alpha2 = 2^-16: all 6 x 256^2 texels NaN, levels
+    // 1..4 clean).  Both quotients below are nonnegative by construction
+    // (d >= alpha2 > 0 for chi.y in [0, 1)); the max()es guard rounding
+    float d = 1.0f + (alpha2 - 1.0f) * chi.y;
+    float cosTheta2 = (1.0f - chi.y) / d;
+    float sinTheta2 = (alpha2 * chi.y) / d;
     
     float phi = 2.0f * M_PI_F * chi.x;
     float cosPhi = cos(phi);
     float sinPhi = sin(phi);
     
-    float cosTheta = sqrt(cosTheta2);
-    float sinTheta = sqrt(1.0 - cosTheta2);
+    float cosTheta = sqrt(max(cosTheta2, 0.0f));
+    float sinTheta = sqrt(max(sinTheta2, 0.0f));
     
     return float3(sinTheta * cosPhi,
                   sinTheta * sinPhi,
@@ -2666,8 +2677,9 @@ CubeFilterAccumulate3(CubeFilterVertexOut in [[stage_in]],
     
     float alpha2 = uniforms.alpha2;
     
-    // construct sample coordinate system
-    float3 U = (N.z < 0.5) ? float3(0, 0, 1) : float3(0, 1, 0);
+    // construct sample coordinate system (abs: without it N near -Z took
+    // U = +Z, nearly parallel, and normalized a near-zero cross product)
+    float3 U = (abs(N.z) < 0.5) ? float3(0, 0, 1) : float3(0, 1, 0);
     float3x3 T;
     T.columns[0] = normalize(cross(N, U));
     T.columns[1] = normalize(cross(N, T.columns[0]));
@@ -3426,8 +3438,9 @@ CubeFilterAccumulate2(CubeFilterVertexOut in [[stage_in]],
     
     float alpha2 = uniforms.alpha2;
     
-    // construct sample coordinate system
-    float3 U = (N.z < 0.5) ? float3(0, 0, 1) : float3(0, 1, 0);
+    // construct sample coordinate system (abs: without it N near -Z took
+    // U = +Z, nearly parallel, and normalized a near-zero cross product)
+    float3 U = (abs(N.z) < 0.5) ? float3(0, 0, 1) : float3(0, 1, 0);
     float3x3 T;
     T.columns[0] = normalize(cross(N, U));
     T.columns[1] = normalize(cross(N, T.columns[0]));

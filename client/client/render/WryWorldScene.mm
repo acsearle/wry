@@ -33,6 +33,7 @@
 #include "json.hpp"
 #include "machine.hpp"
 #include "decal_text.hpp"
+#include "environment_prefilter.hpp"
 #include "font.hpp"
 #include "number_caption.hpp"
 #include "spawner.hpp"
@@ -310,141 +311,11 @@ struct WryNumberGlyph {
     return t;
 }
 
+// The specular sky: CubeFilterAccumulate3, one GGX roughness per level
+// (environment_prefilter.hpp)
 -(id<MTLTexture>)prefilteredEnvironmentMapFromResource:(NSString*)name ofType:ext {
-    
-    using namespace simd;
-    
     id<MTLTexture> input = [_ctx newTextureFromResource:name ofType:ext];
-    
-    id<MTLTexture> output = nil;
-    {
-        MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
-        descriptor.textureType = MTLTextureTypeCube;
-        descriptor.width = 256;
-        descriptor.height = descriptor.width;
-        descriptor.pixelFormat = MTLPixelFormatRGBA32Float;
-        descriptor.mipmapLevelCount = 5; //__builtin_ctzl(descriptor.width) + 1;
-        descriptor.usage = MTLTextureUsageShaderRead;
-        descriptor.resourceOptions = MTLResourceStorageModePrivate;
-        output = [_ctx.device newTextureWithDescriptor:descriptor];
-        output.label = name;
-    }
-    
-    id<MTLRenderPipelineState> pipeline = nil;
-    {
-        MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
-        descriptor.label = @"CubeFilter3";
-        descriptor.vertexFunction = [_ctx newFunctionWithName:@"CubeFilterVertex"];
-        descriptor.fragmentFunction = [_ctx newFunctionWithName:@"CubeFilterAccumulate3"];
-        descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA32Float;
-        descriptor.colorAttachments[0].blendingEnabled = YES;
-        descriptor.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
-        descriptor.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
-        descriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
-        descriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
-        descriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
-        descriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
-        descriptor.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
-        pipeline = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
-    }
-    
-    CubeFilterUniforms uniforms;
-    {
-        // we have position in NDCs with XY01
-        //
-        
-        // translate z=0 near clip plane cordinates to z=1
-        simd_float4x4 Z
-        = simd_matrix(make<float4>(1.0f, 0.0f, 0.0f, 0.0f),
-                      make<float4>(0.0f, 1.0f, 0.0f, 0.0f),
-                      make<float4>(0.0f, 0.0f, 1.0f, 0.0f),
-                      make<float4>(0.0f, 0.0f, 1.0f, 1.0f));
-        uniforms.transforms[0]
-        = simd_mul(simd_matrix_rotate(M_PI_2, simd_make_float3(0.0f, 1.0f, 0.0f)), Z);
-        uniforms.transforms[1]
-        = simd_mul(simd_matrix_rotate(-M_PI_2, simd_make_float3(0.0f, 1.0f, 0.0f)), Z);
-        uniforms.transforms[2]
-        = simd_mul(simd_matrix_rotate(M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f)), Z);
-        uniforms.transforms[3]
-        = simd_mul(simd_matrix_rotate(-M_PI_2, simd_make_float3(-1.0f, 0.0f, 0.0f)), Z);
-        uniforms.transforms[4] = Z;
-        uniforms.transforms[5]
-        = simd_mul(simd_matrix_rotate(M_PI, simd_make_float3(0.0f, 1.0f, 0.0f)), Z);
-    }
-    
-    id<MTLCommandBuffer> commandBuffer = [_ctx.commandQueue commandBuffer];
-    
-    for (NSUInteger level = 0; level != output.mipmapLevelCount; ++level) {
-        
-        id<MTLTexture> target;
-        {
-            MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
-            descriptor.textureType = MTLTextureTypeCube;
-            descriptor.pixelFormat = MTLPixelFormatRGBA32Float;
-            descriptor.width = output.width >> level;
-            descriptor.height = output.height >> level;
-            descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-            descriptor.resourceOptions = MTLResourceStorageModePrivate;
-            target = [_ctx.device newTextureWithDescriptor:descriptor];
-            target.label = @"Cube filter accumulate";
-        }
-        
-        MTLRenderPassDescriptor* renderPass = [MTLRenderPassDescriptor new];
-        renderPass.colorAttachments[0].texture = target;
-        renderPass.colorAttachments[0].loadAction = MTLLoadActionClear;
-        renderPass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
-        renderPass.colorAttachments[0].storeAction = MTLStoreActionStore;
-        renderPass.renderTargetArrayLength = 6;
-        
-        {
-            float roughness = pow(2.0, 1.0 + level - output.mipmapLevelCount);
-            float alpha = roughness * roughness;
-            uniforms.alpha2 = alpha * alpha;
-
-            id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPass];
-
-            [encoder setRenderPipelineState:pipeline];
-            [encoder setVertexBuffer:_ctx.screenTriangleStripVertexBuffer
-                              offset:0
-                             atIndex:AAPLBufferIndexVertices];
-            [encoder setVertexBytes:&uniforms
-                             length:sizeof(CubeFilterUniforms)
-                            atIndex:AAPLBufferIndexUniforms];
-            [encoder setFragmentBytes:&uniforms
-                               length:sizeof(CubeFilterUniforms)
-                              atIndex:AAPLBufferIndexUniforms];
-            [encoder setFragmentTexture:input
-                                atIndex:AAPLTextureIndexColor];
-            [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
-                        vertexStart:0
-                        vertexCount:4
-                      instanceCount:6];
-            
-            [encoder endEncoding];
-        }
-        
-        {
-            id<MTLBlitCommandEncoder> encoder = [commandBuffer blitCommandEncoder];
-            
-            [encoder copyFromTexture:target
-                         sourceSlice:0
-                         sourceLevel:0
-                           toTexture:output
-                    destinationSlice:0
-                    destinationLevel:level
-                          sliceCount:6
-                          levelCount:1 ];
-            [encoder optimizeContentsForGPUAccess:output];
-            
-            [encoder endEncoding];
-        }
-        
-    } // end loop over mip-map levels
-    
-    [commandBuffer commit];
-    
-    return output;
-
+    return wry::prefilter_environment(_ctx.device, _ctx.library, _ctx.commandQueue, input, name);
 }
 
 // The sky's irradiance map (CubeFilterIrradiance): a small cube, one
