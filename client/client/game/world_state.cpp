@@ -1014,6 +1014,52 @@ namespace wry {
                           wrap_add(_focus_tile.y, (i32)y)};
     }
 
+    // The machine occupying a tile of the displayed World, or none
+    EntityID WorldState::machine_at(Coordinate xy) {
+        Root<World const*> w;
+        if (!_worlds.try_pop_front(w))
+            return {};
+        EntityID id = {};
+        const Entity* e = nullptr;
+        const bool machine
+            = w._ptr->_entity_id_for_coordinate.try_get(xy, id) && id
+              && w._ptr->_entity_for_entity_id.try_get(id, e)
+              && dynamic_cast<const Machine*>(e);
+        _worlds.push_front(std::move(w));
+        return machine ? id : EntityID{};
+    }
+
+    // Centre on where the renderer last drew the followed machine (render
+    // space is relative to the focus tile, so the step is that position
+    // less the focus fraction): a frame behind the drawing, and smooth.
+    // A machine not drawn last frame (off screen: the follow began from
+    // afar, or the renderer is absent) is found in the displayed World
+    // and centred on its tile; one no longer there ends the follow.
+    void WorldState::follow_camera() {
+        if (!_follow)
+            return;
+        if (_follow_drawn_at) {
+            float2 at = *_follow_drawn_at;
+            _follow_drawn_at.reset();
+            pan_focus(at - _focus_fraction);
+            return;
+        }
+        const Entity* e = nullptr;
+        const Machine* m = nullptr;
+        Root<World const*> w;
+        if (_worlds.try_pop_front(w)) {
+            if (w._ptr->_entity_for_entity_id.try_get(_follow, e))
+                m = dynamic_cast<const Machine*>(e);
+            Coordinate at = m ? m->_new_location : Coordinate{};
+            _worlds.push_front(std::move(w));
+            if (m) {
+                pan_focus(render_position(at) - _focus_fraction);
+                return;
+            }
+        }
+        _follow = {};
+    }
+
     void WorldState::pan_focus(float2 delta) {
         if (!(std::isfinite(delta.x) && std::isfinite(delta.y)))
             return;
@@ -1719,6 +1765,24 @@ namespace wry {
                 return Reply::ok(command::to_string(Hash{h}));
             })));
 
+        // The camera follows a truck: the machine occupying the tile, or
+        // (no machine there) nobody.  Left click with an empty hand.
+        registry.add(make_command<Ctx>(
+            "follow", "Follow the truck on a tile with the camera (none there: stop)", Category::local,
+            std::tuple{
+                cursor_param("at", "the truck's tile"),
+            },
+            with_world([](WorldState& ws, Coordinate const& at) {
+                const EntityID id = ws.machine_at(at);
+                if (!id) {
+                    const bool was = (bool)ws._follow;
+                    ws._follow = {};
+                    return Reply::ok(String(was ? "stopped following" : "no truck there"));
+                }
+                ws._follow = id;
+                return Reply::ok(String(("following truck " + std::to_string(id.data)).c_str()));
+            })));
+
         // World edits: built into a Player::Action and submitted; the
         // Server orders them and they apply when they come back in a step.
         registry.add(make_command<Ctx>(
@@ -1760,9 +1824,18 @@ namespace wry {
                 // A click off the ground edits nothing.
                 if (auto tile = cursor_tile()) {
                     if (e.button == MouseButton::Left) {
+                        // an empty hand on a truck follows it (a command,
+                        // so it is in the history); on anything else it
+                        // issues nothing and just stops following
                         if (is_holding())
                             (void) _gui.issue_with(command::Origin::gui, "write",
                                                    *tile, _holding_value._value);
+                        else if (machine_at(*tile))
+                            (void) _gui.issue_with(command::Origin::gui, "follow", *tile);
+                        else {
+                            _follow = {};
+                            _follow_drawn_at.reset();
+                        }
                     } else if (e.button == MouseButton::Right) {
                         (void) _gui.issue_with(command::Origin::gui, "erase", *tile);
                     }
@@ -1779,6 +1852,9 @@ namespace wry {
                 // world and map view alike.  The focus is shared: leaving
                 // map view keeps you looking at the spot you panned to.
                 float shuttle = 1.0f / (_zoom * 1024.0f);
+                // panning takes the camera back from a followed truck
+                _follow = {};
+                _follow_drawn_at.reset();
                 pan_focus(make<float2>(-e.scroll_delta.x * shuttle,
                                        +e.scroll_delta.y * shuttle));
                 break;
@@ -1872,6 +1948,9 @@ namespace wry {
     // through the overlay stack, and routes the rest to pump_legacy_event.
     void WorldState::handle_events(float2 view_size_pt) {
         using namespace ::wry::gui;
+
+        // before this frame's input, so a pan or a new `follow` in it wins
+        follow_camera();
 
         const float w_pt = (view_size_pt.x > 0.0f) ? view_size_pt.x : 1.0f;
         const float h_pt = (view_size_pt.y > 0.0f) ? view_size_pt.y : 1.0f;

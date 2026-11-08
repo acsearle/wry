@@ -17,6 +17,7 @@
 - Context help for item under cursor: hover or side panel like Factorio
 - Command help: show some key suggestions, e.g. depending on symmetry of what is held, show [R], [SHIFT]+[R] or [H],[L]
 - Left-click on a TRUCK to have the camera track it, and to explode the stack to make it more viewable
+  - DONE 2026-11-08 (camera half): left click with an empty hand on a truck issues `follow` (also a console/wryctl command, `follow Coordinate(x,y)`); the camera centres each frame on where the renderer drew it (or its tile, when it was off screen); panning, a click off any truck, or the machine vanishing stops it.  OPEN: "explode the stack" needs a design
 - Compute the font drop-shadow in a shader
 - Load/save game etc. as Commands
 - Commutative operations on World values.  Operation is applied when its transaction commits, concurrently, in any order.  Could be an atomic add on the value in the new World, for example.  Money is an example.  Attempt a widthdrawal if enough money \_now\_; but if enough people do it on the same turn, goes negative.  Don't try to prevent that, just penalize it - apply overdraft or interest every "month" based on lowest balance.  Fancier implementation for busy variables is to apply the deltas to thread locals and merge at the end of step.

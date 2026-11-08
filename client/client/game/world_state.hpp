@@ -153,6 +153,16 @@ namespace wry {
         // carries the pan.
         Coordinate _focus_tile = {};
         float2 _focus_fraction = {};
+
+        // The machine the camera follows: set by a left click on a truck
+        // with an empty hand (the `follow` command), cleared by panning,
+        // by `follow` off any truck, or when the machine is gone.  The
+        // renderer writes where it drew the machine this frame (render
+        // space), and the next frame's follow_camera() centres on it.
+        EntityID _follow = {};
+        std::optional<float2> _follow_drawn_at;
+        void follow_camera();
+        EntityID machine_at(Coordinate xy);
         simd_float4 _mouse4 = {};         // cursor on the ground plane, render space
 
         // The camera's position relative to the focus, in world units

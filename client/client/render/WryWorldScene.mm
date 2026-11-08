@@ -2133,6 +2133,9 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
 
                 simd_float4 location = make<float4>(0.0, 0.0, 0.0, 1.0f);
                 location.xy = x1;
+                // the camera follows this one: next frame centres on it
+                if (p->_entity_id == _model->_follow)
+                    _model->_follow_drawn_at = x1;
                 if (digging) {
                     // a new small random offset every frame; the carried
                     // stack shakes with the token
