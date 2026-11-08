@@ -35,6 +35,8 @@
     // Single-attachment 2D pipeline with STRAIGHT (non-premultiplied) alpha
     // blending, for backdrop images drawn via -drawImage:... (fade + pan).
     id<MTLRenderPipelineState> _imageRenderPipelineState;
+    // mip::downsample_kernel, made on first use
+    id<MTLComputePipelineState> _mipPipelineState;
 }
 
 - (nonnull instancetype)initWithDevice:(nonnull id<MTLDevice>)device
@@ -286,6 +288,10 @@
         : 1;
     descriptor.storageMode = MTLStorageModeShared;
     descriptor.usage = MTLTextureUsageShaderRead;
+    // For -generateMipmapsForTexture:cellSize:straightAlpha:, which writes
+    // the levels from a compute kernel
+    if (mipmapped)
+        descriptor.usage |= MTLTextureUsageShaderWrite;
 
     id<MTLTexture> texture = [_device newTextureWithDescriptor:descriptor];
     [texture replaceRegion:MTLRegionMake2D(0, 0, image.major(), image.minor())
@@ -311,6 +317,19 @@
     return texture;
 }
 
+- (id<MTLTexture>)newMipmappedTextureFromResource:(NSString*)name
+                                           ofType:(NSString*)ext
+                                  withPixelFormat:(MTLPixelFormat)pixelFormat
+                                         cellSize:(NSUInteger)cell
+{
+    id<MTLTexture> texture = [self newTextureFromResource:name
+                                                   ofType:ext
+                                          withPixelFormat:pixelFormat
+                                                mipmapped:YES];
+    [self generateMipmapsForTexture:texture cellSize:cell straightAlpha:NO];
+    return texture;
+}
+
 // The symbol atlas: mip storage for the renderer to fill once level 0 is
 // final, and straight alpha (see above)
 - (id<MTLTexture>)newTextureWithMipStorageFromResource:(NSString*)name
@@ -328,6 +347,75 @@
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
     id<MTLBlitCommandEncoder> encoder = [commandBuffer blitCommandEncoder];
     [encoder generateMipmapsForTexture:texture];
+    [encoder endEncoding];
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+}
+
+- (void)generateMipmapsForTexture:(id<MTLTexture>)texture
+                         cellSize:(NSUInteger)cell
+                    straightAlpha:(BOOL)straightAlpha
+{
+    auto power_of_two = [](NSUInteger n) { return n && !(n & (n - 1)); };
+    const MTLPixelFormat format = texture.pixelFormat;
+    const bool srgb = format == MTLPixelFormatRGBA8Unorm_sRGB;
+    // Shader writes to an sRGB texture need an Apple GPU
+    if (!(format == MTLPixelFormatRGBA8Unorm || srgb)
+        || (srgb && ![_device supportsFamily:MTLGPUFamilyApple2])
+        || !power_of_two(texture.width) || !power_of_two(texture.height)
+        || !(texture.usage & MTLTextureUsageShaderWrite)
+        || texture.textureType != MTLTextureType2D) {
+        NSLog(@"WARNING: %@: box-filtered mips (no kernel path for this texture)", texture.label);
+        [self generateMipmapsForTexture:texture];
+        return;
+    }
+    if (!_mipPipelineState) {
+        NSError* error = nil;
+        _mipPipelineState = [_device newComputePipelineStateWithFunction:[self newFunctionWithName:@"mip::downsample_kernel"]
+                                                                   error:&error];
+        if (!_mipPipelineState) {
+            NSLog(@"ERROR: mip::downsample_kernel: %@", error);
+            abort();
+        }
+    }
+
+    WryMipUniforms uniforms = {};
+    // Binomial (1 + z)^3 / 8: see the header.  Compared at zoom 50-70%
+    // (2026-11-08) against the box and (1 + z)^5 / 32: the 6-tap smooths
+    // the aliasing equally but visibly softens the small tile captions
+    const float taps[] = { 1.0f, 3.0f, 3.0f, 1.0f };
+    static_assert(sizeof(taps) / sizeof(*taps) <= WRY_MIP_MAX_TAPS);
+    uniforms.count = (int)(sizeof(taps) / sizeof(*taps));
+    for (int k = 0; k != uniforms.count; ++k)
+        uniforms.taps[k] = taps[k] / 8.0f;
+    uniforms.straight = straightAlpha ? 1 : 0;
+    uniforms.epsilon = 1.0f / 256.0f;
+
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+    encoder.label = @"Mip chain";
+    [encoder setComputePipelineState:_mipPipelineState];
+    for (NSUInteger level = 1; level < texture.mipmapLevelCount; ++level) {
+        id<MTLTexture> source = [texture newTextureViewWithPixelFormat:format
+                                                           textureType:MTLTextureType2D
+                                                                levels:NSMakeRange(level - 1, 1)
+                                                                slices:NSMakeRange(0, 1)];
+        id<MTLTexture> destination = [texture newTextureViewWithPixelFormat:format
+                                                                textureType:MTLTextureType2D
+                                                                     levels:NSMakeRange(level, 1)
+                                                                     slices:NSMakeRange(0, 1)];
+        const NSUInteger c = cell >> (level - 1);
+        uniforms.cell = (cell && c >= 2) ? (int)c : 0;
+        [encoder setTexture:source atIndex:0];
+        [encoder setTexture:destination atIndex:1];
+        [encoder setBytes:&uniforms length:sizeof(uniforms) atIndex:0];
+        [encoder dispatchThreadgroups:MTLSizeMake((destination.width + WRY_MIP_TILE - 1) / WRY_MIP_TILE,
+                                                  (destination.height + WRY_MIP_TILE - 1) / WRY_MIP_TILE,
+                                                  1)
+                threadsPerThreadgroup:MTLSizeMake(WRY_MIP_TILE, WRY_MIP_TILE, 1)];
+        // The next level reads this one
+        [encoder memoryBarrierWithScope:MTLBarrierScopeTextures];
+    }
     [encoder endEncoding];
     [commandBuffer commit];
     [commandBuffer waitUntilCompleted];

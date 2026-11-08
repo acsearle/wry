@@ -807,19 +807,23 @@ struct WryNumberGlyph {
             // build_terrain_textures.py): immutable, so they take the
             // mipmapped path; the trilinear sampler puts the mips to use.
             // Albedo is color (sRGB); the normal and ORM maps are data,
-            // loaded linear.
+            // loaded linear.  Each is 4 x 4 tiles of 256 px; the mip
+            // kernel stays inside a tile.
             _terrainAlbedo = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_Albedo"
             // _terrainAlbedo = [_ctx newMipmappedTextureFromResource:@"white"
                                                             ofType:@"png"
-                                                   withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
+                                                   withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
+                                                          cellSize:256];
             _terrainNormal = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_NormalGL"
             // _terrainNormal = [_ctx newMipmappedTextureFromResource:@"blue"
                                                             ofType:@"png"
-                                                   withPixelFormat:MTLPixelFormatRGBA8Unorm];
+                                                   withPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                          cellSize:256];
             _terrainORM = [_ctx newMipmappedTextureFromResource:@"terrain/Terrain_ORM"
             // _terrainORM = [_ctx newMipmappedTextureFromResource:@"orange"
                                                             ofType:@"png"
-                                                   withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
+                                                   withPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
+                                                          cellSize:256];
         }
 
         {
@@ -1023,7 +1027,9 @@ struct WryNumberGlyph {
                                  mipmapped:YES
                              premultiplied:NO];
     _glyphs.label = @"Glyphs";
-    [_ctx generateMipmapsForTexture:_glyphs];
+    [_ctx generateMipmapsForTexture:_glyphs
+                           cellSize:_glyphs.width / wry::SymbolSDF::kCells
+                      straightAlpha:YES];
     {
         // The field beside the atlas (symbol_sdf.hpp): from its
         // cache, or built from the atlas's silhouette at half the
@@ -1185,8 +1191,11 @@ struct WryNumberGlyph {
     }
 
     // Level 0 is final (label stamping above is its last edit), so
-    // fill the mip chain.  Blocking; nothing has sampled it yet.
-    [_ctx generateMipmapsForTexture:_symbols];
+    // fill the mip chain.  Blocking; nothing has sampled it yet.  The
+    // kernel stays inside each kCells x kCells cell
+    [_ctx generateMipmapsForTexture:_symbols
+                           cellSize:_symbols.width / wry::SymbolSDF::kCells
+                      straightAlpha:YES];
 
     _symbolAtlasName = name.UTF8String;
     NSLog(@"symbol atlas: %@", name);

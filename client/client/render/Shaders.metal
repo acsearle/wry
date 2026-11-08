@@ -3406,3 +3406,83 @@ CubeFilterNormalize(CubeFilterVertexOut in [[stage_in]],
 
 
 #endif
+
+
+namespace mip {
+
+    // One level of a mip chain from the level above: the separable kernel
+    // WryMipUniforms::taps along x then y, decimating by 2, in linear
+    // light (an sRGB texture decodes on read and encodes on write).  Both
+    // passes run over a threadgroup-memory tile: the source block is read
+    // once, filtered along x into `rows`, then along y.  Taps are clamped
+    // to the destination texel's atlas cell (or the texture), per axis;
+    // clamped taps only ever move toward the centre, so they stay inside
+    // the loaded block
+    constant constexpr int SOURCE_TILE = 2 * WRY_MIP_TILE + WRY_MIP_MAX_TAPS - 2;
+
+    static int2 cell_bounds(int d, int n, int cell) {
+        if (cell >= 2) {
+            int lo = ((2 * d) / cell) * cell;
+            return int2(lo, min(lo + cell, n) - 1);
+        }
+        return int2(0, n - 1);
+    }
+
+    [[kernel]] void
+    downsample_kernel(texture2d<float, access::read> source [[texture(0)]],
+                      texture2d<float, access::write> destination [[texture(1)]],
+                      constant WryMipUniforms& u [[buffer(0)]],
+                      uint2 group [[threadgroup_position_in_grid]],
+                      uint2 local [[thread_position_in_threadgroup]],
+                      uint index [[thread_index_in_threadgroup]])
+    {
+        threadgroup float4 tile[SOURCE_TILE][SOURCE_TILE];
+        threadgroup float4 rows[SOURCE_TILE][WRY_MIP_TILE];
+
+        const int2 n = int2(source.get_width(), source.get_height());
+        const int2 m = int2(destination.get_width(), destination.get_height());
+        const int half_count = u.count / 2 - 1;
+        const int2 base = int2(group) * WRY_MIP_TILE;
+        // Source texel of tile[0][0]: the first tap of the block's first
+        // destination texel, for the widest kernel
+        const int2 origin = 2 * base - (WRY_MIP_MAX_TAPS / 2 - 1);
+        const int threads = WRY_MIP_TILE * WRY_MIP_TILE;
+
+        for (int i = (int)index; i < SOURCE_TILE * SOURCE_TILE; i += threads) {
+            int2 p = clamp(origin + int2(i % SOURCE_TILE, i / SOURCE_TILE), int2(0), n - 1);
+            float4 c = source.read(uint2(p));
+            if (u.straight)
+                c.rgb *= c.a + u.epsilon;
+            tile[i / SOURCE_TILE][i % SOURCE_TILE] = c;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (int i = (int)index; i < SOURCE_TILE * WRY_MIP_TILE; i += threads) {
+            int r = i / WRY_MIP_TILE;
+            int x = i % WRY_MIP_TILE;
+            int d = base.x + x;
+            int2 b = cell_bounds(d, n.x, u.cell);
+            float4 sum = 0.0f;
+            for (int k = 0; k != u.count; ++k) {
+                int s = clamp(2 * d - half_count + k, b.x, b.y);
+                sum += u.taps[k] * tile[r][s - origin.x];
+            }
+            rows[r][x] = sum;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        const int2 d = base + int2(local);
+        if (d.x >= m.x || d.y >= m.y)
+            return;
+        int2 b = cell_bounds(d.y, n.y, u.cell);
+        float4 sum = 0.0f;
+        for (int k = 0; k != u.count; ++k) {
+            int s = clamp(2 * d.y - half_count + k, b.x, b.y);
+            sum += u.taps[k] * rows[s - origin.y][local.x];
+        }
+        if (u.straight)
+            sum.rgb /= sum.a + u.epsilon;
+        destination.write(saturate(sum), uint2(d));
+    }
+
+} // namespace mip

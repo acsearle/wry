@@ -121,6 +121,37 @@
 // measured on M1 Max, 2026-10-11.
 - (void)generateMipmapsForTexture:(nonnull id<MTLTexture>)texture;
 
+// Fill levels 1... of `texture` from level 0 with mip::downsample_kernel
+// (Shaders.metal), blocking until complete.  Each level is the one above
+// it filtered by the binomial [1 3 3 1] / 8 along each axis (a near-
+// Gaussian of sigma 0.87 source texels = 0.43 destination texels, about
+// 0.5 destination texels compounded down the chain; a triple zero at the
+// source's Nyquist frequency, where the 2x2 box [1 1] / 2 has a single
+// zero and leaves visible aliasing) and decimated by 2, in linear light.  `cell` > 0 names the power-of-two cell size, in
+// level-0 texels, of an atlas on a regular grid: every tap is clamped to
+// the destination texel's cell, so no level mixes neighbouring cells
+// while a cell is at least one texel (below that the cells merge, as with
+// any filter).  `cell` == 0 treats the whole texture as one cell
+// (clamp-to-edge).  `straightAlpha`: the texture is straight alpha, and
+// colour is averaged weighted by alpha + 1/256: premultiplied filtering
+// where there is coverage (no dark fringe from the black rgb of empty
+// texels), the plain average where there is none (keeps the colour the
+// atlas margins carry).  Falls back to -generateMipmapsForTexture: unless
+// the texture is RGBA8Unorm(_sRGB), power-of-two on both axes and has
+// MTLTextureUsageShaderWrite (the loaders above set it on mipmapped
+// textures).
+- (void)generateMipmapsForTexture:(nonnull id<MTLTexture>)texture
+                         cellSize:(NSUInteger)cell
+                    straightAlpha:(BOOL)straightAlpha;
+
+// -newMipmappedTextureFromResource:ofType:withPixelFormat: with the mips
+// from -generateMipmapsForTexture:cellSize:straightAlpha: (premultiplied,
+// as that loader leaves it)
+- (nonnull id<MTLTexture>)newMipmappedTextureFromResource:(nonnull NSString*)name
+                                                   ofType:(nonnull NSString*)ext
+                                          withPixelFormat:(MTLPixelFormat)pixelFormat
+                                                 cellSize:(NSUInteger)cell;
+
 // ---- Scene backdrop helpers --------------------------------------------
 
 // Enumerate the file stems of every "<prefix>*.<ext>" in the resource

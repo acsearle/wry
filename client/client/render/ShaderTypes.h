@@ -270,6 +270,33 @@ typedef struct
     matrix_float4x4 position_transform;
 } MyUniforms;
 
+#pragma mark - Mip chain generation
+
+// mip::downsample_kernel: one mip level from the level above it.  A
+// dispatch writes a WRY_MIP_TILE x WRY_MIP_TILE block of the destination
+// per threadgroup from a (2 WRY_MIP_TILE + WRY_MIP_MAX_TAPS - 2)^2 block
+// of the source held in threadgroup memory
+#define WRY_MIP_TILE 16
+#define WRY_MIP_MAX_TAPS 6
+
+typedef struct {
+    // The 1D kernel, applied along x then y: taps[k] weights source texel
+    // 2 d - (count / 2 - 1) + k for destination texel d (an even count,
+    // symmetric about the destination centre, summing to 1)
+    float taps[WRY_MIP_MAX_TAPS];
+    int count;
+    // Atlas cell size in SOURCE texels: a tap is clamped to the cell of
+    // the destination texel's centre, so no level mixes neighbouring
+    // cells.  0 when cells are below 2 source texels (the whole texture
+    // is then the cell)
+    int cell;
+    // Straight-alpha source: filter colour weighted by (alpha + epsilon),
+    // i.e. premultiplied where there is coverage and a plain average
+    // where there is none (keeps the margins' bled colour)
+    int straight;
+    float epsilon;
+} WryMipUniforms;
+
 #pragma mark - Screen-space ambient occlusion
 
 // WrySSAOMode: which estimator the occlusion pass runs (WorldState::_ssao_mode)
