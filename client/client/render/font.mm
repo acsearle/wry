@@ -22,6 +22,7 @@
 #include "string.hpp"
 #include "platform.hpp"
 #include "filesystem.hpp"
+#include "bezier.hpp"
 #include "otf.hpp"
 #include "ShaderTypes.h"
 
@@ -70,156 +71,12 @@ namespace wry {
         return c;
     }
 
-    // CPU port of Shaders.metal::otf::bezierFragmentFunction, simplified for
-    // the rasterizer-into-atlas use case: no perspective (w=1 implicitly), no
-    // page-to-screen transform.  Returns the signed analytic coverage of a
-    // closed cubic Bezier path under a 1-pixel-sigma 2D Gaussian prefilter,
-    // evaluated at one pixel.  Positive for CCW-outer contours (the
-    // convention process_points emits after orientation normalization).
-    static float coverage_at_pixel(std::vector<bezier4> const& curves,
-                                   simd_float2 pixel_center,
-                                   float pixel_size_du)
-    {
-        // TODO: This function is structured to avoid recursion and diverging
-        // control flow on the GPU.  It could be written more isiomatically
-        // on the CPU with recursion.
-
-        // Typical glyphs have a few dozen curves and subdivide ~6 levels in
-        // the worst case, so 128 is comfortable.  If we overflow we drop the
-        // tail rather than crash; the coverage error is bounded by the
-        // error-threshold on the dropped curves.
-        constexpr int STACK_SIZE = 128;
-        simd_float2 stack[STACK_SIZE][4];
-        int sp = 0;
-
-        // Convert to "erf coordinates": 1 unit == sqrt(2) pixels == one sigma
-        // of the unit-pixel Gaussian.  Same scale convention as the shader's
-        // `pixel_size * M_SQRT2_F` divisor.
-        // NOTE: Extra factor of two from somewhere is needed
-        float scale = 1.0f / (pixel_size_du * (float)M_SQRT2) * 2.0;
-
-        for (auto const& curve : curves) {
-            if (sp >= STACK_SIZE) break;
-            stack[sp][0] = (curve.columns[0] - pixel_center) * scale;
-            stack[sp][1] = (curve.columns[1] - pixel_center) * scale;
-            stack[sp][2] = (curve.columns[2] - pixel_center) * scale;
-            stack[sp][3] = (curve.columns[3] - pixel_center) * scale;
-            ++sp;
-        }
-
-        float cumulant = 0.0f;
-        while (sp) {
-            --sp;
-            simd_float2 a = stack[sp][0];
-            simd_float2 b = stack[sp][1];
-            simd_float2 c = stack[sp][2];
-            simd_float2 d = stack[sp][3];
-
-            // Control-point bbox: the curve stays inside this convex hull.
-            simd_float2 lo = simd_min(simd_min(a, b), simd_min(c, d));
-            simd_float2 hi = simd_max(simd_max(a, b), simd_max(c, d));
-            // Map bbox corners to erf coordinates so the error estimate is in
-            // the integrator's natural units.
-            simd_float2 plo = erf(lo);
-            simd_float2 phi = erf(hi);
-            float error = (phi.x - plo.x) * (phi.y - plo.y);
-
-            if (error <= 1.0f / 64.0f) {
-                // Trapezoid rule between the two endpoints in erf coords.
-                simd_float2 pa = erf(a);
-                simd_float2 pd = erf(d);
-                cumulant += (pd.y - pa.y) * (pa.x + pd.x);
-            } else if (sp + 2 <= STACK_SIZE) {
-                // de Casteljau subdivision at t=0.5: left half, right half.
-                simd_float2 ab = simd_mix(a, b, 0.5f);
-                simd_float2 bc = simd_mix(b, c, 0.5f);
-                simd_float2 cd = simd_mix(c, d, 0.5f);
-                simd_float2 abbc = simd_mix(ab, bc, 0.5f);
-                simd_float2 bccd = simd_mix(bc, cd, 0.5f);
-                simd_float2 abbbcccd = simd_mix(abbc, bccd, 0.5f);
-                stack[sp][0] = a;
-                stack[sp][1] = ab;
-                stack[sp][2] = abbc;
-                stack[sp][3] = abbbcccd;
-                ++sp;
-                stack[sp][0] = abbbcccd;
-                stack[sp][1] = bccd;
-                stack[sp][2] = cd;
-                stack[sp][3] = d;
-                ++sp;
-            }
-            // else stack full: drop this curve's contribution.
-        }
-
-        // Factor of 0.125 matches the shader: erf range is [-1, 1] (width 2),
-        // and pa.x + pd.x is twice the trapezoid mean.
-        return cumulant * 0.125f;
-    }
-
-    struct GlyphBitmap {
-        matrix<R8Unorm> coverage; // 0 = no fill, 255 = full fill
-        int bitmap_left;          // pixel offset from pen origin to left edge
-        int bitmap_top;           // pixel offset from baseline upward to top edge
-    };
-
-    // Rasterize a glyph outline (in font design units) to an 8-bit coverage
-    // bitmap at the given design-units-per-pixel scale, using the analytic
-    // Gaussian-prefilter integrator above.  The returned offsets match
-    // FreeType's bitmap_left/bitmap_top conventions so the rest of the
-    // pipeline (rgba_padded, atlas placement) needs no changes.
-    static GlyphBitmap rasterize_glyph(std::vector<bezier4> const& curves,
-                                       float pixel_size_du)
-    {
-        if (curves.empty()) {
-            // Empty glyph (e.g. space).  Hand back a zero-sized bitmap; the
-            // downstream rgba_padded will produce a 12x12 fully-transparent
-            // result, the atlas will place it, and only the advance matters.
-            return GlyphBitmap{matrix<R8Unorm>{}, 0, 0};
-        }
-
-        // Control-point bbox in design units.
-        simd_float2 lo = simd_float2{ INFINITY,  INFINITY};
-        simd_float2 hi = simd_float2{-INFINITY, -INFINITY};
-        for (auto const& curve : curves) {
-            for (int i = 0; i != 4; ++i) {
-                lo = simd_min(lo, curve.columns[i]);
-                hi = simd_max(hi, curve.columns[i]);
-            }
-        }
-
-        // Pixel-space bbox with Gaussian-spillover padding.  3 sigma captures
-        // >99.7% of the Gaussian mass; beyond that the falloff is invisible
-        // at 8-bit precision.
-        constexpr int padding = 3;
-        int x_min_px = (int)std::floor(lo.x / pixel_size_du) - padding;
-        int x_max_px = (int)std::ceil (hi.x / pixel_size_du) + padding;
-        int y_min_px = (int)std::floor(lo.y / pixel_size_du) - padding;
-        int y_max_px = (int)std::ceil (hi.y / pixel_size_du) + padding;
-
-        int width  = x_max_px - x_min_px;
-        int height = y_max_px - y_min_px;
-
-        matrix<R8Unorm> bitmap((size_t)height, (size_t)width);
-
-        // TrueType design y is up; bitmap rows go top-to-bottom (row 0 = top).
-        for (int row = 0; row != height; ++row) {
-            float y_du = (y_max_px - row - 0.5f) * pixel_size_du;
-            for (int col = 0; col != width; ++col) {
-                float x_du = (x_min_px + col + 0.5f) * pixel_size_du;
-                float cov = coverage_at_pixel(curves,
-                                              simd_float2{x_du, y_du},
-                                              pixel_size_du);
-                // R8Unorm::operator=(float) clamps [0,1] internally.
-                bitmap[row, col] = cov;
-            }
-        }
-
-        return GlyphBitmap{
-            std::move(bitmap),
-            x_min_px,
-            y_max_px,
-        };
-    }
+    // Glyph outlines rasterize through the shared analytic integrator
+    // (bezier.hpp: rasterize_coverage, the CPU twin of
+    // Shaders.metal::otf::bezierFragmentFunction), which the SVG loader
+    // also uses.  Its bitmap offsets match FreeType's bitmap_left /
+    // bitmap_top conventions, so rgba_padded and atlas placement are as
+    // they were.
 
     Font build_font(SpriteAtlas& atl, float pixels_per_point) {
 
@@ -264,7 +121,7 @@ namespace wry {
                 continue; // character not in font
 
             auto curves = handle.outline_for_glyph_index(glyph_index);
-            auto gb = rasterize_glyph(curves, pixel_size_du);
+            auto gb = rasterize_coverage(curves, pixel_size_du);
             matrix<RGBA8Unorm_sRGB> u = rgba_padded(gb.coverage);
 
             // Stem width: integrate coverage along the middle row of 'I'.
@@ -292,8 +149,8 @@ namespace wry {
             // The pen origin within u: rgba_padded put the coverage bitmap
             // at (2 * kGlyphPad, 2 * kGlyphPad).  The sprite is the image
             // inset by the outer band (see kGlyphPad).
-            Sprite s = atl.place_font(u, make<float2>(2 * kGlyphPad - gb.bitmap_left,
-                                                       2 * kGlyphPad + gb.bitmap_top));
+            Sprite s = atl.place_font(u, make<float2>(2 * kGlyphPad - gb.left,
+                                                       2 * kGlyphPad + gb.top));
             {
                 const float2 inset = make<float2>(kGlyphPad, kGlyphPad);
                 const float2 duv = (s.b.texCoord - s.a.texCoord)
