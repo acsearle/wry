@@ -230,8 +230,17 @@ namespace wry {
         // ConsoleOverlay
         // ================================================================
 
-        ConsoleOverlay::ConsoleOverlay() {
+        ConsoleOverlay::ConsoleOverlay()
+        : _view(std::make_unique<ConsoleView>(
+              std::make_unique<TextLog>(&_lines),
+              std::make_unique<LineField>(StringView("> "), &_input, &_suggestion))) {
             _lines.emplace_back("WryApplication");
+        }
+
+        ConsoleOverlay::~ConsoleOverlay() = default;
+
+        Widget const* ConsoleOverlay::widget_root() const {
+            return _active ? _view.get() : nullptr;
         }
 
         void ConsoleOverlay::print(StringView line) {
@@ -295,7 +304,7 @@ namespace wry {
 
             // Any keystroke restarts the caret's blink, so it is solid
             // while typing or moving.
-            _caret_touched = true;
+            _view->input().touch_caret();
 
             const bool shift = e.mods.has(Modifiers::Shift);
             const bool ctrl = e.mods.has(Modifiers::Ctrl);
@@ -351,7 +360,7 @@ namespace wry {
                     break;
                 case close:
                     _active = false;
-                    _dragging = false;
+                    _view->input().cancel_drag();
                     if (_log) _log->append("[ESC] Hide console");
                     break;
                 case older:
@@ -373,8 +382,8 @@ namespace wry {
                 case none:
                     // Everything else is line editing: cursor motion,
                     // selection, erasure, insertion, undo, copy and cut
-                    // (gui_line_editor.hpp).
-                    _input.on_key(e);
+                    // (gui_line_editor.hpp), through the field.
+                    _view->input().on_event(e);
                     break;
             }
             _update_suggestion();
@@ -513,173 +522,28 @@ namespace wry {
                                                 agreed.chars.end()));
         }
 
-        // The cursor position nearest pixel x, as of the last paint.
-        std::size_t ConsoleOverlay::_offset_at(float x) const {
-            std::size_t offset = 0;
-            float nearest = std::numeric_limits<float>::infinity();
-            for (Stop const& stop : _stops) {
-                const float distance = std::abs(stop.x - x);
-                if (distance < nearest) {
-                    nearest = distance;
-                    offset = stop.offset;
-                }
-            }
-            return offset;
-        }
-
+        // The mouse is the field's, while the console is open; a press
+        // or drag that moves the cursor changes what is suggested.
         bool ConsoleOverlay::_on_mouse(Event const& e) {
             if (!_active) {
-                _dragging = false;
+                _view->input().cancel_drag();
                 return false;
             }
-            const float x = e.location.x;
-            const float y = e.location.y;
-
-            if (e.kind == WryEventKindMouseDown) {
-                if (e.button != MouseButton::Left
-                    || x < _input_row.a.x || x >= _input_row.b.x
-                    || y < _input_row.a.y || y >= _input_row.b.y)
-                    return false;
-                const std::size_t offset = _offset_at(x);
-                const auto now = std::chrono::steady_clock::now();
-                const bool again = (offset == _click_offset)
-                    && (now - _click_time < std::chrono::milliseconds(400));
-                _clicks = again ? (_clicks % 3) + 1 : 1;
-                _click_offset = offset;
-                _click_time = now;
-                switch (_clicks) {
-                    case 1:
-                        // Shift-click extends from the anchor.
-                        _input.move_to(offset, e.mods.has(Modifiers::Shift));
-                        _dragging = true;
-                        break;
-                    case 2:
-                        _input.select_word_at(offset);
-                        break;
-                    default:
-                        _input.select_all();
-                        break;
-                }
-                _caret_touched = true;
+            const bool consumed = _view->on_event(e);
+            if (consumed)
                 _update_suggestion();
-                return true;
-            }
-
-            // A drag follows the pointer wherever it goes until release.
-            if (!_dragging)
-                return false;
-            if (e.kind == WryEventKindMouseMove) {
-                _input.move_to(_offset_at(x), true);
-                _caret_touched = true;
-                _update_suggestion();
-            } else {
-                _dragging = false;
-            }
-            return true;
+            return consumed;
         }
 
+        // The tree fills the viewport; layout is redone every frame (the
+        // viewport, the UI scale and the font may all have changed).
         void ConsoleOverlay::paint(Painter& p) {
             if (!_active) return;
             if (!p.font || !p.atlas) return;
-
-            const RGBA8Unorm_sRGB color(1.0f, 1.0f, 1.0f, 1.0f);
-            const RGBA8Unorm_sRGB grey(0.5f, 0.5f, 0.5f, 1.0f);
-            const RGBA8Unorm_sRGB highlight(0.08f, 0.17f, 0.42f, 1.0f);
-            const float left   = p.font->height * 0.5f;
-            const float slot_h = p.font->height;
-            auto baseline_of = [&](float slot_top) {
-                return slot_top + slot_h * 0.5f
-                    + (p.font->ascender + p.font->descender) * 0.5f;
-            };
-
-            // The input line takes the bottommost slot, which ends a
-            // half-line above the bottom edge.
-            float slot_top = p.viewport_size_px.y - p.font->height * 0.5f - slot_h;
-            {
-                const float baseline = baseline_of(slot_top);
-                const float2 pen = p.draw_text_run(simd_make_float2(left, baseline),
-                                                   "> ", color);
-
-                // The field runs from the prompt to a half-line short of
-                // the right edge.
-                const float field_a = pen.x;
-                const float field_w = std::max(p.viewport_size_px.x - left - field_a, 0.0f);
-
-                // Every cursor position's distance from the start of the
-                // text: one before each character, one after the last.
-                _stops.clear();
-                float total = 0.0f;
-                float caret = 0.0f, first = 0.0f, last = 0.0f;
-                {
-                    const StringView text = _input.text();
-                    auto note = [&](std::size_t offset) {
-                        _stops.push_back(Stop{offset, total});
-                        if (offset == _input.cursor()) caret = total;
-                        if (offset == _input.selection_first()) first = total;
-                        if (offset == _input.selection_last()) last = total;
-                    };
-                    for (auto it = text.begin(); it != text.end(); ++it) {
-                        note((std::size_t)(it.base - text.chars.begin()));
-                        auto glyph = p.font->charmap.find(*it);
-                        if (glyph != p.font->charmap.end())
-                            total += glyph->second.advance;
-                    }
-                    note((std::size_t)text.chars.size());
-                }
-
-                // Scroll the least that keeps the caret inside the field
-                // with some text visible on either side of it, and never
-                // further than leaves the end of the text at the right
-                // edge (so erasing at the end scrolls back).
-                const float margin = std::min(2.0f * p.font->height, field_w * 0.25f);
-                _input_scroll = std::max(_input_scroll, caret - (field_w - margin));
-                _input_scroll = std::min(_input_scroll, caret - margin);
-                _input_scroll = std::clamp(_input_scroll, 0.0f,
-                                           std::max(total - field_w, 0.0f));
-
-                // What the mouse will need: the row, and the stops in
-                // pixels.
-                const float origin = field_a - _input_scroll;
-                _input_row = rect<float>(0.0f, slot_top,
-                                         p.viewport_size_px.x, slot_top + slot_h);
-                for (Stop& stop : _stops)
-                    stop.x += origin;
-
-                // The selection behind the text; the text; the grey
-                // suggestion after it; and the caret, a bar one stem
-                // wide between two characters, spanning the glyph cell.
-                const float bar = std::max(p.font->stem_width, 1.0f);
-                const float top = baseline - p.font->ascender;
-                const float bottom = baseline - p.font->descender;
-                const rect<float> previous = p.push_clip(rect<float>(
-                    field_a, slot_top, field_a + field_w + bar, slot_top + slot_h));
-                if (_input.has_selection())
-                    p.fill_rect(rect<float>(origin + first, top, origin + last, bottom),
-                                highlight);
-                const float2 end = p.draw_text_run(simd_make_float2(origin, baseline),
-                                                   _input.text(), color);
-                if (!_suggestion.empty())
-                    p.draw_text_run(end, _suggestion, grey);
-                if (_caret_touched) {
-                    _caret_touched = false;
-                    _caret_frame = p.frame_count;
-                }
-                if (((p.frame_count - _caret_frame) & 0x40) == 0)
-                    p.fill_rect(rect<float>(origin + caret, top,
-                                            origin + caret + bar, bottom),
-                                color);
-                p.pop_clip(previous);
-            }
-
-            // Output above it, newest at the bottom.
-            for (auto it = _lines.end();
-                 (slot_top >= 0) && (it != _lines.begin()); )
-            {
-                --it;
-                slot_top -= slot_h;
-                p.draw_text_run(simd_make_float2(left, baseline_of(slot_top)),
-                                *it, color);
-            }
+            const MeasureContext mctx{ p.font, p.pixels_per_point };
+            const Size size = _view->measure(SizeConstraints::tight(p.viewport_size_px), mctx);
+            _view->arrange(rect<float>{0.0f, 0.0f, size.w, size.h});
+            _view->paint(p);
         }
 
         // ================================================================
@@ -1338,6 +1202,281 @@ namespace wry {
             rect<float> prev = p.push_clip(_rect);
             _child->paint(p);
             p.pop_clip(prev);
+        }
+
+        // ================================================================
+        // TextLog
+        // ================================================================
+
+        Size TextLog::measure(SizeConstraints c, MeasureContext const&) {
+            // Fill: as large as allowed (as small as required if the
+            // maximum is unbounded).
+            const Size s{
+                std::isfinite(c.max.w) ? c.max.w : c.min.w,
+                std::isfinite(c.max.h) ? c.max.h : c.min.h,
+            };
+            _last_measured_size = c.constrain(s);
+            return _last_measured_size;
+        }
+
+        String TextLog::state() const {
+            char buffer[32];
+            std::snprintf(buffer, sizeof(buffer), "lines %zu",
+                          _lines ? (std::size_t)_lines->size() : (std::size_t)0);
+            return String(StringView(buffer));
+        }
+
+        void TextLog::paint(Painter& p) {
+            if (!_lines || !p.font || !p.atlas) return;
+            const RGBA8Unorm_sRGB color(1.0f, 1.0f, 1.0f, 1.0f);
+            // Each line's glyph cell is centered in a slot one font line
+            // high; the newest slot sits on the bottom edge, and the walk
+            // up stops at the first slot wholly above the top edge.
+            const float slot_h = p.font->height;
+            const float centre = slot_h * 0.5f
+                + (p.font->ascender + p.font->descender) * 0.5f;
+            const rect<float> previous = p.push_clip(_rect);
+            float slot_top = _rect.b.y;
+            for (auto it = _lines->end(); slot_top >= _rect.a.y && it != _lines->begin(); ) {
+                --it;
+                slot_top -= slot_h;
+                p.draw_text_run(simd_make_float2(_rect.a.x, slot_top + centre), *it, color);
+            }
+            p.pop_clip(previous);
+        }
+
+        // ================================================================
+        // LineField
+        // ================================================================
+
+        Size LineField::measure(SizeConstraints c, MeasureContext const& ctx) {
+            const float h = ctx.font ? ctx.font->height : ctx.pt(kFallbackHeightPt);
+            const float w = std::isfinite(c.max.w) ? c.max.w : c.min.w;
+            _last_measured_size = c.constrain(Size{ w, h });
+            return _last_measured_size;
+        }
+
+        String LineField::state() const {
+            char buffer[64];
+            std::snprintf(buffer, sizeof(buffer), "cursor %zu", _editor->cursor());
+            String s(StringView{buffer});
+            if (_editor->has_selection()) {
+                std::snprintf(buffer, sizeof(buffer), " selected %zu..%zu",
+                              _editor->selection_first(), _editor->selection_last());
+                s.append(StringView(buffer));
+            }
+            if (_dragging)
+                s.append(StringView(" dragging"));
+            if (_suggestion && !_suggestion->empty()) {
+                s.append(StringView(" suggests "));
+                command::print_quoted(s, *_suggestion);
+            }
+            return s;
+        }
+
+        bool LineField::on_event(Event const& e) {
+            switch (e.kind) {
+                case WryEventKindKeyDown:
+                    _caret_touched = true;
+                    _editor->on_key(e);
+                    return true;
+                case WryEventKindMouseDown:
+                case WryEventKindMouseMove:
+                case WryEventKindMouseUp:
+                    return _on_mouse(e);
+                default:
+                    return false;
+            }
+        }
+
+        // The cursor position nearest pixel x, as of the last paint.
+        std::size_t LineField::_offset_at(float x) const {
+            std::size_t offset = 0;
+            float nearest = std::numeric_limits<float>::infinity();
+            for (Stop const& stop : _stops) {
+                const float distance = std::abs(stop.x - x);
+                if (distance < nearest) {
+                    nearest = distance;
+                    offset = stop.offset;
+                }
+            }
+            return offset;
+        }
+
+        bool LineField::_on_mouse(Event const& e) {
+            const float x = e.location.x;
+            const float y = e.location.y;
+
+            if (e.kind == WryEventKindMouseDown) {
+                if (e.button != MouseButton::Left
+                    || x < _rect.a.x || x >= _rect.b.x
+                    || y < _rect.a.y || y >= _rect.b.y)
+                    return false;
+                const std::size_t offset = _offset_at(x);
+                const auto now = std::chrono::steady_clock::now();
+                const bool again = (offset == _click_offset)
+                    && (now - _click_time < std::chrono::milliseconds(400));
+                _clicks = again ? (_clicks % 3) + 1 : 1;
+                _click_offset = offset;
+                _click_time = now;
+                switch (_clicks) {
+                    case 1:
+                        // Shift-click extends from the anchor.
+                        _editor->move_to(offset, e.mods.has(Modifiers::Shift));
+                        _dragging = true;
+                        break;
+                    case 2:
+                        _editor->select_word_at(offset);
+                        break;
+                    default:
+                        _editor->select_all();
+                        break;
+                }
+                _caret_touched = true;
+                _pressed = true;
+                return true;
+            }
+
+            // The release of a press we took is ours too, so it does not
+            // land on whatever is under the line (the palette's cells
+            // act on release).
+            if (e.kind == WryEventKindMouseUp) {
+                const bool ours = _pressed || _dragging;
+                _pressed = false;
+                _dragging = false;
+                return ours;
+            }
+
+            // A drag follows the pointer wherever it goes until release.
+            if (!_dragging)
+                return false;
+            _editor->move_to(_offset_at(x), true);
+            _caret_touched = true;
+            return true;
+        }
+
+        void LineField::paint(Painter& p) {
+            if (!p.font || !p.atlas) return;
+
+            const RGBA8Unorm_sRGB color(1.0f, 1.0f, 1.0f, 1.0f);
+            const RGBA8Unorm_sRGB grey(0.5f, 0.5f, 0.5f, 1.0f);
+            const RGBA8Unorm_sRGB highlight(0.08f, 0.17f, 0.42f, 1.0f);
+            const float inset = p.font->height * 0.5f;
+            const float slot_top = _rect.a.y;
+            const float slot_h = _rect.b.y - _rect.a.y;
+            const float baseline = slot_top + slot_h * 0.5f
+                + (p.font->ascender + p.font->descender) * 0.5f;
+
+            const float2 pen = p.draw_text_run(simd_make_float2(_rect.a.x + inset, baseline),
+                                               _prompt, color);
+
+            // The field runs from the prompt to the inset short of the
+            // right edge.
+            const float field_a = pen.x;
+            const float field_w = std::max(_rect.b.x - inset - field_a, 0.0f);
+
+            // Every cursor position's distance from the start of the
+            // text: one before each character, one after the last.
+            _stops.clear();
+            float total = 0.0f;
+            float caret = 0.0f, first = 0.0f, last = 0.0f;
+            {
+                const StringView text = _editor->text();
+                auto note = [&](std::size_t offset) {
+                    _stops.push_back(Stop{offset, total});
+                    if (offset == _editor->cursor()) caret = total;
+                    if (offset == _editor->selection_first()) first = total;
+                    if (offset == _editor->selection_last()) last = total;
+                };
+                for (auto it = text.begin(); it != text.end(); ++it) {
+                    note((std::size_t)(it.base - text.chars.begin()));
+                    auto glyph = p.font->charmap.find(*it);
+                    if (glyph != p.font->charmap.end())
+                        total += glyph->second.advance;
+                }
+                note((std::size_t)text.chars.size());
+            }
+
+            // Scroll the least that keeps the caret inside the field
+            // with some text visible on either side of it, and never
+            // further than leaves the end of the text at the right
+            // edge (so erasing at the end scrolls back).
+            const float margin = std::min(2.0f * p.font->height, field_w * 0.25f);
+            _scroll = std::max(_scroll, caret - (field_w - margin));
+            _scroll = std::min(_scroll, caret - margin);
+            _scroll = std::clamp(_scroll, 0.0f, std::max(total - field_w, 0.0f));
+
+            // The stops in pixels, for the mouse.
+            const float origin = field_a - _scroll;
+            for (Stop& stop : _stops)
+                stop.x += origin;
+
+            // The selection behind the text; the text; the grey
+            // suggestion after it; and the caret, a bar one stem wide
+            // between two characters, spanning the glyph cell.
+            const float bar = std::max(p.font->stem_width, 1.0f);
+            const float top = baseline - p.font->ascender;
+            const float bottom = baseline - p.font->descender;
+            const rect<float> previous = p.push_clip(rect<float>(
+                field_a, slot_top, field_a + field_w + bar, slot_top + slot_h));
+            if (_editor->has_selection())
+                p.fill_rect(rect<float>(origin + first, top, origin + last, bottom),
+                            highlight);
+            const float2 end = p.draw_text_run(simd_make_float2(origin, baseline),
+                                               _editor->text(), color);
+            if (_suggestion && !_suggestion->empty())
+                p.draw_text_run(end, *_suggestion, grey);
+            if (_caret_touched) {
+                _caret_touched = false;
+                _caret_frame = p.frame_count;
+            }
+            if (((p.frame_count - _caret_frame) & 0x40) == 0)
+                p.fill_rect(rect<float>(origin + caret, top,
+                                        origin + caret + bar, bottom),
+                            color);
+            p.pop_clip(previous);
+        }
+
+        // ================================================================
+        // ConsoleView
+        // ================================================================
+
+        Size ConsoleView::measure(SizeConstraints c, MeasureContext const& ctx) {
+            _margin = 0.5f * (ctx.font ? ctx.font->height
+                                       : ctx.pt(LineField::kFallbackHeightPt));
+            const Size s{
+                std::isfinite(c.max.w) ? c.max.w : c.min.w,
+                std::isfinite(c.max.h) ? c.max.h : c.min.h,
+            };
+            _last_measured_size = c.constrain(s);
+            const Size in = _input->measure(SizeConstraints{
+                Size{ _last_measured_size.w, 0.0f },
+                Size{ _last_measured_size.w, _last_measured_size.h },
+            }, ctx);
+            (void) _output->measure(SizeConstraints::loose(Size{
+                std::max(_last_measured_size.w - _margin, 0.0f),
+                std::max(_last_measured_size.h - _margin - in.h, 0.0f),
+            }), ctx);
+            return _last_measured_size;
+        }
+
+        void ConsoleView::arrange(rect<float> r) {
+            _rect = r;
+            // The field's row ends half a line above the bottom edge and
+            // spans the full width (it insets its own text, so a click in
+            // the margin still lands on the line); the log fills the rest,
+            // its text starting where the prompt does.
+            const float h = _input->last_measured_size().h;
+            const float row_b = r.b.y - _margin;
+            const float row_a = std::max(row_b - h, r.a.y);
+            _input->arrange(rect<float>{ r.a.x, row_a, r.b.x, row_b });
+            _output->arrange(rect<float>{ std::min(r.a.x + _margin, r.b.x), r.a.y,
+                                          r.b.x, row_a });
+        }
+
+        void ConsoleView::paint(Painter& p) {
+            _output->paint(p);
+            _input->paint(p);
         }
 
         // ================================================================

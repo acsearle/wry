@@ -1532,6 +1532,31 @@ namespace wry {
         assert(console.input().empty());
         assert(gc.clipboard.read() == StringView("history"));
 
+        // ---- The widget tree (gui_widget.hpp ConsoleView): listed by
+        // `widgets` while the console is open, the field showing the line
+        // and its state; gone once it closes.
+        {
+            auto listed = [&](const char* needle) {
+                auto o = gc.issue(Origin::gui, "widgets");
+                assert(o.reply.status == Reply::OK);
+                const std::string_view text(o.reply.text.chars.begin(),
+                                            o.reply.text.chars.size());
+                return text.find(needle) != std::string_view::npos;
+            };
+            type("tog");
+            assert(listed("ConsoleView"));
+            assert(listed("TextLog"));
+            assert(listed("LineField \"tog\""));
+            assert(listed("cursor 3 suggests \"gle-\""));
+            press(gui::key::ArrowLeft, Modifiers::Shift);
+            assert(listed("cursor 2 selected 2..3"));
+            press(gui::key::Escape);
+            assert(!console.active());
+            assert(console.widget_root() == nullptr);
+            assert(!listed("ConsoleView"));
+            (void) listed;
+        }
+
         (void) shows; (void) before_list; (void) before_words;
         (void) before_usage; (void) issued;
         co_return;

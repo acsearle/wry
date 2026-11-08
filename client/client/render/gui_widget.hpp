@@ -48,6 +48,7 @@
 #define gui_widget_hpp
 
 #include <algorithm>
+#include <chrono>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -547,6 +548,142 @@ namespace wry::gui {
 
         void clamp_offset();
         void arrange_child();
+    };
+
+    // ----------------------------------------------------------------
+    // TextLog: a read-only view of a list of lines, newest at the bottom,
+    // filling its rect upward from the bottom edge, one font line per
+    // line, clipped to the rect.  Free text (outlined), for drawing over
+    // the world.  Borrows the lines; their owner keeps them alive.  Fills
+    // whatever it is given: measure() takes the constraint's maximum.
+
+    class TextLog : public Widget {
+    public:
+        explicit TextLog(ContiguousDeque<String> const* lines) : _lines(lines) {}
+
+        const char* kind() const override { return "TextLog"; }
+        rect<float> bounds() const override { return _rect; }
+        // "lines N": how many lines it holds (not how many fit).
+        String state() const override;
+
+        Size measure(SizeConstraints, MeasureContext const&) override;
+        void arrange(rect<float> r) override { _rect = r; }
+        void paint(Painter&) override;
+
+    private:
+        ContiguousDeque<String> const* _lines;
+        rect<float> _rect = {0, 0, 0, 0};
+    };
+
+    // ----------------------------------------------------------------
+    // LineField: one line of editable text after a prompt, with a grey
+    // suggestion after the text, a blinking caret and a selection
+    // highlight.  A view of a LineEditor it borrows (and of the
+    // suggestion string, if any): the owner decides which keys reach it.
+    //
+    // Layout.  One font line high, as wide as it is given; the prompt
+    // starts half a line in from the left edge and the text field ends
+    // half a line short of the right edge.  The text scrolls sideways to
+    // keep the caret in view.  Free text (outlined).
+    //
+    // Events.  A key down is the editor's (LineEditor::on_key) and
+    // restarts the caret's blink; it is always consumed.  A left press
+    // anywhere in the rect places the cursor at the nearest position
+    // (Shift extends), starting a drag that extends the selection until
+    // release, wherever the pointer goes; presses in quick succession on
+    // one spot select the word, then the line.  The release of a press it
+    // took is consumed too.  Positions are those of the last paint.
+
+    class LineField : public Widget {
+    public:
+        LineField(StringView prompt, LineEditor* editor,
+                  String const* suggestion = nullptr)
+        : _prompt(prompt), _editor(editor), _suggestion(suggestion) {}
+
+        const char* kind() const override { return "LineField"; }
+        StringView label() const override { return _editor->text(); }
+        rect<float> bounds() const override { return _rect; }
+        // "cursor N", then "selected A..B" with a selection, "dragging"
+        // during a drag, and the suggestion as `suggests "..."`.
+        String state() const override;
+
+        Size measure(SizeConstraints, MeasureContext const&) override;
+        void arrange(rect<float> r) override { _rect = r; }
+        bool on_event(Event const&) override;
+        void paint(Painter&) override;
+
+        // Make the caret solid from the next paint (it restarts blinking
+        // there); every key down does this itself.
+        void touch_caret() { _caret_touched = true; }
+        // Forget a press or drag in progress (the owner is closing).
+        void cancel_drag() { _dragging = false; _pressed = false; }
+        bool dragging() const { return _dragging; }
+
+        // Fallback height (points) if measured without a font.
+        static constexpr float kFallbackHeightPt = 24.0f;
+
+    private:
+        bool _on_mouse(Event const&);
+        std::size_t _offset_at(float x) const;
+
+        String _prompt;
+        LineEditor* _editor;
+        String const* _suggestion;
+        rect<float> _rect = {0, 0, 0, 0};
+
+        // Painting state.  Pixels of text scrolled off the left; the
+        // frame the caret's blink restarted at.
+        float _scroll = 0.0f;
+        bool _caret_touched = true;
+        uint64_t _caret_frame = 0;
+
+        // Each cursor position's caret x, as of the last paint.
+        struct Stop {
+            std::size_t offset;
+            float x;
+        };
+        std::vector<Stop> _stops;
+
+        // The mouse: a press of ours not yet released, the drag, and the
+        // click count.
+        bool _pressed = false;
+        bool _dragging = false;
+        int _clicks = 0;
+        std::size_t _click_offset = 0;
+        std::chrono::steady_clock::time_point _click_time{};
+    };
+
+    // ----------------------------------------------------------------
+    // ConsoleView: the console's widget tree, filling what it is given:
+    // a LineField half a line above the bottom edge and a TextLog over
+    // all the rest, its text aligned with the field's prompt.  Events go
+    // to the field (the log takes none).
+
+    class ConsoleView : public Widget {
+    public:
+        ConsoleView(std::unique_ptr<TextLog> output, std::unique_ptr<LineField> input)
+        : _output(std::move(output)), _input(std::move(input)) {}
+
+        TextLog& output() { return *_output; }
+        LineField& input() { return *_input; }
+
+        const char* kind() const override { return "ConsoleView"; }
+        rect<float> bounds() const override { return _rect; }
+        void for_each_child(ChildVisitor const& f) const override {
+            f(*_output);
+            f(*_input);
+        }
+
+        Size measure(SizeConstraints, MeasureContext const&) override;
+        void arrange(rect<float>) override;
+        bool on_event(Event const& e) override { return _input->on_event(e); }
+        void paint(Painter&) override;
+
+    private:
+        std::unique_ptr<TextLog> _output;
+        std::unique_ptr<LineField> _input;
+        float _margin = 0.0f;       // half a line, resolved by measure
+        rect<float> _rect = {0, 0, 0, 0};
     };
 
 } // namespace wry::gui

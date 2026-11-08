@@ -7,7 +7,12 @@ point and a selection.  Behind it sits a `gui::LineHistory`
 search and a file.  Both are platform-neutral and own no painting, so
 any future text field (a save name, a server address) can hold an
 editor.  `ConsoleOverlay` (gui.mm) owns what is the console's:
-submission, paste, completion, the suggestion, the mouse, the painting.
+submission, paste, completion, the suggestion.  What shows is a widget
+tree of views onto those (`gui_widget.hpp`): a `ConsoleView` holding a
+`TextLog` of the output over a `LineField`, the generic one-line field
+that paints an editor (prompt, text, selection, suggestion, caret,
+sideways scroll) and takes the mouse and the keys the console leaves to
+the editor.
 
 This is the behaviour usually just called "line editing".  The
 reference implementations are GNU readline (every Unix shell prompt;
@@ -80,6 +85,10 @@ The console's (`ConsoleOverlay`):
 | Escape, the toggle-console key | close the console |
 | click, Shift-click, drag on the input line | place the cursor, extend, select |
 | double click, triple click | select the word, the line |
+
+(The mouse rows are `LineField`'s, which also consumes the release of
+any press it took, so a double click on the line does not fall through
+to the palette under it.)
 
 Alt is Option on macOS.  Ctrl-arrows and Ctrl-Backspace are the Windows
 and Linux spellings of word motion; on macOS the system usually takes

@@ -22,8 +22,10 @@
 //                          v
 //                    Overlay::paint(Painter&)
 //
-//  Each overlay owns its own state.  Some overlays (LogOverlay,
-//  ConsoleOverlay) paint themselves via the supplied Painter.  Others
+//  Each overlay owns its own state.  Some overlays (LogOverlay) paint
+//  themselves via the supplied Painter; others (ConsoleOverlay, the menus,
+//  the settings screens) lay out and paint a widget tree
+//  (gui_widget.hpp).  Others
 //  (PaletteOverlay for now) participate in event dispatch only; their
 //  paint method is a stub and the renderer reads their state directly to
 //  draw them, because they need a render path the Painter does not yet
@@ -64,6 +66,7 @@ namespace wry {
 
     namespace gui {
         class Widget;
+        class ConsoleView;
     }
 
     namespace gui {
@@ -371,14 +374,27 @@ namespace wry {
         //   Escape, the toggle key   close
         //   click / drag / double    place the cursor / select / select a
         //   click on the input line  word
+        //
+        // The overlay is the controller and owns the model: the output
+        // lines, the line editor, the history and the suggestion.  What
+        // shows is a widget tree of views onto them (gui_widget.hpp: a
+        // ConsoleView of a TextLog over a LineField), laid out, hit
+        // tested and painted by the widget system, and listed by the
+        // `widgets` command while the console is open.  The console's own
+        // keys are handled here; the rest of the keys, and the mouse, go
+        // to the LineField.
         class ConsoleOverlay : public Overlay {
         public:
             ConsoleOverlay();
+            ~ConsoleOverlay() override;
 
             bool active() const { return _active; }
             void set_active(bool a) { _active = a; }
             bool on_event(Event const&) override;
             void paint(Painter&) override;
+
+            // The widget tree, while the console is open.
+            Widget const* widget_root() const override;
 
             // Append a line of output above the input line.
             void print(StringView line);
@@ -443,37 +459,14 @@ namespace wry {
             void _complete_word();
             void _accept_suggestion(bool whole);
             void _update_suggestion();
-            std::size_t _offset_at(float x) const;
 
             ContiguousDeque<String> _lines;     // output, oldest first
             LineEditor _input;                  // the line being typed
             LineHistory _history;
             String _suggestion;
 
-            // Painting state.  The input line scrolls sideways to keep
-            // the caret in view; the caret's blink restarts (solid) at
-            // each keystroke.
-            float _input_scroll = 0.0f;         // pixels of text off the left
-            bool _caret_touched = true;
-            uint64_t _caret_frame = 0;          // frame the blink restarted at
-
-            // Where the input line was last painted, for the mouse: the
-            // row, and each cursor position's x.  A click lands on the
-            // nearest position.
-            struct Stop {
-                std::size_t offset;             // a cursor position
-                float x;                        // its caret, in pixels
-            };
-            rect<float> _input_row = {0.0f, 0.0f, 0.0f, 0.0f};
-            std::vector<Stop> _stops;
-
-            // The mouse.  A press on the input line starts a drag that
-            // extends the selection until release; presses in quick
-            // succession on one spot count up: word, then line.
-            bool _dragging = false;
-            int _clicks = 0;
-            std::size_t _click_offset = 0;
-            std::chrono::steady_clock::time_point _click_time{};
+            // The views (gui_widget.hpp), onto the members above.
+            std::unique_ptr<ConsoleView> _view;
 
             bool _active = false;
             LogOverlay* _log = nullptr;
