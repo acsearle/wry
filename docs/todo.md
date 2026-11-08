@@ -25,6 +25,7 @@
 
 ## Things to change
 - Raise the TRUCK's lowest surface so it hovers and a tile just slides under it
+  - DONE 2026-11-08: the token and its stack ride token_lift = tile slab thickness + 0.015 above the board (WryWorldScene.mm)
 - Investigate radiance cascade as a GTAO alternative.  Can we ditch the shadow map and directional light entirely?
 - Tune the lighting.  Environment map is currently a daytime desert; try indoors with a window.
 - Bloom is calculated but not used.  Decide.

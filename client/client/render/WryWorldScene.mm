@@ -2148,16 +2148,20 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
                 
                 // The machine is a playing piece: the pentagon token of
                 // atlas row 15 (tools/make_assets.py g_token_truck), one
-                // colour through, as tall as it is wide, standing on the
-                // board with its apex to the heading.  The truck mesh
-                // (_truck_mesh) is no longer instanced.
+                // colour through, as tall as it is wide, with its apex to
+                // the heading.  It hovers: its underside clears a tile on
+                // the board by a hair, so the tiles it drives over slide
+                // under it rather than through it (its shadow shows the
+                // gap).  The truck mesh (_truck_mesh) is no longer
+                // instanced.
+                const float token_lift = slab_thickness + 0.015f;
                 {
                     const float thickness = _model->_token_height * texels_per_unit;
                     simd_float2 heading = simd_length(dx1) > 1e-4f ? simd_normalize(dx1) : make<float2>(0.0f, 1.0f);
                     simd_float3 up = make<float3>(heading.x, heading.y, 0.0f);
                     simd_float3 across = make<float3>(heading.y, -heading.x, 0.0f);
                     simd_float4 centre = location;
-                    centre.z = _model->_token_height * 0.5f;
+                    centre.z = token_lift + _model->_token_height * 0.5f;
                     // No occlusion decal: that models a thin slab's
                     // underside, and a standing piece has none to show
                     // The cuboid reaches past the frame for the apex,
@@ -2170,7 +2174,7 @@ static_assert(WRY_TERRAIN_KINDS == wry::TERRAIN_KIND_COUNT,
                 // item's own height (term_height: a chip, a matter tile
                 // and its pile, a container)
                 const float stack_gap = 0.004f;
-                float base = _model->_token_height;
+                float base = token_lift + _model->_token_height;
                 const float yaw = atan2(dx1.x, dx1.y);
                 for (int i = (int) wry::PersistentStack<wry::Term>::size(p->_stack); i--;) {
                     wry::Term value = wry::PersistentStack<wry::Term>::at(p->_stack, i);
